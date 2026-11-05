@@ -151,6 +151,10 @@ inductive WorkspacePathCapability where
   | unrestrictedCompatibility
   deriving DecidableEq, Repr
 
+/-- Workspace document effects caused by a request (binding, seal, integration and
+release) use that request's selected Agent DID. Explicit cleanup carries its caller
+actor. Shared operational discovery is a runtime responsibility; it does not replace
+the originating actor for mutations or retry a denied agent write as the runtime. -/
 structure IsolatedWorkspace where
   workspaceId : String
   workUnitId : String

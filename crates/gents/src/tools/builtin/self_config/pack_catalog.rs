@@ -11,7 +11,7 @@ impl PackInstaller {
             Some(store) => store.names()?.into_iter().collect(),
             None => BTreeMap::new(),
         };
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
+        let access = self.core.access()?;
         let installed =
             crate::pack::installed_catalog(&access, self.core.node_did(), self.home.as_deref())
                 .await?;
@@ -123,12 +123,14 @@ impl PackInstaller {
             expected_digest: None,
         };
         let distribution = self.resolve("get", &args).await?;
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
-        let inference = crate::pack::inspect_pack_inference_bindings(
+        let access = self.core.access()?;
+        let node_binding = self.core.refresh_node_binding().await?;
+        let inference = crate::pack::inspect_pack_inference_bindings_with_node_binding(
             &access,
             distribution.manifest(),
             self.core.node_did(),
             &BTreeMap::new(),
+            node_binding.as_ref(),
         )
         .await?;
         let installable = installs_kind(&distribution.manifest().metadata.kind);
@@ -177,7 +179,7 @@ impl PackInstaller {
                 anyhow::ensure!(!matches!(record.kind, crate::pack::PackKind::Assets | crate::pack::PackKind::Plugins), "native removal of home-installed plugin/assets packs is unavailable; the existing pack removal owner must release plugin and home records together. Current installation is unchanged");
             }
         }
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
+        let access = self.core.access()?;
         let report = crate::pack::remove_pack(
             &access,
             self.core.node_did(),

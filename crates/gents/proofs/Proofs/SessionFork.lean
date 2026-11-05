@@ -52,6 +52,19 @@ theorem ambiguous_edit_anchor (source : History) (key : String)
     editCut source key = none := by
   simp [editCut, ambiguous]
 
+/-- Fork headers currently reuse physical source fragments. A different target
+agent requires a destination-owned copy of the selected fragments before those
+references can be used without granting access to the wider source session. -/
+def mayReuseSourceFragments (sourceAgent targetAgent : String) : Bool :=
+  sourceAgent == targetAgent
+
+theorem same_agent_may_reuse (agent : String) :
+    mayReuseSourceFragments agent agent = true := by simp [mayReuseSourceFragments]
+
+theorem cross_agent_cannot_reuse (source target : String) (different : source ≠ target) :
+    mayReuseSourceFragments source target = false := by
+  simp [mayReuseSourceFragments, beq_iff_eq, different]
+
 def copyMessage (child : AgentSession.Scope) (childId : DocId)
     (childKey : String → String) (message : MessageEnvelope) : MessageEnvelope :=
   { message with

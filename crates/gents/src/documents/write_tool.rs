@@ -439,7 +439,6 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         crate::goal::CREATE_GOAL_TOOL_NAME,
         crate::goal::GET_GOAL_TOOL_NAME,
         crate::goal::UPDATE_GOAL_TOOL_NAME,
-        "memory",
     ];
 
     crate::tools::native::NativeTool::ALL_NAMES.contains(&name)
@@ -450,14 +449,14 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         || crate::tools::builtin::self_config::SELF_CONFIG_TOOL_NAMES.contains(&name)
 }
 
-/// Collections no datastore tool may read or write: protected eval material
-/// and promotion evidence.
+/// Collections no datastore tool may read or write.
 pub const PROTECTED_DATASTORE_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::EVAL_DEFINITION_NAME,
     gents_protocol::schemas::EVAL_RUN_NAME,
     gents_protocol::schemas::EVAL_TRIAL_NAME,
     gents_protocol::schemas::EVAL_VERDICT_NAME,
     gents_protocol::schemas::OPTIMIZATION_JOB_NAME,
+    gents_protocol::schemas::PENDING_CHAT_SUBMISSION_NAME,
 ];
 
 /// Reject a collection a datastore create/query tool may never name. Sits
@@ -553,6 +552,9 @@ fn surface_recovery(tool_name: &str, surface_id: Option<&str>) -> String {
 mod tests {
     #[test]
     fn eval_and_optimization_collections_are_never_exposed() {
+        let publication = &crate::lean_vocab_test::lean_contract_snapshot()
+            .client_publication_protected_collection;
+        assert!(super::PROTECTED_DATASTORE_COLLECTIONS.contains(&publication.as_str()));
         for name in super::PROTECTED_DATASTORE_COLLECTIONS {
             let error = super::reject_protected_collection_name(name).unwrap_err();
             assert!(format!("{error:#}").contains("protected"), "{error:#}");

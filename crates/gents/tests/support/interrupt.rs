@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gents::defra_node::{EmbeddedNode, QueryResponse};
+use gents::defra_node::{Node as EmbeddedNode, QueryResponse};
 use gents::session::canonical_rows::{
     decode_output_segment_row, OutputSegmentRow, AGENT_OUTPUT_SEGMENT_FIELDS,
 };
@@ -91,7 +91,7 @@ pub async fn wait_for_runtime_ready(node: &EmbeddedNode, node_did: &str) {
 pub async fn create_runtime_request(
     node: &EmbeddedNode,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     content: &str,
@@ -100,7 +100,7 @@ pub async fn create_runtime_request(
         node,
         node_did,
         RuntimeRequestSpec {
-            agent_id,
+            agent_did,
             request_id,
             session_id,
             valid_until: None,
@@ -116,7 +116,7 @@ pub async fn create_runtime_request(
 pub async fn create_runtime_request_with_input(
     node: &EmbeddedNode,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     content: &str,
@@ -126,7 +126,7 @@ pub async fn create_runtime_request_with_input(
         node,
         node_did,
         RuntimeRequestSpec {
-            agent_id,
+            agent_did,
             request_id,
             session_id,
             content,
@@ -142,7 +142,7 @@ pub async fn create_runtime_request_with_input(
 pub async fn create_runtime_request_with_valid_until(
     node: &EmbeddedNode,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     valid_until: &str,
@@ -152,7 +152,7 @@ pub async fn create_runtime_request_with_valid_until(
         node,
         node_did,
         RuntimeRequestSpec {
-            agent_id,
+            agent_did,
             request_id,
             session_id,
             valid_until: Some(valid_until),
@@ -168,7 +168,7 @@ pub async fn create_runtime_request_with_valid_until(
 pub async fn create_runtime_request_with_execution_origin(
     node: &EmbeddedNode,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     execution_origin: &str,
@@ -178,7 +178,7 @@ pub async fn create_runtime_request_with_execution_origin(
         node,
         node_did,
         RuntimeRequestSpec {
-            agent_id,
+            agent_did,
             request_id,
             session_id,
             valid_until: None,
@@ -194,7 +194,7 @@ pub async fn create_runtime_request_with_execution_origin(
 pub async fn create_runtime_request_caused_by_source(
     node: &EmbeddedNode,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     caused_by_source_doc_id: &str,
@@ -204,7 +204,7 @@ pub async fn create_runtime_request_caused_by_source(
         node,
         node_did,
         RuntimeRequestSpec {
-            agent_id,
+            agent_did,
             request_id,
             session_id,
             valid_until: None,
@@ -218,7 +218,7 @@ pub async fn create_runtime_request_caused_by_source(
 }
 
 struct RuntimeRequestSpec<'a> {
-    agent_id: &'a str,
+    agent_did: &'a str,
     request_id: &'a str,
     session_id: &'a str,
     valid_until: Option<&'a str>,
@@ -234,7 +234,7 @@ async fn create_runtime_request_inner(
     spec: RuntimeRequestSpec<'_>,
 ) -> String {
     let RuntimeRequestSpec {
-        agent_id,
+        agent_did,
         request_id,
         session_id,
         valid_until,
@@ -243,7 +243,7 @@ async fn create_runtime_request_inner(
         content,
         input,
     } = spec;
-    ensure_generated_session(node, node_did, agent_id, session_id).await;
+    ensure_generated_session(node, node_did, agent_did, session_id).await;
 
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
@@ -251,7 +251,7 @@ async fn create_runtime_request_inner(
         request_id,
         node_did,
         node_did,
-        agent_id,
+        agent_did,
         session_id,
         content,
         execution_origin,
@@ -281,7 +281,7 @@ async fn create_runtime_request_inner(
 async fn ensure_generated_session(
     node: &EmbeddedNode,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     session_id: &str,
 ) {
     if super::snapshots::fetch_session_snapshot(node, session_id)
@@ -291,7 +291,7 @@ async fn ensure_generated_session(
         return;
     }
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mut session = super::session_document(session_id, agent_id, &now);
+    let mut session = super::session_document(session_id, agent_did, &now);
     session.node_did = node_did.to_owned();
     session.requester_did = Some(node_did.to_owned());
     session.title = Some(gents_protocol::session::SessionTitle {

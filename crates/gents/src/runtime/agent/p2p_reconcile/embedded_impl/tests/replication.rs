@@ -1,9 +1,165 @@
 use super::fixtures::{
-    collection_id, collection_values, runtime_test_node, test_node, wait_for_active_peer,
-    wait_for_peer_info, wait_for_value,
+    collection_id, collection_values, runtime_test_node, signed_p2p_node_without_schemas,
+    test_node, wait_for_active_peer, wait_for_peer_info, wait_for_value,
 };
 use super::seeding::{seed_agent_request, seed_agent_tool_call};
 use super::*;
+
+#[tokio::test]
+async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() -> anyhow::Result<()>
+{
+    use crate::store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
+    use anyhow::Context;
+    let model = &crate::lean_vocab_test::lean_contract_snapshot().identity_receiver_grant_cases;
+    let expected = model
+        .iter()
+        .find(|case| case["sender_granted"] == true && case["delivered"] == false)
+        .unwrap()["receiver_granted"]
+        .as_bool()
+        .unwrap();
+    let directory = tempfile::tempdir()?;
+    let candidate_path = directory.path().join("candidate");
+    let admin_path = directory.path().join("admin");
+    let candidate = KeyIdentity::load_or_create(&candidate_path, None)?;
+    let admin = KeyIdentity::load_or_create(&admin_path, None)?;
+    let outsider = KeyIdentity::load_or_create(directory.path().join("outsider"), None)?;
+    let candidate_key =
+        crate::store::identity::load_file_identity(&candidate_path)?.private_key_bytes();
+    let admin_key = crate::store::identity::load_file_identity(&admin_path)?.private_key_bytes();
+    let candidate_address = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
+    let admin_address = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
+    let candidate_test =
+        signed_p2p_node_without_schemas(&candidate, candidate_key, candidate_address).await;
+    let admin_test = signed_p2p_node_without_schemas(&admin, admin_key, admin_address).await;
+    let candidate_node = &candidate_test.node;
+    let admin_node = &admin_test.node;
+    let schema = gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST.replace(
+        "type NetworkEnrollmentRequest @branchable",
+        "type NetworkEnrollmentRequest @branchable @policy(id: \"4bb3e26819f6b2d971472ad58838fe45b7f105c55d3d2763a7cb8fa21751e2d5\", resource: \"configuration\")");
+    for (node, actor) in [(candidate_node, &candidate), (admin_node, &admin)] {
+        node.add_dac_policy_with_counter_as(
+            &defra_core::RequestContext::default().with_identity(Some(actor.did().to_owned())),
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
+        .await?;
+        node.add_collection(&schema).await?;
+    }
+    let candidate_local =
+        ConfigAccess::local_as(candidate_node.clone(), identity::Did::new(candidate.did())?);
+    let admin_local = ConfigAccess::local_as(admin_node.clone(), identity::Did::new(admin.did())?);
+    for (access, other) in [
+        (&candidate_local, &admin),
+        (&admin_local, &candidate),
+        (&admin_local, &outsider),
+    ] {
+        for permission in [NodePermission::DocumentRead, NodePermission::CollectionGet] {
+            access
+                .grant_node_permission(&identity::Did::new(other.did())?, permission)
+                .await?;
+        }
+    }
+    let reader = identity::Did::new(admin.did())?;
+    let mutation = format!(
+        r#"mutation {{ create_NetworkEnrollmentRequest(input: {{request_id:"probe", candidate_did:"{}", admin_did:"{}", offer_token:"private-offer"}}) {{_docID}} }}"#,
+        escape_graphql_string(candidate.did()),
+        escape_graphql_string(admin.did())
+    );
+    let doc = candidate_local
+        .transact_write("test.enrollment_native.create", |txn| {
+            let mutation = &mutation;
+            let reader = &reader;
+            Box::pin(async move {
+                let response = txn.execute(mutation).await?;
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                    &response,
+                    "NetworkEnrollmentRequest",
+                )?;
+                txn.add_actor_relationship("NetworkEnrollmentRequest", &doc, "reader", reader)
+                    .await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await?;
+    let http = |address, actor: &KeyIdentity| -> anyhow::Result<ConfigAccess> {
+        Ok(ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
+                .with_client_signing_capability(actor.client_signing_capability()?)?,
+        ))
+    };
+    let query = format!(
+        r#"{{ NetworkEnrollmentRequest(filter: {{_docID: {{_eq:"{}"}}}}) {{_docID offer_token}} }}"#,
+        escape_graphql_string(&doc)
+    );
+    let count = |value: &serde_json::Value| {
+        gents_protocol::graphql::graphql_rows_from_response(value, "NetworkEnrollmentRequest").len()
+    };
+    assert_eq!(
+        count(&http(candidate_address, &admin)?.execute(&query).await?),
+        1
+    );
+    let candidate_admin = EmbeddedRemoteP2pAdmin::new(candidate_node.clone());
+    let receiving_admin = EmbeddedRemoteP2pAdmin::new(admin_node.clone());
+    let addresses = wait_for_peer_info(&receiving_admin).await;
+    candidate_admin.connect(&addresses).await?;
+    wait_for_active_peer(&candidate_admin).await;
+    let mut arrivals = crate::subscribe_collections(admin_node, ["NetworkEnrollmentRequest"])?;
+    let filters = [(
+        "NetworkEnrollmentRequest".to_owned(),
+        equality_filter("request_id", "probe"),
+    )]
+    .into_iter()
+    .collect();
+    candidate_admin
+        .add_replicator(
+            &addresses,
+            &["NetworkEnrollmentRequest".to_owned()],
+            &filters,
+        )
+        .await?;
+    let peer = admin_node
+        .p2p()
+        .context("admin has no P2P")?
+        .local_peer_id()
+        .await
+        .map_err(anyhow::Error::msg)?;
+    push_documents_to_peer(
+        candidate_node,
+        &peer,
+        vec![P2pDocumentRequest {
+            collection: "NetworkEnrollmentRequest".into(),
+            doc_id: doc.clone(),
+        }],
+    )
+    .await?;
+    tokio::time::timeout(Duration::from_secs(20), arrivals.recv())
+        .await?
+        .context("replicated enrollment notification closed")?;
+    assert_eq!(
+        count(&http(admin_address, &candidate)?.execute(&query).await?),
+        1,
+        "candidate-owned genesis must arrive and be visible to its actual author"
+    );
+    assert_eq!(
+        count(&http(admin_address, &admin)?.execute(&query).await?) != 0,
+        expected,
+        "source reader tuple must not be assumed on receiver"
+    );
+    assert_eq!(
+        count(&http(admin_address, &outsider)?.execute(&query).await?),
+        0
+    );
+    candidate_local
+        .delete_actor_relationship("NetworkEnrollmentRequest", &doc, "reader", &reader)
+        .await?;
+    assert_eq!(
+        count(&http(candidate_address, &admin)?.execute(&query).await?),
+        0
+    );
+    candidate_node.shutdown().await?;
+    admin_node.shutdown().await?;
+    Ok(())
+}
 
 #[test]
 fn adapter_preserves_conjunctive_filters_as_conditions() {
@@ -74,7 +230,7 @@ async fn embedded_collections_round_trip() {
         .expect("list collections");
     assert_eq!(collections, vec![collection_name]);
 
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 /// Every builtin template's filter fields must be `@immutable` in the
@@ -187,8 +343,8 @@ async fn embedded_all_builtin_template_filters_pass_replicator_validation() {
         }
     }
 
-    local.shutdown().await;
-    remote.shutdown().await;
+    local.shutdown().await.expect("node shutdown");
+    remote.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -227,8 +383,8 @@ async fn embedded_replicators_round_trip() {
         "replicators={replicators:?}"
     );
 
-    local.shutdown().await;
-    remote.shutdown().await;
+    local.shutdown().await.expect("node shutdown");
+    remote.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -309,8 +465,8 @@ async fn embedded_filtered_replicator_replays_existing_matching_documents() {
         "filtered tool-call replay should not leak non-matching rows"
     );
 
-    sender.shutdown().await;
-    receiver.shutdown().await;
+    sender.shutdown().await.expect("node shutdown");
+    receiver.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -461,6 +617,6 @@ async fn assert_selected_delivery_outlives_deadline(
             panic!("selected replay did not converge within the native recovery window: expected={document_count} observed={} status={status}", observed.len());
         }
     }
-    sender.shutdown().await;
-    receiver.shutdown().await;
+    sender.shutdown().await.expect("node shutdown");
+    receiver.shutdown().await.expect("node shutdown");
 }

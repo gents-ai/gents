@@ -13,6 +13,7 @@ function makeDeployment(overrides: Partial<DeploymentView> = {}): DeploymentView
     graphql: null,
     source: "enrollment",
     dialSucceeded: true,
+    runtimeConnection: "connected",
     chatSafe: true,
     routes: [],
     pairing: [],

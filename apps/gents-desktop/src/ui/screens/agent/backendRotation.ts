@@ -27,6 +27,7 @@ export function poolAccounts(
    choices was made, but only for the endpoint they were set up for, since
    kept they would be sent to whatever host the endpoint names */
 const KEPT_AUTH = new Set([
+  "credential",
   "aws_credentials",
   "google_credentials",
   "node_oauth",

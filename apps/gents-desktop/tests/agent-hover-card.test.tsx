@@ -114,7 +114,7 @@ describe("an agent's hover card", () => {
     const app = testApp({ deployments: [node()] });
     const [shown] = fleetNodes(app.stores.fleet.getState());
     const view = renderRouted(app, { name: "sessions" }, () => (
-      <AgentHoverCard deployment={shown!} agentId="default">
+      <AgentHoverCard deployment={shown!} agentDid="default">
         <button type="button">agent</button>
       </AgentHoverCard>
     ));
@@ -127,15 +127,15 @@ describe("an agent's hover card", () => {
     );
     expect(app.stores.selection.getState()).toMatchObject({
       nodeDid: shown!.nodeDid,
-      agentId: "default",
+      agentDid: "default",
     });
   });
 
   it("counts the tasks that run with the agent, and leaves the line out at none", async () => {
-    const task = (taskId: string, agentId: string) => ({
+    const task = (taskId: string, agentDid: string) => ({
       ...deployment.tasks[0]!,
       taskId,
-      agentId,
+      agentDid,
     });
     const app = testApp({
       deployments: [
@@ -147,7 +147,7 @@ describe("an agent's hover card", () => {
     const [shown] = fleetNodes(app.stores.fleet.getState());
     renderIn(
       app,
-      <AgentHoverCard deployment={shown!} agentId="default">
+      <AgentHoverCard deployment={shown!} agentDid="default">
         <button type="button">agent</button>
       </AgentHoverCard>,
     );

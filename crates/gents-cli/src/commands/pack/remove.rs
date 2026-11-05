@@ -92,7 +92,9 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     }
     .await;
     if let Some(node) = access.local_node() {
-        node.shutdown().await;
+        if let Err(error) = node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+        }
     }
     crate::print_json(&result?)
 }
@@ -186,22 +188,14 @@ pub(crate) async fn ensure_home_plugins_unreferenced(
     home: &Path,
     plugins: &BTreeSet<String>,
 ) -> Result<()> {
-    if plugins.is_empty() || !gents::store::local::home::init_config_path(home).is_file() {
+    if plugins.is_empty() {
         return Ok(());
     }
-    let scope = crate::cli::ScopeArgs {
-        home: Some(home.to_path_buf()),
-        graphql: None,
-        node_did: None,
-    };
-    let (access, owner) = super::resolve_scope_owner(&scope).await?;
-    let result = gents::pack::ensure_plugins_unreferenced(&access, &owner, plugins).await;
-    if let Some(node) = access.local_node() {
-        node.shutdown().await;
+    if !gents::store::local::home::init_config_path(home).is_file() {
+        return Err(gents::pack::PackRemovalError::ReferenceInventoryUnavailable.into());
     }
-    drop(access);
     #[cfg(test)]
-    if result.is_ok() {
+    {
         let pause = REMOVAL_TEST_PAUSE
             .lock()
             .unwrap()
@@ -213,6 +207,19 @@ pub(crate) async fn ensure_home_plugins_unreferenced(
             pause.release.notified().await;
         }
     }
+    let scope = crate::cli::ScopeArgs {
+        home: Some(home.to_path_buf()),
+        graphql: None,
+        node_did: None,
+    };
+    let (access, owner) = super::resolve_scope_owner(&scope).await?;
+    let result = gents::pack::ensure_plugins_unreferenced(&access, &owner, plugins).await;
+    if let Some(node) = access.local_node() {
+        if let Err(error) = node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+        }
+    }
+    drop(access);
     result
 }
 

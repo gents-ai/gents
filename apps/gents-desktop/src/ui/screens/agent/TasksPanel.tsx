@@ -65,7 +65,7 @@ export function TaskEditor({
   const [editing, setEditing] = useState(false);
   const saved = {
     name: task.name ?? "",
-    agentId: task.agentId ?? "",
+    agentDid: task.agentDid ?? "",
     enabled: task.enabled ?? true,
     description: task.description ?? "",
     promptTemplate: task.promptTemplate ?? "",
@@ -89,7 +89,7 @@ export function TaskEditor({
           task_id: task.taskId,
           display_name: n.name.trim() || task.taskId,
           description: n.description || null,
-          agent_id: n.agentId,
+          agent_did: n.agentDid,
           prompt_template: n.promptTemplate,
           emit_outcome: n.emitOutcome,
           goal_objective_template: n.goalObjectiveTemplate || null,
@@ -105,7 +105,7 @@ export function TaskEditor({
       problems: (n) => {
         const hooks = hooksFromDraft(n.hooks);
         return {
-          agentId: deployment.agents.some((b) => b.agentId === n.agentId)
+          agentDid: deployment.agents.some((b) => b.agentDid === n.agentDid)
             ? undefined
             : "Choose an existing agent",
           promptTemplate: n.promptTemplate.trim()
@@ -135,7 +135,7 @@ export function TaskEditor({
   const [running, setRunning] = useState(false);
   const id = (f: string) => `${task.taskId}-${f}`;
   const agents = deployment.agents.map((b) => ({
-    value: b.agentId,
+    value: b.agentDid,
     pack: packOrigin(b.tags),
     label: b.displayName,
   }));
@@ -272,9 +272,9 @@ export function TaskEditor({
           id={id("agent")}
           label="Agent"
           description="Runs the prompt with its instructions, tools and model."
-          value={d.draft.agentId}
-          error={d.problems.agentId}
-          onChange={(v) => d.set("agentId", v)}
+          value={d.draft.agentDid}
+          error={d.problems.agentDid}
+          onChange={(v) => d.set("agentDid", v)}
           items={agents}
           none="Unset"
           createLabel="New agent…"
@@ -283,17 +283,17 @@ export function TaskEditor({
               setNewAgent(() => resolve);
             })
           }
-          openRoute={(agentId) => ({
+          openRoute={(agentDid) => ({
             ...base,
             section: "agents",
-            item: agentId,
+            item: agentDid,
           })}
         />
         <AgentSheet
           deployment={deployment}
           open={newAgent !== null}
-          onClose={(agentId) => {
-            newAgent?.(agentId);
+          onClose={(agentDid) => {
+            newAgent?.(agentDid);
             setNewAgent(null);
           }}
         />
@@ -375,7 +375,7 @@ export function TaskEditor({
       <DraftActions
         draft={d}
         fields={{
-          agentId: id("agent"),
+          agentDid: id("agent"),
           promptTemplate: id("prompt"),
           goalObjectiveTemplate: id("goal"),
           goalTokenBudget: id("budget"),
@@ -574,7 +574,7 @@ function TaskSummary({
     started: string | null;
   };
 }) {
-  const agent = agentOf(deployment, task.agentId);
+  const agent = agentOf(deployment, task.agentDid);
   const runs = whenItRuns(deployment, task);
   /* green only for a task that runs on its own */
   const automatic =
@@ -666,7 +666,7 @@ function TaskSummary({
       <div className="grid gap-2 @xl:grid-cols-3">
         <Summary
           label="Runs with"
-          to={agent ? section("agents", agent.agentId) : section("agents")}
+          to={agent ? section("agents", agent.agentDid) : section("agents")}
         >
           <span className="truncate">{agent?.displayName ?? "No agent"}</span>
         </Summary>
@@ -728,7 +728,7 @@ function taskDocument(deployment: NodeView, t: TaskView) {
     task_id: t.taskId,
     display_name: t.name ?? t.taskId,
     description: t.description,
-    agent_id: t.agentId ?? "",
+    agent_did: t.agentDid ?? "",
     prompt_template: t.promptTemplate ?? "",
     emit_outcome: t.emitOutcome,
     goal_objective_template: t.goalObjectiveTemplate,
@@ -771,7 +771,7 @@ export function TasksPanel({
             id: t.taskId,
             title: t.name ?? t.taskId,
             tags: t.tags,
-            meta: `${w.when} · with ${agentOf(deployment, t.agentId)?.displayName ?? "no agent"}`,
+            meta: `${w.when} · with ${agentOf(deployment, t.agentDid)?.displayName ?? "no agent"}`,
             badge:
               w.problem ??
               (t.recentRuns.lastStatus === "failed" ? "last run failed" : undefined),

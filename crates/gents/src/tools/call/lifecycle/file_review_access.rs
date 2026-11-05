@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::file_image_hydration::{
     FileImageDemand, FileImageHydrationReceipt, FileImageSelection,
 };

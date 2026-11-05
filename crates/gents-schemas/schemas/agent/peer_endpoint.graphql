@@ -1,7 +1,0 @@
-type PeerEndpoint @branchable {
-    did: String @index(unique: true) @immutable
-    node_id: String
-    address: String
-    updated_at: String
-    binding_sig: String
-}

@@ -16,17 +16,17 @@ describe("the app's own reactions", () => {
   it("selects the first published node and its agent through production wiring", () => {
     const app = createDesktopApp({ api: {} as DesktopApiAdapter });
     const nodeDid = "did:key:first-node";
-    const agentId = "default";
+    const agentDid = "default";
     publish(app, [
       node({
         nodeDid,
-        node: { nodeDid, defaultAgentId: agentId },
-        agents: [{ agentId, enabled: true, isDefault: true }],
+        node: { nodeDid, defaultAgentDid: agentDid },
+        agents: [{ agentDid, enabled: true, isDefault: true }],
       }),
     ]);
     expect(app.stores.selection.getState()).toMatchObject({
       nodeDid,
-      agentId,
+      agentDid,
       sessionId: null,
     });
   });

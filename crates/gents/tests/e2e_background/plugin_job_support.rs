@@ -283,8 +283,8 @@ pub(crate) async fn boot_job_harness(
         AcceptedTurnSpec {
             backend_id: BACKEND_ID,
             model: MODEL,
-            parent_agent_id: PARENT,
-            configured_agent_ids: &[PARENT, CHILD],
+            parent_agent_did: PARENT,
+            configured_agent_dids: &[PARENT, CHILD],
             request_id: &format!("{session_id}-parent"),
             session_id,
             prompt: &format!("{session_id} start"),
@@ -320,11 +320,11 @@ pub(crate) async fn reboot_job_harness(
     );
     let backend =
         MockStreamingBackend::start_with_plans(MODEL, plans).expect("start the restart backend");
-    for agent_id in [PARENT, CHILD] {
+    for agent_did in [PARENT, CHILD] {
         bind_agent_backend(
             &db.node,
             db.node_identity.did(),
-            agent_id,
+            agent_did,
             BACKEND_ID,
             backend.endpoint(),
             MODEL,

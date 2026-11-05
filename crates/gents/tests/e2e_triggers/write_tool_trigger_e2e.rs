@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::documents::{WriteToolDecl, WriteToolField};
 use gents::inference::llm::tool::Tool;
 use gents::store::graphql::escape_graphql_string;
@@ -68,13 +68,13 @@ async fn configure_action_trigger(
     owner: &str,
     task_id: &str,
     trigger_id: &str,
-    agent_id: &str,
+    agent_did: &str,
     prompt_template: &str,
 ) {
     apply_documents(node, vec![
         (
             Collection::Task,
-            serde_json::json!({"node_did":owner,"task_id":task_id,"agent_id":agent_id,"prompt_template":prompt_template}),
+            serde_json::json!({"node_did":owner,"task_id":task_id,"agent_did":agent_did,"prompt_template":prompt_template}),
         ),
         (
             Collection::EventSource,
@@ -122,7 +122,7 @@ fn routed_readiness_uses_generation_not_transient_reconcile_label() {
         reconcile_phase: "idle".into(),
         active_generation: 2,
         router_generation: 2,
-        default_agent_id: "behavior".into(),
+        default_agent_did: "behavior".into(),
         last_reconcile_result: "noop".into(),
         last_reconcile_error: String::new(),
     };
@@ -289,7 +289,7 @@ async fn boot_agent_with_action_trigger(
     .await
     .unwrap();
     let node_did = agent.node_did().to_string();
-    let default_agent_id = agent.default_agent_id().to_string();
+    let default_agent_did = agent.default_agent_did().to_string();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
@@ -310,7 +310,7 @@ async fn boot_agent_with_action_trigger(
         &node_did,
         task_id,
         trigger_id,
-        &default_agent_id,
+        &default_agent_did,
         PROMPT_TEMPLATE,
     )
     .await;

@@ -84,18 +84,18 @@ pub(super) struct AvailableBackend {
 
 async fn load_bound_agent_document(state: &ShimState) -> Result<gents::AgentDocument> {
     let node_did = state.node_did.as_ref();
-    let agent_id = state.agent_id.as_ref();
+    let agent_did = state.agent_did.as_ref();
     let raw = ConfigAccess::transact_local_write(&state.node, None, "codex.bound_agent", |txn| {
         Box::pin(async move {
-            read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_id)
+            read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_did)
                 .await?
                 .map(|(_, value)| value)
-                .ok_or_else(|| anyhow::anyhow!("bound Agent {agent_id:?} missing for {node_did:?}"))
+                .ok_or_else(|| anyhow::anyhow!("bound Agent {agent_did:?} missing for {node_did:?}"))
         })
     })
     .await?;
     let agent: gents::AgentDocument = serde_json::from_value(raw)
-        .with_context(|| format!("decoding bound Agent {agent_id:?}"))?;
+        .with_context(|| format!("decoding bound Agent {agent_did:?}"))?;
     Ok(agent)
 }
 
@@ -140,7 +140,7 @@ pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<Av
         .filter_map(|agent| {
             profile_backend
                 .get(agent.inference_profile_id.as_str())
-                .map(|backend_id| (agent.agent_id.clone(), (*backend_id).to_string()))
+                .map(|backend_id| (agent.agent_did.clone(), (*backend_id).to_string()))
         })
         .collect::<Vec<_>>();
 
@@ -197,19 +197,19 @@ fn backend_vetoed_by_readiness(
         ProjectedNodeReadinessSummary::Unknown(_) => return false,
     };
 
-    let bound_agent_ids = bindings
+    let bound_agent_dids = bindings
         .iter()
         .filter(|(_, binding_backend_id)| binding_backend_id == backend_id)
-        .map(|(agent_id, _)| agent_id.as_str())
+        .map(|(agent_did, _)| agent_did.as_str())
         .collect::<Vec<_>>();
 
-    if bound_agent_ids.is_empty() {
+    if bound_agent_dids.is_empty() {
         return false;
     }
 
-    bound_agent_ids.into_iter().all(|agent_id| {
+    bound_agent_dids.into_iter().all(|agent_did| {
         matches!(
-            summary.unavailable_agents.get(agent_id),
+            summary.unavailable_agents.get(agent_did),
             Some(
                 AgentReadinessUnavailableReason::BackendDisabled
                     | AgentReadinessUnavailableReason::BackendTemporarilyUnavailable
@@ -363,7 +363,7 @@ async fn apply_model_to_bound_agent_with_access(
     apply_model_selection(
         access,
         state.node_did.as_ref(),
-        state.agent_id.as_ref(),
+        state.agent_did.as_ref(),
         selection,
     )
     .await
@@ -372,7 +372,7 @@ async fn apply_model_to_bound_agent_with_access(
 async fn apply_model_selection(
     access: &ConfigAccess,
     owner: &str,
-    agent_id: &str,
+    agent_did: &str,
     selection: &ModelSelection,
 ) -> Result<()> {
     let new_profile_id = uuid::Uuid::new_v4().to_string();
@@ -381,7 +381,7 @@ async fn apply_model_selection(
             let new_profile_id = &new_profile_id;
             Box::pin(async move {
                 let (_, value) =
-                    read_desired_state_record_in_txn(txn, Collection::Agent, owner, agent_id)
+                    read_desired_state_record_in_txn(txn, Collection::Agent, owner, agent_did)
                         .await?
                         .context("bound agent does not exist for this node")?;
                 let mut agent: gents::AgentDocument = serde_json::from_value(value)?;

@@ -8,6 +8,32 @@ The Goal write must participate even though modeled Goal fields are unchanged.
 -/
 namespace GoalAutomation.OperatorResume
 
+/-- A continuation is agent work. The selected session agent signs its
+admission and executes its transaction; a node key or the predecessor's
+requester cannot substitute for that agent. The runtime holds agent keys, so
+this isolates agents from one another, not from their hosting runtime. -/
+def continuationIdentityValid (selected signer actor parentAgent : String) : Bool :=
+  signer == selected && actor == selected && parentAgent == selected
+
+theorem continuation_identity_requires_selected_signer
+    (selected signer actor parentAgent : String)
+    (h : continuationIdentityValid selected signer actor parentAgent = true) :
+    signer = selected ∧ actor = selected ∧ parentAgent = selected := by
+  simpa [continuationIdentityValid, Bool.and_eq_true, beq_iff_eq, and_assoc] using h
+
+/-- Reconciliation observes and updates each goal as its selected agent. A
+runtime may enumerate configured agents, but a row visible to one agent is not
+evidence that it may act for a different session agent. The same selected DID
+is used for observation, controller writes and any resumed continuation. -/
+def goalCandidateInScope (observer sessionAgent parentAgent : String) : Bool :=
+  observer == sessionAgent && parentAgent == sessionAgent
+
+theorem goal_candidate_requires_selected_actor
+    (observer sessionAgent parentAgent : String)
+    (h : goalCandidateInScope observer sessionAgent parentAgent = true) :
+    observer = sessionAgent ∧ parentAgent = sessionAgent := by
+  simpa [goalCandidateInScope, Bool.and_eq_true, beq_iff_eq] using h
+
 structure ClaimedRequest extends Request where
   expectedLastContinuedFrom : Option Nat
   requester : Option String

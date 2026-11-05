@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::store::graphql::escape_graphql_string;
 use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use gents_protocol::row::AgentRequestRow;
@@ -35,12 +35,12 @@ async fn create_task(
     node: &EmbeddedNode,
     owner: &str,
     task_id: &str,
-    agent_id: &str,
+    agent_did: &str,
     prompt_template: &str,
 ) {
     let escaped_owner = escape_graphql_string(owner);
     let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_agent_id = escape_graphql_string(agent_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_prompt_template = escape_graphql_string(prompt_template);
     let mutation = format!(
         r#"mutation {{
@@ -48,7 +48,7 @@ async fn create_task(
                 node_did: "{escaped_owner}",
                 task_id: "{escaped_task_id}",
                 display_name: "{escaped_task_id}",
-                agent_id: "{escaped_agent_id}",
+                agent_did: "{escaped_agent_did}",
                 prompt_template: "{escaped_prompt_template}",
                 enabled: true
             }}) {{ _docID }}
@@ -304,13 +304,13 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     .await
     .unwrap();
     let node_did = agent.node_did().to_string();
-    let default_agent_id = agent.default_agent_id().to_string();
+    let default_agent_did = agent.default_agent_did().to_string();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
     let startup = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
-        is_routed_ready_after(snapshot, 0) && snapshot.default_agent_id == default_agent_id
+        is_routed_ready_after(snapshot, 0) && snapshot.default_agent_did == default_agent_did
     })
     .await;
     let initial_generation = startup.active_generation;
@@ -324,7 +324,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
         db.node.as_ref(),
         &node_did,
         TASK_ID,
-        &default_agent_id,
+        &default_agent_did,
         PROMPT_TEMPLATE,
     )
     .await;
@@ -341,7 +341,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
 
     let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
         is_routed_ready_after(snapshot, initial_generation)
-            && snapshot.default_agent_id == default_agent_id
+            && snapshot.default_agent_did == default_agent_did
     })
     .await;
     assert!(

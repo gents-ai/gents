@@ -9,6 +9,25 @@ use crate::Collection;
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(super) fn changed_configuration_keys(
+    plan: &DesiredStateApplyPlan,
+    owner: &str,
+) -> Result<BTreeSet<(Collection, String)>> {
+    let mut changed = BTreeSet::new();
+    for document in plan.documents() {
+        let (document_owner, id) = document_identity(document.collection, &document.add)?;
+        if document_owner == owner {
+            changed.insert((document.collection, id.to_owned()));
+        }
+    }
+    for (collection, document_owner, id) in plan.removals() {
+        if document_owner == owner {
+            changed.insert((*collection, id.clone()));
+        }
+    }
+    Ok(changed)
+}
+
 pub(crate) async fn validate_desired_state_plan(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
@@ -63,7 +82,7 @@ pub(crate) async fn validate_desired_state_plan(
                 .into_iter()
                 .map(|((collection, _), value)| (collection, value)),
         )?;
-        references.validate()?;
+        references.validate_affected(&changed_configuration_keys(plan, owner)?)?;
         validate_outcome_source_fields(txn, plan, owner, &references, &mut introspected).await?;
         validate_advertised_profiles(txn, plan, owner, &references).await?;
         validate_trigger_document_fields(txn, plan, owner, &references, &mut introspected).await?;

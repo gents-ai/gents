@@ -30,12 +30,12 @@ fn record() -> CodexThreadRecord {
     }
 }
 
-fn caused_thread(node_did: &str, agent_id: &str) -> CausedThread {
+fn caused_thread(node_did: &str, agent_did: &str) -> CausedThread {
     CausedThread {
         session_id: "thread".into(),
         node_did: node_did.into(),
         requester_did: None,
-        agent_id: agent_id.into(),
+        agent_did: agent_did.into(),
         parent_session_id: "parent".into(),
         root_session_id: "root".into(),
         depth: 1,
@@ -129,7 +129,7 @@ async fn generated_agent_selection_cases_drive_scoped_model_binding() {
                 [
                     (
                         Collection::Agent,
-                        json!({"node_did": actual_owner, "agent_id": case.actual_agent,
+                        json!({"node_did": actual_owner, "agent_did": case.actual_agent,
                             "inference_profile_id": "profile"}),
                     ),
                     (
@@ -168,14 +168,14 @@ async fn generated_agent_selection_cases_drive_scoped_model_binding() {
 
         let mut record = record();
         record.caused = case
-            .thread_agent_id
+            .thread_agent_did
             .as_deref()
             .map(|agent| caused_thread(selected_owner, agent));
-        let agent = record.projection_agent_id(&case.root_agent_id).to_owned();
+        let agent = record.projection_agent_did(&case.root_agent_did).to_owned();
         let actual_model =
             load_bound_model_selection_id_for_state(&node, actual_owner, &case.actual_agent).await;
         let model = load_bound_model_selection_id_for_state(&node, selected_owner, &agent).await;
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
 
         if let Some(expected) = &case.resolved_model {
             assert_eq!(
@@ -185,7 +185,7 @@ async fn generated_agent_selection_cases_drive_scoped_model_binding() {
                 case.witness
             );
         }
-        assert_eq!(agent, case.projected_agent_id, "{}", case.witness);
+        assert_eq!(agent, case.projected_agent_did, "{}", case.witness);
         match &case.projected_model {
             Some(expected) => assert_eq!(
                 model.unwrap_or_else(|error| panic!("{}: {error:#}", case.witness)),

@@ -41,7 +41,7 @@ fn run_on_production_runtime(future: impl std::future::Future<Output = ()>) {
 }
 
 async fn fetch_terminal_request(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     request_doc_id: &str,
 ) -> AgentRequestRow {
     let request_doc_id = escape_graphql_string(request_doc_id);
@@ -422,7 +422,7 @@ async fn boot_streaming_agent(
     db: &crate::support::TestDb,
     test_name: &str,
     endpoint: &str,
-    agent_ids: &[&str],
+    agent_dids: &[&str],
     max_concurrent: i64,
 ) -> BootedAgent {
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity(test_name));
@@ -431,7 +431,7 @@ async fn boot_streaming_agent(
         identity.did(),
         STREAM_BACKEND_ID,
         endpoint,
-        agent_ids,
+        agent_dids,
         max_concurrent,
     )
     .await;
@@ -439,11 +439,11 @@ async fn boot_streaming_agent(
     let mut builder = Gents::builder()
         .node(db.node.clone())
         .identity(identity.clone())
-        .default_agent_id(agent_ids[0])
+        .default_agent_did(agent_dids[0])
         .tool_ceiling(ToolCeiling::meta_only());
-    for agent_id in agent_ids {
+    for agent_did in agent_dids {
         builder = builder
-            .agent(*agent_id)
+            .agent(*agent_did)
             .backend_id(STREAM_BACKEND_ID)
             .model_name(STREAM_MODEL)
             .stream_batch_ms(0)
@@ -460,18 +460,18 @@ async fn boot_streaming_agent(
 }
 
 async fn bind_streaming_backend(
-    node: &Arc<gents::defra_node::EmbeddedNode>,
+    node: &Arc<gents::defra_node::Node>,
     node_did: &str,
     backend_id: &str,
     endpoint: &str,
-    agent_ids: &[&str],
+    agent_dids: &[&str],
     max_concurrent: i64,
 ) {
-    for agent_id in agent_ids {
+    for agent_did in agent_dids {
         crate::support::fixtures::bind_agent_backend(
             node,
             node_did,
-            agent_id,
+            agent_did,
             backend_id,
             endpoint,
             STREAM_MODEL,
@@ -500,7 +500,7 @@ async fn bind_streaming_backend(
 }
 
 async fn insert_inference_call(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     request_id: &str,
     call_seq: i64,
     call_state: &str,
@@ -529,7 +529,7 @@ async fn insert_inference_call(
                 request_id: "{escaped_request_id}",
                 call_seq: {call_seq},
                 backend_id: "{STREAM_BACKEND_ID}",
-                agent_id: "{PRIMARY_AGENT}",
+                agent_did: "{PRIMARY_AGENT}",
                 node_did: "{NODE_DID}",
                 call_kind: "inference",
                 attempt: {call_seq},

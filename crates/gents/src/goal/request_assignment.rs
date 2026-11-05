@@ -258,16 +258,14 @@ pub(crate) fn latest_assignment_goals(
 }
 
 pub(crate) async fn load_request_assignment(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    access: &crate::ConfigAccess,
     request: &AgentRequestRow,
 ) -> anyhow::Result<RequestAssignmentObservation> {
-    crate::store::config_client::ConfigAccess::transact_local_readonly(
-        node,
-        None,
-        "goal.assignment_requests",
-        |txn| Box::pin(load_request_assignment_in_txn(txn, request)),
-    )
-    .await
+    access
+        .transact_readonly("goal.assignment_requests", |txn| {
+            Box::pin(load_request_assignment_in_txn(txn, request))
+        })
+        .await
 }
 
 pub(crate) async fn load_request_assignment_in_txn(

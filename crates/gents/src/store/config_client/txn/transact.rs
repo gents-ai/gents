@@ -109,6 +109,10 @@ struct TransactionAttemptFailure<E> {
     retry_generic: bool,
 }
 
+pub(crate) fn client_signed_write_may_retry(dispatched: bool) -> bool {
+    !dispatched
+}
+
 enum FailureDisposition {
     Observe,
     Retry(std::time::Duration),
@@ -234,9 +238,20 @@ where
             let attempt_result: Result<(), TransactionAttemptFailure<E>> = match callback_result {
                 Ok(value) => {
                     let affected_documents = txn.affected_documents();
+                    if let Err(error) = txn.observe_before_commit().await {
+                        let _ = txn.rollback_inner().await;
+                        return Err(E::from(error));
+                    }
                     match txn.commit_inner().await {
                         Ok(()) => {
                             txn.disarm_rollback();
+                            if let Err(error) = txn.observe_committed().await {
+                                return Err(E::from(
+                                    ConfigClientError::ClientAgentPublicationUnconfirmed(Box::new(
+                                        error,
+                                    )),
+                                ));
+                            }
                             telemetry.record(AttemptReport {
                                 outcome: WriteOutcome::Committed,
                                 conflict_source: ConflictSource::None,
@@ -244,6 +259,7 @@ where
                                 affected_documents: Some(affected_documents),
                                 rollback: RollbackStatus::NotNeeded,
                             });
+                            txn.complete_relationship_grants().await.map_err(E::from)?;
                             return Ok(TransactionOutcome::Committed(value));
                         }
                         Err(CommitFailure {
@@ -272,12 +288,37 @@ where
                                     RollbackStatus::Succeeded
                                 )
                             );
+                            if let Err(journal_error) = txn
+                                .observe_commit_failed(
+                                    definitely_not_committed || discarded_before_commit,
+                                )
+                                .await
+                            {
+                                return Err(E::from(
+                                    ConfigClientError::ClientAgentPublicationUnconfirmed(Box::new(
+                                        journal_error,
+                                    )),
+                                ));
+                            }
                             if let (false, false, Some(unconfirmed)) = (
                                 definitely_not_committed,
                                 discarded_before_commit,
                                 &unconfirmed,
                             ) {
                                 unconfirmed.store(true, Ordering::Release);
+                            }
+                            if !definitely_not_committed
+                                && !discarded_before_commit
+                                && txn.has_relationship_grants()
+                            {
+                                telemetry.record(AttemptReport {
+                                    outcome: WriteOutcome::Failed,
+                                    conflict_source: ConflictSource::None,
+                                    backoff: None,
+                                    affected_documents: Some(affected_documents),
+                                    rollback,
+                                });
+                                return Err(E::from(txn.unconfirmed_relationships(error)));
                             }
                             Err(TransactionAttemptFailure {
                                 retry_generic: mode.retries_generic_errors()
@@ -329,6 +370,11 @@ where
                 && txn.contends_with_request_siblings.load(Ordering::Relaxed);
             if sibling_contention {
                 max_attempts = max_attempts.max(retry::REQUEST_SIBLING_MAX_ATTEMPTS);
+            }
+            if !client_signed_write_may_retry(
+                txn.client_signed_write_dispatched.load(Ordering::Acquire),
+            ) {
+                max_attempts = attempt;
             }
             match failure_disposition(mode, conflict_source, retry_generic, attempt, max_attempts) {
                 FailureDisposition::Observe => {

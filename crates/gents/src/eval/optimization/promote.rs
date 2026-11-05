@@ -132,18 +132,11 @@ async fn job_in_state(
     access: &ConfigAccess,
     owner: &str,
     job_id: &str,
-    by: &str,
     expected: JobState,
 ) -> Result<JobRecord> {
     let job = load_job(access, owner, job_id)
         .await?
         .ok_or_else(|| refused("unknown_job", format!("no job {job_id:?} for {owner}")))?;
-    if by != job.origin.owner {
-        return Err(refused(
-            "foreign_did",
-            format!("{by:?} does not own job {job_id:?}"),
-        ));
-    }
     let state = derive_state(&job.journal);
     if state != expected {
         let reason = if expected == JobState::Promoted {
@@ -169,9 +162,14 @@ pub async fn promote(
     owner: &str,
     job_id: &str,
     digest: &str,
-    by: &str,
 ) -> Result<Promotion> {
-    let mut job = job_in_state(access, owner, job_id, by, JobState::ReadyToPromote).await?;
+    let by = access.actor_did().ok_or_else(|| {
+        refused(
+            "actor_required",
+            "optimization requires an authenticated caller",
+        )
+    })?;
+    let mut job = job_in_state(access, owner, job_id, JobState::ReadyToPromote).await?;
     let retained = checkpoint(&job.journal).ok_or_else(|| {
         refused(
             "no_checkpoint",
@@ -193,7 +191,7 @@ pub async fn promote(
         let pack = materialize_pack(
             &path,
             &origin.owner,
-            &origin.subject.agent_id,
+            &origin.subject.agent_slot,
             &origin.target.job_target(),
         )?;
         let text = baseline_text(&pack)?;
@@ -210,7 +208,7 @@ pub async fn promote(
 
     let applied = access
         .transact_write("optimization.promote", |txn| {
-            let (job, text, by) = (&job, &retained.text, by);
+            let (job, text, by) = (&job, &retained.text, &by);
             Box::pin(async move {
                 let live = capture_closure(txn, &job.owner).await?;
                 let drifted = between(&job.origin.closure, &closure_digests(&live)?);
@@ -232,7 +230,7 @@ pub async fn promote(
                     promotion.target_digest
                 );
                 let entry = JournalEntry::Promoted {
-                    by: by.to_owned(),
+                    by: (*by).clone(),
                     target_digest: promotion.target_digest.clone(),
                     previous_text: promotion.previous_text.clone(),
                     previous_digest: promotion.previous_digest.clone(),
@@ -245,7 +243,7 @@ pub async fn promote(
 
     match applied {
         Ok(promotion) => {
-            tracing::info!(job_id, by, "optimization checkpoint promoted");
+            tracing::info!(job_id, by = %by, "optimization checkpoint promoted");
             Ok(promotion)
         }
         Err(error) => {
@@ -262,14 +260,14 @@ pub async fn promote(
     }
 }
 
-pub async fn revert(
-    access: &ConfigAccess,
-    owner: &str,
-    job_id: &str,
-    digest: &str,
-    by: &str,
-) -> Result<()> {
-    let job = job_in_state(access, owner, job_id, by, JobState::Promoted).await?;
+pub async fn revert(access: &ConfigAccess, owner: &str, job_id: &str, digest: &str) -> Result<()> {
+    let by = access.actor_did().ok_or_else(|| {
+        refused(
+            "actor_required",
+            "optimization requires an authenticated caller",
+        )
+    })?;
+    let job = job_in_state(access, owner, job_id, JobState::Promoted).await?;
     let (promoted_digest, previous_text) = job
         .journal
         .iter()
@@ -293,7 +291,7 @@ pub async fn revert(
     let result = access
         .transact_write("optimization.revert", |txn| {
             let (job, promoted_digest, previous_text, by) =
-                (&job, &promoted_digest, &previous_text, by);
+                (&job, &promoted_digest, &previous_text, &by);
             Box::pin(async move {
                 let live = capture_closure(txn, &job.owner).await?;
                 let target = &job.origin.target;
@@ -315,7 +313,7 @@ pub async fn revert(
                 }];
                 let plan = target_plan(&restored, target, &expectation)?;
                 apply_desired_state_plan(txn, &plan).await?;
-                let entry = JournalEntry::Reverted { by: by.to_owned() };
+                let entry = JournalEntry::Reverted { by: (*by).clone() };
                 append_in_txn(txn, job, &entry).await?;
                 Ok(())
             })
@@ -324,7 +322,7 @@ pub async fn revert(
 
     match result {
         Ok(()) => {
-            tracing::warn!(job_id, by, "promoted prompt reverted; the job is closed");
+            tracing::warn!(job_id, by = %by, "promoted prompt reverted; the job is closed");
             Ok(())
         }
         Err(error) if stale_expectation(&error).is_some() => {
@@ -345,22 +343,22 @@ mod tests {
     use crate::eval::optimization::job::load_job;
     use crate::eval::optimization::subject::tests::FIXTURE_TEMPLATE;
     use crate::eval::optimization::target::TargetField;
-    use crate::eval::runner::freeze::tests::OWNER;
     use crate::store::config_client::DesiredStateApplyPlan;
     use crate::Collection;
     use serde_json::json;
 
-    async fn read_closure(access: &ConfigAccess) -> Closure {
-        access
+    async fn read_closure(harness: &Harness) -> Closure {
+        harness
+            .access()
             .transact_write("test.read_closure", |txn| {
-                Box::pin(async move { capture_closure(txn, OWNER).await })
+                Box::pin(async move { capture_closure(txn, harness.owner()).await })
             })
             .await
             .unwrap()
     }
 
-    async fn live_prompt(access: &ConfigAccess) -> Option<String> {
-        read_closure(access)
+    async fn live_prompt(harness: &Harness) -> Option<String> {
+        read_closure(harness)
             .await
             .iter()
             .find_map(|(collection, value)| {
@@ -375,8 +373,8 @@ mod tests {
             })
     }
 
-    async fn live_template(access: &ConfigAccess) -> Option<String> {
-        read_closure(access)
+    async fn live_template(harness: &Harness) -> Option<String> {
+        read_closure(harness)
             .await
             .iter()
             .find_map(|(collection, value)| {
@@ -393,48 +391,47 @@ mod tests {
     async fn a_task_template_promotion_writes_the_task_and_reverts_it() {
         let (harness, request) = accepting_task_harness("promote-task").await;
         let digest = checkpoint_digest(&harness, &request.job_id).await;
-        let job = load_job(harness.access(), OWNER, &request.job_id)
+        let job = load_job(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(job.origin.target.field, TargetField::TaskPromptTemplate);
         assert_eq!(job.origin.target.id, "plan");
-        let before = read_closure(harness.access()).await;
+        let before = read_closure(&harness).await;
 
-        let promotion = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
+        let promotion = promote(harness.access(), harness.owner(), &request.job_id, &digest)
             .await
             .unwrap();
         assert_eq!(promotion.previous_text, FIXTURE_TEMPLATE);
         assert_eq!(
-            live_template(harness.access()).await.as_deref(),
+            live_template(&harness).await.as_deref(),
             Some(CANDIDATE_TEMPLATE)
         );
         assert_eq!(
-            live_prompt(harness.access()).await.as_deref(),
+            live_prompt(&harness).await.as_deref(),
             Some(BASELINE_PROMPT),
             "the context is untouched"
         );
-        let after = read_closure(harness.access()).await;
+        let after = read_closure(&harness).await;
         assert_eq!(after.len(), before.len());
 
         revert(
             harness.access(),
-            OWNER,
+            harness.owner(),
             &request.job_id,
             &promotion.target_digest,
-            OWNER,
         )
         .await
         .unwrap();
         assert_eq!(
-            live_template(harness.access()).await.as_deref(),
+            live_template(&harness).await.as_deref(),
             Some(FIXTURE_TEMPLATE)
         );
         assert_eq!(state(&harness, &request.job_id).await, JobState::Reverted);
     }
 
     async fn state(harness: &Harness, job_id: &str) -> JobState {
-        let job = load_job(harness.access(), OWNER, job_id)
+        let job = load_job(harness.access(), harness.owner(), job_id)
             .await
             .unwrap()
             .unwrap();
@@ -442,7 +439,7 @@ mod tests {
     }
 
     async fn checkpoint_digest(harness: &Harness, job_id: &str) -> String {
-        let job = load_job(harness.access(), OWNER, job_id)
+        let job = load_job(harness.access(), harness.owner(), job_id)
             .await
             .unwrap()
             .unwrap();
@@ -451,12 +448,12 @@ mod tests {
             .pack_digest
     }
 
-    fn operator_edit() -> (Collection, serde_json::Value) {
+    fn operator_edit(owner: &str) -> (Collection, serde_json::Value) {
         (
             Collection::AgentContext,
             json!({
                 "context_id": "monitor-context",
-                "node_did": OWNER,
+                "node_did": owner,
                 "display_name": "Monitor",
                 "system_prompt": "An operator wrote this by hand.\n",
             }),
@@ -483,22 +480,22 @@ mod tests {
     async fn a_promotion_writes_only_the_target_and_records_what_it_replaced() {
         let (harness, request) = accepting_harness("promote-once").await;
         let digest = checkpoint_digest(&harness, &request.job_id).await;
-        let before = read_closure(harness.access()).await;
+        let before = read_closure(&harness).await;
         let on_disk = tree(&job_dir(&request.jobs_dir, &request.job_id));
 
-        let promotion = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
+        let promotion = promote(harness.access(), harness.owner(), &request.job_id, &digest)
             .await
             .unwrap();
         assert_eq!(promotion.previous_text, BASELINE_PROMPT);
         assert_ne!(promotion.target_digest, promotion.previous_digest);
         assert_eq!(
-            live_prompt(harness.access()).await.as_deref(),
+            live_prompt(&harness).await.as_deref(),
             Some(CANDIDATE_PROMPT)
         );
         assert_eq!(state(&harness, &request.job_id).await, JobState::Promoted);
 
-        let after = read_closure(harness.access()).await;
-        let job = load_job(harness.access(), OWNER, &request.job_id)
+        let after = read_closure(&harness).await;
+        let job = load_job(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap()
             .unwrap();
@@ -517,7 +514,7 @@ mod tests {
         else {
             panic!("the last entry is not Promoted: {:?}", job.journal.last());
         };
-        assert_eq!(by, OWNER, "the caller's DID is recorded");
+        assert_eq!(by.as_str(), harness.evaluator_did(), "the caller's DID is recorded");
         assert_eq!(journaled, &promotion.target_digest);
         assert_eq!(journaled, &target_digest(&after, target).unwrap());
         assert_eq!(
@@ -541,11 +538,11 @@ mod tests {
     #[tokio::test]
     async fn the_promotion_plan_expects_the_target_contexts_own_baseline_digest() {
         let (harness, request) = accepting_harness("promote-plan").await;
-        let job = load_job(harness.access(), OWNER, &request.job_id)
+        let job = load_job(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap()
             .unwrap();
-        let live = read_closure(harness.access()).await;
+        let live = read_closure(&harness).await;
         let target = &job.origin.target;
         let (plan, promotion) = promotion_plan(&job.origin, &live, CANDIDATE_PROMPT).unwrap();
 
@@ -567,7 +564,7 @@ mod tests {
             Some(baseline_digest.as_str())
         );
 
-        harness.install(vec![operator_edit()]).await;
+        harness.install(vec![operator_edit(harness.owner())]).await;
         let error = apply(harness.access(), &plan).await.unwrap_err();
         let stale = stale_expectation(&error).unwrap_or_else(|| panic!("{error:#}"));
         assert!(
@@ -579,7 +576,7 @@ mod tests {
             "{stale}"
         );
         assert_eq!(
-            live_prompt(harness.access()).await.as_deref(),
+            live_prompt(&harness).await.as_deref(),
             Some("An operator wrote this by hand.\n")
         );
     }
@@ -596,9 +593,9 @@ mod tests {
     async fn an_operator_edit_of_the_target_before_promotion_refuses_it_and_survives() {
         let (harness, request) = accepting_harness("promote-edited").await;
         let digest = checkpoint_digest(&harness, &request.job_id).await;
-        harness.install(vec![operator_edit()]).await;
+        harness.install(vec![operator_edit(harness.owner())]).await;
 
-        let error = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
+        let error = promote(harness.access(), harness.owner(), &request.job_id, &digest)
             .await
             .unwrap_err();
         let refusal = promote_refused(&error).unwrap_or_else(|| panic!("{error:#}"));
@@ -609,12 +606,12 @@ mod tests {
             refusal.detail
         );
         assert_eq!(
-            live_prompt(harness.access()).await.as_deref(),
+            live_prompt(&harness).await.as_deref(),
             Some("An operator wrote this by hand.\n"),
             "the operator's text is unchanged"
         );
         assert_eq!(state(&harness, &request.job_id).await, JobState::Stale);
-        let job = load_job(harness.access(), OWNER, &request.job_id)
+        let job = load_job(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap()
             .unwrap();
@@ -634,39 +631,40 @@ mod tests {
     async fn a_revert_restores_the_previous_text_and_is_terminal() {
         let (harness, request) = accepting_harness("revert-once").await;
         let digest = checkpoint_digest(&harness, &request.job_id).await;
-        let promotion = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
+        let promotion = promote(harness.access(), harness.owner(), &request.job_id, &digest)
             .await
             .unwrap();
 
         revert(
             harness.access(),
-            OWNER,
+            harness.owner(),
             &request.job_id,
             &promotion.target_digest,
-            OWNER,
         )
         .await
         .unwrap();
         assert_eq!(
-            live_prompt(harness.access()).await.as_deref(),
+            live_prompt(&harness).await.as_deref(),
             Some(BASELINE_PROMPT)
         );
         assert_eq!(state(&harness, &request.job_id).await, JobState::Reverted);
-        let job = load_job(harness.access(), OWNER, &request.job_id)
+        let job = load_job(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(
             job.journal.last(),
-            Some(&JournalEntry::Reverted { by: OWNER.into() })
+            Some(&JournalEntry::Reverted {
+                by: harness.evaluator_did()
+            })
         );
 
-        let again = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
+        let again = promote(harness.access(), harness.owner(), &request.job_id, &digest)
             .await
             .unwrap_err();
         assert_eq!(promote_refused(&again).unwrap().reason, "not_ready");
         assert_eq!(
-            live_prompt(harness.access()).await.as_deref(),
+            live_prompt(&harness).await.as_deref(),
             Some(BASELINE_PROMPT)
         );
     }
@@ -675,23 +673,22 @@ mod tests {
     async fn a_revert_is_refused_once_the_target_moved_and_the_edit_survives() {
         let (harness, request) = accepting_harness("revert-moved").await;
         let digest = checkpoint_digest(&harness, &request.job_id).await;
-        let promotion = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
+        let promotion = promote(harness.access(), harness.owner(), &request.job_id, &digest)
             .await
             .unwrap();
-        harness.install(vec![operator_edit()]).await;
+        harness.install(vec![operator_edit(harness.owner())]).await;
 
         let error = revert(
             harness.access(),
-            OWNER,
+            harness.owner(),
             &request.job_id,
             &promotion.target_digest,
-            OWNER,
         )
         .await
         .unwrap_err();
         assert_eq!(promote_refused(&error).unwrap().reason, "target_moved");
         assert_eq!(
-            live_prompt(harness.access()).await.as_deref(),
+            live_prompt(&harness).await.as_deref(),
             Some("An operator wrote this by hand.\n")
         );
         assert_eq!(state(&harness, &request.job_id).await, JobState::Promoted);
@@ -705,8 +702,8 @@ mod tests {
             .install(vec![(
                 Collection::Agent,
                 json!({
-                    "agent_id": "monitor",
-                    "node_did": OWNER,
+                    "agent_slot": "monitor",
+                    "node_did": harness.owner(),
                     "display_name": "Monitor, renamed",
                     "context_id": "monitor-context",
                     "inference_profile_id": "local",
@@ -714,14 +711,14 @@ mod tests {
             )])
             .await;
 
-        let error = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
+        let error = promote(harness.access(), harness.owner(), &request.job_id, &digest)
             .await
             .unwrap_err();
         let refusal = promote_refused(&error).unwrap_or_else(|| panic!("{error:#}"));
         assert_eq!(refusal.reason, "stale_closure");
         assert!(refusal.detail.contains("Agent"), "{}", refusal.detail);
         assert_eq!(
-            live_prompt(harness.access()).await.as_deref(),
+            live_prompt(&harness).await.as_deref(),
             Some(BASELINE_PROMPT)
         );
         assert_eq!(state(&harness, &request.job_id).await, JobState::Stale);
@@ -731,23 +728,23 @@ mod tests {
     async fn a_closure_edit_committed_between_the_check_and_the_write_refuses_the_promotion() {
         let (harness, request) = accepting_harness("promote-raced").await;
         let digest = checkpoint_digest(&harness, &request.job_id).await;
+        let mut tools = read_closure(&harness)
+            .await
+            .into_iter()
+            .find_map(|(collection, value)| {
+                (collection == Collection::Tools && value["tools_id"] == "monitor-tools")
+                    .then_some(value)
+            })
+            .expect("selected Tools");
+        tools["display_name"] = json!("Monitor tools, renamed");
         let gate = std::sync::Arc::new((tokio::sync::Notify::new(), tokio::sync::Notify::new()));
         let promotion = BETWEEN_CHECK_AND_WRITE.scope(
             std::sync::Arc::clone(&gate),
-            promote(harness.access(), OWNER, &request.job_id, &digest, OWNER),
+            promote(harness.access(), harness.owner(), &request.job_id, &digest),
         );
-        let node = harness
-            .access()
-            .local_node()
-            .expect("the harness is embedded");
         let edit = async {
             gate.0.notified().await;
-            let response = node
-                .execute(
-                    r#"mutation { update_Tools(filter: {tools_id: {_eq: "monitor-tools"}}, input: {display_name: "Monitor tools, renamed"}) { _docID } }"#,
-                )
-                .await;
-            assert!(!response.has_errors(), "{:?}", response.errors);
+            harness.install(vec![(Collection::Tools, tools)]).await;
             gate.1.notify_one();
         };
         let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(60), async {
@@ -761,11 +758,11 @@ mod tests {
         assert_eq!(refusal.reason, "stale_closure");
         assert!(refusal.detail.contains("Tools"), "{}", refusal.detail);
         assert_eq!(
-            live_prompt(harness.access()).await.as_deref(),
+            live_prompt(&harness).await.as_deref(),
             Some(BASELINE_PROMPT)
         );
         assert_eq!(state(&harness, &request.job_id).await, JobState::Stale);
-        let job = load_job(harness.access(), OWNER, &request.job_id)
+        let job = load_job(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap()
             .unwrap();
@@ -782,33 +779,202 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_foreign_did_a_wrong_digest_and_an_unready_job_are_each_refused() {
-        let (harness, request) = accepting_harness("promote-refusals").await;
-        let digest = checkpoint_digest(&harness, &request.job_id).await;
+    async fn held_user_promotion_and_revert_match_native_job_permissions() -> anyhow::Result<()> {
+        use crate::store::config_client::GraphqlEndpoint;
+        use crate::NodeIdentity;
 
-        let foreign = promote(
-            harness.access(),
-            OWNER,
+        let modeled =
+            &crate::lean_vocab_test::lean_contract_snapshot().identity_optimization_promotion_cases;
+        let expected = |name: &str| {
+            modeled
+                .iter()
+                .find(|case| case["name"] == name)
+                .expect("modeled case")
+        };
+        let (harness, request) = accepting_harness("native-promotion").await;
+        let digest = checkpoint_digest(&harness, &request.job_id).await;
+        let keys = tempfile::tempdir()?;
+        let outsider = crate::KeyIdentity::load_or_create(keys.path().join("outsider.key"), None)?;
+        let endpoint = match harness.access() {
+            ConfigAccess::Graphql(endpoint) => endpoint.url(),
+            _ => panic!("held evaluator must use HTTP"),
+        };
+        let foreign = ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(endpoint, outsider.did())
+                .with_client_signing_capability(outsider.client_signing_capability()?)?
+                .with_client_signed_agent_creates(),
+        );
+        let hidden = promote(&foreign, harness.owner(), &request.job_id, &digest)
+            .await
+            .unwrap_err();
+        let missing = promote(&foreign, harness.owner(), "missing-job", &digest)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            promote_refused(&hidden).map(|error| error.reason),
+            Some("unknown_job")
+        );
+        assert_eq!(
+            promote_refused(&hidden).map(|error| error.reason),
+            promote_refused(&missing).map(|error| error.reason)
+        );
+        let anonymous = ConfigAccess::graphql(endpoint);
+        let no_actor = promote(&anonymous, harness.owner(), &request.job_id, &digest)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            promote_refused(&no_actor).map(|error| error.reason),
+            Some("actor_required")
+        );
+        assert_eq!(expected("missing-actor")["expected_target"], "before");
+
+        let owner = harness.owner().to_owned();
+        let node_doc = harness
+            .access()
+            .transact_readonly("test.promotion.node", |txn| {
+                let owner = &owner;
+                Box::pin(async move {
+                    let (doc_id, _) =
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            Collection::Node,
+                            owner,
+                            owner,
+                        )
+                        .await?
+                        .expect("user-owned Node");
+                    Ok::<_, anyhow::Error>(doc_id)
+                })
+            })
+            .await?;
+        harness
+            .access()
+            .add_actor_relationship(
+                "Node",
+                &node_doc,
+                "administrator",
+                &identity::Did::new(outsider.did())?,
+            )
+            .await?;
+        let before_prompt = live_prompt(&harness).await.expect("target prompt");
+        let before_job = load_job(harness.access(), harness.owner(), &request.job_id)
+            .await?
+            .unwrap();
+        let retained = checkpoint(&before_job.journal).expect("ready checkpoint");
+
+        // Establish that the foreign caller can stage the target update, then
+        // abort that independent probe before exercising the joint transaction.
+        let probe = foreign
+            .transact_write("test.promotion.target_probe", |txn| {
+                let origin = &before_job.origin;
+                let text = &retained.text;
+                Box::pin(async move {
+                    let live = capture_closure(txn, &origin.owner).await?;
+                    let (plan, _) = promotion_plan(origin, &live, text)?;
+                    apply_desired_state_plan(txn, &plan).await?;
+                    Err::<(), anyhow::Error>(anyhow::anyhow!("target probe rollback"))
+                })
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(probe.to_string(), "target probe rollback");
+        assert_eq!(
+            live_prompt(&harness).await.as_deref(),
+            Some(before_prompt.as_str())
+        );
+        assert!(promote(&foreign, harness.owner(), &request.job_id, &digest)
+            .await
+            .is_err());
+        let denied = expected("reader-cannot-update-job");
+        assert_eq!(denied["expected_target"], "before");
+        assert_eq!(
+            live_prompt(&harness).await.as_deref(),
+            Some(before_prompt.as_str())
+        );
+        let after_denial = load_job(harness.access(), harness.owner(), &request.job_id)
+            .await?
+            .unwrap();
+        assert_eq!(after_denial.journal, before_job.journal);
+        assert_eq!(denied["expected_journal"].as_array().unwrap().len(), 0);
+
+        let promotion =
+            promote(harness.access(), harness.owner(), &request.job_id, &digest).await?;
+        let granted = expected("held-user-promote");
+        assert_eq!(granted["expected_target"], "after");
+        assert_eq!(
+            live_prompt(&harness).await.as_deref(),
+            Some(CANDIDATE_PROMPT)
+        );
+        let promoted = load_job(harness.access(), harness.owner(), &request.job_id)
+            .await?
+            .unwrap();
+        assert_eq!(
+            promoted.journal.len(),
+            before_job.journal.len() + granted["expected_journal"].as_array().unwrap().len()
+        );
+        assert!(
+            matches!(promoted.journal.last(), Some(JournalEntry::Promoted { by, .. }) if by == &harness.evaluator_did())
+        );
+
+        assert!(revert(
+            &foreign,
+            harness.owner(),
             &request.job_id,
-            &digest,
-            "did:key:someone-else",
+            &promotion.target_digest
         )
         .await
-        .unwrap_err();
-        assert_eq!(promote_refused(&foreign).unwrap().reason, "foreign_did");
+        .is_err());
+        assert_eq!(
+            live_prompt(&harness).await.as_deref(),
+            Some(CANDIDATE_PROMPT)
+        );
+        assert_eq!(
+            load_job(harness.access(), harness.owner(), &request.job_id)
+                .await?
+                .unwrap()
+                .journal,
+            promoted.journal
+        );
+        revert(
+            harness.access(),
+            harness.owner(),
+            &request.job_id,
+            &promotion.target_digest,
+        )
+        .await?;
+        let reverted = expected("held-user-revert");
+        assert_eq!(reverted["expected_target"], "after");
+        assert_eq!(
+            live_prompt(&harness).await.as_deref(),
+            Some(before_prompt.as_str())
+        );
+        let final_job = load_job(harness.access(), harness.owner(), &request.job_id)
+            .await?
+            .unwrap();
+        assert_eq!(
+            final_job.journal.len(),
+            promoted.journal.len() + reverted["expected_journal"].as_array().unwrap().len()
+        );
+        assert!(
+            matches!(final_job.journal.last(), Some(JournalEntry::Reverted { by }) if by == &harness.evaluator_did())
+        );
+        Ok(())
+    }
 
+    #[tokio::test]
+    async fn a_wrong_digest_and_an_unready_job_are_each_refused() {
+        let (harness, request) = accepting_harness("promote-refusals").await;
         let wrong = promote(
             harness.access(),
-            OWNER,
+            harness.owner(),
             &request.job_id,
             "sha256:not-it",
-            OWNER,
         )
         .await
         .unwrap_err();
         assert_eq!(promote_refused(&wrong).unwrap().reason, "wrong_digest");
         assert_eq!(
-            live_prompt(harness.access()).await.as_deref(),
+            live_prompt(&harness).await.as_deref(),
             Some(BASELINE_PROMPT),
             "a refused promotion writes nothing"
         );
@@ -820,10 +986,9 @@ mod tests {
         let (rejecting, unready) = rejecting_harness("unready").await;
         let error = promote(
             rejecting.access(),
-            OWNER,
+            rejecting.owner(),
             &unready.job_id,
             "sha256:anything",
-            OWNER,
         )
         .await
         .unwrap_err();
@@ -835,12 +1000,12 @@ mod tests {
         let (harness, request) = accepting_harness("promote-tampered").await;
         let digest = checkpoint_digest(&harness, &request.job_id).await;
 
-        let unknown = promote(harness.access(), OWNER, "no-such-job", &digest, OWNER)
+        let unknown = promote(harness.access(), harness.owner(), "no-such-job", &digest)
             .await
             .unwrap_err();
         assert_eq!(promote_refused(&unknown).unwrap().reason, "unknown_job");
 
-        let job = load_job(harness.access(), OWNER, &request.job_id)
+        let job = load_job(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap()
             .unwrap();
@@ -854,12 +1019,12 @@ mod tests {
         assert!(prompt.exists(), "{}", prompt.display());
         std::fs::write(&prompt, "Edited on disk after the job accepted it.\n").unwrap();
 
-        let error = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
+        let error = promote(harness.access(), harness.owner(), &request.job_id, &digest)
             .await
             .unwrap_err();
         assert_eq!(promote_refused(&error).unwrap().reason, "rebuild_mismatch");
         assert_eq!(
-            live_prompt(harness.access()).await.as_deref(),
+            live_prompt(&harness).await.as_deref(),
             Some(BASELINE_PROMPT)
         );
         assert_eq!(

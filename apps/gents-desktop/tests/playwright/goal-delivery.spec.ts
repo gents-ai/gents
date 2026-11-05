@@ -12,7 +12,7 @@ for (const colorScheme of ["light", "dark"] as const) {
         nodeDid: "did:key:z6MkBombadilAgent",
         commandId: "retained-opening",
         sessionId: "session-intro",
-        agentId: "default",
+        agentDid: "default",
         sessionDocId: null,
         expected: null,
         cwd: null,

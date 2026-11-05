@@ -82,7 +82,7 @@
               "_eq": "$trial"
             },
             "requester_did": {
-              "_eq": "$trial"
+              "_eq": "$evaluator"
             },
             "sequence": {
               "_eq": 1

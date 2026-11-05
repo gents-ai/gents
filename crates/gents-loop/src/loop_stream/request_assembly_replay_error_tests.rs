@@ -496,6 +496,7 @@ fn replay_assembly_config() -> LoopConfig {
         additional_params: None,
         structured_output: None,
         tool_choice: None,
+        configuration_guard: None,
         on_rendered_request: None,
         turn_compactor: None,
         active_reduction_keys: Vec::new(),
@@ -1020,4 +1021,55 @@ async fn rebuilt_request_over_the_calibrated_budget_cannot_fit_and_keeps_the_ses
         config.context_calibration.anchor().is_some(),
         "a failed reduction keeps the anchor"
     );
+}
+
+#[tokio::test]
+async fn every_provider_assembly_rechecks_configuration_before_reading_input() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut config = replay_assembly_config();
+    config.configuration_guard = Some(Arc::new({
+        let calls = Arc::clone(&calls);
+        move || {
+            let calls = Arc::clone(&calls);
+            Box::pin(async move {
+                if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Ok(())
+                } else {
+                    Err(ProviderConfigurationGuardError::Unavailable(Box::new(
+                        std::io::Error::other("revoked"),
+                    )))
+                }
+            })
+        }
+    }));
+    let replay = LoopReplayInput::default();
+    let mut history = Vec::new();
+    let mut new_messages = vec![TaggedMessage::unassociated(Message::user("first"))];
+    assemble_provider_request(
+        &AssemblyOnlyModel,
+        &mut history,
+        &mut new_messages,
+        &[],
+        &config,
+        &replay,
+    )
+    .await
+    .unwrap();
+    let before = new_messages.clone();
+    let result = assemble_provider_request(
+        &AssemblyOnlyModel,
+        &mut history,
+        &mut new_messages,
+        &[],
+        &config,
+        &replay,
+    )
+    .await;
+    assert!(result.is_err());
+    assert_eq!(
+        new_messages, before,
+        "denied assembly must not consume pending inputs"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }

@@ -1,30 +1,45 @@
-use std::sync::Arc;
-
 use anyhow::{Context, Result};
 use gents::documents::Agent;
 use gents::store::graphql::escape_graphql_string;
 use gents::tools::builtin::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
 use gents::tools::surface::presets;
-use gents::{default_agent_id_for_node, Collection, NodeIdentity};
+use gents::Collection;
 use serde_json::{json, Value};
 
 use crate::cli::output_format::OutputFormat;
 use crate::cli::*;
 use crate::config_writes::{write_agent_document, ConfigAccess};
 use crate::request_helpers::resolve_dual_id;
-use crate::{
-    graphql_rows, load_initialized_home_identity, print_json, read_init_config,
-    resolve_config_access, resolve_home_dir,
-};
+use crate::{graphql_rows, print_json, read_init_config, resolve_config_access, resolve_home_dir};
 
 pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
-    let agent_id = args
-        .agent_id
-        .clone()
-        .unwrap_or_else(|| default_agent_id_for_node(&args.node_did));
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let endpoint = client_endpoint(&args.graphql).await?;
+    let access = ConfigAccess::Graphql(endpoint.clone());
+    let binding = match args.agent_did.as_deref() {
+        Some(agent_did) => {
+            let owner = &args.node_did;
+            let row = access
+                .transact_readonly("cli.agent.identity", |txn| {
+                    Box::pin(async move {
+                        gents::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            Collection::Agent,
+                            owner,
+                            agent_did,
+                        )
+                        .await
+                    })
+                })
+                .await?
+                .context("Agent DID does not exist; omit --agent-did to provision a new agent")?;
+            serde_json::from_value::<Agent>(row.1)?.identity_binding()
+        }
+        None => gents_desktop_core::agent_identity::provision(&endpoint, &args.node_did).await?,
+    };
+    let agent_did = binding.agent_did.clone();
     let agent = Agent {
-        agent_id: agent_id.clone(),
+        agent_did: binding.agent_did,
+        creation_nonce: binding.creation_nonce,
         node_did: args.node_did.clone(),
         display_name: args.display_name.clone(),
         description: args.description.clone(),
@@ -37,7 +52,7 @@ pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
     let doc_id = write_agent_document(&access, &agent).await?;
     let output = json!({
         "doc_id": doc_id,
-        "agent_id": agent_id,
+        "agent_did": agent_did,
         "node_did": args.node_did,
         "context_id": args.context_id,
         "inference_profile_id": args.inference_profile_id,
@@ -47,38 +62,64 @@ pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
     Ok(())
 }
 
-fn local_identity(home: Option<&std::path::Path>) -> Result<Arc<dyn NodeIdentity>> {
-    let home_dir = resolve_home_dir(home);
-    let config = read_init_config(&home_dir)?.with_context(|| {
-        format!(
-            "no init config found in {}; run `gents init` first",
-            home_dir.display()
-        )
-    })?;
-    load_initialized_home_identity(&home_dir, &config)
+async fn client_endpoint(graphql: &str) -> Result<gents::store::config_client::GraphqlEndpoint> {
+    let identity = crate::load_client_identity().await?;
+    let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        identity.private_key_bytes(),
+    )?;
+    Ok(
+        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, identity.did())
+            .with_client_signing_capability(capability)?
+            .with_client_signed_agent_creates(),
+    )
+}
+
+fn local_node_did(home: Option<&std::path::Path>) -> Result<String> {
+    read_init_config(&resolve_home_dir(home))?
+        .map(|config| config.node_did)
+        .context("No runtime configured; pass the target runtime home.")
 }
 
 async fn submit_agent(
     graphql: &str,
-    home: Option<&std::path::Path>,
+    _home: Option<&std::path::Path>,
     owner: &str,
-    params: ConfigureAgentParams,
+    mut params: ConfigureAgentParams,
 ) -> Result<()> {
-    let identity = local_identity(home)?;
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(graphql), home)?);
-    let result = configure_agent(
-        &access,
-        owner,
-        identity.as_ref(),
-        &params,
-        &Default::default(),
-    )
-    .await?;
+    let endpoint = client_endpoint(graphql).await?;
+    if matches!(params.action.as_str(), "create" | "clone") {
+        params.identity_binding =
+            Some(gents_desktop_core::agent_identity::provision(&endpoint, owner).await?);
+    }
+    let access = ConfigAccess::Graphql(endpoint);
+    let result = configure_agent(&access, owner, &params, &Default::default()).await?;
     print_json(&serde_json::from_str::<Value>(&result)?)
 }
 
 fn optional_update(value: Option<String>) -> StringUpdate {
     value.map(StringUpdate::Set).unwrap_or_default()
+}
+
+pub(super) async fn agent_self_config_permission(
+    args: AgentSelfConfigPermissionArgs,
+    grant: bool,
+) -> Result<()> {
+    use gents::store::config_client::AgentSelfConfigPermission;
+
+    let access = ConfigAccess::Graphql(client_endpoint(&args.graphql).await?);
+    let permission = if grant {
+        AgentSelfConfigPermission::Grant
+    } else {
+        AgentSelfConfigPermission::Revoke
+    };
+    access
+        .set_agent_self_config_permission(&args.node_did, &args.agent_did, permission)
+        .await?;
+    print_json(&json!({
+        "node_did": args.node_did,
+        "agent_did": args.agent_did,
+        "self_config_granted": grant,
+    }))
 }
 
 pub(super) async fn agent_create(args: AgentCreateArgs) -> Result<()> {
@@ -107,14 +148,14 @@ pub(super) async fn agent_create(args: AgentCreateArgs) -> Result<()> {
 }
 
 pub(super) async fn agent_clone(args: AgentCloneArgs) -> Result<()> {
-    let owner = local_identity(args.home.as_deref())?.did().to_owned();
+    let owner = local_node_did(args.home.as_deref())?;
     submit_agent(
         &args.graphql,
         args.home.as_deref(),
         &owner,
         ConfigureAgentParams {
             action: "clone".into(),
-            clone_from: Some(args.source_agent_id),
+            clone_from: Some(args.source_agent_did),
             display_name: StringUpdate::Set(args.display_name),
             description: optional_update(args.description),
             system_prompt: optional_update(args.system_prompt),
@@ -127,14 +168,14 @@ pub(super) async fn agent_clone(args: AgentCloneArgs) -> Result<()> {
 }
 
 pub(super) async fn agent_disable(args: AgentDisableArgs) -> Result<()> {
-    let owner = local_identity(args.home.as_deref())?.did().to_owned();
+    let owner = local_node_did(args.home.as_deref())?;
     submit_agent(
         &args.graphql,
         args.home.as_deref(),
         &owner,
         ConfigureAgentParams {
             action: "disable".into(),
-            agent_id: Some(args.agent_id),
+            agent_did: Some(args.agent_did),
             ..Default::default()
         },
     )
@@ -238,7 +279,7 @@ async fn classify_preset(access: &ConfigAccess, value: &Value) -> Result<Option<
     presets::classify_tools(&tools, &merged)
 }
 
-const CANONICAL_AGENT_SHOW_FIELDS: &str = "agent_id node_did display_name description context_id inference_profile_id enabled tags created_at";
+const CANONICAL_AGENT_SHOW_FIELDS: &str = "agent_did creation_nonce node_did display_name description context_id inference_profile_id enabled tags created_at";
 
 const CANONICAL_PROFILE_SHOW_FIELDS: &str = "profile_id display_name description backend_id model_name reasoning_effort service_tier context_window max_output_tokens sampling_id execution_id tags";
 
@@ -263,7 +304,7 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
         &id,
     )
     .await?
-    .ok_or_else(|| anyhow::anyhow!("not found: no Agent document with agent_id {id}"))?;
+    .ok_or_else(|| anyhow::anyhow!("not found: no Agent document with agent_did {id}"))?;
 
     let node_did = row
         .get("node_did")
@@ -354,9 +395,10 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use gents::NodeIdentity as _;
     use std::sync::Arc;
 
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use gents::documents::Tools;
     use gents::{ensure_runtime_schemas, upsert_agent};
     use serde_json::Value;
@@ -437,7 +479,8 @@ mod tests {
             upsert_agent(
                 &node,
                 &Agent {
-                    agent_id: "web-researcher".to_string(),
+                    creation_nonce: "a".repeat(64),
+                    agent_did: "web-researcher".to_string(),
                     node_did: owner.to_string(),
                     display_name: Some(display.to_string()),
                     description: None,
@@ -456,7 +499,7 @@ mod tests {
         let row = load_document(
             &access,
             Collection::Agent,
-            "agent_id node_did display_name",
+            "agent_did creation_nonce node_did display_name",
             None,
             Some(local),
             "web-researcher",
@@ -470,7 +513,8 @@ mod tests {
         upsert_agent(
             &node,
             &Agent {
-                agent_id: "web-researcher".to_string(),
+                creation_nonce: "a".repeat(64),
+                agent_did: "web-researcher".to_string(),
                 node_did: peer.to_string(),
                 display_name: Some("Peer again".to_string()),
                 description: None,
@@ -489,7 +533,7 @@ mod tests {
         let error = load_document(
             &access,
             Collection::Agent,
-            "agent_id node_did display_name",
+            "agent_did creation_nonce node_did display_name",
             None,
             None,
             "web-researcher",
@@ -507,7 +551,7 @@ mod tests {
         let error = load_document(
             &access,
             Collection::Agent,
-            "agent_id node_did display_name",
+            "agent_did creation_nonce node_did display_name",
             None,
             Some("did:key:absent-owner"),
             "web-researcher",
@@ -560,8 +604,9 @@ mod tests {
         )
         .await?;
 
-        let access = ConfigAccess::local(node.clone());
+        let access = ConfigAccess::local_as(node.clone(), actor);
         let doc = ConfigureAgentParams {
+            identity_binding: Some(gents::store::identity::provision_agent_identity(&identity)?),
             action: "create".into(),
             display_name: StringUpdate::Set("Canonical".into()),
             description: StringUpdate::Set("Canonical test agent".into()),
@@ -571,12 +616,12 @@ mod tests {
             ..Default::default()
         };
         let outcome: Value = serde_json::from_str(
-            &configure_agent(&access, owner, &identity, &doc, &Default::default()).await?,
+            &configure_agent(&access, owner, &doc, &Default::default()).await?,
         )?;
         assert_eq!(outcome["committed"], true);
-        let agent_id = outcome["agent_id"].as_str().context("created agent ID")?;
+        let agent_did = outcome["agent_did"].as_str().context("created agent ID")?;
 
-        let agent = gents::load_agent(&node, agent_id)
+        let agent = gents::load_agent(&node, agent_did)
             .await?
             .expect("created agent exists");
         assert_eq!(agent.inference_profile_id, "profile-1");
@@ -610,20 +655,21 @@ mod tests {
         );
 
         let clone_doc = ConfigureAgentParams {
+            identity_binding: Some(gents::store::identity::provision_agent_identity(&identity)?),
             action: "clone".into(),
-            clone_from: Some(agent_id.to_owned()),
+            clone_from: Some(agent_did.to_owned()),
             display_name: StringUpdate::Set("Cloned".into()),
             profile_id: StringUpdate::Set("profile-1".into()),
             ..Default::default()
         };
         let clone_outcome: Value = serde_json::from_str(
-            &configure_agent(&access, owner, &identity, &clone_doc, &Default::default()).await?,
+            &configure_agent(&access, owner, &clone_doc, &Default::default()).await?,
         )?;
         assert_eq!(clone_outcome["committed"], true);
-        let cloned_id = clone_outcome["agent_id"]
+        let cloned_id = clone_outcome["agent_did"]
             .as_str()
             .context("cloned agent ID")?;
-        assert_ne!(cloned_id, agent_id);
+        assert_ne!(cloned_id, agent_did);
         let cloned = gents::load_agent(&node, cloned_id)
             .await?
             .expect("cloned agent exists");
@@ -655,20 +701,20 @@ mod tests {
         assert!(load_document(
             &access,
             Collection::Agent,
-            "agent_id node_did",
+            "agent_did creation_nonce node_did",
             Some("did:key:foreign"),
             Some(owner),
-            agent_id
+            agent_did
         )
         .await?
         .is_none());
         assert!(load_document(
             &access,
             Collection::Agent,
-            "agent_id node_did",
+            "agent_did creation_nonce node_did",
             Some(owner),
             Some(owner),
-            agent_id
+            agent_did
         )
         .await?
         .is_some());
@@ -694,7 +740,8 @@ mod tests {
         ensure_runtime_schemas(&node).await?;
         gents::ensure_node(&node, "did:key:set-owner").await?;
         let agent = Agent {
-            agent_id: "b1".to_string(),
+            creation_nonce: "a".repeat(64),
+            agent_did: "b1".to_string(),
             node_did: "did:key:set-owner".to_string(),
             display_name: None,
             description: None,
@@ -709,7 +756,7 @@ mod tests {
                 .contains("missing-profile")
         );
         let response = node
-            .execute("{ Agent {agent_id} AgentContext {context_id} Tools {tools_id} }")
+            .execute("{ Agent {agent_did} AgentContext {context_id} Tools {tools_id} }")
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         for name in ["Agent", "AgentContext", "Tools"] {

@@ -138,6 +138,12 @@ impl Tool for CallToolTool {
             return Err(MetaToolError::structured(error));
         }
 
+        let current = lookup_service(&self.ctx, &args.service_id)
+            .await
+            .context("rechecking MCP service before tool dispatch")?;
+        if current != service {
+            return Err(anyhow!("MCP service route changed after argument preflight").into());
+        }
         let result = tokio::time::timeout(
             call_timeout,
             self.ctx.mcp_pool.call_tool_with_connect_timeout(
@@ -375,7 +381,6 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use serde_json::json;
-    use std::sync::Arc;
 
     use crate::lean_vocab_test::{lean_tool_preflight_cases, LeanToolPreflightCase};
     use crate::tools::mcp::health::{HealthStatus, ServiceHealth, ServiceHealthMap};
@@ -480,14 +485,17 @@ mod tests {
 
     #[tokio::test]
     async fn disallowed_service_returns_before_argument_validation() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let (node, _runtime) = super::super::tests::test_node().await;
+        let node_did = node.node_identity_did().unwrap().to_owned();
         let tool = CallToolTool::new(MetaToolContext {
+            configuration: crate::inference::resolved::ResolvedConfiguration::Static,
+            actor: identity::Did::new(&node_did).unwrap(),
             node,
             mcp_pool: McpPool::new(),
             health: ServiceHealthMap::new(),
             local_hostname: "studio-1".to_string(),
             local_subnet: None,
-            node_did: "did:key:z-test-agent".to_string(),
+            node_did,
             allowed_mcp_service_ids: vec!["x-data".to_string()],
             remote_tools: super::super::tests::remote_selection(&["x-data"], &["search_posts"]),
         });

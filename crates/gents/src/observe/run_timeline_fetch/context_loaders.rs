@@ -35,23 +35,9 @@ pub(super) async fn load_timeline_sessions(
             .collect::<Vec<_>>()
             .join("\n");
         let response = access.execute(&format!("{{ {selections} }}")).await?;
-        anyhow::ensure!(
-            response.get("errors").is_none_or(
-                |errors| errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)
-            ),
-            "timeline AgentSession query failed: {}",
-            response["errors"]
-        );
-        let data = response
-            .get("data")
-            .context("timeline AgentSession query omitted data")?;
         for (index, (node_did, session_id, requester_did)) in batch.iter().enumerate() {
             let alias = format!("s{index}");
-            let rows = data
-                .get(alias.as_str())
-                .and_then(serde_json::Value::as_array)
-                .with_context(|| format!("timeline query omitted AgentSession scope s{index}"))?
-                .clone();
+            let rows = super::query_helpers::decode_rows(&response, &alias)?;
             if let Some(session) =
                 decode_timeline_session_rows(rows, node_did, session_id, requester_did.as_deref())?
             {
@@ -95,7 +81,7 @@ mod tests {
 
     #[tokio::test]
     async fn canonical_session_reads_require_exact_owner_and_requester_scope() {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(defra_node::Node::builder().build().await.unwrap());
         node.add_collection(gents_protocol::schemas::AGENT_SESSION)
             .await
             .unwrap();
@@ -106,7 +92,7 @@ mod tests {
             let query = format!(
                 r#"mutation {{ create_AgentSession(input: {{
                 session_id: "shared-label", node_did: "{owner}", requester_did: {requester},
-                agent_id: "{behavior}", created_at: "2026-01-01T00:00:00Z",
+                agent_did: "{behavior}", created_at: "2026-01-01T00:00:00Z",
                 title: {{text: "A title", source: "user"}},
                 provenance: {{task_id: "task"}},
                 observation: {{last_activity_at: "2026-01-02T00:00:00Z", preview: "A preview"}}
@@ -120,7 +106,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(owner_a.session.agent_id, "behavior-a");
+        assert_eq!(owner_a.session.agent_did, "behavior-a");
         assert!(owner_a.doc_id.is_some());
         assert_eq!(owner_a.session.title.as_ref().unwrap().text, "A title");
         assert_eq!(
@@ -150,7 +136,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-        assert_eq!(owner_b.session.agent_id, "behavior-b");
+        assert_eq!(owner_b.session.agent_did, "behavior-b");
         assert_ne!(owner_a.doc_id, owner_b.doc_id);
         let batched = load_timeline_sessions(
             &access,
@@ -166,14 +152,14 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(batched.len(), 2);
-        assert_eq!(batched[0].session.agent_id, "behavior-a");
-        assert_eq!(batched[1].session.agent_id, "behavior-b");
+        assert_eq!(batched[0].session.agent_did, "behavior-a");
+        assert_eq!(batched[1].session.agent_did, "behavior-b");
         assert!(
             load_timeline_session(&access, "absent", "shared-label", None)
                 .await
                 .unwrap()
                 .is_none()
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

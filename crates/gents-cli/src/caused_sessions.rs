@@ -2,7 +2,7 @@ use rapidhash::RapidHashSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::session::load_latest_request_in_txn;
 pub(crate) use gents::session::origin::SessionScope;
 use gents::session::origin::{
@@ -16,7 +16,7 @@ use serde_json::Value;
 #[derive(Clone, Debug)]
 pub(crate) struct CausedSession {
     pub(crate) scope: SessionScope,
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
     pub(crate) root_session_id: String,
     pub(crate) caused_by_scope: SessionScope,
     pub(crate) depth: u32,
@@ -39,12 +39,12 @@ pub(crate) async fn load_direct_caused_sessions(
         let latest = load_session_head(node, &link.scope)
             .await?
             .unwrap_or_else(|| first.clone());
-        let Some(agent_id) = first.agent_id.clone() else {
+        let Some(agent_did) = first.agent_did.clone() else {
             continue;
         };
         caused.push(CausedSession {
             scope: link.scope,
-            agent_id,
+            agent_did,
             root_session_id: parent.session_id.clone(),
             caused_by_scope: parent.clone(),
             depth: 1,
@@ -59,7 +59,13 @@ pub(crate) async fn load_caused_sessions(
     node: &Arc<EmbeddedNode>,
     roots: &[SessionScope],
 ) -> Result<Vec<CausedSession>> {
-    let access = access(node);
+    load_caused_sessions_as(&access(node), roots).await
+}
+
+pub(crate) async fn load_caused_sessions_as(
+    access: &ConfigAccess,
+    roots: &[SessionScope],
+) -> Result<Vec<CausedSession>> {
     let mut visited = roots.iter().cloned().collect::<RapidHashSet<_>>();
     let mut frontier = roots
         .iter()
@@ -67,12 +73,14 @@ pub(crate) async fn load_caused_sessions(
         .collect::<Vec<_>>();
     let mut caused = Vec::new();
     while let Some((scope, root, depth)) = frontier.pop() {
-        for link in lineage(&access, &scope).await?.started {
+        for link in lineage(access, &scope).await?.started {
             if !visited.insert(link.scope.clone()) {
                 continue;
             }
             let child = link.scope.clone();
-            if let Some(session) = view(node, link, scope.clone(), root.clone(), depth + 1).await? {
+            if let Some(session) =
+                view(access, link, scope.clone(), root.clone(), depth + 1).await?
+            {
                 caused.push(session);
                 frontier.push((child, root.clone(), depth + 1));
             }
@@ -123,7 +131,7 @@ pub(crate) async fn load_caused_session(
         scope: SessionScope::from(&session),
         cause_request_doc_id: parent.cause_request_doc_id,
     };
-    view(node, started, parent.scope, root, depth).await
+    view(&access, started, parent.scope, root, depth).await
 }
 
 pub(crate) async fn started_by_request(
@@ -148,15 +156,14 @@ pub(crate) async fn started_by_request(
 }
 
 async fn view(
-    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
     link: SessionLink,
     caused_by_scope: SessionScope,
     root_session_id: String,
     depth: u32,
 ) -> Result<Option<CausedSession>> {
-    let access = access(node);
     let Some(session) = load_session(
-        &access,
+        access,
         &link.scope.session_id,
         link.scope.requester_did.as_deref(),
     )
@@ -164,15 +171,15 @@ async fn view(
     .filter(|session| SessionScope::from(session) == link.scope) else {
         return Ok(None);
     };
-    let Some(first) = starting_request(&access, &link).await? else {
+    let Some(first) = starting_request(access, &link).await? else {
         return Ok(None);
     };
-    let latest = load_session_head(node, &link.scope)
+    let latest = load_session_head_as(access, &link.scope)
         .await?
         .unwrap_or_else(|| first.clone());
     Ok(Some(CausedSession {
         scope: link.scope,
-        agent_id: session.agent_id,
+        agent_did: session.agent_did,
         root_session_id,
         caused_by_scope,
         depth,
@@ -185,18 +192,26 @@ pub(crate) async fn load_session_head(
     node: &Arc<EmbeddedNode>,
     scope: &SessionScope,
 ) -> Result<Option<AgentRequestRow>> {
-    let head = ConfigAccess::transact_local_write(node, None, "caused_sessions.head", |txn| {
-        Box::pin(async move {
-            load_latest_request_in_txn(
-                txn,
-                &scope.node_did,
-                &scope.session_id,
-                Some(scope.requester_did.as_deref()),
-            )
-            .await
+    load_session_head_as(&access(node), scope).await
+}
+
+async fn load_session_head_as(
+    access: &ConfigAccess,
+    scope: &SessionScope,
+) -> Result<Option<AgentRequestRow>> {
+    let head = access
+        .transact_readonly("caused_sessions.head", |txn| {
+            Box::pin(async move {
+                load_latest_request_in_txn(
+                    txn,
+                    &scope.node_did,
+                    &scope.session_id,
+                    Some(scope.requester_did.as_deref()),
+                )
+                .await
+            })
         })
-    })
-    .await?;
+        .await?;
     let Some(head) = head else {
         return Ok(None);
     };
@@ -204,7 +219,7 @@ pub(crate) async fn load_session_head(
         r#"{{AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {REQUEST_FIELDS} }}}}"#,
         escape_graphql_string(&head.observed.request_doc_id)
     );
-    let mut heads = request_rows(&access(node), &query).await?;
+    let mut heads = request_rows(access, &query).await?;
     anyhow::ensure!(heads.len() <= 1, "ambiguous caused session head");
     Ok(heads.pop())
 }
@@ -264,7 +279,7 @@ pub(crate) mod fixtures {
     /// starter index at create, then the receipt [`fixture_signer`] signs for
     /// the created physical document, binding `source`, `parent` and `opening`.
     pub(crate) async fn create_started_session(
-        node: &gents::defra_node::EmbeddedNode,
+        node: &gents::defra_node::Node,
         mut session: gents_protocol::session::AgentSession,
         source: gents_protocol::session::SessionReference,
         parent: &str,
@@ -298,7 +313,7 @@ pub(crate) mod fixtures {
             session_id: session.session_id.clone(),
             session_doc_id: doc_id.clone(),
             requester_did: session.requester_did.clone(),
-            agent_id: session.agent_id.clone(),
+            agent_did: session.agent_did.clone(),
             opening_request_doc_id: opening.to_owned(),
             cause: SessionCreationCause::AgentNew,
             cause_binding: "fixture-call".to_owned(),
@@ -339,7 +354,7 @@ pub(crate) mod fixtures {
             session_id: session_id.into(),
             node_did: did.into(),
             requester_did: Some(did.into()),
-            agent_id: "worker".into(),
+            agent_did: "worker".into(),
             created_at: "2026-09-26T00:00:00Z".into(),
             closed_at: None,
             archived_at: None,
@@ -352,11 +367,7 @@ pub(crate) mod fixtures {
         }
     }
 
-    async fn run(
-        node: &gents::defra_node::EmbeddedNode,
-        mutation: String,
-        collection: &str,
-    ) -> String {
+    async fn run(node: &gents::defra_node::Node, mutation: String, collection: &str) -> String {
         let response = node.execute(&mutation).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
@@ -379,7 +390,7 @@ pub(crate) mod fixtures {
         let mut input = vec![
             format!("node_did: {}", quoted(did)),
             format!("requester_did: {}", quoted(did)),
-            r#"agent_id: "worker", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", retry_count: 0"#.to_owned(),
+            r#"agent_did: "worker", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", retry_count: 0"#.to_owned(),
             format!("max_retries: {max_retries}"),
         ];
         for (field, value) in row.as_object().expect("case row") {
@@ -438,7 +449,7 @@ pub(crate) mod fixtures {
     /// are written as one group, re-created with a different `max_retries`
     /// (which no reader selects) until their native order matches the model's.
     pub(crate) async fn seed_lineage_case(
-        node: &gents::defra_node::EmbeddedNode,
+        node: &gents::defra_node::Node,
         case: &Value,
         did: &str,
     ) -> BTreeMap<String, String> {
@@ -557,7 +568,7 @@ pub(crate) mod fixtures {
             run(
                 node,
                 format!(
-                    r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{did}", requester_did: "{did}", agent_id: "worker", created_at: "2026-09-26T00:00:00Z"{provenance} }}) {{ _docID }} }}"#
+                    r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{did}", requester_did: "{did}", agent_did: "worker", created_at: "2026-09-26T00:00:00Z"{provenance} }}) {{ _docID }} }}"#
                 ),
                 "AgentSession",
             )
@@ -570,13 +581,13 @@ pub(crate) mod fixtures {
     /// each opened by a request naming the same tool call (of no session-message
     /// kind). Returns the parent request's `_docID`.
     pub(crate) async fn seed_one_call_two_sessions(
-        node: &gents::defra_node::EmbeddedNode,
+        node: &gents::defra_node::Node,
         did: &str,
         parent_session: &str,
     ) -> String {
         let request = |request_id: &str, session_id: &str, cause: &str| {
             format!(
-                r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "{did}", requester_did: "{did}", agent_id: "worker", session_id: "{session_id}", {cause} content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:01Z", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#
+                r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "{did}", requester_did: "{did}", agent_did: "worker", session_id: "{session_id}", {cause} content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:01Z", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#
             )
         };
         let parent = run(
@@ -653,7 +664,7 @@ mod tests {
                     .and_then(|row| row.doc_id);
                 assert_eq!(found, expected, "{}: {query}", case["name"]);
             }
-            node.shutdown().await;
+            node.shutdown().await.expect("node shutdown");
         }
     }
 }

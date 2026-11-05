@@ -2,13 +2,13 @@ use gents::store::graphql::escape_graphql_string;
 use gents::write_manual_agent_request;
 use serde_json::Value;
 
-use crate::support::{test_db, AGENT_NAME};
+use crate::support::{managed_agent, test_db};
 
 fn actor(did: &str) -> identity::Did {
     identity::Did::new(did.to_owned()).expect("fixture creator DID")
 }
 
-async fn fetch_manual_row(node: &gents::defra_node::EmbeddedNode, doc_id: &str) -> Value {
+async fn fetch_manual_row(node: &gents::defra_node::Node, doc_id: &str) -> Value {
     let escaped = escape_graphql_string(doc_id);
     let query = format!(
         r#"{{
@@ -36,7 +36,7 @@ async fn fetch_manual_row(node: &gents::defra_node::EmbeddedNode, doc_id: &str) 
         .expect("exactly one AgentRequest for the given doc_id")
 }
 
-async fn count_manual_agent_requests(node: &gents::defra_node::EmbeddedNode) -> usize {
+async fn count_manual_agent_requests(node: &gents::defra_node::Node) -> usize {
     let query = r#"{
         AgentRequest(filter: { caused_by_trigger_kind: { _eq: "manual" } }) {
             _docID
@@ -59,12 +59,14 @@ async fn count_manual_agent_requests(node: &gents::defra_node::EmbeddedNode) -> 
 #[tokio::test]
 async fn manual_run_materializes_agent_request_with_lineage() {
     let db = test_db("manual-run-lineage").await;
+    let agent = managed_agent(&db).await;
 
     let doc_id = write_manual_agent_request(
         &db.node,
-        actor(db.node_identity.did()),
+        actor(agent.did()),
+        agent.as_ref(),
         db.node_identity.did(),
-        AGENT_NAME,
+        agent.did(),
         "task-manual-lineage",
         "manual body",
         serde_json::json!({}),
@@ -105,12 +107,14 @@ async fn manual_run_materializes_agent_request_with_lineage() {
 #[tokio::test]
 async fn manual_run_renders_args_scope() {
     let db = test_db("manual-run-args-scope").await;
+    let agent = managed_agent(&db).await;
 
     let doc_id = write_manual_agent_request(
         &db.node,
-        actor(db.node_identity.did()),
+        actor(agent.did()),
+        agent.as_ref(),
         db.node_identity.did(),
-        AGENT_NAME,
+        agent.did(),
         "task-args",
         "hi {{ args.name }}",
         serde_json::json!({"name": "Amy"}),
@@ -129,12 +133,14 @@ async fn manual_run_renders_args_scope() {
 #[tokio::test]
 async fn manual_submissions_materialize_distinct_requests() {
     let db = test_db("manual-run-parallel").await;
+    let agent = managed_agent(&db).await;
 
     let first = write_manual_agent_request(
         &db.node,
-        actor(db.node_identity.did()),
+        actor(agent.did()),
+        agent.as_ref(),
         db.node_identity.did(),
-        AGENT_NAME,
+        agent.did(),
         "task-parallel",
         "one",
         serde_json::json!({}),
@@ -149,9 +155,10 @@ async fn manual_submissions_materialize_distinct_requests() {
 
     let second = write_manual_agent_request(
         &db.node,
-        actor(db.node_identity.did()),
+        actor(agent.did()),
+        agent.as_ref(),
         db.node_identity.did(),
-        AGENT_NAME,
+        agent.did(),
         "task-parallel",
         "two",
         serde_json::json!({}),
@@ -185,12 +192,14 @@ async fn manual_submissions_materialize_distinct_requests() {
 #[tokio::test]
 async fn manual_run_exposes_manual_event_and_node_scope() {
     let db = test_db("manual-run-event-scope").await;
+    let agent = managed_agent(&db).await;
 
     let doc_id = write_manual_agent_request(
         &db.node,
-        actor(db.node_identity.did()),
+        actor(agent.did()),
+        agent.as_ref(),
         db.node_identity.did(),
-        AGENT_NAME,
+        agent.did(),
         "task-event-scope",
         "kind={{ event.trigger_kind }} id={{ event.trigger_id }} fired={{ event.fired_at }} node={{ node.node_did }}",
         serde_json::json!({}),
@@ -217,12 +226,14 @@ async fn manual_run_exposes_manual_event_and_node_scope() {
 #[tokio::test]
 async fn manual_run_render_failure_materializes_no_request() {
     let db = test_db("manual-run-render-err").await;
+    let agent = managed_agent(&db).await;
 
     let error = write_manual_agent_request(
         &db.node,
-        actor(db.node_identity.did()),
+        actor(agent.did()),
+        agent.as_ref(),
         db.node_identity.did(),
-        AGENT_NAME,
+        agent.did(),
         "task-render-err",
         "oops {{ args.missing_field }}",
         serde_json::json!({}),
@@ -242,9 +253,10 @@ async fn manual_run_render_failure_materializes_no_request() {
 
     let doc_id = write_manual_agent_request(
         &db.node,
-        actor(db.node_identity.did()),
+        actor(agent.did()),
+        agent.as_ref(),
         db.node_identity.did(),
-        AGENT_NAME,
+        agent.did(),
         "task-render-err",
         "recovered {{ args.field }}",
         serde_json::json!({"field": "value"}),

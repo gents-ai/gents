@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +20,8 @@ mod history;
 mod load;
 mod observation;
 mod operator_resume;
+#[cfg(test)]
+pub(crate) use operator_resume::support as operator_resume_test_support;
 mod readiness_gate;
 mod request_assignment;
 mod request_head;
@@ -31,16 +33,21 @@ mod transition;
 mod usage;
 mod write;
 pub(crate) use claimed_publication::{
-    publish_claimed_continuation, stop_claimed_continuation_for_unavailable_agent,
+    publish_claimed_continuation_with_identity,
+    stop_claimed_continuation_for_unavailable_agent_from_access,
 };
-pub(crate) use client_control::{prepare_goal_control, stage_goal_control};
+#[cfg(test)]
+pub(crate) use client_control::agent_document_for_test;
+pub(crate) use client_control::{attach_client_goal_graphs, prepare_goal_control, stage_goal_control};
 pub use client_submission::{
     load_applied_opening_goal_id, load_applied_opening_goal_ids,
     load_applied_opening_goal_provenance, prepare_session_goal_control,
     recover_session_goal_control, submit_prepared_session_goal_control,
     submit_session_goal_control, OpeningGoalProvenance,
 };
-pub(crate) use edit::{edit_active_goal, GoalEdit};
+#[cfg(test)]
+pub(crate) use edit::edit_active_goal;
+pub(crate) use edit::{edit_active_goal_from_access, GoalEdit};
 pub use first_request_binding::task_assignment_goal_id;
 pub(crate) use first_request_binding::{
     bind_goal_first_request_in_txn, validate_task_goal_identity_in_txn,
@@ -49,15 +56,20 @@ use first_request_binding::{continuation_assignment, continuation_reference_matc
 pub(crate) use history::{
     load_assignment_versions_for_session, load_goal_versions_for_session, GoalAssignmentVersion,
 };
+#[cfg(test)]
+pub(crate) use observation::project_session_goal;
 pub use observation::{
     bind_goal_input, load_session_goal_observation, load_session_goal_observation_state,
     load_session_goal_observation_state_in_txn, prepare_goal_input, prepare_goal_input_in_txn,
     SessionGoalObservationState,
 };
-pub(crate) use observation::{reconcile_goal_observations, SOURCES as GOAL_OBSERVATION_SOURCES};
+pub(crate) use observation::{
+    reconcile_goal_observations_with_identities, SOURCES as GOAL_OBSERVATION_SOURCES,
+};
 pub use operator_resume::{
     resume_goal_on_account, resume_goal_request, GoalResumeOnReceipt, GoalResumeReceipt,
 };
+pub(crate) use readiness_gate::goal_reconcile_settled;
 pub use readiness_gate::{
     gate_claimed_goal_continuation, gate_goal_continuation, goal_agent_observation,
     goal_failure_cause, goal_readiness_newer_than_terminal, next_goal_infrastructure_retries,
@@ -82,17 +94,25 @@ pub(crate) use backed_request::fingerprint::{
 };
 pub(crate) use backed_request::{
     stage_goal_backed_request_in_txn, stage_goal_backed_request_with_identity_in_txn,
+    submit_goal_backed_request_with_identity,
 };
 pub use backed_request::{
     submit_goal_backed_request, submit_goal_backed_request_local, GoalBackedRequestDisposition,
 };
-pub(crate) use controller::fence_goal_continuation_claim_in_txn;
 pub use controller::{claim_continuation, claim_retry_continuation, update_goal_fields_if_status};
+pub(crate) use controller::{
+    claim_continuation_from_access, claim_retry_continuation_from_access,
+    fence_goal_continuation_claim_in_txn, update_goal_fields_if_status_from_access,
+};
+#[cfg(test)]
+pub(crate) use creation::create_goal_for_request;
 use creation::stage_goal_and_claim;
-pub(crate) use creation::{create_goal_for_request, load_goal_creation_claim_fingerprint_in_txn};
+pub(crate) use creation::{
+    create_goal_for_request_from_access, load_goal_creation_claim_fingerprint_in_txn,
+};
 pub use creation::{
-    create_goal_for_session, replacement_goal_identity, CreateGoalForSessionError,
-    CreateGoalForSessionOutcome, GoalCreationIdentity,
+    create_goal_for_session, create_goal_for_session_from_access, replacement_goal_identity,
+    CreateGoalForSessionError, CreateGoalForSessionOutcome, GoalCreationIdentity,
 };
 pub use document::{
     deterministic_goal_creation_key, deterministic_goal_id, snapshot, GoalDocument, GOAL_FIELDS,
@@ -122,7 +142,9 @@ pub use transition::{
 #[cfg(test)]
 pub(crate) use usage::session_token_usage_breakdown_in_txn;
 use usage::session_token_usage_in_txn;
-pub use usage::{refresh_goal_usage, session_token_usage, SessionTokenUsage};
+pub use usage::{
+    refresh_goal_usage, refresh_goal_usage_from_access, session_token_usage, SessionTokenUsage,
+};
 pub(crate) use write::pause_goal_for_interrupt_in_txn;
 use write::set_goal_in_txn;
 pub use write::{

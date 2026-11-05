@@ -70,7 +70,7 @@ impl ConfigCommandTool {
         let listing = !preview && (verb == "list" || verb == "get" && argv.len() == 1);
         anyhow::ensure!(
             !listing,
-            "surface IDs are listed in an agent's Tools: read {{\"argv\":[\"tools\",\"get\"],\"options\":{{\"agent\":\"AGENT_ID\"}}}}, then [\"datastore\",\"get\",SURFACE_ID] for one of its datastore.datastore_tool_surface_ids"
+            "surface IDs are listed in an agent's Tools: read {{\"argv\":[\"tools\",\"get\"],\"options\":{{\"agent\":\"AGENT_DID\"}}}}, then [\"datastore\",\"get\",SURFACE_ID] for one of its datastore.datastore_tool_surface_ids"
         );
         let id = required_resource_id(argv.get(1), "SURFACE_ID")?;
         let target = SelfConfigTarget::DatastoreToolSurface;

@@ -35,7 +35,7 @@ const question: MailboxItemView = {
   requestId: null,
   causeDocId: null,
   targetNodeDid: NODE,
-  targetAgentId: "agent",
+  targetAgentDid: "agent",
   expectedCollection: null,
   parentItemId: null,
   deadlineAt: null,
@@ -45,11 +45,11 @@ const closed = (status = "acted"): MailboxItemObservation => ({
   item: { ...question, status },
   terminal: true,
 });
-function answer(requestId = "answer") {
+function answer(requestId = "answer", sourceNodeDid = NODE) {
   const request: ChatSendRequest = {
     clientDid: "test-client",
     nodeDid: NODE,
-    agentId: "agent",
+    agentDid: "agent",
     sessionId: "session",
     requestId,
     causedBySourceDocId: "question",
@@ -58,6 +58,7 @@ function answer(requestId = "answer") {
   };
   return {
     ...retainChatDraft(request, "session", false, {
+      nodeDid: sourceNodeDid,
       itemId: "question",
       summary: "Yes",
     }),
@@ -85,6 +86,7 @@ it("keeps an open answer latched and requires a positive exact native closure af
   await flush();
   expect(f.observe).toHaveBeenCalledExactlyOnceWith({
     clientDid: "test-client",
+    nodeDid: NODE,
     itemId: "question",
   });
   expect(f.ack).not.toHaveBeenCalled();
@@ -216,7 +218,36 @@ it("reconciles a confirmed answer from saved storage after app recreation withou
   await waitFor(() => expect(loadChatDrafts().chatDrafts).toHaveLength(0));
   expect(restored.observe).toHaveBeenCalledExactlyOnceWith({
     clientDid: "test-client",
+    nodeDid: NODE,
     itemId: "question",
   });
   expect(restored.ack).toHaveBeenCalledExactlyOnceWith(saved.result.submissionReceipt);
+});
+
+it("observes closure at the mailbox host when the reply targets another runtime", async () => {
+  const source = "source-runtime";
+  const hostedQuestion = { ...question, nodeDid: source };
+  const f = fixture();
+  publish(f.app, [node({ nodeDid: source, mailboxItems: [hostedQuestion] })]);
+  saveChatDraft(f.app.stores.chat, answer("answer", source));
+  await flush();
+  expect(f.observe).not.toHaveBeenCalled();
+  publish(f.app, [node({ nodeDid: source })]);
+  await flush();
+  expect(f.observe).toHaveBeenCalledExactlyOnceWith({
+    clientDid: "test-client",
+    nodeDid: source,
+    itemId: "question",
+  });
+  expect(f.ack).not.toHaveBeenCalled();
+  expect(loadChatDrafts().chatDrafts).toHaveLength(1);
+  f.observe.mockResolvedValue({
+    item: { ...hostedQuestion, status: "acted" },
+    terminal: true,
+  });
+  publish(f.app, [node({ nodeDid: source, mailboxItems: [hostedQuestion] })]);
+  await flush();
+  publish(f.app, [node({ nodeDid: source })]);
+  await waitFor(() => expect(f.ack).toHaveBeenCalledTimes(1));
+  expect(loadChatDrafts().chatDrafts).toHaveLength(0);
 });

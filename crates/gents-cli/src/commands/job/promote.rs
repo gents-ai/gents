@@ -181,14 +181,14 @@ pub async fn promote(
         })?,
     };
     validate_name(home, &name)?;
-    let agent = agent.map_or_else(|| run.caller_agent_id.clone(), str::to_owned);
+    let agent = agent.map_or_else(|| run.caller_agent_did.clone(), str::to_owned);
     let tools = {
-        let (owner, agent_id) = (run.view.scope.node_did.clone(), agent.clone());
+        let (owner, agent_did) = (run.view.scope.node_did.clone(), agent.clone());
         access
             .transact_readonly("job.promote.agent_tools", move |txn| {
-                let (owner, agent_id) = (owner.clone(), agent_id.clone());
+                let (owner, agent_did) = (owner.clone(), agent_did.clone());
                 Box::pin(async move {
-                    gents::documents::load_agent_tools_in_txn(txn, &owner, &agent_id).await
+                    gents::documents::load_agent_tools_in_txn(txn, &owner, &agent_did).await
                 })
             })
             .await

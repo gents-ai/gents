@@ -180,7 +180,7 @@ fn print_written(
         written.out.display(),
         definition.definition_id,
         ctx.subject,
-        ctx.dossier.agent_id,
+        ctx.dossier.agent_slot,
         ctx.profile,
     )?;
     Ok(())
@@ -247,7 +247,7 @@ pub(crate) async fn run(
             "start `gents server` for this home and retry: the author runs on a served home"
         );
     };
-    crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &ctx.owner)?;
+
     // Held to the end: a materialized cache entry stays locked while read.
     let subject = crate::commands::pack::resolve_subject_pack(
         &ctx.home_dir,
@@ -263,12 +263,19 @@ pub(crate) async fn run(
     writeln!(
         out,
         "drafting an eval of agent {} of pack {} {} ({})",
-        dossier.agent_id, dossier.pack_name, dossier.pack_version, dossier.pack_digest
+        dossier.agent_slot, dossier.pack_name, dossier.pack_version, dossier.pack_digest
     )?;
-    let profile = args.profile.clone().unwrap_or_else(|| {
-        gents::default_inference_profile_id_for_agent(&gents::default_agent_id_for_node(&ctx.owner))
-    });
-    install_pack_slot(&ctx.access, &ctx.owner, &author, &author_slot, &profile).await?;
+    let profile = match &args.profile {
+        Some(profile) => profile.clone(),
+        None => ctx.default_inference_profile().await?,
+    };
+    let installed =
+        install_pack_slot(&ctx.access, &ctx.owner, &author, &author_slot, &profile).await?;
+    let author_agent = installed
+        .agents
+        .get(&author_agent)
+        .context("installed author pack has no selected agent binding")?
+        .clone();
     readiness::wait_for_author(
         &ctx.access,
         &ctx.owner,
@@ -296,7 +303,7 @@ pub(crate) async fn run(
     let mut turn = turn::LiveTurn {
         graphql: graphql.clone(),
         node_did: ctx.owner.clone(),
-        agent_id: author_agent.clone(),
+        agent_did: author_agent.clone(),
         session_id: uuid::Uuid::new_v4().to_string(),
         timeout_secs: args.timeout_secs,
         poll_secs: args.poll_secs,
@@ -352,7 +359,7 @@ pub(crate) async fn run(
     .await;
     writeln!(
         out,
-        "session {id}: continue it with `gents chat --session-id {id} --agent-id {}`",
+        "session {id}: continue it with `gents chat --session-id {id} --agent-did {}`",
         author_agent,
         id = turn.session_id()
     )?;
@@ -365,41 +372,42 @@ pub(crate) async fn install_pack_slot(
     pack: &PackSource,
     slot: &str,
     profile: &str,
-) -> Result<gents::store::config_client::DesiredStateApplyCounts> {
+) -> Result<gents::pack::InstallReport> {
     let manifest = pack.manifest();
-    let config = pack_config(pack, owner)?;
     let requested = std::collections::BTreeMap::from([(slot.to_owned(), profile.to_owned())]);
     anyhow::ensure!(manifest.metadata.dependencies.is_empty(),
         "eval author pack dependencies must be installed through `gents pack install` on the runtime host");
-    let prepared = gents::pack::prepare_document_pack_install(
+    let prepared = gents::pack::prepare_document_pack_archive(
         access,
         owner,
-        manifest,
-        &config,
+        pack.archive(),
         &requested,
         &[],
         gents::pack::InstalledVia::Operator,
         None,
-        Some(pack.archive()),
         &|_| None,
     )
     .await?;
-    let bound = prepared.config;
-    let identity = gents::pack::PackIdentity::new(manifest, pack.digest(), Vec::new());
-    gents::pack::install_pack_documents(
+    gents::pack::install_prepared_document_graph(
         access,
         owner,
-        &identity,
-        &bound,
+        pack.archive(),
+        &prepared,
         gents::pack::DriftPolicy::Overwrite,
+        None,
+        false,
+        true,
     )
     .await
-    .map(|report| report.applied)
+    .map(|(report, _)| report)
     .with_context(|| format!("installing the {} pack", manifest.name))
 }
 
-pub(crate) fn pack_config(pack: &PackSource, owner: &str) -> Result<gents::documents::PackConfig> {
-    gents::pack::load_pack_config(
+pub(crate) fn pack_config(
+    pack: &PackSource,
+    owner: &str,
+) -> Result<gents::pack::AuthoredPackConfig> {
+    gents::pack::load_pack_authoring_config(
         pack.manifest(),
         &gents::pack::PackInstallOptions {
             node_did: owner.to_owned(),
@@ -541,9 +549,10 @@ mod tests {
         let fixture = crate::commands::eval::testing::Fixture::new().await;
         let access = &fixture.ctx.access;
         let owner = fixture.ctx.owner.as_str();
-        let read = |ids: [(gents::Collection, &'static str); 3]| async move {
+        let read = |ids: [(gents::Collection, String); 3]| async move {
             let mut documents = Vec::new();
             for (collection, id) in ids {
+                let id = id.as_str();
                 let found = access
                     .transact_write("cli.eval.init.test_read_author", |txn| {
                         Box::pin(async move {
@@ -560,26 +569,31 @@ mod tests {
             }
             documents
         };
-        let installed = || {
-            read([
-                (gents::Collection::Agent, "fixture-author"),
-                (gents::Collection::AgentContext, "fixture-author-context"),
-                (gents::Collection::Tools, "fixture-author-tools"),
-            ])
-        };
         let author = crate::commands::pack::test_support::fixture_pack_source(
             "slot_fixture",
             &fixture.ctx.home_dir,
         );
-        let (slot, agent_id) = single_slot_agent(author.manifest()).unwrap();
+        let (slot, agent_did) = single_slot_agent(author.manifest()).unwrap();
         assert_eq!(
-            (slot.as_str(), agent_id.as_str()),
+            (slot.as_str(), agent_did.as_str()),
             ("author", "fixture-author")
         );
         let first_counts = install_pack_slot(access, owner, &author, &slot, "local")
             .await
             .unwrap();
-        assert_eq!(first_counts.get(gents::Collection::Agent), 1);
+        assert_eq!(first_counts.applied.get(gents::Collection::Agent), 1);
+        let installed_agent = first_counts.agents["fixture-author"].clone();
+        let installed = || {
+            read([
+                (gents::Collection::Agent, installed_agent.clone()),
+                (
+                    gents::Collection::AgentContext,
+                    "fixture-author-context".to_owned(),
+                ),
+                (gents::Collection::Tools, "fixture-author-tools".to_owned()),
+            ])
+        };
+
         let first = installed().await;
         install_pack_slot(access, owner, &author, &slot, "local")
             .await
@@ -639,23 +653,31 @@ mod tests {
         let state = crate::home_state::read_runtime_state(&home_dir)
             .unwrap()
             .expect("a runtime state written by `gents server`");
-        let graphql = crate::home_graphql_endpoint(&home_dir, state.graphql.clone());
+        crate::load_client_identity().await.unwrap();
+        let graphql = crate::home_graphql_endpoint(&home_dir, state.graphql.clone()).unwrap();
         let access = gents::ConfigAccess::Graphql(graphql.clone());
         let owner = state.node_did.clone();
 
         let subject_dir = PathBuf::from(SMOKE_SUBJECT);
         let dossier = dossier::render(&subject_dir, Some(SMOKE_BEHAVIOR)).unwrap();
         let registry = CheckRegistry::builtin();
-        let profile = gents::default_inference_profile_id_for_agent(
-            &gents::default_agent_id_for_node(&owner),
-        );
+        let selected = access.execute(&format!("{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", gents::store::graphql::escape_graphql_string(&owner))).await.unwrap();
+        let agent_did = selected["data"]["Node"][0]["default_agent_did"]
+            .as_str()
+            .expect("served default agent");
+        let selected = access.execute(&format!("{{ Agent(filter: {{ agent_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ inference_profile_id }} }}", gents::store::graphql::escape_graphql_string(agent_did))).await.unwrap();
+        let profile = selected["data"]["Agent"][0]["inference_profile_id"]
+            .as_str()
+            .expect("served agent profile")
+            .to_owned();
         let author = resolve_pack_source("gents/eval_author", None, &home_dir)
             .await
             .expect("gents/eval_author is in the home's store or the registry");
         let (slot, author_agent) = single_slot_agent(author.manifest()).unwrap();
-        install_pack_slot(&access, &owner, &author, &slot, &profile)
+        let installed = install_pack_slot(&access, &owner, &author, &slot, &profile)
             .await
             .unwrap();
+        let author_agent = installed.agents[&author_agent].clone();
 
         let root = tempfile::tempdir().unwrap();
         let ctx = InitContext {
@@ -677,7 +699,7 @@ mod tests {
         let mut turn = turn::LiveTurn {
             graphql,
             node_did: owner,
-            agent_id: author_agent,
+            agent_did: author_agent,
             session_id: uuid::Uuid::new_v4().to_string(),
             timeout_secs: 300,
             poll_secs: 1,

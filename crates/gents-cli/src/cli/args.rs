@@ -177,7 +177,7 @@ pub(crate) enum Command {
     Export(ExportArgs),
     #[command(about = "Preview and apply scoped application document mutations")]
     Write(WriteArgs),
-    #[command(about = "Create documents as the home node")]
+    #[command(about = "Create documents with the CLI client identity")]
     Document {
         #[command(subcommand)]
         command: DocumentCommand,

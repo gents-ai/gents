@@ -43,7 +43,7 @@ const item = (over: Partial<MailboxItemView> = {}): MailboxItemView => ({
   requestId: null,
   causeDocId: null,
   targetNodeDid: "did:key:worker",
-  targetAgentId: "engineer",
+  targetAgentDid: "engineer",
   expectedCollection: null,
   parentItemId: null,
   deadlineAt: null,
@@ -66,7 +66,7 @@ const deploymentWith = (items: MailboxItemView[]) =>
   node({
     nodeDid: "did:key:node",
     mailboxItems: items,
-    agents: [{ agentId: "engineer", displayName: "Engineer" }],
+    agents: [{ agentDid: "engineer", displayName: "Engineer" }],
     sessions: [{ sessionId: "session-1", title: "Mailbox cleanup" }],
   });
 

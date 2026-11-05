@@ -144,7 +144,7 @@ pub(super) async fn project_desktop_approval(
                     server_peer: request.server_peer,
                     server_ticket: offer.server_ticket,
                     admin_did: request.admin_did,
-                    owner_node: request.owner_agent,
+                    owner_node: request.owner_node_did,
                     request_digest: request.request_digest,
                     authorization_sequence: decision.authorization_sequence,
                     authorization_expires_at: decision.authorization_expires_at,

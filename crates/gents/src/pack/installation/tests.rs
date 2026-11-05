@@ -6,6 +6,21 @@ use crate::pack::InstalledVia;
 const OWNER: &str = "did:key:zPackInstallOwner";
 
 #[test]
+fn pack_cleanup_observation_matches_model() {
+    let modeled = crate::lean_vocab_test::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .expect("configuration policy model");
+    assert_eq!(modeled.configuration_pack_cleanup_cases.len(), 4);
+    for case in &modeled.configuration_pack_cleanup_cases {
+        let observed = case["visible"].as_array().unwrap().iter().all(|visible| {
+            require_owned_document_visible("Tools", "tool", visible.as_bool().unwrap()).is_ok()
+        });
+        assert_eq!(observed, case["expected"].as_bool().unwrap(), "{case}");
+    }
+}
+
+#[test]
 fn edited_pack_error_identifies_the_operator_cli() {
     let error = edited_error("acme/demo", &["Tools/t1".to_owned()]).to_string();
     assert!(error.contains("Tools/t1"));
@@ -46,7 +61,30 @@ fn document_ux_install_admission_matches_lean() {
 async fn access() -> ConfigAccess {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    ConfigAccess::local(node)
+    let access = node_access(&node);
+    seed_pack_node(&access, OWNER).await.unwrap();
+    access
+}
+
+fn node_access(node: &Arc<defra_node::Node>) -> ConfigAccess {
+    ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(node.node_identity_did().expect("test node identity")).unwrap(),
+    )
+}
+
+async fn seed_pack_node(access: &ConfigAccess, owner: &str) -> Result<()> {
+    let response = access
+        .write(
+            "test.pack.node",
+            &format!(
+                "mutation {{ create_Node(input: {{node_did: \"{}\", enabled: true}}) {{_docID}} }}",
+                crate::store::graphql::escape_graphql_string(owner),
+            ),
+        )
+        .await?;
+    crate::store::graphql::created_doc_id(&response, "Node")?;
+    Ok(())
 }
 
 fn config(tools: &[(&str, &str)]) -> PackConfig {
@@ -62,6 +100,8 @@ fn config(tools: &[(&str, &str)]) -> PackConfig {
 
 fn identity(version: &str) -> PackIdentity {
     PackIdentity {
+        installation_doc_id: None,
+        agent_bindings: BTreeMap::new(),
         coordinate: "acme/demo".into(),
         version: version.into(),
         digest: format!(
@@ -83,7 +123,9 @@ async fn install(
     config: &PackConfig,
     policy: DriftPolicy,
 ) -> Result<InstallReport> {
-    super::super::install_pack_documents(access, OWNER, &identity(version), config, policy).await
+    let mut pack = identity(version);
+    pack.plugins.clear();
+    super::super::install_pack_documents(access, OWNER, &pack, config, policy).await
 }
 
 async fn edit_tools(access: &ConfigAccess, id: &str, name: &str) {
@@ -183,8 +225,8 @@ async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
     assert_eq!(removed.documents.removed, vec!["Tools/alpha"]);
     assert_eq!(
         removed.documents.plugins,
-        identity("1").plugins,
-        "removal releases what install stored"
+        Vec::<InstalledPackPlugin>::new(),
+        "this document-only fixture has no plugin retirement"
     );
     assert_eq!(
         tools_ids(&access).await,
@@ -346,7 +388,7 @@ async fn plugin_store_notification_lost_commit_receipt_is_unconfirmed() {
         pack.coordinate
     );
     assert_eq!(rows["data"]["PackInstallation"][0]["plugin_store"], true);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -408,14 +450,36 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
         "{refused:#}"
     );
 
+    let before = access
+        .execute("{ PackInstallation { _docID installed_at } }")
+        .await
+        .unwrap();
     record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
         .await
         .unwrap();
     let rows = access
-        .execute("{ PackInstallation { _docID } }")
+        .execute("{ PackInstallation { _docID installed_at } }")
         .await
         .unwrap();
-    assert_eq!(rows["data"]["PackInstallation"], json!([]));
+    let model = crate::lean_vocab_test::lean_plugin_reference_cases()
+        .iter()
+        .find(|case| !case["root_ships"].as_array().unwrap().is_empty())
+        .unwrap();
+    assert_eq!(
+        !rows["data"]["PackInstallation"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        model["retain_notification_record"].as_bool().unwrap()
+    );
+    assert_eq!(
+        rows["data"]["PackInstallation"][0]["_docID"],
+        before["data"]["PackInstallation"][0]["_docID"]
+    );
+    assert_ne!(
+        rows["data"]["PackInstallation"][0]["installed_at"],
+        before["data"]["PackInstallation"][0]["installed_at"]
+    );
 }
 
 #[tokio::test]
@@ -455,14 +519,22 @@ async fn a_plugin_store_change_keeps_a_documents_install_record() {
             digest: identity("1").digest,
         })
     );
-    let removed = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+    let error = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<PackRemovalError>(),
+        Some(PackRemovalError::ReferenceInventoryUnavailable)
+    ));
+    let rows = access
+        .execute("{ PackInstallation { plugins } }")
         .await
         .unwrap();
-    assert_eq!(removed.documents.removed, vec!["Tools/alpha"]);
     assert_eq!(
-        removed.documents.plugins,
-        vec![identity("1").plugins[0].clone(), extra]
+        rows["data"]["PackInstallation"][0]["plugins"],
+        json!([extra])
     );
+    assert_eq!(tools_ids(&access).await, vec!["alpha"]);
 }
 
 #[tokio::test]
@@ -709,7 +781,7 @@ async fn read_installed_pack_fails_loudly_on_a_malformed_record() {
 
 #[tokio::test]
 async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     let schema = gents_protocol::schemas::PACK_INSTALLATION.replace(
         r#"@index(fields: ["node_did", "coordinate"], unique: true)"#,
         "",
@@ -745,14 +817,29 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
     );
 }
 
-async fn dependency_fixture() -> (Arc<defra_node::EmbeddedNode>, ConfigAccess) {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+async fn dependency_fixture() -> (Arc<defra_node::Node>, ConfigAccess) {
+    use crate::store::identity::NodeIdentity as _;
+
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = crate::store::identity::KeyIdentity::load_or_create(
+        directory.path().join("runtime.key"),
+        None,
+    )
+    .unwrap();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(runtime.did())
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::documents::ensure_node(&node, OWNER).await.unwrap();
+    seed_pack_node(&node_access(&node), OWNER).await.unwrap();
     for profile in ["claude", "glm", "grok"] {
-        crate::test_support::install_test_agent(&node, OWNER, profile).await;
+        let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
+        crate::test_support::install_test_agent_binding(&node, OWNER, profile, &binding).await;
     }
-    let access = ConfigAccess::local(node.clone());
+    let access = node_access(&node);
     (node, access)
 }
 
@@ -789,6 +876,8 @@ async fn install_dependee(access: &ConfigAccess, explicit: bool) {
         access,
         OWNER,
         &PackIdentity {
+            installation_doc_id: None,
+            agent_bindings: BTreeMap::new(),
             coordinate: "fixture/dependee_fixture".into(),
             version: archive.manifest().version.clone(),
             digest: archive.digest().to_owned(),
@@ -805,6 +894,8 @@ async fn install_dependee(access: &ConfigAccess, explicit: bool) {
 
 fn demo_identity(dependencies: Vec<String>) -> PackIdentity {
     PackIdentity {
+        installation_doc_id: None,
+        agent_bindings: BTreeMap::new(),
         coordinate: "acme/demo".into(),
         version: "1".into(),
         digest: format!("sha256:{}", "d".repeat(64)),
@@ -954,6 +1045,55 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
 }
 
 #[tokio::test]
+async fn an_upgrade_keeps_a_plugin_dependency_without_complete_inventory() {
+    let (_node, access) = dependency_fixture().await;
+    install_dependee(&access, false).await;
+    let dependency_doc = installation_doc_id(&access).await;
+    corrupt_installation_field(
+        &access,
+        &dependency_doc,
+        "plugins",
+        json!([
+            {"name":"echo", "digest":format!("sha256:{}", "e".repeat(64))}
+        ]),
+    )
+    .await;
+    super::super::install_pack_documents(
+        &access,
+        OWNER,
+        &demo_identity(vec!["fixture/dependee_fixture".into()]),
+        &config(&[("alpha", "Alpha")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let before = access
+        .execute("{ PackInstallation { coordinate version required_by plugins } }")
+        .await
+        .unwrap();
+    let error = super::super::install_pack_documents(
+        &access,
+        OWNER,
+        &demo_identity(vec![]),
+        &config(&[("alpha", "Changed")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<PackRemovalError>(),
+        Some(PackRemovalError::ReferenceInventoryUnavailable)
+    ));
+    assert_eq!(
+        access
+            .execute("{ PackInstallation { coordinate version required_by plugins } }")
+            .await
+            .unwrap(),
+        before
+    );
+}
+
+#[tokio::test]
 async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
     let (_node, access) = dependency_fixture().await;
     install_dependee(&access, false).await;
@@ -1024,13 +1164,15 @@ async fn an_upgrade_that_drops_a_documents_dependency_releases_it() {
     let (_node, access) = dependency_fixture().await;
     let (_guards, dependee, dependent) = documents_dependency_pair(false, false);
     install_dependent_with_dependee(&access, &dependee, &dependent, None).await;
-    let agents = access.execute("{ Agent { agent_id } }").await.unwrap();
+    let agents = access.execute("{ Agent { agent_did } }").await.unwrap();
     let before = agents["data"]["Agent"].as_array().unwrap().len();
 
     super::super::install_pack_documents(
         &access,
         OWNER,
         &PackIdentity {
+            installation_doc_id: None,
+            agent_bindings: BTreeMap::new(),
             coordinate: "fixture/dependent_fixture".into(),
             version: "2".into(),
             digest: format!("sha256:{}", "2".repeat(64)),
@@ -1055,7 +1197,7 @@ async fn an_upgrade_that_drops_a_documents_dependency_releases_it() {
             .any(|row| row["coordinate"] == "fixture/dependee_fixture"),
         "the dropped documents dependency is released outright: {rows:?}"
     );
-    let agents = access.execute("{ Agent { agent_id } }").await.unwrap();
+    let agents = access.execute("{ Agent { agent_did } }").await.unwrap();
     assert!(
         agents["data"]["Agent"].as_array().unwrap().len() < before,
         "the released dependency's own documents are removed: {agents}"
@@ -1081,11 +1223,11 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
         ),
         home(
             Collection::Agent,
-            json!({"node_did":OWNER,"agent_id":"chosen","inference_profile_id":"profile"}),
+            json!({"node_did":OWNER,"agent_did":"chosen","inference_profile_id":"profile"}),
         ),
         home(
             Collection::Node,
-            json!({"node_did":OWNER,"default_agent_id":"chosen"}),
+            json!({"node_did":OWNER,"default_agent_did":"chosen"}),
         ),
     ])
     .unwrap();
@@ -1123,12 +1265,12 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
         .unwrap();
 
     let principal = access
-        .execute("{ Node { default_agent_id } }")
+        .execute("{ Node { default_agent_did } }")
         .await
         .unwrap();
     assert_eq!(
         principal["data"]["Node"],
-        json!([{"default_agent_id": "chosen"}])
+        json!([{"default_agent_did": "chosen"}])
     );
     assert_eq!(tools_ids(&access).await, ["pack-tools"]);
 }
@@ -1345,6 +1487,10 @@ fn documents_archive() -> crate::pack::archive::PackArchive {
 
 fn prepared() -> PreparedDocumentPackInstall {
     PreparedDocumentPackInstall {
+        installation_doc_id: None,
+        agent_bindings: BTreeMap::new(),
+        provisioned: Vec::new(),
+        node_binding: None,
         config: config(&[("self-config-tools", "Self-config tools")]),
         inference: crate::pack::PackInferenceBindingPreview {
             slots: Vec::new(),
@@ -1580,7 +1726,7 @@ fn shipping(targets: &[&str]) -> PackConfig {
             .iter()
             .map(|id| json!({
                 "target_id": id, "node_did": OWNER, "target_node_did": OWNER,
-                "agent_id": id, "name": id,
+                "agent_did": id, "name": id,
             }))
             .collect::<Vec<_>>(),
     }))
@@ -1624,8 +1770,8 @@ async fn pack_job_block_is_refused_on_a_self_config_install() {
     config.agent_targets = shipping(&["wf-run"]).agent_targets;
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::documents::ensure_node(&node, OWNER).await.unwrap();
-    let access = ConfigAccess::local(node);
+    seed_pack_node(&node_access(&node), OWNER).await.unwrap();
+    let access = node_access(&node);
     let requested = Default::default();
     let home = tempfile::tempdir().unwrap();
     let declaration = plugin_pack_manifest("engine", "plugins", &["runner"])
@@ -2046,9 +2192,9 @@ async fn prepare_naming_plugin(
 ) -> Result<PreparedDocumentPackInstall> {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::documents::ensure_node(&node, OWNER).await.unwrap();
+    seed_pack_node(&node_access(&node), OWNER).await.unwrap();
     prepare_document_pack_install(
-        &ConfigAccess::local(node),
+        &node_access(&node),
         OWNER,
         manifest,
         &config_naming_plugin("acme/web_search"),
@@ -2092,7 +2238,7 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .with_node_acp_enabled()
             .with_http(defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap())
@@ -2188,7 +2334,7 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
             .len(),
         1
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -2314,7 +2460,7 @@ async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
         let config: PackConfig = serde_json::from_value(json!({
             "node": {"node_did": OWNER},
             "agents": references.iter().enumerate().map(|(index, _)| json!({
-                "agent_id": format!("reference-{index}"), "node_did": OWNER,
+                "agent_did": format!("reference-{index}"), "node_did": OWNER,
                 "context_id": format!("context-{index}"), "inference_profile_id": "glm:inference"
             })).collect::<Vec<_>>(),
             "contexts": references.iter().enumerate().map(|(index, _)| json!({
@@ -2349,9 +2495,10 @@ async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
 #[tokio::test]
 async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_documents() {
     let (_node, access) = dependency_fixture().await;
-    install(
+    super::super::install_pack_documents(
         &access,
-        "1",
+        OWNER,
+        &identity("1"),
         &config(&[("owned", "Owned")]),
         DriftPolicy::Refuse,
     )
@@ -2360,7 +2507,7 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
     access.write("test.surviving_plugin_user", r#"mutation {
         create_Tools(input: {tools_id: "surviving-tools", node_did: "did:key:zPackInstallOwner", integrations: {plugins: [{plugin: "acme/echo"}]}}) {_docID}
         create_AgentContext(input: {context_id: "surviving-context", node_did: "did:key:zPackInstallOwner", tools_id: "surviving-tools"}) {_docID}
-        create_Agent(input: {agent_id: "surviving-agent", node_did: "did:key:zPackInstallOwner", context_id: "surviving-context", inference_profile_id: "glm:inference"}) {_docID}
+        create_Agent(input: {agent_did: "surviving-agent", node_did: "did:key:zPackInstallOwner", context_id: "surviving-context", inference_profile_id: "glm:inference"}) {_docID}
     }"#).await.unwrap();
     let before = tools_ids(&access).await;
     let error = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
@@ -2377,23 +2524,27 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
         .write(
             "test.remove_plugin_user",
             r#"mutation {
-        delete_Agent(filter: {agent_id: {_eq: "surviving-agent"}}) {_docID}
+        delete_Agent(filter: {agent_did: {_eq: "surviving-agent"}}) {_docID}
     }"#,
         )
         .await
         .unwrap();
-    remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+    let error = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
         .await
-        .unwrap();
-    let retained = before
-        .into_iter()
-        .filter(|id| id != "owned")
-        .collect::<Vec<_>>();
-    assert_eq!(tools_ids(&access).await, retained);
+        .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<PackRemovalError>(),
+        Some(PackRemovalError::ReferenceInventoryUnavailable)
+    ));
+    assert_eq!(tools_ids(&access).await, before);
+    assert!(read_installed_pack(&access, OWNER, "acme/demo")
+        .await
+        .unwrap()
+        .is_some());
 }
 
 #[tokio::test]
-async fn removing_agents_with_their_plugin_pack_does_not_block_removal() {
+async fn removing_agents_with_their_plugin_pack_requires_complete_inventory() {
     let (_node, access) = dependency_fixture().await;
     let retained_tools = tools_ids(&access).await;
     let mut config = config_naming_plugin("acme/echo");
@@ -2402,15 +2553,31 @@ async fn removing_agents_with_their_plugin_pack_does_not_block_removal() {
     }))
     .unwrap()];
     config.agents = vec![serde_json::from_value(json!({
-        "agent_id": "owned-agent", "node_did": OWNER, "context_id": "owned-context", "inference_profile_id": "glm:inference"
+        "agent_did": "owned-agent", "node_did": OWNER, "context_id": "owned-context", "inference_profile_id": "glm:inference"
     })).unwrap()];
-    install(&access, "1", &config, DriftPolicy::Refuse)
+    super::super::install_pack_documents(
+        &access,
+        OWNER,
+        &identity("1"),
+        &config,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let before = tools_ids(&access).await;
+    let error = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
         .await
-        .unwrap();
-    remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<PackRemovalError>(),
+        Some(PackRemovalError::ReferenceInventoryUnavailable)
+    ));
+    assert_eq!(tools_ids(&access).await, before);
+    assert_ne!(before, retained_tools);
+    assert!(read_installed_pack(&access, OWNER, "acme/demo")
         .await
-        .unwrap();
-    assert_eq!(tools_ids(&access).await, retained_tools);
+        .unwrap()
+        .is_some());
 }
 
 #[tokio::test]
@@ -2418,7 +2585,7 @@ async fn plugin_removal_does_not_treat_dangling_scope_as_no_references() {
     let access = access().await;
     let removed = BTreeSet::from(["acme/echo".to_owned()]);
     access.write("test.dangling_plugin_scope", r#"mutation {
-        create_Agent(input: {agent_id: "dangling", node_did: "did:key:zPackInstallOwner", context_id: "missing", inference_profile_id: "profile"}) {_docID}
+        create_Agent(input: {agent_did: "dangling", node_did: "did:key:zPackInstallOwner", context_id: "missing", inference_profile_id: "profile"}) {_docID}
     }"#).await.unwrap();
     let missing_context = ensure_plugins_unreferenced(&access, OWNER, &removed)
         .await
@@ -2434,9 +2601,13 @@ async fn plugin_removal_does_not_treat_dangling_scope_as_no_references() {
     access.write("test.no_plugin_scope", r#"mutation {
         update_AgentContext(filter: {context_id: {_eq: "missing"}}, input: {tools_id: null}) {_docID}
     }"#).await.unwrap();
-    ensure_plugins_unreferenced(&access, OWNER, &removed)
+    let error = ensure_plugins_unreferenced(&access, OWNER, &removed)
         .await
-        .unwrap();
+        .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<PackRemovalError>(),
+        Some(PackRemovalError::ReferenceInventoryUnavailable)
+    ));
 }
 
 #[tokio::test]
@@ -2553,7 +2724,7 @@ async fn pinned_plugin_references_match_executable_model_before_install_or_updat
                 );
             }
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -2601,7 +2772,7 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
         .unwrap()["unconfirmed"]
         .as_bool()
         .unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     let error = super::documents::install_documents_with_plugins(
         &access,
         OWNER,
@@ -2670,7 +2841,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
     assert_eq!(initial.1[0].digest, old_digest);
     let external: PackConfig = serde_json::from_value(json!({
         "node": {"node_did": OWNER},
-        "agents": [{"agent_id": "survivor", "node_did": OWNER, "context_id": "survivor-context", "inference_profile_id": "glm:inference"}],
+        "agents": [{"agent_did": "survivor", "node_did": OWNER, "context_id": "survivor-context", "inference_profile_id": "glm:inference"}],
         "contexts": [{"context_id": "survivor-context", "node_did": OWNER, "tools_id": "survivor-tools"}],
         "tools": [{"tools_id": "survivor-tools", "node_did": OWNER,
             "integrations": {"plugins": [{"plugin": "acme/web_search", "digest": old_digest}]}}],
@@ -2681,7 +2852,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
     let before = crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap();
     let before_docs = access
         .execute(
-            "{Agent {agent_id} Tools {tools_id integrations} PackInstallation {coordinate digest}}",
+            "{Agent {agent_did} Tools {tools_id integrations} PackInstallation {coordinate digest}}",
         )
         .await
         .unwrap();
@@ -2718,7 +2889,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
         crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap(),
         before
     );
-    assert_eq!(access.execute("{Agent {agent_id} Tools {tools_id integrations} PackInstallation {coordinate digest}}").await.unwrap(), before_docs);
+    assert_eq!(access.execute("{Agent {agent_did} Tools {tools_id integrations} PackInstallation {coordinate digest}}").await.unwrap(), before_docs);
     let updated: PackConfig = serde_json::from_value(json!({
         "node": {"node_did": OWNER},
         "tools": [{"tools_id": "survivor-tools", "node_did": OWNER,
@@ -2749,7 +2920,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
             .digest,
         new_digest
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -2815,7 +2986,7 @@ async fn cancelling_pack_install_caller_does_not_cancel_owned_commit() {
             .unwrap()
             .is_some()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -2843,7 +3014,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
     let root_config = |pin: &str| {
         let config = serde_json::from_value::<PackConfig>(json!({
         "node": {"node_did": OWNER},
-        "agents": [{"agent_id":"graph-agent", "node_did":OWNER,"context_id":"graph-context","inference_profile_id":"glm:inference"}],
+        "agents": [{"agent_did":"graph-agent", "node_did":OWNER,"context_id":"graph-context","inference_profile_id":"glm:inference"}],
         "contexts": [{"context_id":"graph-context", "node_did":OWNER,"tools_id":"graph-tools"}],
         "tools": [{"tools_id":"graph-tools", "node_did":OWNER,"integrations":{"plugins":[{"plugin":"acme/web_search","digest":pin}]}}]
     })).unwrap();
@@ -2854,6 +3025,8 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
                  config: PackConfig,
                  bytes: Option<Vec<u8>>,
                  dependencies: Vec<String>| DocumentPackStage {
+        installation_doc_id: None,
+        agent_bindings: BTreeMap::new(),
         manifest: manifest.clone(),
         digest: format!("sha256:{}", digest.repeat(64)),
         config,
@@ -2881,6 +3054,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         DriftPolicy::Refuse,
         Some(home.path()),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -2901,6 +3075,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         DriftPolicy::Refuse,
         Some(home.path()),
         false,
+        None,
     )
     .await
     .unwrap();
@@ -2918,7 +3093,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         rows["data"]["Tools"][0]["integrations"]["plugins"][0]["digest"],
         new_digest
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -3002,7 +3177,7 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
         .await
         .unwrap();
     assert!(rows["data"]["Tools"].as_array().unwrap().is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -3024,7 +3199,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
     let manifest = plugin_pack_manifest("installed_pin", "documents", &[]);
     let config: PackConfig = serde_json::from_value(json!({
         "node": {"node_did": OWNER},
-        "agents": [{"agent_id":"pin-agent", "node_did":OWNER,"context_id":"pin-context","inference_profile_id":"glm:inference"}],
+        "agents": [{"agent_did":"pin-agent", "node_did":OWNER,"context_id":"pin-context","inference_profile_id":"glm:inference"}],
         "contexts": [{"context_id":"pin-context", "node_did":OWNER,"tools_id":"pin-tools"}],
         "tools": [{"tools_id":"pin-tools", "node_did":OWNER,"integrations":{"plugins":[{"plugin":"fixture/native_echo","digest":old.digest}]}}]
     })).unwrap();
@@ -3128,7 +3303,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap(),
         old
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -3149,7 +3324,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
     let old = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
     let external: PackConfig = serde_json::from_value(json!({
         "node": {"node_did": OWNER},
-        "agents": [{"agent_id":"standalone-survivor", "node_did": OWNER, "context_id":"standalone-context", "inference_profile_id":"glm:inference"}],
+        "agents": [{"agent_did":"standalone-survivor", "node_did": OWNER, "context_id":"standalone-context", "inference_profile_id":"glm:inference"}],
         "contexts": [{"context_id":"standalone-context", "node_did":OWNER,"tools_id":"standalone-tools"}],
         "tools": [{"tools_id":"standalone-tools", "node_did":OWNER, "integrations":{"plugins":[{"plugin":"fixture/native_echo","digest":old.digest}]}}]
     })).unwrap();
@@ -3202,7 +3377,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
             .unwrap(),
         old_home
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -3264,7 +3439,7 @@ async fn dependency_schema_is_published_before_root_schema_rejection() {
         .unwrap();
     assert!(result["data"]["PackSchemaDependency"].is_array());
     assert!(result["data"]["PackSchemaRoot"].is_array());
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -3284,7 +3459,7 @@ async fn definitive_document_drift_rejection_restores_previously_pinned_plugin()
     );
     let config: PackConfig = serde_json::from_value(json!({
         "node": {"node_did": OWNER},
-        "agents": [{"agent_id":"drift-agent", "node_did":OWNER,"context_id":"drift-context","inference_profile_id":"glm:inference"}],
+        "agents": [{"agent_did":"drift-agent", "node_did":OWNER,"context_id":"drift-context","inference_profile_id":"glm:inference"}],
         "contexts": [{"context_id":"drift-context", "node_did":OWNER,"tools_id":"drift-tools"}],
         "tools": [{"tools_id":"drift-tools", "node_did":OWNER,"display_name":"original",
             "integrations":{"plugins":[{"plugin":"acme/web_search","digest":pin}]}}]
@@ -3332,7 +3507,7 @@ async fn definitive_document_drift_rejection_restores_previously_pinned_plugin()
         before
     );
     assert_eq!(access.execute("{Tools(filter: {tools_id: {_eq: \"drift-tools\"}}) {display_name integrations} PackInstallation {coordinate digest}}").await.unwrap(), docs);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[test]
@@ -3432,5 +3607,110 @@ async fn committed_ack_timeout_retains_staged_plugin_records() {
     );
     let rows = access.execute("{ AckProbe { value } }").await.unwrap();
     assert_eq!(rows["data"]["AckProbe"], json!([{"value":"committed"}]));
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
+}
+
+#[tokio::test]
+async fn client_signs_pack_installation_record_and_dependency_updates() -> Result<()> {
+    use crate::store::identity::NodeIdentity as _;
+
+    let directory = tempfile::tempdir()?;
+    let key_path = directory.path().join("client.key");
+    let actor = tokio::task::spawn_blocking(move || {
+        crate::store::identity::KeyIdentity::load_or_create(key_path, None)
+    })
+    .await??;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(actor.did())
+            .with_node_acp_owner(actor.did().to_owned())
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await?,
+    );
+    crate::ensure_runtime_schemas(&node).await?;
+    seed_pack_node(&node_access(&node), actor.did()).await?;
+    let endpoint = crate::store::config_client::GraphqlEndpoint::as_principal(
+        format!("http://{address}/api/v0/graphql"),
+        actor.did(),
+    )
+    .with_client_signing_capability(actor.client_signing_capability()?)?
+    .with_client_signed_agent_creates();
+    let access = ConfigAccess::Graphql(endpoint);
+    let owner = actor.did().to_owned();
+    let first = identity("1");
+    access
+        .transact_write("test.client_pack_create", |txn| {
+            let first = &first;
+            let owner = &owner;
+            Box::pin(async move {
+                write_record_in_txn(
+                    txn,
+                    owner,
+                    first,
+                    &Record::default(),
+                    Vec::new(),
+                    true,
+                    true,
+                    None,
+                )
+                .await
+            })
+        })
+        .await?;
+    let observe = || async {
+        access
+            .execute("{ PackInstallation { _docID _version { cid } version required_by } }")
+            .await
+    };
+    let created = observe().await?;
+    let row = &created["data"]["PackInstallation"][0];
+    let doc_id = row["_docID"].as_str().unwrap().to_owned();
+    let initial = row["_version"][0]["cid"].as_str().unwrap().to_owned();
+    assert_eq!(node.verified_block_signer_did(&initial).await?, actor.did());
+
+    let next = identity("2");
+    access
+        .transact_write("test.client_pack_update", |txn| {
+            let next = &next;
+            let owner = &owner;
+            Box::pin(async move {
+                let prior = read_record(txn, owner, &next.coordinate).await?;
+                write_record_in_txn(txn, owner, next, &prior, Vec::new(), true, true, None).await
+            })
+        })
+        .await?;
+    let updated = observe().await?;
+    let cid = updated["data"]["PackInstallation"][0]["_version"][0]["cid"]
+        .as_str()
+        .unwrap();
+    assert_ne!(cid, initial);
+    assert_eq!(node.verified_block_signer_did(cid).await?, actor.did());
+    assert_eq!(updated["data"]["PackInstallation"][0]["version"], "2");
+
+    access
+        .transact_write("test.client_pack_dependency", |txn| {
+            let owner = &owner;
+            Box::pin(async move {
+                dependencies::claim_in_txn(
+                    txn,
+                    owner,
+                    "acme/consumer",
+                    &["acme/demo".to_owned()],
+                    DriftPolicy::Keep,
+                )
+                .await
+            })
+        })
+        .await?;
+    let claimed = observe().await?;
+    let row = &claimed["data"]["PackInstallation"][0];
+    assert_eq!(row["_docID"], doc_id);
+    assert_eq!(row["required_by"], json!(["acme/consumer"]));
+    let cid = row["_version"][0]["cid"].as_str().unwrap();
+    assert_eq!(node.verified_block_signer_did(cid).await?, actor.did());
+    node.shutdown().await?;
+    Ok(())
 }

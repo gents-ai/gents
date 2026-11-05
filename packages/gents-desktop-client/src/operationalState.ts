@@ -32,21 +32,22 @@ export type OperationalStatus = {
 };
 
 export type NodeReadinessDecision =
-  | { kind: "ready"; agentId: string; agentLabel: string }
+  | { kind: "ready"; agentDid: string; agentLabel: string }
   | {
       kind: "unavailable";
-      agentId: string;
+      agentDid: string;
       agentLabel: string;
       reason: AgentUnavailableReasonView;
     }
   | {
       kind: "unknown";
-      agentId: string | null;
+      agentDid: string | null;
       reason: AgentReadinessUnknownReasonView;
     };
 
 export type DeploymentOperationalState = {
   transport: OperationalStatus;
+  connection: OperationalStatus;
   route: OperationalStatus;
   sync: OperationalStatus;
   agent: OperationalStatus;
@@ -73,88 +74,84 @@ export function isLocalRuntimeSource(source?: string | null): boolean {
   return source === "local-standard";
 }
 
-function agentLabel(deployment: DeploymentSettings, agentId: string): string {
+function agentLabel(deployment: DeploymentSettings, agentDid: string): string {
   return (
     deployment.agents
-      .find((agent) => agent.agentId === agentId)
-      ?.displayName?.trim() || agentId
+      .find((agent) => agent.agentDid === agentDid)
+      ?.displayName?.trim() || agentDid
   );
 }
 
-function fallbackAgentId(deployment: DeploymentSettings): string | null {
-  const nodeDefault = deployment.node.defaultAgentId?.trim();
+function fallbackAgentDid(deployment: DeploymentSettings): string | null {
+  const nodeDefault = deployment.node.defaultAgentDid?.trim();
   if (
     nodeDefault &&
-    deployment.agents.some((agent) => agent.agentId === nodeDefault)
+    deployment.agents.some((agent) => agent.agentDid === nodeDefault)
   ) {
     return nodeDefault;
   }
   const markedDefault = deployment.agents.find((agent) => agent.isDefault);
   if (markedDefault) {
-    return markedDefault.agentId;
+    return markedDefault.agentDid;
   }
-  const conventional = `${deployment.nodeDid}:default`;
-  if (deployment.agents.some((agent) => agent.agentId === conventional)) {
-    return conventional;
-  }
-  return deployment.agents.find((agent) => agent.enabled)?.agentId ?? null;
+  return deployment.agents.find((agent) => agent.enabled)?.agentDid ?? null;
 }
 
-export function selectedAgentIdForDeployment(
+export function selectedAgentDidForDeployment(
   deployment: DeploymentSettings | null,
-  selectedAgentId: string | null,
+  selectedAgentDid: string | null,
 ): string | null {
   if (!deployment) return null;
   if (
-    selectedAgentId !== null &&
-    deployment.agents.some((agent) => agent.agentId === selectedAgentId)
+    selectedAgentDid !== null &&
+    deployment.agents.some((agent) => agent.agentDid === selectedAgentDid)
   ) {
-    return selectedAgentId;
+    return selectedAgentDid;
   }
-  return fallbackAgentId(deployment);
+  return fallbackAgentDid(deployment);
 }
 
 export function selectedNodeReadinessDecision(
   deployment: DeploymentSettings | null,
-  selectedAgentId: string | null,
+  selectedAgentDid: string | null,
 ): NodeReadinessDecision {
   if (!deployment) {
-    return { kind: "unknown", agentId: null, reason: "readiness_missing" };
+    return { kind: "unknown", agentDid: null, reason: "readiness_missing" };
   }
 
   const readiness = deployment.nodeReadiness;
-  const agentId = selectedAgentId ?? fallbackAgentId(deployment);
+  const agentDid = selectedAgentDid ?? fallbackAgentDid(deployment);
   if (readiness.source.state === "unknown") {
-    return { kind: "unknown", agentId, reason: readiness.source.reason };
+    return { kind: "unknown", agentDid, reason: readiness.source.reason };
   }
-  if (!agentId) {
+  if (!agentDid) {
     return {
       kind: "unknown",
-      agentId: null,
+      agentDid: null,
       reason: "agent_not_assigned",
     };
   }
 
   const readinessStatus = readiness.agents.find(
-    (candidate) => candidate.agentId === agentId,
+    (candidate) => candidate.agentDid === agentDid,
   );
   if (!readinessStatus) {
-    return { kind: "unknown", agentId, reason: "agent_not_assigned" };
+    return { kind: "unknown", agentDid, reason: "agent_not_assigned" };
   }
   if (readinessStatus.state === "ready") {
     return {
       kind: "ready",
-      agentId,
-      agentLabel: agentLabel(deployment, agentId),
+      agentDid,
+      agentLabel: agentLabel(deployment, agentDid),
     };
   }
   if (readinessStatus.state === "unknown") {
-    return { kind: "unknown", agentId, reason: readinessStatus.reason };
+    return { kind: "unknown", agentDid, reason: readinessStatus.reason };
   }
   return {
     kind: "unavailable",
-    agentId,
-    agentLabel: agentLabel(deployment, agentId),
+    agentDid,
+    agentLabel: agentLabel(deployment, agentDid),
     reason: readinessStatus.reason,
   };
 }
@@ -309,9 +306,9 @@ export function projectRouteOperationalStatus(
       kind: "ready",
       layer: "route",
       reason: "route_ready",
-      label: "Secure route is ready",
-      shortLabel: "Route ready",
-      detail: "The signed conversation route is ready.",
+      label: "Peer pairing is ready",
+      shortLabel: "Paired",
+      detail: "The signed peer pairing is ready.",
     });
   }
   if (pairingPending) {
@@ -329,32 +326,49 @@ export function projectRouteOperationalStatus(
     kind: "waiting",
     layer: "route",
     reason: "route_not_ready",
-    label: "Preparing the secure route",
+    label: "Preparing peer pairing",
     shortLabel: "Preparing",
-    detail:
-      "The agent is connected, but its signed conversation route is not ready yet.",
+    detail: "Waiting for the signed peer pairing to become ready.",
   });
+}
+
+export function runtimeConnectionBlocksAdmission(connection: string | null | undefined): boolean {
+  return connection !== "connected";
+}
+
+function projectRuntimeConnectionStatus(connection: string | null | undefined): OperationalStatus {
+  if (connection === "connected") {
+    return status({ kind: "ready", layer: "runtime", reason: "connected",
+      label: "Runtime is connected", shortLabel: "Connected",
+      detail: "The authenticated runtime connection is ready." });
+  }
+  if (connection === "denied") {
+    return status({ kind: "blocked", layer: "runtime", reason: "permission_denied",
+      label: "Runtime access denied", shortLabel: "Access denied",
+      detail: "The runtime rejected this client's access." });
+  }
+  return status({ kind: "waiting", layer: "runtime", reason: connection === "disconnected" ? "disconnected" : "connecting",
+    label: "Connecting to runtime", shortLabel: "Connecting",
+    detail: "Waiting for the authenticated runtime connection." });
 }
 
 export function projectDeploymentOperationalState(
   deployment: DeploymentSettings,
-  selectedAgentId: string | null = null,
+  selectedAgentDid: string | null = null,
   syncHealth: SyncHealthView | null = null,
 ): DeploymentOperationalState {
   const transport = projectDeploymentTransportStatus(deployment.dialSucceeded);
+  const connection = projectRuntimeConnectionStatus(deployment.runtimeConnection);
 
-  const pairingPending =
-    !isLocalRuntimeSource(deployment.source) && !deployment.chatSafe;
-  const route = projectRouteOperationalStatus(
-    deployment.chatSafe,
-    pairingPending,
-  );
   const localRuntime = isLocalRuntimeSource(deployment.source);
+  const route = projectRouteOperationalStatus(
+    localRuntime || deployment.pairingReady === true,
+  );
   const sync = projectSyncOperationalStatus(syncHealth);
 
   const nodeReadiness = selectedNodeReadinessDecision(
     deployment,
-    selectedAgentId,
+    selectedAgentDid,
   );
   const agent = projectAgentOperationalStatus(nodeReadiness, localRuntime);
   const reconcilePhase = deployment.runtime?.reconcilePhase ?? "unknown";
@@ -378,26 +392,22 @@ export function projectDeploymentOperationalState(
         });
 
   const agentBlocker = agent.kind === "ready" ? null : agent;
-  const admissionBlocker =
-    transport.kind !== "ready"
-      ? transport
-      : route.kind !== "ready"
-        ? route
-        : agentBlocker;
+  const admissionBlocker = runtimeConnectionBlocksAdmission(deployment.runtimeConnection)
+    ? connection
+    : agentBlocker;
 
   const error =
-    deployment.lastError ?? deployment.runtime?.lastReconcileError ?? null;
+    deployment.runtime?.lastReconcileError ?? null;
   const summary = error
     ? status({
         kind: "blocked",
-        layer: "p2p",
+        layer: "runtime",
         reason: "deployment_error",
-        label: "Agent connection error",
+        label: "Runtime configuration error",
         shortLabel: "Error",
         detail: error,
       })
     : (admissionBlocker ??
-      (sync.kind !== "ready" ? sync : null) ??
       (reconcile.kind !== "ready"
         ? reconcile
         : status({
@@ -407,11 +417,12 @@ export function projectDeploymentOperationalState(
             label: "Agent is online",
             shortLabel: "Online",
             detail:
-              "Transport, signed route, and runtime readiness are current.",
+              "The runtime connection and agent readiness are current.",
           })));
 
   return {
     transport,
+    connection,
     route,
     sync,
     agent,

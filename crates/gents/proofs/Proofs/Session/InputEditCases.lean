@@ -37,7 +37,7 @@ def cases : List Case :=
   , ⟨"revoked_enrollment_rejected",[],remote,{remoteAuthority with enrollmentFresh := false},2⟩
   , ⟨"missing_route_rejected",[],remote,{remoteAuthority with routeApplied := false},2⟩
   , ⟨"local_self_applied",[],command,authority,2⟩
-  , ⟨"local_foreign_rejected",[],command,{authority with requesterIsNode := false},2⟩
+  , ⟨"direct_client_applied",[],{command with caller := some 99},{authority with requesterIsNode := false},2⟩
   , ⟨"expired_rejected",[],command,authority,10⟩
   , ⟨"future_issuance_deferred",[],command,authority,0⟩
   , ⟨"signature_rejected",[],command,{authority with signatureValid := false},2⟩
@@ -57,7 +57,7 @@ def cases : List Case :=
 
 def run (c : Case) := apply c.before.queue.scope c.now c.authority c.command c.before
 example : (cases.map fun c => (run c).2.map (·.outcome)) =
-    [some .applied,some .rejected,some .rejected,some .applied,some .rejected,
+    [some .applied,some .rejected,some .rejected,some .applied,some .applied,
      some .rejected,none,some .rejected,some .rejected,some .rejected,
      some .rejected,some .applied,some .applied,none,none,none,none] := by native_decide
 

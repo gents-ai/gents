@@ -1,4 +1,4 @@
-import { selectedAgentIdForDeployment } from "@source-inc/gents-desktop-client";
+import { selectedAgentDidForDeployment } from "@source-inc/gents-desktop-client";
 
 import { chat } from "./chatStore";
 import { listedSession, nodeKeyOf, nodeOrFirst, type FleetState } from "./fleetStore";
@@ -38,23 +38,23 @@ export function createSelectionActions({ stores }: SelectionActionParams) {
     if (selection.selectNode(store, nodeDid)) dropSession();
   }
 
-  function selectAgent(agentId: string | null) {
-    selection.selectAgent(store, agentId);
+  function selectAgent(agentDid: string | null) {
+    selection.selectAgent(store, agentDid);
   }
 
   function selectSession(sessionId: string) {
     const listed = listedSession(fleet(), store.getState().nodeDid, sessionId);
-    selection.selectSession(store, sessionId, listed?.agentId);
+    selection.selectSession(store, sessionId, listed?.agentDid);
     if (!listed) dropSession();
   }
 
-  function startNewSession(agentId?: string | null) {
+  function startNewSession(agentDid?: string | null) {
     const node = nodeOrFirst(fleet(), store.getState().nodeDid);
     if (!node) return;
     selection.startNewSession(
       store,
       node.nodeDid,
-      selectedAgentIdForDeployment(node, agentId ?? null),
+      selectedAgentDidForDeployment(node, agentDid ?? null),
     );
     dropSession();
     chat.resetWorkflow(stores.chat);
@@ -81,7 +81,7 @@ export function createSelectionActions({ stores }: SelectionActionParams) {
       const listed = owner
         ? sessionsOf[owner]?.find((s) => s.sessionId === sessionId)
         : undefined;
-      selection.selectSessionOn(store, ownerDid, sessionId, listed?.agentId);
+      selection.selectSessionOn(store, ownerDid, sessionId, listed?.agentDid);
       dropSession();
       return;
     }

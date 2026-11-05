@@ -63,14 +63,14 @@ impl AgentSlot {
 #[async_trait::async_trait]
 pub(crate) trait SlotFailurePolicy: Send + Sync {
     fn build_failure_budget(&self) -> u32;
-    fn on_build_failure(&self, _agent_id: &str, _failure_number: u32, _error: &str) {}
-    async fn on_slot_created(&self, agent_id: &str, generation: u64) -> Result<()>;
-    async fn try_demote(&self, agent_id: &str, generation: u64, error: &str) -> Result<bool>;
-    async fn on_slot_retired(&self, agent_id: &str, generation: u64, recreated: bool);
+    fn on_build_failure(&self, _agent_did: &str, _failure_number: u32, _error: &str) {}
+    async fn on_slot_created(&self, agent_did: &str, generation: u64) -> Result<()>;
+    async fn try_demote(&self, agent_did: &str, generation: u64, error: &str) -> Result<bool>;
+    async fn on_slot_retired(&self, agent_did: &str, generation: u64, recreated: bool);
 }
 
 async fn handle_slot_failure(
-    agent_id: &str,
+    agent_did: &str,
     generation: u64,
     error: &str,
     failure_policy: Option<&dyn SlotFailurePolicy>,
@@ -110,7 +110,7 @@ async fn handle_slot_failure(
         }
     };
     if let Some(failure_number) = failure_number {
-        policy.on_build_failure(agent_id, failure_number, error);
+        policy.on_build_failure(agent_did, failure_number, error);
     }
     match verdict {
         Verdict::Restart | Verdict::StillPending => return false,
@@ -120,15 +120,15 @@ async fn handle_slot_failure(
         }
         Verdict::Transitioned => {}
     }
-    match policy.try_demote(agent_id, generation, error).await {
+    match policy.try_demote(agent_did, generation, error).await {
         Ok(true) => {}
         Ok(false) => tracing::warn!(
-            agent_id,
+            agent_did,
             generation,
             "startup demotion was already stale; keeping the exhausted slot fail closed"
         ),
         Err(error) => tracing::error!(
-            agent_id,
+            agent_did,
             generation,
             error = %error,
             "failed to persist startup demotion; keeping the exhausted slot fail closed"
@@ -203,14 +203,14 @@ where
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
     let mut slots = RapidHashMap::with_capacity(resolved_snapshot.agents.len());
-    for (agent_id, agent_config) in &resolved_snapshot.agents {
+    for (agent_did, agent_config) in &resolved_snapshot.agents {
         let tool_surface = resolved_snapshot
             .tool_surfaces
-            .get(agent_id)
+            .get(agent_did)
             .cloned()
             .expect("resolved snapshot should include tool surfaces for runnable agents");
         slots.insert(
-            agent_id.clone(),
+            agent_did.clone(),
             spawn_slot_with_capacity(
                 SlotConfig {
                     agent_config: agent_config.clone(),
@@ -297,7 +297,7 @@ where
     let executor_capacity = bounded_active_limit(executor_capacity);
     if requested_capacity > executor_capacity {
         tracing::warn!(
-            agent_id = %agent_config.agent_id,
+            agent_did = %agent_config.agent_did,
             requested_capacity,
             executor_capacity,
             max_worker_tasks = MAX_BEHAVIOR_WORKERS,
@@ -453,7 +453,7 @@ where
                 let delay = retry_policy.delay_for_attempt(failure_count);
                 failure_count += 1;
                 tracing::warn!(
-                    agent_id = %agent_config.agent_id,
+                    agent_did = %agent_config.agent_did,
                     delay_ms = delay.as_millis() as u64,
                     "agent slot exited unexpectedly, scheduling restart"
                 );
@@ -463,7 +463,7 @@ where
             }
             Ok(Err(error)) => {
                 if handle_slot_failure(
-                    &agent_config.agent_id,
+                    &agent_config.agent_did,
                     generation,
                     &format!("{error:#}"),
                     failure_policy.as_deref(),
@@ -478,7 +478,7 @@ where
                 let delay = retry_policy.delay_for_attempt(failure_count);
                 failure_count += 1;
                 tracing::error!(
-                    agent_id = %agent_config.agent_id,
+                    agent_did = %agent_config.agent_did,
                     error = %error,
                     delay_ms = delay.as_millis() as u64,
                     "agent slot failed, scheduling restart"
@@ -489,7 +489,7 @@ where
             }
             Err(_) => {
                 if handle_slot_failure(
-                    &agent_config.agent_id,
+                    &agent_config.agent_did,
                     generation,
                     "agent runner panicked",
                     failure_policy.as_deref(),
@@ -504,7 +504,7 @@ where
                 let delay = retry_policy.delay_for_attempt(failure_count);
                 failure_count += 1;
                 tracing::error!(
-                    agent_id = %agent_config.agent_id,
+                    agent_did = %agent_config.agent_did,
                     delay_ms = delay.as_millis() as u64,
                     "agent slot panicked, scheduling restart"
                 );
@@ -538,9 +538,9 @@ where
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
     let worker_count = executor_capacity;
-    let agent_id = slot.agent_config.agent_id.clone();
+    let agent_did = slot.agent_config.agent_did.clone();
     tracing::info!(
-        agent_id = %agent_id,
+        agent_did = %agent_did,
         executor_capacity,
         worker_count,
         queue_capacity = AGENT_EXECUTOR_QUEUE_CAPACITY,
@@ -550,7 +550,7 @@ where
     for worker_index in 0..worker_count {
         workers.spawn(run_slot_loop(slot.clone(), runtime.clone(), runner.clone()));
         tracing::debug!(
-            agent_id = %agent_id,
+            agent_did = %agent_did,
             worker_index,
             executor_capacity,
             "agent executor worker spawned"
@@ -564,7 +564,7 @@ where
             Ok(Err(error)) => error,
             Err(error) => anyhow::anyhow!("agent executor worker task join failed: {error}"),
         };
-        tracing::error!(agent_id = %agent_id, error = %error, "agent executor worker failed");
+        tracing::error!(agent_did = %agent_did, error = %error, "agent executor worker failed");
         if first_error.is_none() {
             first_error = Some(error);
         }
@@ -599,13 +599,13 @@ mod tests {
             1
         }
 
-        async fn on_slot_created(&self, _agent_id: &str, _generation: u64) -> Result<()> {
+        async fn on_slot_created(&self, _agent_did: &str, _generation: u64) -> Result<()> {
             Ok(())
         }
 
         async fn try_demote(
             &self,
-            _agent_id: &str,
+            _agent_did: &str,
             _generation: u64,
             _error: &str,
         ) -> Result<bool> {
@@ -613,7 +613,7 @@ mod tests {
             Err(anyhow!("injected demotion persistence failure"))
         }
 
-        async fn on_slot_retired(&self, _agent_id: &str, _generation: u64, _recreated: bool) {}
+        async fn on_slot_retired(&self, _agent_did: &str, _generation: u64, _recreated: bool) {}
     }
 
     #[tokio::test]

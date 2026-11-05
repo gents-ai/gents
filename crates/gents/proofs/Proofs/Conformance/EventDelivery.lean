@@ -314,7 +314,7 @@ def eventGroupCaptureCases :
 def eventGroupCaptureCasesJson : String :=
   jsonArray (eventGroupCaptureCases.map fun (name, clock, c) =>
     let input := "[\"b\",\"a\"]"
-    let captured := _root_.EventDelivery.Group.captureCallback clock c "inv-capture" input
+    let captured := _root_.EventDelivery.Group.captureCallback clock c "inv-capture" input "did:key:agent"
     "{\"name\":" ++ jsonString name
       ++ ",\"group_key\":" ++ Conformance.EventGroupContracts.keyJson clock.key
       ++ ",\"quiesced_at\":" ++ Conformance.EventGroupContracts.jsonOptionNat clock.quiescedAt

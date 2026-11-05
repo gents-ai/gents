@@ -8,7 +8,7 @@ import { shellStores } from "./shell-fixture";
 const node = (nodeDid: string, sessionIds: string[]) =>
   ({
     nodeDid,
-    node: { defaultAgentId: null },
+    node: { defaultAgentDid: null },
     agents: [],
     sessions: sessionIds.map((sessionId) => ({ nodeDid, sessionId })),
     mailboxItems: [],
@@ -44,7 +44,7 @@ describe("following the route", () => {
     selection.openMailboxRoute(store, {
       itemId: "item-1",
       nodeDid: "a",
-      agentId: "engineer",
+      agentDid: "engineer",
       sessionId: null,
     });
     route.followRoute(null);

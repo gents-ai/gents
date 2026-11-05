@@ -4,7 +4,7 @@ mod oauth;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::{routing::get, Json, Router};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -302,6 +302,7 @@ impl Drop for ModelsListener {
 
 fn backend(backend_id: &str, endpoint: String) -> InferenceBackend {
     InferenceBackend {
+        physical_doc_id: None,
         node_did: "did:key:backend-owner".to_string(),
         backend_id: backend_id.to_string(),
         name: backend_id.to_string(),

@@ -78,7 +78,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
     hook.on_completion_call(&user_text_message("fill background capacity"), &[])
         .await;
     let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_id(&node, &session, identity.did(), "general")
+    crate::session::create_session_with_agent_did(&node, &session, identity.did(), "general")
         .await
         .unwrap();
     let request_id = format!("budget-{}", uuid::Uuid::new_v4());
@@ -207,7 +207,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         executions.wait_for_completion(child).await;
     }
     hook_execution_fixtures().lock().await.remove(&request_id);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 struct NamedPendingTool(String);
@@ -277,7 +277,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
     hook.on_completion_call(&user_text_message("configured background"), &[])
         .await;
     let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_id(&node, &session, identity.did(), "general")
+    crate::session::create_session_with_agent_did(&node, &session, identity.did(), "general")
         .await
         .unwrap();
     let request_id = format!("timed-{}", uuid::Uuid::new_v4());
@@ -357,7 +357,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
         executions.wait_for_completion(child).await;
     }
     hook_execution_fixtures().lock().await.remove(&request_id);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 struct NoisyTool(String);
@@ -397,13 +397,30 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
+    let executions = BackgroundExecutionRegistry::default();
+    let mut hook =
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
+            .with_background_tool_registry(BackgroundToolRegistry::from_tools(
+                vec![Box::new(NoisyTool("bash".into()))],
+                &["bash".into()],
+            ))
+            .with_background_execution_registry(executions.clone());
+    let session = hook.session_id().await.unwrap();
+    let request_id = format!("budgeted-{}", uuid::Uuid::new_v4());
+    bind_managed_hook_request(
+        &mut hook,
+        &request_id,
+        &identity,
+        Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    let agent = hook_managed_identity(&hook, &request_id).await;
     {
         use crate::store::config_client::{
             apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
         };
-        let tools = json!({"node_did": identity.did(), "tools_id": "general:tools",
+        let tools = json!({"node_did": identity.did(), "tools_id": format!("{}:tools", agent.did()),
             "host": {"bash": {"mode": "ReadOnly", "background_enabled": true,
                 "max_output_chars": 10}}});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -419,22 +436,6 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
         .await
         .unwrap();
     }
-    let executions = BackgroundExecutionRegistry::default();
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
-            .with_background_tool_registry(BackgroundToolRegistry::from_tools(
-                vec![Box::new(NoisyTool("bash".into()))],
-                &["bash".into()],
-            ))
-            .with_background_execution_registry(executions.clone());
-    let session = hook.session_id().await.unwrap();
-    let request_id = format!("budgeted-{}", uuid::Uuid::new_v4());
-    bind_signed_hook_request(
-        &hook,
-        &request_id,
-        Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
     hook.on_completion_call(&user_text_message("budgeted background"), &[])
         .await;
     let receipt = invoke(
@@ -449,10 +450,9 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
     let row = fetch_tool_call_row(&node, &session, &child).await;
     assert_eq!(row["lifecycle_state"], "completed", "{row}");
 
-    let history =
-        crate::session::load_history(&node, &session, identity.did(), Some(identity.did()))
-            .await
-            .unwrap();
+    let history = crate::session::load_history(&node, &session, identity.did(), Some(agent.did()))
+        .await
+        .unwrap();
     let marker = format!("<tool-completion tool_call_id=\"{child}\"");
     let notification = history
         .iter()
@@ -477,7 +477,7 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
             apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
         };
-        let tools = json!({"node_did": identity.did(), "tools_id": "general:tools",
+        let tools = json!({"node_did": identity.did(), "tools_id": format!("{}:tools", agent.did()),
             "host": {"bash": {"mode": "ReadOnly", "background_enabled": true,
                 "max_output_chars": 25}}});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -496,6 +496,12 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
     let tool_doc_id = row["_docID"].as_str().unwrap();
     crate::tools::background::completion::append_background_tool_completion(
         &node,
+        &crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(agent.did()).unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap(),
         &session,
         &request_id,
         tool_doc_id,
@@ -507,10 +513,9 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
     )
     .await
     .expect("redrive after a budget change replays the published notice");
-    let history =
-        crate::session::load_history(&node, &session, identity.did(), Some(identity.did()))
-            .await
-            .unwrap();
+    let history = crate::session::load_history(&node, &session, identity.did(), Some(agent.did()))
+        .await
+        .unwrap();
     let notices = history
         .iter()
         .filter_map(|message| match message {
@@ -523,5 +528,5 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
     assert_eq!(notices, 1, "redrive must not publish a second notice");
 
     hook_execution_fixtures().lock().await.remove(&request_id);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

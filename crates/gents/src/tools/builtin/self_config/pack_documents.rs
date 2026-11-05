@@ -8,7 +8,8 @@ impl PackInstaller {
         distribution: &ConfigPackDistribution,
         commit: bool,
     ) -> anyhow::Result<String> {
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
+        let access = self.core.access()?;
+        let node_binding = self.core.refresh_node_binding().await?;
         let owner = self.core.node_did();
         let prior = self.installation_status(distribution.manifest()).await?;
         anyhow::ensure!(
@@ -64,9 +65,14 @@ impl PackInstaller {
                 })
                 .map(|(slot, profile)| (slot.clone(), profile.clone()))
                 .collect();
-            let preview =
-                crate::pack::inspect_pack_inference_bindings(&access, manifest, owner, &requested)
-                    .await?;
+            let preview = crate::pack::inspect_pack_inference_bindings_with_node_binding(
+                &access,
+                manifest,
+                owner,
+                &requested,
+                node_binding.as_ref(),
+            )
+            .await?;
             for slot in &preview.slots {
                 if !slot.optional && !args.inference_slots.contains_key(&slot.name) {
                     missing_slots.insert(slot.name.clone());
@@ -88,27 +94,21 @@ impl PackInstaller {
                 "next": "repeat --inference-slot NAME=PROFILE_ID for every missing slot, using exact eligible profile IDs",
             }))?);
         }
-        let scope = crate::pack::PackInstallOptions {
-            node_did: owner.to_owned(),
-        };
         let environment = |name: &str| args.variables.get(name).cloned();
-        let authored = crate::pack::load_pack_config(
-            distribution.manifest(),
-            &scope,
-            &|path| {
-                distribution
-                    .0
-                    .archive
-                    .asset(path)
-                    .map(|asset| asset.to_vec())
-            },
-            &environment,
-        )?;
-        let prepared = crate::pack::prepare_document_pack_install(
+        let provisioner = match (self.core.runtime_identity().ok(), self.actor.as_deref()) {
+            (Some(runtime), Some(actor)) => Some(crate::pack::AgentProvisioner {
+                node: &self.node,
+                runtime,
+                actor: Some(actor),
+                selected_agent_did: Some(self.core.agent_did()),
+                node_binding: node_binding.as_ref(),
+            }),
+            _ => None,
+        };
+        let prepared = crate::pack::prepare_document_pack_archive_with_provisioner(
             &access,
             owner,
-            distribution.manifest(),
-            &authored,
+            &distribution.0.archive,
             &args.inference_slots,
             &dependencies
                 .iter()
@@ -116,8 +116,8 @@ impl PackInstaller {
                 .collect::<Vec<_>>(),
             crate::pack::InstalledVia::SelfConfig,
             self.home.as_deref(),
-            Some(&distribution.0.archive),
             &environment,
+            provisioner.as_ref(),
         )
         .await?;
         // Inference slot bindings pick provider accounts exactly like the
@@ -173,6 +173,22 @@ impl PackInstaller {
             crate::pack::DriftPolicy::Refuse,
         )
         .await?;
+        for binding in prepared.provisioned.iter().chain(
+            prepared
+                .dependencies
+                .iter()
+                .flat_map(|d| d.provisioned.iter()),
+        ) {
+            crate::store::identity::grant_agent_node_capabilities(
+                &self.node,
+                self.core.runtime_identity()?,
+                binding,
+            )
+            .await
+            .context(
+                "pack configuration committed, but an Agent node capability publication failed",
+            )?;
+        }
         let effective = self
             .installation_status(distribution.manifest())
             .await?

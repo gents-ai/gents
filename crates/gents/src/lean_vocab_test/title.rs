@@ -62,7 +62,7 @@ pub(crate) struct LeanTitleRequest {
     pub(crate) purpose: LeanRequestPurpose,
     pub(crate) target_node: String,
     pub(crate) requester_did: String,
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
     pub(crate) session_id: String,
     pub(crate) content: String,
     pub(crate) input: LeanTitleRequestInput,
@@ -156,7 +156,7 @@ pub(crate) struct LeanTitleParentEvidence {
     pub(crate) document_id: String,
     pub(crate) node_did: String,
     pub(crate) session_id: String,
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
     pub(crate) logical_binding_current: bool,
     pub(crate) physical_binding_current: bool,
 }

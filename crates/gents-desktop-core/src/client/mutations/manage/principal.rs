@@ -1,7 +1,7 @@
 use anyhow::Result;
 mod editor;
 #[cfg(test)]
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 pub use editor::*;
 use gents::documents::Node;
 use gents::store::collection::Collection;
@@ -44,11 +44,11 @@ pub async fn upsert_node(node: &Arc<EmbeddedNode>, document: &Node) -> Result<()
 pub async fn set_default_agent_on(
     access: &ConfigAccess,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<()> {
     access
         .transact_write("desktop.node.default_agent", |txn| {
-            Box::pin(async move { set_default_agent_in_txn(txn, node_did, agent_id).await })
+            Box::pin(async move { set_default_agent_in_txn(txn, node_did, agent_did).await })
         })
         .await
 }
@@ -57,10 +57,10 @@ pub async fn set_default_agent_on(
 pub async fn set_default_agent(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<()> {
     ConfigAccess::transact_local_write(node, None, "desktop.node.default_agent", |txn| {
-        Box::pin(async move { set_default_agent_in_txn(txn, node_did, agent_id).await })
+        Box::pin(async move { set_default_agent_in_txn(txn, node_did, agent_did).await })
     })
     .await
 }
@@ -68,7 +68,7 @@ pub async fn set_default_agent(
 async fn set_default_agent_in_txn(
     txn: &gents::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<()> {
     use anyhow::Context;
     use gents::store::config_client::read_desired_state_record_in_txn;
@@ -76,10 +76,10 @@ async fn set_default_agent_in_txn(
         .await?
         .context("default agent requires an existing node")?;
     let (_, mut agent) =
-        read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_id)
+        read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_did)
             .await?
-            .with_context(|| format!("Agent {agent_id:?} does not exist"))?;
-    node["default_agent_id"] = agent_id.into();
+            .with_context(|| format!("Agent {agent_did:?} does not exist"))?;
+    node["default_agent_did"] = agent_did.into();
     agent["enabled"] = true.into();
     let plan = DesiredStateApplyPlan::new(
         [(Collection::Agent, agent), (Collection::Node, node)]
@@ -100,51 +100,46 @@ pub async fn apply_config_components(
     node: &Arc<EmbeddedNode>,
     document: &gents::documents::PackConfig,
 ) -> Result<()> {
-    use anyhow::Context;
     let (owner, plan) = config_components_plan(document)?;
     ConfigAccess::transact_local_write(node, None, "desktop.config.components", |txn| {
         let plan = &plan;
         let owner = &owner;
-        Box::pin(async move {
-            gents::store::config_client::read_desired_state_record_in_txn(
-                txn,
-                Collection::Node,
-                owner,
-                owner,
-            )
-            .await?
-            .context("component apply requires an existing node")?;
-            apply_desired_state_plan(txn, plan).await?;
-            Ok(())
-        })
+        Box::pin(async move { apply_config_components_in_txn(txn, owner, plan).await })
     })
     .await
 }
 
-pub async fn apply_config_components_on(
+pub(crate) async fn apply_config_components_with_publication_on(
     access: &ConfigAccess,
     document: &gents::documents::PackConfig,
+    observer: std::sync::Arc<dyn gents::store::config_client::AgentPublicationObserver>,
 ) -> Result<()> {
-    use anyhow::Context;
     let (owner, plan) = config_components_plan(document)?;
     access
-        .transact_write("desktop.config.components", |txn| {
+        .transact_write_with_agent_publication("desktop.config.components", observer, |txn| {
             let plan = &plan;
             let owner = &owner;
-            Box::pin(async move {
-                gents::store::config_client::read_desired_state_record_in_txn(
-                    txn,
-                    Collection::Node,
-                    owner,
-                    owner,
-                )
-                .await?
-                .context("component apply requires an existing node")?;
-                apply_desired_state_plan(txn, plan).await?;
-                Ok(())
-            })
+            Box::pin(async move { apply_config_components_in_txn(txn, owner, plan).await })
         })
         .await
+}
+
+async fn apply_config_components_in_txn(
+    txn: &gents::store::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    plan: &DesiredStateApplyPlan,
+) -> Result<()> {
+    use anyhow::Context;
+    gents::store::config_client::read_desired_state_record_in_txn(
+        txn,
+        Collection::Node,
+        owner,
+        owner,
+    )
+    .await?
+    .context("component apply requires an existing node")?;
+    apply_desired_state_plan(txn, plan).await?;
+    Ok(())
 }
 
 fn config_components_plan(
@@ -295,7 +290,7 @@ mod tests {
             "node":{"node_did":"did:test:other"},
             "inference_backends":[{"node_did":"did:test:other","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":"did:test:other","profile_id":"profile","backend_id":"backend","model_name":"model"}],
-            "agents":[{"node_did":"did:test:other","agent_id":"default","inference_profile_id":"profile"}]
+            "agents":[{"node_did":"did:test:other","agent_did":"default","inference_profile_id":"profile"}]
         }))?;
         let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
         ConfigAccess::transact_local_write(&node, None, "desktop.node.seed", |txn| {
@@ -310,7 +305,7 @@ mod tests {
             json!({"node_did":"did:test:node","display_name":"Agent","avatar":"12","created_at":"2026-01-01T00:00:00Z","created_by":"did:test:creator","tags":["team"]}),
         )?;
         upsert_node(&node, &document).await?;
-        document.default_agent_id = Some("default".into());
+        document.default_agent_did = Some("default".into());
         assert!(upsert_node(&node, &document).await.is_err());
         ConfigAccess::transact_local_write(&node, None, "desktop.node.verify", |txn| {
             Box::pin(async move {
@@ -327,7 +322,7 @@ mod tests {
                 assert_eq!(saved.created_by.as_deref(), Some("did:test:creator"));
                 assert_eq!(saved.tags, vec!["team"]);
                 assert_eq!(saved.avatar.as_deref(), Some("12"));
-                assert!(saved.default_agent_id.is_none());
+                assert!(saved.default_agent_did.is_none());
                 Ok::<_, anyhow::Error>(())
             })
         })
@@ -340,12 +335,12 @@ mod tests {
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:default";
         let seed: gents::documents::PackConfig = serde_json::from_value(json!({
-            "node":{"node_did":owner,"default_agent_id":"first","avatar":"12","tags":["keep"]},
+            "node":{"node_did":owner,"default_agent_did":"first","avatar":"12","tags":["keep"]},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
             "agents":[
-                {"node_did":owner,"agent_id":"first","inference_profile_id":"profile"},
-                {"node_did":owner,"agent_id":"second","inference_profile_id":"profile","enabled":false}
+                {"node_did":owner,"agent_did":"first","inference_profile_id":"profile"},
+                {"node_did":owner,"agent_did":"second","inference_profile_id":"profile","enabled":false}
             ]
         }))?;
         let plan = DesiredStateApplyPlan::from_pack_config(&seed)?;
@@ -361,7 +356,7 @@ mod tests {
             &node,
             "test.default.stale",
             r#"mutation { update_Agent(
-                filter: { node_did: { _eq: "did:test:default" }, agent_id: { _eq: "first" } },
+                filter: { node_did: { _eq: "did:test:default" }, agent_did: { _eq: "first" } },
                 input: { enabled: false }
             ) { _docID } }"#,
         )
@@ -379,7 +374,7 @@ mod tests {
                 )
                 .await?
                 .unwrap();
-                assert_eq!(node["default_agent_id"], "second");
+                assert_eq!(node["default_agent_did"], "second");
                 assert_eq!(node["tags"], json!(["keep"]));
                 assert_eq!(node["avatar"], "12");
                 let (_, second) = read_desired_state_record_in_txn(
@@ -404,10 +399,10 @@ mod tests {
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:components";
         let seed: gents::documents::PackConfig = serde_json::from_value(json!({
-            "node":{"node_did":owner,"display_name":"Keep name","avatar":"12","default_agent_id":"agent","created_at":"2026-01-01T00:00:00Z","created_by":"did:test:creator","tags":["keep"]},
+            "node":{"node_did":owner,"display_name":"Keep name","avatar":"12","default_agent_did":"agent","created_at":"2026-01-01T00:00:00Z","created_by":"did:test:creator","tags":["keep"]},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
-            "agents":[{"node_did":owner,"agent_id":"agent","context_id":"context","inference_profile_id":"profile"}],
+            "agents":[{"node_did":owner,"agent_did":"agent","context_id":"context","inference_profile_id":"profile"}],
             "contexts":[{"node_did":owner,"context_id":"context","system_prompt":"initial"}]
         }))?;
         let plan = DesiredStateApplyPlan::from_pack_config(&seed)?;
@@ -439,7 +434,7 @@ mod tests {
         );
         for (key, value) in [
             ("display_name", json!("discarded")),
-            ("default_agent_id", json!("different")),
+            ("default_agent_did", json!("different")),
             ("created_at", json!("2026-02-01T00:00:00Z")),
             ("created_by", json!("other")),
             ("enabled", json!(false)),
@@ -463,7 +458,7 @@ mod tests {
                         .await?
                         .unwrap();
                 assert_eq!(node["display_name"], "Keep name");
-                assert_eq!(node["default_agent_id"], "agent");
+                assert_eq!(node["default_agent_did"], "agent");
                 assert_eq!(node["created_by"], "did:test:creator");
                 assert_eq!(node["tags"], json!(["keep"]));
                 assert_eq!(node["avatar"], "12");

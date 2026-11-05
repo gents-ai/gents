@@ -151,7 +151,7 @@ pub fn materialize_agent(
     let agent = candidate
         .agents
         .iter()
-        .find(|a| a.agent_id == target && a.node_did == node_did && a.enabled)?;
+        .find(|a| a.agent_did == target && a.node_did == node_did && a.enabled)?;
     let context = match &agent.context_id {
         Some(id) => Some(
             candidate
@@ -194,32 +194,4 @@ pub fn admit_sibling_tools_target(target: &SiblingToolsTarget) -> Result<()> {
         "sibling tools require an owned unprotected agent with unshared Context and Tools"
     );
     Ok(())
-}
-
-pub fn derive_agent_id(
-    node_did: &str,
-    display_name: &str,
-    existing: &BTreeMap<String, bool>,
-) -> String {
-    let mut slug = String::new();
-    let mut separator = false;
-    for ch in display_name.chars() {
-        if ch.is_ascii_alphanumeric() {
-            if separator && !slug.is_empty() {
-                slug.push('-');
-            }
-            slug.push(ch.to_ascii_lowercase());
-            separator = false;
-        } else {
-            separator = true;
-        }
-    }
-    let base = format!("{node_did}:{slug}");
-    let mut id = base.clone();
-    let mut suffix = 2;
-    while existing.contains_key(&id) {
-        id = format!("{base}-{suffix}");
-        suffix += 1;
-    }
-    id
 }

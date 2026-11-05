@@ -82,9 +82,9 @@ mod tests {
             "tools": [{"tools_id": "tools", "node_did": "did:test:source"}],
             "agent_targets": [
                 {"target_id": "local", "node_did": "did:test:source",
-                 "target_node_did": "did:test:source", "agent_id": "b", "name": "local"},
+                 "target_node_did": "did:test:source", "agent_did": "b", "name": "local"},
                 {"target_id": "remote", "node_did": "did:test:source",
-                 "target_node_did": "did:test:remote", "agent_id": "b", "name": "remote"}
+                 "target_node_did": "did:test:remote", "agent_did": "b", "name": "remote"}
             ],
             "inference_profiles": [{"profile_id": "p", "node_did": "did:test:source",
                 "backend_id": "backend", "model_name": "model"}]

@@ -1,5 +1,11 @@
 use super::*;
-use crate::goal::{gate_claimed_goal_continuation, set_goal, GoalAgentObservation};
+use crate::goal::{
+    claim_continuation_from_access, claim_retry_continuation_from_access,
+    gate_claimed_goal_continuation, set_goal_from_access,
+    stop_claimed_continuation_for_unavailable_agent_from_access,
+    update_goal_fields_if_status_from_access, GoalAgentObservation,
+};
+use crate::store::graphql::graphql_with_transaction_retry;
 use crate::support::{test_db, TestDb};
 use gents_protocol::node_readiness::{
     AgentReadinessEntry, AgentReadinessState, AgentReadinessUnavailableReason,
@@ -23,16 +29,29 @@ fn recovery_projection(goal: &GoalDocument) -> Value {
     })
 }
 
-fn source(db: &TestDb) -> GoalSource {
-    let (_, rx) = watch::channel(Arc::new(ActiveRuntimeSnapshot {
+async fn source(
+    db: &TestDb,
+) -> (
+    GoalSource,
+    crate::runtime::status::RuntimeStatusHandle,
+    crate::runtime::status::RuntimeStatusOwner,
+) {
+    let agent_identity = selected_identity(db).await;
+    let agent_did = agent_identity.did().to_owned();
+    let unavailable = crate::runtime::snapshot::UnavailableAgent::new(
+        AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
+        "test fixture identity",
+    )
+    .with_watcher_identity(agent_identity);
+    let snapshot = Arc::new(ActiveRuntimeSnapshot {
         generation: 1,
         node: None,
         local_did: db.node_identity.did().to_owned(),
-        default_agent_id: BEHAVIOR.to_owned(),
+        default_agent_did: agent_did.clone(),
         agents: Default::default(),
         tool_surfaces: Default::default(),
         backend_admission_configs: Default::default(),
-        unavailable_agents: Default::default(),
+        unavailable_agents: [(agent_did, unavailable)].into_iter().collect(),
         active_schedules: Default::default(),
         unavailable_schedules: Default::default(),
         active_event_triggers: Default::default(),
@@ -41,8 +60,59 @@ fn source(db: &TestDb) -> GoalSource {
         dispatchers: Default::default(),
         agent_executor_capacities: Default::default(),
         agent_executor_queue_capacities: Default::default(),
-    }));
-    GoalSource::new(rx, db.node.clone(), CancellationToken::new())
+    });
+    let (owner, status) =
+        crate::runtime::status::RuntimeStatusHandle::start(db.node.clone(), db.node_identity.did());
+    status.publish_applied(&snapshot).await;
+    let (_, rx) = watch::channel(snapshot);
+    (
+        GoalSource::new(rx, db.node.clone(), CancellationToken::new())
+            .with_runtime_status(status.clone()),
+        status,
+        owner,
+    )
+}
+
+async fn selected_agent(db: &TestDb) -> String {
+    let query = format!(
+        r#"{{ Agent(filter: {{ node_did: {{ _eq: "{}" }}, display_name: {{ _eq: "{}" }} }}, limit: 2) {{ agent_did }} }}"#,
+        escape_graphql_string(db.node_identity.did()),
+        escape_graphql_string(BEHAVIOR)
+    );
+    let rows = ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(db.node_identity.did()).unwrap(),
+    )
+    .execute(&query)
+    .await
+    .unwrap();
+    rows["data"]["Agent"][0]["agent_did"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn selected_identity(db: &TestDb) -> Arc<dyn crate::store::identity::NodeIdentity> {
+    let agent_did = selected_agent(db).await;
+    let agent = crate::load_agent(&db.node, &agent_did)
+        .await
+        .unwrap()
+        .unwrap();
+    let binding = gents_protocol::agent_identity::AgentIdentityBinding {
+        agent_did: agent.agent_did,
+        creation_nonce: agent.creation_nonce,
+    };
+    crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap()
+}
+
+async fn agent_access(db: &TestDb) -> ConfigAccess {
+    let agent = selected_identity(db).await;
+    ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap()
 }
 
 async fn load_goal(db: &TestDb) -> GoalDocument {
@@ -71,12 +141,14 @@ async fn install_claim(db: &TestDb, before: &Value) -> GoalDocument {
 }
 
 async fn install_claim_with_terminal(db: &TestDb, before: &Value, terminal: &str) -> GoalDocument {
-    crate::test_support::install_test_agent(&db.node, db.node_identity.did(), BEHAVIOR).await;
-    crate::session::ensure_session_with_agent_id_and_requester_did(
+    let agent = crate::test_support::install_test_agent(&db.node, db.node_identity.did(), BEHAVIOR)
+        .await
+        .agent_did;
+    crate::session::ensure_session_with_agent_did_and_requester_did(
         &db.node,
         SESSION,
         db.node_identity.did(),
-        BEHAVIOR,
+        &agent,
         Some(db.node_identity.did()),
     )
     .await
@@ -88,7 +160,7 @@ async fn install_claim_with_terminal(db: &TestDb, before: &Value, terminal: &str
             requester_did: Some(db.node_identity.did().to_owned()),
             request_id: parent.to_owned(),
             node_did: db.node_identity.did().to_owned(),
-            agent_id: BEHAVIOR.to_owned(),
+            agent_did: agent.clone(),
             session_id: SESSION.to_owned(),
             content: "original goal attempt".to_owned(),
             execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
@@ -117,19 +189,21 @@ async fn install_claim_with_terminal(db: &TestDb, before: &Value, terminal: &str
         &format!(r#"mutation {{ update_AgentRequest(filter: {{request_id: {{_eq: "{}"}}, lifecycle_state: {{_eq: "pending"}}}}, input: {{lifecycle_state: "{}", terminalized_at: "2020-01-02T00:00:00Z"}}) {{_docID}} }}"#,
             escape_graphql_string(parent), escape_graphql_string(terminal)),
     ).await.unwrap();
-    let goal = set_goal(
-        &db.node,
+    let access = agent_access(db).await;
+    let goal = set_goal_from_access(
+        &access,
         db.node_identity.did(),
         SESSION,
         Some("Recover the saved attempt"),
         Some(GoalStatus::Active),
         None,
+        None,
     )
     .await
     .unwrap();
     if let Some(failure) = before["last_failure"].as_str() {
-        assert!(claim_retry_continuation(
-            &db.node,
+        assert!(claim_retry_continuation_from_access(
+            &access,
             &goal,
             parent,
             before["infrastructure_retries"].as_i64().unwrap(),
@@ -138,10 +212,12 @@ async fn install_claim_with_terminal(db: &TestDb, before: &Value, terminal: &str
         .await
         .unwrap());
     } else {
-        assert!(claim_continuation(&db.node, &goal, parent).await.unwrap());
+        assert!(claim_continuation_from_access(&access, &goal, parent)
+            .await
+            .unwrap());
     }
     let claimed = load_goal(db).await;
-    assert!(update_goal_fields_if_status(&db.node, &claimed, GoalStatus::Active, &format!(
+    assert!(update_goal_fields_if_status_from_access(&access, &claimed, GoalStatus::Active, &format!(
         r#"status: "{}", wrapup_requested: {}, wrapup_completed: {}, consecutive_blocked_audits: {}"#,
         escape_graphql_string(before["status"].as_str().unwrap()),
         before["wrapup_requested"], before["wrapup_completed"], before["blocked_audits"],
@@ -154,9 +230,18 @@ async fn install_claim_with_terminal(db: &TestDb, before: &Value, terminal: &str
 async fn publish_readiness(
     db: &TestDb,
     observation: &str,
+    status: &crate::runtime::status::RuntimeStatusHandle,
     settled: bool,
     newer_than_terminal: bool,
 ) {
+    status
+        .set_reconcile_phase(if settled {
+            crate::runtime::status::ReconcilePhase::Idle
+        } else {
+            crate::runtime::status::ReconcilePhase::Applying
+        })
+        .await;
+    let agent = selected_agent(db).await;
     let unavailable = match observation {
         "unavailable" => Some(AgentReadinessUnavailableReason::RuntimeConfigurationInvalid),
         "backend_recovering" => {
@@ -173,20 +258,20 @@ async fn publish_readiness(
         },
         active_generation: 1,
         router_generation: 1,
-        default_agent_id: if observation == "unassigned" {
+        default_agent_did: if observation == "unassigned" {
             "other-assigned-behavior".to_owned()
         } else {
-            BEHAVIOR.to_owned()
+            agent.clone()
         },
         agents: if observation == "unassigned" {
             vec![AgentReadinessEntry {
-                agent_id: "other-assigned-behavior".to_owned(),
+                agent_did: "other-assigned-behavior".to_owned(),
                 state: AgentReadinessState::Ready,
                 reason: None,
             }]
         } else {
             vec![AgentReadinessEntry {
-                agent_id: BEHAVIOR.to_owned(),
+                agent_did: agent.clone(),
                 state: if unavailable.is_some() {
                     AgentReadinessState::Unavailable
                 } else {
@@ -215,12 +300,6 @@ async fn publish_readiness(
     )
     .await
     .unwrap();
-    let phase = if settled { "idle" } else { "applying" };
-    crate::ConfigAccess::write_local(&db.node, "goal.claimed_readiness_test_reconcile", &format!(
-        r#"mutation {{ upsert_NodeRuntime(filter: {{node_did: {{_eq: "{did}"}}}},
-            add: {{node_did: "{did}", reconcile_phase: "{phase}", last_reconcile_result: "applied"}},
-            update: {{reconcile_phase: "{phase}", last_reconcile_result: "applied"}}) {{_docID}} }}"#,
-    )).await.unwrap();
 }
 
 #[tokio::test]
@@ -236,14 +315,15 @@ async fn required_question_holds_the_claim_until_its_native_item_is_acted() {
     let db = test_db("required-question-continuation").await;
     let goal = install_claim_with_terminal(&db, &before, "completed").await;
     let parent = goal.last_continued_from_request_id.as_deref().unwrap();
-    publish_readiness(&db, "ready", true, true).await;
+    let (controller, status, _status_owner) = source(&db).await;
+    publish_readiness(&db, "ready", &status, true, true).await;
     let payload = json!({"version":2,"prompt":"Choose the next step","options":[
         {"id":"small","label":"Small change"},{"id":"broad","label":"Broader change"}
     ]})
     .to_string();
     let did = escape_graphql_string(db.node_identity.did());
     let session = escape_graphql_string(SESSION);
-    let behavior = escape_graphql_string(BEHAVIOR);
+    let behavior = escape_graphql_string(&selected_agent(&db).await);
     let response = crate::ConfigAccess::write_local(
         &db.node,
         "test.goal.required_question",
@@ -253,7 +333,7 @@ async fn required_question_holds_the_claim_until_its_native_item_is_acted() {
             status: "open", kind: "ask", action: "start_request", title: "Next step",
             payload: "{}", source_kind: "agent", source_id: "required-question-source",
             session_id: "{session}", request_id: "{}", target_node_did: "{did}",
-            target_agent_id: "{behavior}", created_at: "2020-01-02T00:00:00Z"
+            target_agent_did: "{behavior}", created_at: "2020-01-02T00:00:00Z"
         }}) {{ _docID }} }}"#,
             escape_graphql_string(&payload),
             escape_graphql_string(parent),
@@ -262,10 +342,12 @@ async fn required_question_holds_the_claim_until_its_native_item_is_acted() {
     .await
     .unwrap();
     let item_id = crate::store::graphql::created_doc_id(&response, "MailboxItem").unwrap();
-    let controller = source(&db);
     for _ in 0..2 {
         assert!(controller
-            .build_intent(load_goal(&db).await)
+            .build_intent(
+                &identity::Did::new(selected_agent(&db).await).unwrap(),
+                load_goal(&db).await
+            )
             .await
             .unwrap()
             .is_none());
@@ -278,13 +360,19 @@ async fn required_question_holds_the_claim_until_its_native_item_is_acted() {
         escape_graphql_string(&item_id),
     )).await.unwrap();
     assert!(controller
-        .build_intent(load_goal(&db).await)
+        .build_intent(
+            &identity::Did::new(selected_agent(&db).await).unwrap(),
+            load_goal(&db).await
+        )
         .await
         .unwrap()
         .is_some());
     assert_eq!(child_count(&db, &goal, parent).await, 1);
     assert!(controller
-        .build_intent(load_goal(&db).await)
+        .build_intent(
+            &identity::Did::new(selected_agent(&db).await).unwrap(),
+            load_goal(&db).await
+        )
         .await
         .unwrap()
         .is_none());
@@ -300,7 +388,7 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
         let db = test_db(name).await;
         let before = install_claim(&db, &case["before"]).await;
         let parent = before.last_continued_from_request_id.as_deref().unwrap();
-        let controller = source(&db);
+        let (controller, status, _status_owner) = source(&db).await;
         let observation = case["observation"].as_str().unwrap();
         let settled = case["settled"].as_bool().unwrap();
         let child_exists = case["child_exists"].as_bool().unwrap();
@@ -328,9 +416,12 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
         };
         assert_eq!(decision_name, case["decision"].as_str().unwrap(), "{name}");
         if child_exists {
-            publish_readiness(&db, "ready", true, true).await;
+            publish_readiness(&db, "ready", &status, true, true).await;
             assert!(controller
-                .build_intent(before.clone())
+                .build_intent(
+                    &identity::Did::new(selected_agent(&db).await).unwrap(),
+                    before.clone()
+                )
                 .await
                 .unwrap()
                 .is_some());
@@ -338,12 +429,19 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
         publish_readiness(
             &db,
             observation,
+            &status,
             settled,
             case["newer_than_terminal"].as_bool().unwrap(),
         )
         .await;
         let observed = load_goal(&db).await;
-        let intent = controller.build_intent(observed.clone()).await.unwrap();
+        let intent = controller
+            .build_intent(
+                &identity::Did::new(selected_agent(&db).await).unwrap(),
+                observed.clone(),
+            )
+            .await
+            .unwrap();
         assert_eq!(
             intent.is_some(),
             decision == GoalClaimedDecision::Materialize,
@@ -353,7 +451,11 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
         assert_eq!(recovery_projection(&after), case["expected"], "{name}");
         assert_eq!(
             controller
-                .continuation_child_exists(&after, parent)
+                .continuation_child_exists(
+                    &identity::Did::new(selected_agent(&db).await).unwrap(),
+                    &after,
+                    parent
+                )
                 .await
                 .unwrap(),
             child_exists || intent.is_some(),
@@ -365,9 +467,12 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
                 serde_json::to_value(&observed).unwrap(),
                 "{name}: waiting writes nothing"
             );
-            publish_readiness(&db, "ready", true, true).await;
+            publish_readiness(&db, "ready", &status, true, true).await;
             let recovered = controller
-                .build_intent(after.clone())
+                .build_intent(
+                    &identity::Did::new(selected_agent(&db).await).unwrap(),
+                    after.clone(),
+                )
                 .await
                 .unwrap()
                 .expect("ready claim recovers");
@@ -385,10 +490,13 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
                 "{name}: recovery preserves retry charge and prompt"
             );
         } else if decision == GoalClaimedDecision::Stop {
-            publish_readiness(&db, "ready", true, true).await;
+            publish_readiness(&db, "ready", &status, true, true).await;
             assert!(
                 controller
-                    .build_intent(after.clone())
+                    .build_intent(
+                        &identity::Did::new(selected_agent(&db).await).unwrap(),
+                        after.clone()
+                    )
                     .await
                     .unwrap()
                     .is_none(),
@@ -403,7 +511,10 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
         let current = load_goal(&db).await;
         assert!(
             controller
-                .build_intent(current.clone())
+                .build_intent(
+                    &identity::Did::new(selected_agent(&db).await).unwrap(),
+                    current.clone()
+                )
                 .await
                 .unwrap()
                 .is_none(),
@@ -422,8 +533,8 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
         );
         if child_exists {
             assert!(
-                !stop_claimed_continuation_for_unavailable_agent(
-                    &db.node,
+                !stop_claimed_continuation_for_unavailable_agent_from_access(
+                    &agent_access(&db).await,
                     &before,
                     parent,
                     "stale unavailable observation"
@@ -437,7 +548,7 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
                 serde_json::to_value(&current).unwrap()
             );
         }
-        db.node.shutdown().await;
+        db.node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -451,19 +562,25 @@ async fn readiness_stop_rejects_a_replaced_claim_epoch() {
     let db = test_db("claimed-readiness-stale-epoch").await;
     let stale = install_claim(&db, &case["before"]).await;
     let parent = stale.last_continued_from_request_id.as_deref().unwrap();
-    assert!(claim_continuation(&db.node, &stale, parent).await.unwrap());
+    assert!(
+        claim_continuation_from_access(&agent_access(&db).await, &stale, parent)
+            .await
+            .unwrap()
+    );
     let current = load_goal(&db).await;
-    assert!(!stop_claimed_continuation_for_unavailable_agent(
-        &db.node,
-        &stale,
-        parent,
-        "stale settled-unavailable observation",
-    )
-    .await
-    .unwrap());
+    assert!(
+        !stop_claimed_continuation_for_unavailable_agent_from_access(
+            &agent_access(&db).await,
+            &stale,
+            parent,
+            "stale settled-unavailable observation",
+        )
+        .await
+        .unwrap()
+    );
     assert_eq!(
         serde_json::to_value(load_goal(&db).await).unwrap(),
         serde_json::to_value(&current).unwrap()
     );
-    db.node.shutdown().await;
+    db.node.shutdown().await.expect("node shutdown");
 }

@@ -6,7 +6,6 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use gents::default_agent_id_for_node;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -14,9 +13,8 @@ fn generated_backend_id_for_agent(node_did: &str) -> String {
     format!("{node_did}:backend")
 }
 
-fn generated_tools_id_for_agent(node_did: &str) -> String {
-    let default_agent_id = default_agent_id_for_node(node_did);
-    format!("{default_agent_id}-tools")
+fn generated_tools_id_for_agent(agent_did: &str) -> String {
+    format!("{agent_did}-tools")
 }
 
 fn add_principal_skill_pair(root: &Path, node_did: &str) -> Result<()> {
@@ -80,7 +78,7 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
     );
     let node_did = node_did_from_init(&init)?;
     let backend_id = generated_backend_id_for_agent(&node_did);
-    let tools_id = generated_tools_id_for_agent(&node_did);
+    let tools_id = generated_tools_id_for_agent(&agent_did_from_init(&init)?);
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -174,7 +172,7 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
         &format!(
             r#"{{
                 Agent(filter: {{ node_did: {{ _eq: "{}" }} }}) {{
-                    agent_id
+                    agent_did
                 }}
             }}"#,
             escape_graphql_string(&node_did),
@@ -262,26 +260,26 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
     )?;
     let config_path = pack_root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let original_agent_id = config["node"]
-        .get("default_agent_id")
+    let original_agent_did = config["node"]
+        .get("default_agent_did")
         .and_then(Value::as_str)
         .context("exported principal missing default agent")?
         .to_string();
-    let applied_agent_id = format!("{node_did}:applied-default");
+    let applied_agent_did = format!("{node_did}:applied-default");
     let mut applied_agent = config["agents"]
         .as_array()
         .context("agents is not an array")?
         .iter()
-        .find(|agent| agent["agent_id"] == original_agent_id)
+        .find(|agent| agent["agent_did"] == original_agent_did)
         .context("exported default agent is missing")?
         .clone();
-    applied_agent["agent_id"] = Value::String(applied_agent_id.clone());
+    applied_agent["agent_did"] = Value::String(applied_agent_did.clone());
     applied_agent["display_name"] = Value::String("Applied default".to_string());
     config["agents"]
         .as_array_mut()
         .context("agents is not an array")?
         .push(applied_agent);
-    config["node"]["default_agent_id"] = Value::String(applied_agent_id.clone());
+    config["node"]["default_agent_did"] = Value::String(applied_agent_did.clone());
     write_json_file(&config_path, &config)?;
 
     let port = allocate_port()?;
@@ -290,20 +288,20 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
         spawn_server_with_ready_json(&home_dir, port, &["--apply-root", pack_root_arg], &[])?;
 
     assert_eq!(
-        readiness.get("default_agent_id").and_then(Value::as_str),
-        Some(applied_agent_id.as_str())
+        readiness.get("default_agent_did").and_then(Value::as_str),
+        Some(applied_agent_did.as_str())
     );
     assert_eq!(
         readiness
-            .pointer("/node_readiness/default_agent_id")
+            .pointer("/node_readiness/default_agent_did")
             .and_then(Value::as_str),
-        Some(applied_agent_id.as_str())
+        Some(applied_agent_did.as_str())
     );
     assert!(readiness
         .pointer("/node_readiness/agents")
         .and_then(Value::as_array)
         .is_some_and(|agents| agents.iter().any(|agent| {
-            agent.get("agent_id").and_then(Value::as_str) == Some(applied_agent_id.as_str())
+            agent.get("agent_did").and_then(Value::as_str) == Some(applied_agent_did.as_str())
         })));
     assert_eq!(
         readiness
@@ -423,8 +421,8 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
     )?;
     let config_path = pack_root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let agent_id = config["node"]
-        .get("default_agent_id")
+    let agent_did = config["node"]
+        .get("default_agent_did")
         .and_then(Value::as_str)
         .context("exported principal missing default agent")?
         .to_string();
@@ -440,7 +438,7 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
             "task_id": task_id,
             "display_name": "Post-apply task",
             "description": null,
-            "agent_id": agent_id,
+            "agent_did": agent_did,
             "prompt_template": "Exercise the post-apply runtime generation.",
             "enabled": true,
             "output_schema_ref": null,
@@ -512,7 +510,7 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
     );
     let node_did = node_did_from_init(&init)?;
     let backend_id = generated_backend_id_for_agent(&node_did);
-    let tools_id = generated_tools_id_for_agent(&node_did);
+    let tools_id = generated_tools_id_for_agent(&agent_did_from_init(&init)?);
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -817,7 +815,7 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let tools_id = generated_tools_id_for_agent(&node_did);
+    let tools_id = generated_tools_id_for_agent(&agent_did_from_init(&init)?);
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
@@ -898,7 +896,12 @@ async fn pin_default_tools_root(
         ),
     )
     .await?;
-    let tools_id = generated_tools_id_for_agent(node_did);
+    let selected = graphql_query(&graphql, &format!("{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", gents::store::graphql::escape_graphql_string(node_did))).await?;
+    let agent_did = selected
+        .pointer("/data/Node/0/default_agent_did")
+        .and_then(Value::as_str)
+        .context("node default agent missing")?;
+    let tools_id = generated_tools_id_for_agent(agent_did);
     let mut tools = response
         .pointer("/data/Tools")
         .and_then(Value::as_array)
@@ -1197,7 +1200,7 @@ async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Re
         reply.contains(&expected_reply),
         "expected the pinned-root chat round trip to deliver the model reply, got:\n{reply}"
     );
-    let tools_id = generated_tools_id_for_agent(&node_did);
+    let tools_id = generated_tools_id_for_agent(&agent_did_from_init(&init)?);
     let response = graphql_query(
         &graphql,
         &format!(
@@ -1263,7 +1266,7 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
     );
     let node_did = node_did_from_init(&init)?;
     let backend_id = generated_backend_id_for_agent(&node_did);
-    let tools_id = generated_tools_id_for_agent(&node_did);
+    let tools_id = generated_tools_id_for_agent(&agent_did_from_init(&init)?);
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -1334,8 +1337,8 @@ async fn readiness_wait_survives_preflight_listener_closing_before_server_start(
     let snapshot = serde_json::json!({
         "format_version": gents_protocol::node_readiness::NODE_READINESS_FORMAT_VERSION, "process_state": "ready",
         "active_generation": 1, "router_generation": 1,
-        "default_agent_id": "default",
-        "agents": [{"agent_id": "default", "state": "ready", "reason": null}]
+        "default_agent_did": "default",
+        "agents": [{"agent_did": "default", "state": "ready", "reason": null}]
     });
     let response = serde_json::json!({"data": {"NodeReadiness": [{
         "node_did": did, "snapshot_json": snapshot.to_string(),

@@ -107,7 +107,41 @@ async fn backend_check(
         return Ok(json!({"probe_status": observation.probe_status,
             "note": OAUTH_CREDENTIAL_DISCOVERY_NOTE, "discovered_models": []}));
     }
+    if matches!(
+        &backend.auth,
+        gents::documents::BackendAuth::Credential { .. }
+    ) {
+        let discovered = if access.local_node().is_some() {
+            anyhow::ensure!(
+                access.actor_did().is_some(),
+                "runtime credential diagnosis requires an authenticated actor"
+            );
+            gents::inference::backends::registry::discover_runtime_backend_models(access, backend)
+                .await?
+        } else {
+            observation
+                .catalog_for(None)?
+                .context("runtime credential discovery is unavailable and no catalog is recorded")?
+                .models
+                .clone()
+        };
+        let names = discovered
+            .iter()
+            .map(|model| model.model_name.as_str())
+            .collect::<BTreeSet<_>>();
+        let missing = required.difference(&names).copied().collect::<Vec<_>>();
+        anyhow::ensure!(
+            missing.is_empty(),
+            "backend is missing required models: {}",
+            missing.join(", ")
+        );
+        return Ok(
+            json!({"probe_status": observation.probe_status, "discovered_models": names,
+            "note": "Private credentials are resolved only by the runtime; remote diagnosis uses its recorded catalog."}),
+        );
+    }
     let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(
             backend.connect_timeout_secs.unwrap_or(10) as u64,
         ))
@@ -171,6 +205,25 @@ mod tests {
     use gents::documents::BackendAuth;
     use std::sync::Arc;
 
+    async fn seed_backend(access: &ConfigAccess, backend: &InferenceBackend, status: Option<&str>) {
+        gents::ensure_node(access.local_node().unwrap(), &backend.node_did)
+            .await
+            .unwrap();
+        gents::store::config_client::write_inference_backend_document(access, backend)
+            .await
+            .unwrap();
+        if let Some(status) = status {
+            gents::inference::backends::registry::set_backend_probe_status_as(
+                access,
+                &backend.node_did,
+                &backend.backend_id,
+                status,
+            )
+            .await
+            .unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn enabled_backend_is_diagnosed_by_discovery_without_runtime_probe() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -204,17 +257,8 @@ mod tests {
             "auth":{"kind":"unauthenticated"}, "enabled":true,
         }))
         .unwrap();
-        let mut stored = serde_json::to_value(&backend).unwrap();
-        stored["probe_status"] = json!("unknown");
-        let input = gents_protocol::graphql::graphql_input_literal(&stored).unwrap();
         let access = ConfigAccess::local(node.clone());
-        access
-            .write(
-                "test.diagnose.backend",
-                &format!("mutation {{ create_InferenceBackend(input: {input}) {{_docID}} }}"),
-            )
-            .await
-            .unwrap();
+        seed_backend(&access, &backend, Some("unknown")).await;
         let report = backend_check(&access, &backend, &BTreeSet::from(["local-model"]))
             .await
             .unwrap();
@@ -242,12 +286,19 @@ mod tests {
                 .await
                 .is_err()
         );
-        access.write("test.diagnose.unhealthy", r#"mutation { update_InferenceBackend(filter: {backend_id: {_eq: "offline-backend"}}, input: {probe_status: "unhealthy"}) {_docID} }"#).await.unwrap();
+        gents::inference::backends::registry::set_backend_probe_status_as(
+            &access,
+            &backend.node_did,
+            &backend.backend_id,
+            "unhealthy",
+        )
+        .await
+        .unwrap();
         let error = backend_check(&access, &backend, &BTreeSet::new())
             .await
             .unwrap_err();
         assert!(error.to_string().contains("no healthy probe observation"));
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -265,23 +316,15 @@ mod tests {
             "auth": BackendAuth::NodeOAuth { account_ref: None },
         }))
         .unwrap();
+        let access = ConfigAccess::local(node.clone());
         for (owner, status) in [
             ("did:key:owner", "healthy"),
             ("did:key:foreign", "unhealthy"),
         ] {
-            let mut value = serde_json::to_value(&backend).unwrap();
-            value["node_did"] = json!(owner);
-            value["probe_status"] = json!(status);
-            value["enabled"] = json!(true);
-            let input = gents_protocol::graphql::graphql_input_literal(&value).unwrap();
-            let result = node
-                .execute(&format!(
-                    "mutation {{ create_InferenceBackend(input: {input}) {{_docID}} }}"
-                ))
-                .await;
-            assert!(!result.has_errors(), "{:?}", result.errors);
+            let mut value = backend.clone();
+            value.node_did = owner.to_owned();
+            seed_backend(&access, &value, Some(status)).await;
         }
-        let access = ConfigAccess::local(node);
         let report = backend_check(&access, &backend, &BTreeSet::from(["claude-sonnet-5"]))
             .await
             .unwrap();
@@ -309,15 +352,9 @@ mod tests {
             "provider_kind": "ClaudeCliSubscription", "endpoint": "https://api.anthropic.com",
             "auth": BackendAuth::NodeOAuth { account_ref: None }, "enabled": true,
         });
-        let input = gents_protocol::graphql::graphql_input_literal(&backend).unwrap();
         let access = ConfigAccess::local(node.clone());
-        access
-            .write(
-                "test.diagnose.oauth_unprobed",
-                &format!("mutation {{ create_InferenceBackend(input: {input}) {{_docID}} }}"),
-            )
-            .await
-            .unwrap();
+        let backend_doc: InferenceBackend = serde_json::from_value(backend.clone()).unwrap();
+        seed_backend(&access, &backend_doc, None).await;
         let bundle: ConfigExportBundle = serde_json::from_value(json!({
             "format": "test", "node_did": owner, "exported_at": "2026-01-01T00:00:00Z",
             "access_mode": "local", "node": {"node_did": owner},
@@ -348,7 +385,7 @@ mod tests {
             reports[0]["error"],
             "backend is disabled or has no healthy probe observation"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]

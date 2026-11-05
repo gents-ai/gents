@@ -7,8 +7,70 @@ use super::write_telemetry::{ConflictSource, WriteTelemetryError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigClientError {
+    #[error("client Agent publication journal could not be recorded")]
+    ClientAgentJournal(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("client Agent publication is interrupted or unconfirmed; inspect the retained publication journal before repair")]
+    ClientAgentPublicationUnconfirmed(#[source] Box<ConfigClientError>),
+    #[error("HTTP authentication and client signing require a locally held actor key")]
+    ClientAgentSignerRequired,
+    #[error("held client signing key does not match the authenticated actor or bearer")]
+    ClientSignerMismatch,
+    #[error("client-signed Agent creation is unavailable for this transaction")]
+    ClientAgentTransportRequired,
+    #[error("client-signed writes require a running HTTP endpoint; start the runtime and retry")]
+    EmbeddedClientSigningUnavailable,
+    #[error("client-signed updates are unavailable for this collection or transaction")]
+    ClientConfigurationUpdateUnsupported,
+    #[error("client-authorized HTTP mutations require the client-signed transaction owner")]
+    ClientUnsignedMutationUnsupported,
+    #[error("client-signed update requires one explicit document and matching collection")]
+    ClientConfigurationUpdateInvalid,
+    #[error("configuration removal was not confirmed")]
+    DesiredStateRemovalUnconfirmed,
+    #[error("client-signed delete requires one exact document and a trusted configuration schema")]
+    ClientConfigurationDeleteInvalid,
+    #[error("client-signed deletion did not confirm the requested document")]
+    ClientConfigurationDeleteNotApplied,
+    #[error("immutable configuration field {field} cannot be changed")]
+    ClientConfigurationImmutableField { field: String },
+    #[error("configuration mutation did not update {collection} {node_did}/{id}; the document may be unavailable or the actor may lack update permission")]
+    ConfigurationMutationNotApplied {
+        collection: &'static str,
+        node_did: String,
+        id: String,
+    },
+    #[error("resolving the trusted canonical schema lineage")]
+    ClientCanonicalSchema(#[source] gents_migration::Error),
+    #[error("building the client-signed configuration update graph")]
+    ClientConfigurationGraph(#[source] db::block::builder::ClientUpdateError),
+    #[error("decoding the client-signed mutation history response")]
+    ClientSignedSnapshotDecode(#[source] serde_json::Error),
+    #[error("building the client-signed configuration delete graph")]
+    ClientConfigurationDeleteGraph(#[source] db::block::builder::ClientDeleteError),
+    #[error("verifying the client-signed configuration mutation graph")]
+    ClientVerifiedMutationGraph(#[source] db::block::builder::VerifiedMutationError),
+    #[error("building the client-signed Agent graph")]
+    ClientAgentGraph(#[source] db::block::builder::ClientCreateError),
+    #[error("joining client-signed Agent graph preparation")]
+    ClientAgentGraphJoin(#[source] tokio::task::JoinError),
+    #[error("client-signed Agent conversation failed")]
+    ClientAgentSigning(#[source] defra_http::client_signed_create::ClientSignedCreateError),
+    #[error("client-signed Agent connection failed")]
+    ClientAgentConnection(#[source] Box<tokio_tungstenite::tungstenite::Error>),
+    #[error("client-signed Agent conversation timed out")]
+    ClientAgentTimeout(#[source] tokio::time::error::Elapsed),
     #[error("a DefraDB Bearer authorization is required")]
     BearerRequired,
+    #[error("GraphQL subscriptions require an authenticated remote endpoint")]
+    RemoteSubscriptionRequired,
+    #[error("GraphQL subscription response is not an event stream: {0:?}")]
+    SubscriptionContentType(Option<String>),
+    #[error("GraphQL subscription handshake timed out")]
+    SubscriptionHandshake(#[source] tokio::time::error::Elapsed),
+    #[error("reading GraphQL subscription events")]
+    SubscriptionStream(#[source] eventsource_stream::EventStreamError<reqwest::Error>),
+    #[error("unexpected GraphQL subscription event: {0}")]
+    SubscriptionEvent(String),
     #[error("invalid authorization header")]
     AuthorizationHeader(#[source] reqwest::header::InvalidHeaderValue),
     #[error("expected GraphQL endpoint ending in /graphql, got {graphql}")]
@@ -54,6 +116,64 @@ pub enum ConfigClientError {
     BearerHeader(#[source] reqwest::header::InvalidHeaderValue),
     #[error("owned native operation requires local access")]
     LocalAccessRequired,
+    #[error("plugin data actor does not match the transaction actor")]
+    TransactionActorMismatch,
+    #[error("validated managed Agent signing capability is required")]
+    ManagedAgentSignerRequired,
+    #[error("a document relationship requires an authenticated actor")]
+    RelationshipActorRequired,
+    #[error("invalid transaction owner observation response")]
+    InvalidOwnerObservation,
+    #[error("invalid document relationship actor")]
+    RelationshipTargetIdentity(#[source] identity::Error),
+    #[error("transaction committed, but document relationships remain incomplete for creator {creator}: {pending:?}")]
+    CommittedRelationshipsIncomplete {
+        creator: String,
+        pending: Vec<super::ConfigRelationshipGrant>,
+        #[source]
+        source: Box<ConfigClientError>,
+    },
+    #[error("transaction outcome is unconfirmed; document relationships may be incomplete for creator {creator}: {pending:?}")]
+    UnconfirmedRelationships {
+        creator: String,
+        pending: Vec<super::ConfigRelationshipGrant>,
+        #[source]
+        source: Box<ConfigClientError>,
+    },
+    #[error("node operation requires an authenticated runtime identity")]
+    NodePermissionActorRequired,
+    #[error("invalid node operation identity")]
+    NodePermissionIdentity(#[source] identity::Error),
+    #[error("node permission grant failed ({status}): {body}")]
+    NodePermissionStatus {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    #[error("{operation} returned HTTP {status}")]
+    HttpOperationStatus {
+        operation: &'static str,
+        status: reqwest::StatusCode,
+    },
+    #[error("transactional relationship request failed ({status}): {body}")]
+    RelationshipStatus {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    #[error(
+        "this backend does not support transaction-bound relationship or permission operations"
+    )]
+    TransactionAuthorizationUnsupported,
+    #[error("invalid resource relationship target")]
+    InvalidResourceRelationshipTarget,
+    #[error("document relationship request failed ({status}): {body}")]
+    DocumentRelationshipStatus {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    #[error("transactional permission observation returned no decision")]
+    PermissionObservationMissing,
+    #[error("runtime identity cannot act for agent document work")]
+    RuntimeDocumentActor,
     #[error("{source}\n{}", super::graphql_diagnostic_hint(endpoint))]
     HttpQuery {
         endpoint: String,
@@ -307,6 +427,45 @@ impl From<crate::store::identity::IdentityError> for ConfigClientError {
 }
 
 impl ConfigClientError {
+    /// DefraDB's explicit structured refusal or an HTTP authentication/ACP
+    /// rejection. A missing or hidden document is not evidence of either.
+    pub fn is_permission_denied(&self) -> bool {
+        let denied = |status: reqwest::StatusCode| {
+            matches!(
+                status,
+                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+            )
+        };
+        match self {
+            Self::Query(error) => matches!(
+                error.as_ref(),
+                query::error::QueryError::PermissionDenied(_)
+            ),
+            Self::EmbeddedGraphqlErrors { errors } => errors.iter().any(|error| {
+                error.code() == Some(gents_protocol::database_error::PERMISSION_DENIED_CODE)
+            }),
+            Self::NodePermissionStatus { status, .. }
+            | Self::HttpOperationStatus { status, .. }
+            | Self::RelationshipStatus { status, .. }
+            | Self::SchemaStatus { status, .. }
+            | Self::SchemaOperationStatus { status, .. }
+            | Self::TxBeginStatus { status, .. }
+            | Self::TxCommitStatus { status, .. }
+            | Self::TxDiscardStatus { status, .. } => denied(*status),
+            Self::Response(crate::store::graphql::GraphqlResponseError::Access(error))
+            | Self::StorageFailure(error)
+            | Self::HttpQuery { source: error, .. } => error.is_permission_denied(),
+            _ => {
+                self.database_failure().is_some_and(
+                    gents_protocol::database_error::GraphqlFailure::is_permission_denied,
+                ) || self
+                    .transport_error()
+                    .and_then(reqwest::Error::status)
+                    .is_some_and(denied)
+            }
+        }
+    }
+
     /// The HTTP transport source held by this typed access error, if any.
     pub fn transport_error(&self) -> Option<&reqwest::Error> {
         match self {
@@ -412,9 +571,12 @@ impl ConfigClientError {
     /// errors code as retryable.
     pub(crate) fn is_retryable_database_conflict(&self) -> bool {
         match self {
-            Self::EmbeddedGraphqlErrors { errors } => errors
-                .iter()
-                .any(|error| error.code() == Some(query::executor::TXN_CONFLICT_ERROR_CODE)),
+            Self::EmbeddedGraphqlErrors { errors } => {
+                !self.is_permission_denied()
+                    && errors
+                        .iter()
+                        .any(|error| error.code() == Some(query::executor::TXN_CONFLICT_ERROR_CODE))
+            }
             Self::Response(crate::store::graphql::GraphqlResponseError::Access(error))
             | Self::StorageFailure(error)
             | Self::HttpQuery { source: error, .. } => error.is_retryable_database_conflict(),

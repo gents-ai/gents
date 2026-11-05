@@ -125,7 +125,7 @@ async fn seeded_node() -> Arc<EmbeddedNode> {
             }"#,
         r#"mutation {
                 create_Agent(input: {
-                    agent_id: "agent-a",
+                    agent_did: "agent-a",
                     node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     inference_profile_id: "profile-a",
                     context_id: "context-a",
@@ -136,7 +136,7 @@ async fn seeded_node() -> Arc<EmbeddedNode> {
                 create_AgentSession(input: {
                     session_id: "session-a",
                     node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
-                    agent_id: "agent-a",
+                    agent_did: "agent-a",
                     title: {text: "OpenAI Agent", source: "user"},
                     tags: ["review"],
                     created_at: "2026-06-03T09:55:00Z"
@@ -146,7 +146,7 @@ async fn seeded_node() -> Arc<EmbeddedNode> {
                 create_AgentSession(input: {
                     session_id: "session-b",
                     node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
-                    agent_id: "agent-b",
+                    agent_did: "agent-b",
                     title: {text: "OpenAI Agent", source: "user"},
                     created_at: "2026-06-03T10:55:00Z",
                     closed_at: "2026-06-03T11:01:00Z"

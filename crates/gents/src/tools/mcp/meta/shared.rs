@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Serialize;
 
 use crate::tools::call::lifecycle::FailureClass;
@@ -10,6 +10,7 @@ use crate::tools::mcp::pool::McpPool;
 
 #[derive(Clone)]
 pub struct MetaToolContext {
+    pub actor: identity::Did,
     pub node: Arc<EmbeddedNode>,
     pub mcp_pool: McpPool,
     pub health: ServiceHealthMap,
@@ -18,6 +19,7 @@ pub struct MetaToolContext {
     pub node_did: String,
     pub allowed_mcp_service_ids: Vec<String>,
     pub remote_tools: crate::documents::RemoteTools,
+    pub configuration: crate::inference::resolved::ResolvedConfiguration,
 }
 
 impl MetaToolContext {
@@ -57,6 +59,11 @@ impl MetaToolContext {
         let selection = self
             .service_selection(service_id)
             .ok_or_else(|| anyhow!("MCP service is not selected"))?;
+        let current = lookup_service(self, service_id).await?;
+        anyhow::ensure!(
+            current == *service,
+            "MCP service route changed before discovery"
+        );
         let connect = timeout(selection.connect_timeout_secs, 15)?;
         let discovery = timeout(selection.discovery_timeout_secs, 30)?;
         tokio::time::timeout(
@@ -328,13 +335,61 @@ pub(super) async fn lookup_service(
     ctx: &MetaToolContext,
     service_id: &str,
 ) -> anyhow::Result<ResolvedMcpService> {
-    let entry = crate::tools::mcp::registry::configured_mcp_services(&ctx.node, &ctx.node_did)
-        .await?
-        .into_iter()
-        .find(|service| service.service_id == service_id && service.enabled)
-        .ok_or_else(|| {
-            anyhow!("service '{service_id}' is not configured or enabled for this node")
-        })?;
+    anyhow::ensure!(
+        ctx.service_selection(service_id).is_some(),
+        "MCP service is not selected"
+    );
+    let access = crate::ConfigAccess::local_as(ctx.node.clone(), ctx.actor.clone());
+    let entry = access.transact_readonly("mcp.authorize_service", |txn| {
+        Box::pin(async move {
+            if let crate::inference::resolved::ResolvedConfiguration::Documents(selection) = &ctx.configuration {
+                anyhow::ensure!(
+                    selection.actor == ctx.actor && Arc::ptr_eq(&selection.node, &ctx.node),
+                    "MCP configuration actor does not match the selected agent"
+                );
+                let documents = &selection.documents;
+                anyhow::ensure!(documents.len() == 3, "MCP configuration chain is unavailable");
+                let mut rows = Vec::with_capacity(3);
+                for (document, (collection, fields)) in documents.iter().zip([
+                    (crate::Collection::Agent, "node_did agent_did context_id"),
+                    (crate::Collection::AgentContext, "node_did context_id tools_id"),
+                    (crate::Collection::Tools, "node_did tools_id remote"),
+                ]) {
+                    anyhow::ensure!(document.collection == collection && !document.doc_id.is_empty(), "MCP configuration chain is invalid");
+                    let name = collection.graphql_type();
+                    let doc = crate::store::graphql::escape_graphql_string(&document.doc_id);
+                    let response = txn.execute(&format!(r#"{{ {name}(filter: {{ _docID: {{ _eq: "{doc}" }} }}, limit: 2) {{ _docID {fields} }} }}"#)).await?;
+                    let values = response["data"][name].as_array().ok_or_else(|| anyhow!("MCP configuration query failed"))?;
+                    anyhow::ensure!(matches!(values.as_slice(), [row] if row["_docID"].as_str() == Some(document.doc_id.as_str())), "MCP configuration is unavailable");
+                    rows.push(values[0].clone());
+                }
+                let [agent, context, tools] = rows.as_slice() else { unreachable!() };
+                anyhow::ensure!(
+                    agent["node_did"].as_str() == Some(ctx.node_did.as_str())
+                        && context["node_did"].as_str() == Some(ctx.node_did.as_str())
+                        && tools["node_did"].as_str() == Some(ctx.node_did.as_str())
+                        && agent["agent_did"].as_str() == Some(ctx.actor.as_str())
+                        && agent["context_id"].as_str().is_some()
+                        && agent["context_id"] == context["context_id"]
+                        && context["tools_id"].as_str().is_some()
+                        && context["tools_id"] == tools["tools_id"],
+                    "MCP configuration was rebound"
+                );
+                let remote: crate::documents::RemoteTools = if tools["remote"].is_null() {
+                    Default::default()
+                } else {
+                    serde_json::from_value(tools["remote"].clone())?
+                };
+                anyhow::ensure!(remote == ctx.remote_tools, "MCP tool selection changed");
+            }
+            let query = crate::tools::mcp::registry::services_query(&ctx.node_did)?;
+            let response = txn.execute(&query).await?;
+            crate::tools::mcp::registry::parse_services(response.get("data"), &ctx.node_did)
+        })
+    }).await?
+    .into_iter()
+    .find(|service| service.service_id == service_id && service.enabled)
+    .ok_or_else(|| anyhow!("service '{service_id}' is not configured or enabled for this node"))?;
     resolve_service(&entry, &ctx.local_hostname, ctx.local_subnet.as_deref())
 }
 

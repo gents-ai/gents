@@ -29,6 +29,9 @@ async fn a_cancelled_seed_stage_is_runtime_before_any_request_exists() {
         seed: Some(FixtureDocument {
             collection: "NoSuchItem".into(),
             document: json!({}),
+            session_readers: Vec::new(),
+            session_agent_owned: false,
+            expired_client_request: false,
         }),
         deadline_secs: None,
         settle: false,
@@ -51,12 +54,16 @@ async fn a_cancelled_seed_stage_is_runtime_before_any_request_exists() {
         Duration::from_secs(5),
         submit_and_observe(
             &TrialSpec::empty_for_tests("t1"),
-            &cancel,
-            &home,
-            &exited_runtime(),
-            &locator,
+            &StageEnv {
+                agent_did: "did:test:unselected",
+                cancel: &cancel,
+                home: &home,
+                runtime: &exited_runtime(),
+                locator: &locator,
+                workspace: Path::new("."),
+                ready: &never_ready,
+            },
             &stage,
-            &never_ready,
         ),
     )
     .await
@@ -95,14 +102,14 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
         let spec = TrialSpec {
             pack_digest: materialized_digest(&pack_dir),
             pack_dir,
-            agent_id: "subject".into(),
+            agent_slot: "subject".into(),
             inference,
             ..TrialSpec::empty_for_tests("scheduled-teardown")
         };
         let home = EmbeddedHome::create_temp("scheduled-teardown")
             .await
             .unwrap();
-        install(&spec, &home, &dir.path().join("workspace"))
+        let agent_did = install(&spec, &home, &dir.path().join("workspace"))
             .await
             .unwrap();
         let (runtime, _agent) = boot_runtime(
@@ -119,8 +126,8 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
                 RequestIdentity {
                     request_id: request_id.clone(),
                     node_did: home.did().into(),
-                    requester_did: None,
-                    agent_id: "subject".into(),
+                    requester_did: Some(spec.evaluator_did.clone()),
+                    agent_did: agent_did.clone(),
                     session_id: uuid::Uuid::new_v4().to_string(),
                     content: marker.into(),
                     execution_origin: ExecutionOrigin::Scheduled,
@@ -128,15 +135,24 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
                         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 },
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                    home.did(),
+                    &spec.evaluator_did,
                 ),
             ),
-            RequestSigner::RegisteredTarget,
+            RequestSigner::Identity(
+                &crate::store::identity::RegisteredIdentity::from_registered_did(
+                    &spec.evaluator_did,
+                    None,
+                )
+                .unwrap(),
+            ),
         )
         .await
         .unwrap();
-        ConfigAccess::write_local(
-            &home.node,
+        ConfigAccess::local_as(
+            home.node.clone(),
+            ::identity::Did::new(spec.evaluator_did.clone()).unwrap(),
+        )
+        .write(
             "test.eval_scheduled_shutdown",
             &request.graphql_mutation().unwrap(),
         )
@@ -167,7 +183,14 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
             cancel.cancel();
             let (terminal, stopped) = tokio::time::timeout(
                 Duration::from_secs(30),
-                observe_stage_terminal(&home.node, &cancel, &runtime, &request_id, None),
+                observe_stage_terminal(
+                    &home.node,
+                    &crate::ConfigAccess::local(home.node.clone()),
+                    &cancel,
+                    &runtime,
+                    &request_id,
+                    None,
+                ),
             )
             .await
             .expect("stage cancellation must settle active inference");
@@ -235,7 +258,7 @@ async fn a_stage_that_could_not_be_submitted_still_runs_its_captures() {
                 name: "requests".to_string(),
                 collection: "AgentRequest".to_string(),
                 filter: json!({"request_id": {"_eq": "seeded"}}),
-                fields: vec!["agent_id".to_string()],
+                fields: vec!["agent_did".to_string()],
             },
             Capture::Documents {
                 name: "unreadable".to_string(),
@@ -250,6 +273,7 @@ async fn a_stage_that_could_not_be_submitted_still_runs_its_captures() {
     let evidence = run_stage(
         &spec,
         &StageEnv {
+            agent_did: "did:test:unselected",
             cancel: &CancellationToken::new(),
             home: &home,
             runtime: &runtime,
@@ -272,13 +296,13 @@ async fn a_stage_that_could_not_be_submitted_still_runs_its_captures() {
         panic!("expected a document capture, got {:?}", evidence.captures);
     };
     assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["agent_id"], "seeded-agent");
+    assert_eq!(rows[0]["agent_did"], "seeded-agent");
     assert!(
         !evidence.captures.contains_key("unreadable"),
         "{:?}",
         evidence.captures
     );
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -308,10 +332,11 @@ async fn a_runtime_that_exits_mid_stage_fails_the_stage_as_runtime_at_once() {
         Duration::from_secs(30),
         run_stage(
             &TrialSpec {
-                agent_id: "subject".to_string(),
+                agent_slot: "subject".to_string(),
                 ..TrialSpec::empty_for_tests("t1")
             },
             &StageEnv {
+                agent_did: "did:test:unselected",
                 cancel: &CancellationToken::new(),
                 home: &home,
                 runtime: &runtime,
@@ -328,7 +353,7 @@ async fn a_runtime_that_exits_mid_stage_fails_the_stage_as_runtime_at_once() {
     assert!(evidence.request_id.is_some(), "the stage was submitted");
     assert_eq!(evidence.failure_kind, Some(OutcomeKind::Runtime));
     assert_eq!(evidence.provider_reason, None);
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -347,7 +372,7 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
     let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     config["tasks"] = json!([{
         "task_id": "seed-task",
-        "agent_id": "subject",
+        "agent_did": "gents:agent-slot:subject",
         "prompt_template": "{{ doc.payload.required }}"
     }]);
     config["event_sources"] = json!([{
@@ -363,7 +388,7 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
     let spec = TrialSpec {
         pack_digest: materialized_digest(&pack_dir),
         pack_dir,
-        agent_id: "subject".into(),
+        agent_slot: "subject".into(),
         inference,
         ..TrialSpec::empty_for_tests("seed-template-failure")
     };
@@ -378,7 +403,7 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
     )
     .await
     .unwrap();
-    install(&spec, &home, &workspace).await.unwrap();
+    let agent_did = install(&spec, &home, &workspace).await.unwrap();
     let (event_sources_ready, ready) = watch::channel(None);
     let options = DocumentRuntimeOptions {
         runtime_snapshot_observer: Some(Arc::new(EventSourcesReady(event_sources_ready))),
@@ -403,6 +428,9 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
         seed: Some(FixtureDocument {
             collection: "EvalSeed".into(),
             document: json!({"payload": {}}),
+            session_readers: Vec::new(),
+            session_agent_owned: false,
+            expired_client_request: false,
         }),
         deadline_secs: None,
         settle: false,
@@ -424,6 +452,7 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
         run_stage(
             &spec,
             &StageEnv {
+                agent_did: &agent_did,
                 cancel: &CancellationToken::new(),
                 home: &home,
                 runtime: &runtime,
@@ -444,7 +473,7 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
             )
         })
         .unwrap();
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 
     let evidence = result.expect("the failed trigger must end the seed wait promptly");
     assert_failure_class(
@@ -485,6 +514,7 @@ async fn a_request_that_settled_before_its_runtime_exited_keeps_its_outcome() {
     tokio::time::pause();
     let (observed, stopped) = observe_stage_terminal(
         &home.node,
+        &crate::ConfigAccess::local(home.node.clone()),
         &CancellationToken::new(),
         &runtime,
         request_id,
@@ -507,7 +537,7 @@ async fn a_request_that_settled_before_its_runtime_exited_keeps_its_outcome() {
         stage_failure_kind(Some(&observed), true, stopped, &evidence),
         None
     );
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 }
 
 fn exited_runtime() -> RunningRuntime {

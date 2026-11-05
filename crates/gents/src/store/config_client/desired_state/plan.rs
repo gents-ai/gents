@@ -274,13 +274,13 @@ fn ensure_expectations_match(
 }
 
 pub(super) fn validate_node_replacement(current: &Value, candidate: &Value) -> Result<()> {
-    if let Some(default) = current.get("default_agent_id").and_then(Value::as_str) {
+    if let Some(default) = current.get("default_agent_did").and_then(Value::as_str) {
         anyhow::ensure!(
             candidate
-                .get("default_agent_id")
+                .get("default_agent_did")
                 .and_then(Value::as_str)
                 .is_some(),
-            "Node replacement would clear default_agent_id {default:?}; \
+            "Node replacement would clear default_agent_did {default:?}; \
              include the current default or another enabled agent in the replacement"
         );
     }

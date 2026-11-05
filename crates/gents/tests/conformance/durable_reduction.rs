@@ -1,6 +1,6 @@
 use super::ReplayAssociations;
 use crate::lean_vocab_test::lean_durable_reduction_cases;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
@@ -77,6 +77,7 @@ fn provenance(scope: &str, messages: Vec<Message>, keys: Vec<String>) -> String 
 
 #[tokio::test]
 async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
+    use gents::NodeIdentity as _;
     let cases = lean_durable_reduction_cases();
     assert!(!cases.is_empty(), "Lean emitted no durable-reduction cases");
 
@@ -92,9 +93,20 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
+        let binding = gents::store::identity::provision_agent_identity(&identity).unwrap();
+        let agent = gents::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
+        let agent_did = agent.did().to_owned();
+        let signer = agent.managed_agent_signer().unwrap();
+        let access = gents::ConfigAccess::local_managed_agent(
+            node.clone(),
+            agent_did.parse().unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        access.write("test.reduction.session", &format!(r#"mutation {{ create_AgentSession(input: {{session_id: "session-11", node_did: "{}", agent_did: "{}", created_at: "2026-01-01T00:00:00Z"}}) {{ _docID }} }}"#, gents::store::graphql::escape_graphql_string(identity.did()), gents::store::graphql::escape_graphql_string(&agent_did))).await.unwrap();
         let request_doc_id = format!("request-doc-{}", case.request_doc_id);
         let key = reduction_key(
-            "did:key:agent",
+            identity.did(),
             "session-11",
             &request_doc_id,
             case.turn_index,
@@ -112,8 +124,10 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
                 unassociated(&[Message::user("older")], &predecessor_checkpoint);
             let predecessor = persist(
                 &node,
+                &signer,
                 NewProviderContextReduction {
-                    node_did: "did:key:agent",
+                    agent_did: &agent_did,
+                    node_did: identity.did(),
                     requester_did: None,
                     session_id: "session-11",
                     request_id: "request-11",
@@ -146,8 +160,10 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
             let prior_associations = unassociated(&[Message::user("old")], &prior_messages);
             let row = persist(
                 &node,
+                &signer,
                 NewProviderContextReduction {
-                    node_did: "did:key:agent",
+                    agent_did: &agent_did,
+                    node_did: identity.did(),
                     requester_did: None,
                     session_id: "session-11",
                     request_id: "request-11",
@@ -188,8 +204,10 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
         let associations = unassociated(&prefix, &suffix);
         let result = persist(
             &node,
+            &signer,
             NewProviderContextReduction {
-                node_did: "did:key:agent",
+                agent_did: &agent_did,
+                node_did: identity.did(),
                 requester_did: None,
                 session_id: "session-11",
                 request_id: "request-11",
@@ -233,7 +251,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
         };
         assert_eq!(rust_outcome, case.outcome, "{} outcome drifted", case.name);
 
-        let loaded = load_for_request(&node, &request_doc_id).await.unwrap();
+        let loaded = load_for_request(&gents::store::config_client::ConfigAccess::local(node.clone()), &request_doc_id).await.unwrap();
         let durable_after = loaded.iter().any(|row| {
             row.reduction_key == key
                 && row.request_commit_cid == request_commit_cid
@@ -282,7 +300,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
             "{} consumption drifted",
             case.name
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     assert!(!rendered_capture_cites_reduction(

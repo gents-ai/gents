@@ -6,11 +6,18 @@ use async_trait::async_trait;
 use defra_core::signing::{SigningConfig, SigningKeyType};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 
+mod agent;
 mod error;
 mod file_key;
 pub(crate) mod macos;
+mod provision_client;
 mod registered;
 
+pub(crate) use agent::grant_agent_node_capabilities;
+pub use agent::{
+    derive_agent_identity, provision_agent_identity, provision_agent_identity_authorized,
+    provision_agent_identity_for_agent, resolve_agent_identity, AgentProvisionError,
+};
 pub use error::{identity_key_unavailable, IdentityError, IdentityKeyUnavailable};
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};
 pub(crate) use file_key::{publish_private_key_file, read_private_key_file};
@@ -18,6 +25,7 @@ pub use macos::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
 };
+pub use provision_client::provision as provision_agent_identity_remote;
 use registered::raw_identity_from_signing_config;
 pub use registered::RegisteredIdentity;
 
@@ -33,7 +41,7 @@ pub struct ServiceAccount {
 pub struct RuntimeNode {
     pub node_did: String,
     pub identity: Arc<dyn NodeIdentity>,
-    pub default_agent_id: String,
+    pub default_agent_did: String,
     pub display_name: Option<String>,
     pub enabled: bool,
 }
@@ -42,7 +50,7 @@ impl std::fmt::Debug for RuntimeNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RuntimeNode")
             .field("node_did", &self.node_did)
-            .field("default_agent_id", &self.default_agent_id)
+            .field("default_agent_did", &self.default_agent_did)
             .field("display_name", &self.display_name)
             .field("enabled", &self.enabled)
             .finish_non_exhaustive()
@@ -58,6 +66,90 @@ pub trait NodeIdentity: Send + Sync {
     async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool>;
 
     fn service_account(&self) -> Option<&ServiceAccount>;
+
+    /// A capability exists only when this identity retains a supported local key.
+    fn client_signing_capability(
+        &self,
+    ) -> std::result::Result<
+        crate::store::config_client::ClientSigningCapability,
+        crate::store::config_client::ConfigClientError,
+    > {
+        Err(crate::store::config_client::ConfigClientError::ClientAgentSignerRequired)
+    }
+
+    /// The derivation root is available only from an identity that holds its key.
+    fn agent_derivation_root(&self) -> Option<AgentDerivationRoot> {
+        None
+    }
+
+    /// A validated runtime-owned Agent identity carries its own block signer.
+    fn managed_agent_signer(&self) -> Option<ManagedAgentSigner> {
+        None
+    }
+}
+
+/// Opaque authority to derive the Agents owned by a held runtime root key.
+#[derive(Clone)]
+pub struct AgentDerivationRoot {
+    identity: Arc<RawIdentity>,
+}
+
+/// Signing authority derived and validated for a runtime-owned Agent binding.
+#[derive(Clone)]
+pub struct ManagedAgentSigner {
+    node_did: String,
+    signer: defra_node::EmbeddedSigner,
+    identity: Arc<KeyIdentity>,
+}
+
+#[async_trait]
+impl NodeIdentity for ManagedAgentSigner {
+    fn did(&self) -> &str {
+        self.identity.did()
+    }
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
+        self.identity.sign(payload).await
+    }
+    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
+        self.identity.verify(did, payload, signature).await
+    }
+    fn service_account(&self) -> Option<&ServiceAccount> {
+        self.identity.service_account()
+    }
+    fn client_signing_capability(
+        &self,
+    ) -> std::result::Result<
+        crate::store::config_client::ClientSigningCapability,
+        crate::store::config_client::ConfigClientError,
+    > {
+        self.identity.client_signing_capability()
+    }
+    fn managed_agent_signer(&self) -> Option<ManagedAgentSigner> {
+        Some(self.clone())
+    }
+}
+
+impl ManagedAgentSigner {
+    pub fn did(&self) -> &str {
+        self.signer.did()
+    }
+
+    pub(crate) fn node_did(&self) -> &str {
+        &self.node_did
+    }
+
+    pub(crate) fn native(&self) -> &defra_node::EmbeddedSigner {
+        &self.signer
+    }
+}
+
+impl std::fmt::Debug for ManagedAgentSigner {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("ManagedAgentSigner")
+            .field(&self.did())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +188,17 @@ impl KeyIdentity {
         service_account: Option<ServiceAccount>,
     ) -> Result<Self> {
         Self::from_raw_identity(load_file_identity(&key_path.into())?, service_account)
+    }
+
+    /// Derive an explicit client signing capability from this held identity.
+    pub fn client_signing_capability(
+        &self,
+    ) -> std::result::Result<
+        crate::store::config_client::ClientSigningCapability,
+        crate::store::config_client::ConfigClientError,
+    > {
+        let key = zeroize::Zeroizing::new(self.identity.private_key_bytes());
+        crate::store::config_client::ClientSigningCapability::from_ed25519_key(&key)
     }
 
     fn from_raw_identity(
@@ -164,7 +267,7 @@ pub fn commit_signer_identity_for_did(did: &str) -> Result<String> {
 
 /// DefraDB tolerates up to 60s of clock skew and its bearers carry no nonce,
 /// so a replayed bearer stays usable for at most two minutes.
-const DEFRADB_BEARER_LIFETIME: std::time::Duration = std::time::Duration::from_secs(60);
+pub(crate) const DEFRADB_BEARER_LIFETIME: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Mint an `Authorization` header authenticating one DefraDB HTTP request as
 /// `did`. DefraDB verifies the JWT against the request's `Host` header, so
@@ -177,12 +280,27 @@ pub fn defradb_bearer_authorization(did: &str, audience: &str) -> Result<String>
             did: did.to_owned(),
         }
     })?;
-    let identity = raw_identity_from_signing_config(&config).map_err(|source| {
+    defradb_bearer_authorization_with_config(did, audience, &config)
+}
+
+pub(crate) fn defradb_bearer_authorization_with_config(
+    did: &str,
+    audience: &str,
+    config: &SigningConfig,
+) -> Result<String> {
+    let identity = raw_identity_from_signing_config(config).map_err(|source| {
         IdentityError::LoadSigningIdentity {
             did: did.to_owned(),
             source: Box::new(source),
         }
     })?;
+    let derived_did = identity.did()?.to_string();
+    if derived_did != did {
+        return Err(IdentityError::NodeDidMismatch {
+            did: did.to_owned(),
+            derived_did,
+        });
+    }
     let token = identity::new_token(
         &identity,
         DEFRADB_BEARER_LIFETIME,
@@ -202,9 +320,7 @@ pub fn can_mint_defradb_bearer(did: &str) -> bool {
 }
 
 /// P2P administration must carry the node DID explicitly across worker boundaries.
-pub fn node_p2p(
-    node: &defra_node::EmbeddedNode,
-) -> Option<Arc<dyn defra_p2p_adapter::P2POperations>> {
+pub fn node_p2p(node: &defra_node::Node) -> Option<Arc<dyn defra_p2p_adapter::P2POperations>> {
     let context = defra_core::RequestContext::default()
         .with_identity(node.node_identity_did().map(ToOwned::to_owned));
     node.p2p_arc().and_then(|p2p| p2p.bind_request(&context))
@@ -214,6 +330,15 @@ pub fn node_p2p(
 impl NodeIdentity for KeyIdentity {
     fn did(&self) -> &str {
         &self.did
+    }
+
+    fn client_signing_capability(
+        &self,
+    ) -> std::result::Result<
+        crate::store::config_client::ClientSigningCapability,
+        crate::store::config_client::ConfigClientError,
+    > {
+        KeyIdentity::client_signing_capability(self)
     }
 
     async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
@@ -241,6 +366,12 @@ impl NodeIdentity for KeyIdentity {
 
     fn service_account(&self) -> Option<&ServiceAccount> {
         self.service_account.as_ref()
+    }
+
+    fn agent_derivation_root(&self) -> Option<AgentDerivationRoot> {
+        Some(AgentDerivationRoot {
+            identity: self.identity.clone(),
+        })
     }
 }
 

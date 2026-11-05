@@ -167,7 +167,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         Some(gents::DEFAULT_CONTEXT_WINDOW as i64),
         "context capacity should come from the bound GENTS inference profile"
     );
-    let (original_request, session_id, _agent_id) =
+    let (original_request, session_id, _agent_did) =
         wait_for_request(&graphql, &node_did, &prompt).await?;
     assert_eq!(session_id, thread_id);
     wait_for_request_lifecycle_state(
@@ -191,7 +191,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
                     session_id
                     node_did
                     requester_did
-                    agent_id
+                    agent_did
                     created_at
                     closed_at
                 }}
@@ -211,10 +211,10 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         session.get("node_did").and_then(Value::as_str),
         Some(node_did.as_str())
     );
-    let expected_agent_id = format!("{node_did}:default");
+    let expected_agent_did = format!("{node_did}:default");
     assert_eq!(
-        session.get("agent_id").and_then(Value::as_str),
-        Some(expected_agent_id.as_str())
+        session.get("agent_did").and_then(Value::as_str),
+        Some(expected_agent_did.as_str())
     );
     assert_eq!(
         session.get("requester_did").and_then(Value::as_str),
@@ -693,7 +693,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     let followup = read_turn_capture(&mut ws).await?;
     assert_eq!(followup.turn.status, codex::TurnStatus::Completed);
     assert!(followup.text.contains(&expected_reply));
-    let (followup_request, session_id, _agent_id) =
+    let (followup_request, session_id, _agent_did) =
         wait_for_request(&graphql, &node_did, &followup_prompt).await?;
     assert_eq!(session_id, thread_id);
     wait_for_request_lifecycle_state(
@@ -788,7 +788,7 @@ async fn codex_shim_completes_blank_materialized_terminal_message() -> Result<()
 
     let prompt = "Read notes.txt, then finish without visible final text.";
     send_turn(&mut ws, &thread_id, prompt).await?;
-    let (request_id, session_id, _agent_id) = wait_for_request(&graphql, &node_did, prompt).await?;
+    let (request_id, session_id, _agent_did) = wait_for_request(&graphql, &node_did, prompt).await?;
     assert_eq!(session_id, thread_id);
     seed_blank_materialized_completion(&graphql, &request_id, &node_did, &thread_id).await?;
 

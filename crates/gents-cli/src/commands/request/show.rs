@@ -206,7 +206,7 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
         "requester_did",
         "request_id",
         "node_did",
-        "agent_id",
+        "agent_did",
         "session_id",
         "lifecycle_state",
         "backend_id",

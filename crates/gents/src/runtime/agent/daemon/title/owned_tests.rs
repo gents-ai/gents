@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use futures::{stream, StreamExt};
 use gents_protocol::message::ReasoningContent;
 use gents_protocol::output::extent::inspect_open_source;
@@ -187,7 +187,7 @@ async fn access_review_uses_the_caller_ledger_without_tools_or_chat_publication(
     drain_reviews(&tasks, true).await;
     assert_eq!(budget.snapshot().unwrap().used, 8);
     let recovered = crate::turn::completion_factory::aggregate_token_budget_for_request(
-        &fixture.node,
+        &crate::store::config_client::ConfigAccess::local(fixture.node.clone()),
         &fixture.parent,
     )
     .await
@@ -223,6 +223,7 @@ async fn access_review_uses_the_caller_ledger_without_tools_or_chat_publication(
     assert_eq!(
         crate::goal::session_token_usage(
             &fixture.node,
+            &identity::Did::new(&fixture.parent.agent_did).unwrap(),
             &fixture.parent.node_did,
             &fixture.parent.session_id,
         )
@@ -268,6 +269,7 @@ async fn goal_usage_rejects_a_review_without_its_same_session_parent() {
     )).await.unwrap();
     let error = crate::goal::session_token_usage(
         &fixture.node,
+        &identity::Did::new(&fixture.parent.agent_did).unwrap(),
         &fixture.parent.node_did,
         &fixture.parent.session_id,
     )
@@ -284,7 +286,7 @@ async fn install_review_policy(
     let document = serde_json::json!({
         "node_did": fixture.parent.node_did,
         "task_id": "review",
-        "agent_id": fixture.parent.agent_id,
+        "agent_did": fixture.parent.agent_did,
         "prompt_template": prompt,
     });
     let selection = crate::plugin::approval::workspace::ReviewTaskSelection::for_task(
@@ -337,7 +339,7 @@ async fn configured_review_task_and_callers_ledger(launch: bool) {
     let key = workspace::WorkspaceKey::canonical(
         &fixture.parent.node_did,
         fixture.parent.requester_did.as_deref().unwrap(),
-        &fixture.parent.agent_id,
+        &fixture.parent.agent_did,
         project.path(),
     )
     .unwrap();
@@ -371,7 +373,7 @@ async fn configured_review_task_and_callers_ledger(launch: bool) {
         Some(home.path()),
         &fixture.parent.node_did,
         fixture.parent.requester_did.as_deref(),
-        &fixture.parent.agent_id,
+        &fixture.parent.agent_did,
         Some(project.path()),
     )
     .unwrap()
@@ -471,7 +473,7 @@ async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
     let key = workspace::WorkspaceKey::canonical(
         &fixture.parent.node_did,
         fixture.parent.requester_did.as_deref().unwrap(),
-        &fixture.parent.agent_id,
+        &fixture.parent.agent_did,
         project.path(),
     )
     .unwrap();
@@ -506,7 +508,7 @@ async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
         Some(home.path()),
         &fixture.parent.node_did,
         fixture.parent.requester_did.as_deref(),
-        &fixture.parent.agent_id,
+        &fixture.parent.agent_did,
         Some(project.path()),
     )
     .unwrap()
@@ -569,7 +571,7 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
     let key = workspace::WorkspaceKey::canonical(
         &fixture.parent.node_did,
         fixture.parent.requester_did.as_deref().unwrap(),
-        &fixture.parent.agent_id,
+        &fixture.parent.agent_did,
         project.path(),
     )
     .unwrap();
@@ -602,7 +604,7 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
         Some(home.path()),
         &fixture.parent.node_did,
         fixture.parent.requester_did.as_deref(),
-        &fixture.parent.agent_id,
+        &fixture.parent.agent_did,
         Some(project.path()),
     )
     .unwrap()
@@ -615,7 +617,7 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
         Some(fixture.identity.clone()),
         &crate::tools::surface::SelfConfigToolConfig {
             enabled: true,
-            agent_id: fixture.parent.agent_id.clone(),
+            agent_did: fixture.parent.agent_did.clone(),
             categories: std::collections::BTreeSet::from(["automation".into()]),
             ..Default::default()
         },
@@ -687,7 +689,10 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
             .unwrap()
             .is_empty());
         let current = crate::session::message::load_configured_task(
-            &fixture.node,
+            &crate::ConfigAccess::local_as(
+                fixture.node.clone(),
+                identity::Did::new(&fixture.parent.agent_did).unwrap(),
+            ),
             &fixture.parent.node_did,
             "review",
         )
@@ -729,7 +734,7 @@ async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
     let key = workspace::WorkspaceKey::canonical(
         &fixture.parent.node_did,
         fixture.parent.requester_did.as_deref().unwrap(),
-        &fixture.parent.agent_id,
+        &fixture.parent.agent_did,
         project.path(),
     )
     .unwrap();
@@ -757,7 +762,7 @@ async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
         Some(home.path()),
         &fixture.parent.node_did,
         fixture.parent.requester_did.as_deref(),
-        &fixture.parent.agent_id,
+        &fixture.parent.agent_did,
         Some(project.path()),
     )
     .unwrap()
@@ -884,7 +889,7 @@ async fn access_review_without_reported_usage_invalidates_the_callers_allowance(
     drain_reviews(&tasks, false).await;
     assert!(budget.snapshot().is_err());
     let recovered = crate::turn::completion_factory::aggregate_token_budget_for_request(
-        &fixture.node,
+        &crate::store::config_client::ConfigAccess::local(fixture.node.clone()),
         &fixture.parent,
     )
     .await
@@ -1200,7 +1205,10 @@ impl TitleFixture {
                 },
             )]),
         );
-        crate::inference::admission::AdmittedCompletionModel::new(model, registry, "scripted")
+        let mut model =
+            crate::inference::admission::AdmittedCompletionModel::new(model, registry, "scripted");
+        model.agent_signer = self.agent_config.agent_identity.managed_agent_signer();
+        model
     }
 
     async fn new() -> Self {
@@ -1228,13 +1236,21 @@ impl TitleFixture {
         let principal = Arc::new(RuntimeNode {
             node_did: identity.did().to_owned(),
             identity: identity.clone(),
-            default_agent_id: "general".into(),
+            default_agent_did: "general".into(),
             display_name: None,
             enabled: true,
         });
+        let binding =
+            crate::store::identity::provision_agent_identity(principal.identity.as_ref()).unwrap();
+        let agent_identity =
+            crate::store::identity::resolve_agent_identity(principal.identity.as_ref(), &binding)
+                .unwrap();
+        let agent_did = binding.agent_did.clone();
         let agent_config = Arc::new(ResolvedAgent {
+            configuration: crate::inference::resolved::ResolvedConfiguration::Static,
             profile_id: None,
-            agent_id: "general".into(),
+            agent_did,
+            agent_identity,
             node: principal,
             backend_id: Some("general:backend".into()),
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
@@ -1265,8 +1281,13 @@ impl TitleFixture {
             skills: Vec::new(),
             oauth_pool: Vec::new(),
         });
-        crate::test_support::install_test_agent(&node, identity.did(), &agent_config.agent_id)
-            .await;
+        crate::test_support::install_test_agent_binding(
+            &node,
+            identity.did(),
+            "Title fixture agent",
+            &binding,
+        )
+        .await;
         let request_id = uuid::Uuid::new_v4().to_string();
         let session_id = uuid::Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -1275,7 +1296,7 @@ impl TitleFixture {
             request_id,
             identity.did(),
             identity.did(),
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             session_id,
             "explain the request",
             "interactive",
@@ -1299,7 +1320,7 @@ impl TitleFixture {
             session_id: parent.session_id.clone(),
             node_did: parent.node_did.clone(),
             requester_did: parent.requester_did.clone(),
-            agent_id: parent.agent_id.clone(),
+            agent_did: parent.agent_did.clone(),
             created_at: parent.created_at.clone(),
             closed_at: None,
             archived_at: None,
@@ -1323,23 +1344,27 @@ impl TitleFixture {
         if purpose == RequestPurpose::AccessReview {
             let mut lifecycle = RequestLifecycle::new_with_execution_binding(
                 node.clone(),
-                &agent_config.agent_id,
+                &agent_config.agent_did,
                 &parent.node_did,
                 parent.clone(),
                 agent_config.deadline_duration.as_secs(),
                 crate::request::lifecycle::ExecutionOrigin::Interactive,
                 agent_config.backend_id.clone().unwrap_or_default(),
             );
+            lifecycle
+                .bind_managed_agent(agent_config.agent_identity.as_ref())
+                .unwrap();
             lifecycle.set_configured_max_total_tokens(parent_limit);
             assert_eq!(
                 lifecycle.claim_with_identity().await.unwrap(),
                 ClaimOutcome::Claimed
             );
-            let writer = crate::request::streaming::DefraStreamWriter::new(
+            let writer = crate::request::streaming::DefraStreamWriter::new_managed(
                 node.clone(),
-                &parent.node_did,
+                agent_config.agent_identity.as_ref(),
                 Duration::ZERO,
-            );
+            )
+            .unwrap();
             lifecycle.begin_owned_execution(&writer).await.unwrap();
             parent = lifecycle.request().clone();
         }
@@ -1352,6 +1377,7 @@ impl TitleFixture {
                 (chrono::Utc::now() + chrono::Duration::seconds(60))
                     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
             }),
+            &agent_config.agent_identity.managed_agent_signer().unwrap(),
         )
         .await
         .unwrap();
@@ -1381,9 +1407,9 @@ impl TitleFixture {
                 crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
             ),
             capture_factory: capture.then(|| {
-                crate::inference::rendered_request::defra_rendered_request_capture_factory(
-                    self.node.clone(),
-                )
+                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                    self.node.clone(), self.agent_config.agent_identity.as_ref(),
+                ).unwrap()
             }),
         }
     }
@@ -1393,6 +1419,8 @@ impl TitleFixture {
             &self.node,
             &self.parent.doc_id,
             &self.parent.node_did,
+            &self.parent.agent_did,
+            self.agent_config.agent_identity.as_ref(),
             "parent ended before title inference",
             "test.title_parent_terminal",
         )
@@ -1412,7 +1440,7 @@ impl TitleFixture {
     async fn interrupt_parent(&self) {
         let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
-            &self.agent_config.agent_id,
+            &self.agent_config.agent_did,
             &self.parent.node_did,
             self.parent.clone(),
             self.agent_config.deadline_duration.as_secs(),
@@ -1977,9 +2005,13 @@ async fn crashed_title_recovers_committed_reasoning_without_publication() {
         fixture.title.doc_id
     );
 
-    let first = crate::RequestLifecycle::recover_all(&fixture.node, fixture.identity.did())
-        .await
-        .expect("recover crashed title");
+    let first = crate::RequestLifecycle::recover_all_with_identities(
+        &fixture.node,
+        fixture.identity.did(),
+        &[fixture.agent_config.agent_identity.clone()],
+    )
+    .await
+    .expect("recover crashed title");
     assert_eq!(first.requests_recovered, 1);
     assert_title_audit(&fixture, &fields, outcome, 1, false).await;
     assert_eq!(
@@ -2000,9 +2032,13 @@ async fn crashed_title_recovers_committed_reasoning_without_publication() {
         .iter()
         .all(|id| after.iter().any(|row| &row.doc_id == id)));
 
-    let replay = crate::RequestLifecycle::recover_all(&fixture.node, fixture.identity.did())
-        .await
-        .expect("repeat title recovery");
+    let replay = crate::RequestLifecycle::recover_all_with_identities(
+        &fixture.node,
+        fixture.identity.did(),
+        &[fixture.agent_config.agent_identity.clone()],
+    )
+    .await
+    .expect("repeat title recovery");
     assert_eq!(replay.requests_recovered, 0);
     assert_title_audit(&fixture, &fields, outcome, 1, false).await;
     assert_eq!(fixture.output_rows().await.0.len(), after.len());
@@ -2046,6 +2082,8 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
                 &fixture.node,
                 &fixture.title.doc_id,
                 &fixture.title.node_did,
+                &fixture.title.agent_did,
+                fixture.agent_config.agent_identity.as_ref(),
                 "retire setup title before live creation",
                 "test.title_live_creation_setup",
             )
@@ -2057,7 +2095,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
         let calls = provider.calls.clone();
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &fixture.agent_config.system_prompt,
-            &fixture.agent_config.agent_id,
+            &fixture.agent_config.agent_did,
             &[],
             false,
             &[],
@@ -2078,7 +2116,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             generation: 1,
             node: None,
             local_did: String::new(),
-            default_agent_id: "general".into(),
+            default_agent_did: "general".into(),
             agents: Default::default(),
             tool_surfaces: Default::default(),
             backend_admission_configs: Default::default(),
@@ -2113,9 +2151,9 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory(
-                    fixture.node.clone(),
-                ),
+                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                    fixture.node.clone(), fixture.agent_config.agent_identity.as_ref(),
+                ).unwrap(),
             ),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -2140,7 +2178,8 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             run_router_with_watcher(RouterInputs {
                 node: router_node.clone(),
                 node_did: router_did.clone(),
-                watcher: DefraWatcher::new(router_node, &router_did).expect("request watcher"),
+                watcher: DefraWatcher::new_legacy(router_node, &router_did)
+                    .expect("request watcher"),
                 active_snapshot_rx: snapshot_rx,
                 shutdown: shutdown_rx,
                 admission_gate: router_gate,
@@ -2252,7 +2291,7 @@ async fn start_owned_title_daemon(
 ) {
     let prompt_builder = LayeredPromptBuilder::for_agent(
         &fixture.agent_config.system_prompt,
-        &fixture.agent_config.agent_id,
+        &fixture.agent_config.agent_did,
         &[],
         false,
         &[],
@@ -2273,7 +2312,7 @@ async fn start_owned_title_daemon(
         generation: 1,
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".into(),
+        default_agent_did: "general".into(),
         agents: Default::default(),
         tool_surfaces: Default::default(),
         backend_admission_configs: Default::default(),
@@ -2307,9 +2346,11 @@ async fn start_owned_title_daemon(
         prompt_builder,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 fixture.node.clone(),
-            ),
+                fixture.agent_config.agent_identity.as_ref(),
+            )
+            .unwrap(),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -2675,11 +2716,12 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
         resets_at.timestamp()
     ));
     let calls = provider.calls.clone();
-    let model = crate::inference::admission::AdmittedCompletionModel::new(
+    let mut model = crate::inference::admission::AdmittedCompletionModel::new(
         provider,
         registry,
         format!("{backend}:connection"),
     );
+    model.agent_signer = fixture.agent_config.agent_identity.managed_agent_signer();
     let parent_state = |node: Arc<EmbeddedNode>, doc: String| async move {
         let doc = crate::store::graphql::escape_graphql_string(&doc);
         ConfigAccess::local(node)

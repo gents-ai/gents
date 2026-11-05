@@ -34,7 +34,7 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
         .execute(
             r#"mutation {
                 create_Agent(input: {
-                    agent_id: "amy-default",
+                    agent_did: "amy-default",
                     node_did: "did:key:amy",
                     display_name: "Amy",
                     context_id: "amy-context",
@@ -82,7 +82,7 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
                         purpose: "normal",
                         node_did: "did:key:amy",
                         requester_did: "{requester_did}",
-                        agent_id: "amy-default",
+                        agent_did: "amy-default",
                         session_id: "{request_id}-session",
                         retry_parent_request: "",
                         retry_root_request: "{request_id}",
@@ -184,13 +184,13 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
     );
 }
 
-async fn wait_for_config(node: &gents::defra_node::EmbeddedNode, timeout: Duration) -> Value {
+async fn wait_for_config(node: &gents::defra_node::Node, timeout: Duration) -> Value {
     let deadline = Instant::now() + timeout;
     loop {
         let response = node
             .execute(
                 r#"query {
-                    Agent(filter: { agent_id: { _eq: "amy-default" } }) { agent_id context_id inference_profile_id }
+                    Agent(filter: { agent_did: { _eq: "amy-default" } }) { agent_did context_id inference_profile_id }
                     InferenceBackend(filter: { backend_id: { _eq: "amy-backend" } }) { backend_id }
                     InferenceProfile(filter: { profile_id: { _eq: "amy-profile" } }) { profile_id backend_id model_name sampling_id execution_id }
                     AgentContext { context_id tools_id compaction_id }

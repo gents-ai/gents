@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 pub use gents_loop::account_usage;
 use gents_loop::account_usage::{
     usage_from_headers, UsagePlan, UsageReport, UsageSource, READ_SKIP_WINDOW,
@@ -471,7 +471,16 @@ pub async fn read_account_usage(
         return Ok(UsageRead::NotReported);
     }
     let api_key = match kind {
-        Kind::OpenRouter => match backend.auth.resolve_api_key() {
+        Kind::OpenRouter => match crate::inference::auth::credential::resolve_runtime_backend_auth(
+            &node,
+            node_did,
+            backend.provider_kind,
+            &backend.endpoint,
+            &backend.auth,
+        )
+        .await
+        .and_then(|auth| auth.resolve_api_key())
+        {
             Ok(Some(key)) => Some(key),
             _ => return Ok(unavailable("no key")),
         },
@@ -490,7 +499,10 @@ pub async fn read_account_usage(
         return Ok(UsageRead::SkippedRecent);
     }
 
-    let http = reqwest::Client::builder().timeout(READ_TIMEOUT).build()?;
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(READ_TIMEOUT)
+        .build()?;
     let (request, parse): (reqwest::RequestBuilder, UsageParser) = match api_key {
         Some(key) => (
             http.get(format!("{}/key", backend.endpoint.trim_end_matches('/')))

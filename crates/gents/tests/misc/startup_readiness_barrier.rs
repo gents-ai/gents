@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use events::EventName;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::runtime::startup_readiness::StartupReadinessOptions;
 use gents::store::graphql::escape_graphql_string;
 use gents::{
@@ -23,7 +23,7 @@ const STARTUP_DEADLOCK_GUARD: std::time::Duration = std::time::Duration::from_se
 
 #[derive(Clone, Debug)]
 struct BuildFailure {
-    agent_id: String,
+    agent_did: String,
     failure_number: u32,
     budget: u32,
     error: String,
@@ -75,14 +75,14 @@ impl RecordingBuildFailureObserver {
 impl gents::runtime::startup_readiness::StartupBuildFailureObserver
     for RecordingBuildFailureObserver
 {
-    fn on_build_failure(&self, agent_id: &str, failure_number: u32, budget: u32, error: &str) {
+    fn on_build_failure(&self, agent_did: &str, failure_number: u32, budget: u32, error: &str) {
         let count = {
             let mut failures = self
                 .failures
                 .lock()
                 .expect("build failure observer mutex poisoned");
             failures.push(BuildFailure {
-                agent_id: agent_id.to_string(),
+                agent_did: agent_did.to_string(),
                 failure_number,
                 budget,
                 error: error.to_string(),
@@ -96,7 +96,7 @@ impl gents::runtime::startup_readiness::StartupBuildFailureObserver
 async fn wait_for_node_readiness(
     node: &EmbeddedNode,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     state: AgentReadinessState,
     reason: Option<AgentReadinessUnavailableReason>,
 ) -> NodeReadinessSnapshot {
@@ -127,7 +127,7 @@ async fn wait_for_node_readiness(
         {
             if snapshot.process_state.accepts_work()
                 && snapshot.agents.iter().any(|entry| {
-                    entry.agent_id == agent_id && entry.state == state && entry.reason == reason
+                    entry.agent_did == agent_did && entry.state == state && entry.reason == reason
                 })
             {
                 return snapshot;
@@ -200,7 +200,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
         },
     )
     .await?;
-    let default_agent_id = agent.default_agent_id().to_string();
+    let default_agent_did = agent.default_agent_did().to_string();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let run_task = tokio::spawn(agent.run(shutdown_rx));
 
@@ -223,7 +223,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     assert_eq!(failures[1].failure_number, 2);
     assert!(failures
         .iter()
-        .all(|failure| failure.agent_id == default_agent_id));
+        .all(|failure| failure.agent_did == default_agent_did));
     assert!(failures.iter().all(|failure| failure.budget == 2));
     assert!(failures
         .iter()
@@ -232,7 +232,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     let readiness = wait_for_node_readiness(
         node.as_ref(),
         identity.did(),
-        &default_agent_id,
+        &default_agent_did,
         AgentReadinessState::Unavailable,
         Some(AgentReadinessUnavailableReason::ExecutorStartFailed),
     )
@@ -327,7 +327,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
         },
     )
     .await?;
-    let default_agent_id = agent.default_agent_id().to_string();
+    let default_agent_did = agent.default_agent_did().to_string();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let run_task = tokio::spawn(agent.run(shutdown_rx));
 
@@ -346,13 +346,13 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
     assert!(failures.iter().all(|failure| failure.budget == 10));
     assert!(failures
         .iter()
-        .all(|failure| failure.agent_id == default_agent_id));
+        .all(|failure| failure.agent_did == default_agent_did));
     assert!(failures.iter().all(|failure| failure.error.contains(VAR)));
 
     let readiness = wait_for_node_readiness(
         node.as_ref(),
         identity.did(),
-        &default_agent_id,
+        &default_agent_did,
         AgentReadinessState::Ready,
         None,
     )

@@ -1,0 +1,23 @@
+type InferenceBackendMetadata @policy(id: "8d9e64ca014dddfb01e5a55a5018e0a56d238ea0da1df1b6b33d50b1ac23386a", resource: "configuration") @index(fields: ["node_did", "backend_id"], unique: true) {
+    backend_id: String
+    node_did: String @index
+    creation_nonce: String
+    name: String @index
+    provider_kind: String
+    openai_wire_api: String
+    endpoint: String
+    auth_kind: String
+    credential_id: String
+    credential_version: String
+    environment_variable: String
+    oauth_account_ref: String
+    oauth_allow_overage: Boolean
+    connect_timeout_secs: Int
+    discovery_timeout_secs: Int
+    max_concurrent: Int
+    max_queue_depth: Int
+    enabled: Boolean @index
+    tags: [String!]
+    updated_at: DateTime @index(direction: DESC)
+    claude_platform: JSON
+}

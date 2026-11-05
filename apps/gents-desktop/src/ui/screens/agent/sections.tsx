@@ -71,7 +71,7 @@ export const SECTIONS: AgentSection[] = [
     icon: Workflow,
     count: (d) => d.agents.length,
     Panel: ({ deployment, item }) => (
-      <AgentsPanel deployment={deployment} agentId={item} />
+      <AgentsPanel deployment={deployment} agentDid={item} />
     ),
   },
   { id: "contexts", under: "agents", Panel: ContextsPanel },

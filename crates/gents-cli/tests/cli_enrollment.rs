@@ -1,5 +1,9 @@
+#[path = "cli_enrollment/live_two_agent.rs"]
+mod live_two_agent;
 #[path = "cli_enrollment/contract.rs"]
 mod contract;
+#[path = "cli_enrollment/household.rs"]
+mod household;
 mod support;
 use support::*;
 
@@ -9,7 +13,6 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
-use gents::default_agent_id_for_node;
 use gents::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_desktop_core::client::canonical_output::{
     project_canonical_message, CanonicalMessageProjection,
@@ -69,7 +72,7 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let default_agent_id = default_agent_id_for_node(&node_did);
+    let default_agent_did = agent_did_from_init(&init)?;
 
     let (mut serve, _readiness) =
         spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[])?;
@@ -181,7 +184,7 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
                 &session_id,
                 &node_did,
                 &prompt,
-                Some(&default_agent_id),
+                Some(&default_agent_did),
             )
             .await
             .context("submitting chat request from the enrolled desktop")?;
@@ -337,7 +340,7 @@ async fn wait_for_runtime_enrollment_request(graphql: &str, request_id: &str) ->
 
 async fn wait_for_runtime_agent_request(
     graphql: &str,
-    client_node: &gents::defra_node::EmbeddedNode,
+    client_node: &gents::defra_node::Node,
     node_did: &str,
     content: &str,
 ) -> Result<(String, String, String)> {
@@ -354,7 +357,7 @@ async fn wait_for_runtime_agent_request(
                     ) {{
                         request_id
                         session_id
-                        agent_id
+                        agent_did
                         content
                     }}
                 }}"#,
@@ -378,7 +381,7 @@ async fn wait_for_runtime_agent_request(
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_string(),
-                        row.get("agent_id")
+                        row.get("agent_did")
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_string(),
@@ -417,11 +420,20 @@ async fn wait_for_complete_agent_response(
     session: &str,
     timeout: Duration,
 ) -> Result<RuntimeTerminalReply> {
+    let access = gents::ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    wait_for_complete_agent_response_with_access(&access, request_id, session, timeout).await
+}
+
+async fn wait_for_complete_agent_response_with_access(
+    access: &gents::ConfigAccess,
+    request_id: &str,
+    session: &str,
+    timeout: Duration,
+) -> Result<RuntimeTerminalReply> {
     let deadline = Instant::now() + timeout;
     let mut empty_terminal_since = None::<Instant>;
     loop {
-        let response = graphql_query(
-            graphql,
+        let response = access.execute(
             &format!(
                 r#"{{
                     AgentRequest(
@@ -467,9 +479,7 @@ async fn wait_for_complete_agent_response(
             }
             if request.is_terminal() {
                 let output = gents::session::observe_request_output(
-                    &gents::ConfigAccess::Graphql(crate::support::graphql::served_endpoint(
-                        graphql,
-                    )),
+                    access,
                     &request,
                 )
                 .await?;
@@ -572,10 +582,8 @@ async fn wait_for_client_complete_response(
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        core.ensure_session_hydration_started(session_id, node_did)
-            .await?;
-        let page = gents_desktop_core::client::load_session_transcript_page(
-            core.node(),
+        let page = gents_desktop_core::client::load_session_transcript_page_on(
+            &core.operator_access(node_did)?,
             session_id,
             Some(node_did),
             Some(core.node_identity().did()),
@@ -706,7 +714,7 @@ async fn wait_for_client_node_readiness(core: &ClientCore, node_did: &str) -> Re
 }
 
 async fn query_collection_dids(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     collection: &str,
 ) -> Result<Vec<String>> {
     let response = node

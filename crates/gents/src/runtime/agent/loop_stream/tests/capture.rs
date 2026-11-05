@@ -483,7 +483,7 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
             request_id: request_id.to_string(),
             node_did: "did:key:agent".to_string(),
             requester_did: String::new(),
-            agent_id: "general".to_string(),
+            agent_did: "general".to_string(),
             session_id: session_id.to_string(),
             model_name: "model".to_string(),
             provider_family: None,
@@ -536,7 +536,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
     assert!(!cases.is_empty(), "Lean emitted no rendered-capture cases");
 
     async fn rendered_rows(
-        node: &Arc<defra_node::EmbeddedNode>,
+        node: &Arc<defra_node::Node>,
         capture_key: &str,
     ) -> Vec<serde_json::Value> {
         let query = format!(
@@ -585,7 +585,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
                     attempt: case.attempt,
                     node_did,
                     requester_did: "did:key:z6Mk-requester".to_string(),
-                    agent_id: "behavior-sink".to_string(),
+                    agent_did: "behavior-sink".to_string(),
                     session_id,
                     model_name: "sink-model".to_string(),
                     source: RenderedRequestSource::OpenAiChatCompletions,
@@ -660,7 +660,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
             "{}: the durable binding must match the capture contract",
             case.name
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }
 

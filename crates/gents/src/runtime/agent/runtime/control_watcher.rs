@@ -43,9 +43,7 @@ pub(super) struct ControlSubscription {
     names_by_id: RapidHashMap<String, &'static str>,
 }
 
-pub(super) fn subscribe_control_changes(
-    node: &defra_node::EmbeddedNode,
-) -> Result<ControlSubscription> {
+pub(super) fn subscribe_control_changes(node: &defra_node::Node) -> Result<ControlSubscription> {
     let names = document_view::control_collection_names().collect::<Vec<_>>();
     let ids = crate::collection_ids(node, names.iter().copied())?;
     Ok(ControlSubscription {
@@ -55,7 +53,8 @@ pub(super) fn subscribe_control_changes(
 }
 
 pub(super) struct ControlWatcherInputs {
-    pub(super) node: Arc<defra_node::EmbeddedNode>,
+    pub(super) node: Arc<defra_node::Node>,
+    pub(super) backend_admission: crate::store::local::backend_protection::BackendAdmission,
     pub(super) subscription: ControlSubscription,
     pub(super) node_did: String,
     pub(super) resolve_context: DocumentResolveContext,
@@ -76,6 +75,7 @@ pub(super) async fn run_control_watcher_with_timing(
 ) -> Result<()> {
     let ControlWatcherInputs {
         node,
+        backend_admission,
         subscription,
         node_did,
         resolve_context,
@@ -85,7 +85,13 @@ pub(super) async fn run_control_watcher_with_timing(
         mut health_events_rx,
         mut shutdown,
     } = inputs;
-    let mut document_view = document_view::load_document_runtime_view(&node, &node_did).await?;
+    backend_admission.validate(&node).await?;
+    let mut document_view = document_view::load_document_runtime_view_as(
+        &node,
+        &node_did,
+        resolve_context.identity.did(),
+    )
+    .await?;
     let sleep = tokio::time::sleep(timing.idle_sleep);
     tokio::pin!(sleep);
     let mut dirty = false;
@@ -109,9 +115,12 @@ pub(super) async fn run_control_watcher_with_timing(
         tokio::select! {
             _ = shutdown.changed() => return Ok(()),
             _ = &mut sleep, if dirty => {
+                backend_admission.validate(&node).await?;
                 replicated_pending = false;
                 if resync_required || pending_visibility || settle_deadline.is_some() {
-                    match document_view::load_document_runtime_view(&node, &node_did).await {
+                    match document_view::load_document_runtime_view_as(
+                        &node, &node_did, resolve_context.identity.did()
+                    ).await {
                         Ok(reloaded) => {
                             document_view = reloaded;
                             pending_visibility = document_view.has_unresolved_agent_references();
@@ -302,7 +311,9 @@ pub(super) async fn run_control_watcher_with_timing(
                     {
                         Ok(document_view::ControlUpdateOutcome::Irrelevant) => continue,
                         Ok(document_view::ControlUpdateOutcome::FullReload) => {
-                            match document_view::load_document_runtime_view(&node, &node_did).await {
+                            match document_view::load_document_runtime_view_as(
+                                &node, &node_did, resolve_context.identity.did()
+                            ).await {
                                 Ok(reloaded) => {
                                     document_view = reloaded;
                                     pending_visibility = document_view.has_unresolved_agent_references();
@@ -331,7 +342,9 @@ pub(super) async fn run_control_watcher_with_timing(
                                 error = %error,
                                 "runtime control update apply failed; forcing full resync"
                             );
-                            match document_view::load_document_runtime_view(&node, &node_did).await {
+                            match document_view::load_document_runtime_view_as(
+                                &node, &node_did, resolve_context.identity.did()
+                            ).await {
                                 Ok(reloaded) => {
                                     document_view = reloaded;
                                     pending_visibility = document_view.has_unresolved_agent_references();

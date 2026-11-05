@@ -1,6 +1,6 @@
-//! Same-owner configuration closure over the complete transaction snapshot.
+//! Configuration closure over the authenticated actor's transaction snapshot.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{ensure, Context, Result};
 use serde::de::DeserializeOwned;
@@ -32,6 +32,12 @@ pub struct MissingReference {
 pub struct ConfigReferences {
     node_did: String,
     documents: BTreeMap<(Collection, String), Value>,
+}
+
+struct RequiredReference {
+    collection: Collection,
+    id: String,
+    field: &'static str,
 }
 
 impl ConfigReferences {
@@ -131,11 +137,11 @@ impl ConfigReferences {
             .collect()
     }
 
-    pub(crate) fn agent_profiles(&self, agent_id: &str) -> Vec<String> {
+    pub(crate) fn agent_profiles(&self, agent_did: &str) -> Vec<String> {
         let get = |collection: Collection, id: Option<&str>| {
             self.documents.get(&(collection, id?.to_owned()))
         };
-        let Some(agent) = get(Collection::Agent, Some(agent_id)) else {
+        let Some(agent) = get(Collection::Agent, Some(agent_did)) else {
             return Vec::new();
         };
         let compaction = get(Collection::AgentContext, agent["context_id"].as_str())
@@ -205,6 +211,174 @@ impl ConfigReferences {
         Ok(())
     }
 
+    /// Validate changed documents and their visible direct consumers. Native
+    /// actor-scoped reads do not establish whether hidden consumers exist.
+    pub(crate) fn validate_affected(&self, changed: &BTreeSet<(Collection, String)>) -> Result<()> {
+        for ((collection, id), document) in &self.documents {
+            let references = self.required_references(*collection, document)?;
+            if changed.contains(&(*collection, id.clone()))
+                || references.iter().any(|reference| {
+                    changed.contains(&(reference.collection, reference.id.clone()))
+                })
+            {
+                self.validate_document(*collection, document)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn required_references(
+        &self,
+        collection: Collection,
+        value: &Value,
+    ) -> Result<Vec<RequiredReference>> {
+        let mut references = Vec::new();
+        let mut push = |collection, id: &str, field| {
+            references.push(RequiredReference {
+                collection,
+                id: id.to_owned(),
+                field,
+            })
+        };
+        match collection {
+            Collection::Node => {
+                let doc: Node = decode(value)?;
+                if let Some(id) = doc.default_agent_did.as_deref() {
+                    push(Collection::Agent, id, "default_agent_did");
+                }
+            }
+            Collection::Agent => {
+                let doc: Agent = decode(value)?;
+                if let Some(id) = doc.context_id.as_deref() {
+                    push(Collection::AgentContext, id, "context_id");
+                }
+                push(
+                    Collection::InferenceProfile,
+                    &doc.inference_profile_id,
+                    "inference_profile_id",
+                );
+            }
+            Collection::AgentContext => {
+                let doc: AgentContext = decode(value)?;
+                if let Some(id) = doc.tools_id.as_deref() {
+                    push(Collection::Tools, id, "tools_id");
+                }
+                if let Some(id) = doc.compaction_id.as_deref() {
+                    push(Collection::Compaction, id, "compaction_id");
+                }
+                for id in &doc.skill_ids {
+                    push(Collection::Skill, id, "skill_ids");
+                }
+            }
+            Collection::Compaction => {
+                let doc: CompactionConfig = decode(value)?;
+                if let Some(id) = doc.inference_profile_id.as_deref() {
+                    push(Collection::InferenceProfile, id, "inference_profile_id");
+                }
+            }
+            Collection::Tools => {
+                let doc: Tools = decode(value)?;
+                if let Some(remote) = &doc.remote {
+                    for service in &remote.services {
+                        push(
+                            Collection::ToolServiceRegistry,
+                            &service.mcp_service_id,
+                            "remote.services.mcp_service_id",
+                        );
+                    }
+                }
+                if let Some(agents) = &doc.agents {
+                    for id in &agents.target_ids {
+                        push(Collection::AgentTarget, id, "agents.target_ids");
+                    }
+                }
+                if let Some(datastore) = &doc.datastore {
+                    for id in datastore.datastore_tool_surface_ids.iter().flatten() {
+                        push(
+                            Collection::DatastoreToolSurface,
+                            id,
+                            "datastore.datastore_tool_surface_ids",
+                        );
+                    }
+                }
+            }
+            Collection::AgentTarget => {
+                let doc: AgentTargetDocument = decode(value)?;
+                if doc.target_node_did == self.node_did {
+                    push(Collection::Agent, &doc.agent_did, "agent_did");
+                }
+            }
+            Collection::InferenceProfile => {
+                let doc: InferenceProfile = decode(value)?;
+                push(Collection::InferenceBackend, &doc.backend_id, "backend_id");
+                if let Some(id) = doc.sampling_id.as_deref() {
+                    push(Collection::InferenceSampling, id, "sampling_id");
+                }
+                if let Some(id) = doc.execution_id.as_deref() {
+                    push(Collection::InferenceExecution, id, "execution_id");
+                }
+            }
+            Collection::InferenceExecution => {
+                let doc: InferenceExecution = decode(value)?;
+                if let Some(id) = doc.retry_policy_id.as_deref() {
+                    push(Collection::InferenceRetryPolicy, id, "retry_policy_id");
+                }
+            }
+            Collection::ProjectionAcpBinding => {
+                let doc: ProjectionAcpBinding = decode(value)?;
+                if let Some(id) = doc.agent_did.as_deref() {
+                    push(Collection::Agent, id, "agent_did");
+                }
+            }
+            Collection::Task => {
+                let doc: Task = decode(value)?;
+                push(Collection::Agent, &doc.agent_did, "agent_did");
+            }
+            Collection::Trigger => {
+                let doc: Trigger = decode(value)?;
+                push(Collection::Task, &doc.task_id, "task_id");
+                match &doc.source {
+                    TriggerSource::Schedule { schedule_id } => {
+                        push(Collection::Schedule, schedule_id, "source.schedule_id")
+                    }
+                    TriggerSource::Event { event_source_id } => push(
+                        Collection::EventSource,
+                        event_source_id,
+                        "source.event_source_id",
+                    ),
+                }
+            }
+            Collection::Callback => {
+                let doc: Callback = decode(value)?;
+                if let CallbackHandler::Module { module_id } = &doc.handler {
+                    push(Collection::CallbackModule, module_id, "handler.module_id");
+                }
+            }
+            Collection::CallbackBinding => {
+                let doc: CallbackBinding = decode(value)?;
+                push(Collection::Agent, &doc.agent_did, "agent_did");
+                push(
+                    Collection::EventSource,
+                    &doc.event_source_id,
+                    "event_source_id",
+                );
+                push(Collection::Callback, &doc.callback_id, "callback_id");
+            }
+            Collection::InferenceBackend
+            | Collection::InferenceSampling
+            | Collection::InferenceRetryPolicy
+            | Collection::DatastoreToolSurface
+            | Collection::Schedule
+            | Collection::EventSource
+            | Collection::ToolServiceRegistry
+            | Collection::RepositoryPlacement
+            | Collection::EvalDefinition
+            | Collection::Skill
+            | Collection::CallbackModule => {}
+        }
+        Ok(references)
+    }
+
     pub fn validate_removal(&self, collection: Collection, id: &str) -> Result<()> {
         let mut candidate = self.clone();
         ensure!(
@@ -230,7 +404,10 @@ impl ConfigReferences {
             .as_str()
             .filter(|id| !id.trim().is_empty())
             .context("configuration requires logical ID")?;
-        let require = |target: Collection, target_id: &str, field: &str| -> Result<()> {
+        for reference in self.required_references(collection, value)? {
+            let target = reference.collection;
+            let target_id = &reference.id;
+            let field = reference.field;
             ensure!(
                 !target_id.trim().is_empty(),
                 "{} {id} field {field} has a blank reference ID",
@@ -247,23 +424,11 @@ impl ConfigReferences {
                 }
                 .into());
             }
-            Ok(())
-        };
-        let optional = |target, target_id: Option<&str>, field| -> Result<()> {
-            if let Some(target_id) = target_id {
-                require(target, target_id, field)?;
-            }
-            Ok(())
-        };
+        }
         match collection {
             Collection::Node => {
                 let doc: Node = decode(value)?;
-                optional(
-                    Collection::Agent,
-                    doc.default_agent_id.as_deref(),
-                    "default_agent_id",
-                )?;
-                if let Some(default) = doc.default_agent_id.as_deref() {
+                if let Some(default) = doc.default_agent_did.as_deref() {
                     let agent: Agent =
                         decode(&self.documents[&(Collection::Agent, default.to_owned())])?;
                     ensure!(
@@ -274,39 +439,10 @@ impl ConfigReferences {
                     );
                 }
             }
-            Collection::Agent => {
-                let doc: Agent = decode(value)?;
-                optional(
-                    Collection::AgentContext,
-                    doc.context_id.as_deref(),
-                    "context_id",
-                )?;
-                require(
-                    Collection::InferenceProfile,
-                    &doc.inference_profile_id,
-                    "inference_profile_id",
-                )?;
-            }
-            Collection::AgentContext => {
-                let doc: AgentContext = decode(value)?;
-                optional(Collection::Tools, doc.tools_id.as_deref(), "tools_id")?;
-                optional(
-                    Collection::Compaction,
-                    doc.compaction_id.as_deref(),
-                    "compaction_id",
-                )?;
-                for skill in doc.skill_ids {
-                    require(Collection::Skill, &skill, "skill_ids")?;
-                }
-            }
+            Collection::Agent | Collection::AgentContext => {}
             Collection::Compaction => {
                 let doc: CompactionConfig = decode(value)?;
                 doc.validate()?;
-                optional(
-                    Collection::InferenceProfile,
-                    doc.inference_profile_id.as_deref(),
-                    "inference_profile_id",
-                )?;
             }
             Collection::Tools => {
                 let doc: Tools = decode(value)?;
@@ -330,20 +466,6 @@ impl ConfigReferences {
                     &cli_names,
                     &[],
                 )?;
-                if let Some(remote) = &doc.remote {
-                    for service in &remote.services {
-                        require(
-                            Collection::ToolServiceRegistry,
-                            &service.mcp_service_id,
-                            "remote.services.mcp_service_id",
-                        )?;
-                    }
-                }
-                if let Some(agents) = &doc.agents {
-                    for target in &agents.target_ids {
-                        require(Collection::AgentTarget, target, "agents.target_ids")?;
-                    }
-                }
                 let targets = self
                     .documents
                     .iter()
@@ -351,51 +473,21 @@ impl ConfigReferences {
                     .map(|(_, value)| decode::<AgentTargetDocument>(value))
                     .collect::<Result<Vec<_>>>()?;
                 crate::tools::surface::AgentToolConfig::from_document_with_targets(&doc, &targets)?;
-                if let Some(datastore) = doc.datastore {
-                    for surface in datastore.datastore_tool_surface_ids.unwrap_or_default() {
-                        require(
-                            Collection::DatastoreToolSurface,
-                            &surface,
-                            "datastore.datastore_tool_surface_ids",
-                        )?;
-                    }
-                }
             }
             Collection::AgentTarget => {
                 let doc: AgentTargetDocument = decode(value)?;
                 ensure!(
-                    !doc.target_node_did.trim().is_empty() && !doc.agent_id.trim().is_empty(),
-                    "AgentTarget {id} requires target_node_did and agent_id"
+                    !doc.target_node_did.trim().is_empty() && !doc.agent_did.trim().is_empty(),
+                    "AgentTarget {id} requires target_node_did and agent_did"
                 );
-                // Same-owner targets close legal agent/context/tools cycles;
-                // foreign targets are checked by delegation admission under ACP.
-                if doc.target_node_did == self.node_did {
-                    require(Collection::Agent, &doc.agent_id, "agent_id")?;
-                }
             }
             Collection::InferenceProfile => {
                 let doc: InferenceProfile = decode(value)?;
                 doc.validate()?;
-                require(Collection::InferenceBackend, &doc.backend_id, "backend_id")?;
-                optional(
-                    Collection::InferenceSampling,
-                    doc.sampling_id.as_deref(),
-                    "sampling_id",
-                )?;
-                optional(
-                    Collection::InferenceExecution,
-                    doc.execution_id.as_deref(),
-                    "execution_id",
-                )?;
             }
             Collection::InferenceExecution => {
                 let doc: InferenceExecution = decode(value)?;
                 doc.validate()?;
-                optional(
-                    Collection::InferenceRetryPolicy,
-                    doc.retry_policy_id.as_deref(),
-                    "retry_policy_id",
-                )?;
             }
             Collection::InferenceBackend => decode::<InferenceBackend>(value)?.validate()?,
             Collection::InferenceSampling => decode::<InferenceSampling>(value)?.validate()?,
@@ -413,24 +505,20 @@ impl ConfigReferences {
             Collection::ProjectionAcpBinding => {
                 let doc: ProjectionAcpBinding = decode(value)?;
                 doc.validate()?;
-                optional(Collection::Agent, doc.agent_id.as_deref(), "agent_id")?;
             }
             Collection::Task => {
                 let task: Task = decode(value)?;
                 task.validate()?;
-                require(Collection::Agent, &task.agent_id, "agent_id")?;
             }
             Collection::Trigger => {
                 let doc: Trigger = decode(value)?;
-                require(Collection::Task, &doc.task_id, "task_id")?;
                 let task: Task = decode(
                     self.documents
                         .get(&(Collection::Task, doc.task_id.clone()))
                         .context("trigger task missing")?,
                 )?;
                 let forbidden: &[&str] = match &doc.source {
-                    TriggerSource::Schedule { schedule_id } => {
-                        require(Collection::Schedule, schedule_id, "source.schedule_id")?;
+                    TriggerSource::Schedule { .. } => {
                         // The fire-time owner, so publication refuses exactly
                         // what every schedule fire would error on (#2080).
                         crate::triggers::engine::validate_task_delivery_options(
@@ -448,11 +536,6 @@ impl ConfigReferences {
                         &["doc", "args", "group"]
                     }
                     TriggerSource::Event { event_source_id } => {
-                        require(
-                            Collection::EventSource,
-                            event_source_id,
-                            "source.event_source_id",
-                        )?;
                         let source: EventSource = decode(
                             self.documents
                                 .get(&(Collection::EventSource, event_source_id.clone()))
@@ -503,9 +586,7 @@ impl ConfigReferences {
                 }
             }
             Collection::Callback => match decode::<Callback>(value)?.handler {
-                CallbackHandler::Module { module_id } => {
-                    require(Collection::CallbackModule, &module_id, "handler.module_id")?;
-                }
+                CallbackHandler::Module { .. } => {}
                 CallbackHandler::Plugin {
                     plugin,
                     digest,
@@ -523,11 +604,6 @@ impl ConfigReferences {
             Collection::CallbackBinding => {
                 let doc: CallbackBinding = decode(value)?;
                 doc.projected_fields()?;
-                require(
-                    Collection::EventSource,
-                    &doc.event_source_id,
-                    "event_source_id",
-                )?;
                 let source: EventSource = decode(
                     self.documents
                         .get(&(Collection::EventSource, doc.event_source_id.clone()))
@@ -538,7 +614,6 @@ impl ConfigReferences {
                     source.filter.as_deref(),
                     None,
                 )?;
-                require(Collection::Callback, &doc.callback_id, "callback_id")?;
             }
             Collection::Schedule => decode::<Schedule>(value)?.cadence.validate()?,
             Collection::EventSource => decode::<EventSource>(value)?.validate()?,

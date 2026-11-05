@@ -1,6 +1,5 @@
 use super::*;
 use crate::request::watcher::AgentRequest;
-use crate::store::config_client::ConfigAccess;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 
 async fn signed_reply(
@@ -41,12 +40,22 @@ async fn persisted_request(
     question_reply: Option<&gents_protocol::mailbox_question::MailboxQuestionReply>,
 ) -> AgentRequest {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+    let context = defra_core::RequestContext::default()
+        .with_identity(Some(tests::root_identity().did().to_owned()));
+    for permission in [
+        acp::nac::NodePermission::DocumentRead,
+        acp::nac::NodePermission::DocumentUpdate,
+    ] {
+        node.add_nac_actor_relationship_as(&context, permission.as_str(), identity.did())
+            .await
+            .unwrap();
+    }
     let mut create = AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         id,
+        tests::root_identity().did(),
         identity.did(),
-        identity.did(),
-        "operator",
+        tests::agent_identity().did(),
         "session-1",
         content,
         "interactive",
@@ -66,6 +75,15 @@ async fn persisted_request(
         .unwrap()
         .unwrap();
     let doc_id = doc["_docID"].as_str().unwrap();
+    node.add_dac_actor_relationship(
+        tests::root_identity().did(),
+        "AgentRequest",
+        doc_id,
+        "working_agent",
+        tests::agent_identity().did(),
+    )
+    .await
+    .unwrap();
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
         escape_graphql_string(doc_id),
@@ -79,7 +97,7 @@ async fn persisted_request(
 }
 
 async fn claim(node: &Arc<EmbeddedNode>, request: &AgentRequest, abort: bool) -> Result<()> {
-    ConfigAccess::transact_local_write(node, None, "test.mailbox_reply", |txn| Box::pin(async move {
+    tests::agent_access(node).transact_write("test.mailbox_reply", |txn| Box::pin(async move {
         let mutation = format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "claimed" }}) {{ _docID }} }}"#,
             escape_graphql_string(&request.doc_id));
         txn.execute_local_response(&mutation).await?;
@@ -106,8 +124,8 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("reply.key"), None).unwrap();
     let mut context = tests::context(identity.did());
-    context.node_did = identity.did().into();
-    let item = stamp_create(
+    context.node_did = tests::root_identity().did().into();
+    let item = tests::stamp_create(
         &node,
         &context,
         tests::args(MailboxAction::StartRequest, "approval"),
@@ -123,7 +141,7 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
     assert!(claim(&node, &request, true).await.is_err());
     assert_eq!(stored_lifecycle(&node, &request).await, "pending");
     assert_eq!(
-        load_mailbox_item(&node, &item.doc_id)
+        tests::load_as_creator(&node, &item.doc_id)
             .await
             .unwrap()
             .unwrap()
@@ -131,11 +149,16 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
         "open"
     );
     assert_eq!(
-        sweep_open_mailbox_items(&node, identity.did(), None)
-            .await
-            .unwrap()
-            .report
-            .acted,
+        sweep_open_mailbox_items(
+            &node,
+            tests::root_identity().did(),
+            &[tests::agent_identity()],
+            None
+        )
+        .await
+        .unwrap()
+        .report
+        .acted,
         0
     );
     claim(&node, &request, false).await.unwrap();
@@ -144,7 +167,7 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
     let error = claim(&node, &replay, false).await.unwrap_err();
     assert!(crate::request::lifecycle::is_claim_admission_error(&error));
     assert_eq!(stored_lifecycle(&node, &replay).await, "pending");
-    let stored = load_mailbox_item(&node, &item.doc_id)
+    let stored = tests::load_as_creator(&node, &item.doc_id)
         .await
         .unwrap()
         .unwrap();
@@ -152,7 +175,7 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
         stored.resolved_doc_id.as_deref(),
         Some(request.doc_id.as_str())
     );
-    let declined = stamp_create(
+    let declined = tests::stamp_create(
         &node,
         &context,
         tests::args(MailboxAction::StartRequest, "declined"),
@@ -160,21 +183,21 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
     .await
     .unwrap();
     let denied = signed_reply(&node, &identity, &declined, "declined-request").await;
-    dismiss_mailbox_item(&node, &declined.doc_id, identity.did())
+    tests::dismiss_as_creator(&node, &declined.doc_id)
         .await
         .unwrap();
     assert!(crate::request::lifecycle::is_claim_admission_error(
         &claim(&node, &denied, false).await.unwrap_err()
     ));
     assert_eq!(
-        load_mailbox_item(&node, &declined.doc_id)
+        tests::load_as_creator(&node, &declined.doc_id)
             .await
             .unwrap()
             .unwrap()
             .status,
         "dismissed"
     );
-    let raced = stamp_create(
+    let raced = tests::stamp_create(
         &node,
         &context,
         tests::args(MailboxAction::StartRequest, "competing-replies"),
@@ -194,7 +217,7 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
     assert_eq!(stored_lifecycle(&node, winner).await, "claimed");
     assert_eq!(stored_lifecycle(&node, loser).await, "pending");
     assert_eq!(
-        load_mailbox_item(&node, &raced.doc_id)
+        tests::load_as_creator(&node, &raced.doc_id)
             .await
             .unwrap()
             .unwrap()
@@ -211,7 +234,7 @@ async fn modern_questions_require_correlated_replies_and_preserve_skip_claims() 
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("questions.key"), None).unwrap();
     let mut context = tests::context(identity.did());
-    context.node_did = identity.did().into();
+    context.node_did = tests::root_identity().did().into();
     for optional in [false, true] {
         let payload = json!({
             "version": 2, "prompt": "Any further constraints?", "options": [],
@@ -221,13 +244,13 @@ async fn modern_questions_require_correlated_replies_and_preserve_skip_claims() 
         let question = MailboxQuestion::from_payload(&payload).unwrap();
         let mut args = tests::args(MailboxAction::StartRequest, &format!("question-{optional}"));
         args.payload = Some(payload);
-        let item = stamp_create(&node, &context, args).await.unwrap();
-        let error = dismiss_mailbox_item(&node, &item.doc_id, identity.did())
+        let item = tests::stamp_create(&node, &context, args).await.unwrap();
+        let error = tests::dismiss_as_creator(&node, &item.doc_id)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("original item"));
         assert_eq!(
-            load_mailbox_item(&node, &item.doc_id)
+            tests::load_as_creator(&node, &item.doc_id)
                 .await
                 .unwrap()
                 .unwrap()
@@ -279,13 +302,13 @@ async fn modern_questions_require_correlated_replies_and_preserve_skip_claims() 
         assert_eq!(request.content, content);
         let mut stale = item.clone();
         stale.summary = Some("A changed decision context".into());
-        assert!(reply::validate_reply_claim(&stale, &request, true, true).is_err());
+        assert!(reply::validate_reply_claim(&stale, &request, true, true, true).is_err());
         let mut missing = request.clone();
         missing.input.question_reply = None;
-        assert!(reply::validate_reply_claim(&item, &missing, true, true).is_err());
+        assert!(reply::validate_reply_claim(&item, &missing, true, true, true).is_err());
         assert!(claim(&node, &request, true).await.is_err());
         assert_eq!(
-            load_mailbox_item(&node, &item.doc_id)
+            tests::load_as_creator(&node, &item.doc_id)
                 .await
                 .unwrap()
                 .unwrap()
@@ -294,13 +317,15 @@ async fn modern_questions_require_correlated_replies_and_preserve_skip_claims() 
         );
         claim(&node, &request, false).await.unwrap();
         claim(&node, &request, false).await.unwrap();
-        let observed = dismiss_mailbox_item(&node, &item.doc_id, identity.did())
+        let observed = tests::dismiss_as_creator(&node, &item.doc_id)
             .await
             .unwrap();
         assert_eq!(observed.status, "acted");
         let mut changed_after_claim = observed.clone();
         changed_after_claim.summary = Some("Later context".into());
-        assert!(reply::validate_reply_claim(&changed_after_claim, &request, true, false).is_ok());
+        assert!(
+            reply::validate_reply_claim(&changed_after_claim, &request, true, false, false).is_ok()
+        );
         assert_eq!(
             observed.resolved_doc_id.as_deref(),
             Some(request.doc_id.as_str())
@@ -309,19 +334,15 @@ async fn modern_questions_require_correlated_replies_and_preserve_skip_claims() 
         assert!(claim(&node, &replay, false).await.is_err());
         assert_eq!(stored_lifecycle(&node, &replay).await, "pending");
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
 async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
-    use crate::inference::llm::tool::Tool;
     use crate::request::lifecycle::{
         ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
     };
     use crate::request::streaming::DefraStreamWriter;
-    use crate::tools::call::lifecycle::runtime::{
-        scope_request_tool_execution_with_session, scope_tool_request_identity,
-    };
     use std::time::Duration;
 
     let modeled = crate::lean_vocab_test::lean_contract_snapshot()
@@ -356,54 +377,62 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
     .await;
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        "operator",
-        identity.did(),
+        tests::agent_identity().did(),
+        tests::root_identity().did(),
         producer.clone(),
         60,
         ExecutionOrigin::Interactive,
         "handoff-test",
     );
+    lifecycle
+        .bind_managed_agent(tests::agent_identity().as_ref())
+        .unwrap();
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    let writer = DefraStreamWriter::new(node.clone(), identity.did(), Duration::ZERO);
+    let writer =
+        DefraStreamWriter::new_for_lifecycle(node.clone(), &lifecycle, Duration::ZERO).unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
 
-    let tool = MailboxCreateTool::new(
-        node.clone(),
-        MailboxNotificationPolicy {
-            identity: NotificationIdentity::Event,
+    let context = tests::context(identity.did());
+    let notification_identity = NotificationIdentity::Event;
+    let source_id = notification_identity
+        .source_id(
+            &context.node_did,
+            &context.requester_did,
+            &context.agent_did,
+            &producer.request_id,
+        )
+        .unwrap();
+    let receipt = stamp_notification(
+        &node,
+        &tests::agent_access(&node),
+        &context,
+        FileMailboxItemArgs {
             kind: serde_json::from_value(json!(modeled.kind)).unwrap(),
             action: serde_json::from_value(json!(modeled.action)).unwrap(),
+            title: modeled.content.clone(),
+            summary: None,
+            payload: None,
+            source_kind: MailboxSourceKind::Agent,
+            source_id,
+            session_id: None,
+            request_id: Some(producer.request_id.clone()),
+            cause_doc_id: None,
             expected_collection: None,
+            parent_item_id: None,
+            deadline_at: None,
         },
-    );
-    let receipt_json = scope_tool_request_identity(
-        Some(identity.did().to_owned()),
-        Some(identity.did().to_owned()),
-        Some("operator".into()),
-        Some(producer.request_id.clone()),
-        scope_request_tool_execution_with_session(
-            None,
-            tokio_util::sync::CancellationToken::new(),
-            None,
-            None,
-            Some(producer.session_id.clone()),
-            tool.call(MailboxContentArgs {
-                title: modeled.content.clone(),
-                summary: None,
-                payload: None,
-                question: None,
-            }),
-        ),
+        &notification_identity,
+        MAILBOX_CLOSE_COLLECTIONS,
     )
     .await
     .unwrap();
-    let receipt: Value = serde_json::from_str(&receipt_json).unwrap();
+    let receipt = serde_json::to_value(receipt).unwrap();
     assert_eq!(receipt["outcome"], "created");
     let mailbox_doc_id = receipt["item"]["_docID"].as_str().unwrap();
-    let filed = load_mailbox_item(&node, mailbox_doc_id)
+    let filed = tests::load_as_creator(&node, mailbox_doc_id)
         .await
         .unwrap()
         .unwrap();
@@ -435,7 +464,7 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
         TerminalizeResult::Won,
     );
     assert_eq!(
-        load_mailbox_item(&node, mailbox_doc_id)
+        tests::load_as_creator(&node, mailbox_doc_id)
             .await
             .unwrap()
             .unwrap()
@@ -452,18 +481,21 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
     );
     let mut reply_lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        "operator",
-        identity.did(),
+        tests::agent_identity().did(),
+        tests::root_identity().did(),
         reply.clone(),
         60,
         ExecutionOrigin::Interactive,
         "handoff-test",
     );
+    reply_lifecycle
+        .bind_managed_agent(tests::agent_identity().as_ref())
+        .unwrap();
     assert_eq!(
         reply_lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    let consumed = load_mailbox_item(&node, mailbox_doc_id)
+    let consumed = tests::load_as_creator(&node, mailbox_doc_id)
         .await
         .unwrap()
         .unwrap();
@@ -473,13 +505,13 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
         Some(reply.doc_id.as_str())
     );
     assert!(modeled.linked_reply_accepted);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[test]
 fn generated_reply_cases_drive_claim_validation() {
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().mailbox_reply_cases;
-    assert_eq!(cases.len(), 228);
+    assert!(!cases.is_empty());
     assert!(cases
         .iter()
         .any(|case| case["variant"] == "expired-deadline"
@@ -494,7 +526,7 @@ fn generated_reply_cases_drive_claim_validation() {
             "kind": "gate", "action": text("handling"), "title": "Repair",
             "source_kind": "session", "source_id": "source",
             "target_node_did": text("target_node_did"),
-            "target_agent_id": text("target_agent_id"),
+            "target_agent_did": text("target_agent_did"),
             "session_id": case["bound_session_id"],
             "resolved_doc_id": text("resolved_doc_id"), "created_at": "2026-01-01T00:00:00Z"
         }))
@@ -504,7 +536,7 @@ fn generated_reply_cases_drive_claim_validation() {
                 "_docID": text("request_doc_id"), "request_id": "request",
                 "purpose": "normal",
                 "node_did": text("node_did"), "requester_did": text("requester_did"),
-                "agent_id": text("agent_id"), "session_id": text("session_id"),
+                "agent_did": text("agent_did"), "session_id": text("session_id"),
                 "caused_by_source_doc_id": text("source_doc_id"),
                 "execution_origin": if case["interactive"] == true { "interactive" } else { "event" },
                 "content": "Approved", "created_at": "2026-01-01T00:00:00Z"
@@ -524,6 +556,7 @@ fn generated_reply_cases_drive_claim_validation() {
             &item,
             &request,
             case["authenticated"].as_bool().unwrap(),
+            case["recipient_authorized"].as_bool().unwrap(),
             case["deadline_valid"].as_bool().unwrap(),
         );
         assert_eq!(

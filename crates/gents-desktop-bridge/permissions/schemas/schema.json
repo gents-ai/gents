@@ -1651,18 +1651,6 @@
           "markdownDescription": "Denies the desktop_session_history command without any pre-configured scope."
         },
         {
-          "description": "Enables the desktop_session_hydration_retry command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-session-hydration-retry",
-          "markdownDescription": "Enables the desktop_session_hydration_retry command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_session_hydration_retry command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-session-hydration-retry",
-          "markdownDescription": "Denies the desktop_session_hydration_retry command without any pre-configured scope."
-        },
-        {
           "description": "Enables the desktop_session_live_delta command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-session-live-delta",
@@ -1685,6 +1673,18 @@
           "type": "string",
           "const": "deny-desktop-session-provenance",
           "markdownDescription": "Denies the desktop_session_provenance command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_session_reload command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-session-reload",
+          "markdownDescription": "Enables the desktop_session_reload command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_session_reload command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-session-reload",
+          "markdownDescription": "Denies the desktop_session_reload command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_session_rename command without any pre-configured scope.",
@@ -2047,10 +2047,10 @@
           "markdownDescription": "Session/conversation snapshot, live-delta and selected attachment reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-attachment-read`\n- `allow-desktop-request-attachments`\n- `allow-desktop-session-context-details`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-tool-file-changes`\n- `allow-desktop-session-history`\n- `allow-desktop-session-goal`"
         },
         {
-          "description": "Explicit selected-session hydration retry\n#### This permission set includes:\n\n- `allow-desktop-session-hydration-retry`",
+          "description": "Explicit selected-session hydration retry\n#### This permission set includes:\n\n- `allow-desktop-session-reload`",
           "type": "string",
           "const": "session-control",
-          "markdownDescription": "Explicit selected-session hydration retry\n#### This permission set includes:\n\n- `allow-desktop-session-hydration-retry`"
+          "markdownDescription": "Explicit selected-session hydration retry\n#### This permission set includes:\n\n- `allow-desktop-session-reload`"
         },
         {
           "description": "Request timeline read\n#### This permission set includes:\n\n- `allow-desktop-request-timeline`",

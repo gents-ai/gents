@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio::sync::Mutex;
 
 pub(crate) mod auxiliary;
@@ -16,6 +16,8 @@ pub(crate) mod native_encoding;
 
 #[derive(Clone, Debug)]
 pub struct AcceptedToolCall {
+    pub(crate) actor: identity::Did,
+    pub(crate) agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
     pub(crate) tool_call_doc_id: String,
     pub(crate) request_doc_id: String,
     pub(crate) session_id: String,
@@ -45,6 +47,8 @@ use gents_loop::stream_writer::PendingOutput;
 pub use gents_loop::stream_writer::StreamWriter;
 
 pub struct DefraStreamWriter {
+    actor_did: String,
+    agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
     node: Arc<EmbeddedNode>,
     batch_interval: Duration,
     buffers: Mutex<RapidHashMap<String, StreamBuffer>>,
@@ -193,6 +197,8 @@ impl DefraStreamWriter {
         };
         let published = canonical::publish_provider_turn_with_time(
             &self.node,
+            identity::Did::new(self.actor_did.clone())?,
+            self.agent_signer.clone(),
             lifecycle.execution_generation()?,
             plan,
             fixture_now,
@@ -294,7 +300,14 @@ impl DefraStreamWriter {
             pending.segment.ordinal == Some(tail.next_ordinal),
             "pending provider flush disagrees with its acknowledged cursor"
         );
-        canonical::append_provider_segment(&self.node, generation, &pending.segment).await?;
+        canonical::append_provider_segment_with_signer(
+            &self.node,
+            identity::Did::new(self.actor_did.clone())?,
+            self.agent_signer.clone(),
+            generation,
+            &pending.segment,
+        )
+        .await?;
         let pending = tail
             .pending_flush
             .take()
@@ -358,8 +371,15 @@ impl DefraStreamWriter {
             close: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        let partial_message_doc_id =
-            canonical::close_provider_attempt(&self.node, generation, &segment, close).await?;
+        let partial_message_doc_id = canonical::close_provider_attempt_with_signer(
+            &self.node,
+            identity::Did::new(self.actor_did.clone())?,
+            self.agent_signer.clone(),
+            generation,
+            &segment,
+            close,
+        )
+        .await?;
         tails.remove(&request.doc_id);
         drop(tails);
         if let Some(message_doc_id) = partial_message_doc_id {
@@ -434,8 +454,10 @@ impl DefraStreamWriter {
                 created_at,
             }
         };
-        let published = canonical::publish_provider_turn(
+        let published = canonical::publish_provider_turn_with_signer(
             &self.node,
+            identity::Did::new(self.actor_did.clone())?,
+            self.agent_signer.clone(),
             lifecycle.execution_generation()?,
             canonical::ProviderPublicationPlan {
                 final_flush: Some(segment),
@@ -496,14 +518,46 @@ impl DefraStreamWriter {
             .map(tokio::time::Instant::from_std)
     }
 
-    pub fn new(node: Arc<EmbeddedNode>, _node_did: &str, batch_interval: Duration) -> Self {
+    pub fn new(node: Arc<EmbeddedNode>, actor_did: &str, batch_interval: Duration) -> Self {
         Self {
+            actor_did: actor_did.to_owned(),
+            agent_signer: None,
             node,
             batch_interval,
             buffers: Mutex::new(RapidHashMap::new()),
             published: Mutex::new(RapidHashMap::new()),
             provider_tails: Mutex::new(RapidHashMap::new()),
         }
+    }
+
+    pub fn new_managed(
+        node: Arc<EmbeddedNode>,
+        identity: &dyn crate::store::identity::NodeIdentity,
+        batch_interval: Duration,
+    ) -> Result<Self> {
+        let actor = identity::Did::new(identity.did())?;
+        crate::ConfigAccess::local_managed_agent(node.clone(), actor, identity)?;
+        let mut writer = Self::new(node, identity.did(), batch_interval);
+        writer.agent_signer = identity.managed_agent_signer();
+        Ok(writer)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_lifecycle(
+        node: Arc<EmbeddedNode>,
+        lifecycle: &crate::request::lifecycle::RequestLifecycle,
+        batch_interval: Duration,
+    ) -> Result<Self> {
+        let actor = lifecycle.actor_did()?;
+        let signer = lifecycle.managed_agent_signer();
+        crate::ConfigAccess::local_with_optional_agent_signer(
+            node.clone(),
+            actor.clone(),
+            signer.clone(),
+        )?;
+        let mut writer = Self::new(node, actor.as_str(), batch_interval);
+        writer.agent_signer = signer;
+        Ok(writer)
     }
 
     pub(crate) async fn initialize_request_buffer(&self, request_doc_id: &str) -> Result<()> {

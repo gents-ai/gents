@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::config_client::ConfigAccess;
 use std::sync::Arc;
 
@@ -19,8 +19,9 @@ pub(crate) async fn reconcile(
     match record.result() {
         Decision::Settled(reference, Outcome::Accepted) => return Ok(reference.request),
         Decision::Settled(reference, Outcome::NotDelivered) => {
-            return Err(SubmissionNotDelivered {
+            return Err(SubmissionNotDelivered::Rejected {
                 request: reference.request,
+                cause: None,
             }
             .into());
         }
@@ -40,6 +41,7 @@ pub(crate) async fn reconcile(
         Err(error) if error.is::<SubmissionOutcomeUnknown>() => return delivered,
         Err(_) => Outcome::NotDelivered,
     };
+    let rejection = delivered.err();
     let settled =
         match journal::caller::update(node, &record.intent, &record.reference, Some(outcome)).await
         {
@@ -49,10 +51,13 @@ pub(crate) async fn reconcile(
         };
     match settled.result() {
         Decision::Settled(reference, Outcome::Accepted) => Ok(reference.request),
-        Decision::Settled(reference, Outcome::NotDelivered) => Err(SubmissionNotDelivered {
-            request: reference.request,
+        Decision::Settled(reference, Outcome::NotDelivered) => {
+            Err(SubmissionNotDelivered::Rejected {
+                request: reference.request,
+                cause: rejection,
+            }
+            .into())
         }
-        .into()),
         _ => Err(pending.outcome_unknown(None)),
     }
 }

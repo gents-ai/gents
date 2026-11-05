@@ -27,7 +27,7 @@ use self::backend::LiveBackendConfig;
 pub(crate) use self::backend::LiveBackendOverride;
 pub(crate) use self::backend::LiveTargetBackendOverride;
 use self::replication::{
-    configure_live_replicators, wait_for_connectable_iroh_addr, wait_for_connected_peer,
+    connect_live_peers, wait_for_connectable_iroh_addr, wait_for_connected_peer,
     wait_for_live_documents, wait_for_ready_peer_status, write_peer_directory_records,
 };
 use self::workspace::seed_runner_node_home;
@@ -156,6 +156,9 @@ impl LiveBridgeFixture {
         let tempdir = tempfile::tempdir()?;
         let remote_paths = DesktopPaths::from_root(tempdir.path().join("remote"));
         let desktop_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
+        desktop_paths.ensure_root_dirs().await?;
+        let config_actor =
+            gents_desktop_core::client::PrincipalIdentity::load_or_create(&desktop_paths).await?;
         let node_home = tempdir.path().join("agent-home");
 
         let port_probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
@@ -170,6 +173,7 @@ impl LiveBridgeFixture {
         let agent_root = tempdir.path().join("agent");
         let (running_node, docs, tool_root) = spawn_live_node(
             Arc::clone(&remote_core),
+            config_actor.did(),
             agent_root,
             DEFAULT_NODE_NAME,
             &backend,
@@ -196,7 +200,7 @@ impl LiveBridgeFixture {
                 .await?,
         );
 
-        configure_live_replicators(
+        connect_live_peers(
             desktop_core.as_ref(),
             remote_core.as_ref(),
             DEFAULT_DEPLOYMENT_LABEL,
@@ -544,7 +548,6 @@ mod tests {
     use axum::response::{IntoResponse, Response};
     use axum::routing::{get, post};
     use axum::Router;
-    use gents::default_agent_id_for_node;
     use gents_desktop_core::client::ClientCore;
     use gents_protocol::row::{decode_node_readiness_snapshot, AgentRequestRow};
     use serde_json::Value;
@@ -560,7 +563,7 @@ mod tests {
     const MODEL_NAME: &str = "desktop-live-skill-mock";
 
     #[test]
-    fn live_fixture_replicates_skill_create_delete_to_node() -> Result<()> {
+    fn live_fixture_writes_skill_create_delete_to_runtime() -> Result<()> {
         let _guard = live_fixture_test_lock();
         run_on_live_runtime(async {
             let mock = MockChatEndpoint::start(MODEL_NAME, "ok").await?;
@@ -588,7 +591,7 @@ mod tests {
     async fn skill_create_delete_case(fixture: &LiveBridgeFixture) -> Result<()> {
         let node_did = fixture.node_did().to_string();
         let skill_id = "desktop-crud-skill";
-        let skill_body = "CRUD skill body should replicate to the node.";
+        let skill_body = "CRUD skill body should be written to the runtime.";
 
         save_skill_config(
             fixture.desktop_core().as_ref(),
@@ -597,7 +600,7 @@ mod tests {
         .await?;
         wait_for_remote_skill(fixture.remote_core().as_ref(), skill_id)
             .await
-            .context("skill did not replicate to the node after create")?;
+            .context("skill did not appear on the runtime after create")?;
 
         delete_skill_config(
             fixture.desktop_core().as_ref(),
@@ -618,7 +621,13 @@ mod tests {
         mock: &MockChatEndpoint,
     ) -> Result<()> {
         let node_did = fixture.node_did().to_string();
-        let agent_id = default_agent_id_for_node(&node_did);
+        let agent_did = fixture
+            .remote_core()
+            .store()
+            .snapshot()
+            .default_agent_did_for_node(&node_did)
+            .context("live fixture Node has no configured default agent")?
+            .to_owned();
         let skill_id = "desktop-review";
         let skill_body = "UNIQUE_DESKTOP_SKILL_BODY_USE_THIS_REVIEW_PROTOCOL";
         let task = "summarize the current workspace state";
@@ -633,8 +642,8 @@ mod tests {
             wait_for_remote_runtime_generation(fixture.remote_core().as_ref(), &node_did)
                 .await
                 .context("runtime status missing before skill binding")?;
-        bind_skill_to_agent_context(fixture, &node_did, &agent_id, skill_id).await?;
-        wait_for_remote_context_skill_ids(fixture.remote_core().as_ref(), &agent_id, &[skill_id])
+        bind_skill_to_agent_context(fixture, &node_did, &agent_did, skill_id).await?;
+        wait_for_remote_context_skill_ids(fixture.remote_core().as_ref(), &agent_did, &[skill_id])
             .await?;
         wait_for_remote_runtime_generation_after(
             fixture.remote_core().as_ref(),
@@ -651,7 +660,7 @@ mod tests {
                 node_did: node_did.clone(),
                 client_did: None,
                 request_id: None,
-                agent_id: Some(agent_id.clone()),
+                agent_did: Some(agent_did.clone()),
                 session_id: None,
                 content: HELD_PROMPT.to_string(),
                 captured_context: None,
@@ -695,7 +704,7 @@ mod tests {
                 node_did: node_did.clone(),
                 client_did: None,
                 request_id: None,
-                agent_id: Some(agent_id.clone()),
+                agent_did: Some(agent_did.clone()),
                 session_id: Some(initial.session_id.clone()),
                 content: format!("/{skill_id}\n{task}"),
                 captured_context: None,
@@ -729,8 +738,9 @@ mod tests {
             },
         )
         .await?;
-        let transcript_page = gents_desktop_core::client::load_session_transcript_page(
-            fixture.desktop_core().node(),
+        let access = fixture.desktop_core().operator_access(&node_did)?;
+        let transcript_page = gents_desktop_core::client::load_session_transcript_page_on(
+            &access,
             &submitted.session_id,
             Some(&node_did),
             Some(&requester_scope),
@@ -738,8 +748,8 @@ mod tests {
             None,
         )
         .await?;
-        let context_store = gents_desktop_core::client::load_session_context_store(
-            fixture.desktop_core().node(),
+        let context_store = gents_desktop_core::client::load_session_context_store_on(
+            &access,
             &submitted.session_id,
             Some(&node_did),
             Some(&requester_scope),
@@ -747,7 +757,7 @@ mod tests {
         .await?;
         let session = build_session_snapshot_for_node_with_transcript(
             fixture.desktop_core().as_ref(),
-            &gents::store::config_client::ConfigAccess::local(fixture.desktop_core().node_arc()),
+            &access,
             Some(&node_did),
             &submitted.session_id,
             Some(&submitted.request_id),
@@ -755,12 +765,11 @@ mod tests {
             Some(&transcript_page.canonical_dependencies),
             Some(&context_store),
             None,
-            None,
             true,
             true,
             None,
         )
-        .await
+        .await?
         .context("desktop session snapshot missing after skill chat submit")?;
         assert_eq!(
             session.latest_request_id.as_deref(),
@@ -800,7 +809,7 @@ mod tests {
         let input = request
             .input
             .as_ref()
-            .context("replicated request is missing canonical input")?;
+            .context("runtime request is missing canonical input")?;
         assert_eq!(input.selected_skill_ids, vec![skill_id.to_string()]);
         assert_eq!(
             input
@@ -853,7 +862,7 @@ mod tests {
     async fn bind_skill_to_agent_context(
         fixture: &LiveBridgeFixture,
         node_did: &str,
-        agent_id: &str,
+        agent_did: &str,
         skill_id: &str,
     ) -> Result<()> {
         use gents::store::collection::Collection;
@@ -870,10 +879,10 @@ mod tests {
                         txn,
                         Collection::Agent,
                         node_did,
-                        agent_id,
+                        agent_did,
                     )
                     .await?
-                    .with_context(|| format!("agent {agent_id} is missing"))?;
+                    .with_context(|| format!("agent {agent_did} is missing"))?;
                     let agent: gents::AgentDocument = serde_json::from_value(agent)?;
                     let context_id = agent.context_id.context("fixture agent has no context")?;
                     let (_, context) = read_desired_state_record_in_txn(
@@ -904,7 +913,7 @@ mod tests {
 
     async fn wait_for_remote_context_skill_ids(
         core: &ClientCore,
-        agent_id: &str,
+        agent_did: &str,
         expected_skill_ids: &[&str],
     ) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(15);
@@ -914,7 +923,7 @@ mod tests {
             let observed = store
                 .agents
                 .iter()
-                .find(|agent| agent.agent_id == agent_id)
+                .find(|agent| agent.agent_did == agent_did)
                 .and_then(|agent| agent.context_id.as_deref())
                 .and_then(|context_id| {
                     store
@@ -934,7 +943,7 @@ mod tests {
             }
             if Instant::now() >= deadline {
                 bail!(
-                    "remote context for agent {agent_id} has skill IDs {observed:?}, expected {expected_skill_ids:?}"
+                    "remote context for agent {agent_did} has skill IDs {observed:?}, expected {expected_skill_ids:?}"
                 );
             }
             tokio::time::sleep(Duration::from_millis(50)).await;

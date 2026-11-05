@@ -129,7 +129,7 @@ impl ConfigCommandTool {
                 "profile_id display_name description backend_id model_name reasoning_effort service_tier context_window max_output_tokens sampling_id execution_id",
             ),
             SelfConfigTarget::InferenceBackend => (
-                "InferenceBackend",
+                "InferenceBackendMetadata",
                 "backend_id",
                 "backend_id name provider_kind openai_wire_api endpoint claude_platform connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled catalogs catalog_freshness probe_status last_probe",
             ),
@@ -163,7 +163,8 @@ impl ConfigCommandTool {
                         "execution_id",
                         "retry_policy_id",
                         "compaction_id",
-                        "agent_id",
+                        "agent_did",
+                        "agent_did",
                         "task_id",
                         "source_collection",
                     ]

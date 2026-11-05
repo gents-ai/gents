@@ -13,7 +13,7 @@ pub(super) fn agent_target_entry_command(args: AgentTargetEntryArgs) -> Result<(
         target_id: args.target_id,
         node_did: args.node_did,
         target_node_did: args.target_node_did,
-        agent_id: args.agent_id,
+        agent_did: args.agent_did,
         name: args.name,
         description: args.description,
         tags: Vec::new(),

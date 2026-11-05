@@ -43,7 +43,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         let identity = crate::KeyIdentity::load_or_create(path.join("agent.key"), None).unwrap();
         let node_did = identity.did().to_owned();
         let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .data_path(&path)
                 .with_node_identity_did(&node_did)
                 .build()
@@ -53,7 +53,14 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         crate::store::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
-        crate::test_support::install_test_agent(&node, &node_did, "general").await;
+        let node_scope = crate::store::graphql::escape_graphql_string(&node_did);
+        crate::ConfigAccess::local(node.clone())
+            .write(
+                "test.recovery_owner.node",
+                &format!(r#"mutation {{ create_Node(input: {{ node_did: "{node_scope}" }}) {{ _docID }} }}"#),
+            )
+            .await
+            .unwrap();
         let session_id = format!("session-{name}");
         let mut parent =
             crate::tools::call::lifecycle::admission_fixture::claimed_signed_request_with_trigger(
@@ -79,6 +86,9 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             )
             .await
             .unwrap();
+        let signer = tool.access().unwrap().managed_agent_signer().unwrap();
+        let identities: Vec<Arc<dyn NodeIdentity>> = vec![Arc::new(signer)];
+        let agent_did = parent.request().agent_did.clone();
         let tool_doc_id = tool.doc_id().unwrap().to_owned();
         let tool_call_id = tool.tool_call_id().to_owned();
 
@@ -112,6 +122,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         let job_driver = crate::tools::background::job::driver::JobDriver::new(
             crate::tools::background::job::driver::JobRuntime {
                 node: node.clone(),
+                agent_snapshots: Default::default(),
                 plugins: Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
                 home: job_home.path().to_path_buf(),
                 tool_root: None,
@@ -123,9 +134,10 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             .expect("Lean session-control model includes owned-background settlement");
 
         let escaped_agent = crate::store::graphql::escape_graphql_string(&node_did);
+        let selected_agent = crate::store::graphql::escape_graphql_string(&agent_did);
         for mutation in [
             format!(
-                r#"mutation {{ create_Task(input: {{ task_id: "task-1858", node_did: "{escaped_agent}", agent_id: "general", prompt_template: "tick" }}) {{ _docID }} }}"#
+                r#"mutation {{ create_Task(input: {{ task_id: "task-1858", node_did: "{escaped_agent}", agent_did: "{selected_agent}", prompt_template: "tick" }}) {{ _docID }} }}"#
             ),
             format!(
                 r#"mutation {{ create_Trigger(input: {{ trigger_id: "trigger-1858", node_did: "{escaped_agent}", task_id: "task-1858" }}) {{ _docID }} }}"#
@@ -134,10 +146,14 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             let response = node.execute(&mutation).await;
             assert!(!response.has_errors(), "{:?}", response.errors);
         }
-        let report =
-            ToolCallLifecycle::reconcile_orphaned_background_tools(&node, &node_did, &registry)
-                .await
-                .unwrap();
+        let report = ToolCallLifecycle::reconcile_orphaned_background_tools(
+            &node,
+            &node_did,
+            &identities,
+            &registry,
+        )
+        .await
+        .unwrap();
         assert_eq!(report.tool_calls_terminalized, 0, "{}", left.name);
         assert_eq!(
             process.observe(),
@@ -153,11 +169,20 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 r#"lifecycle_state: "completed""#,
             )
             .await;
-            crate::session::stop_session(&node, &node_did, &session_id, tool.requester_did())
-                .await
-                .unwrap();
+            crate::session::stop_session(
+                &node,
+                node.node_identity_did()
+                    .expect("fixture has a registered signing principal"),
+                &node_did,
+                &session_id,
+                tool.requester_did(),
+            )
+            .await
+            .unwrap();
             let first_resume = crate::session::resume_session(
                 &node,
+                node.node_identity_did()
+                    .expect("fixture has a registered signing principal"),
                 &node_did,
                 &session_id,
                 tool.requester_did(),
@@ -189,10 +214,14 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         .await;
             assert!(!response.has_errors(), "{:?}", response.errors);
         }
-        let report =
-            ToolCallLifecycle::reconcile_orphaned_background_tools(&node, &node_did, &registry)
-                .await
-                .unwrap();
+        let report = ToolCallLifecycle::reconcile_orphaned_background_tools(
+            &node,
+            &node_did,
+            &identities,
+            &registry,
+        )
+        .await
+        .unwrap();
         assert_eq!(report.tool_calls_terminalized, 1, "{}", deleted.name);
         worker.await.unwrap();
         assert_ne!(
@@ -204,6 +233,8 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         if session_stopped {
             crate::session::resume_session(
                 &node,
+                node.node_identity_did()
+                    .expect("fixture has a registered signing principal"),
                 &node_did,
                 &session_id,
                 tool.requester_did(),
@@ -244,11 +275,12 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 "interrupted"
             }
         );
-        let (notifications, _) = completion_obligations(&node, &session_id, &node_did).await;
+        let (notifications, _) =
+            completion_obligations(&node, &session_id, &node_did, tool.requester_did()).await;
         let reason = deleted.notification_reason.as_deref().unwrap();
         assert_eq!(notifications.len(), 1);
         assert!(notifications[0].contains(&format!("<reason>{reason}</reason>")));
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(path).unwrap();
     }
 }
@@ -320,6 +352,10 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     reservation_released_rx.await.unwrap();
     let stop = crate::session::stop_session(
         &admission.node,
+        admission
+            .node
+            .node_identity_did()
+            .expect("fixture has a registered signing principal"),
         &node_did,
         &session_id,
         tool.requester_did(),
@@ -347,6 +383,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     let job_driver = crate::tools::background::job::driver::JobDriver::new(
         crate::tools::background::job::driver::JobRuntime {
             node: admission.node.clone(),
+            agent_snapshots: Default::default(),
             plugins: Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
             home: job_home.path().to_path_buf(),
             tool_root: None,
@@ -354,6 +391,10 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     );
     let blocked = crate::session::resume_session(
         &admission.node,
+        admission
+            .node
+            .node_identity_did()
+            .expect("fixture has a registered signing principal"),
         &node_did,
         &session_id,
         tool.requester_did(),
@@ -372,11 +413,20 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     );
 
     let other_session = format!("unrelated-{}", uuid::Uuid::new_v4());
-    crate::session::create_session_with_id(&admission.node, &other_session, "general", &node_did)
-        .await
-        .unwrap();
+    crate::session::create_session_with_id(
+        &admission.node,
+        &other_session,
+        &tool.actor().to_string(),
+        &node_did,
+    )
+    .await
+    .unwrap();
     crate::session::resume_session(
         &admission.node,
+        admission
+            .node
+            .node_identity_did()
+            .expect("fixture has a registered signing principal"),
         &node_did,
         &other_session,
         None,
@@ -402,6 +452,10 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     );
     crate::session::resume_session(
         &admission.node,
+        admission
+            .node
+            .node_identity_did()
+            .expect("fixture has a registered signing principal"),
         &node_did,
         &session_id,
         tool.requester_did(),
@@ -421,6 +475,10 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         resumed.data.unwrap()["AgentSession"][0]["stopped_at"].is_string(),
         modeled["stopped_after_settlement"]
     );
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }

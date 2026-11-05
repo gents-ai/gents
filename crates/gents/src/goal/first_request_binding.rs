@@ -120,13 +120,16 @@ pub(crate) async fn bind_goal_first_request_in_txn(
         return Ok(());
     }
     let response = txn
-        .execute(&format!(
-            r#"mutation {{ update_Goal(filter: {{ _docID: {{_eq: "{}"}}, node_did: {{_eq: "{}"}}, assignment_root_request_doc_id: {{_eq: null}} }},
-        input: {{ assignment_root_request_doc_id: "{}" }}) {{_docID}} }}"#,
-            escape_graphql_string(&goal.doc_id),
-            escape_graphql_string(&goal.node_did),
-            escape_graphql_string(request_doc_id),
-        ))
+        .execute_client_signed_update(
+            &format!(
+                r#"mutation($input: GoalMutationInputArg!) {{ update_Goal(docID: "{}", filter: {{ _docID: {{_eq: "{}"}}, node_did: {{_eq: "{}"}}, assignment_root_request_doc_id: {{_eq: null}} }}, input: $input) {{_docID}} }}"#,
+                escape_graphql_string(&goal.doc_id),
+                escape_graphql_string(&goal.doc_id),
+                escape_graphql_string(&goal.node_did),
+            ),
+            &serde_json::json!({"input": {"assignment_root_request_doc_id": request_doc_id}}),
+            gents_protocol::schemas::GOAL,
+        )
         .await?;
     anyhow::ensure!(
         response["data"]["update_Goal"]

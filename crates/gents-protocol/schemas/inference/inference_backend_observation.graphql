@@ -1,0 +1,10 @@
+type InferenceBackendObservation @policy(id: "8d9e64ca014dddfb01e5a55a5018e0a56d238ea0da1df1b6b33d50b1ac23386a", resource: "configuration") @index(fields: ["node_did", "backend_id"], unique: true) {
+    node_did: String @index
+    backend_id: String
+    metadata_doc_id: String
+    catalogs: JSON
+    catalog_freshness: JSON
+    last_probe: DateTime
+    probe_status: String @index
+    updated_at: DateTime
+}

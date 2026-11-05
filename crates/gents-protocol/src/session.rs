@@ -9,7 +9,7 @@ pub struct AgentSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_did: Option<String>,
     /// The only configuration selection. Context and inference resolve through it.
-    pub agent_id: String,
+    pub agent_did: String,
     pub created_at: String,
     /// Explicit close time; absent for an open session. Reopening clears it.
     /// Authoritative request execution state remains on AgentRequest.
@@ -151,7 +151,7 @@ pub struct SessionCreationReceipt {
     pub session_id: String,
     pub session_doc_id: String,
     pub requester_did: Option<String>,
-    pub agent_id: String,
+    pub agent_did: String,
     pub opening_request_doc_id: String,
     pub cause: SessionCreationCause,
     pub cause_binding: String,
@@ -186,7 +186,7 @@ impl SessionCreationReceipt {
             &self.session_id,
             &self.session_doc_id,
             &self.requester_did,
-            &self.agent_id,
+            &self.agent_did,
             &self.opening_request_doc_id,
             self.cause,
             &self.cause_binding,

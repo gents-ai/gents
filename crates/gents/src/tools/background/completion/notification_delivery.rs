@@ -8,6 +8,7 @@ pub(super) struct SideEffects {
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn append_background_tool_completion(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     parent_session_id: &str,
     parent_request_id: &str,
     tool_call_doc_id: &str,
@@ -21,15 +22,91 @@ pub(crate) async fn append_background_tool_completion(
         .await?
         .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
 
+    append_with_parent(
+        node,
+        access,
+        &parent_request,
+        parent_session_id,
+        parent_request_id,
+        tool_call_doc_id,
+        tool_name,
+        status,
+        result,
+        reason,
+        wake,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn append_background_tool_completion_for_parent(
+    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
+    parent_request_doc_id: &str,
+    parent_session_id: &str,
+    parent_request_id: &str,
+    tool_call_doc_id: &str,
+    tool_name: &str,
+    status: &str,
+    result: &str,
+    reason: Option<&str>,
+    wake: crate::request::lifecycle::RequestHopCause,
+) -> Result<()> {
+    let parent_request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        access,
+        parent_request_doc_id,
+    )
+    .await?
+    .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_doc_id} not found"))?;
+    append_with_parent(
+        node,
+        access,
+        &parent_request,
+        parent_session_id,
+        parent_request_id,
+        tool_call_doc_id,
+        tool_name,
+        status,
+        result,
+        reason,
+        wake,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn append_with_parent(
+    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
+    parent_request: &crate::AgentRequest,
+    parent_session_id: &str,
+    parent_request_id: &str,
+    tool_call_doc_id: &str,
+    tool_name: &str,
+    status: &str,
+    result: &str,
+    reason: Option<&str>,
+    wake: crate::request::lifecycle::RequestHopCause,
+) -> Result<()> {
+    anyhow::ensure!(
+        parent_request.request_id == parent_request_id,
+        "background completion parent request mismatch"
+    );
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(parent_request.agent_did.as_str()),
+        "background completion actor mismatch"
+    );
     anyhow::ensure!(
         parent_request.session_id == parent_session_id,
         "background completion parent session mismatch"
     );
     let existing =
-        existing_tool_completion_notification(node, &parent_request, tool_call_doc_id).await?;
+        existing_tool_completion_notification(node, parent_request, tool_call_doc_id).await?;
     let tool_call_id = load_tool_call_id(node, tool_call_doc_id).await?;
     let existing_text = match &existing {
-        Some(existing) => stored_notification_text(node, &parent_request, &existing.doc_id).await,
+        Some(existing) => {
+            Some(stored_notification_text(access, parent_request, &existing.doc_id).await?)
+        }
         None => None,
     };
     let render = |budget: usize| {
@@ -44,7 +121,7 @@ pub(crate) async fn append_background_tool_completion(
         None => crate::tools::surface::configured_output_budget(
             node,
             &parent_request.node_did,
-            &parent_request.agent_id,
+            &parent_request.agent_did,
             tool_name,
         )
         .await
@@ -54,7 +131,8 @@ pub(crate) async fn append_background_tool_completion(
     let key = background_completion_notification_message_key(tool_call_doc_id, "tool");
     let effects = ensure_notification_delivery(
         node,
-        &parent_request,
+        access,
+        parent_request,
         existing,
         &notification,
         &key,
@@ -68,13 +146,13 @@ pub(crate) async fn append_background_tool_completion(
     )
     .await?;
     mark_background_tool_notification_delivered(
-        node,
+        access,
         &parent_request.node_did,
         parent_request_id,
         tool_call_doc_id,
     )
     .await?;
-    mark_background_tool_completion_side_effects_done(node, tool_call_doc_id).await?;
+    mark_background_tool_completion_side_effects_done(node, access, tool_call_doc_id).await?;
     tracing::debug!(
         parent_session_id, parent_request_id, tool_call_doc_id,
         wake_request_id = ?effects.wake_request_id,
@@ -85,26 +163,21 @@ pub(crate) async fn append_background_tool_completion(
 }
 
 async fn stored_notification_text(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     parent: &crate::AgentRequest,
     notification_doc_id: &str,
-) -> Option<String> {
-    let (_, message) = crate::session::load_canonical_message_from_node(
-        node,
+) -> Result<String> {
+    let (_, message) = crate::session::load_canonical_message(
+        access,
         notification_doc_id,
         &parent.node_did,
         parent.requester_did.as_deref(),
     )
     .await
-    .map_err(|error| {
-        tracing::warn!(
-            notification_doc_id,
-            error = %format!("{error:#}"),
-            "published background notification could not be read for replay"
-        )
-    })
-    .ok()?;
-    message.rag_text()
+    .with_context(|| format!("reading published background notification {notification_doc_id}"))?;
+    message
+        .rag_text()
+        .context("published background notification has no text")
 }
 
 fn published_notification_budget(
@@ -150,6 +223,7 @@ async fn load_tool_call_id(node: &EmbeddedNode, tool_call_doc_id: &str) -> Resul
 
 pub(super) async fn ensure_notification_delivery(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     parent: &crate::AgentRequest,
     existing: Option<side_effects::ExistingNotification>,
     content: &str,
@@ -159,7 +233,8 @@ pub(super) async fn ensure_notification_delivery(
 ) -> Result<SideEffects> {
     let native = native.context("background notification requires its canonical provenance")?;
     let enqueued =
-        crate::request::lifecycle::queue::persist_background_completion_with_message_canonical(
+        crate::request::lifecycle::queue::persist_background_completion_with_message_canonical_with_access(
+            access,
             node,
             parent,
             content,
@@ -187,7 +262,7 @@ pub(super) async fn ensure_notification_delivery(
 }
 
 async fn mark_background_tool_notification_delivered(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     node_did: &str,
     parent_request_id: &str,
     tool_call_doc_id: &str,
@@ -211,17 +286,15 @@ async fn mark_background_tool_notification_delivered(
             ) {{ _docID }}
         }}"#
     );
-    crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "mark_background_tool_notification_delivered",
-        &mutation,
-    )
-    .await?;
+    access
+        .write("mark_background_tool_notification_delivered", &mutation)
+        .await?;
     Ok(())
 }
 
 async fn mark_background_tool_completion_side_effects_done(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     tool_call_doc_id: &str,
 ) -> Result<()> {
     let tool_call_doc_id = escape_graphql_string(tool_call_doc_id);
@@ -285,11 +358,8 @@ async fn mark_background_tool_completion_side_effects_done(
             ) {{ _docID }}
         }}"#
     );
-    crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "mark_background_completion_side_effects_done",
-        &mutation,
-    )
-    .await?;
+    access
+        .write("mark_background_completion_side_effects_done", &mutation)
+        .await?;
     Ok(())
 }

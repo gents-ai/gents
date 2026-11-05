@@ -67,6 +67,7 @@ impl ManualTriggerHandle {
                 &[&uuid::Uuid::new_v4().to_string()],
             ),
             pre_materialized_request_id: None,
+            event_source_generation: None,
             on_result: Box::new(move |result| {
                 let _ = result_tx.send(result);
             }),

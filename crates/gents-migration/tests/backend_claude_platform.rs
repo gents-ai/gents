@@ -55,7 +55,7 @@ async fn migrates_from(schema: &str) {
     assert_eq!(retained["InferenceBackend"][0]["_docID"], document);
     assert_eq!(retained["InferenceBackend"][0]["name"], "retained backend");
     assert!(retained["InferenceBackend"][0]["claude_platform"].is_null());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -96,6 +96,6 @@ async fn a_fresh_store_registers_the_rc0_backend_root_and_patches_onto_the_canon
         "InferenceBackend",
         &direct_version.version_id
     ));
-    fresh.shutdown().await;
-    direct.shutdown().await;
+    fresh.shutdown().await.expect("shut down test node");
+    direct.shutdown().await.expect("shut down test node");
 }

@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use tokio::sync::watch;
 
@@ -12,7 +12,7 @@ use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retr
 
 mod scoped;
 pub use scoped::fetch_interrupt_requested_at_scoped;
-pub(crate) use scoped::observe_interrupt_requested_at_scoped;
+pub(crate) use scoped::observe_interrupt_requested_at_with_access;
 
 /// Requests a soft interrupt by latching `interrupt_requested_at` on the
 /// AgentRequest document. Idempotent: the first latch drains automated wakes
@@ -131,9 +131,25 @@ async fn interrupt_request_matching(
     node: &std::sync::Arc<EmbeddedNode>,
     filter: String,
 ) -> Result<Vec<String>> {
+    let lookup = graphql_with_transaction_retry(
+        node,
+        &format!(r#"{{ AgentRequest(filter: {{{filter}}}, limit: 2) {{ agent_did }} }}"#),
+        "interrupt.resolve_agent",
+    )
+    .await?;
+    let rows = crate::store::graphql::rows::<serde_json::Value>(&lookup, "AgentRequest")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "interrupt request is missing or ambiguous within selected scope"
+    );
+    let actor = identity::Did::new(
+        rows[0]["agent_did"]
+            .as_str()
+            .context("interrupt request has no selected agent DID")?,
+    )?;
     crate::store::config_client::ConfigAccess::transact_local_write(
         node,
-        None,
+        Some(actor),
         "interrupt.latch_request",
         |txn| {
             let filter = &filter;
@@ -239,29 +255,47 @@ pub(crate) async fn interrupt_active_session_in_txn(
     Ok(Some(request_id))
 }
 
+#[cfg(test)]
 pub(crate) async fn active_session_request(
     node: &EmbeddedNode,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<gents_protocol::row::AgentRequestRow>> {
+    let query = active_session_request_query(session_id, node_did, requester_did);
+    let response = graphql_with_transaction_retry(node, &query, "active request lookup").await?;
+    let data = response.data.context("active request query omitted data")?;
+    active_session_request_rows(&data)
+}
+
+pub(crate) async fn active_session_request_with_access(
+    access: &crate::ConfigAccess,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<Option<gents_protocol::row::AgentRequestRow>> {
+    let query = active_session_request_query(session_id, node_did, requester_did);
+    let response = access.execute(&query).await?;
+    active_session_request_rows(&response["data"])
+}
+
+fn active_session_request_query(
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> String {
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
-    let response = graphql_with_transaction_retry(
-        node,
-        &format!(r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:{claimed_or_processing}}}}},limit:2){{_docID request_id node_did requester_did session_id lifecycle_state}}}}"#, claimed_or_processing = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing])),
-        "active request lookup",
-    )
-    .await?;
-    anyhow::ensure!(
-        response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .is_some(),
-        "active request query omitted rows"
-    );
-    let mut rows: Vec<gents_protocol::row::AgentRequestRow> =
-        crate::store::graphql::rows(&response, "AgentRequest")?;
+    format!(r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:{claimed_or_processing}}}}},limit:2){{_docID request_id node_did requester_did session_id lifecycle_state}}}}"#, claimed_or_processing = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing]))
+}
+
+fn active_session_request_rows(
+    data: &serde_json::Value,
+) -> Result<Option<gents_protocol::row::AgentRequestRow>> {
+    let mut rows: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
+        data.get("AgentRequest")
+            .context("active request query omitted rows")?
+            .clone(),
+    )?;
     anyhow::ensure!(
         rows.len() <= 1,
         "multiple active physical requests in exact session scope"

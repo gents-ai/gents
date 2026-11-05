@@ -107,6 +107,9 @@ pub struct OperatorJobControlRequest {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum JobControlOutcome {
+    Queued {
+        intent_doc_id: String,
+    },
     Applied {
         state: JobState,
         killed_children: u32,
@@ -124,6 +127,7 @@ pub enum JobControlOutcome {
 pub enum JobReadError {
     NotAJob,
     NotAuthorized,
+    PermissionDenied,
     NotYetObservable,
     Unavailable { message: String },
     Malformed { message: String },
@@ -143,6 +147,9 @@ impl std::fmt::Display for JobReadError {
             }
             Self::NotAuthorized => f.write_str(
                 "this job belongs to another session or requester; read it from the session that started it",
+            ),
+            Self::PermissionDenied => f.write_str(
+                "access to the job was denied; check this client's permissions with the runtime owner",
             ),
             Self::NotYetObservable => f.write_str(
                 "no job row is visible at this address yet; retry shortly, or check the address with `gents job list`",

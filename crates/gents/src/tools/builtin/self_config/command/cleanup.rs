@@ -55,7 +55,7 @@ impl ConfigCommandTool {
             );
             let target = cleanup_target(resource)?;
             let id = if target == SelfConfigTarget::Agent {
-                self.resolve_agent_id(id).await?
+                self.resolve_agent_did(id).await?
             } else {
                 id.to_owned()
             };
@@ -101,13 +101,10 @@ impl ConfigCommandTool {
         } else {
             "self_config.cleanup_remove"
         };
-        let identity = Some(self.core.identity()?);
+        let access = self.core.access()?;
         let (receipt_targets, plan_digest) = if preview {
-            crate::store::config_client::ConfigAccess::transact_local_readonly(
-                &self.node,
-                identity,
-                operation,
-                |txn| {
+            access
+                .transact_readonly(operation, |txn| {
                     Box::pin(cleanup_in_txn(
                         txn,
                         &owner,
@@ -116,15 +113,11 @@ impl ConfigCommandTool {
                         &plan,
                         preview,
                     ))
-                },
-            )
-            .await?
+                })
+                .await?
         } else {
-            crate::store::config_client::ConfigAccess::transact_local_write(
-                &self.node,
-                identity,
-                operation,
-                |txn| {
+            access
+                .transact_write(operation, |txn| {
                     Box::pin(cleanup_in_txn(
                         txn,
                         &owner,
@@ -133,9 +126,8 @@ impl ConfigCommandTool {
                         &plan,
                         preview,
                     ))
-                },
-            )
-            .await?
+                })
+                .await?
         };
         ordered! {
             "committed": !preview,

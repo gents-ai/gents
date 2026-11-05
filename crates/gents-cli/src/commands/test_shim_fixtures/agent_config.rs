@@ -2,13 +2,13 @@
 use std::sync::Arc;
 
 #[cfg(unix)]
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 #[cfg(unix)]
 pub(crate) async fn configure_runtime_agent(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
-    agent_id: &str,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
     backend_id: &str,
     endpoint: &str,
     model: &str,
@@ -18,11 +18,12 @@ pub(crate) async fn configure_runtime_agent(
     use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents::Collection;
 
-    seed_test_agent_configuration(node, node_did, agent_id, agent_id, model, true).await;
+    let agent_did = binding.agent_did.as_str();
+    seed_test_agent_configuration(node, node_did, binding, agent_did, model, true).await;
     gents::ConfigAccess::transact_local_write(node, None, "grok.runtime_fixture", |txn| {
         Box::pin(async move {
             use gents::store::config_client::read_desired_state_record_in_txn as read;
-            let (_, mut agent) = read(txn, Collection::Agent, node_did, agent_id)
+            let (_, mut agent) = read(txn, Collection::Agent, node_did, agent_did)
                 .await?
                 .expect("fixture agent");
             let profile_id = agent["inference_profile_id"]
@@ -34,8 +35,8 @@ pub(crate) async fn configure_runtime_agent(
                 .expect("fixture profile");
             profile["backend_id"] = backend_id.into();
             profile["model_name"] = model.into();
-            let tools_id = format!("{agent_id}:tools");
-            let context_id = format!("{agent_id}:context");
+            let tools_id = format!("{agent_did}:tools");
+            let context_id = format!("{agent_did}:context");
             let mut tools = Tools {
                 tools_id: tools_id.clone(),
                 node_did: node_did.into(),
@@ -50,7 +51,7 @@ pub(crate) async fn configure_runtime_agent(
                 }),
                 ..Default::default()
             };
-            let target_id = format!("{agent_id}:self-target");
+            let target_id = format!("{agent_did}:self-target");
             if agents_enabled {
                 tools.agents = Some(AgentTools {
                     target_ids: vec![target_id.clone()],
@@ -93,8 +94,8 @@ pub(crate) async fn configure_runtime_agent(
                         target_id,
                         node_did: node_did.into(),
                         target_node_did: node_did.into(),
-                        agent_id: agent_id.into(),
-                        name: agent_id.into(),
+                        agent_did: agent_did.into(),
+                        name: agent_did.into(),
                         description: Some("self target for Grok control fixture".into()),
                         tags: Vec::new(),
                     })?,
@@ -122,11 +123,12 @@ pub(crate) async fn configure_runtime_agent(
 pub(in crate::commands) async fn seed_test_agent_configuration(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
-    agent_id: &str,
-    default_agent_id: &str,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    default_agent_did: &str,
     model_name: &str,
     enabled: bool,
 ) {
+    let agent_did = binding.agent_did.as_str();
     gents::ensure_node(node, node_did)
         .await
         .expect("seed test principal");
@@ -146,9 +148,9 @@ pub(in crate::commands) async fn seed_test_agent_configuration(
                     read_desired_state_record_in_txn(txn, Collection::Node, node_did, node_did)
                         .await?
                         .expect("seeded principal");
-                principal["default_agent_id"] = default_agent_id.into();
-                let backend_id = format!("{agent_id}-backend");
-                let profile_id = format!("{agent_id}-inference");
+                principal["default_agent_did"] = default_agent_did.into();
+                let backend_id = format!("{agent_did}-backend");
+                let profile_id = format!("{agent_did}-inference");
                 let values = [
                     (Collection::Node, principal),
                     (
@@ -156,7 +158,7 @@ pub(in crate::commands) async fn seed_test_agent_configuration(
                         serde_json::json!({
                             "node_did": node_did,
                             "backend_id": backend_id,
-                            "name": format!("{agent_id} test backend"),
+                            "name": format!("{agent_did} test backend"),
                             "provider_kind": "OpenAiCompatible",
                             "openai_wire_api": "chat_completions",
                             "endpoint": "http://127.0.0.1:1/v1",
@@ -177,8 +179,9 @@ pub(in crate::commands) async fn seed_test_agent_configuration(
                         Collection::Agent,
                         serde_json::json!({
                             "node_did": node_did,
-                            "agent_id": agent_id,
-                            "display_name": agent_id,
+                            "agent_did": agent_did,
+                            "creation_nonce": binding.creation_nonce,
+                            "display_name": agent_did,
                             "inference_profile_id": profile_id,
                             "enabled": enabled
                         }),

@@ -67,7 +67,7 @@ pub(crate) fn record(
                     label: (*cell_id).into(),
                     subject: SubjectRef {
                         pack_digest: "sha256:pack".into(),
-                        agent_id: "monitor".into(),
+                        agent_slot: "monitor".into(),
                     },
                     inference_profile_id: "local".into(),
                 })

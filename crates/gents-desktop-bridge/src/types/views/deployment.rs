@@ -90,14 +90,14 @@ pub enum AgentReadinessUnknownReasonView {
 )]
 pub enum AgentReadinessStatusView {
     Ready {
-        agent_id: String,
+        agent_did: String,
     },
     Unavailable {
-        agent_id: String,
+        agent_did: String,
         reason: AgentUnavailableReasonView,
     },
     Unknown {
-        agent_id: String,
+        agent_did: String,
         reason: AgentReadinessUnknownReasonView,
     },
 }
@@ -138,7 +138,7 @@ impl Default for NodeReadinessView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEnvironmentView {
-    pub agent_id: String,
+    pub agent_did: String,
     pub display_name: String,
     pub enabled: bool,
     pub is_default: bool,
@@ -166,7 +166,7 @@ pub struct TaskView {
     pub task_id: String,
     pub name: Option<String>,
     pub description: Option<String>,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub prompt_template: Option<String>,
     pub goal_objective_template: Option<String>,
     pub goal_token_budget: Option<i64>,
@@ -197,7 +197,7 @@ pub struct TaskRunSummaryView {
     pub node_did: String,
     pub requester_did: Option<String>,
     pub session_id: Option<String>,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
     pub execution_origin: Option<String>,
     pub caused_by_trigger_id: Option<String>,
@@ -255,7 +255,7 @@ pub struct SessionSummary {
     #[ts(optional = nullable)]
     pub reply_preview: Option<String>,
     pub status: Option<String>,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub latest_request_id: Option<String>,
     pub task_id: Option<String>,
     pub task_name: Option<String>,
@@ -304,7 +304,7 @@ pub struct MailboxItemView {
     pub request_id: Option<String>,
     pub cause_doc_id: Option<String>,
     pub target_node_did: String,
-    pub target_agent_id: String,
+    pub target_agent_did: String,
     pub expected_collection: Option<String>,
     pub parent_item_id: Option<String>,
     pub deadline_at: Option<String>,
@@ -357,7 +357,7 @@ impl From<&MailboxItemRow> for MailboxItemView {
             request_id: row.request_id.clone(),
             cause_doc_id: row.cause_doc_id.clone(),
             target_node_did: row.target_node_did.clone(),
-            target_agent_id: row.target_agent_id.clone(),
+            target_agent_did: row.target_agent_did.clone(),
             expected_collection: row.expected_collection.clone(),
             parent_item_id: row.parent_item_id.clone(),
             deadline_at: row.deadline_at.clone(),
@@ -395,7 +395,13 @@ pub struct DeploymentView {
     pub source: Option<String>,
     pub graphql: Option<String>,
     pub dial_succeeded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub runtime_connection: Option<String>,
     pub chat_safe: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pairing_ready: Option<bool>,
     pub routes: Vec<ClientRouteStatusView>,
     #[serde(default)]
     pub pairing: Vec<PairingCollectionStatusView>,

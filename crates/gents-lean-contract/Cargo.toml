@@ -12,6 +12,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+acp.workspace = true
 chrono.workspace = true
 defra-node = { workspace = true, features = ["native"] }
 gents-protocol.workspace = true

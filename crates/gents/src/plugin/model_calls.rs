@@ -42,6 +42,75 @@ pub struct ModelEndpoint {
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
     pub max_output_tokens: Option<u64>,
+    pub profile_visibility: Option<ModelProfileVisibility>,
+}
+
+/// Retains the exact selected profile and caller for native checks before
+/// each plugin model request; it contains no credential material.
+pub struct ModelProfileVisibility {
+    access: ConfigAccess,
+    owner: String,
+    profile_id: String,
+    profile_doc: String,
+    profile_value: Value,
+    backend_id: String,
+    backend_doc: String,
+    backend_value: Value,
+}
+
+impl ModelProfileVisibility {
+    async fn check(&self) -> Result<Option<String>> {
+        let backend = self
+            .access
+            .transact_readonly("plugin.model_recheck", |txn| {
+                Box::pin(async move {
+                    let profile = crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        Collection::InferenceProfile,
+                        &self.owner,
+                        &self.profile_id,
+                    )
+                    .await?
+                    .context("selected profile is unavailable")?;
+                    let backend = crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        Collection::InferenceBackend,
+                        &self.owner,
+                        &self.backend_id,
+                    )
+                    .await?
+                    .context("selected backend is unavailable")?;
+                    anyhow::ensure!(
+                        profile.0 == self.profile_doc
+                            && profile.1 == self.profile_value
+                            && backend.0 == self.backend_doc
+                            && backend.1 == self.backend_value,
+                        "selected model configuration changed"
+                    );
+                    Ok::<_, anyhow::Error>(serde_json::from_value::<InferenceBackend>(backend.1)?)
+                })
+            })
+            .await?;
+        if !matches!(
+            &backend.auth,
+            crate::documents::BackendAuth::Credential { .. }
+        ) {
+            return Ok(None);
+        }
+        let node = self
+            .access
+            .local_node()
+            .context("runtime credential resolver unavailable")?;
+        let auth = crate::inference::auth::credential::resolve_runtime_backend_auth(
+            node,
+            &backend.node_did,
+            backend.provider_kind,
+            &backend.endpoint,
+            &backend.auth,
+        )
+        .await?;
+        auth.resolve_api_key()
+    }
 }
 
 impl std::fmt::Debug for ModelEndpoint {
@@ -54,7 +123,11 @@ impl std::fmt::Debug for ModelEndpoint {
 }
 
 pub trait ModelResolver: Send + Sync {
-    fn resolve<'a>(&'a self, binding: &'a ModelBinding) -> BoxFuture<'a, Result<ModelEndpoint>>;
+    fn resolve<'a>(
+        &'a self,
+        binding: &'a ModelBinding,
+        actor: Option<&'a identity::Did>,
+    ) -> BoxFuture<'a, Result<ModelEndpoint>>;
 }
 
 pub struct AccessModels<A>(pub A);
@@ -63,46 +136,91 @@ impl<A> ModelResolver for AccessModels<A>
 where
     A: std::borrow::Borrow<ConfigAccess> + Send + Sync,
 {
-    fn resolve<'a>(&'a self, binding: &'a ModelBinding) -> BoxFuture<'a, Result<ModelEndpoint>> {
+    fn resolve<'a>(
+        &'a self,
+        binding: &'a ModelBinding,
+        actor: Option<&'a identity::Did>,
+    ) -> BoxFuture<'a, Result<ModelEndpoint>> {
         Box::pin(async move {
             let owner = binding.node_did.as_str();
             let profile_id = binding.profile_id.as_str();
-            let (profile, backend) = self
-                .0
-                .borrow()
-                .transact_readonly("plugin.model_endpoint", |txn| {
-                    Box::pin(async move {
-                        let profile: InferenceProfile =
-                            crate::store::config_client::read_desired_state_record_in_txn(
-                                txn,
-                                Collection::InferenceProfile,
-                                owner,
-                                profile_id,
-                            )
-                            .await?
-                            .map(|(_, value)| serde_json::from_value(value))
-                            .transpose()?
-                            .with_context(|| {
-                                format!("the inference profile {profile_id:?} no longer exists")
-                            })?;
-                        let backend: InferenceBackend =
-                            crate::store::config_client::read_desired_state_record_in_txn(
-                                txn,
-                                Collection::InferenceBackend,
-                                owner,
-                                &profile.backend_id,
-                            )
-                            .await?
-                            .map(|(_, value)| serde_json::from_value(value))
-                            .transpose()?
-                            .with_context(|| {
-                                format!("the backend of profile {profile_id:?} no longer exists")
-                            })?;
-                        Ok::<_, anyhow::Error>((profile, backend))
+            let access = self.0.borrow();
+            if let (Some(configured), Some(actor)) = (access.actor_did(), actor) {
+                anyhow::ensure!(
+                    configured == actor.as_str(),
+                    "plugin model caller does not match access"
+                );
+            }
+            let profile_access = match (access.local_node(), actor) {
+                (Some(node), Some(actor)) => {
+                    ConfigAccess::local_as(Arc::clone(node), actor.clone())
+                }
+                (_, None) if access.actor_did().is_some() => access.clone(),
+                (None, Some(_)) if access.actor_did().is_some() => access.clone(),
+                _ => anyhow::bail!("plugin model requires an authenticated caller"),
+            };
+            let (profile_doc, profile_value, profile, backend_doc, backend_value, backend) =
+                profile_access
+                    .transact_readonly("plugin.model_profile", |txn| {
+                        Box::pin(async move {
+                            let (profile_doc, profile_value) =
+                                crate::store::config_client::read_desired_state_record_in_txn(
+                                    txn,
+                                    Collection::InferenceProfile,
+                                    owner,
+                                    profile_id,
+                                )
+                                .await?
+                                .with_context(|| "the selected inference profile is unavailable")?;
+                            let profile: InferenceProfile =
+                                serde_json::from_value(profile_value.clone())?;
+                            let (backend_doc, backend_value) =
+                                crate::store::config_client::read_desired_state_record_in_txn(
+                                    txn,
+                                    Collection::InferenceBackend,
+                                    owner,
+                                    &profile.backend_id,
+                                )
+                                .await?
+                                .with_context(|| {
+                                    format!(
+                                        "the backend of profile {profile_id:?} no longer exists"
+                                    )
+                                })?;
+                            let backend: InferenceBackend =
+                                serde_json::from_value(backend_value.clone())?;
+                            Ok::<_, anyhow::Error>((
+                                profile_doc,
+                                profile_value,
+                                profile,
+                                backend_doc,
+                                backend_value,
+                                backend,
+                            ))
+                        })
                     })
-                })
-                .await?;
-            endpoint_for(&profile, &backend)
+                    .await?;
+            let mut endpoint = endpoint_for_selected(&profile, &backend, true)?;
+            if matches!(
+                &backend.auth,
+                crate::documents::BackendAuth::Credential { .. }
+            ) {
+                anyhow::ensure!(
+                    profile_access.local_node().is_some(),
+                    "runtime credential resolver unavailable"
+                );
+            }
+            endpoint.profile_visibility = Some(ModelProfileVisibility {
+                access: profile_access,
+                owner: owner.to_owned(),
+                profile_id: profile_id.to_owned(),
+                profile_doc,
+                profile_value,
+                backend_id: profile.backend_id.clone(),
+                backend_doc,
+                backend_value,
+            });
+            Ok(endpoint)
         })
     }
 }
@@ -110,6 +228,14 @@ where
 pub fn endpoint_for(
     profile: &InferenceProfile,
     backend: &InferenceBackend,
+) -> Result<ModelEndpoint> {
+    endpoint_for_selected(profile, backend, false)
+}
+
+fn endpoint_for_selected(
+    profile: &InferenceProfile,
+    backend: &InferenceBackend,
+    allow_runtime_credential: bool,
 ) -> Result<ModelEndpoint> {
     use crate::inference::backends::provider::BackendProviderKind::{OpenAiCompatible, OpenRouter};
     anyhow::ensure!(
@@ -133,7 +259,18 @@ pub fn endpoint_for(
         "the backend of profile {:?} has credentials its provider cannot use",
         profile.profile_id
     );
-    let api_key = backend.auth.resolve_api_key()?;
+    let api_key = if matches!(
+        &backend.auth,
+        crate::documents::BackendAuth::Credential { .. }
+    ) {
+        anyhow::ensure!(
+            allow_runtime_credential,
+            "runtime credential resolver required"
+        );
+        None
+    } else {
+        backend.auth.resolve_api_key()?
+    };
     let max_concurrent = usize::try_from(backend.effective_max_concurrent())
         .ok()
         .filter(|limit| *limit > 0)
@@ -161,6 +298,7 @@ pub fn endpoint_for(
         max_output_tokens: profile
             .max_output_tokens
             .and_then(|tokens| u64::try_from(tokens).ok()),
+        profile_visibility: None,
     })
 }
 
@@ -414,12 +552,23 @@ impl Session {
             Ok(Err(_)) => return Err("the model endpoint is not available".to_owned()),
             Err(_) => return Err("the model request timed out".to_owned()),
         };
+        let mut runtime_key = None;
+        if let Some(visibility) = &endpoint.profile_visibility {
+            match tokio::time::timeout_at(wall, visibility.check()).await {
+                Ok(Ok(key)) => {
+                    runtime_key = key;
+                }
+                Ok(Err(_)) => return Err("the selected model profile is unavailable".to_owned()),
+                Err(_) => return Err("the model request timed out".to_owned()),
+            }
+        }
         let mut call = self
             .client
             .post(&endpoint.url)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(body);
-        if let Some(key) = &endpoint.api_key {
+        let private_key = runtime_key.as_deref().or(endpoint.api_key.as_deref());
+        if let Some(key) = private_key {
             call = call.bearer_auth(key);
         }
         let exchange = async {

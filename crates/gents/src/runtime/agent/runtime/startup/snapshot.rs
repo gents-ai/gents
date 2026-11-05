@@ -33,30 +33,35 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
     tool_runtime: &ToolRuntimeContext,
     snapshot: &mut ResolvedRuntimeSnapshot,
 ) -> Result<()> {
-    let mut agent_ids = snapshot.agents.keys().cloned().collect::<Vec<_>>();
-    agent_ids.sort();
+    let mut agent_dids = snapshot.agents.keys().cloned().collect::<Vec<_>>();
+    agent_dids.sort();
 
-    for agent_id in agent_ids {
+    for agent_did in agent_dids {
         let tool_surface = snapshot
             .tool_surfaces
-            .get(&agent_id)
-            .ok_or_else(|| anyhow!("missing tool surface for agent_config {agent_id}"))?;
-        if let Err(error) = tool_surface.build_tools(tool_runtime).await {
+            .get(&agent_did)
+            .ok_or_else(|| anyhow!("missing tool surface for agent_config {agent_did}"))?;
+        let agent = snapshot
+            .agents
+            .get(&agent_did)
+            .ok_or_else(|| anyhow!("missing resolved agent {agent_did} during tool admission"))?;
+        let tool_runtime = tool_runtime.for_agent(agent);
+        if let Err(error) = tool_surface.build_tools(&tool_runtime).await {
             let reason = UnavailableAgent::new(
                 gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
                 format!("building tool surface: {error:#}"),
             );
             tracing::error!(
-                agent_id = %agent_id,
+                agent_did = %agent_did,
                 public_reason = ?reason.public_reason,
                 diagnostic = %reason.diagnostic,
                 "agent_config tool surface unavailable; running without it"
             );
             crate::runtime::native_logging::mirror_service_diagnostic(&format!(
-                "gents runtime: agent_config {agent_id} unavailable: {}",
+                "gents runtime: agent_config {agent_did} unavailable: {}",
                 reason.diagnostic
             ));
-            snapshot.demote_agent(&agent_id, reason);
+            snapshot.demote_agent(&agent_did, reason);
         }
     }
     Ok(())
@@ -80,7 +85,7 @@ pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
         let mut unavailable = snapshot
             .unavailable_agents
             .iter()
-            .map(|(agent_id, reason)| (agent_id.clone(), reason.clone()))
+            .map(|(agent_did, reason)| (agent_did.clone(), reason.clone()))
             .collect::<Vec<_>>();
         unavailable.sort_by(|left, right| left.0.cmp(&right.0));
 
@@ -97,21 +102,21 @@ pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
             .collect::<Vec<_>>();
         if !blocking.is_empty() {
             // Only the presentation-safe reason leaves this boundary.
-            for (agent_id, reason) in &blocking {
+            for (agent_did, reason) in &blocking {
                 tracing::error!(
-                    agent_id = %agent_id,
+                    agent_did = %agent_did,
                     public_reason = ?reason.public_reason,
                     diagnostic = %reason.diagnostic,
                     "agent_config unavailable at startup blocks the agent from starting"
                 );
                 crate::runtime::native_logging::mirror_service_diagnostic(&format!(
-                    "gents runtime: agent_config {agent_id} unavailable at startup: {}",
+                    "gents runtime: agent_config {agent_did} unavailable at startup: {}",
                     reason.diagnostic
                 ));
             }
             let blocking = blocking
                 .iter()
-                .map(|(agent_id, reason)| format!("{agent_id}: {}", reason.public_message()))
+                .map(|(agent_did, reason)| format!("{agent_did}: {}", reason.public_message()))
                 .collect::<Vec<_>>();
             anyhow::bail!(
                 "agent {} has no runnable agents at startup due to invalid configuration ({})",
@@ -125,14 +130,14 @@ pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
 }
 
 async fn resolve_tool_surfaces(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     agents: &[Arc<crate::inference::resolved::ResolvedAgent>],
     plugins: &crate::plugin::executor::PluginExecutor,
 ) -> Result<RapidHashMap<String, Arc<ToolSurface>>> {
     let mut tool_surfaces = RapidHashMap::with_capacity(agents.len());
     for agent in agents {
         let tool_surface = agent.tools.resolve(node, agent.node_did(), plugins).await?;
-        tool_surfaces.insert(agent.agent_id.clone(), Arc::new(tool_surface));
+        tool_surfaces.insert(agent.agent_did.clone(), Arc::new(tool_surface));
     }
     Ok(tool_surfaces)
 }
@@ -150,7 +155,7 @@ pub(in crate::runtime::agent::runtime) async fn resolve_startup_snapshot(
             let backend_admission_configs =
                 resolve_backend_admission_configs(&agent.node, &agent.agents).await?;
             Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-                agent.default_agent_id().to_string(),
+                agent.default_agent_did().to_string(),
                 agent.agents.clone(),
                 tool_surfaces,
                 backend_admission_configs,
@@ -166,7 +171,7 @@ pub(in crate::runtime::agent::runtime) async fn resolve_startup_snapshot(
 }
 
 async fn resolve_backend_admission_configs(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     agents: &[Arc<crate::inference::resolved::ResolvedAgent>],
 ) -> Result<RapidHashMap<String, BackendAdmissionConfig>> {
     let mut configs = RapidHashMap::new();
@@ -188,7 +193,7 @@ async fn resolve_backend_admission_configs(
                 .ok_or_else(|| {
                     anyhow!(
                         "agent_config {} references missing backend {}",
-                        agent.agent_id,
+                        agent.agent_did,
                         backend_id
                     )
                 })?;
@@ -210,7 +215,7 @@ async fn resolve_backend_admission_configs(
         }
         .instrument(tracing::info_span!(
             "backend.admission_resolve",
-            agent_id = %agent.agent_id,
+            agent_did = %agent.agent_did,
             backend_id = %backend_id,
             backend_enabled = tracing::field::Empty,
             probe_status = tracing::field::Empty,
@@ -224,7 +229,7 @@ async fn resolve_backend_admission_configs(
 }
 
 async fn resolve_document_snapshot_with_tools(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     resolve_context: &DocumentResolveContext,
 ) -> Result<ResolvedRuntimeSnapshot> {
     crate::runtime::agent::resolve_document_runtime_snapshot(node, resolve_context).await

@@ -158,6 +158,6 @@ async fn embedded_agent_target_host_replays_only_return_projection() {
         BTreeSet::from([match_session_id.clone()]),
         "only the requester's caused session crosses the return leg"
     );
-    sender.shutdown().await;
-    receiver.shutdown().await;
+    sender.shutdown().await.expect("node shutdown");
+    receiver.shutdown().await.expect("node shutdown");
 }

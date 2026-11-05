@@ -12,7 +12,7 @@ export function AgentSheet({
 }: {
   deployment: NodeView;
   open: boolean;
-  onClose: (agentId: string | null) => void;
+  onClose: (agentDid: string | null) => void;
   enabled?: boolean;
 }) {
   const [draft, setDraft] = useState(() => newAgentView(deployment));
@@ -29,7 +29,7 @@ export function AgentSheet({
     >
       {open && (
         <AgentEditor
-          key={draft.agentId}
+          key={draft.agentDid}
           deployment={deployment}
           agent={draft}
           draft={{ onSaved: (id) => close(id), onCancel: () => close(null), enabled }}

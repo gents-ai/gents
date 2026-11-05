@@ -75,12 +75,12 @@ describe("engineer setup patches", () => {
       ...deployment,
       node: {
         ...deployment.node,
-        defaultAgentId: "ops",
+        defaultAgentDid: "ops",
       },
       agents: deployment.agents.map((agent) => ({
         ...agent,
-        isDefault: agent.agentId === "ops",
-        tags: agent.agentId === "default" ? [ENGINEER_AGENT_TAG] : [],
+        isDefault: agent.agentDid === "ops",
+        tags: agent.agentDid === "default" ? [ENGINEER_AGENT_TAG] : [],
       })),
     };
 
@@ -97,16 +97,16 @@ describe("engineer setup patches", () => {
   it("engineerAgentOf picks the agent engineerPatches patches", () => {
     const tagged = {
       ...deployment,
-      node: { ...deployment.node, defaultAgentId: "ops" },
+      node: { ...deployment.node, defaultAgentDid: "ops" },
       agents: deployment.agents.map((agent) => ({
         ...agent,
-        isDefault: agent.agentId === "ops",
-        tags: agent.agentId === "default" ? [ENGINEER_AGENT_TAG] : [],
+        isDefault: agent.agentDid === "ops",
+        tags: agent.agentDid === "default" ? [ENGINEER_AGENT_TAG] : [],
       })),
     };
     for (const node of [tagged, deployment]) {
-      expect(engineerAgentOf(node)?.agentId).toBe(engineerPatches(node)[0].id);
+      expect(engineerAgentOf(node)?.agentDid).toBe(engineerPatches(node)[0].id);
     }
-    expect(engineerAgentOf(tagged)?.agentId).toBe("default");
+    expect(engineerAgentOf(tagged)?.agentDid).toBe("default");
   });
 });

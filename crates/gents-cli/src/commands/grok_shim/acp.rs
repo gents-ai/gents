@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use futures_util::future::BoxFuture;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use serde_json::{json, Value};
 
 use super::projection::caused_sessions::{
@@ -110,7 +110,7 @@ impl BoundModel {
 pub(crate) struct AcpServiceConfig {
     pub(crate) node: Arc<EmbeddedNode>,
     pub(crate) node_did: Arc<str>,
-    pub(crate) agent_id: Arc<str>,
+    pub(crate) agent_did: Arc<str>,
     pub(crate) current_model: BoundModel,
     pub(crate) grok_home: Option<std::path::PathBuf>,
     /// Gents home the plugin catalogs of `x.ai/workflows/list` are read under.
@@ -193,6 +193,12 @@ impl AcpService {
     async fn dispatch_notification(&self, request: AcpRequest) -> AcpDispatch {
         match request.method.as_str() {
             SESSION_CANCEL_METHOD => {
+                if self.client_id.is_some() {
+                    tracing::warn!(
+                        "grok shim cannot cancel a session without an authenticated client DID"
+                    );
+                    return AcpDispatch::default();
+                }
                 let cancel = match parse_cancel_notification(&request.params) {
                     Ok(cancel) => cancel,
                     Err(error) => {
@@ -265,6 +271,9 @@ impl AcpService {
         request: &AcpRequest,
         prompt_sender: &PromptSender,
     ) -> Result<RequestOutcome> {
+        if self.client_id.is_some() && requires_client_identity(&request.method) {
+            anyhow::bail!("Grok shim requires an authenticated client DID for this operation; its registration does not provide one");
+        }
         match request.method.as_str() {
             INITIALIZE_METHOD => self.handle_initialize(request).await,
             AUTHENTICATE_METHOD => self.handle_authenticate(request).await,
@@ -272,8 +281,12 @@ impl AcpService {
                 let session = required_session_id(&request.params)?;
                 let result = super::usage::session_info(
                     &self.config.node,
+                    &gents::ConfigAccess::local_as(
+                        self.config.node.clone(),
+                        self.turns.actor().clone(),
+                    ),
                     &self.config.node_did,
-                    &self.config.agent_id,
+                    &self.config.agent_did,
                     &session,
                     &self.config.current_model.model_id,
                     &self.config.current_model.name,
@@ -293,8 +306,12 @@ impl AcpService {
                 let session = required_session_id(&request.params)?;
                 let result = super::usage::session_usage(
                     &self.config.node,
+                    &gents::ConfigAccess::local_as(
+                        self.config.node.clone(),
+                        self.turns.actor().clone(),
+                    ),
                     &self.config.node_did,
-                    &self.config.agent_id,
+                    &self.config.agent_did,
                     &session,
                 )
                 .await?;
@@ -308,7 +325,7 @@ impl AcpService {
                 result: super::workflow_catalog::list(
                     &self.config.node,
                     &self.config.node_did,
-                    &self.config.agent_id,
+                    &self.config.agent_did,
                     &self.config.plugin_home,
                 )
                 .await?,
@@ -318,7 +335,7 @@ impl AcpService {
                 result: super::sessions::roster(
                     &self.config.node,
                     &self.config.node_did,
-                    &self.config.agent_id,
+                    &self.config.agent_did,
                 )
                 .await?,
             }),
@@ -333,7 +350,7 @@ impl AcpService {
                 let result = super::sessions::list(
                     &self.config.node,
                     &self.config.node_did,
-                    &self.config.agent_id,
+                    &self.config.agent_did,
                     params,
                 )
                 .await?;
@@ -386,6 +403,7 @@ impl AcpService {
                     self.config.node.clone(),
                     &self.projections.background_executions,
                     &self.config.node_did,
+                    &self.config.agent_did,
                     &sessions,
                     params,
                 )
@@ -411,6 +429,39 @@ impl AcpService {
             })),
         }
     }
+}
+
+/// Pager registration supplies capabilities but no authenticated DID. Runtime
+/// identity must not stand in for a client on document or session operations.
+pub(super) fn requires_client_identity(method: &str) -> bool {
+    matches!(
+        method,
+        "x.ai/session/info"
+            | "x.ai/session/usage"
+            | "x.ai/workflows/list"
+            | "x.ai/sessions/list"
+            | "x.ai/session/list"
+            | SESSION_NEW_METHOD
+            | SESSION_SET_MODEL_METHOD
+            | SESSION_SET_MODE_METHOD
+            | SESSION_PROMPT_METHOD
+            | SESSION_LOAD_METHOD
+            | SUBAGENT_GET_METHOD
+            | SUBAGENT_LIST_RUNNING_METHOD
+            | SUBAGENT_CANCEL_METHOD
+            | "x.ai/task/kill"
+    )
+}
+
+#[cfg(test)]
+#[test]
+fn user_document_operations_need_a_client_identity() {
+    assert!(requires_client_identity(SESSION_NEW_METHOD));
+    assert!(requires_client_identity(SESSION_PROMPT_METHOD));
+    assert!(requires_client_identity("x.ai/task/kill"));
+    assert!(requires_client_identity("x.ai/session/list"));
+    assert!(!requires_client_identity(INITIALIZE_METHOD));
+    assert!(!requires_client_identity("x.ai/billing"));
 }
 
 impl AcpDelegate for AcpService {

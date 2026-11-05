@@ -17,6 +17,20 @@ use super::status::{status_handler, STATUS_PROBE_BUDGET};
 use super::*;
 use crate::http::prometheus::MetricsRuntimeRow;
 
+fn desktop_endpoint(
+    url: impl Into<String>,
+    identity: &gents_desktop_core::client::PrincipalIdentity,
+) -> GraphqlEndpoint {
+    GraphqlEndpoint::as_principal(url, identity.did())
+        .with_client_signing_capability(
+            gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                identity.private_key_bytes(),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+}
+
 fn state() -> RuntimeHttpState {
     let (activation_runtime, activation_observation) = empty_activation_state();
     RuntimeHttpState {
@@ -76,10 +90,40 @@ async fn inference_activity_requires_authenticated_identity() {
 }
 
 #[tokio::test]
-async fn background_control_authenticates_the_owning_operator_before_runtime_access() {
+async fn backend_discovery_requires_authenticated_identity() {
+    let app = Router::new()
+        .route(
+            crate::http::inference_activity::BACKEND_DISCOVERY_PATH,
+            post(crate::http::inference_activity::discover_backend),
+        )
+        .with_state(state());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    }));
+    let response = reqwest::Client::new()
+        .post(format!(
+            "http://{address}{}",
+            crate::http::inference_activity::BACKEND_DISCOVERY_PATH
+        ))
+        .json(&json!({"node_did":"node", "backend_id":"backend"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+}
+
+#[tokio::test]
+async fn background_control_requires_authentication_before_runtime_access() {
+    use gents::NodeIdentity as _;
     use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
-    use gents_protocol::job::{JobControlKind, OperatorJobControlRequest, JOB_CONTROL_PATH};
-    use gents_protocol::process_control::{OperatorProcessControlRequest, PROCESS_CONTROL_PATH};
+    use gents_protocol::job::JOB_CONTROL_PATH;
+    use gents_protocol::process_control::{ToolControlIntent, PROCESS_CONTROL_PATH};
     let temp = tempfile::tempdir().unwrap();
     let owner_paths = DesktopPaths::from_root(temp.path().join("owner"));
     owner_paths.ensure_root_dirs().await.unwrap();
@@ -110,25 +154,34 @@ async fn background_control_authenticates_the_owning_operator_before_runtime_acc
     }));
     let client = reqwest::Client::new();
     let graphql = format!("http://{address}/api/v0/graphql");
-    let command = OperatorJobControlRequest {
-        node_did: owner.did().into(),
-        tool_call_doc_id: "physical-job".into(),
-        action: JobControlKind::Stop,
-    };
-    let process = OperatorProcessControlRequest {
-        node_did: owner.did().into(),
-        session_id: "session".into(),
-        tool_call_id: "native".into(),
-        tool_call_doc_id: "physical-native".into(),
-    };
-    for (path, command) in [
-        (JOB_CONTROL_PATH, serde_json::to_value(command).unwrap()),
-        (PROCESS_CONTROL_PATH, serde_json::to_value(process).unwrap()),
+    for (path, action) in [
+        (JOB_CONTROL_PATH, "job_stop"),
+        (PROCESS_CONTROL_PATH, "process_stop"),
     ] {
+        let mut intent = ToolControlIntent {
+            version: 1,
+            intent_id: format!("intent-{action}"),
+            client_did: owner.did().into(),
+            node_did: owner.did().into(),
+            agent_did: "did:test:agent".into(),
+            session_id: "session".into(),
+            session_doc_id: "session-doc".into(),
+            request_doc_id: "request-doc".into(),
+            requester_did: Some(owner.did().into()),
+            tool_call_id: "call".into(),
+            tool_call_doc_id: "physical-doc".into(),
+            action: action.into(),
+            signature: Vec::new(),
+        };
+        intent.signature = owner
+            .sign(&intent.signing_payload().unwrap())
+            .await
+            .unwrap();
+        let command = serde_json::to_value(intent).unwrap();
         let url = format!("http://{address}{path}");
         let response = client.post(&url).json(&command).send().await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        let endpoint = GraphqlEndpoint::as_principal(&graphql, foreign.did());
+        let endpoint = desktop_endpoint(&graphql, &foreign);
         let response = endpoint
             .authorize(client.post(&url))
             .unwrap()
@@ -136,10 +189,10 @@ async fn background_control_authenticates_the_owning_operator_before_runtime_acc
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        let endpoint = GraphqlEndpoint::as_principal(&graphql, owner.did());
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let endpoint = desktop_endpoint(&graphql, &owner);
         let mut other = command.clone();
-        other["nodeDid"] = serde_json::json!(foreign.did());
+        other["node_did"] = serde_json::json!(foreign.did());
         let response = endpoint
             .authorize(client.post(&url))
             .unwrap()
@@ -147,7 +200,7 @@ async fn background_control_authenticates_the_owning_operator_before_runtime_acc
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let response = endpoint
             .authorize(client.post(&url))
             .unwrap()
@@ -180,7 +233,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
         .unwrap();
     let owner = identity.did().to_owned();
     let node = Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
+        gents::defra_node::Node::builder()
             .with_node_identity_did(&owner)
             .with_node_acp_enabled()
             .build()
@@ -194,7 +247,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
             txn.execute_with_variables(
                 "mutation($node: NodeMutationInputArg!, $backend: InferenceBackendMutationInputArg!) { create_Node(input: $node) { _docID } create_InferenceBackend(input: $backend) { _docID } }",
                 &json!({
-                    "node": {"node_did": owner, "default_agent_id": "fixture", "enabled": true},
+                    "node": {"node_did": owner, "default_agent_did": "fixture", "enabled": true},
                     "backend": {"node_did": owner, "backend_id": "fixture", "name": "Fixture",
                         "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:9/v1",
                         "auth": {"kind": "unauthenticated"}, "enabled": true, "probe_status": "healthy"},
@@ -246,7 +299,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
         .unwrap();
     let url = format!("http://{addr}{RUNTIME_CONTROL_PATH}");
     let graphql = format!("http://{addr}/api/v0/graphql");
-    let endpoint = GraphqlEndpoint::as_principal(&graphql, &owner);
+    let endpoint = desktop_endpoint(&graphql, &identity);
     let command = |operation| RuntimeControlCommand {
         version: RUNTIME_CONTROL_VERSION,
         node_did: owner.clone(),
@@ -293,7 +346,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
         .await
         .unwrap();
     assert!(response.status().is_client_error());
-    let foreign_endpoint = GraphqlEndpoint::as_principal(&graphql, foreign.did());
+    let foreign_endpoint = desktop_endpoint(&graphql, &foreign);
     let response = foreign_endpoint
         .authorize(client.post(&url))
         .unwrap()
@@ -329,7 +382,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
     assert_eq!(refused.disposition, RuntimeControlDisposition::BuildChanged);
     assert!(!admission.is_retiring().unwrap());
 
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     let response = endpoint
         .authorize(client.post(format!("http://{addr}/runtime/operator/starting")))
         .unwrap()
@@ -362,47 +415,82 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
 }
 
 #[tokio::test]
-async fn operator_inventory_authenticates_and_replays_native_metadata() {
+async fn operator_inventory_authenticates_and_reads_native_metadata() {
     use gents::store::config_client::ConfigAccess;
     use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
     use gents_protocol::file_inventory::{
-        FileInventoryAdmission, FileInventoryPageDemand, FileInventoryRefusalReason,
-        FileInventoryReply, FILE_INVENTORY_OPERATOR_PATH,
+        DirectFileInventoryRequest, FileInventoryObservation, FileInventoryReadAction,
+        FILE_INVENTORY_OPERATOR_PATH,
     };
-    use gents_protocol::session_hydration::HydrationRequest;
+
     let temp = tempfile::tempdir().unwrap();
-    let paths = DesktopPaths::from_root(temp.path().join("operator"));
+    let paths = DesktopPaths::from_root(temp.path().join("runtime"));
     paths.ensure_root_dirs().await.unwrap();
     let identity = Arc::new(PrincipalIdentity::load_or_create(&paths).await.unwrap());
+    let user_paths = DesktopPaths::from_root(temp.path().join("user"));
+    user_paths.ensure_root_dirs().await.unwrap();
+    let user = PrincipalIdentity::load_or_create(&user_paths)
+        .await
+        .unwrap();
     let foreign_paths = DesktopPaths::from_root(temp.path().join("foreign"));
     foreign_paths.ensure_root_dirs().await.unwrap();
     let foreign = PrincipalIdentity::load_or_create(&foreign_paths)
         .await
         .unwrap();
+    let db_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let db_addr = db_listener.local_addr().unwrap();
     let node = Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
+        gents::defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .with_node_acp_enabled()
+            .with_http(gents::defra_node::HttpConfig::with_listener(db_listener).unwrap())
             .build()
             .await
             .unwrap(),
     );
     gents::ensure_runtime_schemas(&node).await.unwrap();
     let owner = identity.did();
+    let db_endpoint = desktop_endpoint(format!("http://{db_addr}/api/v0/graphql"), &identity);
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    for did in [user.did(), foreign.did()] {
+        for relation in ["read-document", "update-document"] {
+            let response = db_endpoint
+                .authorize(
+                    client
+                        .post(format!("http://{db_addr}/api/v0/acp/node/relationship"))
+                        .json(&json!({"Relation": relation, "TargetActor": did})),
+                )
+                .unwrap()
+                .send()
+                .await
+                .unwrap();
+            assert!(
+                response.status().is_success(),
+                "{}",
+                response.text().await.unwrap()
+            );
+        }
+    }
+    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
     let session_id = "operator-http-session";
-    let session_doc_id = ConfigAccess::transact_local_write(&node, None, "test.inventory.http_setup", |txn| {
+    let user_did = user.did().to_owned();
+    access.transact_write("test.inventory.http_setup", |txn| {
+        let user_did = &user_did;
         Box::pin(async move {
-            let result = txn.execute_with_variables(
+            txn.execute_with_variables(
                 "mutation($node: NodeMutationInputArg!, $backend: InferenceBackendMutationInputArg!, $session: AgentSessionMutationInputArg!) { create_Node(input: $node) { _docID } create_InferenceBackend(input: $backend) { _docID } create_AgentSession(input: $session) { _docID } }",
                 &json!({
-                    "node": {"node_did": owner, "default_agent_id": "fixture", "enabled": true},
+                    "node": {"node_did": owner, "default_agent_did": "fixture", "enabled": true},
                     "backend": {"node_did": owner, "backend_id": "fixture", "name": "Fixture",
                         "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:9/v1",
                         "auth": {"kind": "unauthenticated"}, "enabled": true, "probe_status": "healthy"},
-                    "session": {"session_id": session_id, "node_did": owner, "requester_did": owner,
-                        "agent_id": "fixture", "created_at": "2026-10-24T00:00:00Z"},
+                    "session": {"session_id": session_id, "node_did": owner, "requester_did": user_did,
+                        "agent_did": "fixture", "created_at": "2026-10-24T00:00:00Z"},
                 })).await?;
-            gents::store::graphql::created_doc_id(&result, "AgentSession")
+            Ok::<_, anyhow::Error>(())
         })
     }).await.unwrap();
     let runtime = gents::Gents::builder()
@@ -431,25 +519,14 @@ async fn operator_inventory_authenticates_and_replays_native_metadata() {
         axum::serve(listener, app).await.unwrap();
     }));
     let graphql = format!("http://{addr}/api/v0/graphql");
-    let endpoint = GraphqlEndpoint::as_principal(&graphql, owner);
+    let endpoint = desktop_endpoint(&graphql, &user);
+    let foreign_endpoint = desktop_endpoint(&graphql, &foreign);
     let url = format!("http://{addr}{FILE_INVENTORY_OPERATOR_PATH}");
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap();
-    let demand = FileInventoryPageDemand {
-        admission: FileInventoryAdmission {
-            request: HydrationRequest {
-                request_key: format!("operator-client:{session_id}"),
-                peer_id: "operator-client".into(),
-                requester_did: owner.into(),
-                node_did: owner.into(),
-                session_id: session_id.into(),
-            },
-            session_doc_id,
-        },
-        attempt_id: "operator-http-attempt".into(),
-        cursor: None,
+    let demand = DirectFileInventoryRequest {
+        node_did: owner.into(),
+        session_id: session_id.into(),
+        peer_id: "operator-client".into(),
+        action: FileInventoryReadAction::default(),
     };
     let response = client.post(&url).json(&demand).send().await.unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -462,8 +539,10 @@ async fn operator_inventory_authenticates_and_replays_native_metadata() {
         .await
         .unwrap();
     assert!(response.status().is_client_error());
-    let wrong_audience =
-        gents::store::identity::defradb_bearer_authorization(owner, "other.invalid").unwrap();
+    let wrong_audience = desktop_endpoint("http://other.invalid/api/v0/graphql", &user)
+        .authorization()
+        .unwrap()
+        .unwrap();
     let response = client
         .post(&url)
         .header(header::AUTHORIZATION, wrong_audience)
@@ -472,7 +551,6 @@ async fn operator_inventory_authenticates_and_replays_native_metadata() {
         .await
         .unwrap();
     assert!(response.status().is_client_error());
-    let foreign_endpoint = GraphqlEndpoint::as_principal(&graphql, foreign.did());
     let response = foreign_endpoint
         .authorize(client.post(&url))
         .unwrap()
@@ -480,18 +558,12 @@ async fn operator_inventory_authenticates_and_replays_native_metadata() {
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    let access = ConfigAccess::local(node.clone());
-    assert!(
-        access
-            .execute("{ FileInventoryPage { _docID } }")
-            .await
-            .unwrap()["data"]["FileInventoryPage"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        "unauthorized reads must not prepare metadata"
-    );
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response
+        .json::<Option<FileInventoryObservation>>()
+        .await
+        .unwrap()
+        .is_none());
     let mut retained = None;
     for _ in 0..2 {
         let response = endpoint
@@ -503,34 +575,32 @@ async fn operator_inventory_authenticates_and_replays_native_metadata() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
-        let reply: FileInventoryReply = response.json().await.unwrap();
-        gents::file_inventory::verify_reply(&demand, &reply, identity.as_ref())
+        let reply = response
+            .json::<Option<FileInventoryObservation>>()
             .await
+            .unwrap()
             .unwrap();
-        let FileInventoryReply::Page(page) = &reply else {
-            panic!("operator received a refusal");
-        };
-        assert_eq!(page.page.binding.coverage.entries, 0);
-        assert_eq!(page.page.binding.coverage.pending, 0);
-        assert_eq!(page.page.binding.coverage.unknown, 0);
+        let page = reply.current.as_ref().unwrap();
+        assert_eq!(page.binding.coverage.entries, 0);
+        assert_eq!(page.binding.coverage.pending, 0);
+        assert_eq!(page.binding.coverage.unknown, 0);
         if let Some(prior) = &retained {
             assert_eq!(&reply, prior);
         }
         retained = Some(reply);
     }
-    let mut cross_source = demand.clone();
-    cross_source.admission.request.node_did = foreign.did().into();
+    let mut wrong_runtime = demand.clone();
+    wrong_runtime.node_did = foreign.did().into();
     let response = endpoint
         .authorize(client.post(&url))
         .unwrap()
-        .json(&cross_source)
+        .json(&wrong_runtime)
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let mut missing = demand.clone();
-    missing.admission.request.session_id.push_str("-missing");
-    missing.attempt_id.push_str("-missing");
+    missing.session_id.push_str("-missing");
     let response = endpoint
         .authorize(client.post(&url))
         .unwrap()
@@ -539,15 +609,14 @@ async fn operator_inventory_authenticates_and_replays_native_metadata() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let refused: FileInventoryReply = response.json().await.unwrap();
-    gents::file_inventory::verify_reply(&missing, &refused, identity.as_ref())
+    assert!(response
+        .json::<Option<FileInventoryObservation>>()
         .await
-        .unwrap();
-    assert!(matches!(refused, FileInventoryReply::Refused(receipt)
-        if receipt.reason == FileInventoryRefusalReason::Unavailable));
+        .unwrap()
+        .is_none());
     drop(server);
     drop(access);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -583,9 +652,10 @@ async fn inference_settings_authenticates_the_client_before_reading_configuratio
         .await
         .unwrap();
     assert!(response.status().is_client_error());
-    let foreign_audience =
-        gents::store::identity::defradb_bearer_authorization(identity.did(), "other.invalid")
-            .unwrap();
+    let foreign_audience = desktop_endpoint("http://other.invalid/api/v0/graphql", &identity)
+        .authorization()
+        .unwrap()
+        .unwrap();
     let response = client
         .get(&url)
         .header(header::AUTHORIZATION, foreign_audience)
@@ -593,8 +663,7 @@ async fn inference_settings_authenticates_the_client_before_reading_configuratio
         .await
         .unwrap();
     assert!(response.status().is_client_error());
-    let endpoint =
-        GraphqlEndpoint::as_principal(format!("http://{addr}/api/v0/graphql"), identity.did());
+    let endpoint = desktop_endpoint(format!("http://{addr}/api/v0/graphql"), &identity);
     let response = endpoint
         .authorize(client.get(&url))
         .unwrap()
@@ -642,7 +711,7 @@ fn runtime() -> MetricsRuntimeRow {
     }
 }
 
-fn readiness(default_agent_id: &str) -> NodeReadinessRow {
+fn readiness(default_agent_did: &str) -> NodeReadinessRow {
     NodeReadinessRow {
         node_did: "did:key:zAgent".to_string(),
         snapshot_json: serde_json::to_string(&NodeReadinessSnapshot {
@@ -650,9 +719,9 @@ fn readiness(default_agent_id: &str) -> NodeReadinessRow {
             process_state: NodeReadinessProcessState::Ready,
             active_generation: 1,
             router_generation: 1,
-            default_agent_id: default_agent_id.to_string(),
+            default_agent_did: default_agent_did.to_string(),
             agents: vec![AgentReadinessEntry {
-                agent_id: default_agent_id.to_string(),
+                agent_did: default_agent_did.to_string(),
                 state: AgentReadinessState::Ready,
                 reason: None,
             }],
@@ -856,13 +925,32 @@ async fn disabled_p2p_metrics_skip_live_status_fetch() {
 async fn usage_route(
     state: &RuntimeHttpState,
     command: crate::commands::accounts::UsageReadCommand,
+    bearer: Option<&dyn gents::NodeIdentity>,
 ) -> (StatusCode, Value) {
-    let response = account_usage_read_handler(State(state.clone()), axum::Json(command)).await;
+    let app = Router::new()
+        .route("/accounts/usage/read", post(account_usage_read_handler))
+        .with_state(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    }));
+    let client = reqwest::Client::new();
+    let request = client
+        .post(format!("http://{address}/accounts/usage/read"))
+        .json(&command);
+    let request = if let Some(identity) = bearer {
+        GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), identity.did())
+            .with_client_signing_capability(identity.client_signing_capability().unwrap())
+            .unwrap()
+            .authorize(request)
+            .unwrap()
+    } else {
+        request
+    };
+    let response = request.send().await.unwrap();
     let status = response.status();
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("usage body");
-    (status, serde_json::from_slice(&body).expect("usage json"))
+    (status, response.json().await.expect("usage json"))
 }
 
 fn usage_command(signer_did: &str) -> crate::commands::accounts::UsageReadCommand {
@@ -878,7 +966,7 @@ fn usage_command(signer_did: &str) -> crate::commands::accounts::UsageReadComman
 
 #[tokio::test]
 async fn account_usage_route_is_unavailable_before_activation() {
-    let (status, body) = usage_route(&state(), usage_command("did:key:zAgent")).await;
+    let (status, body) = usage_route(&state(), usage_command("did:key:zAgent"), None).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert!(body["error"].is_string(), "{body}");
 }
@@ -889,7 +977,7 @@ async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
     let key = |name: &str| -> Arc<dyn gents::NodeIdentity> {
         Arc::new(gents::KeyIdentity::load_or_create(temp.path().join(name), None).unwrap())
     };
-    let (identity, other) = (key("runtime.key"), key("other.key"));
+    let (identity, owner, other) = (key("runtime.key"), key("owner.key"), key("other.key"));
     let node = Arc::new(
         crate::shared::test_support::node_builder()
             .build()
@@ -899,7 +987,20 @@ async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
     gents::store::schema::migration::ensure_all_runtime_migrations(node.clone())
         .await
         .unwrap();
-    let state = state();
+    let access =
+        gents::ConfigAccess::local_as(node.clone(), identity::Did::new(owner.did()).unwrap());
+    access
+        .write(
+            "test.usage.node",
+            &format!(
+                "mutation {{ create_Node(input: {{node_did: \"{}\"}}) {{ _docID }} }}",
+                gents::store::graphql::escape_graphql_string(identity.did())
+            ),
+        )
+        .await
+        .unwrap();
+    let mut state = state();
+    state.node_did = identity.did().into();
     *state.enrollment_decisions.write().await = Some(
         crate::http::enrollment::EnrollmentDecisionService::new(identity.clone(), node),
     );
@@ -916,14 +1017,17 @@ async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
         }
     };
 
-    let (status, body) = usage_route(&state, usage_command(identity.did())).await;
+    let (status, body) =
+        usage_route(&state, usage_command(owner.did()), Some(owner.as_ref())).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "unsigned: {body}");
-    let (status, body) = usage_route(&state, signed(&other).await).await;
+    let (status, body) = usage_route(&state, signed(&other).await, Some(other.as_ref())).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "foreign: {body}");
 
-    let command = signed(&identity).await;
-    let (status, body) = usage_route(&state, command.clone()).await;
+    let command = signed(&owner).await;
+    let (status, body) = usage_route(&state, command.clone(), Some(other.as_ref())).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "bearer mismatch: {body}");
+    let (status, body) = usage_route(&state, command.clone(), Some(owner.as_ref())).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "signed: {body}");
-    let (status, body) = usage_route(&state, command).await;
+    let (status, body) = usage_route(&state, command, Some(owner.as_ref())).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "replay: {body}");
 }

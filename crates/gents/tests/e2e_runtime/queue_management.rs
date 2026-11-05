@@ -32,10 +32,13 @@ pub(super) async fn enqueue(
         text,
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::local_self(did),
+        AgentRequestAdmissionRecord::client(did),
     );
     request.input = gents::request::lifecycle::prepare_user_message_input(
-        &ConfigAccess::local(db.node.clone()),
+        &ConfigAccess::local_as(
+            db.node.clone(),
+            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+        ),
         did,
         session,
         request.input,
@@ -50,13 +53,16 @@ pub(super) async fn insert_signed(db: &TestDb, mut request: AgentRequestCreate) 
     gents::sign_agent_request_create(db.node_identity.as_ref(), &mut request)
         .await
         .unwrap();
-    let response = ConfigAccess::local(db.node.clone())
-        .write(
-            "test.queue_signed_input",
-            &request.graphql_mutation().unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    )
+    .write(
+        "test.queue_signed_input",
+        &request.graphql_mutation().unwrap(),
+    )
+    .await
+    .unwrap();
     gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
@@ -75,12 +81,15 @@ async fn submit_edit_inner(
     steer: Option<&str>,
 ) -> anyhow::Result<SessionInputEditReceipt> {
     let did = db.node_identity.did();
-    let existing = ConfigAccess::local(db.node.clone())
-        .execute(&format!(
-            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            escape_graphql_string(session_id)
-        ))
-        .await?;
+    let existing = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    )
+    .execute(&format!(
+        r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+        escape_graphql_string(session_id)
+    ))
+    .await?;
     if existing["data"]["AgentSession"]
         .as_array()
         .is_none_or(Vec::is_empty)
@@ -100,13 +109,16 @@ async fn submit_edit_inner(
         db.node_identity.clone(),
         cancel.clone(),
     ));
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let result = match steer {
         Some(selected) => {
             submit_pending_user_steer(
                 &access,
                 db.node_identity.as_ref(),
-                AgentRequestAdmissionRecord::local_self(did),
+                AgentRequestAdmissionRecord::client(did),
                 None,
                 did,
                 session_id,
@@ -120,7 +132,7 @@ async fn submit_edit_inner(
             submit_pending_user_edit(
                 &access,
                 db.node_identity.as_ref(),
-                AgentRequestAdmissionRecord::local_self(did),
+                AgentRequestAdmissionRecord::client(did),
                 None,
                 did,
                 session_id,
@@ -135,7 +147,7 @@ async fn submit_edit_inner(
 }
 
 pub(super) async fn row(db: &TestDb, doc: &str) -> serde_json::Value {
-    let response = ConfigAccess::local(db.node.clone()).execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id content input lifecycle_state failure_reason admission_signature superseded_by_request_doc_id terminal_output }} }}"#, escape_graphql_string(doc))).await.unwrap();
+    let response = ConfigAccess::local_as(db.node.clone(), ::identity::Did::new(db.node_identity.did().to_owned()).unwrap()).execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id content input lifecycle_state failure_reason admission_signature superseded_by_request_doc_id terminal_output }} }}"#, escape_graphql_string(doc))).await.unwrap();
     let rows = response["data"]["AgentRequest"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
     rows[0].clone()
@@ -145,7 +157,10 @@ pub(super) async fn row(db: &TestDb, doc: &str) -> serde_json::Value {
 async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
     let db = test_db("signed-queue-management").await;
     let did = db.node_identity.did();
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let first = enqueue(
         &db,
         "general",
@@ -281,7 +296,10 @@ async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
 async fn stale_queue_snapshot_rejects_edit_without_mutating_signed_requests() {
     let db = test_db("stale-queue-management").await;
     let did = db.node_identity.did();
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let first = enqueue(
         &db,
         "general",
@@ -458,7 +476,10 @@ async fn authored_edit_keeps_queue_slot_and_retains_new_attachment_bytes() {
         original
     );
     let pending = pending_user_queue(
-        &ConfigAccess::local(db.node.clone()),
+        &ConfigAccess::local_as(
+            db.node.clone(),
+            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+        ),
         did,
         "authored-edit-session",
         did,
@@ -476,10 +497,13 @@ async fn authored_edit_changes_allowed_skills_without_losing_queue_position() {
     let db = test_db("allowed-edited-skill").await;
     let did = db.node_identity.did();
     crate::support::create_agent(&db.node, "general", did).await;
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let owner = escape_graphql_string(did);
     access.write("test.skill_context", &format!(r#"mutation {{ create_AgentContext(input: {{ node_did: "{owner}", context_id: "general:context", skill_ids: ["review"] }}) {{ _docID }} }}"#)).await.unwrap();
-    access.write("test.attach_context", &format!(r#"mutation {{ update_Agent(filter: {{ node_did: {{ _eq: "{owner}" }}, agent_id: {{ _eq: "general" }} }}, input: {{ context_id: "general:context" }}) {{ _docID }} }}"#)).await.unwrap();
+    access.write("test.attach_context", &format!(r#"mutation {{ update_Agent(filter: {{ node_did: {{ _eq: "{owner}" }}, agent_did: {{ _eq: "general" }} }}, input: {{ context_id: "general:context" }}) {{ _docID }} }}"#)).await.unwrap();
     let original = enqueue(
         &db,
         "general",
@@ -530,10 +554,13 @@ async fn queued_edit_accepts_skill_only_but_rejects_truly_empty_input() {
     let db = test_db("skill-only-queue-edit").await;
     let did = db.node_identity.did();
     crate::support::create_agent(&db.node, "general", did).await;
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let owner = escape_graphql_string(did);
     access.write("test.skill_context", &format!(r#"mutation {{ create_AgentContext(input: {{ node_did: "{owner}", context_id: "general:context", skill_ids: ["review"] }}) {{ _docID }} }}"#)).await.unwrap();
-    access.write("test.attach_context", &format!(r#"mutation {{ update_Agent(filter: {{ node_did: {{ _eq: "{owner}" }}, agent_id: {{ _eq: "general" }} }}, input: {{ context_id: "general:context" }}) {{ _docID }} }}"#)).await.unwrap();
+    access.write("test.attach_context", &format!(r#"mutation {{ update_Agent(filter: {{ node_did: {{ _eq: "{owner}" }}, agent_did: {{ _eq: "general" }} }}, input: {{ context_id: "general:context" }}) {{ _docID }} }}"#)).await.unwrap();
     let original = enqueue(
         &db,
         "general",
@@ -585,7 +612,10 @@ async fn queued_edit_accepts_skill_only_but_rejects_truly_empty_input() {
 async fn signed_pending_replacement_authenticates_delivery_and_each_position_field() {
     let db = test_db("queue-signature-tampering").await;
     let _did = db.node_identity.did();
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let original = enqueue(
         &db,
         "general",
@@ -692,7 +722,10 @@ async fn explicit_steering_prioritizes_one_message_without_losing_other_queued_i
     ] {
         originals.push(enqueue(&db, "general", session, id, content, QueueDelivery::Queue).await);
     }
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let snapshot = pending_user_queue(&access, did, session, did)
         .await
         .unwrap();

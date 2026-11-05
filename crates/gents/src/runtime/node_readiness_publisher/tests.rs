@@ -290,11 +290,11 @@ async fn replacement_ready_cannot_clear_demotion_until_source_generation_advance
         .send(|ack| Command::PublishSource {
             source: ReadinessSource {
                 active_generation: 1,
-                default_agent_id: "general".to_string(),
+                default_agent_did: "general".to_string(),
                 entries: BTreeMap::from([(
                     "general".to_string(),
                     AgentReadinessSourceEntry {
-                        agent_id: "general".to_string(),
+                        agent_did: "general".to_string(),
                         dispatcher_present: true,
                         unavailable_reason: None,
                         startup_demoted: false,
@@ -329,11 +329,11 @@ async fn replacement_ready_cannot_clear_demotion_until_source_generation_advance
         .send(|ack| Command::PublishSource {
             source: ReadinessSource {
                 active_generation: 2,
-                default_agent_id: "general".to_string(),
+                default_agent_did: "general".to_string(),
                 entries: BTreeMap::from([(
                     "general".to_string(),
                     AgentReadinessSourceEntry {
-                        agent_id: "general".to_string(),
+                        agent_did: "general".to_string(),
                         dispatcher_present: true,
                         unavailable_reason: None,
                         startup_demoted: false,
@@ -359,11 +359,11 @@ async fn invalid_source_leaves_committed_standing_and_observation_usable() {
         .send(|ack| Command::PublishSource {
             source: ReadinessSource {
                 active_generation: 1,
-                default_agent_id: "general".to_string(),
+                default_agent_did: "general".to_string(),
                 entries: BTreeMap::from([(
                     "general".to_string(),
                     AgentReadinessSourceEntry {
-                        agent_id: "general".to_string(),
+                        agent_did: "general".to_string(),
                         dispatcher_present: true,
                         unavailable_reason: None,
                         startup_demoted: false,
@@ -385,11 +385,11 @@ async fn invalid_source_leaves_committed_standing_and_observation_usable() {
         .send(|ack| Command::PublishSource {
             source: ReadinessSource {
                 active_generation: 2,
-                default_agent_id: "missing".to_string(),
+                default_agent_did: "missing".to_string(),
                 entries: BTreeMap::from([(
                     "general".to_string(),
                     AgentReadinessSourceEntry {
-                        agent_id: "general".to_string(),
+                        agent_did: "general".to_string(),
                         dispatcher_present: true,
                         unavailable_reason: None,
                         startup_demoted: false,
@@ -412,11 +412,11 @@ async fn invalid_source_leaves_committed_standing_and_observation_usable() {
         .send(|ack| Command::PublishSource {
             source: ReadinessSource {
                 active_generation: 2,
-                default_agent_id: "general".to_string(),
+                default_agent_did: "general".to_string(),
                 entries: BTreeMap::from([(
                     "general".to_string(),
                     AgentReadinessSourceEntry {
-                        agent_id: "general".to_string(),
+                        agent_did: "general".to_string(),
                         dispatcher_present: true,
                         unavailable_reason: None,
                         startup_demoted: false,
@@ -443,11 +443,11 @@ async fn unchanged_demoted_slot_stays_demoted_across_unrelated_global_generation
             .send(|ack| Command::PublishSource {
                 source: ReadinessSource {
                     active_generation,
-                    default_agent_id: "general".to_string(),
+                    default_agent_did: "general".to_string(),
                     entries: BTreeMap::from([(
                         "general".to_string(),
                         AgentReadinessSourceEntry {
-                            agent_id: "general".to_string(),
+                            agent_did: "general".to_string(),
                             dispatcher_present: true,
                             unavailable_reason: None,
                             startup_demoted: false,
@@ -624,4 +624,351 @@ fn generated_storage_failure_cases_bind_readiness_classification() {
             case["fatal_readiness"].as_bool().unwrap()
         );
     }
+}
+
+#[tokio::test]
+async fn readiness_parent_recovery_matches_native_owner_and_model() {
+    use crate::store::config_client::ConfigAccess;
+    use crate::store::identity::NodeIdentity;
+    use gents_protocol::node_readiness::NODE_READINESS_FORMAT_VERSION;
+
+    async fn verify_native_owner(
+        access: &ConfigAccess,
+        collection: &'static str,
+        id: &str,
+        expected: Option<&str>,
+    ) {
+        let ids = vec![id.to_owned()];
+        let owners = access
+            .transact_readonly("test.readiness.owner_evidence", |txn| {
+                let ids = &ids;
+                Box::pin(async move { txn.document_owners(collection, ids).await })
+            })
+            .await
+            .unwrap();
+        assert_eq!(owners.len(), 1);
+        assert!(
+            owners[0].visible,
+            "fixture row must exist and be visible in the transaction"
+        );
+        assert_eq!(
+            owners[0].owner.as_ref().map(identity::Did::as_str),
+            expected
+        );
+    }
+
+    async fn remove_native_owner(node: &defra_node::Node, resource: &str, id: &str) {
+        let acp = node.document_acp();
+        let policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+        assert!(acp.is_doc_registered(policy, resource, id).await.unwrap());
+        acp.unregister_doc_object(policy, resource, id)
+            .await
+            .unwrap();
+        assert!(!acp.is_doc_registered(policy, resource, id).await.unwrap());
+    }
+
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().identity_readiness_recovery_cases;
+    let mut checked = 0;
+    for case in cases.iter().filter(|case| {
+        matches!(
+            case["name"].as_str(),
+            Some(
+                "success"
+                    | "owner-unknown"
+                    | "owner-mismatch"
+                    | "parent-mismatch"
+                    | "foreign-runtime"
+                    | "unregistered-parent"
+                    | "already-complete"
+            )
+        )
+    }) {
+        checked += 1;
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            crate::KeyIdentity::load_or_create(dir.path().join("runtime.key"), None).unwrap();
+        let user = crate::KeyIdentity::load_or_create(dir.path().join("user.key"), None).unwrap();
+        let foreign =
+            crate::KeyIdentity::load_or_create(dir.path().join("foreign.key"), None).unwrap();
+        let node = Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(runtime.did())
+                .build()
+                .await
+                .unwrap(),
+        );
+        node.add_dac_policy_with_counter_as(
+            &defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned())),
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
+        .await
+        .unwrap();
+        node.add_collection(gents_protocol::schemas::NODE)
+            .await
+            .unwrap();
+        node.add_collection(gents_protocol::schemas::NODE_READINESS)
+            .await
+            .unwrap();
+        node.add_collection(gents_protocol::schemas::NODE_RUNTIME)
+            .await
+            .unwrap();
+        node.add_collection(gents_protocol::schemas::AGENT)
+            .await
+            .unwrap();
+        let user_access =
+            ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
+        let runtime_access =
+            ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
+        let parent_write = format!(
+            r#"mutation {{ create_Node(input: {{node_did: "{}"}}) {{_docID}} }}"#,
+            escape_graphql_string(runtime.did())
+        );
+        let parent = if case["name"] == "unregistered-parent" {
+            ConfigAccess::write_local(&node, "test.readiness.unregistered_parent", &parent_write)
+                .await
+                .unwrap()
+        } else {
+            user_access
+                .write("test.readiness.parent", &parent_write)
+                .await
+                .unwrap()
+        };
+        let parent = gents_protocol::graphql::extract_mutation_doc_id(&parent, "Node").unwrap();
+        if case["name"] != "unregistered-parent" {
+            user_access
+                .add_actor_relationship(
+                    "Node",
+                    &parent,
+                    "runtime_reader",
+                    &identity::Did::new(runtime.did()).unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+        if case["name"] == "unregistered-parent" {
+            verify_native_owner(&runtime_access, "Node", &parent, Some(runtime.did())).await;
+            remove_native_owner(&node, "nodes", &parent).await;
+            verify_native_owner(&runtime_access, "Node", &parent, None).await;
+        } else {
+            verify_native_owner(&runtime_access, "Node", &parent, Some(user.did())).await;
+        }
+        let recorded_parent = if case["name"] == "parent-mismatch" {
+            "another-parent"
+        } else {
+            parent.as_str()
+        };
+        let linked = !case["pending"].as_bool().unwrap();
+        let mutation = format!(
+            r#"mutation {{ create_NodeReadiness(input: {{node_did: "{}", node_doc_id: "{}", parent_linked: {linked}, snapshot_json: "{{}}", updated_at: "2026-01-01T00:00:00Z"}}) {{_docID}} }}"#,
+            escape_graphql_string(runtime.did()),
+            escape_graphql_string(recorded_parent)
+        );
+        let created = match case["name"].as_str().unwrap() {
+            "owner-unknown" => {
+                ConfigAccess::write_local(&node, "test.readiness.unregistered", &mutation)
+                    .await
+                    .unwrap()
+            }
+            "owner-mismatch" => user_access
+                .write("test.readiness.wrong_owner", &mutation)
+                .await
+                .unwrap(),
+            _ => runtime_access
+                .write("test.readiness.pending", &mutation)
+                .await
+                .unwrap(),
+        };
+        let doc =
+            gents_protocol::graphql::extract_mutation_doc_id(&created, "NodeReadiness").unwrap();
+        if case["name"] == "owner-unknown" {
+            verify_native_owner(&runtime_access, "NodeReadiness", &doc, Some(runtime.did())).await;
+            remove_native_owner(&node, "operations", &doc).await;
+            verify_native_owner(&runtime_access, "NodeReadiness", &doc, None).await;
+        } else if case["name"] == "owner-mismatch" {
+            verify_native_owner(&user_access, "NodeReadiness", &doc, Some(user.did())).await;
+        } else {
+            verify_native_owner(&runtime_access, "NodeReadiness", &doc, Some(runtime.did())).await;
+        }
+        let snapshot = NodeReadinessSnapshot {
+            format_version: NODE_READINESS_FORMAT_VERSION,
+            process_state: NodeReadinessProcessState::Ready,
+            active_generation: 1,
+            router_generation: 1,
+            default_agent_did: "general".to_owned(),
+            agents: vec![gents_protocol::node_readiness::AgentReadinessEntry {
+                agent_did: "general".to_owned(),
+                state: gents_protocol::node_readiness::AgentReadinessState::Ready,
+                reason: None,
+            }],
+        };
+        let selected = if case["name"] == "foreign-runtime" {
+            foreign.did()
+        } else {
+            runtime.did()
+        };
+        let result =
+            upsert_node_readiness(&node, selected, &snapshot, "2026-01-01T00:00:01Z").await;
+        let expected_ok = matches!(case["name"].as_str(), Some("success" | "already-complete"));
+        assert_eq!(result.is_ok(), expected_ok, "{case}: {result:?}");
+        let observation_access = if case["name"] == "owner-mismatch" {
+            &user_access
+        } else {
+            &runtime_access
+        };
+        let observed = observation_access
+            .execute(&format!(
+                r#"{{ NodeReadiness(filter: {{_docID: {{_eq: "{}"}}}}) {{parent_linked}} }}"#,
+                escape_graphql_string(&doc)
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            observed["data"]["NodeReadiness"][0]["parent_linked"], case["expected_parent_linked"],
+            "{case}"
+        );
+        let observation_name = match case["name"].as_str().unwrap() {
+            "success" => Some("valid"),
+            "owner-unknown" => Some("readiness-unregistered"),
+            "owner-mismatch" => Some("foreign-readiness"),
+            "parent-mismatch" => Some("replaced-parent"),
+            "unregistered-parent" => Some("node-unregistered"),
+            "already-complete" => Some("revoked-after-publication"),
+            _ => None,
+        };
+        if let Some(observation_name) = observation_name {
+            if !matches!(case["name"].as_str(), Some("success" | "already-complete")) {
+                let mark = format!(
+                    r#"mutation {{ update_NodeReadiness(docID: "{}", input: {{parent_linked: true}}) {{_docID}} }}"#,
+                    escape_graphql_string(&doc)
+                );
+                match case["name"].as_str().unwrap() {
+                    "owner-unknown" => {
+                        ConfigAccess::write_local(&node, "test.readiness.mark_unregistered", &mark)
+                            .await
+                            .unwrap();
+                    }
+                    "owner-mismatch" => {
+                        user_access
+                            .write("test.readiness.mark_foreign", &mark)
+                            .await
+                            .unwrap();
+                    }
+                    _ => {
+                        runtime_access
+                            .write("test.readiness.mark_mismatch", &mark)
+                            .await
+                            .unwrap();
+                    }
+                }
+            }
+            if case["name"] == "owner-unknown" {
+                verify_native_owner(&runtime_access, "NodeReadiness", &doc, None).await;
+            }
+            let model = crate::lean_vocab_test::lean_contract_snapshot()
+                .identity_readiness_observation_cases
+                .iter()
+                .find(|model| model["name"] == observation_name)
+                .unwrap();
+            let actor = identity::Did::new(runtime.did()).unwrap();
+            let actual = runtime_access
+                .transact_readonly("test.readiness.observe_owner", |txn| {
+                    let actor = &actor;
+                    Box::pin(async move { observe_published_readiness(txn, actor).await })
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                actual.is_some(),
+                model["expected_usable"].as_bool().unwrap(),
+                "{model}"
+            );
+        }
+        if case["name"] == "success" {
+            use crate::runtime::agent::directory_projection::DirectoryStore;
+            runtime_access.write("test.readiness.runtime_status", &format!(
+                r#"mutation {{ create_NodeRuntime(input: {{node_did: "{}", reconcile_phase: "idle", last_reconcile_result: "applied"}}) {{_docID}} }}"#,
+                escape_graphql_string(runtime.did()),
+            )).await.unwrap();
+            user_access.write("test.readiness.private_agent", &format!(
+                r#"mutation {{ create_Agent(input: {{node_did: "{}", agent_did: "private-agent"}}) {{_docID}} }}"#,
+                escape_graphql_string(runtime.did()),
+            )).await.unwrap();
+            let goal = crate::goal::observe_goal_agent(&node, runtime.did(), Some("general"), None)
+                .await
+                .unwrap();
+            assert!(matches!(
+                goal.observation,
+                crate::goal::GoalAgentObservation::Ready { .. }
+            ));
+            assert!(
+                !goal.settled,
+                "persisted NodeRuntime must not supply live settled state"
+            );
+            assert!(
+                crate::goal::observe_goal_agent(&node, foreign.did(), Some("general"), None)
+                    .await
+                    .is_err()
+            );
+            let directory = crate::runtime::agent::directory_projection::GraphqlDirectoryStore::new(
+                node.clone(),
+            );
+            let observed = directory.load_source_snapshot().await.unwrap();
+            assert!(
+                observed.runtimes.is_empty(),
+                "readiness must not enter the shared directory"
+            );
+            assert!(
+                observed.nodes.is_empty(),
+                "private Node must not be projected through runtime authority"
+            );
+            assert!(
+                observed.agents.is_empty(),
+                "private Agent must not be projected through runtime authority"
+            );
+        }
+        if case["name"] == "success" || case["name"] == "already-complete" {
+            let visible = user_access
+                .execute(&format!(
+                    r#"{{ NodeReadiness(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+                    escape_graphql_string(&doc)
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                !visible["data"]["NodeReadiness"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty(),
+                case["expected_parent_granted"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+        node.shutdown().await.unwrap();
+    }
+    assert_eq!(checked, 7);
+
+    let unbound = crate::lean_vocab_test::lean_contract_snapshot()
+        .identity_readiness_preflight_cases
+        .iter()
+        .find(|case| case["name"] == "unbound")
+        .unwrap();
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let unbound_sdl = gents_protocol::schemas::NODE_READINESS.replace(
+        &format!(
+            " @policy(id: \"{}\", resource: \"operations\")",
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+        ),
+        "",
+    );
+    node.add_collection(&unbound_sdl).await.unwrap();
+    let result = crate::ensure_runtime_schemas(node.as_ref()).await;
+    assert_eq!(result.is_ok(), unbound["expected"].as_bool().unwrap());
+    assert!(node
+        .get_collection("NodeReadiness")
+        .unwrap()
+        .unwrap()
+        .policy
+        .is_none());
+    node.shutdown().await.unwrap();
 }

@@ -167,6 +167,7 @@ fn gate_test_loop_config() -> crate::runtime::agent::loop_stream::LoopConfig {
         additional_params: None,
         structured_output: None,
         tool_choice: None,
+        configuration_guard: None,
         on_rendered_request: None,
         turn_compactor: None,
         active_reduction_keys: Vec::new(),
@@ -1601,6 +1602,7 @@ fn scheduled_origin_config() -> crate::runtime::agent::loop_stream::LoopConfig {
         additional_params: None,
         structured_output: None,
         tool_choice: None,
+        configuration_guard: None,
         on_rendered_request: None,
         turn_compactor: None,
         active_reduction_keys: Vec::new(),
@@ -2788,6 +2790,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         additional_params: None,
         structured_output: None,
         tool_choice: None,
+        configuration_guard: None,
         on_rendered_request: None,
         turn_compactor: None,
         active_reduction_keys: Vec::new(),
@@ -2814,7 +2817,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         let request_id = crate::store::graphql::escape_graphql_string("request-compaction-test");
         let session_id = crate::store::graphql::escape_graphql_string("session-1");
         let node_did = crate::store::graphql::escape_graphql_string(node_did);
-        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "compaction", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", request_hop: 0, failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#)).await;
+        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_did: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "compaction", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", request_hop: 0, failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#)).await;
         assert!(!created.has_errors(), "{:#?}", created.errors);
         let row = node.execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
@@ -2965,6 +2968,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             .expect("exact reduction must resolve to a durable cursor");
     session::save_compaction_entry(
         &node,
+        "did:test:test",
         "session-1",
         "did:test:test",
         "request-compaction-test",
@@ -2980,7 +2984,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     .await
     .unwrap();
 
-    let entries = session::load_compaction_entries(&node, "session-1", "did:test:test", None)
+    let entries = session::load_compaction_entries(&crate::store::config_client::ConfigAccess::local(node.clone()), "session-1", "did:test:test", None)
         .await
         .unwrap();
     assert_eq!(entries.len(), 1);
@@ -2994,9 +2998,10 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         "compaction must not mutate the durable transcript the timeline is built from"
     );
 
-    let state = session::load_prompt_compaction_state(&node, "session-1", node_did, None, None)
-        .await
-        .unwrap();
+    let state =
+        session::load_prompt_compaction_state(&node, node_did, "session-1", node_did, None, None)
+            .await
+            .unwrap();
     assert_eq!(
         state.compacted_through_sequence,
         Some(compacted_through_sequence)

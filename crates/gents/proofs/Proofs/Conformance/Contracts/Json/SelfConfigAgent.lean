@@ -33,7 +33,7 @@ private def agentEditPatchJson (f : AgentEditFields) : String :=
 private def agentDecisionRowFields (r : AgentDecisionRow) : String :=
     "\"name\":" ++ jsonString r.name ++ ","
     ++ "\"agents\":" ++ jsonArray (r.catalog.agents.map fun a =>
-        "{\"agent_id\":" ++ jsonString a.1 ++ ",\"enabled\":" ++ agentBool a.2 ++ "}") ++ ","
+        "{\"agent_did\":" ++ jsonString a.1 ++ ",\"enabled\":" ++ agentBool a.2 ++ "}") ++ ","
     ++ "\"protected_ids\":" ++ jsonStringArray r.catalog.protectedIds ++ ","
     ++ "\"default_id\":" ++ (match r.catalog.defaultId with
         | some id => jsonString id
@@ -83,7 +83,7 @@ private def candidateFixtureJson (f : CandidateFixture) : String :=
   "{"
     ++ "\"node_did\":" ++ jsonString f.nodeDid ++ ","
     ++ "\"agents\":" ++ jsonArray (f.agents.map fun (id, a) =>
-        "{\"agent_id\":" ++ jsonString id ++ ","
+        "{\"agent_did\":" ++ jsonString id ++ ","
           ++ "\"context_id\":" ++ jsonOptionalString a.contextId ++ ","
           ++ "\"inference_profile_id\":" ++ jsonString a.profileId ++ ","
           ++ "\"enabled\":" ++ agentBool a.enabled ++ "}") ++ ","

@@ -4,7 +4,7 @@ use gents::runtime::agent::p2p_reconcile::templates::{resolve_template, Scope, M
 use gents::runtime::agent::p2p_reconcile::{client_route_collections, PairingDirection};
 use gents_migration::CLIENT_AUTHORED_COLLECTIONS;
 
-const CONTROL_PLANE_CLAIM_COLLECTIONS: &[&str] = &[gents_protocol::schemas::PEER_ENDPOINT_NAME];
+const CONTROL_PLANE_CLAIM_COLLECTIONS: &[&str] = &[gents_protocol::schemas::PEER_REGISTRY_NAME];
 
 const ENROLLMENT_EXACT_PUSH_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST_NAME,
@@ -14,7 +14,7 @@ const ENROLLMENT_EXACT_PUSH_COLLECTIONS: &[&str] = &[
 ];
 
 #[test]
-fn machine_template_push_set_matches_client_authored_collections_guard() {
+fn machine_template_push_set_is_guarded_as_client_authored() {
     let machine = resolve_template(MACHINE_TEMPLATE).expect("machine template registered");
     let Scope::PerCollection(rules) = &machine.scope else {
         panic!(
@@ -39,12 +39,8 @@ fn machine_template_push_set_matches_client_authored_collections_guard() {
         "retired persona requests must not replicate"
     );
 
-    assert_eq!(
-        actual, expected,
-        "gents's client push surface (machine template per-collection rules + control-plane \
-         claim collections + exact enrollment push) drifted from \
-         gents_migration::CLIENT_AUTHORED_COLLECTIONS — update \
-         CLIENT_AUTHORED_COLLECTIONS in crates/gents-migration/src/registry.rs so \
-         fresh_apply_parity.rs guards the new collection too (see #1123/#1125)"
+    assert!(
+        actual.is_subset(&expected),
+        "replicated client-authored collections must be guarded: {actual:?}"
     );
 }

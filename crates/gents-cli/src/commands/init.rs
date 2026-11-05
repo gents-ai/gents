@@ -15,7 +15,7 @@ use gents::store::config_client::{
 };
 use gents::tools::builtin::self_config::engineer_self_config;
 use gents::{
-    default_agent_id_for_node, default_inference_profile_id_for_agent, load_agent, load_node,
+    default_inference_profile_id_for_agent, load_agent, load_node,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity, BashMode,
     Collection, CommandExecutionMode, FileToolMode, InferenceProfile, KeyIdentity, NodeIdentity,
 };
@@ -167,11 +167,19 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
         eprintln!("{YOLO_WARNING}");
     }
     crate::interactive_backend::resolve_backend_interactively(&mut args).await?;
+    if !args.identity_only {
+        resolve_init_model_name(&args)?;
+    }
     let data_dir = args
         .data_dir
         .clone()
         .unwrap_or_else(|| default_data_dir(&home_dir));
     let store_lock = lock_init_store(&home_dir, &data_dir, args.dangerously_overwrite)?;
+    let fresh_store = tokio::fs::read_dir(&data_dir)
+        .await?
+        .next_entry()
+        .await?
+        .is_none();
 
     if args.identity_only {
         if args.identity_backend != IdentityBackendArg::File && args.key_path.is_some() {
@@ -223,6 +231,33 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
         return Ok(output);
     }
 
+    let fresh_backend = if fresh_store {
+        Some(
+            gents::store::local::backend_protection::FreshBackendStore::observe(
+                &data_dir,
+                &store_lock,
+            )
+            .await?,
+        )
+    } else {
+        let key = gents::store::local::store_key::open_home_store_key(&home_dir, &data_dir).await?;
+        let provenance = gents::store::local::backend_protection::ProtectedBackendStore::open(
+            &data_dir,
+            &key,
+            &store_lock,
+        )
+        .await?;
+        let existing =
+            read_init_config(&home_dir)?.context("existing home has no initialized identity")?;
+        let identity = crate::home_state::load_initialized_home_identity(&home_dir, &existing)?;
+        provenance.preflight(&key, Some(identity.did())).await?;
+        None
+    };
+
+    if fresh_store {
+        reserve_fresh_bootstrap(&home_dir).await?;
+    }
+
     let initialized_identity = load_or_create_home_identity(HomeIdentityOptions {
         home: &home_dir,
         node_name: &args.node_name,
@@ -259,30 +294,77 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
         &mut stored,
     )
     .await?;
+    if let Some(fresh_backend) = fresh_backend {
+        fresh_backend
+            .initialize(
+                &store_key,
+                initialized_identity.node_identity_did.as_deref(),
+            )
+            .await?;
+    }
     let mut node_builder =
         gents::store::local::store_key::persistent_builder(&data_dir, &store_key)?;
     if let Some(node_identity_did) = initialized_identity.node_identity_did.as_ref() {
-        node_builder = node_builder.with_node_identity_did(node_identity_did.clone());
+        node_builder = node_builder
+            .with_node_identity_did(node_identity_did.clone())
+            .with_node_acp_enabled();
     }
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let graphql_url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+    node_builder = node_builder.with_http(gents::defra_node::HttpConfig::with_listener(listener)?);
     let node_arc = std::sync::Arc::new(
         node_builder
             .build()
             .await
             .context("building embedded DefraDB node for init")?,
     );
-    let access = ConfigAccess::claimed_local(node_arc, store_lock)?;
-    let init_node = access
+    let client_paths = crate::home_state::cli_identity_paths()?;
+    client_paths.ensure_root_dirs().await?;
+    let client_identity =
+        gents_desktop_core::client::PrincipalIdentity::load_or_create(&client_paths).await?;
+    let held_store_access = ConfigAccess::claimed_local_as(
+        node_arc,
+        store_lock,
+        identity::Did::new(client_identity.did().to_owned())?,
+    )?;
+    let init_node = held_store_access
         .local_node()
         .context("init requires claimed local DefraDB access")?
         .clone();
+    let client_signing = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        client_identity.private_key_bytes(),
+    )?;
+    let access = ConfigAccess::Graphql(
+        gents::store::config_client::GraphqlEndpoint::as_principal(
+            graphql_url,
+            client_identity.did(),
+        )
+        .with_client_signing_capability(client_signing)?
+        .with_client_signed_agent_creates(),
+    );
     let result = async {
         gents::store::schema::migration::ensure_all_runtime_migrations(init_node.clone()).await?;
         gents::store::local::store_key::upgrade::finish(&data_dir)?;
+        let binding = if fresh_store {
+            Some(provision_fresh_home(&init_node, initialized_identity.identity.as_ref(), client_identity.did()).await?)
+        } else {
+            let existing = load_node(&init_node, initialized_identity.identity.did()).await?
+                .context("home initialization is incomplete or its Node is unavailable; explicit recovery is required")?;
+            if existing.default_agent_did.as_deref().is_none_or(str::is_empty) {
+                Some(gents::store::identity::provision_agent_identity_authorized(
+                    &init_node, initialized_identity.identity.as_ref(), &identity::Did::new(client_identity.did())?,
+                ).await?)
+            } else {
+                None
+            }
+        };
         let summary = initialize_runtime_home(
             &access,
+            &init_node,
             &args,
-            initialized_identity.identity.did(),
+            initialized_identity.identity.as_ref(),
             tool_package,
+            binding,
         )
         .await?;
         write_init_config(&home_dir, &stored)?;
@@ -308,14 +390,13 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
             "identity_backend": initialized_identity.identity_backend,
             "keychain_label": initialized_identity.keychain_label,
             "secure_enclave_label": initialized_identity.secure_enclave_label,
-            "default_agent_id": summary.default_agent_id,
+            "default_agent_did": summary.default_agent_did,
             "tools_id": summary.tools_id,
             "wide_open_preset_id": summary.wide_open_preset_id,
             "inference_profile_id": summary.inference_profile_id,
             "tool_package": format_tool_package(summary.tool_package),
             "tool_ceiling": format_tool_ceiling(summary.tool_ceiling),
             "tool_root": summary.tool_root,
-            "enable_memory": summary.enable_memory,
             "enable_defra_query": summary.enable_defra_query,
             "defra_query_collections": summary.defra_query_collections,
             "runtime_state_reset": runtime_state_reset,
@@ -347,8 +428,66 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
         Ok(output)
     }
     .await;
-    init_node.shutdown().await;
+    if let Err(error) = init_node.shutdown().await {
+        tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+    }
     result
+}
+
+/// A consumed marker is never removed by ordinary initialization; an
+/// ambiguous or interrupted grant attempt cannot become a fresh attempt.
+async fn reserve_fresh_bootstrap(home: &Path) -> Result<()> {
+    let marker = home.join(".node-bootstrap-consumed");
+    let file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&marker)
+        .await
+        .context("fresh home bootstrap was already attempted; explicit recovery is required")?;
+    file.sync_all()
+        .await
+        .context("syncing bootstrap reservation")?;
+    #[cfg(unix)]
+    tokio::fs::File::open(home)
+        .await?
+        .sync_all()
+        .await
+        .context("syncing bootstrap reservation directory")?;
+    Ok(())
+}
+
+async fn provision_fresh_home(
+    node: &Arc<gents::defra_node::Node>,
+    runtime: &dyn NodeIdentity,
+    client: &str,
+) -> Result<gents_protocol::agent_identity::AgentIdentityBinding> {
+    use gents::store::config_client::NodePermission;
+    anyhow::ensure!(
+        node.node_identity_did() == Some(runtime.did()),
+        "bootstrap runtime identity does not match the node"
+    );
+    let client = identity::Did::new(client)?;
+    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+    let binding = gents::store::identity::provision_agent_identity(runtime)?;
+    let agent = identity::Did::new(&binding.agent_did)?;
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DocumentDelete,
+        NodePermission::DacRelationAdd,
+        NodePermission::DacRelationDelete,
+    ] {
+        access.grant_node_permission(&client, permission).await?;
+    }
+    for permission in [
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DacRelationAdd,
+    ] {
+        access.grant_node_permission(&agent, permission).await?;
+    }
+    Ok(binding)
 }
 
 fn added_account_note(sign_in: &gents::inference::auth::credential::SignIn) -> Option<String> {
@@ -825,13 +964,17 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
 
 async fn initialize_runtime_home(
     access: &ConfigAccess,
+    node: &Arc<gents::defra_node::Node>,
     args: &InitArgs,
-    node_did: &str,
+    runtime: &dyn NodeIdentity,
     tool_package: ToolPackageArg,
+    fresh_binding: Option<gents_protocol::agent_identity::AgentIdentityBinding>,
 ) -> Result<InitSummary> {
-    let Some(node) = access.local_node() else {
-        anyhow::bail!("init requires local DefraDB access");
-    };
+    let node_did = runtime.did();
+    anyhow::ensure!(
+        node.node_identity_did() == Some(node_did),
+        "initialization runtime identity does not match the node"
+    );
     let explicit_backend_id = args
         .backend_id
         .as_deref()
@@ -858,18 +1001,24 @@ async fn initialize_runtime_home(
             }
         });
     let existing_node = load_node(node, node_did).await?;
-    let default_agent_id = existing_node
-        .as_ref()
-        .and_then(|node_document| {
-            normalize_optional_string(node_document.default_agent_id.as_deref())
-        })
-        .unwrap_or_else(|| default_agent_id_for_node(node_did));
-    let existing_default_agent = load_agent(node, &default_agent_id).await?;
+    let existing_default_id = existing_node.as_ref().and_then(|node_document| {
+        normalize_optional_string(node_document.default_agent_did.as_deref())
+    });
+    let existing_default_agent = match existing_default_id.as_deref() {
+        Some(did) => load_agent(node, did).await?,
+        None => None,
+    };
+    let binding = match &existing_default_agent {
+        Some(agent) => agent.identity_binding(),
+        None => fresh_binding.context("new agent identity was not provisioned")?,
+    };
+    gents::store::identity::resolve_agent_identity(runtime, &binding)?;
+    let default_agent_did = binding.agent_did.clone();
     if let Some(agent) = existing_default_agent.as_ref() {
         if agent.node_did != node_did {
             anyhow::bail!(
                 "Agent {} belongs to {} not {}",
-                default_agent_id,
+                default_agent_did,
                 agent.node_did,
                 node_did
             );
@@ -883,7 +1032,7 @@ async fn initialize_runtime_home(
         .as_ref()
         .map(|node_document| node_document.enabled)
         .unwrap_or(true);
-    let tools_id = default_tools_id_for_agent(&default_agent_id);
+    let tools_id = default_tools_id_for_agent(&default_agent_did);
     let tool_ceiling = tool_ceiling_for_package(tool_package);
     let tool_root = resolve_tool_root_for_package(tool_package, args.tool_root.as_deref())?;
     let explicit_workspace_policy = gents::tools::surface::load_workspace_root_policy(node, None)
@@ -894,6 +1043,7 @@ async fn initialize_runtime_home(
         .flatten();
     let backend_auth = backend_auth_for_init(&backend)?;
     let backend_doc = InferenceBackend {
+        physical_doc_id: None,
         node_did: node_did.to_string(),
         backend_id: backend_id.clone(),
         name: backend_name.clone(),
@@ -920,7 +1070,6 @@ async fn initialize_runtime_home(
         &tools_id,
         tool_package,
         pinned_tool_root,
-        args.enable_memory,
         enable_defra_query,
         args.defra_query_collections.clone(),
     );
@@ -929,7 +1078,7 @@ async fn initialize_runtime_home(
         .engineer
         .then(|| engineer_tools(&mut tools, node_did, !args.disable_defra_query));
     let context = AgentContext {
-        context_id: default_context_id_for_agent(&default_agent_id),
+        context_id: default_context_id_for_agent(&default_agent_did),
         node_did: node_did.to_string(),
         display_name: Some(if args.engineer {
             "The Engineer".to_string()
@@ -947,7 +1096,7 @@ async fn initialize_runtime_home(
         skill_ids: Vec::new(),
         tags: Vec::new(),
     };
-    let inference_profile_id = default_inference_profile_id_for_agent(&default_agent_id);
+    let inference_profile_id = default_inference_profile_id_for_agent(&default_agent_did);
     let inference_execution_id = default_inference_execution_id_for_profile(&inference_profile_id);
     let inference_execution = standard_inference_execution(node_did, &inference_execution_id);
     let mut inference_profile = standard_inference_profile(
@@ -958,7 +1107,8 @@ async fn initialize_runtime_home(
     );
     inference_profile.execution_id = Some(inference_execution_id);
     let agent = Agent {
-        agent_id: default_agent_id.clone(),
+        agent_did: default_agent_did.clone(),
+        creation_nonce: binding.creation_nonce,
         node_did: node_did.to_string(),
         display_name: Some(if args.engineer {
             "The Engineer".to_string()
@@ -1008,11 +1158,24 @@ async fn initialize_runtime_home(
         access,
         node_did,
         &node_display_name,
-        &default_agent_id,
+        &default_agent_did,
         node_enabled,
         documents,
     )
     .await?;
+    access
+        .transact_write("init.grant_self_configuration", |txn| {
+            let default_agent_did = &default_agent_did;
+            Box::pin(async move {
+                gents::store::config_client::grant_selected_self_configuration(
+                    txn,
+                    node_did,
+                    default_agent_did,
+                )
+                .await
+            })
+        })
+        .await?;
 
     Ok(InitSummary {
         backend_id,
@@ -1024,14 +1187,13 @@ async fn initialize_runtime_home(
         model_name: model_name.unwrap_or_default().to_string(),
         max_concurrent: backend_doc.effective_max_concurrent(),
         max_queue_depth: args.max_queue_depth,
-        default_agent_id,
+        default_agent_did,
         tools_id: tools_id.clone(),
         wide_open_preset_id,
         inference_profile_id,
         tool_package,
         tool_ceiling,
         tool_root: tool_root.map(|path| path.to_string_lossy().to_string()),
-        enable_memory: args.enable_memory,
         enable_defra_query,
         defra_query_collections: args.defra_query_collections.clone(),
         created_node: existing_node.is_none(),
@@ -1043,13 +1205,17 @@ async fn publish_home_config(
     access: &ConfigAccess,
     node_did: &str,
     display_name: &str,
-    default_agent_id: &str,
+    default_agent_did: &str,
     enabled: bool,
     documents: Vec<DesiredStateApplyDocument>,
 ) -> Result<()> {
+    let created_by = access
+        .actor_did()
+        .context("bootstrap requires the client's identity")?;
     access
         .transact_write("init.initialize_runtime_home", |txn| {
             let mut documents = documents.clone();
+            let created_by = created_by.clone();
             Box::pin(async move {
                 let mut node_document =
                     read_desired_state_record_in_txn(txn, Collection::Node, node_did, node_did)
@@ -1059,11 +1225,11 @@ async fn publish_home_config(
                             json!({
                                 "node_did": node_did,
                                 "created_at": chrono::Utc::now().to_rfc3339(),
-                                "created_by": node_did,
+                                "created_by": created_by,
                             })
                         });
                 node_document["display_name"] = json!(display_name);
-                node_document["default_agent_id"] = json!(default_agent_id);
+                node_document["default_agent_did"] = json!(default_agent_did);
                 node_document["enabled"] = json!(enabled);
                 documents.push(DesiredStateApplyDocument {
                     collection: Collection::Node,
@@ -1089,12 +1255,12 @@ where
     })
 }
 
-fn default_tools_id_for_agent(agent_id: &str) -> String {
-    format!("{agent_id}-tools")
+fn default_tools_id_for_agent(agent_did: &str) -> String {
+    format!("{agent_did}-tools")
 }
 
-fn default_context_id_for_agent(agent_id: &str) -> String {
-    format!("{agent_id}-context")
+fn default_context_id_for_agent(agent_did: &str) -> String {
+    format!("{agent_did}-context")
 }
 
 fn tools_for_package(
@@ -1102,7 +1268,6 @@ fn tools_for_package(
     tools_id: &str,
     tool_package: ToolPackageArg,
     tool_root: Option<PathBuf>,
-    enable_memory: bool,
     enable_defra_query: bool,
     defra_query_collections: Vec<String>,
 ) -> Tools {
@@ -1162,7 +1327,6 @@ fn tools_for_package(
         built_ins: Some(BuiltInTools {
             enable_goal_tools: privileged.then_some(true),
             enable_goal_creation: Some(false),
-            enable_memory: Some(enable_memory),
             enable_session_history_tool: None,
             enable_schema_tool: None,
             enable_p2p_tool: None,
@@ -1289,13 +1453,12 @@ fn resolve_init_tool_package(
 
 fn validate_init_tool_flags(args: &InitArgs, tool_package: ToolPackageArg) -> Result<()> {
     if args.identity_only
-        && (args.enable_memory
-            || args.enable_defra_query
+        && (args.enable_defra_query
             || args.disable_defra_query
             || !args.defra_query_collections.is_empty())
     {
         anyhow::bail!(
-            "--enable-memory, --enable-defra-query, --disable-defra-query, and --defra-query-collection cannot be used with --identity-only because no Tools document is written"
+            "--enable-defra-query, --disable-defra-query, and --defra-query-collection cannot be used with --identity-only because no Tools document is written"
         );
     }
     if !args.defra_query_collections.is_empty()
@@ -1651,23 +1814,26 @@ mod tests {
             Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
         let owner = identity.did().to_string();
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            gents::defra_node::Node::builder()
                 .with_node_identity_did(owner.clone())
                 .build()
                 .await
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::local(node.clone());
+        let user_home = tempfile::tempdir().unwrap();
+        let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
+        let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
 
-        let agent_id = default_agent_id_for_node(&owner);
-        let profile_id = default_inference_profile_id_for_agent(&agent_id);
+        let binding = gents::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+        let agent_did = binding.agent_did;
+        let profile_id = default_inference_profile_id_for_agent(&agent_did);
         let execution_id = default_inference_execution_id_for_profile(&profile_id);
         let backend_id = default_backend_id_for_agent(&owner);
         let backend = json!({"node_did": owner, "backend_id": backend_id, "name": "Local",
             "provider_kind": "OpenAiCompatible", "endpoint": "http://localhost:8000/v1",
             "auth": {"kind": "unauthenticated"}, "enabled": true});
-        let agent = json!({"node_did": owner, "agent_id": agent_id,
+        let agent = json!({"node_did": owner, "agent_did": agent_did, "creation_nonce": binding.creation_nonce,
             "inference_profile_id": profile_id, "enabled": true});
         let mut profile = standard_inference_profile(&owner, &profile_id, &backend_id, "model");
         profile.execution_id = Some(execution_id.clone());
@@ -1689,7 +1855,7 @@ mod tests {
                 update: agent,
             },
         ];
-        publish_home_config(&access, &owner, "Agent", &agent_id, true, documents)
+        publish_home_config(&access, &owner, "Agent", &agent_did, true, documents)
             .await
             .unwrap();
         gents::inference::backends::registry::set_backend_probe_status_with_last_probe(
@@ -1712,7 +1878,7 @@ mod tests {
         let resolved = agent
             .agents()
             .iter()
-            .find(|resolved| resolved.agent_id == agent_id)
+            .find(|resolved| resolved.agent_did == agent_did)
             .expect("init default agent resolves");
         assert_eq!(
             resolved.max_turns,
@@ -1732,20 +1898,30 @@ mod tests {
             Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
         let owner = identity.did().to_string();
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            gents::defra_node::Node::builder()
                 .with_node_identity_did(owner.clone())
                 .build()
                 .await
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::local(node.clone());
+        let user_home = tempfile::tempdir().unwrap();
+        let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
+        let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
 
         let args = init_args();
         let tool_package = resolve_initial_tool_package(&args).unwrap();
-        let summary = initialize_runtime_home(&access, &args, &owner, tool_package)
-            .await
-            .expect("a fresh home initializes");
+        let binding = gents::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+        let summary = initialize_runtime_home(
+            &access,
+            &node,
+            &args,
+            identity.as_ref(),
+            tool_package,
+            Some(binding),
+        )
+        .await
+        .expect("a fresh home initializes");
         gents::inference::backends::registry::set_backend_probe_status_with_last_probe(
             &node,
             &owner,
@@ -1767,7 +1943,7 @@ mod tests {
             Some(identity.clone()),
             &gents::tools::surface::SelfConfigToolConfig {
                 enabled: true,
-                agent_id: summary.default_agent_id.clone(),
+                agent_did: summary.default_agent_did.clone(),
                 categories: categories.into_iter().collect(),
                 ..Default::default()
             },
@@ -1794,7 +1970,7 @@ mod tests {
         let resolved = agent
             .agents()
             .iter()
-            .find(|resolved| resolved.agent_id == summary.default_agent_id)
+            .find(|resolved| resolved.agent_did == summary.default_agent_did)
             .expect("init default agent resolves")
             .clone();
         assert_eq!(resolved.max_turns, 250);
@@ -1812,21 +1988,31 @@ mod tests {
             Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
         let owner = identity.did().to_string();
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            gents::defra_node::Node::builder()
                 .with_node_identity_did(owner.clone())
                 .build()
                 .await
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::local(node.clone());
+        let user_home = tempfile::tempdir().unwrap();
+        let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
+        let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
 
         let mut args = init_args();
         args.engineer = engineer;
         let tool_package = resolve_initial_tool_package(&args).unwrap();
-        let summary = initialize_runtime_home(&access, &args, &owner, tool_package)
-            .await
-            .expect("a fresh home initializes");
+        let binding = gents::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+        let summary = initialize_runtime_home(
+            &access,
+            &node,
+            &args,
+            identity.as_ref(),
+            tool_package,
+            Some(binding),
+        )
+        .await
+        .expect("a fresh home initializes");
         gents::inference::backends::registry::set_backend_probe_status_with_last_probe(
             &node,
             &owner,
@@ -1847,7 +2033,7 @@ mod tests {
         agent
             .agents()
             .iter()
-            .find(|resolved| resolved.agent_id == summary.default_agent_id)
+            .find(|resolved| resolved.agent_did == summary.default_agent_did)
             .expect("init default agent resolves")
             .tools
             .explain_with_runtime(false, &owner, &Default::default())
@@ -1886,7 +2072,9 @@ mod tests {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::local(node.clone());
+        let user_home = tempfile::tempdir().unwrap();
+        let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None).unwrap();
+        let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
         let owner = "did:key:z-init-atomic";
         let backend = json!({"node_did":owner,"backend_id":"backend","name":"Local",
             "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
@@ -1894,7 +2082,7 @@ mod tests {
         let profile = json!({"node_did":owner,"profile_id":"profile","backend_id":"backend",
             "model_name":"model"});
         let agent = |enabled: bool| {
-            json!({"node_did":owner,"agent_id":"default",
+            json!({"node_did":owner,"agent_did":"default",
                 "inference_profile_id":"profile","enabled":enabled})
         };
         let entry = |collection, value: serde_json::Value| DesiredStateApplyDocument {
@@ -1937,7 +2125,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            node_document().await.unwrap().default_agent_id.as_deref(),
+            node_document().await.unwrap().default_agent_did.as_deref(),
             Some("default")
         );
     }
@@ -1955,6 +2143,228 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fresh_backend_baseline_commits_before_http_is_started() -> Result<()> {
+        let snapshot: Value =
+            tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
+                .await?;
+        let case = snapshot["identity_household_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "configuration-explicit-grants")
+            .unwrap()["fresh_backend_origin_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| {
+                case["locked"] == true
+                    && case["empty"] == true
+                    && case["unexposed"] == true
+                    && case["committed"] == true
+            })
+            .unwrap();
+        let directory = tempfile::tempdir()?;
+        let data = directory.path().join("data");
+        let lock_home = directory.path().to_owned();
+        let lock_data = data.clone();
+        let _lock =
+            tokio::task::spawn_blocking(move || lock_init_store(&lock_home, &lock_data, false))
+                .await??;
+        assert!(tokio::fs::read_dir(&data)
+            .await?
+            .next_entry()
+            .await?
+            .is_none());
+        let key = gents::store::local::store_key::StoreKey::from_host(&[7; 32])?;
+        let path = directory.path().join("node.key");
+        let did = tokio::task::spawn_blocking(move || -> Result<String> {
+            Ok(KeyIdentity::load_or_create(path, None)?.did().to_owned())
+        })
+        .await??;
+        let fresh =
+            gents::store::local::backend_protection::FreshBackendStore::observe(&data, &_lock)
+                .await?;
+        let result = fresh.initialize(&key, Some(&did)).await;
+        assert_eq!(result.is_ok(), case["origin"].as_bool().unwrap());
+        result?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await?
+            .into_std()?;
+        let node = gents::store::local::store_key::persistent_builder(&data, &key)?
+            .with_node_identity_did(did)
+            .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await?;
+        let collection = node
+            .get_collection(gents_protocol::schemas::INFERENCE_BACKEND_NAME)?
+            .context("legacy backend baseline missing")?;
+        assert!(collection.policy.is_some_and(|policy| policy.id
+            == gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+            && policy.resource_name == "secret_configuration"));
+        node.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fresh_init_grants_native_operations_once_without_regranting_revocation() {
+        let snapshot: Value =
+            tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
+                .await
+                .unwrap();
+        let cases = snapshot["identity_bootstrap_cases"].as_array().unwrap();
+        assert_eq!(
+            cases.iter().find(|case| case["name"] == "fresh").unwrap()["expected_may_grant"],
+            true
+        );
+        assert_eq!(
+            cases
+                .iter()
+                .find(|case| case["name"] == "crash-after-reservation")
+                .unwrap()["expected_may_grant"],
+            false
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let initial = initialize_disposable_home(&home, false).await.unwrap();
+        let stored = read_init_config(&home).unwrap().unwrap();
+        let identity = crate::home_state::load_initialized_home_identity(&home, &stored).unwrap();
+        let client = gents_desktop_core::client::PrincipalIdentity::load_or_create(
+            &crate::home_state::cli_identity_paths().unwrap(),
+        )
+        .await
+        .unwrap();
+        let agent = identity::Did::new(initial["default_agent_did"].as_str().unwrap()).unwrap();
+        let client_did = identity::Did::new(client.did()).unwrap();
+        let data = default_data_dir(&home);
+        let claim = lock_init_store(&home, &data, false).unwrap();
+        let node = Arc::new(
+            crate::persistent_node_builder(&home, &data)
+                .await
+                .unwrap()
+                .with_node_identity_did(identity.did())
+                .with_node_acp_enabled()
+                .build()
+                .await
+                .unwrap(),
+        );
+        let runtime = ConfigAccess::claimed_local_as(
+            node.clone(),
+            claim,
+            identity::Did::new(identity.did()).unwrap(),
+        )
+        .unwrap();
+        let owner = ConfigAccess::local_as(node.clone(), client_did.clone());
+        let worker = ConfigAccess::local_as(node.clone(), agent.clone());
+        let node_row = runtime.execute("{ Node { _docID } }").await.unwrap();
+        let doc = node_row["data"]["Node"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let observed = runtime
+            .transact_readonly("init.test.owner", |txn| {
+                let doc = doc.clone();
+                Box::pin(async move { txn.document_owners("Node", &[doc]).await })
+            })
+            .await
+            .unwrap();
+        assert_eq!(observed[0].owner.as_ref(), Some(&client_did));
+        let agent_row = runtime
+            .execute("{ Agent { _docID agent_did creation_nonce } }")
+            .await
+            .unwrap();
+        let rows = agent_row["data"]["Agent"].as_array().unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row["agent_did"].as_str() == Some(agent.as_str()))
+            .unwrap();
+        let binding = gents_protocol::agent_identity::AgentIdentityBinding {
+            agent_did: agent.to_string(),
+            creation_nonce: row["creation_nonce"].as_str().unwrap().to_owned(),
+        };
+        assert_eq!(
+            gents::store::identity::resolve_agent_identity(identity.as_ref(), &binding)
+                .unwrap()
+                .did(),
+            agent.as_str()
+        );
+        let agent_doc = row["_docID"].as_str().unwrap().to_owned();
+        let agent_owner = runtime
+            .transact_readonly("init.test.agent_owner", |txn| {
+                let agent_doc = &agent_doc;
+                Box::pin(async move { txn.document_owners("Agent", &[agent_doc.clone()]).await })
+            })
+            .await
+            .unwrap();
+        assert_eq!(agent_owner[0].owner.as_ref(), Some(&client_did));
+        assert!(owner.execute("{ Node { _docID } }").await.unwrap()["data"]["Node"].is_array());
+        assert!(
+            worker.execute("{ AgentRequest { _docID } }").await.unwrap()["data"]["AgentRequest"]
+                .is_array()
+        );
+        for did in [&client_did, &agent] {
+            runtime
+                .revoke_node_permission(
+                    did,
+                    gents::store::config_client::NodePermission::DocumentRead,
+                )
+                .await
+                .unwrap();
+        }
+        node.shutdown().await.unwrap();
+        drop(owner);
+        drop(worker);
+        drop(runtime);
+        drop(node);
+        assert!(
+            initialize_disposable_home(&home, false).await.is_err(),
+            "reinit must not restore revoked permissions"
+        );
+        let node = Arc::new(
+            crate::persistent_node_builder(&home, &data)
+                .await
+                .unwrap()
+                .with_node_identity_did(identity.did())
+                .with_node_acp_enabled()
+                .build()
+                .await
+                .unwrap(),
+        );
+        for did in [client_did, agent] {
+            let response = ConfigAccess::local_as(node.clone(), did)
+                .execute("{ Node { _docID } }")
+                .await
+                .unwrap();
+            assert!(
+                response["data"].get("Node").is_none(),
+                "revocation must survive reinit"
+            );
+        }
+        node.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn consumed_bootstrap_reservation_is_not_replayed() {
+        let snapshot: Value =
+            tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
+                .await
+                .unwrap();
+        let case = snapshot["identity_bootstrap_reservation_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "exists-or-create-failed")
+            .unwrap();
+        assert_eq!(case["expected"], false);
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join(".node-bootstrap-consumed"), b"").unwrap();
+        let error = initialize_disposable_home(&home, false).await.unwrap_err();
+        assert!(format!("{error:#}").contains("bootstrap was already attempted"));
+        assert!(!default_data_dir(&home).join("MANIFEST").exists());
+    }
+
+    #[tokio::test]
     async fn an_initialized_home_reopens_without_ending_the_callers_runtime() {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
@@ -1965,7 +2375,7 @@ mod tests {
         assert_eq!(first["status"], "initialized");
         assert_eq!(second["status"], "initialized");
         assert_eq!(second["node_did"], first["node_did"]);
-        assert_eq!(second["default_agent_id"], first["default_agent_id"]);
+        assert_eq!(second["default_agent_did"], first["default_agent_did"]);
         assert_eq!(fs::read_to_string(home.join("retained")).unwrap(), "keep");
     }
 
@@ -2011,7 +2421,6 @@ mod tests {
             tool_package: None,
             engineer: false,
             tool_root: None,
-            enable_memory: false,
             disable_defra_query: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),

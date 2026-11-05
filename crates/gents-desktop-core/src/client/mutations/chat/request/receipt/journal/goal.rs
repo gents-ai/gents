@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::goal_control::SessionGoalControlReceipt;
 use std::sync::Arc;
 
@@ -9,21 +9,17 @@ use super::super::goal_delivery::{self, Decision, Intent, Record, Reference};
 use super::{Entry, Envelope};
 
 pub(crate) async fn lookup(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     client_did: &str,
     node_did: &str,
     command_id: &str,
 ) -> Result<Option<Record>> {
-    let response = graphql_with_transaction_retry(
-        node,
-        &super::query(command_id),
-        "desktop.goal.recover_caller_receipt",
-    )
-    .await?;
+    let response = ConfigAccess::local_as(node.clone(), identity::Did::new(client_did)?)
+        .execute(&super::query(command_id))
+        .await?;
     match super::row(
         response
-            .data
-            .as_ref()
+            .get("data")
             .context("Goal caller query omitted data")?,
         command_id,
     )? {
@@ -39,7 +35,7 @@ pub(crate) async fn lookup(
     }
 }
 
-pub(crate) async fn recover(node: &EmbeddedNode, intent: &Intent) -> Result<Option<Record>> {
+pub(crate) async fn recover(node: &Arc<EmbeddedNode>, intent: &Intent) -> Result<Option<Record>> {
     let record = lookup(
         node,
         &intent.client_did,
@@ -59,7 +55,7 @@ pub(crate) async fn recover(node: &EmbeddedNode, intent: &Intent) -> Result<Opti
 pub(crate) async fn reserve(node: &Arc<EmbeddedNode>, proposal: &Record) -> Result<Record> {
     ConfigAccess::transact_local_idempotent(
         node,
-        None,
+        Some(identity::Did::new(&proposal.intent.client_did)?),
         IdempotentTransactionRetry::Standard,
         "desktop.goal.reserve_caller_receipt",
         move |txn| Box::pin(async move {
@@ -73,7 +69,8 @@ pub(crate) async fn reserve(node: &Arc<EmbeddedNode>, proposal: &Record) -> Resu
             if let Some(record) = staged {
                 let id = escape_graphql_string(&record.intent.command_id);
                 let payload = encode(&record)?;
-                txn.execute(&format!("mutation {{ create_PendingChatSubmission(input: {{request_id: \"{id}\", payload: \"{payload}\"}}) {{ _docID }} }}")).await?;
+                let response = txn.execute(&format!("mutation {{ create_PendingChatSubmission(input: {{request_id: \"{id}\", payload: \"{payload}\"}}) {{ _docID }} }}")).await?;
+                super::require_written(&response, "create_PendingChatSubmission")?;
                 Ok(record)
             } else {
                 records.into_iter().next().context("Goal reservation omitted its retained record")
@@ -91,8 +88,8 @@ fn encode(record: &Record) -> Result<String> {
 async fn write(txn: &ConfigApplyTxn<'_>, doc_id: &str, record: &Record) -> Result<()> {
     let id = escape_graphql_string(doc_id);
     let payload = encode(record)?;
-    txn.execute(&format!("mutation {{ update_PendingChatSubmission(docID: \"{id}\", input: {{payload: \"{payload}\"}}) {{ _docID }} }}")).await?;
-    Ok(())
+    let response = txn.execute(&format!("mutation {{ update_PendingChatSubmission(docID: \"{id}\", input: {{payload: \"{payload}\"}}) {{ _docID }} }}")).await?;
+    super::require_written(&response, "update_PendingChatSubmission")
 }
 
 /// The caller supplies only a receipt verified by the native Goal owner. The
@@ -106,7 +103,7 @@ pub(crate) async fn update(
 ) -> Result<Record> {
     ConfigAccess::transact_local_idempotent(
         node,
-        None,
+        Some(identity::Did::new(&intent.client_did)?),
         IdempotentTransactionRetry::Standard,
         "desktop.goal.update_caller_receipt",
         move |txn| {

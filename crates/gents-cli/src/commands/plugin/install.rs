@@ -49,7 +49,9 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
     .await;
     if let Some((access, _)) = &notification_scope {
         if let Some(node) = access.local_node() {
-            node.shutdown().await;
+            if let Err(error) = node.shutdown().await {
+                tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+            }
         }
     }
     let (record, installed) = result?;
@@ -150,7 +152,7 @@ mod tests {
                 .await
                 .unwrap();
             let records = access.execute("{ PackInstallation { coordinate } }").await;
-            access.local_node().unwrap().shutdown().await;
+            access.local_node().unwrap().shutdown().await.expect("node shutdown");
             records.unwrap()["data"]["PackInstallation"].clone()
         };
 

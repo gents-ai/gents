@@ -79,7 +79,7 @@ async fn job_row(name: &str) -> PublishedAdmission {
 }
 
 async fn finish(admission: PublishedAdmission) {
-    admission.node.shutdown().await;
+    admission.node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(admission.path);
 }
 
@@ -594,7 +594,7 @@ async fn read_step_row_carries_the_pin_progress_and_derived_children() {
     job.write_step_state(&row, Some(&block)).await;
     let step = read_step_row(&job.access, &row).await.unwrap();
     assert_eq!(step.resume, Some(block));
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -628,7 +628,7 @@ async fn read_step_row_in_txn_sees_the_transactions_own_writes() {
         .await
         .unwrap();
     assert_eq!(spent, 3);
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 use crate::pack::{write_home_install, HomePackInstall, PackKind};
@@ -816,7 +816,7 @@ async fn read_step_row_state_follows_the_row_lifecycle_first() {
         let stored = read_step_row(&job.access, &row).await.unwrap();
         assert_eq!(stored.state, expected, "case {}", index + 1);
     }
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -833,7 +833,7 @@ async fn control_outcome_of_a_settled_row_read_back_is_already_terminal() {
             state: JobState::Completed
         }
     );
-    job.node.shutdown().await;
+    job.node.shutdown().await.expect("shut down test node");
 }
 
 pub(crate) async fn stepper(output: Value) -> Stepper {
@@ -848,7 +848,7 @@ async fn stepper_wat(wat: &str) -> Stepper {
         insert(
             &job.node,
             "Agent",
-            json!({"agent_id": agent, "node_did": node_did(), "context_id": "context",
+            json!({"agent_did": agent, "node_did": node_did(), "context_id": "context",
                        "inference_profile_id": "inference", "enabled": true}),
         )
         .await;
@@ -856,7 +856,7 @@ async fn stepper_wat(wat: &str) -> Stepper {
             &job.node,
             "AgentTarget",
             json!({"target_id": format!("t-{agent}"), "node_did": node_did(),
-                       "target_node_did": node_did(), "agent_id": agent, "name": agent}),
+                       "target_node_did": node_did(), "agent_did": agent, "name": agent}),
         )
         .await;
     }
@@ -925,7 +925,13 @@ impl Stepper {
     }
 
     async fn run(&self, row: &str) -> StepOutcome {
-        run_step(&self.job.runtime, row).await.unwrap()
+        run_step(
+            &self.job.runtime,
+            row,
+            &super::super::input::tests::agent_actor(),
+        )
+        .await
+        .unwrap()
     }
 
     pub(crate) async fn progress(&self, row: &str) -> JobProgress {
@@ -991,7 +997,7 @@ impl Stepper {
                 requester_did: None,
             },
             StampContext::JobStep {
-                node_did: caller.node_did.clone(),
+                caller_did: caller.agent_did.clone(),
                 session_id: caller.session_id.clone(),
                 request_doc_id: caller.request_doc_id.clone(),
                 tool_call_doc_id: input.job.row_doc_id.clone(),
@@ -1000,7 +1006,17 @@ impl Stepper {
             },
         )
         .with_children(input.job.chain.clone(), input.ceiling.result_bytes);
-        let data = DataCaller::new(self.job.node.clone(), &caller.node_did).unwrap();
+        let agent_identity = self
+            .job
+            .runtime
+            .agent_identity(&caller.node_did, &caller.agent_did)
+            .unwrap();
+        let data = DataCaller::for_agent(
+            self.job.node.clone(),
+            &caller.node_did,
+            agent_identity.did(),
+        )
+        .unwrap();
         self.job
             .runtime
             .plugins
@@ -1015,7 +1031,7 @@ impl Stepper {
     }
 
     pub(crate) async fn close(self) {
-        self.job.node.shutdown().await;
+        self.job.node.shutdown().await.expect("shut down test node");
     }
 }
 
@@ -1419,7 +1435,7 @@ async fn live_child(step: &Stepper, node_did: &str) -> String {
             "node_did": node_did,
             "requester_did": null,
             "session_id": job_session_id(&step.row, "slot-a", 0),
-            "agent_id": "a",
+            "agent_did": "a",
             "lifecycle_state": "processing",
             "retry_key": job_spawn_key(&step.row, "slot-a", 0),
             "created_at": "2026-01-01T00:00:00Z",
@@ -1447,10 +1463,16 @@ async fn recovery_hold_and_deferred_step_keep_runtime_retirement_busy() {
     };
     let held = driver.permits.acquire_many(4).await.unwrap();
     driver
-        .hold_steps(&step.row, async {
-            assert_eq!(admission.retire(authority()), Err(RetirementError::Busy));
-            driver.kick(&step.row);
-        })
+        .hold_steps(
+            &step.row,
+            &super::super::input::tests::agent_actor(),
+            async {
+                assert_eq!(admission.retire(authority()), Err(RetirementError::Busy));
+                driver
+                    .kick(&step.row, &super::super::input::tests::agent_actor())
+                    .unwrap();
+            },
+        )
         .await
         .unwrap();
     assert!(driver.is_stepping(&step.row));
@@ -1460,9 +1482,11 @@ async fn recovery_hold_and_deferred_step_keep_runtime_retirement_busy() {
     assert_eq!(step.progress(&step.row).await.revision, 2);
     admission.retire(authority()).unwrap();
     assert!(driver
-        .hold_steps(&step.row, async {
-            panic!("retiring runtime admitted recovery")
-        })
+        .hold_steps(
+            &step.row,
+            &super::super::input::tests::agent_actor(),
+            async { panic!("retiring runtime admitted recovery") }
+        )
         .await
         .is_none());
     step.close().await;
@@ -1476,7 +1500,9 @@ async fn two_wakes_during_a_step_produce_exactly_one_rerun() {
     // The first kick puts the row in flight; the other two arrive while
     // its step is in flight.
     for _ in 0..3 {
-        driver.kick(&step.row);
+        driver
+            .kick(&step.row, &super::super::input::tests::agent_actor())
+            .unwrap();
     }
     idle(&driver).await;
     assert_eq!(step.progress(&step.row).await.revision, 3, "two steps");
@@ -1491,7 +1517,9 @@ async fn concurrent_steps_are_bounded_by_the_semaphore() {
     let driver = JobDriver::new(step.job.runtime.clone());
     assert_eq!(driver.permits.available_permits(), 4);
     let held = driver.permits.acquire_many(4).await.unwrap();
-    driver.kick(&step.row);
+    driver
+        .kick(&step.row, &super::super::input::tests::agent_actor())
+        .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert_eq!(
         step.progress(&step.row).await.revision,
@@ -1516,7 +1544,9 @@ async fn three_consecutive_step_failures_settle_step_failed_with_the_next_call()
     .await
     .unwrap();
     let driver = JobDriver::new(step.job.runtime.clone());
-    driver.kick(&step.row);
+    driver
+        .kick(&step.row, &super::super::input::tests::agent_actor())
+        .unwrap();
     idle(&driver).await;
     let row = step.row_json(&step.row).await;
     assert_eq!(row["lifecycle_state"], "failed");
@@ -1559,15 +1589,23 @@ async fn two_failures_then_a_success_do_not_settle() {
     let trap = StepFailure::Trap("boom".to_owned());
     for _ in 0..2 {
         assert_eq!(
-            driver.step_failed(&step.row, &trap).await.unwrap(),
+            driver
+                .step_failed(&step.row, &super::super::input::tests::agent_actor(), &trap)
+                .await
+                .unwrap(),
             FailureVerdict::Retry
         );
     }
-    driver.kick(&step.row);
+    driver
+        .kick(&step.row, &super::super::input::tests::agent_actor())
+        .unwrap();
     idle(&driver).await;
     assert_eq!(step.progress(&step.row).await.revision, 2, "the step ran");
     assert_eq!(
-        driver.step_failed(&step.row, &trap).await.unwrap(),
+        driver
+            .step_failed(&step.row, &super::super::input::tests::agent_actor(), &trap)
+            .await
+            .unwrap(),
         FailureVerdict::Retry,
         "the success reset the count"
     );
@@ -1598,7 +1636,13 @@ async fn step_failures_without_a_remembered_row_read_it_and_settle_on_the_third(
         FailureVerdict::Retry,
         FailureVerdict::Settle,
     ] {
-        assert_eq!(driver.step_failed(&step.row, &trap).await.unwrap(), verdict);
+        assert_eq!(
+            driver
+                .step_failed(&step.row, &super::super::input::tests::agent_actor(), &trap)
+                .await
+                .unwrap(),
+            verdict
+        );
     }
     assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
     assert_eq!(
@@ -1621,7 +1665,13 @@ async fn a_guest_trap_is_a_step_failure() {
         r#"(module (memory (export "memory") 1) (func (export "_start") unreachable))"#,
     )
     .await;
-    let error = run_step(&step.job.runtime, &step.row).await.unwrap_err();
+    let error = run_step(
+        &step.job.runtime,
+        &step.row,
+        &super::super::input::tests::agent_actor(),
+    )
+    .await
+    .unwrap_err();
     assert!(
         matches!(
             error.downcast_ref::<StepFailure>(),
@@ -1634,9 +1684,47 @@ async fn a_guest_trap_is_a_step_failure() {
 }
 
 #[tokio::test]
+async fn in_flight_job_rejects_a_wake_from_another_agent() {
+    let step = stepper(json!({"effects": {}})).await;
+    let driver = JobDriver::new(step.job.runtime.clone());
+    let actor = super::super::input::tests::agent_actor();
+    let other = identity::Did::new("did:test:other-agent").unwrap();
+    let result = driver
+        .hold_steps(&step.row, &actor, async {
+            assert!(driver.kick(&step.row, &other).is_err());
+            assert!(matches!(
+                driver.step_now(&step.row, &other).await,
+                Some(Err(_))
+            ));
+        })
+        .await;
+    assert!(result.is_some());
+    assert!(!driver.is_stepping(&step.row));
+    step.close().await;
+}
+
+#[tokio::test]
+async fn step_does_not_switch_to_the_job_owner_when_given_another_actor() {
+    let step = stepper(json!({"effects": {}})).await;
+    let before = step.row_json(&step.row).await;
+    let other = identity::Did::new("did:test:other-agent").unwrap();
+    assert!(run_step(&step.job.runtime, &step.row, &other)
+        .await
+        .is_err());
+    assert_eq!(step.row_json(&step.row).await, before);
+    step.close().await;
+}
+
+#[tokio::test]
 async fn a_step_call_error_that_is_not_a_trap_counts_towards_step_failed() {
     let step = stepper_wat(r#"(module (memory (export "memory") 1))"#).await;
-    let error = run_step(&step.job.runtime, &step.row).await.unwrap_err();
+    let error = run_step(
+        &step.job.runtime,
+        &step.row,
+        &super::super::input::tests::agent_actor(),
+    )
+    .await
+    .unwrap_err();
     assert!(
         matches!(
             error.downcast_ref::<StepFailure>(),
@@ -1647,7 +1735,9 @@ async fn a_step_call_error_that_is_not_a_trap_counts_towards_step_failed() {
     let driver = JobDriver::new(step.job.runtime.clone());
     let sweep = crate::tools::background::job::recovery::redrive_running_jobs;
     // The sweep re-steps the row, which has not stepped since adoption.
-    sweep(&driver).await.unwrap();
+    sweep(&driver, &super::super::input::tests::agent_actor())
+        .await
+        .unwrap();
     idle(&driver).await;
     assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
     assert_eq!(
@@ -1655,7 +1745,9 @@ async fn a_step_call_error_that_is_not_a_trap_counts_towards_step_failed() {
         "plugin_job_step_failed"
     );
     assert_eq!(
-        sweep(&driver).await.unwrap(),
+        sweep(&driver, &super::super::input::tests::agent_actor())
+            .await
+            .unwrap(),
         0,
         "a failed row is not re-stepped"
     );
@@ -1713,7 +1805,12 @@ async fn a_guest_state_over_the_cap_fails_the_step_and_stores_nothing() {
         "state": {"blob": big},
     }}))
     .await;
-    let outcome = run_step(&step.job.runtime, &step.row).await;
+    let outcome = run_step(
+        &step.job.runtime,
+        &step.row,
+        &super::super::input::tests::agent_actor(),
+    )
+    .await;
     assert!(
         matches!(
             outcome
@@ -1728,7 +1825,9 @@ async fn a_guest_state_over_the_cap_fails_the_step_and_stores_nothing() {
         None
     );
     let driver = JobDriver::new(step.job.runtime.clone());
-    driver.kick(&step.row);
+    driver
+        .kick(&step.row, &super::super::input::tests::agent_actor())
+        .unwrap();
     idle(&driver).await;
     assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
     assert_eq!(

@@ -20,7 +20,6 @@ use crate::eval::optimization::job::{JobState, JournalEntry};
 use crate::eval::optimization::policy::{Decision, InconclusiveReason, RejectReason};
 use crate::eval::optimization::proposer::ScriptedProposer;
 use crate::eval::report::load_run_rows;
-use crate::eval::runner::freeze::tests::OWNER;
 use crate::eval::runner::ScriptedExecutor;
 use crate::eval::{load_run, load_verdicts};
 
@@ -265,21 +264,24 @@ async fn an_inconclusive_round_is_rerun_on_a_new_seed_and_ends_inconclusive() {
     );
     let mut seeds = Vec::new();
     for run_id in &decided.1 {
-        let run = load_run(harness.access(), OWNER, run_id)
+        let run = load_run(harness.access(), harness.owner(), run_id)
             .await
             .unwrap()
             .unwrap();
         seeds.push(run.origin.seed_base);
     }
     assert_ne!(seeds[0], seeds[1], "the re-run draws a new seed base");
-    let definition =
-        crate::eval::optimization::driver::load_definition(harness.access(), OWNER, DEFINITION)
-            .await
-            .unwrap();
+    let definition = crate::eval::optimization::driver::load_definition(
+        harness.access(),
+        harness.owner(),
+        DEFINITION,
+    )
+    .await
+    .unwrap();
     let mut runs = Vec::new();
     for run_id in &decided.1 {
         runs.push(
-            load_run_rows(harness.access(), OWNER, run_id)
+            load_run_rows(harness.access(), harness.owner(), run_id)
                 .await
                 .unwrap(),
         );
@@ -377,7 +379,7 @@ async fn feedback_reaches_the_proposer_only_from_the_train_run() {
             .iter()
             .all(|entry| entry.feedback.as_deref() == Some(FEEDBACK)));
     }
-    let validation = load_verdicts(harness.access(), OWNER, "feedback-r1-v0")
+    let validation = load_verdicts(harness.access(), harness.owner(), "feedback-r1-v0")
         .await
         .unwrap();
     assert!(!validation.is_empty());

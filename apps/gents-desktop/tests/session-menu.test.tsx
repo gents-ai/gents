@@ -53,7 +53,7 @@ const summary = (overrides: Partial<SessionSummary>): SessionSummary => ({
   title: "First",
   previewText: null,
   status: null,
-  agentId: null,
+  agentDid: null,
   taskId: null,
   taskName: null,
   triggerId: null,
@@ -475,7 +475,7 @@ function heldSession(over: Partial<DesktopSessionSnapshot> = {}) {
   return {
     sessionId: "first",
     nodeDid: NODE,
-    agentId: "default",
+    agentDid: "default",
     title: "First",
     turnState: "completed",
     timelineItems: [],

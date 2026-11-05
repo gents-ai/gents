@@ -151,7 +151,47 @@ impl StoreMutation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeConnectionStatus {
+    Connecting,
+    Connected,
+    Disconnected,
+    Denied,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RuntimeConnectionEvent {
+    SourceStarted,
+    SubscriptionsReady,
+    SnapshotSucceeded,
+    TransportFailed,
+    PermissionDenied,
+}
+
+impl RuntimeConnectionEvent {
+    fn status(self) -> RuntimeConnectionStatus {
+        match self {
+            Self::SourceStarted | Self::SubscriptionsReady => RuntimeConnectionStatus::Connecting,
+            Self::SnapshotSucceeded => RuntimeConnectionStatus::Connected,
+            Self::TransportFailed => RuntimeConnectionStatus::Disconnected,
+            Self::PermissionDenied => RuntimeConnectionStatus::Denied,
+        }
+    }
+}
+
+impl RuntimeConnectionStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Connecting => "connecting",
+            Self::Connected => "connected",
+            Self::Disconnected => "disconnected",
+            Self::Denied => "denied",
+        }
+    }
+}
+
 struct ObservedState {
+    runtime_connections: BTreeMap<String, RuntimeConnectionStatus>,
     snapshot: SharedClientStore,
     revision: StoreProjectionRevision,
     fences: StoreReadFence,
@@ -184,6 +224,7 @@ impl ObservedStore {
         let (resync_tx, _resync_rx) = watch::channel(0_u64);
         let store = Arc::new(Self {
             state: RwLock::new(ObservedState {
+                runtime_connections: BTreeMap::new(),
                 snapshot: Arc::new(initial_snapshot.into_observer_projection()),
                 revision,
                 fences: StoreReadFence::default(),
@@ -195,6 +236,41 @@ impl ObservedStore {
             pending_resync: StdMutex::new(PendingResync::default()),
         });
         (store, version_rx)
+    }
+
+    pub fn runtime_connection(&self, node_did: &str) -> Option<RuntimeConnectionStatus> {
+        self.state
+            .read()
+            .expect("store snapshot lock poisoned")
+            .runtime_connections
+            .get(node_did)
+            .copied()
+    }
+
+    pub(crate) fn observe_runtime_connection(&self, node_did: &str, event: RuntimeConnectionEvent) {
+        self.set_runtime_connection(node_did, Some(event.status()));
+    }
+
+    pub(crate) fn set_runtime_connection(
+        &self,
+        node_did: &str,
+        status: Option<RuntimeConnectionStatus>,
+    ) {
+        let changed = {
+            let mut state = self.state.write().expect("store snapshot lock poisoned");
+            match status {
+                Some(status) => {
+                    state
+                        .runtime_connections
+                        .insert(node_did.to_owned(), status)
+                        != Some(status)
+                }
+                None => state.runtime_connections.remove(node_did).is_some(),
+            }
+        };
+        if changed {
+            self.invalidate_projection(false);
+        }
     }
 
     pub fn snapshot(&self) -> SharedClientStore {
@@ -337,6 +413,7 @@ impl ObservedStore {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn merge_observer_patch_at_read(
         &self,
         captured: &StoreReadFence,

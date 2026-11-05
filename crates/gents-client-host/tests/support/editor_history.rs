@@ -207,7 +207,7 @@ pub async fn populate(
                 *id,
                 "desktop_chat_send",
                 json!({"request":{
-                    "nodeDid":node, "sessionId":session, "agentId":agent,
+                    "nodeDid":node, "sessionId":session, "agentDid":agent,
                     "content":format!("{INPUT_PREFIX}{turn:02}"), "delivery":"queue"
                 }}),
             )

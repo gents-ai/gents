@@ -182,7 +182,7 @@ pub(crate) async fn steering_snapshot(
 ) -> Result<gents_loop::loop_stream::SteeringSnapshot> {
     let rows = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
-        None,
+        Some(identity::Did::new(head.agent_did.clone())?),
         "queue.steering_snapshot",
         |txn| Box::pin(async move { pending_in_txn(txn, &head.node_did, &head.session_id).await }),
     )
@@ -200,7 +200,7 @@ pub(crate) async fn steering_snapshot(
         }
         let id = row.doc_id.clone().unwrap_or_default();
         let request = AgentRequest::try_from(row.clone())?;
-        match verifier.verify_fresh(&request, &head.agent_id).await {
+        match verifier.verify_fresh(&request, &head.agent_did).await {
             Ok(_) => {}
             Err(error) if !error.is_denied() => return Err(error.into()),
             Err(_) => break,
@@ -273,7 +273,7 @@ pub(crate) fn steering_compatible(
         && row.node_did.as_deref() == Some(head.node_did.as_str())
         && row.session_id.as_deref() == Some(head.session_id.as_str())
         && row.requester_did == head.requester_did
-        && row.agent_id.as_deref() == Some(head.agent_id.as_str())
+        && row.agent_did.as_deref() == Some(head.agent_did.as_str())
         && row.workspace_id == head.workspace_id
         && row.workspace_owner_node_did == head.workspace_owner_node_did
         && row.workspace_authority == head.workspace_authority

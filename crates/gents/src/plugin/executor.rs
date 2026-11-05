@@ -252,6 +252,7 @@ impl PluginExecutor {
     async fn model_session(
         &self,
         record: &InstalledPlugin,
+        actor: Option<&identity::Did>,
     ) -> Result<(Option<model_calls::Session>, Option<String>)> {
         let (Some(slot), Some(binding)) = (&record.declaration.model_slot, &record.model_binding)
         else {
@@ -261,7 +262,7 @@ impl PluginExecutor {
         let resolver = self.models.as_ref().with_context(|| {
             format!("plugin {coordinate} has its model slot {slot:?} bound, but this runtime cannot reach inference")
         })?;
-        let resolved = resolver.resolve(binding).await;
+        let resolved = resolver.resolve(binding, actor).await;
         match resolved {
             Ok(endpoint) => Ok((Some(model_calls::Session::new(endpoint)?), None)),
             Err(_) => {
@@ -421,6 +422,24 @@ impl PluginExecutor {
         data: Option<DataCaller>,
         jobs: Option<JobCaller>,
     ) -> Result<PluginCall> {
+        self.call_data_bound_jobs_as(record, input, tool_root, tool_calls, data, jobs, None)
+            .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "call-scoped capabilities and actor travel together"
+    )]
+    async fn call_data_bound_jobs_as(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        tool_root: Option<&Path>,
+        tool_calls: bool,
+        data: Option<DataCaller>,
+        jobs: Option<JobCaller>,
+        actor: Option<identity::Did>,
+    ) -> Result<PluginCall> {
         let session = crate::tools::call::lifecycle::runtime::current_tool_runtime_context();
         let workdir = session
             .as_ref()
@@ -447,6 +466,7 @@ impl PluginExecutor {
             super::tool_calls::Session::for_call(tool_calls),
             data,
             jobs,
+            actor,
         )
         .await
     }
@@ -472,9 +492,22 @@ impl PluginExecutor {
         tool_calls: bool,
         data: Option<DataCaller>,
     ) -> (Result<PluginCall>, PluginExecutionReceipt) {
+        self.call_data_bound_with_receipt_as(record, input, tool_root, tool_calls, data, None)
+            .await
+    }
+
+    pub(crate) async fn call_data_bound_with_receipt_as(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        tool_root: Option<&Path>,
+        tool_calls: bool,
+        data: Option<DataCaller>,
+        actor: Option<identity::Did>,
+    ) -> (Result<PluginCall>, PluginExecutionReceipt) {
         let refused = initial_receipt(record, &input);
         let result = self
-            .call_data_bound_for(record, input, tool_root, tool_calls, data)
+            .call_data_bound_jobs_as(record, input, tool_root, tool_calls, data, None, actor)
             .await;
         let receipt = receipt_of(&result, refused);
         (result, receipt)
@@ -509,7 +542,9 @@ impl PluginExecutor {
         jobs: JobCaller,
     ) -> (Result<PluginCall>, PluginExecutionReceipt) {
         let refused = initial_receipt(record, &input);
-        let result = self.run(record, input, None, None, data, Some(jobs)).await;
+        let result = self
+            .run(record, input, None, None, data, Some(jobs), None)
+            .await;
         let receipt = receipt_of(&result, refused);
         (result, receipt)
     }
@@ -537,7 +572,7 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
     ) -> Result<PluginCall> {
-        self.run(record, input, None, None, None, None).await
+        self.run(record, input, None, None, None, None, None).await
     }
 
     /// [`Self::call`] offering `data_calls.query` as `caller` when the plugin
@@ -548,7 +583,7 @@ impl PluginExecutor {
         input: serde_json::Value,
         caller: DataCaller,
     ) -> Result<PluginCall> {
-        self.run(record, input, None, None, Some(caller), None)
+        self.run(record, input, None, None, Some(caller), None, None)
             .await
     }
 
@@ -560,7 +595,7 @@ impl PluginExecutor {
         input: serde_json::Value,
         caller: JobCaller,
     ) -> Result<PluginCall> {
-        self.run(record, input, None, None, None, Some(caller))
+        self.run(record, input, None, None, None, Some(caller), None)
             .await
     }
 
@@ -570,7 +605,8 @@ impl PluginExecutor {
         input: serde_json::Value,
         bound: BoundDir,
     ) -> Result<PluginCall> {
-        self.run(record, input, Some(bound), None, None, None).await
+        self.run(record, input, Some(bound), None, None, None, None)
+            .await
     }
 
     /// [`Self::call`] granting `bound` and offering `data_calls.query` as
@@ -582,9 +618,25 @@ impl PluginExecutor {
         bound: Option<BoundDir>,
         data: Option<DataCaller>,
     ) -> Result<PluginCall> {
-        self.run(record, input, bound, None, data, None).await
+        self.run(record, input, bound, None, data, None, None).await
     }
 
+    pub(crate) async fn call_bound_data_as(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        bound: Option<BoundDir>,
+        data: Option<DataCaller>,
+        actor: Option<identity::Did>,
+    ) -> Result<PluginCall> {
+        self.run(record, input, bound, None, data, None, actor)
+            .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "call-scoped capabilities and actor travel together"
+    )]
     async fn run(
         &self,
         record: &InstalledPlugin,
@@ -593,6 +645,7 @@ impl PluginExecutor {
         tools: Option<super::tool_calls::Session>,
         data: Option<DataCaller>,
         jobs: Option<JobCaller>,
+        actor: Option<identity::Did>,
     ) -> Result<PluginCall> {
         let mut receipt = initial_receipt(record, &input);
         let result: Result<PluginCall> = async {
@@ -614,7 +667,11 @@ impl PluginExecutor {
                     self.services.prepare(self.home.as_deref().context("service requires a runtime home")?, record, &mut input).await?;
                 }
             }
-            let (model, binding_note) = self.model_session(record).await?;
+            let data_actor = data.as_ref().map(DataCaller::model_actor).transpose()?;
+            if let (Some(actor), Some(data_actor)) = (actor.as_ref(), data_actor.as_ref()) {
+                anyhow::ensure!(actor == data_actor, "plugin caller differs from data actor");
+            }
+            let (model, binding_note) = self.model_session(record, actor.as_ref().or(data_actor.as_ref())).await?;
             let calls = HostCalls {
                 model,
                 http: http_calls::Session::for_grant(&coordinate, &admitted.runner.manifold)?,

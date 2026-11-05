@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct NodeView {
     pub node_did: String,
     pub display_name: Option<String>,
-    pub default_agent_id: Option<String>,
+    pub default_agent_did: Option<String>,
     pub enabled: Option<bool>,
     pub created_at: Option<String>,
     pub created_by: Option<String>,
@@ -17,7 +17,8 @@ pub struct NodeView {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentView {
-    pub agent_id: String,
+    pub creation_nonce: String,
+    pub agent_did: String,
     pub node_did: String,
     pub display_name: String,
     pub description: Option<String>,
@@ -77,6 +78,7 @@ pub fn backend_config_view(
     let (auth_kind, api_key_configured, api_key_env_var) = match &row.auth {
         BackendAuth::Unauthenticated => ("unauthenticated", false, None),
         BackendAuth::ApiKey { .. } => ("api_key", true, None),
+        BackendAuth::Credential { .. } => ("credential", true, None),
         BackendAuth::Environment { variable } => ("environment", false, Some(variable.clone())),
         BackendAuth::NodeOAuth { .. } => ("node_oauth", false, None),
         BackendAuth::NodeOAuthPool { .. } => ("node_oauth_pool", false, None),
@@ -127,7 +129,7 @@ impl InferenceSetupState {
             .map(|row| NodeView {
                 node_did: row.node_did.clone(),
                 display_name: normalize_optional(row.display_name.as_deref()),
-                default_agent_id: normalize_optional(row.default_agent_id.as_deref()),
+                default_agent_did: normalize_optional(row.default_agent_did.as_deref()),
                 enabled: Some(row.enabled),
                 created_at: normalize_optional(row.created_at.as_deref()),
                 created_by: normalize_optional(row.created_by.as_deref()),
@@ -135,7 +137,7 @@ impl InferenceSetupState {
             .unwrap_or_else(|| NodeView {
                 node_did: node_did.to_owned(),
                 display_name: None,
-                default_agent_id: None,
+                default_agent_did: None,
                 enabled: None,
                 created_at: None,
                 created_by: None,
@@ -146,21 +148,24 @@ impl InferenceSetupState {
             .filter(|row| row.node_did == node_did)
             .cloned()
             .collect::<Vec<_>>();
-        agent_configs.sort_by(|left, right| left.agent_id.cmp(&right.agent_id));
-        let default_agent_id = store.default_agent_id_for_node(node_did).map(str::to_owned);
+        agent_configs.sort_by(|left, right| left.agent_did.cmp(&right.agent_did));
+        let default_agent_did = store
+            .default_agent_did_for_node(node_did)
+            .map(str::to_owned);
         let mut agents = store
             .agent_rows(node_did)
             .into_iter()
             .map(|row| AgentView {
-                agent_id: row.agent_id.clone(),
+                creation_nonce: row.creation_nonce.clone(),
+                agent_did: row.agent_did.clone(),
                 node_did: row.node_did.clone(),
                 display_name: normalize_optional(row.display_name.as_deref())
-                    .unwrap_or_else(|| row.agent_id.clone()),
+                    .unwrap_or_else(|| row.agent_did.clone()),
                 description: row.description.clone(),
                 context_id: row.context_id.clone(),
                 inference_profile_id: Some(row.inference_profile_id.clone()),
                 enabled: row.enabled,
-                is_default: default_agent_id.as_deref() == Some(row.agent_id.as_str()),
+                is_default: default_agent_did.as_deref() == Some(row.agent_did.as_str()),
                 tags: row.tags.clone(),
                 created_at: row.created_at.clone(),
             })
@@ -182,6 +187,10 @@ impl InferenceSetupState {
                     .enumerate()
                     .find(|(index, observation)| {
                         observation.backend_id == row.backend_id
+                            && observation_belongs_to_backend(
+                                row.physical_doc_id.as_deref(),
+                                observation.metadata_doc_id.as_deref(),
+                            )
                             && source_matches_node(
                                 &store.backend_observation_source_node_dids,
                                 *index,
@@ -220,6 +229,25 @@ impl InferenceSetupState {
             inference_backends,
             inference_profiles,
         }
+    }
+}
+
+fn observation_belongs_to_backend(
+    metadata_doc: Option<&str>,
+    observation_parent: Option<&str>,
+) -> bool {
+    metadata_doc.is_some_and(|doc| observation_parent == Some(doc))
+}
+
+#[cfg(test)]
+mod backend_observation_binding_tests {
+    use super::observation_belongs_to_backend;
+
+    #[test]
+    fn requires_the_same_physical_metadata() {
+        assert!(observation_belongs_to_backend(Some("new"), Some("new")));
+        assert!(!observation_belongs_to_backend(Some("new"), Some("old")));
+        assert!(!observation_belongs_to_backend(None, None));
     }
 }
 
@@ -311,7 +339,7 @@ impl crate::client::ClientCore {
             .graphql
             .as_deref()
             .context("runtime has no HTTP endpoint")?;
-        read_inference_setup_state_from(graphql, node_did, self.node_identity().did()).await
+        read_inference_setup_state_from(graphql, node_did, self.node_identity()).await
     }
 }
 
@@ -320,7 +348,7 @@ impl crate::client::ClientCore {
 async fn read_inference_setup_state_from(
     graphql: &str,
     node_did: &str,
-    client_did: &str,
+    client_identity: &crate::client::PrincipalIdentity,
 ) -> anyhow::Result<InferenceSetupState> {
     use anyhow::Context;
     use gents::store::config_client::GraphqlEndpoint;
@@ -343,7 +371,11 @@ async fn read_inference_setup_state_from(
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
-    let endpoint = GraphqlEndpoint::as_principal(graphql, client_did);
+    let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        client_identity.private_key_bytes(),
+    )?;
+    let endpoint = GraphqlEndpoint::as_principal(graphql, client_identity.did())
+        .with_client_signing_capability(capability)?;
     let mut response = endpoint
         .authorize(client.get(url))?
         .send()
@@ -430,7 +462,7 @@ mod tests {
         let state = read_inference_setup_state_from(
             &format!("{}/api/v0/graphql", server.uri()),
             node,
-            identity.did(),
+            &identity,
         )
         .await
         .unwrap();
@@ -472,7 +504,7 @@ mod tests {
             assert!(read_inference_setup_state_from(
                 &format!("{}/api/v0/graphql", server.uri()),
                 "did:runtime",
-                identity.did()
+                &identity
             )
             .await
             .is_err());
@@ -496,7 +528,7 @@ mod tests {
             let error = read_inference_setup_state_from(
                 &format!("{}/api/v0/graphql", server.uri()),
                 "did:runtime",
-                identity.did(),
+                &identity,
             )
             .await
             .unwrap_err();
@@ -520,7 +552,7 @@ mod tests {
         let error = read_inference_setup_state_from(
             &format!("{}/api/v0/graphql", server.uri()),
             "did:runtime",
-            identity.did(),
+            &identity,
         )
         .await
         .unwrap_err();
@@ -555,7 +587,7 @@ mod tests {
                 "malformed agent",
                 {
                     let mut data = data.clone();
-                    data["agents"] = json!([{"agent_id":"incomplete"}]);
+                    data["agents"] = json!([{"agent_did":"incomplete"}]);
                     data
                 },
                 false,

@@ -240,7 +240,7 @@ export function createChatActions({
 
   async function sendMessage(
     content: string,
-    agentId?: string | null,
+    agentDid?: string | null,
     attachments: RequestAttachment[] = [],
     followUp?: QueueDelivery,
     acceptsView: () => boolean = () => true,
@@ -270,9 +270,9 @@ export function createChatActions({
       return null;
     }
     const admission =
-      agentId === undefined
+      agentDid === undefined
         ? projection.agentReadiness
-        : selectedNodeReadinessDecision(node, agentId);
+        : selectedNodeReadinessDecision(node, agentDid);
     if (admission.kind !== "ready") {
       reportSendFailure("The selected agent is unavailable");
       return null;
@@ -305,7 +305,7 @@ export function createChatActions({
       if (earlier) {
         const reply = await api.sendChatMessage({
           nodeDid: node.nodeDid,
-          agentId: admission.agentId,
+          agentDid: admission.agentDid,
           sessionId: earlier.sessionId,
           content,
           attachments,
@@ -324,8 +324,8 @@ export function createChatActions({
             chat.resetWorkflow(stores.chat);
             reportSendFailure(
               reply.outcome === "notDelivered"
-                ? EARLIER_SEND_NOT_DELIVERED_HINT
-                : DELIVERY_UNKNOWN_HINT,
+                ? `${EARLIER_SEND_NOT_DELIVERED_HINT}${reply.deliveryError ? ` ${reply.deliveryError.message}` : ""}`
+                : `${DELIVERY_UNKNOWN_HINT}${reply.deliveryError ? ` ${reply.deliveryError.message}` : ""}`,
             );
           }
           return null;
@@ -336,7 +336,7 @@ export function createChatActions({
             requestId: reply.requestId,
             nodeDid: reply.nodeDid,
             sessionId: reply.sessionId,
-            agentId: reply.agentId,
+            agentDid: reply.agentDid,
             content,
             attachments,
             cwd,
@@ -345,13 +345,21 @@ export function createChatActions({
           status.kind === "queue",
         );
         await applyChatResult(reply, draft, intent, acceptsView);
+        if (
+          reply.deliveryError &&
+          acceptsView() &&
+          selection.acceptsIntent(store, intent)
+        )
+          reportSendFailure(
+            `Your message was delivered, but its saved-message cleanup failed: ${reply.deliveryError.message}`,
+          );
         return reply;
       }
       const result = await chatDelivery.submit(
         {
           clientDid: callerDid,
           nodeDid: node.nodeDid,
-          agentId: admission.agentId,
+          agentDid: admission.agentDid,
           sessionId: selectedSessionId,
           content,
           attachments,
@@ -368,8 +376,8 @@ export function createChatActions({
           chat.resetWorkflow(stores.chat);
           reportSendFailure(
             result.outcome === "notDelivered"
-              ? EARLIER_SEND_NOT_DELIVERED_HINT
-              : DELIVERY_UNKNOWN_HINT,
+              ? `${EARLIER_SEND_NOT_DELIVERED_HINT}${result.deliveryError ? ` ${result.deliveryError.message}` : ""}`
+              : `${DELIVERY_UNKNOWN_HINT}${result.deliveryError ? ` ${result.deliveryError.message}` : ""}`,
           );
         }
         return null;
@@ -390,7 +398,7 @@ export function createChatActions({
       already on the session is replaced, fenced on the revision observed. */
   async function setGoal(
     objective: string,
-    agentId?: string | null,
+    agentDid?: string | null,
     acceptsView: () => boolean = () => true,
   ): Promise<GoalControlResult | null> {
     if (submissionInFlight) return null;
@@ -403,9 +411,9 @@ export function createChatActions({
       return null;
     }
     const admission =
-      agentId === undefined
+      agentDid === undefined
         ? projection.agentReadiness
-        : selectedNodeReadinessDecision(node, agentId);
+        : selectedNodeReadinessDecision(node, agentDid);
     if (admission.kind !== "ready") {
       reportFailure("The selected agent is unavailable");
       return null;
@@ -444,7 +452,7 @@ export function createChatActions({
           sessionId: selectedSessionId,
           sessionDocId: current?.sessionDocId ?? null,
           expected: current?.goal?.revision ?? null,
-          agentId: admission.agentId,
+          agentDid: admission.agentDid,
           action: { kind: "create", objective, tokenBudget: null },
           cwd: goalCwd,
         },
@@ -491,7 +499,7 @@ export function createChatActions({
           sessionId,
           sessionDocId: current.sessionDocId,
           expected: current.goal.revision,
-          agentId: null,
+          agentDid: null,
           action: originalAction,
           cwd: null,
         },

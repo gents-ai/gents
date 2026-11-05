@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_does_not_clobber_session_agent_id() -> Result<()> {
+async fn codex_shim_does_not_clobber_session_agent_did() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -22,7 +22,7 @@ async fn codex_shim_does_not_clobber_session_agent_id() -> Result<()> {
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let default_agent_id = format!("{node_did}:default");
+    let default_agent_did = format!("{node_did}:default");
     let session_id = format!("test-session-{}", Uuid::new_v4().simple());
 
     let shim_port = allocate_port()?;
@@ -52,13 +52,13 @@ async fn codex_shim_does_not_clobber_session_agent_id() -> Result<()> {
                     session_id: "{session_id}",
                     node_did: "{node_did}",
                     requester_did: "{node_did}",
-                    agent_id: "{default_agent_id}",
+                    agent_did: "{default_agent_did}",
                     created_at: "2026-01-01T00:00:00Z"
                 }}) {{ _docID }}
             }}"#,
                 session_id = escape_graphql_string(&session_id),
                 node_did = escape_graphql_string(&node_did),
-                default_agent_id = escape_graphql_string(&default_agent_id),
+                default_agent_did = escape_graphql_string(&default_agent_did),
             ),
         ))
         .await?;
@@ -115,21 +115,21 @@ async fn codex_shim_does_not_clobber_session_agent_id() -> Result<()> {
                         requester_did: {{ _eq: "{node_did}" }}
                     }},
                     limit: 1
-                ) {{ agent_id }}
+                ) {{ agent_did }}
             }}"#,
                 session_id = escape_graphql_string(&session_id),
                 node_did = escape_graphql_string(&node_did),
             ),
         ))
         .await?;
-    let preserved_agent_id = resp
-        .pointer("/data/AgentSession/0/agent_id")
+    let preserved_agent_did = resp
+        .pointer("/data/AgentSession/0/agent_did")
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
     assert_eq!(
-        preserved_agent_id, default_agent_id,
-        "agent_id must remain pinned to its create-time value"
+        preserved_agent_did, default_agent_did,
+        "agent_did must remain pinned to its create-time value"
     );
     Ok(())
 }
@@ -157,7 +157,7 @@ async fn codex_shim_does_not_adopt_a_session_from_another_agent() -> Result<()> 
     )?;
     let node_did = node_did_from_init(&init)?;
     let session_id = format!("test-session-{}", Uuid::new_v4().simple());
-    let foreign_agent_id = "some-other-agent".to_string();
+    let foreign_agent_did = "some-other-agent".to_string();
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -186,13 +186,13 @@ async fn codex_shim_does_not_adopt_a_session_from_another_agent() -> Result<()> 
                     session_id: "{session_id}",
                     node_did: "{node_did}",
                     requester_did: "{node_did}",
-                    agent_id: "{foreign_agent_id}",
+                    agent_did: "{foreign_agent_did}",
                     created_at: "2026-01-01T00:00:00Z"
                 }}) {{ _docID }}
             }}"#,
                 session_id = escape_graphql_string(&session_id),
                 node_did = escape_graphql_string(&node_did),
-                foreign_agent_id = escape_graphql_string(&foreign_agent_id),
+                foreign_agent_did = escape_graphql_string(&foreign_agent_did),
             ),
         ))
         .await?;

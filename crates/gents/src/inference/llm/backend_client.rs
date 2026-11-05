@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::resolved::ResolvedAgent;
@@ -153,18 +153,25 @@ fn api_key_http(
     cache: &Arc<crate::inference::usage_observation::UsageCache>,
     node: &Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
-) -> crate::inference::clients::provider_http::ProviderHttpClient {
-    match crate::inference::usage_observation::UsageAccount::for_agent(agent) {
-        Some(account) => crate::inference::clients::provider_http::ProviderHttpClient::with_usage(
-            Default::default(),
-            crate::inference::usage_observation::UsageReporter::new(
-                cache.clone(),
-                node.clone(),
-                account,
-            ),
-        ),
-        None => crate::inference::clients::provider_http::ProviderHttpClient::default(),
-    }
+) -> Result<crate::inference::clients::provider_http::ProviderHttpClient> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    Ok(
+        match crate::inference::usage_observation::UsageAccount::for_agent(agent) {
+            Some(account) => {
+                crate::inference::clients::provider_http::ProviderHttpClient::with_usage(
+                    client,
+                    crate::inference::usage_observation::UsageReporter::new(
+                        cache.clone(),
+                        node.clone(),
+                        account,
+                    ),
+                )
+            }
+            None => crate::inference::clients::provider_http::ProviderHttpClient::new(client),
+        },
+    )
 }
 
 /// OAuth-branch construction hits DefraDB for the agent's `OAuthCredential`
@@ -176,11 +183,32 @@ pub(crate) async fn build_backend_client(
     api_key: &str,
     build_timeout: Duration,
 ) -> Result<BackendClient> {
+    let resolved_auth = crate::inference::auth::credential::resolve_runtime_backend_auth(
+        &node,
+        agent.node_did(),
+        agent.backend_provider_kind,
+        &agent.backend_endpoint,
+        &agent.backend_auth,
+    )
+    .await?;
+    let resolved_key = if matches!(
+        &agent.backend_auth,
+        crate::documents::BackendAuth::Credential { .. }
+    ) {
+        Some(
+            resolved_auth
+                .resolve_api_key()?
+                .unwrap_or_else(|| "no-key".to_owned()),
+        )
+    } else {
+        None
+    };
+    let api_key = resolved_key.as_deref().unwrap_or(api_key);
     match agent.backend_provider_kind {
         BackendProviderKind::OpenAiCompatible => {
             let build_context = format!(
                 "building OpenAI-compatible completion client for agent {} against {}",
-                agent.agent_id, agent.backend_endpoint
+                agent.agent_did, agent.backend_endpoint
             );
             if agent.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
                 let client = crate::inference::clients::inference_http::build_openai_chat_completions_client(
@@ -188,7 +216,7 @@ pub(crate) async fn build_backend_client(
                     &agent.backend_endpoint,
                     crate::inference::clients::inference_http::SessionTaggingHttpClient::new(
                         crate::inference::rendered_request::RenderedRequestCapturingHttpClient::new(
-                            api_key_http(&cache, &node, agent),
+                            api_key_http(&cache, &node, agent)?,
                         ),
                     ),
                 )
@@ -201,7 +229,7 @@ pub(crate) async fn build_backend_client(
                     crate::inference::clients::inference_http::SessionTaggingHttpClient::new(
                         crate::inference::clients::inference_http::ResponsesNormalizingHttpClient::new(
                             crate::inference::rendered_request::RenderedRequestCapturingHttpClient::new(
-                                api_key_http(&cache, &node, agent),
+                                api_key_http(&cache, &node, agent)?,
                             ),
                         )
                         .with_service_tier(agent.service_tier),
@@ -215,7 +243,7 @@ pub(crate) async fn build_backend_client(
         BackendProviderKind::OpenRouter => {
             let build_context = format!(
                 "building OpenRouter completion client for agent {} against {}",
-                agent.agent_id, agent.backend_endpoint
+                agent.agent_did, agent.backend_endpoint
             );
             let client: rig::providers::openrouter::Client<
                 crate::inference::rendered_request::RenderedRequestCapturingHttpClient<
@@ -227,7 +255,7 @@ pub(crate) async fn build_backend_client(
                 .http_client(
                     crate::inference::rendered_request::RenderedRequestCapturingHttpClient::<
                         crate::inference::clients::provider_http::ProviderHttpClient,
-                    >::new(api_key_http(&cache, &node, agent)),
+                    >::new(api_key_http(&cache, &node, agent)?),
                 )
                 .build()
                 .with_context(|| build_context.clone())?;
@@ -255,7 +283,7 @@ pub(crate) async fn build_backend_client(
             .with_context(|| {
                 format!(
                     "building ChatGPT Codex completion client for agent {} against {}",
-                    agent.agent_id, agent.backend_endpoint
+                    agent.agent_did, agent.backend_endpoint
                 )
             })?;
             Ok(BackendClient::ChatGptCodex(client))
@@ -263,7 +291,7 @@ pub(crate) async fn build_backend_client(
         BackendProviderKind::XaiGrokOAuth => {
             let build_context = format!(
                 "building Grok OAuth completion client for agent {} against {}",
-                agent.agent_id, agent.backend_endpoint
+                agent.agent_did, agent.backend_endpoint
             );
             let timeout_error = || {
                 anyhow::anyhow!(
@@ -336,7 +364,7 @@ pub(crate) async fn build_backend_client(
             .with_context(|| {
                 format!(
                     "building Claude subscription completion client for agent {}",
-                    agent.agent_id
+                    agent.agent_did
                 )
             })?;
             Ok(BackendClient::ClaudeSubscription(client))
@@ -365,7 +393,7 @@ pub(crate) async fn build_backend_client(
             let kind = agent.backend_provider_kind;
             let endpoint = agent.backend_endpoint.as_str();
             let settings = agent.claude_platform.as_ref();
-            let built = match &agent.backend_auth {
+            let built = match &resolved_auth {
                 crate::documents::BackendAuth::AwsCredentials {
                     access_key_id,
                     secret_access_key,
@@ -460,7 +488,7 @@ pub(crate) async fn build_backend_client(
                 .with_context(|| {
                     format!(
                         "building the {kind} completion client for agent {}",
-                        agent.agent_id
+                        agent.agent_did
                     )
                 })?;
             Ok(BackendClient::AnthropicApiKey(

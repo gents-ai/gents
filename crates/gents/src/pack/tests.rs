@@ -160,7 +160,7 @@ fn stamped_keys_must_be_graphql_names() {
     let mut plugin = data_plugin(&["FixtureNote"], &["insert"]);
     let data = plugin.data.as_mut().unwrap();
     data.stamped
-        .insert("owner_did".to_owned(), StampedField::NodeDid);
+        .insert("owner_did".to_owned(), StampedField::CallerDid);
     plugin.validate().unwrap();
     let data = plugin.data.as_mut().unwrap();
     data.stamped
@@ -180,7 +180,7 @@ fn secret_stamped_field_names_are_refused() {
             .as_mut()
             .unwrap()
             .stamped
-            .insert(field.to_owned(), StampedField::NodeDid);
+            .insert(field.to_owned(), StampedField::CallerDid);
         let message = refusal(&plugin);
         assert!(message.contains("format_check"), "{message}");
         assert!(message.contains(field), "{message}");

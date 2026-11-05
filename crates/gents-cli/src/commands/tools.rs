@@ -75,14 +75,14 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
     .await?;
     let availability =
         RuntimeToolAvailability::from_online_mcp_services(available_services.clone());
-    let enabled_agent_ids = bundle
+    let enabled_agent_dids = bundle
         .config
         .agents
         .iter()
         .filter(|agent| agent.enabled)
-        .map(|agent| agent.agent_id.clone())
+        .map(|agent| agent.agent_did.clone())
         .collect::<BTreeSet<_>>();
-    let enabled_agent_id_set = enabled_agent_ids
+    let enabled_agent_did_set = enabled_agent_dids
         .iter()
         .cloned()
         .collect::<RapidHashSet<_>>();
@@ -90,21 +90,21 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
     let mut agents = Vec::new();
     for agent in &bundle.config.agents {
         if args
-            .agent_id
+            .agent_did
             .as_deref()
-            .is_some_and(|id| agent.agent_id != id)
+            .is_some_and(|id| agent.agent_did != id)
         {
             continue;
         }
         if !agent.enabled {
-            configuration_issues.insert(agent.agent_id.clone(), "agent is disabled".to_owned());
+            configuration_issues.insert(agent.agent_did.clone(), "agent is disabled".to_owned());
         }
         let resolved = (|| -> Result<_> {
             let (context, tools) = agent_tools_document(&bundle, &node_did, agent)?;
             let tools_id = context.and_then(|context| context.tools_id.as_deref());
             let config = if let Some(tools) = tools {
                 AgentToolSurfaceConfig::from_tools_documents(
-                    &agent.agent_id,
+                    &agent.agent_did,
                     tools,
                     &bundle.config.datastore_tool_surfaces,
                     &bundle.config.agent_targets,
@@ -113,7 +113,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                 )?
             } else {
                 AgentToolSurfaceConfig::from_tools_documents(
-                    &agent.agent_id,
+                    &agent.agent_did,
                     &gents::documents::Tools::default(),
                     &[],
                     &[],
@@ -126,17 +126,17 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         let (tools_id, config) = match resolved {
             Ok(value) => value,
             Err(error) => {
-                configuration_issues.insert(agent.agent_id.clone(), format!("{error:#}"));
+                configuration_issues.insert(agent.agent_did.clone(), format!("{error:#}"));
                 continue;
             }
         };
         let explanation = config.explain_with_runtime_availability(
             availability.clone(),
             &node_did,
-            &enabled_agent_id_set,
+            &enabled_agent_did_set,
         );
         agents.push(json!({
-            "agent_id": agent.agent_id,
+            "agent_did": agent.agent_did,
             "display_name": agent.display_name,
             "enabled": agent.enabled,
             "context_id": agent.context_id,
@@ -146,14 +146,14 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         }));
     }
 
-    if let Some(only_agent_id) = args.agent_id.as_deref() {
+    if let Some(only_agent_did) = args.agent_did.as_deref() {
         let found = agents.iter().any(|row| {
-            row.get("agent_id")
+            row.get("agent_did")
                 .and_then(Value::as_str)
-                .is_some_and(|value| value == only_agent_id)
-        }) || configuration_issues.contains_key(only_agent_id);
+                .is_some_and(|value| value == only_agent_did)
+        }) || configuration_issues.contains_key(only_agent_did);
         if !found {
-            anyhow::bail!("agent {only_agent_id} was not found for node {node_did}");
+            anyhow::bail!("agent {only_agent_did} was not found for node {node_did}");
         }
     }
 
@@ -177,7 +177,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
             "measured_available_mcp_service_ids": available_services,
             "local_target_eligibility": {
                 "source": "enabled_agent_configuration",
-                "enabled_agent_ids": enabled_agent_ids.iter().cloned().collect::<Vec<_>>(),
+                "enabled_agent_dids": enabled_agent_dids.iter().cloned().collect::<Vec<_>>(),
                 "runtime_readiness_verified": false
             },
         }),
@@ -384,9 +384,9 @@ mod tests {
         }
     }
 
-    fn agent_json(node_did: &str, agent_id: &str, context_id: Option<&str>) -> Value {
+    fn agent_json(node_did: &str, agent_did: &str, context_id: Option<&str>) -> Value {
         json!({
-            "agent_id": agent_id,
+            "agent_did": agent_did,
             "node_did": node_did,
             "context_id": context_id,
             "inference_profile_id": "profile",
@@ -401,7 +401,7 @@ mod tests {
                 .config
                 .agents
                 .iter()
-                .find(|agent| agent.agent_id == id)
+                .find(|agent| agent.agent_did == id)
                 .unwrap()
         };
 

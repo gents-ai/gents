@@ -1,10 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use gents::documents::{EvalDefinition, PackConfig, SurfaceToolDecl};
+use gents::documents::{EvalDefinition, SurfaceToolDecl};
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::ScriptedExecutor;
 use gents::eval::OutcomeKind;
-use gents::pack::{declared_paths, load_pack_config, PackInstallOptions, PackManifest};
+use gents::pack::{
+    declared_paths, load_pack_authoring_config, AuthoredPackConfig, PackInstallOptions,
+    PackManifest,
+};
 
 const OWNER: &str = "did:key:zFactorySetupEvalOwner";
 
@@ -26,7 +29,7 @@ fn subjects() -> Vec<PathBuf> {
     dirs
 }
 
-fn load(dir: &Path) -> (PackManifest, PackConfig) {
+fn load(dir: &Path) -> (PackManifest, AuthoredPackConfig) {
     let manifest: PackManifest =
         serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap();
     for path in declared_paths(&manifest) {
@@ -36,7 +39,7 @@ fn load(dir: &Path) -> (PackManifest, PackConfig) {
             dir.display()
         );
     }
-    let config = load_pack_config(
+    let config = load_pack_authoring_config(
         &manifest,
         &PackInstallOptions {
             node_did: OWNER.into(),
@@ -53,17 +56,20 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
     for dir in subjects() {
         let (manifest, config) = load(&dir);
         let name = dir.display();
-        let [behavior] = config.agents.as_slice() else {
+        let [behavior] = config.value["agents"].as_array().unwrap().as_slice() else {
             panic!("{name}: one behavior, the Engineer");
         };
-        assert_eq!(behavior.agent_id, "engineer", "{name}");
+        assert_eq!(behavior["agent_slot"], "engineer", "{name}");
+        assert!(behavior.get("agent_did").is_none(), "{name}");
+        let config = &config.documents;
         assert_eq!(
-            config.node.default_agent_id, None,
+            config.node.default_agent_did, None,
             "{name}: the trial selects the cell's behavior as the default"
         );
         assert!(
-            behavior
-                .tags
+            behavior["tags"]
+                .as_array()
+                .unwrap()
                 .iter()
                 .any(|tag| tag == gents::tools::builtin::self_config::ENGINEER_AGENT_TAG),
             "{name}: the Engineer carries the protected Setup tag"
@@ -138,7 +144,7 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
 
 pub(super) fn definition() -> EvalDefinition {
     let (_, config) = load(&root().join("definition"));
-    let [definition] = config.eval_definitions.as_slice() else {
+    let [definition] = config.documents.eval_definitions.as_slice() else {
         panic!("the definition pack carries one eval definition");
     };
     definition.clone()
@@ -179,6 +185,10 @@ fn the_definition_validates_and_every_check_accepts_its_params() {
         ScriptedExecutor::passed_evidence(OWNER, &stage.stage_id, "unused", Vec::new())
             .stages
             .remove(0);
+    evidence.subject_agent = Some(gents::eval::runner::subject_binding::SubjectAgent {
+        slot: "engineer".into(),
+        agent_did: "did:key:test-engineer".into(),
+    });
     evidence.captures.clear();
     for capture in &stage.capture {
         evidence.captures.insert(
@@ -187,10 +197,9 @@ fn the_definition_validates_and_every_check_accepts_its_params() {
         );
     }
     for check in stage.checks.iter().chain(&repair.checks) {
-        let implementation = registry
-            .get(&check.check)
+        let verdict = registry
+            .evaluate_bound(&check.check, &check.params, &evidence)
             .unwrap_or_else(|| panic!("{} is not a shipped check", check.check));
-        let verdict = implementation.evaluate(&check.params, &evidence);
         assert_ne!(
             verdict.kind,
             OutcomeKind::Grader,
@@ -216,7 +225,7 @@ fn capstone_role_checks_follow_generated_ids_through_automation() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|agent| agent["agent_id"] == "planner")
+        .find(|agent| agent["agent_did"] == "planner")
         .unwrap();
     let wiring = params["links"]
         .as_array()
@@ -230,7 +239,7 @@ fn capstone_role_checks_follow_generated_ids_through_automation() {
         })
         .unwrap();
     let permission = json!({"agents":{"agents":"agents","contexts":"contexts","tools":"tools","expect":[{
-        "agent_id":"planner","source_match":planner["source_match"],"tools":[{"field":"host.bash.mode","equals":"Off"}]
+        "agent_did":"planner","source_match":planner["source_match"],"tools":[{"field":"host.bash.mode","equals":"Off"}]
     }]},"links":[wiring]});
     let mut evidence = ScriptedExecutor::passed_evidence(OWNER, "setup", "unused", vec![])
         .stages
@@ -240,8 +249,8 @@ fn capstone_role_checks_follow_generated_ids_through_automation() {
         (
             "agents",
             vec![
-                json!({"agent_id":"did:x:research-desk-planner","display_name":"Research desk Planner","context_id":"c"}),
-                json!({"agent_id":"wrong","display_name":"Researcher"}),
+                json!({"agent_did":"did:x:research-desk-planner","display_name":"Research desk Planner","context_id":"c"}),
+                json!({"agent_did":"wrong","display_name":"Researcher"}),
             ],
         ),
         ("contexts", vec![json!({"context_id":"c","tools_id":"t"})]),
@@ -261,7 +270,7 @@ fn capstone_role_checks_follow_generated_ids_through_automation() {
         ),
         (
             "tasks",
-            vec![json!({"task_id":"generated-task","agent_id":"did:x:research-desk-planner"})],
+            vec![json!({"task_id":"generated-task","agent_did":"did:x:research-desk-planner"})],
         ),
     ] {
         evidence
@@ -274,7 +283,7 @@ fn capstone_role_checks_follow_generated_ids_through_automation() {
     let CaptureResult::Documents { rows } = evidence.captures.get_mut("tasks").unwrap() else {
         unreachable!()
     };
-    rows[0]["agent_id"] = json!("wrong");
+    rows[0]["agent_did"] = json!("wrong");
     assert!(check.evaluate(&permission, &evidence).score_bp.unwrap() < 10000);
 }
 
@@ -393,10 +402,10 @@ fn capstone_disabled_roles_fail_cleanup_without_shadowing_active_roles() {
             })
             .unwrap();
         let subset = json!({"present":[count],"links":[link]});
-        let planner = json!({"agent_id":"planner-new","display_name":"Planner","enabled":true,"inference_profile_id":"profile"});
+        let planner = json!({"agent_did":"planner-new","display_name":"Planner","enabled":true,"inference_profile_id":"profile"});
         let mut all_rows = vec![planner.clone()];
-        all_rows.extend((0..6).map(|i| json!({"agent_id":format!("other-{i}"),"enabled":true})));
-        all_rows.push(json!({"agent_id":"planner-old","display_name":"Planner","enabled":false,"inference_profile_id":"wrong-profile"}));
+        all_rows.extend((0..6).map(|i| json!({"agent_did":format!("other-{i}"),"enabled":true})));
+        all_rows.push(json!({"agent_did":"planner-old","display_name":"Planner","enabled":false,"inference_profile_id":"wrong-profile"}));
         let mut evidence =
             ScriptedExecutor::passed_evidence(OWNER, &stage.stage_id, "unused", vec![])
                 .stages
@@ -432,7 +441,7 @@ fn capstone_disabled_roles_fail_cleanup_without_shadowing_active_roles() {
         );
         assert_eq!(check.evaluate(&subset, &evidence).score_bp, Some(10000));
 
-        evidence.captures.insert("agents".into(), CaptureResult::Documents { rows: vec![planner.clone(), json!({"agent_id":"planner-duplicate","display_name":"Planner","enabled":true,"inference_profile_id":"profile"})] });
+        evidence.captures.insert("agents".into(), CaptureResult::Documents { rows: vec![planner.clone(), json!({"agent_did":"planner-duplicate","display_name":"Planner","enabled":true,"inference_profile_id":"profile"})] });
         assert!(check.evaluate(&subset, &evidence).score_bp.unwrap() < 10000);
         evidence
             .captures

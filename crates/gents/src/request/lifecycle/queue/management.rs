@@ -76,7 +76,7 @@ pub async fn pending_user_queue_projection(
                         let edit_group = can_edit
                             .then(|| {
                                 serde_json::to_string(&(
-                                    &row.agent_id,
+                                    &row.agent_did,
                                     &row.workspace_id,
                                     &row.workspace_owner_node_did,
                                     &row.workspace_authority,
@@ -155,7 +155,8 @@ pub async fn pending_user_queue_projection(
 
 fn editable(row: &AgentRequestRow, requester: &str) -> bool {
     row.requester_did.as_deref() == Some(requester)
-        && row.admission_signer_did.as_deref() == Some(requester)
+        && (row.admission_kind.as_deref() == Some("client")
+            || row.admission_signer_did.as_deref() == Some(requester))
         && crate::request::admission::verify_request_receipt_signature(row).is_ok()
         && matches!(
             crate::request::lifecycle::parse_valid_until(
@@ -213,7 +214,7 @@ fn selected_group<'a>(
     );
     let first = &selected[0];
     anyhow::ensure!(
-        selected.iter().all(|row| row.agent_id == first.agent_id
+        selected.iter().all(|row| row.agent_did == first.agent_did
             && row.workspace_id == first.workspace_id
             && row.workspace_authority == first.workspace_authority
             && row.workspace_owner_node_did == first.workspace_owner_node_did
@@ -339,7 +340,7 @@ fn replacement_spec(
             requester_did: Some(requester_did.to_owned()),
             request_id,
             node_did: node_did.to_owned(),
-            agent_id: source.agent_id.clone().context("message has no agent")?,
+            agent_did: source.agent_did.clone().context("message has no agent")?,
             session_id: session_id.to_owned(),
             content: message.content.trim().to_owned(),
             execution_origin: ExecutionOrigin::Interactive,
@@ -394,8 +395,8 @@ pub(crate) async fn prepare_pending_user_edit_with_deliveries(
     first_request_id: Option<&str>,
 ) -> Result<Vec<AgentRequestCreate>> {
     anyhow::ensure!(
-        signer.did() == requester_did && admission.signer_did == requester_did,
-        "Only the author can edit pending messages."
+        access.actor_did().as_deref() == Some(signer.did()) && admission.signer_did == signer.did(),
+        "Pending edit signer must match the authenticated caller."
     );
     anyhow::ensure!(
         deliveries.is_none_or(|values| values.len() == edit.messages.len()),
@@ -440,8 +441,12 @@ pub(crate) async fn prepare_pending_user_edit_with_deliveries(
             },
         )?;
         creates.push(
-            crate::request::lifecycle::build_signed_request(spec, RequestSigner::Identity(signer))
-                .await?,
+            crate::request::lifecycle::build_signed_client_request(
+                access,
+                spec,
+                RequestSigner::Identity(signer),
+            )
+            .await?,
         );
     }
     Ok(creates)
@@ -533,7 +538,7 @@ mod input_reissuance_tests {
             let source = AgentRequestRow {
                 doc_id: Some(case["reissued_source_doc_id"].as_str().unwrap().into()),
                 request_id: "source-message".into(),
-                agent_id: Some("coding".into()),
+                agent_did: Some("coding".into()),
                 input: Some(input.clone()),
                 ..Default::default()
             };
@@ -594,6 +599,7 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
     node_did: &str,
     session_id: &str,
     requester_did: &str,
+    signer_did: &str,
     edit: &PendingQueueEdit,
     creates: &[AgentRequestCreate],
 ) -> Result<std::result::Result<ValidatedPendingEdit, String>> {
@@ -612,8 +618,8 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
                 "Replacement request identity is not fresh."
             );
             anyhow::ensure!(
-                create.admission.signer_did == requester_did,
-                "Only the author can replace pending messages."
+                create.admission.signer_did == signer_did,
+                "Replacement signer differs from the signed edit caller."
             );
             create.admission.validate_canonical_fields()?;
             create
@@ -646,7 +652,7 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
             create.graphql_input_fields().map_err(anyhow::Error::msg)?;
             anyhow::ensure!(
                 crate::store::identity::verify_did_signature(
-                    requester_did,
+                    signer_did,
                     &create.signing_payload(),
                     &create.admission.signature
                 )?,
@@ -673,7 +679,7 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
         let (context, _, _) = match crate::request::admission::load_request_context_in_txn(
             txn,
             node_did,
-            &create.agent_id,
+            &create.agent_did,
         )
         .await
         {
@@ -930,6 +936,7 @@ pub(super) async fn replace_pending_user_messages(
                     node_did,
                     session_id,
                     requester_did,
+                    signer.did(),
                     edit,
                     creates,
                 )

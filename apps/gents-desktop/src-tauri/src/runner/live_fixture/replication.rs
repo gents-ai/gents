@@ -1,9 +1,7 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use gents_desktop_core::client::{
-    subscribed_collection_names, ClientCore, DesktopPaths, PeerRecord,
-};
+use gents_desktop_core::client::{ClientCore, DesktopPaths, PeerRecord};
 
 use super::agent::LiveAgentDocs;
 
@@ -27,7 +25,7 @@ pub(super) async fn wait_for_connectable_iroh_addr(
     }
 }
 
-pub(super) async fn configure_live_replicators(
+pub(super) async fn connect_live_peers(
     desktop_core: &ClientCore,
     remote_core: &ClientCore,
     label: &str,
@@ -49,20 +47,6 @@ pub(super) async fn configure_live_replicators(
         &desktop_addr,
         &desktop_peer_id,
         &format!("{label} -> desktop"),
-    )
-    .await?;
-    set_replicator_with_retry(
-        remote_core,
-        &desktop_addr,
-        &format!("{label} -> desktop replicator"),
-        subscribed_collection_names(),
-    )
-    .await?;
-    set_replicator_with_retry(
-        desktop_core,
-        &remote_addr,
-        &format!("desktop -> {label} replicator"),
-        subscribed_collection_names(),
     )
     .await?;
     Ok(())
@@ -152,36 +136,6 @@ pub(super) async fn wait_for_ready_peer_status(
     }
 }
 
-async fn set_replicator_with_retry(
-    core: &ClientCore,
-    addr: &str,
-    label: &str,
-    collections: Vec<&'static str>,
-) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        match core
-            .p2p()
-            .add_replicator(
-                collections.iter().map(|name| (*name).to_owned()).collect(),
-                Some(addr),
-                Default::default(),
-                Vec::new(),
-                None,
-            )
-            .await
-        {
-            Ok(()) => return Ok(()),
-            Err(error) => {
-                if Instant::now() >= deadline {
-                    anyhow::bail!("timed out configuring {label}: {error}");
-                }
-                tokio::time::sleep(Duration::from_millis(250)).await;
-            }
-        }
-    }
-}
-
 pub(super) fn write_peer_directory_records(
     paths: &DesktopPaths,
     records: &[PeerRecord],
@@ -208,11 +162,11 @@ pub(super) async fn wait_for_live_documents(
         let has_agent = snapshot
             .agents
             .iter()
-            .any(|row| row.agent_id == docs.agent_id);
+            .any(|row| row.agent_did == docs.agent_did);
         let has_target_agent = snapshot
             .agents
             .iter()
-            .any(|row| row.agent_id == docs.target_agent_id);
+            .any(|row| row.agent_did == docs.target_agent_did);
         let has_tools = snapshot
             .tools
             .iter()
@@ -242,7 +196,7 @@ pub(super) async fn wait_for_live_documents(
         }
 
         if Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for live documents to replicate to desktop");
+            anyhow::bail!("timed out waiting for live documents from runtime");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

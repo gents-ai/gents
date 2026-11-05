@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+#[cfg(test)]
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{
     MessagePublication, MessageRole, OutputOutcome, OutputSource, OutputWriter, SourceClose,
 };
@@ -33,6 +34,7 @@ pub(crate) async fn load_canonical_assistant_candidates(
     load_canonical_assistant_candidates_with(node, node, scope, boundary, None).await
 }
 
+#[cfg(test)]
 pub(crate) async fn load_canonical_assistant_candidates_with(
     node: &EmbeddedNode,
     requests: &impl ReplayRequestReader,
@@ -40,8 +42,25 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,
     selected_tags: Option<&[gents_loop::claude_messages_body::ReplayTag]>,
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
+    load_canonical_assistant_candidates_using(
+        ReadAccess::Node(node),
+        requests,
+        scope,
+        boundary,
+        selected_tags,
+    )
+    .await
+}
+
+pub(super) async fn load_canonical_assistant_candidates_using(
+    access: ReadAccess<'_, '_>,
+    requests: &impl ReplayRequestReader,
+    scope: CanonicalReplayScope<'_>,
+    boundary: &crate::turn::provider_context_reduction::SourceBoundary,
+    selected_tags: Option<&[gents_loop::claude_messages_body::ReplayTag]>,
+) -> Result<Vec<CanonicalAssistantCandidate>> {
     let (request_commits, high_water) =
-        validated_canonical_replay_boundary(node, requests, scope, boundary).await?;
+        validated_canonical_replay_boundary(access, requests, scope, boundary).await?;
     // None records the empty canonical view at capture time. A later current
     // read cannot turn that historical empty boundary into an unbounded scan.
     let Some(high_water) = high_water else {
@@ -68,7 +87,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         r#"{{ AgentMessage(filter: {{ {session_filter}, sequence: {{ _le: {} }} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#,
         high_water.sequence
     );
-    let response = ReadAccess::Node(node)
+    let response = access
         .query(&query, "load_canonical_replay_candidates")
         .await?;
     let headers = rows_value(&response, "AgentMessage")?
@@ -108,7 +127,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         .filter_map(|row| row.message.request_doc_id.clone())
         .collect::<Vec<_>>();
     preload_request_output_segments(
-        node,
+        access,
         &replay_output_requests,
         scope.node_did,
         scope.requester_did,
@@ -122,7 +141,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         .filter(|row| row.message.role == MessageRole::Assistant)
     {
         let reconstructed = reconstruct_scoped_message_with_facts(
-            ReadAccess::Node(node),
+            access,
             &row.doc_id,
             scope.node_did,
             scope.requester_did,
@@ -275,13 +294,13 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             message: candidate.message,
         });
     }
-    let capture_rows = load_replay_capture_rows(node, &selected).await?;
-    preload_replay_capture_blocks(node, &capture_rows, &mut capture_cache).await?;
+    let capture_rows = load_replay_capture_rows(access, &selected).await?;
+    preload_replay_capture_blocks(access, &capture_rows, &mut capture_cache).await?;
 
     let mut candidates = Vec::new();
     for item in selected {
         let capture = replay_capture_from_row(
-            node,
+            access,
             &capture_rows,
             &item.capture_key,
             &item.node_did,

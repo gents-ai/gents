@@ -21,13 +21,13 @@ async fn parent(
         RequestPurpose::Normal,
         format!("scope-parent-{id}"),
         db.node_did(),
-        db.node_did(),
-        TEST_AGENT_ID,
+        db.agent_did(),
+        db.agent_did(),
         session,
         "work",
         "interactive",
         "2026-10-21T00:00:00Z",
-        AgentRequestAdmissionRecord::local_self(db.node_did()),
+        AgentRequestAdmissionRecord::local_self(db.agent_did()),
     );
     create.input.goal_assignment = model["reference"].as_object().map(|_| GoalAssignmentInput {
         goal_id: format!("goal-{}", model["reference"]["goal"]),
@@ -35,7 +35,7 @@ async fn parent(
             .as_u64()
             .map(|root| documents[&root].doc_id.clone()),
     });
-    crate::sign_agent_request_create(db.identity.as_ref(), &mut create)
+    crate::sign_agent_request_create(db.agent_identity.as_ref(), &mut create)
         .await
         .unwrap();
     ConfigAccess::write_local(

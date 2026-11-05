@@ -11,13 +11,161 @@ use super::*;
 use crate::store::config_client::ConfigAccess;
 use crate::tools::builtin::defra_query::SchemaField;
 use anyhow::Context;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::json;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
+
+#[test]
+fn modeled_removal_requires_the_exact_returned_document() {
+    let cases = &crate::lean_vocab_test::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .expect("configuration contract")
+        .configuration_removal_cases;
+    assert!(!cases.is_empty());
+    for case in cases {
+        let target = case["target"].as_str().unwrap();
+        let rows: Vec<_> = case["returned"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| json!({"_docID": id}))
+            .collect();
+        let response = json!({"data": {"delete_Skill": rows}});
+        assert_eq!(
+            confirm_removal(&response, "Skill", target).is_ok(),
+            case["expected"].as_bool().unwrap(),
+            "{}",
+            case["name"]
+        );
+    }
+    assert!(confirm_removal(&json!({"data": {"delete_Skill": null}}), "Skill", "doc").is_err());
+}
+
+#[tokio::test]
+async fn modeled_callback_configuration_publication_and_revocation() -> Result<()> {
+    use crate::lean_vocab_test::{lean_identity_household_cases, LeanIdentitySubject};
+    let case = lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .unwrap();
+    let user = &case
+        .objects
+        .iter()
+        .find(|object| object.id == "home")
+        .unwrap()
+        .owner;
+    let agent = &case
+        .objects
+        .iter()
+        .find(|object| object.id == "agent-created")
+        .unwrap()
+        .owner;
+    let runtime = case
+        .relations
+        .iter()
+        .find_map(|relation| match &relation.subject {
+            LeanIdentitySubject::Actor { actor }
+                if relation.resource == "nodes" && relation.relation == "runtime_reader" =>
+            {
+                Some(actor)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(user)
+            .build()
+            .await?,
+    );
+    let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(user)?);
+    let context = defra_core::RequestContext::default().with_identity(Some(user.clone()));
+    node.add_dac_policy_with_counter_as(&context, &case.policy_yaml, 0)
+        .await?;
+    register_config_schemas(&node).await?;
+    owner
+        .add_collection(gents_protocol::schemas::EVENT_SOURCE_CURSOR)
+        .await?;
+    owner
+        .add_collection("type CallbackTestEvent { label: String }")
+        .await?;
+    let created = owner
+        .write(
+            "test.callback.node",
+            &format!(
+                "mutation {{ create_Node(input: {{node_did: \"{}\", enabled: true}}) {{_docID}} }}",
+                escape_graphql_string(runtime)
+            ),
+        )
+        .await?;
+    let node_doc = crate::store::graphql::created_doc_id(&created, "Node")?;
+    owner
+        .add_actor_relationship(
+            "Node",
+            &node_doc,
+            "runtime_reader",
+            &identity::Did::new(runtime)?,
+        )
+        .await?;
+    owner.write("test.callback.dependencies", &format!(
+        "mutation {{ create_Agent(input: {{node_did: \"{runtime}\", agent_did: \"{agent}\", creation_nonce: \"nonce\"}}) {{_docID}} create_EventSource(input: {{node_did: \"{runtime}\", event_source_id: \"source\", source_collection: \"CallbackTestEvent\", event_kind: \"created\"}}) {{_docID}} }}",
+        runtime = escape_graphql_string(runtime), agent = escape_graphql_string(agent),
+    )).await?;
+    let docs = [
+        (Collection::Callback, json!({"node_did":runtime,"callback_id":"callback","handler":{"kind":"built_in","emitter":"create_workspace"}})),
+        (Collection::CallbackModule, json!({"node_did":runtime,"module_id":"module"})),
+        (Collection::CallbackBinding, json!({"node_did":runtime,"binding_id":"binding","agent_did":agent,"callback_id":"callback","event_source_id":"source"})),
+    ].into_iter().map(|(collection, value)| DesiredStateApplyDocument {
+        collection, add: value.clone(), update: value,
+    }).collect::<Vec<_>>();
+    apply(&owner, docs.clone()).await?;
+    let binding = owner.execute("{ CallbackBinding { _docID } }").await?;
+    let binding_doc = binding["data"]["CallbackBinding"][0]["_docID"]
+        .as_str()
+        .unwrap();
+    let mut revoked = false;
+    for observation in &case.callback_configuration_cases {
+        if observation["revoked"] == true && !revoked {
+            owner
+                .delete_actor_relationship(
+                    "CallbackBinding",
+                    binding_doc,
+                    "reader",
+                    &identity::Did::new(agent)?,
+                )
+                .await?;
+            apply(&owner, docs.clone()).await?;
+            revoked = true;
+        }
+        let actor = observation["actor"].as_str().unwrap();
+        let id = observation["id"].as_str().unwrap();
+        let (collection, field) = match id {
+            "binding" => ("CallbackBinding", "binding_id"),
+            "callback" => ("Callback", "callback_id"),
+            "module" => ("CallbackModule", "module_id"),
+            _ => unreachable!(),
+        };
+        let reader = ConfigAccess::local_as(node.clone(), identity::Did::new(actor)?);
+        let response = reader
+            .execute(&format!(
+                "{{ {collection}(filter: {{{field}: {{_eq: \"{}\"}}}}) {{_docID}} }}",
+                escape_graphql_string(id)
+            ))
+            .await?;
+        assert_eq!(
+            !response["data"][collection].as_array().unwrap().is_empty(),
+            observation["expected"].as_bool().unwrap(),
+            "{actor} {id}"
+        );
+    }
+    node.shutdown().await?;
+    Ok(())
+}
 
 #[derive(Clone, Default)]
 struct IgnoredWireWarningCapture(Arc<Mutex<Vec<tracing::Level>>>);
@@ -129,7 +277,7 @@ async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_ow
         vec![tracing::Level::WARN, tracing::Level::WARN],
         "the generic desired-state owner warns for create/change, never an unchanged replay"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -187,7 +335,7 @@ async fn unchanged_desired_state_replay_does_not_add_document_commit() -> Result
         "an identical desired-state replay must not add a whole-document commit"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -390,7 +538,7 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
         read_queries, 2,
         "one page reads all expectations and one reads all planned documents"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -446,7 +594,7 @@ fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
         ),
         config(
             Collection::Agent,
-            json!({"node_did":owner,"agent_id":"behavior","inference_profile_id":"profile","context_id":"context"}),
+            json!({"node_did":owner,"agent_did":"behavior","inference_profile_id":"profile","context_id":"context"}),
         ),
         config(
             Collection::AgentContext,
@@ -458,7 +606,7 @@ fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
         ),
         config(
             Collection::AgentTarget,
-            json!({"node_did":owner,"target_id":"target","target_node_did":owner,"agent_id":"behavior","name":"worker"}),
+            json!({"node_did":owner,"target_id":"target","target_node_did":owner,"agent_did":"behavior","name":"worker"}),
         ),
     ]
 }
@@ -478,7 +626,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         let principal = |default: &Value, name: &str| {
             config(
                 Collection::Node,
-                json!({"node_did":owner,"default_agent_id":default,"display_name":name}),
+                json!({"node_did":owner,"default_agent_did":default,"display_name":name}),
             )
         };
         let mut documents = vec![
@@ -492,7 +640,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         for behavior in ["coding", "review"] {
             documents.push(config(
                 Collection::Agent,
-                json!({"node_did":owner,"agent_id":behavior,"inference_profile_id":"profile"}),
+                json!({"node_did":owner,"agent_did":behavior,"inference_profile_id":"profile"}),
             ));
         }
         apply(&access, documents).await?;
@@ -500,7 +648,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             "node_did":owner,"display_name":"Changed"
         }});
         if !case["candidate"].is_null() {
-            requested["node"]["default_agent_id"] = case["candidate"].clone();
+            requested["node"]["default_agent_did"] = case["candidate"].clone();
         }
         let pack: crate::documents::PackConfig = serde_json::from_value(requested)?;
         let mut replacement = DesiredStateApplyPlan::from_pack_config(&pack)?
@@ -508,7 +656,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             .first()
             .expect("pack principal")
             .clone();
-        replacement.add["default_agent_id"] = json!("coding");
+        replacement.add["default_agent_did"] = json!("coding");
         let plan = DesiredStateApplyPlan::new(vec![replacement])?;
         let before = access
             .transact_write("test.default.before", |txn| {
@@ -539,16 +687,16 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             .await?;
         if allowed {
             let (_, after) = after.expect("published principal");
-            assert_eq!(after["default_agent_id"], case["candidate"]);
+            assert_eq!(after["default_agent_did"], case["candidate"]);
             assert_eq!(after["display_name"], "Changed");
         } else {
             assert_eq!(after, before, "refused replacement changed the principal");
             let message = format!("{:#}", published.unwrap_err());
-            assert!(message.contains("default_agent_id"), "{message}");
+            assert!(message.contains("default_agent_did"), "{message}");
             assert!(message.contains("coding"), "{message}");
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1025,7 +1173,7 @@ fn rule_documents(
         source["correlation_field"] = json!("message");
     }
     let mut task = json!({
-        "node_did": owner, "task_id": "work", "agent_id": "behavior",
+        "node_did": owner, "task_id": "work", "agent_did": "behavior",
         "prompt_template": prompt_template, "emit_outcome": emit_outcome,
     });
     if let Some(goal_objective_template) = goal_objective_template {
@@ -1132,8 +1280,8 @@ fn obligation_surface(
 }
 
 async fn obligation_node() -> Result<Arc<EmbeddedNode>> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
-    register_config_schemas(&node).await?;
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    crate::ensure_runtime_schemas(&node).await?;
     node.add_collection(
         "type ObligationOutcome { text: String result: String expected_total: String total: Int ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID flag: Boolean tags: [String] required_total: Int! required_label: String! required_tags: [String!] }",
     )
@@ -1221,7 +1369,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
             .is_empty(),
         "a refused obligation publishes no surface"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1273,7 +1421,7 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
     let surfaces =
         crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner).await?;
     assert_eq!(surfaces.len(), count_fields.len() + 1, "{surfaces:?}");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1297,7 +1445,7 @@ async fn string_count_field_from_the_reported_failure_is_still_accepted() -> Res
     let surfaces =
         crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner).await?;
     assert_eq!(surfaces.len(), 1, "{surfaces:?}");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1386,7 +1534,7 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
         published_count_field(&access, owner, "created").await?,
         "total"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1448,7 +1596,7 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
         published_count_field(&access, owner, "replaced").await?,
         "amount"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1593,7 +1741,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
         published_event_sources(&node).await?.is_empty(),
         "a refused count field publishes no event source"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1665,7 +1813,7 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
         published_event_sources(&node).await?.len(),
         count_fields.len() + correlation_fields.len() + 1
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1713,7 +1861,7 @@ async fn event_source_correlation_field_must_be_a_string() -> Result<()> {
         published_event_sources(&node).await?.is_empty(),
         "a refused correlation field publishes no event source"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1797,7 +1945,7 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Re
     )
     .await?;
     assert_eq!(published_count_field_of(&node, "created").await?, "total");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1869,7 +2017,7 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
     )
     .await?;
     assert_eq!(published_count_field_of(&node, "replaced").await?, "amount");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1893,7 +2041,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     let task = |emit_outcome: bool| {
         config(
             Collection::Task,
-            json!({"node_did":owner,"task_id":"handle","agent_id":"behavior","prompt_template":"Handle {{ doc.message }}","emit_outcome":emit_outcome}),
+            json!({"node_did":owner,"task_id":"handle","agent_did":"behavior","prompt_template":"Handle {{ doc.message }}","emit_outcome":emit_outcome}),
         )
     };
     let trigger = config(
@@ -1958,7 +2106,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     );
     apply(&access, vec![source("LaterPing")]).await?;
     assert_eq!(triggers().await, 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -2073,7 +2221,7 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
         ),
         config(
             Collection::Task,
-            json!({"node_did":owner,"task_id":"review","agent_id":"behavior","prompt_template":"Review {{ doc.work_unit_id }} after attempt {{ doc.attempt }}","goal_objective_template":"Seal {{ doc.attempt }}","emit_outcome":true}),
+            json!({"node_did":owner,"task_id":"review","agent_did":"behavior","prompt_template":"Review {{ doc.work_unit_id }} after attempt {{ doc.attempt }}","goal_objective_template":"Seal {{ doc.attempt }}","emit_outcome":true}),
         ),
         config(
             Collection::Trigger,
@@ -2095,6 +2243,357 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
         1,
         "an admitted trigger publishes"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
+    Ok(())
+}
+
+#[tokio::test]
+async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_actor() -> Result<()> {
+    use crate::lean_vocab_test::{
+        lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
+    };
+    let case = lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .expect("configuration contract");
+    let user = &case
+        .objects
+        .iter()
+        .find(|object| object.id == "home")
+        .unwrap()
+        .owner;
+    let agent = &case
+        .objects
+        .iter()
+        .find(|object| object.id == "agent-created")
+        .unwrap()
+        .owner;
+    let runtime = case
+        .relations
+        .iter()
+        .find_map(|relation| match &relation.subject {
+            LeanIdentitySubject::Actor { actor }
+                if relation.resource == "nodes" && relation.relation == "runtime_reader" =>
+            {
+                Some(actor)
+            }
+            _ => None,
+        })
+        .expect("modeled runtime");
+    assert!(case
+        .actions
+        .iter()
+        .any(|action| matches!(action, LeanIdentityAction::Check { actor, .. } if actor == agent)));
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let user_access = ConfigAccess::local_as(node.clone(), identity::Did::new(user)?);
+    let runtime_did = identity::Did::new(runtime)?;
+    let agent_access = ConfigAccess::local_as(node.clone(), identity::Did::new(agent)?);
+    let ctx = defra_core::RequestContext::default().with_identity(Some(user.clone()));
+    node.add_dac_policy_with_counter_as(&ctx, &case.policy_yaml, 0)
+        .await?;
+    user_access
+        .add_collection(gents_protocol::schemas::NODE)
+        .await?;
+    let response = user_access
+        .write(
+            "test.configuration.node_binding",
+            &format!(
+                "mutation {{ create_Node(input: {{node_did: \"{}\"}}) {{_docID}} }}",
+                escape_graphql_string(runtime),
+            ),
+        )
+        .await?;
+    let doc_id = crate::store::graphql::created_doc_id(&response, "Node")?;
+    for observation in &case.configuration_node_binding_cases {
+        let visible = observation["visible"].as_bool().unwrap();
+        if visible {
+            user_access
+                .add_actor_relationship("Node", &doc_id, "runtime_reader", &runtime_did)
+                .await?;
+        } else {
+            user_access
+                .delete_actor_relationship("Node", &doc_id, "runtime_reader", &runtime_did)
+                .await?;
+        }
+        let binding = ConfigurationNodeBinding {
+            enabled: true,
+            default_agent_did: None,
+            node_did: if observation["same_node"] == true {
+                runtime_did.clone()
+            } else {
+                identity::Did::new(agent)?
+            },
+            doc_id: if observation["has_doc"] == true {
+                doc_id.clone()
+            } else {
+                String::new()
+            },
+        };
+        let result = agent_access
+            .transact_readonly("test.configuration.node_binding_observe", |txn| {
+                let binding = &binding;
+                Box::pin(async move {
+                    let hidden = txn.execute("{Node {_docID}}").await?;
+                    anyhow::ensure!(
+                        hidden["data"]["Node"].as_array().unwrap().is_empty(),
+                        "agent unexpectedly reads Node"
+                    );
+                    anyhow::ensure!(
+                        txn.actor_did() == Some(agent.as_str()),
+                        "transaction actor changed"
+                    );
+                    configuration_node_doc(txn, runtime, Some(binding)).await
+                })
+            })
+            .await;
+        assert_eq!(
+            result.is_ok(),
+            observation["expected"].as_bool().unwrap(),
+            "modeled binding: {result:?}"
+        );
+    }
+    node.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn projection_binding_publication_follows_modeled_native_ownership() -> Result<()> {
+    use crate::lean_vocab_test::lean_identity_household_cases;
+    use crate::store::config_client::{GraphqlEndpoint, NodePermission};
+    use crate::NodeIdentity;
+
+    let model = lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .context("missing configuration model")?;
+    let dir = tempfile::tempdir()?;
+    let runtime = crate::KeyIdentity::load_or_create(dir.path().join("runtime"), None)?;
+    let user = crate::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
+    let creator = crate::KeyIdentity::load_or_create(dir.path().join("creator"), None)?;
+    let agent = crate::KeyIdentity::load_or_create(dir.path().join("agent"), None)?;
+    let sibling = crate::KeyIdentity::load_or_create(dir.path().join("sibling"), None)?;
+    let outsider = crate::KeyIdentity::load_or_create(dir.path().join("outsider"), None)?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_enabled()
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .with_storage_backend(defra_node::StorageBackend::Regolith)
+            .data_path(dir.path().join("database"))
+            .build()
+            .await?,
+    );
+    node.add_dac_policy_with_counter_as(
+        &defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned())),
+        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+        0,
+    )
+    .await?;
+    register_config_schemas(&node).await?;
+    let runtime_access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+    for actor in [&user, &creator, &agent, &sibling, &outsider] {
+        for permission in [
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::DacRelationAdd,
+            NodePermission::DacRelationDelete,
+            NodePermission::CollectionGet,
+        ] {
+            runtime_access
+                .grant_node_permission(&identity::Did::new(actor.did())?, permission)
+                .await?;
+        }
+    }
+    let access = |actor: &crate::KeyIdentity, signed: bool| -> Result<ConfigAccess> {
+        let endpoint =
+            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
+                .with_client_signing_capability(actor.client_signing_capability()?)?;
+        Ok(ConfigAccess::Graphql(if signed {
+            endpoint.with_client_signed_agent_creates()
+        } else {
+            endpoint
+        }))
+    };
+    let user_access = access(&user, false)?;
+    let parent = user_access
+        .write(
+            "test.projection.node",
+            &format!(
+                "mutation {{ create_Node(input: {{node_did: \"{}\"}}) {{_docID}} }}",
+                escape_graphql_string(runtime.did())
+            ),
+        )
+        .await?;
+    let parent = gents_protocol::graphql::extract_mutation_doc_id(&parent, "Node")?;
+    for actor in [&runtime, &creator] {
+        user_access
+            .add_actor_relationship(
+                "Node",
+                &parent,
+                "runtime_reader",
+                &identity::Did::new(actor.did())?,
+            )
+            .await?;
+    }
+    let creator_access = access(&creator, true)?;
+    let input = json!({"node_did":runtime.did(), "binding_id":"projection", "policy_id":"policy"});
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::ProjectionAcpBinding,
+        add: input.clone(),
+        update: input,
+    }])?;
+    creator_access
+        .transact_write("test.projection.create", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+        })
+        .await?;
+    let query = "{ ProjectionAcpBinding { _docID policy_id } }";
+    let result = creator_access.execute(query).await?;
+    let doc = result["data"]["ProjectionAcpBinding"][0]["_docID"]
+        .as_str()
+        .context("projection ID")?
+        .to_owned();
+    for revoked in [false, true] {
+        if revoked {
+            creator_access
+                .delete_resource_relationship(
+                    "ProjectionAcpBinding",
+                    &doc,
+                    "parent",
+                    "nodes",
+                    &parent,
+                )
+                .await?;
+        }
+        for case in model
+            .projection_binding_cases
+            .iter()
+            .filter(|case| case["revoked"] == revoked)
+        {
+            let actor = match case["actor"].as_str().context("modeled actor")? {
+                "user" => &user,
+                "creator" => &creator,
+                "runtime" => &runtime,
+                "agent" => &agent,
+                "sibling" => &sibling,
+                "outsider" => &outsider,
+                _ => unreachable!(),
+            };
+            let access = access(actor, true)?;
+            let expected = case["expected"].as_bool().context("modeled expectation")?;
+            let actual = match case["permission"].as_str().context("modeled permission")? {
+                "read" => !gents_protocol::graphql::graphql_rows_from_response(
+                    &access.execute(query).await?,
+                    "ProjectionAcpBinding",
+                )
+                .is_empty(),
+                "update" => {
+                    let mutation = "mutation($id: ID!, $input: ProjectionAcpBindingMutationInputArg!) { update_ProjectionAcpBinding(docID: $id, input: $input) { _docID _version { cid } } }";
+                    let value = format!("updated-{}-{revoked}", case["actor"].as_str().unwrap());
+                    if !expected {
+                        let before = creator_access.execute(query).await?;
+                        let raw_access = ConfigAccess::Graphql(
+                            GraphqlEndpoint::as_principal(
+                                format!("http://{address}/api/v0/graphql"),
+                                actor.did(),
+                            )
+                            .with_client_signing_capability(actor.client_signing_capability()?)?,
+                        );
+                        let response = raw_access.write("test.projection.denied", &format!(
+                            "mutation {{ update_ProjectionAcpBinding(docID: \"{}\", input: {{policy_id: \"{}\"}}) {{_docID}} }}",
+                            escape_graphql_string(&doc), escape_graphql_string(&value),
+                        )).await;
+                        let updated = match response {
+                            Ok(value) => !gents_protocol::graphql::graphql_rows_from_response(
+                                &value,
+                                "update_ProjectionAcpBinding",
+                            )
+                            .is_empty(),
+                            Err(error)
+                                if error.is_permission_denied() || error.is_graphql_rejection() =>
+                            {
+                                false
+                            }
+                            Err(error) => return Err(error.into()),
+                        };
+                        assert_eq!(
+                            creator_access.execute(query).await?,
+                            before,
+                            "denied mutation changed the document"
+                        );
+                        updated
+                    } else {
+                        let response = access
+                            .transact_write("test.projection.update", |txn| {
+                                let doc = &doc;
+                                let value = &value;
+                                Box::pin(async move {
+                                    txn.execute_desired_state_mutation(
+                                        mutation,
+                                        &json!({"id": doc, "input": {"policy_id": value}}),
+                                        Collection::ProjectionAcpBinding,
+                                        false,
+                                    )
+                                    .await
+                                })
+                            })
+                            .await;
+                        !gents_protocol::graphql::graphql_rows_from_response(
+                            &response?,
+                            "update_ProjectionAcpBinding",
+                        )
+                        .is_empty()
+                    }
+                }
+                _ => unreachable!(),
+            };
+            assert_eq!(actual, expected, "{case}");
+        }
+    }
+    drop(creator_access);
+    drop(user_access);
+    drop(runtime_access);
+    node.shutdown().await?;
+    drop(node);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let restarted = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_enabled()
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .with_storage_backend(defra_node::StorageBackend::Regolith)
+            .data_path(dir.path().join("database"))
+            .build()
+            .await?,
+    );
+    for (actor, role) in [
+        (&creator, "creator"),
+        (&user, "user"),
+        (&sibling, "sibling"),
+    ] {
+        let expected = model
+            .projection_binding_cases
+            .iter()
+            .find(|case| {
+                case["revoked"] == true && case["actor"] == role && case["permission"] == "read"
+            })
+            .and_then(|case| case["expected"].as_bool())
+            .context("modeled restart expectation")?;
+        let access = ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
+                .with_client_signing_capability(actor.client_signing_capability()?)?,
+        );
+        let response = access.execute(query).await?;
+        assert_eq!(
+            !gents_protocol::graphql::graphql_rows_from_response(&response, "ProjectionAcpBinding")
+                .is_empty(),
+            expected
+        );
+    }
+    restarted.shutdown().await?;
     Ok(())
 }

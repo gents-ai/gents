@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
@@ -53,10 +53,9 @@ use support::snapshots::{
     RequestLineageSnapshot, RequestSnapshot,
 };
 use support::{
-    build_request, create_agent_session, create_request, create_request_with_signed_fields,
-    create_request_with_valid_until, first_optional_row, first_row, materialization_identity,
-    set_interrupt_requested_at, set_request_lifecycle_state, test_db, AGENT_NAME, BACKEND_ID,
-    DEADLINE_SECS, NODE_DID,
+    build_request, create_request, create_request_with_signed_fields,
+    create_request_with_valid_until, first_optional_row, first_row, set_interrupt_requested_at,
+    set_request_lifecycle_state, test_db, AGENT_NAME, BACKEND_ID, DEADLINE_SECS, NODE_DID,
 };
 
 #[path = "conformance/backend_health.rs"]

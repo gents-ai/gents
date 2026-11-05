@@ -4,12 +4,12 @@ use std::sync::Arc;
 use crate::inference::llm::tool::ToolDefinition;
 use crate::inference::llm::tool::{Tool, ToolDyn};
 use anyhow::{anyhow, bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::escape_graphql_string;
 
 pub const CONTEXT_BUDGET_TOOL_NAME: &str = "context_budget";
 
@@ -63,7 +63,7 @@ pub struct LastRequestContextSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ContextBudgetScope {
     pub node_did: String,
-    pub agent_id: String,
+    pub agent_did: String,
     pub session_id: String,
 }
 
@@ -72,9 +72,9 @@ impl ContextBudgetScope {
     /// runtime did not install an agent or session identity.
     fn from_tool_runtime(node_did: &str) -> Result<Self> {
         let runtime = crate::tools::call::lifecycle::runtime::current_tool_runtime_context();
-        let agent_id = runtime
+        let agent_did = runtime
             .as_ref()
-            .and_then(|runtime| runtime.agent_id.clone())
+            .and_then(|runtime| runtime.agent_did.clone())
             .filter(|value| !value.trim().is_empty())
             .context("context_budget tool requires the calling agent identity")?;
         let session_id = runtime
@@ -89,7 +89,7 @@ impl ContextBudgetScope {
             .unwrap_or_else(|| node_did.to_string());
         Ok(Self {
             node_did,
-            agent_id,
+            agent_did,
             session_id,
         })
     }
@@ -279,51 +279,44 @@ pub fn build_context_budget_tool(
 }
 
 pub async fn load_context_budget_snapshot(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     scope: &ContextBudgetScope,
 ) -> Result<ContextBudgetSnapshot> {
     let node_did = scope.node_did.trim();
     if node_did.is_empty() {
         bail!("context_budget tool requires a running node DID");
     }
-    let agent_id = scope.agent_id.trim();
+    let agent_did = scope.agent_did.trim();
     let session_id = scope.session_id.trim();
-    if agent_id.is_empty() || session_id.is_empty() {
+    if agent_did.is_empty() || session_id.is_empty() {
         bail!("context_budget tool requires the calling agent and session identity");
     }
 
-    let resp = graphql_with_transaction_retry(
-        node,
-        &context_query(node_did, agent_id, session_id),
-        "loading context budget",
-    )
-    .await?;
-    let envelope: ContextEnvelope = decode(resp.data.as_ref(), "context budget")?;
+    let access =
+        crate::ConfigAccess::local_as(node.clone(), identity::Did::new(scope.agent_did.clone())?);
+    let resp = access
+        .execute(&context_query(node_did, agent_did, session_id))
+        .await?;
+    let envelope: ContextEnvelope = decode(resp.get("data"), "context budget")?;
     let request_ids = distinct_request_ids(&envelope.requests);
     let last_request = if request_ids.is_empty() {
         None
     } else {
-        let resp = graphql_with_transaction_retry(
-            node,
-            &inference_call_query(node_did, agent_id, &request_ids),
-            "loading context budget inference calls",
-        )
-        .await?;
+        let resp = access
+            .execute(&inference_call_query(node_did, agent_did, &request_ids))
+            .await?;
         let calls: InferenceCallEnvelope =
-            decode(resp.data.as_ref(), "context budget inference calls")?;
+            decode(resp.get("data"), "context budget inference calls")?;
         latest_request_context(&calls.inference_calls)?
     };
     let max_tokens = last_request
         .as_ref()
         .map(|request| request.accounting.context_window as i64)
         .or_else(|| max_context_window(&envelope.agents, &envelope.profiles));
-    let resp = graphql_with_transaction_retry(
-        node,
-        &compaction_query(node_did, session_id),
-        "loading context compactions",
-    )
-    .await?;
-    let envelope: CompactionEnvelope = decode(resp.data.as_ref(), "context compactions")?;
+    let resp = access
+        .execute(&compaction_query(node_did, session_id))
+        .await?;
+    let envelope: CompactionEnvelope = decode(resp.get("data"), "context compactions")?;
 
     Ok(build_snapshot(
         scope.clone(),
@@ -367,16 +360,16 @@ fn compaction_query(node_did: &str, session_id: &str) -> String {
     )
 }
 
-fn context_query(node_did: &str, agent_id: &str, session_id: &str) -> String {
+fn context_query(node_did: &str, agent_did: &str, session_id: &str) -> String {
     let node_did = escape_graphql_string(node_did);
-    let agent_id = escape_graphql_string(agent_id);
+    let agent_did = escape_graphql_string(agent_did);
     let session_id = escape_graphql_string(session_id);
     format!(
         r#"{{
             Agent(filter: {{ _and: [
                 {{ node_did: {{ _eq: "{node_did}" }} }},
-                {{ agent_id: {{ _eq: "{agent_id}" }} }}
-            ] }}, order: {{ agent_id: ASC }}) {{
+                {{ agent_did: {{ _eq: "{agent_did}" }} }}
+            ] }}, order: {{ agent_did: ASC }}) {{
                 inference_profile_id
                 enabled
             }}
@@ -395,9 +388,9 @@ fn context_query(node_did: &str, agent_id: &str, session_id: &str) -> String {
     )
 }
 
-fn inference_call_query(node_did: &str, agent_id: &str, request_ids: &[String]) -> String {
+fn inference_call_query(node_did: &str, agent_did: &str, request_ids: &[String]) -> String {
     let node_did = escape_graphql_string(node_did);
-    let agent_id = escape_graphql_string(agent_id);
+    let agent_did = escape_graphql_string(agent_did);
     let list = request_ids
         .iter()
         .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
@@ -408,7 +401,7 @@ fn inference_call_query(node_did: &str, agent_id: &str, request_ids: &[String]) 
             InferenceCall(
                 filter: {{ _and: [
                     {{ node_did: {{ _eq: "{node_did}" }} }},
-                    {{ agent_id: {{ _eq: "{agent_id}" }} }},
+                    {{ agent_did: {{ _eq: "{agent_did}" }} }},
                     {{ call_kind: {{ _eq: "inference" }} }},
                     {{ request_id: {{ _in: [{list}] }} }}
                 ] }},
@@ -602,7 +595,7 @@ mod tests {
             }"#,
             r#"mutation {
                 create_Agent(input: {
-                    agent_id: "agent-context",
+                    agent_did: "agent-context",
                     node_did: "did:key:z-context",
                     inference_profile_id: "profile-context",
                     enabled: true
@@ -695,7 +688,7 @@ mod tests {
                         request_id: "request-context",
                         request_doc_id: "request-context-doc",
                         node_did: "did:key:z-context",
-                        agent_id: "agent-context",
+                        agent_did: "agent-context",
                         call_kind: "inference",
                         call_seq: 1,
                         queued_at: "2026-06-03T11:00:00Z",
@@ -709,11 +702,11 @@ mod tests {
         node
     }
 
-    async fn call_as(tool: &ContextBudgetTool, agent_id: &str, session_id: &str) -> String {
+    async fn call_as(tool: &ContextBudgetTool, agent_did: &str, session_id: &str) -> String {
         crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
             None,
             Some("did:key:z-context".into()),
-            Some(agent_id.into()),
+            Some(agent_did.into()),
             Some("caller-request".into()),
             crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_session(
                 None,
@@ -731,7 +724,7 @@ mod tests {
     /// same node (the reported Codex background-completion shape), plus a
     /// newer dispatch by the same agent in a different session.
     async fn seed_foreign_dispatches(node: &EmbeddedNode) {
-        for (agent_id, session_id, request_id, call_id, queued_at) in [
+        for (agent_did, session_id, request_id, call_id, queued_at) in [
             (
                 "agent-codex",
                 "session-codex",
@@ -812,7 +805,7 @@ mod tests {
                             request_id: "{request_id}",
                             request_doc_id: "{request_id}-doc",
                             node_did: "did:key:z-context",
-                            agent_id: "{agent_id}",
+                            agent_did: "{agent_did}",
                             call_kind: "inference",
                             call_seq: 1,
                             queued_at: "{queued_at}",
@@ -840,7 +833,7 @@ mod tests {
         assert_eq!(parsed.max_tokens, Some(1000));
         assert_eq!(parsed.current_estimate, Some(650));
         assert_eq!(parsed.scope.node_did, "did:key:z-context");
-        assert_eq!(parsed.scope.agent_id, "agent-context");
+        assert_eq!(parsed.scope.agent_did, "agent-context");
         assert_eq!(parsed.scope.session_id, "session-context");
         assert_eq!(parsed.session_compaction_count, 1);
         assert_eq!(parsed.request_reduction_count, 1);
@@ -886,7 +879,7 @@ mod tests {
                 }) { _docID }
             }"#,
             r#"mutation {
-                update_Agent(filter: { agent_id: { _eq: "agent-context" } },
+                update_Agent(filter: { agent_did: { _eq: "agent-context" } },
                     input: { inference_profile_id: "foreign-profile" }) { _docID }
             }"#,
         ] {

@@ -1,4 +1,4 @@
-type EvalVerdict @branchable @index(fields: ["owner_node_did", "verdict_id"], unique: true) {
+type EvalVerdict @policy(id: "8d9e64ca014dddfb01e5a55a5018e0a56d238ea0da1df1b6b33d50b1ac23386a", resource: "operations") @index(fields: ["owner_node_did", "verdict_id"], unique: true) {
     verdict_id: String @immutable
     owner_node_did: String @index @immutable
     run_id: String @index @immutable

@@ -1,6 +1,7 @@
-type Agent @branchable @index(fields: ["node_did", "agent_id"], unique: true) {
-    agent_id: String
-    node_did: String @index
+type Agent @policy(id: "8d9e64ca014dddfb01e5a55a5018e0a56d238ea0da1df1b6b33d50b1ac23386a", resource: "agents") {
+    agent_did: String @index(unique: true) @immutable
+    creation_nonce: String @immutable
+    node_did: String @index @immutable
     display_name: String
     description: String
     context_id: String @index

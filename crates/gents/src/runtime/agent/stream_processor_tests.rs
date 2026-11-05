@@ -173,7 +173,7 @@ fn fixture_agent_request(
         request_id: request_id.to_string(),
         node_did: "did:test:test".to_string(),
         requester_did: None,
-        agent_id: "general".to_string(),
+        agent_did: "general".to_string(),
         session_id: session_id.to_string(),
         content: content.to_string(),
         max_total_tokens: None,
@@ -256,7 +256,7 @@ async fn first_visible_flushes_immediately_and_followup_waits_for_cadence() {
         .await
         .unwrap();
     processor.process_item(text_item("first")).await.unwrap();
-    async fn count(node: &defra_node::EmbeddedNode, doc: &str) -> usize {
+    async fn count(node: &defra_node::Node, doc: &str) -> usize {
         let response = node.execute(&format!(r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#, crate::store::graphql::escape_graphql_string(doc))).await;
         response.data.as_ref().unwrap()["AgentOutputSegment"]
             .as_array()
@@ -319,7 +319,7 @@ async fn first_visible_flushes_immediately_and_followup_waits_for_cadence() {
         processor.next_flush_deadline().await.is_none(),
         "the idle processor must let dispatch and finalization run"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     let _ = std::fs::remove_dir_all(data_path);
 }
 
@@ -554,7 +554,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
             request_id: request_id.clone(),
             node_did: "did:test:test".into(),
             requester_did: String::new(),
-            agent_id: "general".into(),
+            agent_did: "general".into(),
             session_id: session_id.clone(),
             model_name: "claude".into(),
             provider_family: None,
@@ -695,12 +695,12 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
                 == gents_protocol::output::StreamPayload::ReasoningSignature
     }));
 
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
 async fn create_pending_request(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     request_id: &str,
     session_id: &str,
 ) -> String {
@@ -708,7 +708,7 @@ async fn create_pending_request(
 }
 
 async fn create_pending_request_with_input(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     request_id: &str,
     session_id: &str,
     input: Option<&gents_protocol::request_input::RequestInput>,
@@ -725,7 +725,7 @@ async fn create_pending_request_with_input(
                 request_id: "{request_id}",
                 purpose: "normal",
                 node_did: "did:test:test",
-                agent_id: "general",
+                agent_did: "general",
                 session_id: "{session_id}",
                 request_hop: 0,
                 retry_parent_request: "",
@@ -790,7 +790,7 @@ struct PersistedMessageShape {
 }
 
 async fn load_message_shapes_in_scope(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -1131,7 +1131,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         crate::store::identity::KeyIdentity::load_or_create(data_path.join("agent.key"), None)
             .unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .data_path(&data_path)
             .build()
@@ -1500,7 +1500,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         .count();
     assert_eq!(result_count, 3);
 
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -1670,7 +1670,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
                 ToolResultContent::Text(text) if text.text == r#"{"hit":1}"#))));
     assert_eq!(history[2], final_message);
 
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -1861,7 +1861,7 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
     assert_eq!(prefix.streams.len(), 2);
     assert_eq!(prefix.streams[0].text, "Hel");
 
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -2021,7 +2021,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         "the salvageable #589 payload must persist its intended object"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 

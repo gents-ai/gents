@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use crate::inference::auth::credential::OAuthRefreshKind;
 use crate::inference::backends::provider::BackendProviderOauthExt;
@@ -13,13 +13,13 @@ pub struct OAuthProbeContext<'a> {
 
 #[derive(Debug, thiserror::Error)]
 #[error("{context}: {source:#}")]
-pub(super) struct OAuthProbeError {
+pub(crate) struct OAuthProbeError {
     context: String,
     #[source]
     pub(super) source: crate::inference::auth::credential::OAuthCredentialError,
 }
 
-pub(super) async fn oauth_credential_for_probe(
+pub(crate) async fn oauth_credential_for_probe(
     context: &OAuthProbeContext<'_>,
     backend: &InferenceBackend,
 ) -> std::result::Result<crate::inference::auth::credential::OAuthCredential, OAuthProbeError> {

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use crate::tools::mcp::health::ServiceHealthMap;
 use crate::tools::mcp::pool::McpPool;
@@ -18,6 +18,8 @@ pub struct ToolRuntimeContext {
     pub(super) local_subnet: Option<String>,
     pub(super) node_did: String,
     pub(super) identity: Option<Arc<dyn NodeIdentity>>,
+    pub(super) agent_identity: Option<Arc<dyn NodeIdentity>>,
+    pub(super) configuration: crate::inference::resolved::ResolvedConfiguration,
     pub(super) plugins: Arc<crate::plugin::executor::PluginExecutor>,
 }
 
@@ -59,6 +61,8 @@ impl ToolRuntimeContext {
             local_subnet,
             node_did: node_did.into(),
             identity,
+            agent_identity: None,
+            configuration: crate::inference::resolved::ResolvedConfiguration::Static,
             plugins: Arc::default(),
         }
     }
@@ -78,6 +82,8 @@ impl ToolRuntimeContext {
             local_subnet: None,
             node_did: node_did.into(),
             identity: None,
+            agent_identity: None,
+            configuration: crate::inference::resolved::ResolvedConfiguration::Static,
             plugins: Arc::default(),
         }
     }
@@ -88,6 +94,15 @@ impl ToolRuntimeContext {
     ) -> Self {
         self.usage_cache = cache;
         self
+    }
+
+    pub fn for_agent(&self, agent: &crate::inference::resolved::ResolvedAgent) -> Self {
+        let mut runtime = self.clone();
+        runtime.node_did = agent.node_did().to_owned();
+        runtime.identity = Some(agent.node_identity().clone());
+        runtime.agent_identity = Some(agent.agent_identity().clone());
+        runtime.configuration = agent.configuration.clone();
+        runtime
     }
 
     pub fn with_plugins(mut self, plugins: Arc<crate::plugin::executor::PluginExecutor>) -> Self {

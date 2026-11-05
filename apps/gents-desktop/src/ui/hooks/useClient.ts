@@ -182,8 +182,8 @@ export function usePinnedSessionList() {
   });
 }
 
-export function useSelectedAgentId() {
-  return useView((view) => view.agentReadiness.agentId);
+export function useSelectedAgentDid() {
+  return useView((view) => view.agentReadiness.agentDid);
 }
 
 export function useChatFolder() {
@@ -206,9 +206,9 @@ export function useRecentFolders() {
 export function useMailboxCause() {
   const { stores } = useApp();
   const route = stores.selection.use.mailboxRoute();
-  const agentId = useSelectedAgentId();
+  const agentDid = useSelectedAgentDid();
   const sessionId = stores.selection.use.sessionId();
-  return route ? { itemId: route.itemId, agentId: agentId ?? "", sessionId } : null;
+  return route ? { itemId: route.itemId, agentDid: agentDid ?? "", sessionId } : null;
 }
 
 export function useStartup() {

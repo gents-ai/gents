@@ -21,22 +21,24 @@ async fn pending_scope(
     );
     let endpoint = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let node = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
-    let home = crate::resolve_home_dir(args.home.as_deref());
-    let config = crate::read_init_config(&home)?
-        .context("An initialized --home is required to identify the message author")?;
-    let signer = crate::load_initialized_home_identity(&home, &config)?;
-    Ok((ConfigAccess::Graphql(endpoint), node, signer))
+    let access = ConfigAccess::Graphql(endpoint);
+    let actor = access
+        .actor_did()
+        .context("Pending messages require an authenticated client identity")?;
+    let signer = std::sync::Arc::new(
+        gents::store::identity::RegisteredIdentity::from_registered_did(actor, None)?,
+    );
+    Ok((access, node, signer))
 }
 
 pub(super) async fn request_pending(args: RequestPendingArgs) -> Result<()> {
     let (access, node, signer) = pending_scope(&args).await?;
-    let snapshot = gents::request::lifecycle::pending_user_queue(
-        &access,
-        &node,
-        &args.session_id,
-        signer.did(),
-    )
-    .await?;
+    let requester =
+        gents::session::client_requester_scope(&access, &node, &args.session_id, signer.did())
+            .await?;
+    let snapshot =
+        gents::request::lifecycle::pending_user_queue(&access, &node, &args.session_id, &requester)
+            .await?;
     match args
         .output
         .ensure_supported("request pending", &[OutputFormat::Text, OutputFormat::Json])?
@@ -86,7 +88,7 @@ async fn apply_pending_edit(
     let receipt = gents::request::lifecycle::submit_pending_user_edit(
         &access,
         signer.as_ref(),
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(signer.did()),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(signer.did()),
         None,
         &node,
         &args.scope.session_id,
@@ -133,11 +135,18 @@ pub(super) async fn request_remove_pending(args: RequestRemovePendingArgs) -> Re
 pub(super) async fn request_reorder_pending(args: RequestReorderPendingArgs) -> Result<()> {
     let selected = selected_queue_ids(&args.queue.expected_request_doc_ids, &args.request_doc_ids);
     let (access, node, signer) = pending_scope(&args.queue.scope).await?;
-    let snapshot = gents::request::lifecycle::pending_user_queue(
+    let requester = gents::session::client_requester_scope(
         &access,
         &node,
         &args.queue.scope.session_id,
         signer.did(),
+    )
+    .await?;
+    let snapshot = gents::request::lifecycle::pending_user_queue(
+        &access,
+        &node,
+        &args.queue.scope.session_id,
+        &requester,
     )
     .await?;
     let messages = args

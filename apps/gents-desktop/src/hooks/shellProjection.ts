@@ -58,13 +58,13 @@ export type ProjectionInputs = {
 export function projectShell(inputs: ProjectionInputs) {
   const { node, selection, session, syncHealth } = inputs;
   const operationalState = node
-    ? projectDeploymentOperationalState(node, selection.agentId, syncHealth)
+    ? projectDeploymentOperationalState(node, selection.agentDid, syncHealth)
     : null;
   const agentReadiness =
     operationalState?.nodeReadiness ??
-    selectedNodeReadinessDecision(null, selection.agentId);
+    selectedNodeReadinessDecision(null, selection.agentDid);
   const retryOperationalState = node
-    ? projectDeploymentOperationalState(node, session?.agentId ?? null, syncHealth)
+    ? projectDeploymentOperationalState(node, session?.agentDid ?? null, syncHealth)
     : null;
   const base = {
     clientAvailable: inputs.clientAvailable,

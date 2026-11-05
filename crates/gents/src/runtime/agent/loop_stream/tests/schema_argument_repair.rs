@@ -149,7 +149,7 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
             case["name"]
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -164,7 +164,7 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
     crate::test_support::install_test_agent(&node, &owner, "general").await;
     let grants = crate::tools::surface::SelfConfigToolConfig {
         enabled: true,
-        agent_id: "general".into(),
+        agent_did: "general".into(),
         categories: ["profile".to_string()].into_iter().collect(),
         preview: true,
         no_lockout: false,
@@ -247,5 +247,5 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
         "{}",
         collected.tool_results[10]
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

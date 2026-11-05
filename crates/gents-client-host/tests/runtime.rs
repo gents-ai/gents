@@ -1121,10 +1121,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         return Ok(());
     }
 
-    let agent_id = deployment["agents"]
+    let agent_did = deployment["agents"]
         .as_array()
         .and_then(|agents| agents.iter().find(|agent| agent["isDefault"] == true))
-        .and_then(|agent| agent["agentId"].as_str())
+        .and_then(|agent| agent["agentDid"].as_str())
         .context("runtime default agent")?;
     if matches!(
         journey,
@@ -1147,7 +1147,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &mut client,
             &mut id,
             node_did,
-            agent_id,
+            agent_did,
             provider.endpoint(),
         )
         .await?;
@@ -1158,18 +1158,27 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .await;
         id += 1;
         let service = speech::SpeechService::start().await?;
-        access
-            .write(
-                "seed_editor_speech_service",
-                &format!(
-                    r#"mutation {{ create_ToolServiceRegistry(input: {{
-                node_did:"{}", service_id:"editor-speech", display_name:"Editor speech",
-                hostname:"127.0.0.1", mcp_port:{}, mcp_path:"/mcp", enabled:true, send_node_did:true
-            }}) {{ _docID }} }}"#,
-                    gents::store::graphql::escape_graphql_string(node_did),
-                    service.port,
-                ),
-            )
+        let value = json!({"node_did":node_did,"service_id":"editor-speech","display_name":"Editor speech",
+            "hostname":"127.0.0.1","mcp_port":service.port,"mcp_path":"/mcp","enabled":true,"send_node_did":true});
+        let plan = gents::store::config_client::DesiredStateApplyPlan::new(vec![
+            gents::store::config_client::DesiredStateApplyDocument {
+                collection: gents::Collection::ToolServiceRegistry,
+                add: value.clone(),
+                update: value,
+            },
+        ])?;
+        let signing_access = gents::ConfigAccess::Graphql(
+            gents::store::config_client::GraphqlEndpoint::as_principal(graphql, identity.did())
+                .with_client_signing_capability(identity.client_signing_capability()?)?
+                .with_client_signed_agent_creates(),
+        );
+        signing_access
+            .transact_write("seed_editor_speech_service", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    gents::store::config_client::apply_desired_state_plan(txn, plan).await
+                })
+            })
             .await?;
         let services = client
             .call(id, "client_speech_services", json!({"nodeDid":node_did}))
@@ -1225,7 +1234,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &mut id,
             node_did,
             &client_did,
-            agent_id,
+            agent_did,
             &identity,
             &mut recovery,
         )
@@ -1237,7 +1246,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         Journey::EditorGoalRecovery | Journey::EditorGoalSteering
     ) {
         let request = json!({
-            "nodeDid":node_did, "agentId":agent_id,
+            "nodeDid":node_did, "agentDid":agent_did,
             "cwd": journey.is_steering().then_some(root),
             "action":{"kind":"create", "objective":"Return the fixture response.", "tokenBudget":"1000"}
         });
@@ -1250,7 +1259,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 id,
                 "desktop_chat_send",
                 json!({"request":{
-                    "nodeDid":node_did,"agentId":agent_id,"content":content,"delivery":"queue",
+                    "nodeDid":node_did,"agentDid":agent_did,"content":content,"delivery":"queue",
                     "cwd": journey.is_steering().then_some(root)
                 }}),
             )
@@ -1380,7 +1389,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 continuation_gate.add_permits(1);
             }
         }));
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
@@ -1547,7 +1556,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         }));
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
@@ -1622,7 +1631,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 && stopped.iter().all(|row| row["lifecycle_state"] == "interrupted"),
             "both editor Stop actions must reach distinct requests in the same session: {stopped:?}"
         );
-        configured_actions::verify_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::verify_editor_settings(&access, node_did, agent_did).await?;
         let submitted = access.execute(&format!(
             r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ content input }} }}"#,
             gents::store::graphql::escape_graphql_string(node_did),
@@ -1651,7 +1660,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         id += 1;
         let binding = selected["agentConfigs"]
             .as_array()
-            .and_then(|agents| agents.iter().find(|agent| agent["agent_id"] == agent_id))
+            .and_then(|agents| agents.iter().find(|agent| agent["agent_did"] == agent_did))
             .context("selected agent configuration")?;
         ensure!(
             selected["inferenceProfiles"]
@@ -1762,7 +1771,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             home: &node_home,
             binary: &host_binary,
             node_did,
-            agent_id,
+            agent_did,
             session,
             client_did: &client_did,
             original_doc_id: &original_doc_id,
@@ -1925,7 +1934,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &access,
             node_did,
             session,
-            agent_id,
+            agent_did,
             &client_did,
             options,
             root,
@@ -1936,7 +1945,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             root.join("editor-history-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
         )?;
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
@@ -2048,7 +2057,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         journey,
         Journey::EditorRelatedWork | Journey::EditorRelatedWorkFailure
     ) {
-        editor_related_work::configure(&access, node_did, agent_id).await?;
+        editor_related_work::configure(&access, node_did, agent_did).await?;
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
@@ -2087,7 +2096,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )?;
     }
     if matches!(journey, Journey::EditorQuestions) {
-        editor_related_work::configure(&access, node_did, agent_id).await?;
+        editor_related_work::configure(&access, node_did, agent_did).await?;
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
@@ -2122,7 +2131,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )?;
     }
     if matches!(journey, Journey::EditorImages) {
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
@@ -2143,7 +2152,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )?;
     }
     if matches!(journey, Journey::EditorWorkspace) {
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
@@ -2166,7 +2175,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     }
     if matches!(journey, Journey::EditorInventory) {
         editor_inventory::prepare(root).await?;
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         ensure!(
             client
                 .call(id, "client_runtime_is_local", json!({"nodeDid":node_did}))
@@ -2267,7 +2276,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         Journey::EditorReview | Journey::EditorReviewPermissions
     ) {
         editor_review::prepare(root)?;
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         ensure!(
             client
                 .call(id, "client_runtime_is_local", json!({"nodeDid": node_did}))
@@ -2328,7 +2337,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     }
     if matches!(journey, Journey::EditorUndo) {
         editor_undo::prepare(root)?;
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         ensure!(
             client
                 .call(id, "client_runtime_is_local", json!({"nodeDid":node_did}))
@@ -2385,7 +2394,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     }
     if matches!(journey, Journey::EditorGoalReplacement) {
         editor_goal_replacement::prepare(root)?;
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
@@ -2440,7 +2449,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         drop(releases);
     }
     if matches!(journey, Journey::EditorGoalRemoval) {
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
@@ -2493,7 +2502,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 "title":editor_goal_recovery::TITLE, "blockedReason":editor_goal_recovery::BLOCKED_REASON,
             }))?,
         )?;
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
@@ -2619,7 +2628,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 "captured":editor_retry::CAPTURED,
             }))?,
         )?;
-        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_did).await?;
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
@@ -2662,7 +2671,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &mut id,
             &access,
             node_did,
-            agent_id,
+            agent_did,
             &client_did,
         )
         .await?;
@@ -2673,7 +2682,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &mut id,
             node_did,
             session,
-            agent_id,
+            agent_did,
             &mut EditRecoveryHost {
                 process: &mut host,
                 binary: &host_binary,
@@ -2917,13 +2926,13 @@ async fn exercise_message_edit(
         "desktop_chat_send",
         json!({"request": {
             "requestId": request_id, "clientDid": client_did,
-            "nodeDid": node_did, "sessionId": child, "agentId": agent,
+            "nodeDid": node_did, "sessionId": child, "agentDid": agent,
             "content": "Return the edited fixture response."
         }}),
     )
     .await?;
     *id += 1;
-    let request_query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{_docID request_id session_id requester_did agent_id content input admission_signer_did admission_signature created_at valid_until}} }}",
+    let request_query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{_docID request_id session_id requester_did agent_did content input admission_signer_did admission_signature created_at valid_until}} }}",
         gents::store::graphql::escape_graphql_string(node_did), gents::store::graphql::escape_graphql_string(&request_id));
     let admitted = access.execute(&request_query).await?;
     ensure!(
@@ -3182,7 +3191,7 @@ async fn configure_inference(
     client: &mut Attachment,
     id: &mut u32,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     endpoint: &str,
 ) -> Result<()> {
     let local = client
@@ -3226,7 +3235,7 @@ async fn configure_inference(
     ensure!(deployment["nodeDid"] == node_did);
     let mut agent = deployment["agentConfigs"]
         .as_array()
-        .and_then(|rows| rows.iter().find(|row| row["agent_id"] == agent_id))
+        .and_then(|rows| rows.iter().find(|row| row["agent_did"] == agent_did))
         .context("the setup default agent configuration")?
         .clone();
     agent["inference_profile_id"] = json!("editor-setup");
@@ -3253,7 +3262,7 @@ async fn configure_inference(
         observed["agentConfigs"].as_array().is_some_and(|rows| rows
             .iter()
             .any(
-                |row| row["agent_id"] == agent_id && row["inference_profile_id"] == "editor-setup"
+                |row| row["agent_did"] == agent_did && row["inference_profile_id"] == "editor-setup"
             )),
         "the selected model was not bound to the default agent: {observed}"
     );

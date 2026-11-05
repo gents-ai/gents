@@ -426,7 +426,7 @@ mod pack_schema_tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("widget.graphql");
         let node = std::sync::Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            gents::defra_node::Node::builder()
                 .build()
                 .await
                 .unwrap(),

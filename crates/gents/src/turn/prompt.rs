@@ -84,7 +84,7 @@ impl LayeredPromptBuilder {
         let tool_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
         let mut builder = Self::for_agent(
             &agent.system_prompt,
-            &agent.agent_id,
+            &agent.agent_did,
             &tool_refs,
             tool_surface.includes_meta_tools(),
             allowed_targets,
@@ -121,14 +121,14 @@ impl LayeredPromptBuilder {
 
     pub fn for_agent(
         system_prompt: &str,
-        agent_id: &str,
+        agent_did: &str,
         tool_names: &[&str],
         include_meta_tool_guidance: bool,
         allowed_targets: &[(String, String)],
     ) -> Self {
         let preamble = build_preamble_with_targets(
             system_prompt,
-            agent_id,
+            agent_did,
             tool_names,
             include_meta_tool_guidance,
             allowed_targets,
@@ -176,7 +176,7 @@ pub use gents_loop::prompt::{
 
 pub(crate) fn build_preamble_with_targets(
     system_prompt: &str,
-    agent_id: &str,
+    agent_did: &str,
     tool_names: &[&str],
     include_meta_tool_guidance: bool,
     allowed_targets: &[(String, String)],
@@ -188,8 +188,8 @@ pub(crate) fn build_preamble_with_targets(
         parts.push(system_prompt.to_string());
     }
 
-    if !agent_id.is_empty() {
-        parts.push(format!("You are the {} agent.", agent_id));
+    if !agent_did.is_empty() {
+        parts.push(format!("You are the {} agent.", agent_did));
     }
 
     if include_meta_tool_guidance
@@ -227,13 +227,13 @@ pub(crate) fn build_preamble_with_targets(
 #[cfg(test)]
 fn build_preamble(
     system_prompt: &str,
-    agent_id: &str,
+    agent_did: &str,
     tool_names: &[&str],
     include_meta_tool_guidance: bool,
 ) -> String {
     build_preamble_with_targets(
         system_prompt,
-        agent_id,
+        agent_did,
         tool_names,
         include_meta_tool_guidance,
         &[],

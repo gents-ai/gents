@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use rig::http_client::{
     self, HeaderMap, HttpClientExt, LazyBody, MultipartForm, Request, ReqwestClient, Response,
     StreamingResponse,
@@ -297,25 +297,21 @@ pub(crate) async fn bootstrap_oauth_client_typed(
     (Arc<DbCredentialBearer>, OAuthCredential),
     crate::inference::auth::credential::OAuthCredentialError,
 > {
-    let credential = resolve_oauth_credential(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        node_did,
-        provider,
-        pick,
-    )
-    .await
-    .with_context(|| format!("loading OAuthCredential for node {node_did}"))?
-    .ok_or_else(
-        || crate::inference::auth::credential::OAuthCredentialAuthError {
-            problem: OAuthAuthProblem::Missing,
-            message: classify_oauth_auth_error(
-                &product,
-                node_did,
-                provider,
-                &OAuthAuthProblem::Missing,
-            ),
-        },
-    )?;
+    let access = crate::inference::auth::credential::runtime_credential_access(&node, node_did)?;
+    let credential = resolve_oauth_credential(&access, node_did, provider, pick)
+        .await
+        .with_context(|| format!("loading OAuthCredential for node {node_did}"))?
+        .ok_or_else(
+            || crate::inference::auth::credential::OAuthCredentialAuthError {
+                problem: OAuthAuthProblem::Missing,
+                message: classify_oauth_auth_error(
+                    &product,
+                    node_did,
+                    provider,
+                    &OAuthAuthProblem::Missing,
+                ),
+            },
+        )?;
     let credential_id = credential.credential_id.clone();
     let provider = provider.to_string();
     let bearer = shared_bearer(&credential_id, || {

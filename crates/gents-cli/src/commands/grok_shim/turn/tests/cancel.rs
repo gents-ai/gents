@@ -6,7 +6,7 @@ async fn outbound_close_after_submission_interrupts_and_drains() {
     let graphql = spawn_mock_graphql(node.clone()).await;
     let manager = Arc::new(TurnManager::new(
         node.clone(),
-        test_config(graphql, &node_did),
+        test_config(graphql, &node_did, &node).await,
     ));
     let engine = test_engine(node.clone());
     let (frames_tx, frames_rx) = tokio::sync::mpsc::unbounded_channel::<
@@ -150,7 +150,7 @@ async fn cancel_before_request_id_resolves_cancelled_and_permits_reuse() {
     .await;
     let manager = Arc::new(TurnManager::new(
         node.clone(),
-        test_config(graphql, &node_did),
+        test_config(graphql, &node_did, &node).await,
     ));
     let engine = test_engine(node.clone());
     let (_buffer, sender) = buffer_sender();
@@ -264,7 +264,7 @@ async fn disconnect_before_request_id_resolves_cancelled() {
     .await;
     let manager = Arc::new(TurnManager::new(
         node.clone(),
-        test_config(graphql, &node_did),
+        test_config(graphql, &node_did, &node).await,
     ));
     let engine = test_engine(node.clone());
     let (_buffer, sender) = buffer_sender();

@@ -192,7 +192,7 @@ export function NodesGroup() {
     const agentId = key.slice(at + 1);
     const agent = nodes
       .find((n) => n.nodeDid === nodeDid)
-      ?.agents.find((a) => a.agentId === agentId);
+      ?.agents.find((a) => a.agentDid === agentId);
     return { key, nodeDid, agentId, name: agent?.displayName ?? agentId };
   });
   /* agents draw their node's portrait, since an agent has none of its own */
@@ -211,7 +211,7 @@ export function NodesGroup() {
       node: nodeOf(a.nodeDid),
       name: a.name,
       kind: `Agent on ${nameOf(a.nodeDid)}`,
-      show: () => preferences.setAgentHidden(a.nodeDid, a.agentId, false),
+      show: () => preferences.setAgentHidden(a.nodeDid, a.agentDid, false),
     })),
   ];
   return (

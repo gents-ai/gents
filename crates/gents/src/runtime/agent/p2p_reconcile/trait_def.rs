@@ -18,6 +18,9 @@ pub enum RemoteP2pAdminError {
     #[error("remote admin rejected request as unauthorized")]
     RemoteUnauthorized,
 
+    #[error("collection {0:?} is runtime-local; use authenticated GraphQL access")]
+    RuntimeLocalCollection(String),
+
     #[error("local error: {0}")]
     LocalError(String),
 }

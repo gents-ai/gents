@@ -8,7 +8,7 @@ use super::testing::{
     proposer_file,
 };
 use super::{
-    ensure_tool_less, execute, pack_config, proposer_agent_id, subject_preamble, JobTarget,
+    ensure_tool_less, execute, pack_config, proposer_agent_slot, subject_preamble, JobTarget,
 };
 use crate::cli::Cli;
 use crate::commands::eval::testing::{deps, eval, executor, Fixture, DEFINITION};
@@ -55,16 +55,16 @@ fn a_slot_with_several_behaviors_needs_the_behavior_named() {
         agents: vec!["terse".to_owned(), "verbose".to_owned()],
         optional: false,
     };
-    let error = proposer_agent_id("p", &slot, None).unwrap_err();
+    let error = proposer_agent_slot("p", &slot, None).unwrap_err();
     assert_eq!(
         error.to_string(),
         "pack p declares 2 inference-slot agents; pass --proposer agent:p:<agent> with one of [\"terse\", \"verbose\"]"
     );
     assert_eq!(
-        proposer_agent_id("p", &slot, Some("verbose")).unwrap(),
+        proposer_agent_slot("p", &slot, Some("verbose")).unwrap(),
         "verbose"
     );
-    let unknown = proposer_agent_id("p", &slot, Some("other")).unwrap_err();
+    let unknown = proposer_agent_slot("p", &slot, Some("other")).unwrap_err();
     assert!(
         unknown.to_string().contains("no inference-slot agent"),
         "{unknown}"
@@ -74,7 +74,7 @@ fn a_slot_with_several_behaviors_needs_the_behavior_named() {
         optional: false,
         ..slot
     };
-    assert_eq!(proposer_agent_id("p", &one, None).unwrap(), "terse");
+    assert_eq!(proposer_agent_slot("p", &one, None).unwrap(), "terse");
 }
 
 #[test]
@@ -106,7 +106,7 @@ fn the_subject_preamble_is_the_dossier_naming_the_subject_tools() {
         "{task}"
     );
     assert!(
-        task.contains("node.node_did, node.agent_id, ctx.now"),
+        task.contains("node.node_did, node.agent_did, ctx.now"),
         "{task}"
     );
 }
@@ -152,33 +152,33 @@ fn cli_tools_a_target_outside_the_pack_or_skills_are_refused() {
     ensure_tool_less(&base, OWNER, "fixture-author").unwrap();
 
     let mut cli = base.clone();
-    cli.tools[0]
+    cli.documents.tools[0]
         .host
         .as_mut()
         .unwrap()
         .cli
         .push(serde_json::from_value(json!({"name": "rg"})).unwrap());
     let mut delegated = base.clone();
-    delegated.tools[0].agents =
+    delegated.documents.tools[0].agents =
         Some(serde_json::from_value(json!({"enabled": true, "target_ids": ["helper"]})).unwrap());
-    delegated.agent_targets.push(
+    delegated.documents.agent_targets.push(
         serde_json::from_value(json!({
             "target_id": "helper",
             "node_did": OWNER,
             "target_node_did": OWNER,
-            "agent_id": "home-default",
+            "agent_did": "home-default",
             "name": "helper",
         }))
         .unwrap(),
     );
     let mut sessions = base.clone();
-    sessions.tools[0]
+    sessions.documents.tools[0]
         .built_ins
         .as_mut()
         .unwrap()
         .enable_session_history_tool = Some(true);
     let mut skills = base.clone();
-    skills.contexts[0].skill_ids = vec!["review".to_owned()];
+    skills.documents.contexts[0].skill_ids = vec!["review".to_owned()];
     for (config, offending) in [
         (cli, "\"rg\""),
         (delegated, "\"agent_new\""),
@@ -800,7 +800,6 @@ async fn rm_keeps_running_and_ready_jobs_and_removes_a_reverted_one() {
         &fixture.ctx.owner,
         "job-1",
         &digest,
-        &fixture.ctx.owner,
     )
     .await
     .unwrap();
@@ -809,7 +808,6 @@ async fn rm_keeps_running_and_ready_jobs_and_removes_a_reverted_one() {
         &fixture.ctx.owner,
         "job-1",
         &promotion.target_digest,
-        &fixture.ctx.owner,
     )
     .await
     .unwrap();
@@ -890,18 +888,15 @@ fn run_and_rm_help_say_what_absence_and_force_mean() {
 async fn rm_refuses_a_job_directory_that_is_not_under_this_home() {
     let fixture = Fixture::new().await;
     accepted_job(&fixture, "job-1").await;
-    let node = fixture
-        .ctx
-        .access
-        .local_node()
-        .expect("the fixture is embedded");
     let elsewhere = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(elsewhere.path().join("eval").join("jobs")).unwrap();
     let other_home = crate::commands::eval::EvalContext {
-        access: gents::ConfigAccess::local(node.clone()),
+        access: fixture.ctx.access.clone(),
         home_dir: elsewhere.path().to_path_buf(),
         owner: fixture.ctx.owner.clone(),
         runtime: fixture.ctx.runtime.clone(),
+        evaluator: fixture.ctx.evaluator.clone(),
+        client_signing: fixture.ctx.client_signing.clone(),
     };
     for argv in [&["rm", "job-1"][..], &["rm", "job-1", "--force"][..]] {
         let crate::cli::OptimizationCommand::Rm(args) = super::testing::optimization_command(argv)

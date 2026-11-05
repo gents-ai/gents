@@ -62,7 +62,7 @@ impl Reset {
             panic!("not a usage limit: {failure}");
         };
         execute(
-            &self.f.node,
+            &self.f.agent_access(),
             &format!(
                 r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ status: "usage_limited", last_failure: "{}" }}) {{ _docID }} }}"#,
                 escape_graphql_string(&self.f.goal.doc_id),
@@ -86,10 +86,7 @@ impl Reset {
     }
 
     async fn goal(&self) -> GoalDocument {
-        load_canonical_goal(&self.f.node, self.f.identity.did(), SESSION)
-            .await
-            .unwrap()
-            .unwrap()
+        self.f.current_goal().await
     }
 
     async fn resume(&self, now: i64) -> Option<GoalResumeReceipt> {
@@ -97,7 +94,12 @@ impl Reset {
     }
 
     async fn resume_with(&self, goal: &GoalDocument, now: i64) -> Option<GoalResumeReceipt> {
-        resume_at_reset(&self.f.node, self.f.identity.as_ref(), goal, at(now))
+        let agent = crate::store::identity::RegisteredIdentity::from_registered_did(
+            &self.f.parent.agent_did,
+            None,
+        )
+        .unwrap();
+        resume_at_reset(&self.f.node, &agent, goal, at(now))
             .await
             .unwrap()
     }
@@ -232,7 +234,7 @@ async fn waits_after_the_account_was_removed() {
 async fn waits_after_the_backend_was_disabled() {
     let reset = Reset::new("inference", Some(T)).await;
     execute(
-        &reset.f.node,
+        &reset.f.user_access(),
         &format!(
             r#"mutation {{ update_InferenceBackend(filter: {{ node_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#,
             escape_graphql_string(reset.f.identity.did()),

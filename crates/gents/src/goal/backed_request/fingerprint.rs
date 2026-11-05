@@ -1,7 +1,7 @@
 use super::*;
 
 pub(crate) const GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS: &str = r#"
-    request_id purpose node_did requester_did agent_id session_id
+    request_id purpose node_did requester_did agent_did session_id session_doc_id agent_doc_id
     retry_parent_request retry_parent_request_doc_id retry_root_request retry_key
     content input
     execution_origin caused_by_trigger_id caused_by_trigger_doc_id
@@ -22,8 +22,10 @@ pub(crate) struct GoalBackedRequestFingerprint {
     purpose: gents_protocol::request_admission::RequestPurpose,
     node_did: String,
     requester_did: String,
-    agent_id: String,
+    agent_did: String,
     session_id: String,
+    session_doc_id: Option<String>,
+    agent_doc_id: Option<String>,
     retry_parent_request: Option<String>,
     retry_parent_request_doc_id: Option<String>,
     retry_root_request: Option<String>,
@@ -76,8 +78,10 @@ impl GoalBackedRequestFingerprint {
             purpose: _,
             node_did: _,
             requester_did: _,
-            agent_id: _,
+            agent_did: _,
             session_id: _,
+            session_doc_id: _,
+            agent_doc_id: _,
             retry_parent_request: _,
             retry_parent_request_doc_id: _,
             retry_root_request: _,
@@ -112,8 +116,10 @@ impl GoalBackedRequestFingerprint {
             purpose: request.purpose,
             node_did: request.node_did.clone(),
             requester_did: request.requester_did.clone(),
-            agent_id: request.agent_id.clone(),
+            agent_did: request.agent_did.clone(),
             session_id: request.session_id.clone(),
+            session_doc_id: request.session_doc_id.clone(),
+            agent_doc_id: request.agent_doc_id.clone(),
             retry_parent_request: request.retry_parent_request.clone(),
             retry_parent_request_doc_id: request.retry_parent_request_doc_id.clone(),
             retry_root_request: request.retry_root_request.clone(),

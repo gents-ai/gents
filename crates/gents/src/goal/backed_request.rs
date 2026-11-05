@@ -2,9 +2,7 @@ use super::*;
 
 pub(super) mod fingerprint;
 pub(super) mod recovery;
-use recovery::{
-    load_goal_backed_request_by_retry_key, load_goal_backed_request_by_retry_key_from_access,
-};
+use recovery::load_goal_backed_request_by_retry_key_from_access;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GoalBackedRequestDisposition {
@@ -44,6 +42,7 @@ fn resolve_ambiguous_goal_submission_commit(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn stage_goal_backed_request(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -52,6 +51,7 @@ async fn stage_goal_backed_request(
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
     identity: Option<&GoalCreationIdentity>,
+    client_graph: Option<&std::sync::Arc<db::block::builder::VerifiedClientCreate>>,
 ) -> Result<StagedGoalBackedRequest> {
     let objective = objective.trim();
     anyhow::ensure!(!objective.is_empty(), "goal objective must be non-empty");
@@ -69,6 +69,114 @@ async fn stage_goal_backed_request(
         .as_deref()
         .context("goal-backed request requires a stable retry_key")?;
 
+    let existing = txn
+        .execute(&format!(
+            r#"{{
+                    AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{ _docID admission_signature
+                        {GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS}
+                    }}
+                }}"#,
+            escape_graphql_string(retry_key),
+        ))
+        .await?;
+    let requests = existing
+        .pointer("/data/AgentRequest")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    anyhow::ensure!(requests.len() <= 1, "goal request retry key is not unique");
+    let (request_doc_id, disposition) = if let Some(existing_request) = requests.first() {
+        let persisted: GoalBackedRequestFingerprint =
+            serde_json::from_value(existing_request.clone())
+                .context("decoding goal-backed request fingerprint")?;
+        anyhow::ensure!(
+            persisted == GoalBackedRequestFingerprint::from_create(request)?,
+            "goal request retry key conflicts with different immutable request fields"
+        );
+        let existing_doc = existing_request["_docID"]
+            .as_str()
+            .context("persisted Goal request lacks physical identity")?;
+        if let Some(graph) = client_graph {
+            let expected_signature = bs58::encode(&request.admission.signature).into_string();
+            let owners = txn
+                .document_owners("AgentRequest", &[existing_doc.to_owned()])
+                .await?;
+            anyhow::ensure!(
+                graph.doc_id() == existing_doc
+                    && existing_request["admission_signature"].as_str()
+                        == Some(expected_signature.as_str())
+                    && matches!(owners.as_slice(), [owner] if owner.doc_id == existing_doc
+                    && owner.visible && owner.owner.as_ref().is_some_and(|owner| owner.as_str() == graph.signer_did())),
+                "persisted Goal request differs from its signed native graph or owner"
+            );
+        }
+        (
+            existing_doc.to_owned(),
+            GoalBackedRequestDisposition::Idempotent,
+        )
+    } else {
+        let request_doc = if let Some(graph) = client_graph {
+            let session = request
+                .session_doc_id
+                .as_deref()
+                .context("client Goal request has no physical session")?;
+            let agent = request
+                .agent_doc_id
+                .as_deref()
+                .context("client Goal request has no physical Agent")?;
+            txn.stage_verified_edit_request(request, graph.clone(), session, agent)
+                .await?
+        } else if txn.is_http() {
+            let session = request
+                .session_doc_id
+                .as_deref()
+                .context("client Goal request has no physical session")?;
+            let agent = request
+                .agent_doc_id
+                .as_deref()
+                .context("client Goal request has no physical Agent")?;
+            crate::request::lifecycle::stage_client_request_in_txn(txn, request, session, agent)
+                .await?
+        } else {
+            let request_fields = request.graphql_input_fields().map_err(anyhow::Error::msg)?;
+            let created = txn
+                .execute(&format!(
+                    "mutation {{ create_AgentRequest(input: {{ {request_fields} }}) {{ _docID }} }}"
+                ))
+                .await?;
+            crate::store::graphql::created_doc_id(&created, "AgentRequest")?
+        };
+        (request_doc, GoalBackedRequestDisposition::Created)
+    };
+    let response = txn
+        .execute(&format!(
+            r#"{{ AgentRequest(docIDs: ["{}"]) {{ {} }} }}"#,
+            escape_graphql_string(&request_doc_id),
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
+        ))
+        .await?;
+    let rows = response["data"]["AgentRequest"]
+        .as_array()
+        .context("staged request lookup omitted rows")?;
+    anyhow::ensure!(rows.len() == 1, "staged request is missing or ambiguous");
+    let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(rows[0].clone())?;
+    let staged_request = crate::request::watcher::AgentRequest::try_from(row)?;
+    let provenance = crate::request::lifecycle::materialize::created_session_provenance_in_txn(
+        txn,
+        &staged_request,
+    )
+    .await?;
+    crate::session::ensure_session_in_txn(
+        txn,
+        session_id,
+        node_did,
+        &request.agent_did,
+        Some(&request.requester_did),
+        request.input.initial_title.clone(),
+        provenance,
+        &request.created_at,
+    )
+    .await?;
     let staged_goal = stage_goal_and_claim(
         txn,
         node_did,
@@ -83,72 +191,15 @@ async fn stage_goal_backed_request(
         },
         &Utc::now().to_rfc3339(),
         identity,
+        Some(&request_doc_id),
     )
     .await?;
-    let mut submission_state = goal_submission_step(
-        GoalSubmissionState {
-            durable_goal: false,
-            runnable_request: false,
-            staged_goal: false,
-            staged_request: false,
-        },
-        GoalSubmissionAction::StageGoal,
-    );
-    let existing = txn
-        .execute(&format!(
-            r#"{{
-                    AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{ _docID
-                        {GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS}
-                    }}
-                }}"#,
-            escape_graphql_string(retry_key),
-        ))
-        .await?;
-    let requests = existing
-        .pointer("/data/AgentRequest")
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    anyhow::ensure!(requests.len() <= 1, "goal request retry key is not unique");
-    if let Some(existing_request) = requests.first() {
-        let persisted: GoalBackedRequestFingerprint =
-            serde_json::from_value(existing_request.clone())
-                .context("decoding goal-backed request fingerprint")?;
+    if disposition == GoalBackedRequestDisposition::Created {
         anyhow::ensure!(
-            persisted == GoalBackedRequestFingerprint::from_create(request)?,
-            "goal request retry key conflicts with different immutable request fields"
+            staged_goal.goal.parsed_status() == Some(GoalStatus::Active),
+            "the session already has a non-active goal"
         );
-        bind_goal_first_request_in_txn(
-            txn,
-            &staged_goal.goal,
-            existing_request["_docID"]
-                .as_str()
-                .context("persisted Goal request lacks physical identity")?,
-            request.input.goal_assignment.as_ref(),
-        )
-        .await?;
-        submission_state =
-            goal_submission_step(submission_state, GoalSubmissionAction::StageRequest);
-        anyhow::ensure!(
-            submission_state.staged_request,
-            "validated goal-backed request could not be staged"
-        );
-        return Ok(StagedGoalBackedRequest {
-            disposition: GoalBackedRequestDisposition::Idempotent,
-            state: submission_state,
-        });
     }
-    anyhow::ensure!(
-        staged_goal.goal.parsed_status() == Some(GoalStatus::Active),
-        "the session already has a non-active goal"
-    );
-    let request_fields = request.graphql_input_fields().map_err(anyhow::Error::msg)?;
-    let created = txn
-        .execute(&format!(
-            "mutation {{ create_AgentRequest(input: {{ {request_fields} }}) {{ _docID }} }}"
-        ))
-        .await?;
-    let request_doc_id = crate::store::graphql::created_doc_id(&created, "AgentRequest")?;
     bind_goal_first_request_in_txn(
         txn,
         &staged_goal.goal,
@@ -156,13 +207,24 @@ async fn stage_goal_backed_request(
         request.input.goal_assignment.as_ref(),
     )
     .await?;
-    submission_state = goal_submission_step(submission_state, GoalSubmissionAction::StageRequest);
+    let submission_state = goal_submission_step(
+        goal_submission_step(
+            GoalSubmissionState {
+                durable_goal: false,
+                runnable_request: false,
+                staged_goal: false,
+                staged_request: false,
+            },
+            GoalSubmissionAction::StageRequest,
+        ),
+        GoalSubmissionAction::StageGoal,
+    );
     anyhow::ensure!(
         submission_state.staged_request,
         "created goal-backed request could not be staged"
     );
     Ok(StagedGoalBackedRequest {
-        disposition: GoalBackedRequestDisposition::Created,
+        disposition,
         state: submission_state,
     })
 }
@@ -186,6 +248,7 @@ pub async fn submit_goal_backed_request(
                     token_budget,
                     request,
                     None,
+                    None,
                 )
                 .await
                 .and_then(authorize_goal_submission_commit)
@@ -193,7 +256,10 @@ pub async fn submit_goal_backed_request(
         })
         .await;
     match result {
-        Ok(disposition) => Ok(disposition),
+        Ok(disposition) => {
+            super::creation::finish_goal_relationships(access, node_did, session_id).await?;
+            Ok(disposition)
+        }
         Err(error) => {
             let recovery = load_goal_backed_request_by_retry_key_from_access(
                 access,
@@ -204,7 +270,9 @@ pub async fn submit_goal_backed_request(
                 request,
             )
             .await;
-            resolve_ambiguous_goal_submission_commit(error, recovery)
+            let disposition = resolve_ambiguous_goal_submission_commit(error, recovery)?;
+            super::creation::finish_goal_relationships(access, node_did, session_id).await?;
+            Ok(disposition)
         }
     }
 }
@@ -225,10 +293,12 @@ pub(crate) async fn stage_goal_backed_request_in_txn(
         token_budget,
         request,
         None,
+        None,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -237,6 +307,7 @@ pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
     identity: Option<&GoalCreationIdentity>,
+    client_graph: Option<&std::sync::Arc<db::block::builder::VerifiedClientCreate>>,
 ) -> Result<crate::request::lifecycle::EnqueuedAgentRequest> {
     stage_goal_backed_request(
         txn,
@@ -246,6 +317,7 @@ pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
         token_budget,
         request,
         identity,
+        client_graph,
     )
     .await
     .and_then(authorize_goal_submission_commit)?;
@@ -286,11 +358,37 @@ pub async fn submit_goal_backed_request_local(
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<crate::request::lifecycle::EnqueuedAgentRequest> {
-    let staged = crate::store::config_client::ConfigAccess::transact_local_write(
+    submit_goal_backed_request_with_identity(
         node,
-        Some(actor),
-        "goal.submit_backed_request_local",
-        move |txn| {
+        actor,
+        node_did,
+        session_id,
+        objective,
+        token_budget,
+        request,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn submit_goal_backed_request_with_identity(
+    node: &std::sync::Arc<EmbeddedNode>,
+    actor: ::identity::Did,
+    node_did: &str,
+    session_id: &str,
+    objective: &str,
+    token_budget: Option<i64>,
+    request: &gents_protocol::request_admission::AgentRequestCreate,
+    identity: Option<&dyn crate::store::identity::NodeIdentity>,
+) -> Result<crate::request::lifecycle::EnqueuedAgentRequest> {
+    let access = crate::ConfigAccess::local_with_optional_agent_signer(
+        node.clone(),
+        actor,
+        identity.and_then(|identity| identity.managed_agent_signer()),
+    )?;
+    let staged = access
+        .transact_write("goal.submit_backed_request_local", move |txn| {
             Box::pin(async move {
                 stage_goal_backed_request(
                     txn,
@@ -300,18 +398,18 @@ pub async fn submit_goal_backed_request_local(
                     token_budget,
                     request,
                     None,
+                    None,
                 )
                 .await
                 .and_then(authorize_goal_submission_commit)
             })
-        },
-    )
-    .await;
+        })
+        .await;
     match staged {
         Ok(_) => {}
         Err(error) => {
-            if let Some(recovered) = load_goal_backed_request_by_retry_key(
-                node,
+            if let Some(recovered) = load_goal_backed_request_by_retry_key_from_access(
+                &access,
                 node_did,
                 session_id,
                 objective,
@@ -320,13 +418,15 @@ pub async fn submit_goal_backed_request_local(
             )
             .await?
             {
+                super::creation::finish_goal_relationships(&access, node_did, session_id).await?;
                 return Ok(recovered);
             }
             return Err(error);
         }
     }
-    load_goal_backed_request_by_retry_key(
-        node,
+    super::creation::finish_goal_relationships(&access, node_did, session_id).await?;
+    load_goal_backed_request_by_retry_key_from_access(
+        &access,
         node_did,
         session_id,
         objective,

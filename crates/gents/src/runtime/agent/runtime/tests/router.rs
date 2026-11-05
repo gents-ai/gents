@@ -42,7 +42,7 @@ fn routed_snapshot(
         generation,
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -60,24 +60,36 @@ fn routed_snapshot(
 
 #[tokio::test]
 async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_router() {
-    let node = test_node().await;
+    use crate::store::identity::NodeIdentity as _;
+    let dir = tempfile::tempdir().unwrap();
+    let root = crate::KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
+    let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
+    let agent = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(root.did())
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = "did:test:invalid-origin-route";
+    let node_did = root.did();
+    let agent_did = agent.did();
     let response = node
-        .execute(
-            r#"mutation {
-                create_AgentRequest(input: {
+        .execute(&format!(
+            r#"mutation {{
+                create_AgentRequest(input: {{
                     request_id: "invalid-origin-route-request"
                     purpose: "normal"
-                    node_did: "did:test:invalid-origin-route"
-                    agent_id: "general"
+                    node_did: "{node_did}"
+                    agent_did: "{agent_did}"
                     session_id: "invalid-origin-route-session"
                     content: "hostile"
                     lifecycle_state: "pending"
                     created_at: "2026-09-03T00:00:00Z"
-                }) { _docID }
-            }"#,
-        )
+                }}) {{ _docID }}
+            }}"#,
+        ))
         .await;
     assert!(
         !response.has_errors(),
@@ -109,7 +121,7 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
         .and_then(Value::as_str)
         .expect("malformed request doc id")
         .to_string();
-    let mut malformed = request(Some("general"), "invalid-origin-route-session");
+    let mut malformed = request(Some(agent_did), "invalid-origin-route-session");
     malformed.doc_id = doc_id;
     malformed.request_id = "invalid-origin-route-request".to_string();
     malformed.node_did = node_did.to_string();
@@ -118,7 +130,8 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
         node.clone(),
         node_did,
         malformed,
-        "general",
+        agent_did,
+        agent.as_ref(),
         "agent unavailable",
     )
     .await
@@ -154,7 +167,7 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
         .get("failure_reason")
         .and_then(Value::as_str)
         .is_some_and(|reason| reason.contains("execution_origin")));
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -230,7 +243,7 @@ async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
         "closed admission leaked work"
     );
     status_owner.close().await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -313,7 +326,7 @@ async fn snapshot_change_reroutes_request_blocked_on_old_executor_queue() {
         .unwrap()
         .unwrap();
     status_owner.close().await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -381,7 +394,7 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
     );
     assert!(executor_rx.try_recv().is_err(), "request reached executor");
     status_owner.close().await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -394,7 +407,7 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
         generation: 1,
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -412,7 +425,7 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
         generation: 2,
         node: None,
         local_did: String::new(),
-        default_agent_id: "code".to_string(),
+        default_agent_did: "code".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -476,12 +489,12 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
     assert_eq!(request.request_id, "req-router");
     assert_eq!(routed_observation.source_generation(), 2);
     assert_eq!(routed_snapshot.generation, 2);
-    assert_eq!(routed_snapshot.default_agent_id, "code");
+    assert_eq!(routed_snapshot.default_agent_did, "code");
     assert_eq!(
         active_snapshot.generation,
         accept.post_router_generation as u64
     );
-    assert_eq!(active_snapshot.default_agent_id, "code");
+    assert_eq!(active_snapshot.default_agent_did, "code");
 }
 
 #[tokio::test]
@@ -496,7 +509,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         generation: 1,
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -520,7 +533,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         generation: 2,
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),

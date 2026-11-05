@@ -97,7 +97,7 @@ pub(in crate::client::core) fn enrollment_record_lacks_current_authority(
 }
 
 pub(in crate::client::core) async fn reconcile_status_enrollment_approvals(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     p2p: &Arc<dyn defra_p2p_adapter::P2POperations>,
     principal: &Arc<PrincipalIdentity>,
     local_peer_id: &str,
@@ -105,7 +105,7 @@ pub(in crate::client::core) async fn reconcile_status_enrollment_approvals(
     route_manager: &Arc<ClientRouteManager>,
 ) -> Result<BTreeMap<String, EnrollmentAuthorizationGeneration>> {
     let (outcomes, authorized_server_peers) =
-        load_status_enrollment_approvals(node.as_ref(), principal.as_ref(), local_peer_id).await?;
+        load_status_enrollment_approvals(node, principal.as_ref(), local_peer_id).await?;
     // The prune keys on authority presence, not on the receipt-gated outcomes:
     // a missing route receipt must not end a retirement whose decision and
     // revision still read current, or the peer it removed could be reinstalled
@@ -205,6 +205,26 @@ pub(in crate::client::core) async fn reconcile_status_enrollment_approvals(
             .into_iter()
             .find(|record| record.peer_id == approval.server_peer);
         let applied = async {
+            if !current.as_ref().is_some_and(|record| record.is_managed_runtime()) {
+                use gents::runtime::agent::p2p_reconcile::endpoint::{resolve_graphql_endpoint, EndpointError};
+                let access = gents::store::config_client::ConfigAccess::local_as(node.clone(), principal.did().parse()?);
+                match resolve_graphql_endpoint(&access, &approval.owner_node, principal.as_ref()).await {
+                    Ok(endpoint) => {
+                        if current.as_ref().and_then(|record| record.graphql.as_deref()) != Some(endpoint.url()) {
+                            sync_state.remember_enrollment_endpoint(
+                                &approval.server_peer, &approval.owner_node, &approval.request_digest,
+                                &approval.authorization_expires_at, endpoint.url(),
+                            ).await?;
+                        }
+                    }
+                    Err(EndpointError::Unavailable(_)) => {
+                        tracing::debug!(peer_id, node_did = %approval.owner_node, "enrolled runtime has no signed HTTP advertisement yet");
+                    }
+                    Err(error) => {
+                        tracing::warn!(peer_id, node_did = %approval.owner_node, %error, "signed runtime HTTP advertisement rejected");
+                    }
+                }
+            }
             let label = sync_state
                 .advertised_enrollment_label(&approval.server_peer)
                 .unwrap_or_else(|| "Enrolled Agent".to_string());

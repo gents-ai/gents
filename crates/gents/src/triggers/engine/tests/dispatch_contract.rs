@@ -90,6 +90,7 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
             args_vars: None,
             durable_fire_key: "contract-fire".to_string(),
             pre_materialized_request_id: None,
+            event_source_generation: None,
             on_result: Box::new(|_| {}),
         };
 

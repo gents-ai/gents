@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
@@ -11,26 +11,33 @@ use tokio_util::sync::CancellationToken;
 
 use crate::goal::blocked_turn::last_failed_call_in_txn;
 use crate::goal::{
-    claim_continuation, claim_retry_continuation, gate_claimed_goal_continuation,
-    gate_goal_continuation, goal_continuation_materialization_step, goal_failure_cause,
-    load_goal_by_id, load_goals_for_session, next_goal_infrastructure_retries, observe_goal_agent,
-    refresh_goal_usage, stop_claimed_continuation_for_unavailable_agent,
-    update_goal_fields_if_status, GoalAction, GoalClaimedDecision, GoalContinuationAction,
-    GoalContinuationFacts, GoalContinuationPhase, GoalDecision, GoalDocument, GoalFailureCause,
-    GoalGatedDecision, GoalRequestTerminal, GoalStatus, ObservedGoalAgent,
-    GOAL_READINESS_WAIT_PREFIX, GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
+    claim_continuation_from_access, claim_retry_continuation_from_access,
+    gate_claimed_goal_continuation, gate_goal_continuation, goal_continuation_materialization_step,
+    goal_failure_cause, next_goal_infrastructure_retries, observe_goal_agent,
+    refresh_goal_usage_from_access, stop_claimed_continuation_for_unavailable_agent_from_access,
+    update_goal_fields_if_status_from_access, GoalAction, GoalClaimedDecision,
+    GoalContinuationAction, GoalContinuationFacts, GoalContinuationPhase, GoalDecision,
+    GoalDocument, GoalFailureCause, GoalGatedDecision, GoalRequestTerminal, GoalStatus,
+    ObservedGoalAgent, GOAL_READINESS_WAIT_PREFIX, GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
 };
-use crate::goal::{publish_claimed_continuation, resume_at_reset};
+use crate::goal::{publish_claimed_continuation_with_identity, resume_at_reset};
 use crate::request::watcher::AgentRequest;
 use crate::runtime::snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
 use crate::store::config_client::ConfigAccess;
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use crate::store::identity::RegisteredIdentity;
+use crate::store::graphql::escape_graphql_string;
 use crate::UpdateSubscriptionSource;
 
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
 
 const GOAL_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
+
+pub(crate) fn goal_candidate_in_scope(
+    observer: &str,
+    session_agent: &str,
+    parent_agent: &str,
+) -> bool {
+    observer == session_agent && parent_agent == session_agent
+}
 
 const GOAL_OBSERVED_COLLECTIONS: &[&str] = &[
     "Goal",
@@ -56,6 +63,7 @@ pub struct GoalSource {
     subscription: Option<events::DocumentChangeSubscription>,
     cancel: CancellationToken,
     rescan_tick: tokio::time::Interval,
+    runtime_status: Option<crate::runtime::status::RuntimeStatusHandle>,
 }
 
 impl GoalSource {
@@ -82,7 +90,16 @@ impl GoalSource {
             subscription: None,
             cancel,
             rescan_tick,
+            runtime_status: None,
         }
+    }
+
+    pub(crate) fn with_runtime_status(
+        mut self,
+        status: crate::runtime::status::RuntimeStatusHandle,
+    ) -> Self {
+        self.runtime_status = Some(status);
+        self
     }
 
     #[doc(hidden)]
@@ -114,36 +131,73 @@ impl GoalSource {
         }
     }
 
+    fn agent_access(&self, actor: &identity::Did) -> Result<ConfigAccess> {
+        let identity = self
+            .snapshot_rx
+            .borrow()
+            .watcher_identities()?
+            .into_iter()
+            .find(|identity| identity.did() == actor.as_str())
+            .context("goal reconciliation agent identity is unavailable")?;
+        Ok(ConfigAccess::local_with_optional_agent_signer(
+            self.node.clone(),
+            actor.clone(),
+            identity.managed_agent_signer(),
+        )?)
+    }
+
     async fn rescan(&mut self, tick: bool) -> Option<FireIntent> {
-        let node_did = self.snapshot_rx.borrow().local_did.clone();
-        if tick {
-            self.resume_at_reported_resets(&node_did).await;
-        }
-        match self
-            .load_goals(
-                &node_did,
-                r#"status: { _in: ["active", "budget_limited"] }"#,
-            )
-            .await
-        {
-            Ok(goals) => {
-                for goal in goals {
-                    match self.build_intent(goal).await {
-                        Ok(Some(intent)) => return Some(intent),
-                        Ok(None) => {}
-                        Err(error) => tracing::warn!(%error, "goal source candidate failed"),
+        let snapshot = self.snapshot_rx.borrow().clone();
+        let node_did = snapshot.local_did.clone();
+        let mut agents = snapshot
+            .agents
+            .keys()
+            .chain(snapshot.unavailable_agents.keys())
+            .cloned()
+            .collect::<Vec<_>>();
+        agents.sort();
+        agents.dedup();
+        for agent_did in agents {
+            let actor = match identity::Did::new(&agent_did) {
+                Ok(actor) => actor,
+                Err(error) => {
+                    tracing::warn!(%error, %agent_did, "invalid goal reconciliation identity");
+                    continue;
+                }
+            };
+            if tick {
+                self.resume_at_reported_resets(&node_did, &actor).await;
+            }
+            match self
+                .load_goals(
+                    &node_did,
+                    &actor,
+                    r#"status: { _in: ["active", "budget_limited"] }"#,
+                )
+                .await
+            {
+                Ok(goals) => {
+                    for goal in goals {
+                        match self.build_intent(&actor, goal).await {
+                            Ok(Some(intent)) => return Some(intent),
+                            Ok(None) => {}
+                            Err(error) => {
+                                tracing::warn!(%error, %agent_did, "goal source candidate failed")
+                            }
+                        }
                     }
                 }
+                Err(error) => tracing::warn!(%error, %agent_did, "goal source rescan failed"),
             }
-            Err(error) => tracing::warn!(%error, "goal source rescan failed"),
         }
         None
     }
 
-    async fn resume_at_reported_resets(&self, node_did: &str) {
+    async fn resume_at_reported_resets(&self, node_did: &str, actor: &identity::Did) {
         let goals = match self
             .load_goals(
                 node_did,
+                actor,
                 r#"status: { _eq: "usage_limited" }, auto_resume_at_reset: { _eq: true }"#,
             )
             .await
@@ -156,8 +210,14 @@ impl GoalSource {
         };
         for goal in goals {
             let resumed = async {
-                let identity = RegisteredIdentity::from_registered_did(&goal.node_did, None)?;
-                resume_at_reset(&self.node, &identity, &goal, Utc::now()).await
+                let identity = self
+                    .snapshot_rx
+                    .borrow()
+                    .watcher_identities()?
+                    .into_iter()
+                    .find(|identity| identity.did() == actor.as_str())
+                    .context("goal reset agent identity is unavailable")?;
+                resume_at_reset(&self.node, identity.as_ref(), &goal, Utc::now()).await
             }
             .await;
             match resumed {
@@ -174,7 +234,12 @@ impl GoalSource {
         }
     }
 
-    async fn load_goals(&self, node_did: &str, status_filter: &str) -> Result<Vec<GoalDocument>> {
+    async fn load_goals(
+        &self,
+        node_did: &str,
+        actor: &identity::Did,
+        status_filter: &str,
+    ) -> Result<Vec<GoalDocument>> {
         let node_did = escape_graphql_string(node_did);
         let query = format!(
             r#"{{
@@ -190,23 +255,33 @@ impl GoalSource {
             }}"#,
             goal_fields = crate::goal::GOAL_FIELDS,
         );
-        let response =
-            graphql_with_transaction_retry(&self.node, &query, "query Goal rows").await?;
+        let response = ConfigAccess::local_as(self.node.clone(), actor.clone())
+            .execute(&query)
+            .await?;
         serde_json::from_value(
             response
-                .data
-                .as_ref()
-                .and_then(|data| data.get("Goal"))
+                .pointer("/data/Goal")
                 .cloned()
                 .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
         )
         .context("decoding Goal rows")
     }
 
-    async fn build_intent(&self, mut goal: GoalDocument) -> Result<Option<FireIntent>> {
-        let session_goals =
-            load_goals_for_session(&self.node, &goal.node_did, &goal.session_id).await?;
-        let Some(canonical) = session_goals.first() else {
+    async fn build_intent(
+        &self,
+        actor: &identity::Did,
+        mut goal: GoalDocument,
+    ) -> Result<Option<FireIntent>> {
+        let goal_ref = &goal;
+        let canonical = ConfigAccess::transact_local_readonly(
+            &self.node, Some(actor.clone()), "goal.reconcile_candidate", |txn| Box::pin(async move {
+                let selected = txn.execute(&format!(r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 2) {{ agent_did }} }}"#, escape_graphql_string(&goal_ref.node_did), escape_graphql_string(&goal_ref.session_id))).await?;
+                let sessions = selected.pointer("/data/AgentSession").and_then(serde_json::Value::as_array).context("goal session query omitted rows")?;
+                if sessions.len() != 1 || sessions[0]["agent_did"].as_str() != Some(actor.as_str()) { return Ok::<_, anyhow::Error>(None); }
+                crate::goal::load_canonical_goal_in_txn(txn, &goal_ref.node_did, &goal_ref.session_id).await
+            }),
+        ).await?;
+        let Some(canonical) = canonical else {
             return Ok(None);
         };
         if canonical.doc_id != goal.doc_id {
@@ -214,8 +289,8 @@ impl GoalSource {
                 let now = Utc::now();
                 let active_time = goal.current_active_time_seconds(now);
                 let updated_at = escape_graphql_string(&now.to_rfc3339());
-                let _ = update_goal_fields_if_status(
-                    &self.node,
+                let _ = update_goal_fields_if_status_from_access(
+                    &self.agent_access(actor)?,
                     &goal,
                     GoalStatus::Active,
                     &format!(
@@ -234,7 +309,7 @@ impl GoalSource {
             return Ok(None);
         }
 
-        let Some(latest) = self.latest_request_when_session_idle(&goal).await? else {
+        let Some(latest) = self.latest_request_when_session_idle(actor, &goal).await? else {
             return Ok(None);
         };
         let Some(terminal_state) = latest.lifecycle_state.filter(|state| state.is_terminal())
@@ -252,7 +327,7 @@ impl GoalSource {
         let already_claimed =
             goal.last_continued_from_request_id.as_deref() == Some(latest.request_id.as_str());
         let child_exists = self
-            .continuation_child_exists(&goal, &latest.request_id)
+            .continuation_child_exists(actor, &goal, &latest.request_id)
             .await?;
         let persisted_phase = if child_exists {
             GoalContinuationPhase::ChildPresent
@@ -270,17 +345,26 @@ impl GoalSource {
                 bail!("goal continuation reconciliation rejected a persisted child");
             }
             if !already_claimed {
-                let _ = claim_continuation(&self.node, &goal, &latest.request_id).await?;
+                let _ = claim_continuation_from_access(
+                    &self.agent_access(actor)?,
+                    &goal,
+                    &latest.request_id,
+                )
+                .await?;
             }
             return Ok(None);
         }
-        let agent = observe_goal_agent(
+        let mut agent = observe_goal_agent(
             &self.node,
             &goal.node_did,
-            latest.agent_id.as_deref(),
+            latest.agent_did.as_deref(),
             latest.terminalized_at.as_deref(),
         )
         .await?;
+        agent.settled = match &self.runtime_status {
+            Some(status) => status.goal_reconcile_settled().await,
+            None => false,
+        };
         if persisted_phase == GoalContinuationPhase::Claimed {
             if reconciled_phase != GoalContinuationPhase::ChildPresent {
                 return Ok(None);
@@ -296,8 +380,8 @@ impl GoalSource {
                     return Ok(None)
                 }
                 GoalClaimedDecision::Stop => {
-                    if stop_claimed_continuation_for_unavailable_agent(
-                        &self.node,
+                    if stop_claimed_continuation_for_unavailable_agent_from_access(
+                        &self.agent_access(actor)?,
                         &goal,
                         &latest.request_id,
                         &agent.reason,
@@ -344,7 +428,7 @@ impl GoalSource {
             )
         {
             if let Some(reason) = self
-                .request_usage_limit_failure(&goal.node_did, &latest.request_id)
+                .request_usage_limit_failure(actor, &goal.node_did, &latest.request_id)
                 .await?
             {
                 let post = goal
@@ -355,8 +439,8 @@ impl GoalSource {
                 let active_time = goal.current_active_time_seconds(now);
                 let updated_at = escape_graphql_string(&now.to_rfc3339());
                 let reason = escape_graphql_string(&reason);
-                if !update_goal_fields_if_status(
-                    &self.node,
+                if !update_goal_fields_if_status_from_access(
+                    &self.agent_access(actor)?,
                     &goal,
                     GoalStatus::Active,
                     &format!(
@@ -379,8 +463,8 @@ impl GoalSource {
             }
             if request_is_wrapup && terminal == GoalRequestTerminal::Completed {
                 let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
-                if !update_goal_fields_if_status(
-                    &self.node,
+                if !update_goal_fields_if_status_from_access(
+                    &self.agent_access(actor)?,
                     &goal,
                     GoalStatus::BudgetLimited,
                     &format!(
@@ -396,7 +480,7 @@ impl GoalSource {
         }
 
         let (has_activity, control_unavailable) = if terminal == GoalRequestTerminal::Completed {
-            self.request_activity(&latest).await?
+            self.request_activity(actor, &latest).await?
         } else {
             (true, false)
         };
@@ -433,13 +517,25 @@ impl GoalSource {
             &facts(&goal, status, persisted_budget_reached),
         ) == GoalGatedDecision::AwaitReadiness
         {
-            self.record_readiness_wait(&goal, status, &agent).await?;
+            self.record_readiness_wait(actor, &goal, status, &agent)
+                .await?;
             return Ok(None);
         }
-        let tokens_used = refresh_goal_usage(&self.node, &goal).await?;
-        let refreshed_goal = load_goal_by_id(&self.node, &goal.node_did, &goal.goal_id)
-            .await?
-            .context("refreshed Goal row disappeared")?;
+        let tokens_used = refresh_goal_usage_from_access(&self.agent_access(actor)?, &goal).await?;
+        let refreshed_goal = ConfigAccess::transact_local_readonly(
+            &self.node,
+            Some(actor.clone()),
+            "goal.refreshed_candidate",
+            |txn| {
+                Box::pin(crate::goal::load_canonical_goal_in_txn(
+                    txn,
+                    &goal.node_did,
+                    &goal.session_id,
+                ))
+            },
+        )
+        .await?
+        .context("refreshed Goal row disappeared")?;
         if !continuation_evidence_is_current(&goal, &refreshed_goal) {
             return Ok(None);
         }
@@ -456,11 +552,12 @@ impl GoalSource {
         let decision = match gated {
             GoalGatedDecision::Decided(decision) => decision,
             GoalGatedDecision::AwaitReadiness => {
-                self.record_readiness_wait(&goal, status, &agent).await?;
+                self.record_readiness_wait(actor, &goal, status, &agent)
+                    .await?;
                 return Ok(None);
             }
             GoalGatedDecision::AgentUnavailable => {
-                self.stop_for_unavailable_agent(&goal, status, &agent.reason)
+                self.stop_for_unavailable_agent(actor, &goal, status, &agent.reason)
                     .await?;
                 return Ok(None);
             }
@@ -482,7 +579,7 @@ impl GoalSource {
                         "infrastructure retry budget exhausted"
                     }
                 };
-                if !self.pause_goal(&goal, status, reason).await? {
+                if !self.pause_goal(actor, &goal, status, reason).await? {
                     return Ok(None);
                 }
                 return Ok(None);
@@ -497,6 +594,7 @@ impl GoalSource {
             }
             GoalDecision::AbandonWrapup => {
                 self.abandon_wrapup(
+                    actor,
                     &goal,
                     status,
                     &format!("wrap-up {terminal_name} after {MAX_INFRASTRUCTURE_RETRIES} retries"),
@@ -511,8 +609,8 @@ impl GoalSource {
                     .is_some_and(|reason| reason.starts_with(GOAL_READINESS_WAIT_PREFIX));
                 if waited || next_retries != goal.infrastructure_retry_count.unwrap_or_default() {
                     let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
-                    if !update_goal_fields_if_status(
-                        &self.node,
+                    if !update_goal_fields_if_status_from_access(
+                        &self.agent_access(actor)?,
                         &goal,
                         status,
                         &format!(
@@ -535,8 +633,8 @@ impl GoalSource {
             && goal.last_blocked_request_id.as_deref() != Some(latest.request_id.as_str())
         {
             let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
-            if !update_goal_fields_if_status(
-                &self.node,
+            if !update_goal_fields_if_status_from_access(
+                &self.agent_access(actor)?,
                 &goal,
                 status,
                 &format!(
@@ -558,8 +656,8 @@ impl GoalSource {
             let now = Utc::now();
             let active_time = goal.current_active_time_seconds(now);
             let updated_at = escape_graphql_string(&now.to_rfc3339());
-            if !update_goal_fields_if_status(
-                &self.node,
+            if !update_goal_fields_if_status_from_access(
+                &self.agent_access(actor)?,
                 &goal,
                 GoalStatus::Active,
                 &format!(
@@ -575,8 +673,8 @@ impl GoalSource {
         }
 
         let claimed = if decision == GoalDecision::Retry {
-            claim_retry_continuation(
-                &self.node,
+            claim_retry_continuation_from_access(
+                &self.agent_access(actor)?,
                 &goal,
                 &latest.request_id,
                 goal.infrastructure_retry_count.unwrap_or_default(),
@@ -584,7 +682,8 @@ impl GoalSource {
             )
             .await?
         } else {
-            claim_continuation(&self.node, &goal, &latest.request_id).await?
+            claim_continuation_from_access(&self.agent_access(actor)?, &goal, &latest.request_id)
+                .await?
         };
         let claimed_phase = goal_continuation_materialization_step(
             GoalContinuationPhase::Unclaimed,
@@ -628,9 +727,22 @@ impl GoalSource {
         let prompt = continuation_prompt(&goal, retry_prefix.as_deref(), wrapup);
         let parent = AgentRequest::try_from(latest)
             .context("decode goal continuation parent AgentRequest")?;
-        let Some(child) =
-            publish_claimed_continuation(&self.node, &goal, &parent.request_id, &prompt, wrapup)
-                .await?
+        let identity = self
+            .snapshot_rx
+            .borrow()
+            .watcher_identities()?
+            .into_iter()
+            .find(|identity| identity.did() == parent.agent_did)
+            .context("claimed goal agent identity is unavailable")?;
+        let Some(child) = publish_claimed_continuation_with_identity(
+            &self.node,
+            identity.as_ref(),
+            &goal,
+            &parent.request_id,
+            &prompt,
+            wrapup,
+        )
+        .await?
         else {
             return Ok(None);
         };
@@ -638,7 +750,7 @@ impl GoalSource {
             emit_outcome: false,
             task_id: format!("goal:{}", goal.goal_id),
             name: Some("Durable goal continuation".to_string()),
-            agent_id: parent.agent_id.clone(),
+            agent_did: parent.agent_did.clone(),
             prompt_template: prompt,
             goal_objective_template: None,
             goal_token_budget: None,
@@ -668,6 +780,7 @@ impl GoalSource {
                 &[&child.request_id],
             ),
             pre_materialized_request_id: Some(child.request_id),
+            event_source_generation: None,
             on_result: Box::new(move |result| match result {
                 FireResult::Fired { request_id } | FireResult::Duplicate { request_id } => {
                     tracing::info!(
@@ -693,6 +806,7 @@ impl GoalSource {
 
     async fn latest_request_when_session_idle(
         &self,
+        actor: &identity::Did,
         goal: &GoalDocument,
     ) -> Result<Option<AgentRequestRow>> {
         let node_did = escape_graphql_string(&goal.node_did);
@@ -711,15 +825,13 @@ impl GoalSource {
                 crate::goal::request_selection_fields()
             ),
         );
-        let response =
-            graphql_with_transaction_retry(&self.node, &query, "query goal session requests")
-                .await
-                .with_context(|| format!("query goal session requests for {}", goal.session_id))?;
+        let response = ConfigAccess::local_as(self.node.clone(), actor.clone())
+            .execute(&query)
+            .await
+            .with_context(|| format!("query goal session requests for {}", goal.session_id))?;
         let rows: Vec<AgentRequestRow> = serde_json::from_value(
             response
-                .data
-                .as_ref()
-                .and_then(|data| data.get("AgentRequest"))
+                .pointer("/data/AgentRequest")
                 .cloned()
                 .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
         )
@@ -727,11 +839,19 @@ impl GoalSource {
         if !crate::goal::goal_session_is_idle(&rows) {
             return Ok(None);
         }
-        Ok(crate::goal::latest_goal_request(goal, &rows).cloned())
+        let latest = crate::goal::latest_goal_request(goal, &rows).cloned();
+        Ok(latest.filter(|row| {
+            goal_candidate_in_scope(
+                actor.as_str(),
+                actor.as_str(),
+                row.agent_did.as_deref().unwrap_or_default(),
+            )
+        }))
     }
 
     async fn continuation_child_exists(
         &self,
+        actor: &identity::Did,
         goal: &GoalDocument,
         parent_request_id: &str,
     ) -> Result<bool> {
@@ -754,18 +874,20 @@ impl GoalSource {
                 ) {{ _docID }}
             }}"#
         );
-        let response =
-            graphql_with_transaction_retry(&self.node, &query, "query goal continuation child")
-                .await?;
+        let response = ConfigAccess::local_as(self.node.clone(), actor.clone())
+            .execute(&query)
+            .await?;
         Ok(response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
+            .pointer("/data/AgentRequest")
             .and_then(|value| value.as_array())
             .is_some_and(|rows| !rows.is_empty()))
     }
 
-    async fn request_activity(&self, request: &AgentRequestRow) -> Result<(bool, bool)> {
+    async fn request_activity(
+        &self,
+        actor: &identity::Did,
+        request: &AgentRequestRow,
+    ) -> Result<(bool, bool)> {
         let physical_id = request
             .doc_id
             .as_deref()
@@ -806,12 +928,11 @@ impl GoalSource {
                 AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {segment_fields} }}
             }}"#
         );
-        let response =
-            graphql_with_transaction_retry(&self.node, &query, "query goal request activity")
-                .await?;
+        let response = ConfigAccess::local_as(self.node.clone(), actor.clone())
+            .execute(&query)
+            .await?;
         let data = response
-            .data
-            .as_ref()
+            .get("data")
             .context("goal activity query omitted data")?;
         let has_rows = |collection: &str| -> Result<bool> {
             Ok(!data
@@ -842,12 +963,13 @@ impl GoalSource {
 
     async fn request_usage_limit_failure(
         &self,
+        actor: &identity::Did,
         node_did: &str,
         request_id: &str,
     ) -> Result<Option<String>> {
         let call = ConfigAccess::transact_local_readonly(
             &self.node,
-            None,
+            Some(actor.clone()),
             "goal.last_failed_call",
             |txn| Box::pin(last_failed_call_in_txn(txn, node_did, request_id)),
         )
@@ -869,6 +991,7 @@ impl GoalSource {
 
     async fn stop_for_unavailable_agent(
         &self,
+        actor: &identity::Did,
         goal: &GoalDocument,
         status: GoalStatus,
         reason: &str,
@@ -887,22 +1010,23 @@ impl GoalSource {
             "durable goal stopped because its agent is unavailable"
         );
         if action == GoalAction::Pause {
-            self.pause_goal(goal, status, reason).await
+            self.pause_goal(actor, goal, status, reason).await
         } else {
-            self.abandon_wrapup(goal, status, reason).await
+            self.abandon_wrapup(actor, goal, status, reason).await
         }
     }
 
     async fn abandon_wrapup(
         &self,
+        actor: &identity::Did,
         goal: &GoalDocument,
         status: GoalStatus,
         reason: &str,
     ) -> Result<bool> {
         let reason = escape_graphql_string(reason);
         let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
-        update_goal_fields_if_status(
-            &self.node,
+        update_goal_fields_if_status_from_access(
+            &self.agent_access(actor)?,
             goal,
             status,
             &format!(
@@ -914,6 +1038,7 @@ impl GoalSource {
 
     async fn record_readiness_wait(
         &self,
+        actor: &identity::Did,
         goal: &GoalDocument,
         status: GoalStatus,
         agent: &ObservedGoalAgent,
@@ -924,8 +1049,8 @@ impl GoalSource {
         }
         let reason = escape_graphql_string(&waiting);
         let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
-        update_goal_fields_if_status(
-            &self.node,
+        update_goal_fields_if_status_from_access(
+            &self.agent_access(actor)?,
             goal,
             status,
             &format!(r#"last_failure: "{reason}", updated_at: "{updated_at}""#),
@@ -936,6 +1061,7 @@ impl GoalSource {
 
     async fn pause_goal(
         &self,
+        actor: &identity::Did,
         goal: &GoalDocument,
         expected_status: GoalStatus,
         reason: &str,
@@ -944,8 +1070,8 @@ impl GoalSource {
         let active_time = goal.current_active_time_seconds(now);
         let reason = escape_graphql_string(reason);
         let updated_at = escape_graphql_string(&now.to_rfc3339());
-        update_goal_fields_if_status(
-            &self.node,
+        update_goal_fields_if_status_from_access(
+            &self.agent_access(actor)?,
             goal,
             expected_status,
             &format!(

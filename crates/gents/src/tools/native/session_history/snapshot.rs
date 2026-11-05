@@ -2,7 +2,7 @@ use rapidhash::RapidHashSet;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use super::{
@@ -117,7 +117,7 @@ fn session_detail_query(node_did: &str, session_ids: &[String]) -> String {
                 {{ session_id: {{ _in: [{list}] }} }}
             ] }}) {{
                 session_id
-                agent_id
+                agent_did
                 title
                 tags
                 created_at
@@ -251,7 +251,7 @@ fn build_session_rows(
             Ok(SessionHistoryRow {
                 is_current: false,
                 session_id: session_id.clone(),
-                agent_id: clean(session.agent_id.as_ref()),
+                agent_did: clean(session.agent_did.as_ref()),
                 title: session.title.clone(),
                 tags: session.tags.clone(),
                 created_at: clean(session.created_at.as_ref()),

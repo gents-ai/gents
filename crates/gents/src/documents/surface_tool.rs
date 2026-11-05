@@ -4,15 +4,15 @@
 
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 use super::datastore_tool_surface::DatastoreToolSurfaceDocument;
 use super::serde_helpers;
 use super::tools::Tools;
 use super::write_tool::{
-    reject_protected_collection_name, reject_tool_name_surface_collisions,
-    validate_write_tool_declarations, WriteToolDecl, WriteToolField, WriteToolFieldFill,
+    WriteToolDecl, WriteToolField, WriteToolFieldFill, reject_protected_collection_name,
+    reject_tool_name_surface_collisions, validate_write_tool_declarations,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -20,6 +20,94 @@ pub struct MergedSurfaceTools {
     pub write_tools: Vec<WriteToolDecl>,
     pub query_tools: Vec<QueryToolDecl>,
     pub surface_of_tool: std::collections::BTreeMap<String, String>,
+}
+
+pub(crate) fn validate_datastore_surface(surface: &DatastoreToolSurfaceDocument) -> Result<()> {
+    anyhow::ensure!(
+        surface.enabled,
+        "surface {:?} is disabled",
+        surface.surface_id
+    );
+    let mut names = RapidHashSet::new();
+    for entry in surface.entries.as_deref().unwrap_or(&[]) {
+        entry.validate().map_err(|error| {
+            anyhow!(
+                "DatastoreToolSurface {} has a malformed entry: {error}",
+                surface.surface_id
+            )
+        })?;
+        anyhow::ensure!(
+            names.insert(entry.tool_name()),
+            "surface {:?} declares tool {:?} twice",
+            surface.surface_id,
+            entry.tool_name()
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn confirm_visible_datastore_tool(
+    surface: Option<&DatastoreToolSurfaceDocument>,
+    expected: &SurfaceToolDecl,
+) -> Result<()> {
+    let surface = surface.ok_or_else(|| anyhow!("datastore surface is unavailable"))?;
+    validate_datastore_surface(surface)?;
+    anyhow::ensure!(
+        surface
+            .entries
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .any(|entry| entry == expected),
+        "datastore tool declaration is no longer present"
+    );
+    Ok(())
+}
+
+pub(crate) async fn revalidate_visible_datastore_tool_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    surface_id: &str,
+    expected: &SurfaceToolDecl,
+) -> Result<()> {
+    anyhow::ensure!(
+        txn.actor_did().is_some(),
+        "datastore tool actor is required"
+    );
+    let surface = crate::store::config_client::read_desired_state_document_in_txn(
+        txn,
+        crate::Collection::DatastoreToolSurface,
+        owner,
+        surface_id,
+    )
+    .await?
+    .map(serde_json::from_value::<DatastoreToolSurfaceDocument>)
+    .transpose()?;
+    confirm_visible_datastore_tool(surface.as_ref(), expected)
+}
+
+#[derive(Clone)]
+pub(crate) enum DatastoreSurfaceScope {
+    SelectedAgent(String),
+    VisibleCaller(String),
+}
+
+impl DatastoreSurfaceScope {
+    pub(crate) async fn revalidate(
+        &self,
+        txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+        surface_id: &str,
+        expected: &SurfaceToolDecl,
+    ) -> Result<()> {
+        match self {
+            Self::SelectedAgent(owner) => {
+                revalidate_datastore_tool_in_txn(txn, owner, surface_id, expected).await
+            }
+            Self::VisibleCaller(owner) => {
+                revalidate_visible_datastore_tool_in_txn(txn, owner, surface_id, expected).await
+            }
+        }
+    }
 }
 
 pub fn merge_datastore_tool_surfaces<'a>(
@@ -75,17 +163,8 @@ pub fn merge_datastore_tool_surfaces<'a>(
                     surface_id
                 )
             })?;
-        if !surface.enabled {
-            bail!(
-                "Tools {} references disabled DatastoreToolSurface {}",
-                selection.tools_id,
-                surface_id
-            );
-        }
+        validate_datastore_surface(surface)?;
         for entry in surface.entries.as_deref().unwrap_or(&[]) {
-            entry.validate().map_err(|error| {
-                anyhow!("DatastoreToolSurface {surface_id} has a malformed entry: {error}")
-            })?;
             if !seen.insert(entry.tool_name().to_string()) {
                 bail!(
                     "duplicate tool_name {:?} after expanding DatastoreToolSurface {} for Tools {}",
@@ -107,6 +186,76 @@ pub fn merge_datastore_tool_surfaces<'a>(
         query_tools,
         surface_of_tool,
     })
+}
+
+pub(crate) async fn revalidate_datastore_tool_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    surface_id: &str,
+    expected: &SurfaceToolDecl,
+) -> Result<()> {
+    let actor = txn
+        .actor_did()
+        .ok_or_else(|| anyhow!("datastore tool actor is required"))?;
+    let (_, tools) = super::load_agent_context_and_tools_in_txn(txn, owner, actor).await?;
+    let tools = tools.ok_or_else(|| anyhow!("Agent has no selected Tools"))?;
+    let ids = tools
+        .datastore
+        .as_ref()
+        .and_then(|datastore| datastore.datastore_tool_surface_ids.as_deref())
+        .unwrap_or(&[]);
+    let borrowed = ids.iter().map(String::as_str).collect::<Vec<_>>();
+    let rows = crate::store::config_client::read_desired_state_records_in_txn(
+        txn,
+        crate::Collection::DatastoreToolSurface,
+        owner,
+        &borrowed,
+    )
+    .await?;
+    let surfaces = rows
+        .into_values()
+        .map(|(_, value)| serde_json::from_value(value))
+        .collect::<std::result::Result<Vec<DatastoreToolSurfaceDocument>, _>>()?;
+    confirm_cached_datastore_tool(&tools, &surfaces, surface_id, expected)
+}
+
+#[derive(Clone)]
+pub(crate) struct DatastoreToolSource {
+    pub(crate) owner: String,
+    pub(crate) surface_id: String,
+    pub(crate) declaration: SurfaceToolDecl,
+}
+
+impl DatastoreToolSource {
+    pub(crate) async fn revalidate(
+        &self,
+        txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    ) -> Result<()> {
+        revalidate_datastore_tool_in_txn(txn, &self.owner, &self.surface_id, &self.declaration)
+            .await
+    }
+}
+
+pub(super) fn confirm_cached_datastore_tool(
+    tools: &Tools,
+    surfaces: &[DatastoreToolSurfaceDocument],
+    surface_id: &str,
+    expected: &SurfaceToolDecl,
+) -> Result<()> {
+    let merged = merge_datastore_tool_surfaces(tools, surfaces)?;
+    let matching_source = merged
+        .surface_of_tool
+        .get(expected.tool_name())
+        .is_some_and(|id| id == surface_id);
+    let matching_declaration = match expected {
+        SurfaceToolDecl::Create(decl) => merged.write_tools.contains(decl),
+        SurfaceToolDecl::Query(decl) => merged.query_tools.contains(decl),
+    };
+    anyhow::ensure!(
+        matching_source && matching_declaration,
+        "datastore tool source or declaration is no longer selected"
+    );
+    Ok(())
 }
 
 /// One bound read tool: one collection, a fixed projection, optional filter

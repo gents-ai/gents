@@ -61,10 +61,10 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     )?;
     let config_path = root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let agent_id = config["node"]
-        .get("default_agent_id")
+    let agent_did = config["node"]
+        .get("default_agent_did")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing default_agent_id"))?
+        .ok_or_else(|| anyhow!("exported bundle missing default_agent_did"))?
         .to_string();
     let node_did = config["node"]
         .get("node_did")
@@ -77,7 +77,7 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
         "task_id": task_id.clone(),
         "display_name": "Greet",
         "description": "Manual-only task for CLI task run.",
-        "agent_id": agent_id.clone(),
+        "agent_did": agent_did.clone(),
         "prompt_template": "hi {{ args.name }}",
         "enabled": true,
     }]);
@@ -120,9 +120,9 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     );
     assert_eq!(
         listed_task
-            .pointer("/agent/agent_id")
+            .pointer("/agent/agent_did")
             .and_then(Value::as_str),
-        Some(agent_id.as_str())
+        Some(agent_did.as_str())
     );
 
     let shown = run_cli_json(
@@ -158,8 +158,8 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     );
     assert_eq!(fire.get("status").and_then(Value::as_str), Some("pending"));
     assert_eq!(
-        fire.get("agent_id").and_then(Value::as_str),
-        Some(agent_id.as_str())
+        fire.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
     );
     assert_eq!(
         fire.get("node_did").and_then(Value::as_str),
@@ -183,7 +183,7 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
                 AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     request_id
                     node_did
-                    agent_id
+                    agent_did
                     content
                     lifecycle_state
                     execution_origin
@@ -201,8 +201,8 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
         Some(node_did.as_str())
     );
     assert_eq!(
-        row.get("agent_id").and_then(Value::as_str),
-        Some(agent_id.as_str())
+        row.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
     );
     assert_eq!(row.get("content").and_then(Value::as_str), Some("hi Amy"));
     let persisted_lifecycle_state = row.get("lifecycle_state").and_then(Value::as_str);
@@ -267,10 +267,10 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
     )?;
     let config_path = root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let agent_id = config["node"]
-        .get("default_agent_id")
+    let agent_did = config["node"]
+        .get("default_agent_did")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("exported bundle missing default_agent_id"))?
+        .ok_or_else(|| anyhow!("exported bundle missing default_agent_did"))?
         .to_string();
     let node_did = config["node"]
         .get("node_did")
@@ -282,7 +282,7 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
     config["tasks"] = serde_json::json!([{
         "task_id": task_id.clone(),
         "display_name": "Disabled",
-        "agent_id": agent_id.clone(),
+        "agent_did": agent_did.clone(),
         "prompt_template": "noop",
         "enabled": false,
     }]);

@@ -209,7 +209,7 @@ function AgentsValue({ deployment }: { deployment: NodeView }) {
   if (agents.length === 0) return <span className="truncate">None</span>;
   return (
     <>
-      <AgentMarks deployment={deployment} agentIds={agents.map((a) => a.agentId)} />
+      <AgentMarks deployment={deployment} agentIds={agents.map((a) => a.agentDid)} />
       <span className="truncate text-muted-foreground">
         {counted(agents.length, "agent")}
       </span>
@@ -423,19 +423,19 @@ export function AgentCard({
     doing, and what runs with it on its own. */
 export function AgentSummaryCards({
   deployment,
-  agentId,
+  agentDid,
 }: {
   deployment: NodeView;
-  agentId: string;
+  agentDid: string;
 }) {
-  const agent = agentOf(deployment, agentId);
+  const agent = agentOf(deployment, agentDid);
   const sessions = useFleet((s) => s.sessionsOf[nodeKeyOf(deployment)] ?? NO_SESSIONS);
   if (!agent) return null;
-  const env = deployment.agentEnvironments.find((e) => e.agentId === agentId);
+  const env = deployment.agentEnvironments.find((e) => e.agentDid === agentDid);
   const backend = backendOf(deployment, agent);
-  const mine = sessions.filter((s) => s.agentId === agentId);
+  const mine = sessions.filter((s) => s.agentDid === agentDid);
   const live = mine.filter((s) => isLive(s.turnState)).length;
-  const tasks = deployment.tasks.filter((t) => t.agentId === agentId).length;
+  const tasks = deployment.tasks.filter((t) => t.agentDid === agentDid).length;
   const section = (section: string, item?: string): Route => ({
     name: "agent",
     nodeDid: deployment.nodeDid,

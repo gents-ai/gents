@@ -27,19 +27,19 @@ pub struct WorkspaceRootPolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RootExecutionGuard {
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
     pub(crate) selected_root: Option<PathBuf>,
     pub(crate) ceiling_root: Option<PathBuf>,
 }
 
 impl RootExecutionGuard {
-    pub(crate) async fn validate(&self, node: &defra_node::EmbeddedNode) -> Result<()> {
+    pub(crate) async fn validate(&self, node: &defra_node::Node) -> Result<()> {
         let policy = load_workspace_root_policy(node, self.ceiling_root.as_deref()).await?;
         let Some(selected_root) = self.selected_root.as_deref() else {
             anyhow::ensure!(
                 !policy.configured,
                 "agent {} has active host tools but no explicit root under current WorkspaceRoot policy",
-                self.agent_id
+                self.agent_did
             );
             return Ok(());
         };
@@ -47,13 +47,13 @@ impl RootExecutionGuard {
             RootAdmission::Admitted(root) if root == selected_root => Ok(()),
             RootAdmission::Admitted(root) => anyhow::bail!(
                 "agent {} persisted root {} re-resolved to {} at the execution boundary",
-                self.agent_id,
+                self.agent_did,
                 selected_root.display(),
                 root.display()
             ),
             denied @ RootAdmission::Denied { .. } => anyhow::bail!(
                 "agent {} persisted root {} is not admitted by current WorkspaceRoot policy at the execution boundary: {}",
-                self.agent_id,
+                self.agent_did,
                 selected_root.display(),
                 denied.denial_reason().expect("denied outcome has a reason")
             ),
@@ -150,7 +150,7 @@ pub(crate) async fn load_workspace_root_policy_in_txn(
 }
 
 pub async fn load_workspace_root_policy(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     ceiling_root: Option<&Path>,
 ) -> Result<WorkspaceRootPolicy> {
     let response = crate::store::graphql::graphql_with_transaction_retry(

@@ -1,10 +1,10 @@
 use super::identity::resolve_p2p_peer_id;
 use super::{
     augment_peer_status_payload_for_desktop, await_serving_runtime_within,
-    cached_operator_endpoint, dangerously_overwrite_desktop_home,
+    cached_runtime_operator_endpoint, dangerously_overwrite_desktop_home,
     graphql_endpoint_for_desktop_access, init_standard_local_runtime, load_operator_node_identity,
-    load_standard_runtime_identity, operator_signer, render_human_summary,
-    reset_desktop_runtime_state, runtime_graphql_url, runtime_status_url, serving_runtime,
+    load_standard_runtime_identity, render_human_summary, reset_desktop_runtime_state,
+    runtime_graphql_url, runtime_operator_signer, runtime_status_url, serving_runtime,
     DesktopInitOptions, DesktopInitSummary, StoredRuntimeState, LOCAL_STANDARD_SOURCE,
 };
 use crate::client::DesktopPaths;
@@ -98,6 +98,10 @@ fn init_summary_tells_demo_to_wait_for_desktop_bootstrap() {
 fn runtime_status_url_accepts_case_insensitive_http_schemes() {
     for (input, expected) in [
         ("HTTP://Example.COM:9191", "http://example.com:9191/status"),
+        (
+            "https://example.com/proxy/api/v0/graphql",
+            "https://example.com/proxy/status",
+        ),
         (
             "hTtPs://Example.COM:9191/api/v0/graphql?query=1#fragment",
             "https://example.com:9191/status",
@@ -467,7 +471,7 @@ fn hosted_record(home: &std::path::Path, did: &str, graphql: &str) -> crate::cli
 }
 
 #[test]
-fn cached_operator_endpoint_does_not_load_a_cold_runtime_key() {
+fn cached_runtime_operator_endpoint_does_not_load_a_cold_runtime_key() {
     use identity::Identity as _;
 
     let tempdir = tempfile::tempdir().unwrap();
@@ -484,45 +488,40 @@ fn cached_operator_endpoint_does_not_load_a_cold_runtime_key() {
     let record = hosted_record(home, &did, HOSTED_GRAPHQL);
     assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
     assert_eq!(
-        cached_operator_endpoint(&record),
+        cached_runtime_operator_endpoint(&record),
         Some(gents::store::config_client::GraphqlEndpoint::anonymous(
             HOSTED_GRAPHQL
         ))
     );
     assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
 
-    assert_eq!(
-        super::OperatorIdentityInteraction::default().endpoint(&record),
-        Some(gents::store::config_client::GraphqlEndpoint::as_principal(
-            HOSTED_GRAPHQL,
-            &did
-        ))
-    );
+    let unlocked = super::OperatorIdentityInteraction::default()
+        .runtime_endpoint(&record)
+        .unwrap();
+    assert!(unlocked.authorization().unwrap().is_some());
     std::fs::remove_file(home.join("init.json")).unwrap();
     std::fs::remove_file(key_path).unwrap();
     assert_eq!(
-        cached_operator_endpoint(&record),
-        Some(gents::store::config_client::GraphqlEndpoint::as_principal(
-            HOSTED_GRAPHQL,
-            &did
+        cached_runtime_operator_endpoint(&record),
+        Some(gents::store::config_client::GraphqlEndpoint::anonymous(
+            HOSTED_GRAPHQL
         ))
     );
 }
 
 #[test]
-fn cached_operator_endpoint_keeps_unlocked_authority_on_its_hosted_endpoint() {
+fn cached_runtime_operator_endpoint_does_not_infer_authority_from_registry() {
     let tempdir = tempfile::tempdir().unwrap();
     let (home, did) = hosted_home(tempdir.path());
     assert_eq!(
-        cached_operator_endpoint(&hosted_record(&home, &did, HOSTED_GRAPHQL)),
-        Some(gents::store::config_client::GraphqlEndpoint::as_principal(
-            HOSTED_GRAPHQL,
-            &did
+        cached_runtime_operator_endpoint(&hosted_record(&home, &did, HOSTED_GRAPHQL)),
+        Some(gents::store::config_client::GraphqlEndpoint::anonymous(
+            HOSTED_GRAPHQL
         ))
     );
     let elsewhere = "http://127.0.0.1:9999/api/v0/graphql";
     assert_eq!(
-        cached_operator_endpoint(&hosted_record(&home, &did, elsewhere)),
+        cached_runtime_operator_endpoint(&hosted_record(&home, &did, elsewhere)),
         Some(gents::store::config_client::GraphqlEndpoint::anonymous(
             elsewhere
         ))
@@ -530,13 +529,43 @@ fn cached_operator_endpoint_keeps_unlocked_authority_on_its_hosted_endpoint() {
     let mut record = hosted_record(&home, &did, HOSTED_GRAPHQL);
     record.local_node_home = None;
     assert_eq!(
-        cached_operator_endpoint(&record),
+        cached_runtime_operator_endpoint(&record),
         Some(gents::store::config_client::GraphqlEndpoint::anonymous(
             HOSTED_GRAPHQL
         ))
     );
-    record.source = Some("manual".to_string());
-    assert!(cached_operator_endpoint(&record).is_none());
+    record.graphql = None;
+    assert!(cached_runtime_operator_endpoint(&record).is_none());
+}
+
+#[tokio::test]
+async fn passive_runtime_status_without_held_capability_is_explicitly_unavailable() {
+    use wiremock::MockServer;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().to_owned();
+    let server = MockServer::start().await;
+    let graphql = format!("{}/api/v0/graphql", server.uri());
+    let endpoint = graphql.clone();
+    let (home, did) = tokio::task::spawn_blocking(move || {
+        let (home, did) = hosted_home(&root);
+        seed_home(&home, &did, &endpoint);
+        (home, did)
+    })
+    .await
+    .unwrap();
+    let record = hosted_record(&home, &did, &graphql);
+    let error =
+        super::fetch_hosted_runtime_status(&record, super::OperatorIdentityInteraction::Prevent)
+            .await
+            .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("unavailable without a held signing capability"));
+    assert!(matches!(
+        error.downcast_ref::<gents::store::config_client::ConfigClientError>(),
+        Some(gents::store::config_client::ConfigClientError::ClientAgentSignerRequired)
+    ));
+    assert!(server.received_requests().await.unwrap().is_empty());
 }
 
 #[test]
@@ -565,15 +594,16 @@ fn operator_node_identity_requires_the_homes_own_runtime_endpoint() {
 }
 
 #[test]
-fn operator_signer_is_the_hosted_runtimes_own_identity() {
+fn runtime_operator_signer_is_the_hosted_runtimes_own_identity() {
     let tempdir = tempfile::tempdir().unwrap();
     let (home, did) = hosted_home(tempdir.path());
     let record = |graphql: &str| hosted_record(&home, &did, graphql);
 
-    let signer = operator_signer(&record(HOSTED_GRAPHQL)).expect("the hosted runtime's signer");
+    let signer =
+        runtime_operator_signer(&record(HOSTED_GRAPHQL)).expect("the hosted runtime's signer");
     assert_eq!(signer.did(), did);
 
-    let elsewhere = operator_signer(&record("http://127.0.0.1:9999/api/v0/graphql"))
+    let elsewhere = runtime_operator_signer(&record("http://127.0.0.1:9999/api/v0/graphql"))
         .err()
         .expect("an endpoint the home does not serve");
     assert!(
@@ -583,11 +613,11 @@ fn operator_signer_is_the_hosted_runtimes_own_identity() {
 
     let mut remote = record(HOSTED_GRAPHQL);
     remote.source = Some("manual".to_string());
-    assert!(operator_signer(&remote).is_err());
+    assert!(runtime_operator_signer(&remote).is_err());
 
     let mut homeless = record(HOSTED_GRAPHQL);
     homeless.local_node_home = None;
-    assert!(operator_signer(&homeless).is_err());
+    assert!(runtime_operator_signer(&homeless).is_err());
 }
 
 #[tokio::test]
@@ -617,9 +647,76 @@ async fn managed_readiness_status_rejects_redirects_without_forwarding_authority
         .await;
     let error = super::fetch_hosted_runtime_status(
         &hosted_record(&home, &did, &graphql),
-        super::OperatorIdentityInteraction::Prevent,
+        super::OperatorIdentityInteraction::Allow,
     )
     .await
     .unwrap_err();
     assert!(error.to_string().contains("302"), "{error:#}");
+}
+
+#[test]
+fn document_operator_endpoint_preserves_client_without_loading_runtime_key() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = "did:key:unloaded-runtime";
+    let caller =
+        gents::KeyIdentity::load_or_create(directory.path().join("caller.key"), None).unwrap();
+    let record = hosted_record(directory.path(), runtime, HOSTED_GRAPHQL);
+    let capability = caller.client_signing_capability().unwrap();
+    let endpoint = super::operator_endpoint(&record, &capability).unwrap();
+    assert!(endpoint.authorization().unwrap().is_some());
+    assert!(!gents::store::identity::can_mint_defradb_bearer(runtime));
+}
+
+#[tokio::test]
+async fn runtime_status_uses_the_caller_and_rejects_another_node() {
+    use gents::NodeIdentity as _;
+    use identity::Identity as _;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let directory = tempfile::tempdir().unwrap();
+    let caller =
+        gents::KeyIdentity::load_or_create(directory.path().join("caller.key"), None).unwrap();
+    let server = MockServer::start().await;
+    let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+        format!("{}/api/v0/graphql", server.uri()),
+        caller.did(),
+    )
+    .with_client_signing_capability(caller.client_signing_capability().unwrap())
+    .unwrap();
+    Mock::given(method("GET"))
+        .and(path("/status"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"node_did":"did:key:target", "service":"gents"})),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    let value = super::fetch_runtime_status_for_node(&endpoint, "did:key:target")
+        .await
+        .unwrap();
+    assert!(value.get("liveness").is_none());
+    assert!(
+        super::fetch_runtime_status_for_node(&endpoint, "did:key:other")
+            .await
+            .is_err()
+    );
+    for request in server.received_requests().await.unwrap() {
+        let bearer = request
+            .headers
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .strip_prefix("Bearer ")
+            .unwrap();
+        assert_eq!(
+            identity::from_token(bearer.as_bytes())
+                .unwrap()
+                .did()
+                .unwrap()
+                .to_string(),
+            caller.did()
+        );
+    }
 }

@@ -5,7 +5,7 @@ use std::sync::Once;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::documents::{
     Agent, AgentContext, AgentTools, BashTools, HostTools, InferenceProfile, Tools,
 };
@@ -21,9 +21,8 @@ use gents::tools::native::{
     AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
 };
 use gents::{
-    default_agent_id_for_node, default_inference_profile_id_for_agent, ensure_node,
-    AgentTargetDocument, BashMode, Collection, DocumentRuntimeOptions, Gents, NodeIdentity,
-    ReasoningEffort, ToolCeiling,
+    ensure_node, AgentTargetDocument, BashMode, Collection, DocumentRuntimeOptions, Gents,
+    NodeIdentity, ReasoningEffort, ToolCeiling,
 };
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -40,9 +39,9 @@ use crate::support::{
     first_optional_row, snapshots::fetch_runtime_snapshot, test_db, test_p2p_db, TestDb,
 };
 
-const RESEARCHER_AGENT_ID: &str = "live-researcher";
-const FAST_WORKER_AGENT_ID: &str = "live-fast-worker";
-const BACKGROUND_WORKER_AGENT_ID: &str = "live-background-worker";
+const RESEARCHER_AGENT_NAME: &str = "live-researcher";
+const FAST_WORKER_AGENT_NAME: &str = "live-fast-worker";
+const BACKGROUND_WORKER_AGENT_NAME: &str = "live-background-worker";
 const RESEARCHER_TARGET_NAME: &str = "researcher";
 const FAST_WORKER_TARGET_NAME: &str = "fast-worker";
 const BACKGROUND_WORKER_TARGET_NAME: &str = "background-worker";
@@ -88,12 +87,11 @@ async fn live_local_create_session() -> Result<()> {
     let db = test_db("session-message-live-local").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("session-message-live-local"));
     let node_did = identity.did().to_string();
-    let orchestrator_agent_id = default_agent_id_for_node(&node_did);
-    let profile_id = default_inference_profile_id_for_agent(&orchestrator_agent_id);
+    let profile_id = format!("{node_did}:orchestrator-inference");
     upsert_live_backend(&db.node, &node_did, &target).await;
-    configure_agent(
+    let orchestrator_agent_did = configure_agent(
         &db.node,
-        &orchestrator_agent_id,
+        "Orchestrator",
         &node_did,
         &target,
         &profile_id,
@@ -102,9 +100,9 @@ async fn live_local_create_session() -> Result<()> {
         true,
     )
     .await;
-    configure_agent(
+    let researcher_agent_did = configure_agent(
         &db.node,
-        RESEARCHER_AGENT_ID,
+        RESEARCHER_AGENT_NAME,
         &node_did,
         &target,
         &profile_id,
@@ -116,14 +114,14 @@ async fn live_local_create_session() -> Result<()> {
     authorize_session_targets(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         vec![AgentTargetDocument {
             description: Some("Researches factual questions.".to_string()),
             ..agent_target(
                 &node_did,
                 RESEARCHER_TARGET_NAME,
                 node_did.clone(),
-                RESEARCHER_AGENT_ID,
+                researcher_agent_did.as_str(),
             )
         }],
     )
@@ -136,7 +134,7 @@ async fn live_local_create_session() -> Result<()> {
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         request_id,
         session_id,
         "Use your research agent to find the capital of France, then tell me the answer.",
@@ -173,7 +171,7 @@ async fn live_local_create_session() -> Result<()> {
     )
     .await
     .expect("the caused request must name an agent_new call of the orchestrator request");
-    assert_eq!(caused.agent_id, RESEARCHER_AGENT_ID);
+    assert_eq!(caused.agent_did, researcher_agent_did.as_str());
     assert_eq!(caused.node_did, node_did);
     assert_eq!(caused.requester_did.as_deref(), Some(node_did.as_str()));
     assert_eq!(caused.request_hop, Some(1));
@@ -317,12 +315,11 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     let identity: Arc<dyn NodeIdentity> =
         Arc::new(test_identity("backgrounding-live-standard-path"));
     let node_did = identity.did().to_string();
-    let orchestrator_agent_id = default_agent_id_for_node(&node_did);
-    let profile_id = default_inference_profile_id_for_agent(&orchestrator_agent_id);
+    let profile_id = format!("{node_did}:orchestrator-inference");
     upsert_live_backend(&db.node, &node_did, &target).await;
-    configure_agent(
+    let orchestrator_agent_did = configure_agent(
         &db.node,
-        &orchestrator_agent_id,
+        "Orchestrator",
         &node_did,
         &target,
         &profile_id,
@@ -331,9 +328,9 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         true,
     )
     .await;
-    configure_agent(
+    let background_worker_agent_did = configure_agent(
         &db.node,
-        BACKGROUND_WORKER_AGENT_ID,
+        BACKGROUND_WORKER_AGENT_NAME,
         &node_did,
         &target,
         &profile_id,
@@ -345,7 +342,8 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     configure_standard_backgrounding_tools(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
+        &background_worker_agent_did,
         workspace.path(),
     )
     .await;
@@ -360,14 +358,19 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         },
     )
     .await?;
-    assert_standard_backgrounding_tool_surfaces(&loaded_agent, &node_did, &orchestrator_agent_id);
+    assert_standard_backgrounding_tool_surfaces(
+        &loaded_agent,
+        &node_did,
+        &orchestrator_agent_did,
+        &background_worker_agent_did,
+    );
     let agent = boot_loaded_document_agent(&db, loaded_agent).await;
     let agent_request_id = "req-live-standard-background-agent";
     let agent_session_id = "session-live-standard-background-agent";
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         agent_request_id,
         agent_session_id,
         "RUN_BACKGROUND_AGENT: invoke agent_new now for background-worker with prompt RUN_CHILD_BACKGROUND_JOB. Do not answer until its running receipt arrives.",
@@ -394,7 +397,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     let caused = wait_for_caused_request(&db.node, agent_request_id, Duration::from_secs(60))
         .await
         .expect("agent_new must cause a request");
-    assert_eq!(caused.agent_id, BACKGROUND_WORKER_AGENT_ID);
+    assert_eq!(caused.agent_did, background_worker_agent_did.as_str());
     assert_eq!(
         caused.caused_by_parent_tool_call_id.as_deref(),
         Some(session_row.tool_call_id.as_str())
@@ -478,7 +481,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         tool_request_id,
         tool_session_id,
         "RUN_BACKGROUND_TOOL",
@@ -568,7 +571,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         managed_create_request_id,
         managed_agent_session_id,
         "MANAGE_BACKGROUND_AGENT_CREATE: Call agent_new exactly once now with agent background-worker and prompt RUN_MANAGED_CHILD_BACKGROUND_JOB. Do not call any other tool.",
@@ -614,7 +617,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         managed_list_request_id,
         managed_agent_session_id,
         "MANAGE_BACKGROUND_AGENT_LIST: Call list_processes exactly once now. Do not call any other tool.",
@@ -649,7 +652,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         managed_message_request_id,
         managed_agent_session_id,
         &managed_message_prompt,
@@ -796,7 +799,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         managed_tool_request_id,
         managed_tool_session_id,
         &managed_tool_spawn_prompt,
@@ -822,7 +825,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         managed_tool_list_request_id,
         managed_tool_session_id,
         "MANAGE_BACKGROUND_TOOL_LIST: Call list_processes exactly once now. Do not call any other tool.",
@@ -853,7 +856,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         managed_tool_read_request_id,
         managed_tool_session_id,
         &managed_tool_read_prompt,
@@ -892,7 +895,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         managed_tool_wait_request_id,
         managed_tool_session_id,
         &managed_tool_wait_prompt,
@@ -937,7 +940,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         managed_tool_terminal_read_request_id,
         managed_tool_session_id,
         &managed_tool_terminal_read_prompt,
@@ -1015,12 +1018,11 @@ async fn live_cross_node_create_session() -> Result<()> {
     let identity_b: Arc<dyn NodeIdentity> = db_b.node_identity.clone();
     let did_a = identity_a.did().to_string();
     let did_b = identity_b.did().to_string();
-    let orchestrator_agent_id = default_agent_id_for_node(&did_a);
-    let profile_b = default_inference_profile_id_for_agent(&default_agent_id_for_node(&did_b));
+    let profile_b = format!("{did_b}:worker-inference");
     upsert_live_backend(&db_b.node, &did_b, &target).await;
-    configure_agent(
+    let fast_worker_agent_did = configure_agent(
         &db_b.node,
-        FAST_WORKER_AGENT_ID,
+        FAST_WORKER_AGENT_NAME,
         &did_b,
         &target,
         &profile_b,
@@ -1030,11 +1032,11 @@ async fn live_cross_node_create_session() -> Result<()> {
     )
     .await;
 
-    let profile_a = default_inference_profile_id_for_agent(&orchestrator_agent_id);
+    let profile_a = format!("{did_a}:orchestrator-inference");
     upsert_live_backend(&db_a.node, &did_a, &target).await;
-    configure_agent(
+    let orchestrator_agent_did = configure_agent(
         &db_a.node,
-        &orchestrator_agent_id,
+        "Orchestrator",
         &did_a,
         &target,
         &profile_a,
@@ -1046,14 +1048,14 @@ async fn live_cross_node_create_session() -> Result<()> {
     authorize_session_targets(
         &db_a.node,
         &did_a,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         vec![AgentTargetDocument {
             description: Some("Answers factual questions on another node.".to_string()),
             ..agent_target(
                 &did_a,
                 FAST_WORKER_TARGET_NAME,
                 did_b.clone(),
-                FAST_WORKER_AGENT_ID,
+                fast_worker_agent_did.as_str(),
             )
         }],
     )
@@ -1069,7 +1071,7 @@ async fn live_cross_node_create_session() -> Result<()> {
     create_runtime_request(
         &db_a.node,
         &did_a,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         request_id,
         session_id,
         "Run the remote research workflow for the capital of France.",
@@ -1090,7 +1092,7 @@ async fn live_cross_node_create_session() -> Result<()> {
     tracing::info!("[live-cross] caused request on A = {caused_a:?}");
     assert_eq!(caused_a.node_did, did_b);
     assert_eq!(caused_a.requester_did.as_deref(), Some(did_a.as_str()));
-    assert_eq!(caused_a.agent_id, FAST_WORKER_AGENT_ID);
+    assert_eq!(caused_a.agent_did, fast_worker_agent_did.as_str());
     assert_eq!(caused_a.admission_kind.as_deref(), Some("peer"));
     assert_eq!(
         caused_a.caused_by_parent_tool_call_id.as_deref(),
@@ -1194,10 +1196,10 @@ async fn live_cross_node_create_session() -> Result<()> {
     Ok(())
 }
 
-const ALPHA_AGENT_ID: &str = "live-alpha";
-const BETA_AGENT_ID: &str = "live-beta";
-const BLOCKER_AGENT_ID: &str = "live-blocker";
-const RELAY_AGENT_ID: &str = "live-relay";
+const ALPHA_AGENT_NAME: &str = "live-alpha";
+const BETA_AGENT_NAME: &str = "live-beta";
+const BLOCKER_AGENT_NAME: &str = "live-blocker";
+const RELAY_AGENT_NAME: &str = "live-relay";
 
 fn code_word(prefix: &str) -> String {
     format!(
@@ -1237,12 +1239,11 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     let db = test_db("session-message-live-fan-out").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("session-message-live-fan-out"));
     let node_did = identity.did().to_string();
-    let orchestrator_agent_id = default_agent_id_for_node(&node_did);
-    let profile_id = default_inference_profile_id_for_agent(&orchestrator_agent_id);
+    let profile_id = format!("{node_did}:orchestrator-inference");
     upsert_live_backend(&db.node, &node_did, &target).await;
-    configure_agent(
+    let orchestrator_agent_did = configure_agent(
         &db.node,
-        &orchestrator_agent_id,
+        "Orchestrator",
         &node_did,
         &target,
         &profile_id,
@@ -1251,29 +1252,40 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         true,
     )
     .await;
-    for (agent_id, name, first, second) in [
-        (ALPHA_AGENT_ID, "alpha", &alpha_first, &alpha_second),
-        (BETA_AGENT_ID, "beta", &beta_first, &code_word("BETATWO")),
-    ] {
-        configure_agent(
-            &db.node,
-            agent_id,
-            &node_did,
-            &target,
-            &profile_id,
-            &code_worker_prompt(name, first, second),
-            Some("Knows a code word."),
-            false,
-        )
-        .await;
-    }
+    let alpha_agent_did = configure_agent(
+        &db.node,
+        ALPHA_AGENT_NAME,
+        &node_did,
+        &target,
+        &profile_id,
+        &code_worker_prompt("alpha", &alpha_first, &alpha_second),
+        Some("Knows a code word."),
+        false,
+    )
+    .await;
+    let beta_agent_did = configure_agent(
+        &db.node,
+        BETA_AGENT_NAME,
+        &node_did,
+        &target,
+        &profile_id,
+        &code_worker_prompt("beta", &beta_first, &code_word("BETATWO")),
+        Some("Knows a code word."),
+        false,
+    )
+    .await;
     authorize_session_targets(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         vec![
-            agent_target(&node_did, "alpha", node_did.clone(), ALPHA_AGENT_ID),
-            agent_target(&node_did, "beta", node_did.clone(), BETA_AGENT_ID),
+            agent_target(
+                &node_did,
+                "alpha",
+                node_did.clone(),
+                alpha_agent_did.as_str(),
+            ),
+            agent_target(&node_did, "beta", node_did.clone(), beta_agent_did.as_str()),
         ],
     )
     .await;
@@ -1284,7 +1296,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         fan_out_request_id,
         session_id,
         "Call agent_new twice in this turn: once with agent \"alpha\" and prompt \"What is your code word?\", and once with agent \"beta\" and prompt \"What is your code word?\". After both running receipts arrive, reply exactly STARTED_BOTH and call no other tool.",
@@ -1309,12 +1321,12 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     );
     let alpha = caused
         .iter()
-        .find(|row| row.agent_id == ALPHA_AGENT_ID)
+        .find(|row| row.agent_did == alpha_agent_did.as_str())
         .unwrap_or_else(|| panic!("no alpha session was started; caused={caused:?}"))
         .clone();
     let beta = caused
         .iter()
-        .find(|row| row.agent_id == BETA_AGENT_ID)
+        .find(|row| row.agent_did == beta_agent_did.as_str())
         .unwrap_or_else(|| panic!("no beta session was started; caused={caused:?}"))
         .clone();
     for started in [&alpha, &beta] {
@@ -1365,7 +1377,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         list_request_id,
         session_id,
         "Call agent_list exactly once now, then reply exactly LISTED and call no other tool.",
@@ -1413,7 +1425,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         message_request_id,
         session_id,
         &format!(
@@ -1434,7 +1446,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         .await
         .expect("agent_message must cause a request in the idle session");
     assert_eq!(continued.session_id, alpha.session_id);
-    assert_eq!(continued.agent_id, ALPHA_AGENT_ID);
+    assert_eq!(continued.agent_did, alpha_agent_did.as_str());
     assert_eq!(
         continued.caused_by_parent_tool_call_id.as_deref(),
         Some(message_row.tool_call_id.as_str())
@@ -1500,12 +1512,11 @@ async fn live_agent_interrupt_is_spawner_only() -> Result<()> {
     let db = test_db("session-message-live-interrupt").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("session-message-live-interrupt"));
     let node_did = identity.did().to_string();
-    let orchestrator_agent_id = default_agent_id_for_node(&node_did);
-    let profile_id = default_inference_profile_id_for_agent(&orchestrator_agent_id);
+    let profile_id = format!("{node_did}:orchestrator-inference");
     upsert_live_backend(&db.node, &node_did, &target).await;
-    configure_agent(
+    let orchestrator_agent_did = configure_agent(
         &db.node,
-        &orchestrator_agent_id,
+        "Orchestrator",
         &node_did,
         &target,
         &profile_id,
@@ -1514,9 +1525,9 @@ async fn live_agent_interrupt_is_spawner_only() -> Result<()> {
         true,
     )
     .await;
-    configure_agent(
+    let blocker_agent_did = configure_agent(
         &db.node,
-        BLOCKER_AGENT_ID,
+        BLOCKER_AGENT_NAME,
         &node_did,
         &target,
         &profile_id,
@@ -1532,19 +1543,19 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     authorize_session_targets(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         vec![agent_target(
             &node_did,
             "blocker",
             node_did.clone(),
-            BLOCKER_AGENT_ID,
+            blocker_agent_did.as_str(),
         )],
     )
     .await;
     configure_bash_agent_tools(
         &db.node,
         &node_did,
-        BLOCKER_AGENT_ID,
+        blocker_agent_did.as_str(),
         workspace.path(),
         Vec::new(),
     )
@@ -1557,7 +1568,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         start_request_id,
         spawner_session,
         "Call agent_new exactly once now with agent \"blocker\" and prompt \"Run the blocked job.\". After its running receipt arrives, reply exactly BLOCKER_STARTED and call no other tool.",
@@ -1574,7 +1585,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     let worker = wait_for_caused_request(&db.node, start_request_id, Duration::from_secs(120))
         .await
         .expect("agent_new must start the blocker");
-    assert_eq!(worker.agent_id, BLOCKER_AGENT_ID);
+    assert_eq!(worker.agent_did, blocker_agent_did.as_str());
     wait_for_model_tool_call(
         &db.node,
         &worker.request_id,
@@ -1593,7 +1604,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         refused_request_id,
         other_session,
         &format!(
@@ -1627,7 +1638,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         interrupt_request_id,
         spawner_session,
         &format!(
@@ -1713,12 +1724,11 @@ async fn live_hop_bound_stops_chain() -> Result<()> {
     let db = test_db("session-message-live-hop").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("session-message-live-hop"));
     let node_did = identity.did().to_string();
-    let orchestrator_agent_id = default_agent_id_for_node(&node_did);
-    let profile_id = default_inference_profile_id_for_agent(&orchestrator_agent_id);
+    let profile_id = format!("{node_did}:orchestrator-inference");
     upsert_live_backend(&db.node, &node_did, &target).await;
-    configure_agent(
+    let orchestrator_agent_did = configure_agent(
         &db.node,
-        &orchestrator_agent_id,
+        "Orchestrator",
         &node_did,
         &target,
         &profile_id,
@@ -1727,9 +1737,9 @@ async fn live_hop_bound_stops_chain() -> Result<()> {
         true,
     )
     .await;
-    configure_agent(
+    let relay_agent_did = configure_agent(
         &db.node,
-        RELAY_AGENT_ID,
+        RELAY_AGENT_NAME,
         &node_did,
         &target,
         &profile_id,
@@ -1740,9 +1750,16 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
         false,
     )
     .await;
-    let relay = || agent_target(&node_did, "relay", node_did.clone(), RELAY_AGENT_ID);
-    authorize_session_targets(&db.node, &node_did, &orchestrator_agent_id, vec![relay()]).await;
-    authorize_session_targets(&db.node, &node_did, RELAY_AGENT_ID, vec![relay()]).await;
+    let relay = || {
+        agent_target(
+            &node_did,
+            "relay",
+            node_did.clone(),
+            relay_agent_did.as_str(),
+        )
+    };
+    authorize_session_targets(&db.node, &node_did, &orchestrator_agent_did, vec![relay()]).await;
+    authorize_session_targets(&db.node, &node_did, relay_agent_did.as_str(), vec![relay()]).await;
     let mut node_config = ensure_node(&db.node, &node_did).await.expect("node_config");
     node_config.max_request_hop = Some(1);
     apply_fixture_documents(
@@ -1760,7 +1777,7 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
     create_runtime_request(
         &db.node,
         &node_did,
-        &orchestrator_agent_id,
+        &orchestrator_agent_did,
         root_request_id,
         root_session,
         "Call agent_new exactly once now with agent \"relay\" and prompt \"start the relay\". After its running receipt arrives, reply exactly RELAY_STARTED and call no other tool.",
@@ -1777,7 +1794,7 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
     let first = wait_for_caused_request(&db.node, root_request_id, Duration::from_secs(120))
         .await
         .expect("the root must start the relay");
-    assert_eq!(first.agent_id, RELAY_AGENT_ID);
+    assert_eq!(first.agent_did, relay_agent_did.as_str());
     assert_eq!(first.request_hop, Some(1));
     assert_eq!(
         wait_for_request_terminal(&db.node, &first.request_id, Duration::from_secs(300)).await,
@@ -1883,12 +1900,11 @@ impl LiveNode {
         let db = test_db(name).await;
         let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity(name));
         let did = identity.did().to_string();
-        let orchestrator = default_agent_id_for_node(&did);
-        let profile = default_inference_profile_id_for_agent(&orchestrator);
+        let profile = format!("{did}:orchestrator-inference");
         upsert_live_backend(&db.node, &did, target).await;
-        configure_agent(
+        let orchestrator = configure_agent(
             &db.node,
-            &orchestrator,
+            "Orchestrator",
             &did,
             target,
             &profile,
@@ -1913,13 +1929,13 @@ impl LiveNode {
     async fn agent(
         &self,
         target: &InferenceTarget,
-        agent_id: &str,
+        display_name: &str,
         system_prompt: &str,
         description: &str,
-    ) {
+    ) -> String {
         configure_agent(
             self.node(),
-            agent_id,
+            display_name,
             &self.did,
             target,
             &self.profile,
@@ -1927,11 +1943,11 @@ impl LiveNode {
             Some(description),
             false,
         )
-        .await;
+        .await
     }
 
-    fn target(&self, name: &str, agent_id: &str) -> AgentTargetDocument {
-        agent_target(&self.did, name, self.did.clone(), agent_id)
+    fn target(&self, name: &str, agent_did: &str) -> AgentTargetDocument {
+        agent_target(&self.did, name, self.did.clone(), agent_did)
     }
 
     async fn request(&self, request_id: &str, session_id: &str, content: &str) {
@@ -1966,8 +1982,8 @@ Never call any other tool."
     )
 }
 
-const MIDDLE_AGENT_ID: &str = "live-middle";
-const LEAF_AGENT_ID: &str = "live-leaf";
+const MIDDLE_AGENT_NAME: &str = "live-middle";
+const LEAF_AGENT_NAME: &str = "live-leaf";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
@@ -1992,46 +2008,48 @@ async fn live_interrupt_does_not_cascade() -> Result<()> {
         DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT,
     )
     .await;
-    fx.agent(
-        &target,
-        MIDDLE_AGENT_ID,
-        &format!(
-            "You are agent middle in an integration test. When the latest request is exactly \
+    let middle_agent_did = fx
+        .agent(
+            &target,
+            MIDDLE_AGENT_NAME,
+            &format!(
+                "You are agent middle in an integration test. When the latest request is exactly \
 RUN_MIDDLE, do two steps in order: first call agent_new exactly once with agent \"leaf\" and \
 prompt \"RUN_LEAF\"; after its running receipt arrives, call bash_unrestricted exactly once with \
 these arguments: {middle_args}. Wait for that command to finish, then reply exactly MIDDLE_DONE. \
 When background completion notifications arrive, do not call any tool: reply with one short \
 sentence that repeats, verbatim, every code word reported in the notifications."
-        ),
-        "Starts a leaf session, then runs a blocked job.",
-    )
-    .await;
-    fx.agent(
-        &target,
-        LEAF_AGENT_ID,
-        &blocked_worker_prompt("leaf", "RUN_LEAF", &leaf_args, &leaf_code),
-        "Runs a blocked job and reports its code word.",
-    )
-    .await;
+            ),
+            "Starts a leaf session, then runs a blocked job.",
+        )
+        .await;
+    let leaf_agent_did = fx
+        .agent(
+            &target,
+            LEAF_AGENT_NAME,
+            &blocked_worker_prompt("leaf", "RUN_LEAF", &leaf_args, &leaf_code),
+            "Runs a blocked job and reports its code word.",
+        )
+        .await;
     authorize_session_targets(
         fx.node(),
         &fx.did,
         &fx.orchestrator,
-        vec![fx.target("middle", MIDDLE_AGENT_ID)],
+        vec![fx.target("middle", middle_agent_did.as_str())],
     )
     .await;
     configure_bash_agent_tools(
         fx.node(),
         &fx.did,
-        MIDDLE_AGENT_ID,
+        middle_agent_did.as_str(),
         workspace.path(),
-        vec![fx.target("leaf", LEAF_AGENT_ID)],
+        vec![fx.target("leaf", leaf_agent_did.as_str())],
     )
     .await;
     configure_bash_agent_tools(
         fx.node(),
         &fx.did,
-        LEAF_AGENT_ID,
+        leaf_agent_did.as_str(),
         workspace.path(),
         Vec::new(),
     )
@@ -2059,7 +2077,7 @@ sentence that repeats, verbatim, every code word reported in the notifications."
     let middle = wait_for_caused_request(fx.node(), start_request_id, Duration::from_secs(120))
         .await
         .expect("root must start middle");
-    assert_eq!(middle.agent_id, MIDDLE_AGENT_ID);
+    assert_eq!(middle.agent_did, middle_agent_did.as_str());
     assert_eq!(middle.request_hop, Some(1));
     assert_eq!(
         middle.caused_by_parent_tool_call_id.as_deref(),
@@ -2076,7 +2094,7 @@ sentence that repeats, verbatim, every code word reported in the notifications."
     let leaf = wait_for_caused_request(fx.node(), &middle.request_id, Duration::from_secs(120))
         .await
         .expect("middle must start leaf");
-    assert_eq!(leaf.agent_id, LEAF_AGENT_ID);
+    assert_eq!(leaf.agent_did, leaf_agent_did.as_str());
     assert_eq!(leaf.request_hop, Some(2));
     assert_eq!(
         leaf.caused_by_parent_request_id.as_deref(),
@@ -2238,7 +2256,7 @@ sentence that repeats, verbatim, every code word reported in the notifications."
     Ok(())
 }
 
-const STEERED_AGENT_ID: &str = "live-steered";
+const STEERED_AGENT_NAME: &str = "live-steered";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
@@ -2260,24 +2278,25 @@ async fn live_agent_message_interrupt_steers() -> Result<()> {
         DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT,
     )
     .await;
-    fx.agent(
-        &target,
-        STEERED_AGENT_ID,
-        &blocked_worker_prompt("worker", "RUN_LONG_JOB", &args, &code_word("WORKER")),
-        "Runs a long job and accepts steering.",
-    )
-    .await;
+    let steered_agent_did = fx
+        .agent(
+            &target,
+            STEERED_AGENT_NAME,
+            &blocked_worker_prompt("worker", "RUN_LONG_JOB", &args, &code_word("WORKER")),
+            "Runs a long job and accepts steering.",
+        )
+        .await;
     authorize_session_targets(
         fx.node(),
         &fx.did,
         &fx.orchestrator,
-        vec![fx.target("worker", STEERED_AGENT_ID)],
+        vec![fx.target("worker", steered_agent_did.as_str())],
     )
     .await;
     configure_bash_agent_tools(
         fx.node(),
         &fx.did,
-        STEERED_AGENT_ID,
+        steered_agent_did.as_str(),
         workspace.path(),
         Vec::new(),
     )
@@ -2339,7 +2358,7 @@ async fn live_agent_message_interrupt_steers() -> Result<()> {
         .await
         .expect("agent_message must cause a request in the worker's session");
     assert_eq!(steer.session_id, worker.session_id);
-    assert_eq!(steer.agent_id, STEERED_AGENT_ID);
+    assert_eq!(steer.agent_did, steered_agent_did.as_str());
     assert_eq!(
         steer.caused_by_parent_request_id.as_deref(),
         Some(steer_request_id)
@@ -2424,7 +2443,7 @@ async fn live_agent_message_interrupt_steers() -> Result<()> {
     Ok(())
 }
 
-const GOAL_WORKER_AGENT_ID: &str = "live-goal-worker";
+const GOAL_WORKER_AGENT_NAME: &str = "live-goal-worker";
 
 const GOAL_ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are an orchestrator in an integration test. \
 Follow the latest user instruction exactly, calling only the tools it names. Never call agent_new \
@@ -2453,24 +2472,25 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
         GOAL_ORCHESTRATOR_SYSTEM_PROMPT,
     )
     .await;
-    fx.agent(
-        &target,
-        GOAL_WORKER_AGENT_ID,
-        &blocked_worker_prompt("worker", "RUN_JOB", &args, &worker_code),
-        "Runs a blocked job and reports its code word.",
-    )
-    .await;
+    let goal_worker_agent_did = fx
+        .agent(
+            &target,
+            GOAL_WORKER_AGENT_NAME,
+            &blocked_worker_prompt("worker", "RUN_JOB", &args, &worker_code),
+            "Runs a blocked job and reports its code word.",
+        )
+        .await;
     authorize_session_targets(
         fx.node(),
         &fx.did,
         &fx.orchestrator,
-        vec![fx.target("worker", GOAL_WORKER_AGENT_ID)],
+        vec![fx.target("worker", goal_worker_agent_did.as_str())],
     )
     .await;
     configure_bash_agent_tools(
         fx.node(),
         &fx.did,
-        GOAL_WORKER_AGENT_ID,
+        goal_worker_agent_did.as_str(),
         workspace.path(),
         Vec::new(),
     )
@@ -2643,7 +2663,7 @@ fn rfc3339(value: &Option<String>) -> Option<chrono::DateTime<chrono::Utc>> {
         .map(|time| time.with_timezone(&chrono::Utc))
 }
 
-const RESTART_WORKER_AGENT_ID: &str = "live-restart-worker";
+const RESTART_WORKER_AGENT_NAME: &str = "live-restart-worker";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SESSION_MESSAGE=1 and pass --ignored"]
@@ -2665,13 +2685,12 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     let identity_b: Arc<dyn NodeIdentity> = db_b.node_identity.clone();
     let did_a = identity_a.did().to_string();
     let did_b = identity_b.did().to_string();
-    let orchestrator = default_agent_id_for_node(&did_a);
 
-    let profile_b = default_inference_profile_id_for_agent(&default_agent_id_for_node(&did_b));
+    let profile_b = format!("{did_b}:worker-inference");
     upsert_live_backend(&db_b.node, &did_b, &target).await;
-    configure_agent(
+    let restart_worker_agent_did = configure_agent(
         &db_b.node,
-        RESTART_WORKER_AGENT_ID,
+        RESTART_WORKER_AGENT_NAME,
         &did_b,
         &target,
         &profile_b,
@@ -2683,16 +2702,16 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     configure_bash_agent_tools(
         &db_b.node,
         &did_b,
-        RESTART_WORKER_AGENT_ID,
+        restart_worker_agent_did.as_str(),
         workspace.path(),
         Vec::new(),
     )
     .await;
-    let profile_a = default_inference_profile_id_for_agent(&orchestrator);
+    let profile_a = format!("{did_a}:orchestrator-inference");
     upsert_live_backend(&db_a.node, &did_a, &target).await;
-    configure_agent(
+    let orchestrator = configure_agent(
         &db_a.node,
-        &orchestrator,
+        "Orchestrator",
         &did_a,
         &target,
         &profile_a,
@@ -2709,7 +2728,7 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
             &did_a,
             "worker",
             did_b.clone(),
-            RESTART_WORKER_AGENT_ID,
+            restart_worker_agent_did.as_str(),
         )],
     )
     .await;
@@ -3063,15 +3082,22 @@ async fn live_randomized_soak() -> Result<()> {
         DELEGATING_ORCHESTRATOR_SYSTEM_PROMPT,
     )
     .await;
-    for (agent_id, name) in [(ALPHA_AGENT_ID, "alpha"), (BETA_AGENT_ID, "beta")] {
-        fx.agent(
+    let alpha_agent_did = fx
+        .agent(
             &target,
-            agent_id,
-            &code_worker_prompt(name, &code_word("FIRST"), &code_word("SECOND")),
+            ALPHA_AGENT_NAME,
+            &code_worker_prompt("alpha", &code_word("FIRST"), &code_word("SECOND")),
             "Knows a code word.",
         )
         .await;
-    }
+    let beta_agent_did = fx
+        .agent(
+            &target,
+            BETA_AGENT_NAME,
+            &code_worker_prompt("beta", &code_word("FIRST"), &code_word("SECOND")),
+            "Knows a code word.",
+        )
+        .await;
     let gate_rules = gates
         .iter()
         .enumerate()
@@ -3083,9 +3109,9 @@ async fn live_randomized_soak() -> Result<()> {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    fx.agent(
+    let blocker_agent_did = fx.agent(
         &target,
-        BLOCKER_AGENT_ID,
+        BLOCKER_AGENT_NAME,
         &format!(
             "You are agent blocker in an integration test.\n{gate_rules}\nFor any other request, call no tool and reply exactly BLOCKER_IDLE."
         ),
@@ -3093,23 +3119,23 @@ async fn live_randomized_soak() -> Result<()> {
     )
     .await;
     let pool = [
-        ("alpha", ALPHA_AGENT_ID),
-        ("beta", BETA_AGENT_ID),
-        ("blocker", BLOCKER_AGENT_ID),
+        ("alpha", alpha_agent_did.as_str()),
+        ("beta", beta_agent_did.as_str()),
+        ("blocker", blocker_agent_did.as_str()),
     ];
     authorize_session_targets(
         fx.node(),
         &fx.did,
         &fx.orchestrator,
         pool.iter()
-            .map(|(name, agent_id)| fx.target(name, agent_id))
+            .map(|(name, agent_did)| fx.target(name, agent_did))
             .collect(),
     )
     .await;
     configure_bash_agent_tools(
         fx.node(),
         &fx.did,
-        BLOCKER_AGENT_ID,
+        blocker_agent_did.as_str(),
         workspace.path(),
         Vec::new(),
     )
@@ -3222,7 +3248,7 @@ async fn live_randomized_soak() -> Result<()> {
             }
             if let Some((name, _)) = pool
                 .iter()
-                .find(|(_, agent_id)| *agent_id == caused.agent_id)
+                .find(|(_, agent_did)| *agent_did == caused.agent_did)
             {
                 started.push((caused.session_id, *name));
             }
@@ -3668,17 +3694,17 @@ fn blocked_bash_args(started: &str, release: &Path, done: &str) -> serde_json::V
 async fn configure_bash_agent_tools(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     workspace: &Path,
     targets: Vec<AgentTargetDocument>,
 ) {
     configure_agent_tools(
         node,
         node_did,
-        agent_id,
+        agent_did,
         None,
         Tools {
-            tools_id: format!("{agent_id}-bash-tools"),
+            tools_id: format!("{agent_did}-bash-tools"),
             node_did: node_did.to_string(),
             host: Some(HostTools {
                 root: Some(workspace.display().to_string()),
@@ -3699,26 +3725,27 @@ async fn configure_bash_agent_tools(
 fn assert_standard_backgrounding_tool_surfaces(
     agent: &Gents,
     node_did: &str,
-    parent_agent_id: &str,
+    parent_agent_did: &str,
+    child_agent_did: &str,
 ) {
-    let active_agent_ids = agent
+    let active_agent_dids = agent
         .agents()
         .iter()
-        .map(|agent_config| agent_config.agent_id.clone())
+        .map(|agent_config| agent_config.agent_did.clone())
         .collect::<RapidHashSet<_>>();
     let parent = agent
         .agents()
         .iter()
-        .find(|agent_config| agent_config.agent_id == parent_agent_id)
+        .find(|agent_config| agent_config.agent_did == parent_agent_did)
         .unwrap_or_else(|| {
             panic!(
-                "loaded orchestrator agent {parent_agent_id}; active agents: {active_agent_ids:?}; unavailable: {:?}",
+                "loaded orchestrator agent {parent_agent_did}; active agents: {active_agent_dids:?}; unavailable: {:?}",
                 agent.unavailable_agents()
             )
         });
     let parent_surface = parent
         .tools
-        .explain_with_runtime(false, node_did, &active_agent_ids);
+        .explain_with_runtime(false, node_did, &active_agent_dids);
     for required in [
         "bash_unrestricted",
         AGENT_NEW_TOOL_NAME,
@@ -3766,11 +3793,11 @@ fn assert_standard_backgrounding_tool_surfaces(
     let child = agent
         .agents()
         .iter()
-        .find(|agent_config| agent_config.agent_id == BACKGROUND_WORKER_AGENT_ID)
+        .find(|agent_config| agent_config.agent_did == child_agent_did)
         .expect("loaded background worker agent");
     let child_surface = child
         .tools
-        .explain_with_runtime(false, node_did, &active_agent_ids);
+        .explain_with_runtime(false, node_did, &active_agent_dids);
     assert!(
         child_surface
             .tool_names
@@ -3804,19 +3831,22 @@ async fn upsert_live_backend(node: &Arc<EmbeddedNode>, node_did: &str, target: &
 #[allow(clippy::too_many_arguments)]
 async fn configure_agent(
     node: &Arc<EmbeddedNode>,
-    agent_id: &str,
+    display_name: &str,
     node_did: &str,
     target: &InferenceTarget,
     inference_profile_id: &str,
     system_prompt: &str,
     description: Option<&str>,
     default_for_node: bool,
-) {
+) -> String {
+    let root =
+        gents::store::identity::RegisteredIdentity::from_registered_did(node_did, None).unwrap();
+    let binding = gents::store::identity::provision_agent_identity(&root).unwrap();
     let mut node_config = ensure_node(node, node_did)
         .await
         .expect("ensure live fixture node_config");
-    let context_id = format!("{agent_id}:context");
-    let sampling_id = format!("{agent_id}:live-sampling");
+    let context_id = format!("{}:context", binding.agent_did);
+    let sampling_id = format!("{}:live-sampling", binding.agent_did);
     let profile = InferenceProfile {
         profile_id: inference_profile_id.to_string(),
         sampling_id: Some(sampling_id.clone()),
@@ -3836,9 +3866,10 @@ async fn configure_agent(
         tags: Vec::new(),
     };
     let agent_config = Agent {
-        agent_id: agent_id.to_string(),
+        agent_did: binding.agent_did.clone(),
+        creation_nonce: binding.creation_nonce,
         node_did: node_did.to_string(),
-        display_name: Some(agent_id.to_string()),
+        display_name: Some(display_name.to_string()),
         description: description.map(ToOwned::to_owned),
         context_id: Some(context_id),
         inference_profile_id: inference_profile_id.to_string(),
@@ -3865,13 +3896,14 @@ async fn configure_agent(
         ),
     ];
     if default_for_node {
-        node_config.default_agent_id = Some(agent_id.to_string());
+        node_config.default_agent_did = Some(binding.agent_did.clone());
         documents.push((
             Collection::Node,
             serde_json::to_value(node_config).expect("serialize live node_config"),
         ));
     }
     apply_fixture_documents(node, documents).await;
+    binding.agent_did
 }
 
 async fn apply_fixture_documents(
@@ -3931,16 +3963,16 @@ fn target_documents(targets: Vec<AgentTargetDocument>) -> Vec<(Collection, serde
 async fn authorize_session_targets(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     targets: Vec<AgentTargetDocument>,
 ) {
     configure_agent_tools(
         node,
         node_did,
-        agent_id,
+        agent_did,
         None,
         Tools {
-            tools_id: format!("{agent_id}-session-tools"),
+            tools_id: format!("{agent_did}-session-tools"),
             node_did: node_did.to_string(),
             agents: Some(session_targets_group(&targets)),
             ..Default::default()
@@ -3953,7 +3985,8 @@ async fn authorize_session_targets(
 async fn configure_standard_backgrounding_tools(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
-    parent_agent_id: &str,
+    parent_agent_did: &str,
+    child_agent_did: &str,
     workspace: &Path,
 ) {
     let targets = vec![AgentTargetDocument {
@@ -3962,16 +3995,16 @@ async fn configure_standard_backgrounding_tools(
             node_did,
             BACKGROUND_WORKER_TARGET_NAME,
             node_did,
-            BACKGROUND_WORKER_AGENT_ID,
+            child_agent_did,
         )
     }];
     configure_agent_tools(
         node,
         node_did,
-        parent_agent_id,
+        parent_agent_did,
         None,
         Tools {
-            tools_id: format!("{parent_agent_id}-standard-background-tools"),
+            tools_id: format!("{parent_agent_did}-standard-background-tools"),
             node_did: node_did.to_string(),
             host: Some(HostTools {
                 root: Some(workspace.display().to_string()),
@@ -3992,10 +4025,10 @@ async fn configure_standard_backgrounding_tools(
     configure_agent_tools(
         node,
         node_did,
-        BACKGROUND_WORKER_AGENT_ID,
+        child_agent_did,
         None,
         Tools {
-            tools_id: format!("{BACKGROUND_WORKER_AGENT_ID}-foreground-bash-tools"),
+            tools_id: format!("{child_agent_did}-foreground-bash-tools"),
             node_did: node_did.to_string(),
             host: Some(HostTools {
                 root: Some(workspace.display().to_string()),
@@ -4039,7 +4072,7 @@ struct CausedRequestRow {
     session_id: String,
     node_did: String,
     requester_did: Option<String>,
-    agent_id: String,
+    agent_did: String,
     lifecycle_state: Option<RequestLifecycleState>,
     admission_kind: Option<String>,
     request_hop: Option<i64>,
@@ -4049,7 +4082,7 @@ struct CausedRequestRow {
     caused_by_parent_tool_call_doc_id: Option<String>,
 }
 
-const CAUSED_REQUEST_FIELDS: &str = "request_id session_id node_did requester_did agent_id \
+const CAUSED_REQUEST_FIELDS: &str = "request_id session_id node_did requester_did agent_did \
     lifecycle_state admission_kind request_hop caused_by_parent_request_id \
     caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id";
 

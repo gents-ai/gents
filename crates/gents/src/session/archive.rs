@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::session::{AgentSession, SessionArchiveOutcome, SessionArchiveReceipt};
 use std::sync::Arc;
 
@@ -83,11 +83,13 @@ pub async fn set_session_archived_on(
     let now = chrono::Utc::now().to_rfc3339();
     match access {
         ConfigAccess::Local(local) => {
-            ConfigAccess::transact_local_write(
-                local.node(),
-                Some(::identity::Did::new(actor.did())?),
-                "session.archive",
-                |txn| {
+            let selected = ConfigAccess::local_with_optional_agent_signer(
+                Arc::clone(local.node()),
+                ::identity::Did::new(actor.did())?,
+                actor.managed_agent_signer(),
+            )?;
+            selected
+                .transact_write("session.archive", |txn| {
                     Box::pin(apply_in_txn(
                         txn,
                         node_did,
@@ -96,9 +98,8 @@ pub async fn set_session_archived_on(
                         archived,
                         &now,
                     ))
-                },
-            )
-            .await
+                })
+                .await
         }
         ConfigAccess::Graphql(_) => {
             access

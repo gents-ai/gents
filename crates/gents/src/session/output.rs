@@ -129,7 +129,7 @@ where
     (output, queries.load(std::sync::atomic::Ordering::Relaxed))
 }
 
-mod access;
+pub(in crate::session) mod access;
 mod headers;
 pub(super) mod reader;
 mod reconstruct;

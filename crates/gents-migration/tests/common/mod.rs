@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
 use crypto::Key;
-use defra_core::signing::{SigningConfig, SigningKeyType};
-use defra_node::EmbeddedNode;
+use defra_core::{
+    signing::{SigningConfig, SigningKeyType},
+    RequestContext,
+};
+use defra_node::Node as EmbeddedNode;
 use identity::{Identity as _, RawIdentity};
 
 pub fn node_identity() -> String {
@@ -33,17 +36,69 @@ pub async fn fresh_node() -> Arc<EmbeddedNode> {
         .build()
         .await
         .expect("build node");
-    let policy = node
-        .add_dac_policy_with_counter(
-            node.node_identity_did().unwrap(),
+    for (policy, expected) in [
+        (
             gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY,
-            0,
-        )
-        .await
-        .expect("file image policy");
-    assert_eq!(policy, gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID);
+            gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID,
+        ),
+        (
+            gents_protocol::schemas::CLIENT_JOURNAL_POLICY,
+            gents_protocol::schemas::CLIENT_JOURNAL_POLICY_ID,
+        ),
+        (
+            gents_protocol::schemas::MAILBOX_POLICY,
+            gents_protocol::schemas::MAILBOX_POLICY_ID,
+        ),
+        (
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+        ),
+    ] {
+        let actual = node
+            .add_dac_policy_with_counter_as(&node_context(&node), policy, 0)
+            .await
+            .expect("fixture policy");
+        assert_eq!(actual, expected);
+    }
     std::mem::forget(dir);
     Arc::new(node)
+}
+
+#[allow(dead_code)]
+pub fn node_context(node: &EmbeddedNode) -> RequestContext {
+    RequestContext::default().with_identity(node.node_identity_did().map(str::to_owned))
+}
+
+#[allow(dead_code)]
+pub async fn patch_collection(
+    node: &EmbeddedNode,
+    collection: &str,
+    patch: &str,
+) -> schema::CollectionVersion {
+    let before = node
+        .get_all_collection_versions()
+        .await
+        .expect("versions before patch");
+    node.patch_collection_as(&node_context(node), patch, None)
+        .await
+        .expect("patch collection");
+    let after = node
+        .get_all_collection_versions()
+        .await
+        .expect("versions after patch");
+    after
+        .into_iter()
+        .find(|version| {
+            version.name == collection
+                && !before
+                    .iter()
+                    .any(|old| old.version_id == version.version_id)
+        })
+        .unwrap_or_else(|| {
+            node.get_collection(collection)
+                .expect("collection lookup")
+                .expect("collection exists")
+        })
 }
 
 /// Versioned steps a fresh store takes to reach the canonical versions of collections

@@ -20,7 +20,7 @@ async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes()
         let mutation = format!(
             r#"mutation {{ create_AgentSession(input: {{
                     node_did: "{}", requester_did: "{}", session_id: "{}",
-                    agent_id: "shared-agent", created_at: "2026-09-01T00:00:00Z"
+                    agent_did: "shared-agent", created_at: "2026-09-01T00:00:00Z"
                 }}) {{ _docID }} }}"#,
             escape_graphql_string(identity.did()),
             escape_graphql_string(identity.did()),
@@ -54,7 +54,11 @@ async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes()
         .await
         .unwrap();
     }
-    let tool = SessionHistoryTool::new(node, owner.did());
+    let tool = SessionHistoryTool::new(
+        node,
+        owner.did(),
+        identity::Did::new((owner.did()).to_string()).unwrap(),
+    );
     let list = || async {
         let output = Tool::call(
             &tool,
@@ -125,6 +129,10 @@ async fn session_history_snapshot_reports_recent_agent_sessions() {
     let tool = SessionHistoryTool::new(
         node,
         "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+        identity::Did::new(
+            ("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7").to_string(),
+        )
+        .unwrap(),
     );
 
     let snapshot = load_session_history_snapshot(&tool.node, &tool.node_did, Some(2))
@@ -155,7 +163,7 @@ async fn session_history_snapshot_reports_recent_agent_sessions() {
         Some("OpenAI Agent")
     );
     assert_eq!(session_a.tags, vec!["review"]);
-    assert_eq!(session_a.agent_id.as_deref(), Some("agent-a"));
+    assert_eq!(session_a.agent_did.as_deref(), Some("agent-a"));
     assert_eq!(session_a.closed_at, None);
     assert_eq!(
         session_a.created_at.as_deref(),

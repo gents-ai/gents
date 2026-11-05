@@ -17,7 +17,7 @@ async fn cancelled_submission_cannot_capture_an_exact_key_replacement() {
     .await;
     let manager = Arc::new(TurnManager::new(
         node.clone(),
-        test_config(graphql, &node_did),
+        test_config(graphql, &node_did, &node).await,
     ));
     let engine = test_engine(node.clone());
     let (_buffer, sender) = buffer_sender();
@@ -131,7 +131,7 @@ async fn failed_submission_cannot_remove_an_exact_key_replacement() {
     .await;
     let manager = Arc::new(TurnManager::new(
         node.clone(),
-        test_config(graphql, &node_did),
+        test_config(graphql, &node_did, &node).await,
     ));
     let engine = test_engine(node.clone());
     let (_buffer, sender) = buffer_sender();
@@ -239,8 +239,8 @@ async fn failed_submission_cannot_remove_an_exact_key_replacement() {
 async fn cancel_selection_cannot_drain_an_exact_key_replacement() {
     let (_tempdir, node, node_did) = test_node().await;
     let manager = Arc::new(TurnManager::new(
-        node,
-        test_config("http://127.0.0.1:1/".to_string(), &node_did),
+        node.clone(),
+        test_config("http://127.0.0.1:1/".to_string(), &node_did, &node).await,
     ));
     let key = ("session-reuse".to_string(), "same-prompt".to_string());
     let old_generation = Arc::new(Mutex::new(CancelBeforeIdLatch::default()));

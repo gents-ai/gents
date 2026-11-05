@@ -318,7 +318,7 @@ fn claude_sse_for_blocks(blocks: &[serde_json::Value]) -> String {
 }
 
 struct ClaudeFixtureRun {
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     lifecycle: crate::request::lifecycle::RequestLifecycle,
     collected: CollectedScriptedStream,
     request_commit_cid: String,
@@ -509,7 +509,7 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
 }
 
 async fn captured_claude_sends(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     request_doc_id: &str,
     request_commit_cid: &str,
     scope_kind: gents_protocol::rendered_request::CaptureScopeKind,

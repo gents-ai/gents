@@ -150,7 +150,7 @@ fn pre_inference_agent() -> Arc<ResolvedAgent> {
 }
 
 async fn seed_titled_session(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     request: &AgentRequest,
     agent_config: &ResolvedAgent,
 ) -> anyhow::Result<()> {
@@ -169,7 +169,7 @@ async fn seed_titled_session(
                     txn,
                     &request.session_id,
                     &request.node_did,
-                    &agent_config.agent_id,
+                    &agent_config.agent_did,
                     request.requester_did.as_deref(),
                     Some(title),
                     None,
@@ -185,7 +185,7 @@ async fn seed_titled_session(
 }
 
 async fn request_terminal_row(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     request_doc_id: &str,
 ) -> anyhow::Result<serde_json::Value> {
     use anyhow::Context;
@@ -220,7 +220,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
     let identity = agent_config.node_identity().clone();
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -320,7 +320,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         "no provider call may run in the pre-inference window"
     );
     capture.assert_source("preparation");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -332,7 +332,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     let identity = agent_config.node_identity().clone();
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -380,7 +380,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
             .expect("a created request carries a canonical execution origin");
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         agent_config.node_did(),
         request.clone(),
         agent_config.deadline_duration.as_secs(),
@@ -499,7 +499,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         0,
         "no provider call may run before execution begins"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -511,7 +511,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
     let identity = agent_config.node_identity().clone();
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -599,7 +599,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
     assert!(!row["terminalized_at"].is_null(), "{row}");
     assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
     capture.assert_source("mid_flight");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[cfg(unix)]

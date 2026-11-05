@@ -5,7 +5,7 @@ export function acceptedChat(request: ChatSendRequest): ChatSendResult {
     nodeDid: request.nodeDid,
     requestId: request.requestId!,
     sessionId: request.sessionId!,
-    agentId: request.agentId ?? null,
+    agentDid: request.agentDid ?? null,
   };
   return {
     ...result,

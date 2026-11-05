@@ -1,10 +1,10 @@
 use super::AwaitMode;
 use crate::store::identity::NodeIdentity;
 use crate::tools::call::lifecycle::admission_fixture::{
-    claimed_signed_request, complete_child, materialize_session_message,
+    claimed_signed_request, complete_child_managed, materialize_session_message,
     publish_accepted_on_claimed_request,
 };
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use std::sync::Arc;
 
 async fn exec(node: &EmbeddedNode, statement: &str) {
@@ -99,6 +99,7 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
     assert_eq!(pre.1, 0, "{} pre coalesced count drifted", case.name);
 
     let mut children = Vec::new();
+    let mut agent_signer = None;
     for turn in 0..2 {
         let tool_id = format!("queue-deadline-coalesce-{}-{turn}", uuid::Uuid::new_v4());
         let mut row = publish_accepted_on_claimed_request(
@@ -114,6 +115,7 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
         )
         .await
         .unwrap();
+        agent_signer = row.access().unwrap().managed_agent_signer();
         let receipt = materialize_session_message(
             &node,
             &parent,
@@ -133,19 +135,29 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
     }
     let escaped_parent_doc = crate::store::graphql::escape_graphql_string(&parent_doc_id);
     exec(node.as_ref(), &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_parent_doc}" }} }}, input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#)).await;
+    let agent_signer = agent_signer.expect("session-message fixture managed signer");
+    let access = crate::ConfigAccess::local_with_agent_signer(
+        node.clone(),
+        identity::Did::new(agent_signer.did()).unwrap(),
+        agent_signer.clone(),
+    )
+    .unwrap();
     for (index, caused_request_id) in children.iter().enumerate() {
-        complete_child(
+        complete_child_managed(
             &node,
             caused_request_id,
             node_did,
             &format!("child {} complete", index + 1),
+            &agent_signer,
         )
         .await;
     }
     let settled =
-        crate::tools::background::completion::settle_running_session_message_rows(&node, node_did)
-            .await
-            .unwrap();
+        crate::tools::background::completion::settle_running_session_message_rows_with_access(
+            &node, &access, node_did,
+        )
+        .await
+        .unwrap();
     assert_eq!(settled, 2);
     let post = queue_snapshot(node.as_ref(), &session_id, queue_key).await;
     assert!(
@@ -163,6 +175,6 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
         "{} coalesced count drifted",
         case.name
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(path).unwrap();
 }

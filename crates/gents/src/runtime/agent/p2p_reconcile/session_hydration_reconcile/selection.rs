@@ -1,8 +1,11 @@
 use super::*;
 use crate::session::origin::SessionScope;
-use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+#[cfg(test)]
+use crate::store::config_client::ConfigAccess;
+use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::required_rows;
 
+#[cfg(test)]
 pub(super) async fn load_hydration_selection(
     node: &Arc<EmbeddedNode>,
     request: &HydrationRequest,
@@ -16,6 +19,7 @@ pub(super) async fn load_hydration_selection(
 /// All origin, segment and effect dependencies use the caller's same read
 /// snapshot. Inventory enumeration must additionally establish bounded complete
 /// membership and current projection owners before certifying coverage.
+#[cfg(test)]
 pub(super) async fn load_hydration_selection_in_txn(
     txn: &ConfigApplyTxn<'_>,
     request: &HydrationRequest,
@@ -214,18 +218,8 @@ pub(super) async fn load_canonical_selection_in_txn(
             session_id: row.session_id.clone(),
         });
     }
-    let authorized_reference_closure = documents
-        .iter()
-        .filter(|document| document.session_id != scope.session_id)
-        .map(|document| SessionHydrationDocumentKey {
-            collection: document.collection,
-            doc_id: document.doc_id.clone(),
-        })
-        .collect();
-
     Ok(HydrationSelection {
         documents,
-        authorized_reference_closure,
         publications: canonical.publications,
         headers: root_headers,
         output_segments,

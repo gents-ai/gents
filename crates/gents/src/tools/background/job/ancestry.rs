@@ -101,7 +101,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use serde_json::{json, Value};
 
     use super::{started_by_job, ANCESTRY_QUERIES};
@@ -144,7 +144,7 @@ mod tests {
             "node_did": "owner",
             "requester_did": null,
             "session_id": session_id,
-            "agent_id": "configured",
+            "agent_did": "configured",
             "lifecycle_state": "processing",
         });
         if let Some(parent) = parent_request {
@@ -247,7 +247,7 @@ mod tests {
         let chain = chain().await;
         let access = ConfigAccess::local(chain.node.clone());
         assert!(started_by_job(&access, &chain.child, 1).await.unwrap());
-        chain.node.shutdown().await;
+        chain.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -255,7 +255,7 @@ mod tests {
         let chain = chain().await;
         let access = ConfigAccess::local(chain.node.clone());
         assert!(started_by_job(&access, &chain.grand, 2).await.unwrap());
-        chain.node.shutdown().await;
+        chain.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -266,7 +266,7 @@ mod tests {
             .await
             .unwrap());
         assert!(!started_by_job(&access, &chain.plain_root, 1).await.unwrap());
-        chain.node.shutdown().await;
+        chain.node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -282,6 +282,6 @@ mod tests {
         let (miss, miss_queries) = counted(&access, &chain.plain_child, 3).await;
         assert!(!miss.unwrap());
         assert!(miss_queries <= 2 * (3 + 1), "{miss_queries}");
-        chain.node.shutdown().await;
+        chain.node.shutdown().await.expect("shut down test node");
     }
 }

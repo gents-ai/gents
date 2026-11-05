@@ -1,3 +1,4 @@
+import type { AgentIdentityBinding } from "../generated/AgentIdentityBinding.js";
 import type { MailboxItemObservation } from "../generated/MailboxItemObservation.js";
 import type { MailboxItemObservationRequest } from "../generated/MailboxItemObservationRequest.js";
 import type { RequestAttachment } from "../generated/RequestAttachment.js";
@@ -219,7 +220,7 @@ export type DesktopApiAdapter = {
   ) => Promise<RequestTimelineView>;
   explainToolSurface: (
     nodeDid: string,
-    agentId: string,
+    agentDid: string,
   ) => Promise<ToolSurfaceExplanationView>;
   fetchNetworkStatus: () => Promise<NetworkStatusView>;
   fetchSessionContextDetails?: (
@@ -234,7 +235,7 @@ export type DesktopApiAdapter = {
       beforeItemKey?: string | null;
     },
   ) => Promise<DesktopSessionSnapshot | null>;
-  retrySessionHydration: (
+  reloadSession: (
     sessionId: string,
     nodeDid?: string | null,
   ) => Promise<void>;
@@ -311,6 +312,7 @@ export type DesktopApiAdapter = {
   setDefaultAgent: (
     request: DefaultAgentSetRequest,
   ) => Promise<DesktopClientSnapshot>;
+  provisionAgentIdentity: (nodeDid: string) => Promise<AgentIdentityBinding>;
   saveAgentConfig: (
     request: AgentSaveRequest,
   ) => Promise<DesktopClientSnapshot>;

@@ -259,8 +259,12 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
     let next = crate::pack::archive::PackArchive::from_bytes(&packed).unwrap();
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
-    access.write("test.dangling_agent", r#"mutation { create_Agent(input: {agent_id: "broken", node_did: "did:test:owner", context_id: "missing", inference_profile_id: "profile"}) { _docID } }"#).await.unwrap();
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(node.node_identity_did().unwrap()).unwrap(),
+    );
+    access.write("test.pack.node", r#"mutation { create_Node(input: {node_did: "did:test:owner", enabled: true}) { _docID } }"#).await.unwrap();
+    access.write("test.dangling_agent", r#"mutation { create_Agent(input: {agent_did: "broken", node_did: "did:test:owner", context_id: "missing", inference_profile_id: "profile"}) { _docID } }"#).await.unwrap();
     let notify_access = access.clone();
     let notify_home = home.path().to_owned();
     let original_digest = old_plugin.digest.clone();
@@ -298,5 +302,5 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
         crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap(),
         old_plugin
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

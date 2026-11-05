@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
 use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::row::AgentRequestRow;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::config_client::ConfigRead;
+use crate::store::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditUsageTokens {
@@ -73,13 +73,12 @@ fn nonempty<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str> {
         .with_context(|| format!("audit usage has no {field}"))
 }
 
-fn required_rows<T>(response: &defra_node::QueryResponse, field: &str) -> Result<Vec<T>>
+fn required_rows<T>(response: &serde_json::Value, field: &str) -> Result<Vec<T>>
 where
     T: DeserializeOwned,
 {
     let value = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get(field))
         .with_context(|| format!("audit usage query omitted {field} rows"))?;
     serde_json::from_value(value.clone())
@@ -297,10 +296,10 @@ pub(crate) async fn load_session_goal_usage(
 /// An auxiliary call enters the parent-inclusive total only through its
 /// historically verified signed parent link.
 pub async fn load_parent_inclusive_audit_usage(
-    node: &EmbeddedNode,
+    access: &dyn ConfigRead,
     exact_parent: &AgentRequestRow,
 ) -> Result<ParentAuditUsage> {
-    let catalog = load_parent_catalog(node, exact_parent).await?;
+    let catalog = load_parent_catalog(access, exact_parent).await?;
     project_catalog(
         &catalog.parent_doc_id,
         &catalog.parent_id,
@@ -310,7 +309,7 @@ pub async fn load_parent_inclusive_audit_usage(
 }
 
 pub(crate) async fn load_parent_inclusive_budget_usage(
-    node: &EmbeddedNode,
+    access: &dyn ConfigRead,
     request: &crate::request::watcher::AgentRequest,
 ) -> Result<u64> {
     let scope = AgentRequestRow {
@@ -318,11 +317,11 @@ pub(crate) async fn load_parent_inclusive_budget_usage(
         request_id: request.request_id.clone(),
         node_did: Some(request.node_did.clone()),
         requester_did: request.requester_did.clone(),
-        agent_id: Some(request.agent_id.clone()),
+        agent_did: Some(request.agent_did.clone()),
         session_id: Some(request.session_id.clone()),
         ..Default::default()
     };
-    let catalog = load_parent_catalog(node, &scope).await?;
+    let catalog = load_parent_catalog(access, &scope).await?;
     anyhow::ensure!(
         catalog.max_total_tokens == request.max_total_tokens,
         "budget restart disagrees with the execution owner's pinned limit"
@@ -331,7 +330,7 @@ pub(crate) async fn load_parent_inclusive_budget_usage(
 }
 
 async fn load_parent_catalog(
-    node: &EmbeddedNode,
+    access: &dyn ConfigRead,
     exact_parent: &AgentRequestRow,
 ) -> Result<ParentUsageCatalog> {
     let parent_doc_id = nonempty(exact_parent.doc_id.as_deref(), "parent physical request")?;
@@ -339,13 +338,11 @@ async fn load_parent_catalog(
     let agent = nonempty(exact_parent.node_did.as_deref(), "parent agent")?;
     let session = nonempty(exact_parent.session_id.as_deref(), "parent session")?;
     let parent_doc = escape_graphql_string(parent_doc_id);
-    let response = graphql_with_transaction_retry(
-        node,
+    let response = access.execute_read(
         &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{parent_doc}" }} }}, limit: 2) {{ {} }} }}"#,
             crate::request::admission::SIGNED_REQUEST_FIELDS
         ),
-        "load audit usage parent receipt",
     )
     .await?;
     let parents: Vec<AgentRequestRow> = required_rows(&response, "AgentRequest")?;
@@ -360,19 +357,17 @@ async fn load_parent_catalog(
             && parent.node_did.as_deref() == Some(agent)
             && parent.session_id.as_deref() == Some(session)
             && parent.requester_did == exact_parent.requester_did
-            && parent.agent_id == exact_parent.agent_id
+            && parent.agent_did == exact_parent.agent_did
             && parent.purpose == Some(RequestPurpose::Normal),
         "audit usage parent crossed its exact normal request scope"
     );
     crate::request::admission::verify_request_receipt_signature(parent)?;
 
-    let response = graphql_with_transaction_retry(
-        node,
+    let response = access.execute_read(
         &format!(
             r#"{{ AgentRequest(filter: {{ caused_by_parent_request_doc_id: {{ _eq: "{parent_doc}" }}, purpose: {{ _in: ["title-audit", "access-review"] }} }}) {{ {} }} }}"#,
             crate::request::admission::SIGNED_REQUEST_FIELDS
         ),
-        "load auxiliary audit usage receipts",
     )
     .await?;
     let auxiliaries: Vec<AgentRequestRow> = required_rows(&response, "AgentRequest")?;
@@ -394,17 +389,14 @@ async fn load_parent_catalog(
         .map(|doc| format!("\"{}\"", escape_graphql_string(doc)))
         .collect::<Vec<_>>()
         .join(", ");
-    let response = graphql_with_transaction_retry(
-        node,
+    let response = access.execute_read(
         &format!(
             r#"{{ InferenceCall(filter: {{ request_doc_id: {{ _in: [{docs}] }} }}) {{ _docID node_did call_id request_doc_id request_id backend_id call_state ended_at prompt_tokens completion_tokens cached_input_tokens cache_creation_input_tokens reasoning_output_tokens provider_total_tokens usage_completeness }} }}"#
         ),
-        "load exact parent and auxiliary inference usage",
     )
     .await?;
     let raw_calls = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("InferenceCall"))
         .and_then(serde_json::Value::as_array)
         .context("audit usage query omitted InferenceCall rows")?;

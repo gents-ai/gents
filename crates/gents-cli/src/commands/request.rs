@@ -5,9 +5,7 @@ use gents_protocol::request_input::RequestInput;
 use serde_json::json;
 
 use crate::cli::args::{RequestCommand, RequestResendArgs, RequestSubmitArgs};
-use crate::request_helpers::{
-    ensure_local_request_signer, fetch_request_view, parse_valid_until_flag, RequestOutputEnvelope,
-};
+use crate::request_helpers::{fetch_request_view, parse_valid_until_flag, RequestOutputEnvelope};
 use crate::{
     create_agent_request, print_json, resolve_graphql_endpoint, resolve_node_did,
     resolve_request_content, resolve_request_id, wait_for_terminal_response,
@@ -61,7 +59,6 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
     let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let content = resolve_request_content(args.content.as_deref(), args.content_file.as_deref())?;
     let valid_until = parse_valid_until_flag(args.valid_until.as_deref())?;
-    ensure_local_request_signer(args.home.as_deref(), &node_did)?;
     let session_id = args
         .session_id
         .clone()
@@ -86,7 +83,7 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
         &node_did,
         &content,
         Some(&session_id),
-        args.agent_id.as_deref(),
+        args.agent_did.as_deref(),
         RequestSubmitOptions {
             input: Some(input),
             valid_until,
@@ -98,7 +95,7 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
         "request_id": submitted.request_id,
         "session_id": submitted.session_id,
         "node_did": submitted.node_did,
-        "agent_id": submitted.agent_id,
+        "agent_did": submitted.agent_did,
         "input": submitted.input,
     });
     if args.no_wait {
@@ -156,13 +153,12 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
         .as_deref()
         .context("stale request has no _docID")?;
     let valid_until = Some(chrono::Utc::now() + chrono::Duration::minutes(5));
-    ensure_local_request_signer(args.home.as_deref(), stale_node_did)?;
     let submitted = create_agent_request(
         &graphql,
         stale_node_did,
         stale_content,
         None,
-        stale.agent_id.as_deref(),
+        stale.agent_did.as_deref(),
         RequestSubmitOptions {
             caused_by_source_doc_id: None,
             input: stale.input.as_ref().map(RequestInput::for_fresh_session),
@@ -178,7 +174,7 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
         "request_id": submitted.request_id,
         "session_id": submitted.session_id,
         "node_did": submitted.node_did,
-        "agent_id": submitted.agent_id,
+        "agent_did": submitted.agent_did,
         "retry_parent_request": stale_id,
         "retry_root_request": stale.retry_root_request,
     });

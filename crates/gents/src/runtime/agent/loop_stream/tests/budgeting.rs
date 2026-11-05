@@ -510,6 +510,7 @@ async fn provider_view_repair_is_not_reported_as_a_durable_compaction() {
 /// `commitRequestLocalAfterRebuild` for the matching rebuilt result.
 #[tokio::test]
 async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fits() {
+    use crate::store::identity::NodeIdentity as _;
     let cases = crate::lean_vocab_test::lean_compaction_projection_join_cases();
     let committed = |result: &str| {
         cases
@@ -526,14 +527,27 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
         let expected_rows = committed(rebuilt_result);
         let data_path =
             std::env::temp_dir().join(format!("staged-turn-reduction-{}", uuid::Uuid::new_v4()));
+        let identity_home = tempfile::tempdir().unwrap();
+        let root = crate::store::identity::KeyIdentity::load_or_create(
+            identity_home.path().join("node.key"),
+            None,
+        )
+        .unwrap();
+        let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
+        let agent = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
         let node = Arc::new(
             crate::test_support::node_builder()
                 .data_path(&data_path)
+                .with_node_identity_did(root.did())
                 .build()
                 .await
                 .unwrap(),
         );
         ensure_runtime_schemas(&node).await.unwrap();
+        let root_did = crate::store::graphql::escape_graphql_string(root.did());
+        let agent_did = crate::store::graphql::escape_graphql_string(agent.did());
+        crate::ConfigAccess::local_managed_agent(node.clone(), agent.did().parse().unwrap(), agent.as_ref()).unwrap()
+            .write("test.reduction.session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "session-3283", node_did: "{root_did}", agent_did: "{agent_did}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#)).await.unwrap();
         let request_doc_id = "request-doc-3283";
         let model = ScriptedModel::new(vec![
             RawStreamingChoice::Message("done".to_string()),
@@ -544,8 +558,14 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
         loop_config.context_window = 6_500;
         loop_config.compaction_threshold = 0.25;
         let compaction_node = node.clone();
+        let compaction_agent_did = agent.did().to_owned();
+        let compaction_node_did = root.did().to_owned();
+        let compaction_signer = agent.managed_agent_signer().unwrap();
         loop_config.turn_compactor = Some(Arc::new(move |_| {
             let node = compaction_node.clone();
+            let agent_did = compaction_agent_did.clone();
+            let node_did = compaction_node_did.clone();
+            let signer = compaction_signer.clone();
             let retained = retained.clone();
             Box::pin(async move {
                 let compacted_prefix = [Message::user("x".repeat(8_000))];
@@ -571,7 +591,8 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
                 };
                 crate::turn::provider_context_reduction::stage(
                     crate::turn::provider_context_reduction::NewProviderContextReduction {
-                        node_did: "did:test:test",
+                        agent_did: &agent_did,
+                        node_did: &node_did,
                         requester_did: None,
                         session_id: "session-3283",
                         request_id: "request-3283",
@@ -591,7 +612,7 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
                         compacted_tokens: 10,
                     },
                 )
-                .and_then(|staged| staged.into_turn_outcome(node))
+                .and_then(|staged| staged.into_turn_outcome(node, signer))
                 .map_err(|error| TurnCompactionError::Compactor(error.into()))
             })
         }));
@@ -620,7 +641,7 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
             }
         }
 
-        let rows = crate::turn::provider_context_reduction::load_for_request(&node, request_doc_id)
+        let rows = crate::turn::provider_context_reduction::load_for_request(&crate::store::config_client::ConfigAccess::local(node.clone()), request_doc_id)
             .await
             .unwrap();
         assert_eq!(

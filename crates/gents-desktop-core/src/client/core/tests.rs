@@ -1128,7 +1128,7 @@ async fn failed_selection_refresh_schedules_scoped_observer_recovery() {
     observer.shutdown().await;
     let _ = core.store.take_resync_requests();
 
-    core.node.shutdown().await;
+    core.node.shutdown().await.unwrap();
     let error = core
         .refresh_node("did:test:selection-recovery")
         .await
@@ -1224,7 +1224,7 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         admin_did: runtime_did.into(),
         server_peer: "peer".into(),
         server_ticket: "ticket".into(),
-        owner_agent: runtime_did.into(),
+        owner_node_did: runtime_did.into(),
         profile: "client".into(),
         schema_fingerprint: gents_protocol::enrollment::enrollment_schema_fingerprint(),
         issued_at: "2026-09-24T00:00:00Z".into(),
@@ -1502,7 +1502,7 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
                 r#"mutation {{ create_AgentRequest(input: {{
                     request_id: "stale-seed", session_id: "stale-session",
                     node_did: "{escaped_owner}", requester_did: "{escaped_requester}",
-                    agent_id: "agent", content: "resend directly", purpose: "normal",
+                    agent_did: "agent", content: "resend directly", purpose: "normal",
                     lifecycle_state: "dead", failure_reason: "Stale", created_at: "{created_at}"
                 }}) {{ _docID }} }}"#
             ),
@@ -1512,7 +1512,7 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
         session_id: "stale-session".into(),
         node_did: owner.did().into(),
         requester_did: Some(core.node_identity().did().into()),
-        agent_id: "agent".into(),
+        agent_did: "agent".into(),
         created_at: chrono::Utc::now().to_rfc3339(),
         closed_at: None,
         archived_at: None,
@@ -1624,91 +1624,6 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
     Ok(())
 }
 
-/// A session the node has not returned yet is a delivery state from the
-/// local request, its replicated claim and the pairing, never a read failure;
-/// the canonical row, once here, wins.
-#[tokio::test]
-async fn a_missing_session_row_reads_as_the_delivery_state_of_its_signals() -> anyhow::Result<()> {
-    let tmp = tempfile::tempdir()?;
-    let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(tmp.path().to_path_buf()),
-            ClientCoreOptions::local_only(),
-        )
-        .await?,
-    );
-    let observer = core.observer.lock().await.take().expect("observer");
-    observer.shutdown().await;
-    let node = core.node_identity.did().to_owned();
-    let access = gents::ConfigAccess::local(core.node_arc());
-    let refresh_code = |session: &'static str| {
-        let core = Arc::clone(&core);
-        let node = node.clone();
-        async move {
-            let error = core
-                .refresh_local_request(&node, session, Some("req-awaiting"), None, &[])
-                .await
-                .expect_err("no canonical row yet");
-            let error = error
-                .downcast_ref::<crate::error::BridgeError>()
-                .cloned()
-                .expect("typed delivery state");
-            assert_eq!(error.endpoint.as_deref(), Some(node.as_str()));
-            error.code
-        }
-    };
-
-    assert_eq!(
-        refresh_code("awaiting").await,
-        crate::error::BridgeErrorCode::NotFound
-    );
-    let now = chrono::Utc::now().to_rfc3339();
-    let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
-        "request_id":"req-awaiting","session_id":"awaiting","node_did":node,
-        "agent_id":"agent","purpose":"normal","content":"hello",
-        "lifecycle_state":"pending","created_at":now,
-    }))?;
-    access
-        .write(
-            "test.awaiting.request",
-            &format!("mutation {{ create_AgentRequest(input:{input}) {{_docID}} }}"),
-        )
-        .await?;
-    assert_eq!(
-        refresh_code("awaiting").await,
-        crate::error::BridgeErrorCode::SessionNotConnected,
-        "no pairing to the node is listed"
-    );
-    access
-        .write(
-            "test.awaiting.claim",
-            &format!(
-                "mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: \"req-awaiting\" }} }}, input: {{ claimed_at: \"{now}\" }}) {{ _docID }} }}"
-            ),
-        )
-        .await?;
-    assert_eq!(
-        refresh_code("awaiting").await,
-        crate::error::BridgeErrorCode::SessionAccepted
-    );
-    let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
-        "session_id":"awaiting","node_did":node,"agent_id":"agent","created_at":now,
-    }))?;
-    access
-        .write(
-            "test.awaiting.session",
-            &format!("mutation {{ create_AgentSession(input:{input}) {{_docID}} }}"),
-        )
-        .await?;
-    core.refresh_node(&node).await?;
-    let visible = core
-        .refresh_local_request(&node, "awaiting", Some("req-awaiting"), None, &[])
-        .await?;
-    assert!(visible.is_some(), "the canonical row wins");
-    core.shutdown().await?;
-    Ok(())
-}
-
 #[tokio::test]
 async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Result<()> {
     let tmp = tempfile::tempdir()?;
@@ -1728,7 +1643,7 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
     for id in ["older", "latest"] {
         let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
             "request_id":id,"session_id":"terminal-page","node_did":owner,
-            "agent_id":"agent","purpose":"normal","content":"fixture",
+            "agent_did":"agent","purpose":"normal","content":"fixture",
             "lifecycle_state":"completed","created_at":now,
         }))?;
         let result = access
@@ -1743,7 +1658,7 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
         )?);
     }
     let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
-        "session_id":"terminal-page","node_did":owner,"agent_id":"agent",
+        "session_id":"terminal-page","node_did":owner,"agent_did":"agent",
         "created_at":now,"observation":{"last_activity_at":now,"latest_request":{
             "request_doc_id":docs[1],"request_id":"latest","lifecycle_state":"completed"
         }}
@@ -1776,138 +1691,6 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
         .request_row_by_doc_id(&docs[0])
         .is_some());
     core.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn send_into_a_node_owned_session_is_refused_before_it_is_written() -> anyhow::Result<()> {
-    use gents::NodeIdentity;
-    use wiremock::{
-        matchers::{body_string_contains, method, path},
-        Mock, MockServer, ResponseTemplate,
-    };
-    let temp = tempfile::tempdir()?;
-    let home = temp.path().join("runtime");
-    std::fs::create_dir(&home)?;
-    let key = home.join("node.key");
-    let owner = gents::store::identity::KeyIdentity::load_or_create(&key, None)?;
-    let server = MockServer::start().await;
-    let graphql = format!("{}/api/v0/graphql", server.uri());
-    std::fs::write(
-        home.join("init.json"),
-        serde_json::to_vec(&serde_json::json!({
-            "node_name":"owner", "node_did":owner.did(), "key_path":key,
-        }))?,
-    )?;
-    std::fs::write(
-        home.join("runtime.json"),
-        serde_json::to_vec(&serde_json::json!({
-            "node_name":"owner", "node_did":owner.did(), "graphql":graphql,
-            "p2p_transport":"iroh", "p2p_peer_id":"owner-peer",
-        }))?,
-    )?;
-    Mock::given(method("POST"))
-        .and(path("/api/v0/graphql"))
-        .and(body_string_contains("create_AgentRequest"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "data":{"create_AgentRequest":[{"_docID":"owner-request"}]}
-        })))
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/api/v0/tx"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":17})))
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/api/v0/tx/17"))
-        .respond_with(ResponseTemplate::new(200))
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/api/v0/graphql"))
-        .and(body_string_contains("AgentSession"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "data":{"AgentSession":[]}
-        })))
-        .mount(&server)
-        .await;
-    let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(temp.path().join("client")),
-            ClientCoreOptions::local_simulated_route(),
-        )
-        .await?,
-    );
-    core.add_managed_enrollment_peer_for_test(owner.did(), &graphql, home.to_str().unwrap(), 1)
-        .await?;
-    let session = |session_id: &str, requester: &str, started_by: Option<&str>| {
-        gents_protocol::session::AgentSession {
-            session_id: session_id.into(),
-            node_did: owner.did().to_string(),
-            requester_did: Some(requester.to_string()),
-            agent_id: "agent".into(),
-            created_at: "2026-10-22T00:00:00Z".into(),
-            closed_at: None,
-            archived_at: None,
-            archive_revision: 0,
-            stopped_at: None,
-            title: None,
-            tags: Vec::new(),
-            provenance: started_by.map(|parent| gents_protocol::session::SessionProvenance {
-                parent_request_doc_id: Some(parent.to_string()),
-                ..Default::default()
-            }),
-            observation: None,
-        }
-    };
-    let sender = core.node_identity().did().to_string();
-    core.store()
-        .merge_snapshot(crate::client::ClientStore::from_rows(
-            crate::client::store::ClientStoreRows {
-                sessions: vec![
-                    session("worker", owner.did(), Some("parent-request")),
-                    session("own", &sender, None),
-                ],
-                ..Default::default()
-            },
-        ));
-
-    assert!(
-        core.session_read_through_operator("worker", owner.did()),
-        "a node-owned session is read through the node, not hydrated"
-    );
-    assert!(!core.session_read_through_operator("own", owner.did()));
-
-    let error = core
-        .submit_request("worker", owner.did(), "hello", Some("agent"))
-        .await
-        .expect_err("a send into a node-owned session must be refused");
-    let refusal = error
-        .downcast_ref::<crate::error::BridgeError>()
-        .expect("the refusal is a typed bridge error");
-    assert_eq!(refusal.code, crate::error::BridgeErrorCode::SessionNotOwned);
-    assert_eq!(
-        refusal.message,
-        "Read-only. Message the session that started it."
-    );
-    let written = |server_requests: &[wiremock::Request]| {
-        server_requests
-            .iter()
-            .filter(|request| {
-                String::from_utf8_lossy(&request.body).contains("create_AgentRequest")
-            })
-            .count()
-    };
-    assert_eq!(
-        written(&server.received_requests().await.unwrap()),
-        0,
-        "a refused send must not be written"
-    );
-
-    core.submit_request("own", owner.did(), "hello", Some("agent"))
-        .await?;
-    assert_eq!(written(&server.received_requests().await.unwrap()), 1);
     Ok(())
 }
 

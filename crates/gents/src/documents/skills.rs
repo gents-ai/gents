@@ -348,11 +348,34 @@ pub struct LoadSkillArgs {
 pub struct LoadSkillTool {
     skills: Vec<Skill>,
     ceiling: SkillToolCeiling,
+    selection: Option<crate::inference::resolved::SelectedConfiguration>,
 }
 
 impl LoadSkillTool {
     pub fn new(skills: Vec<Skill>, ceiling: SkillToolCeiling) -> Self {
-        Self { skills, ceiling }
+        Self {
+            skills,
+            ceiling,
+            selection: None,
+        }
+    }
+
+    pub(crate) fn for_agent(
+        skills: Vec<Skill>,
+        ceiling: SkillToolCeiling,
+        configuration: &crate::inference::resolved::ResolvedConfiguration,
+    ) -> Self {
+        let selection = match configuration {
+            crate::inference::resolved::ResolvedConfiguration::Static => None,
+            crate::inference::resolved::ResolvedConfiguration::Documents(selection) => {
+                Some(selection.clone())
+            }
+        };
+        Self {
+            skills,
+            ceiling,
+            selection,
+        }
     }
 }
 
@@ -383,8 +406,28 @@ impl crate::inference::llm::tool::Tool for LoadSkillTool {
 
     async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
         match find_skill(&self.skills, &args.name) {
-            Some(skill) => Ok(render_activated_skill(skill, &self.ceiling)),
+            Some(skill) => {
+                if let Some(selection) = &self.selection {
+                    selection
+                        .check_skill(&skill.skill_id)
+                        .await
+                        .map_err(|_| LoadSkillError("selected skill is unavailable".into()))?;
+                }
+                Ok(render_activated_skill(skill, &self.ceiling))
+            }
             None => {
+                if let Some(selection) = &self.selection {
+                    selection
+                        .check_skills(
+                            &self
+                                .skills
+                                .iter()
+                                .map(|skill| skill.skill_id.clone())
+                                .collect::<Vec<_>>(),
+                        )
+                        .await
+                        .map_err(|_| LoadSkillError("selected skill is unavailable".into()))?;
+                }
                 let available = self
                     .skills
                     .iter()

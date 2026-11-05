@@ -42,6 +42,12 @@ pub(crate) struct ServeArgs {
         help = "HTTP port. Defaults to the home's network.json, else 9191, where the desktop and CLI expect the default home's runtime"
     )]
     pub(crate) http_port: Option<u16>,
+    #[arg(
+        long,
+        value_name = "URL",
+        help = "Explicit routable GraphQL URL to publish in the signed peer endpoint"
+    )]
+    pub(crate) advertise_graphql_url: Option<String>,
     #[arg(long)]
     pub(crate) node_name: Option<String>,
     #[arg(long)]
@@ -133,7 +139,7 @@ pub(crate) struct ServeArgs {
     )]
     pub(crate) codex_shim_public_url: Option<String>,
     #[arg(long, help = "Optional GENTS agent override for Codex turns")]
-    pub(crate) codex_shim_agent_id: Option<String>,
+    pub(crate) codex_shim_agent_did: Option<String>,
     #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_TIMEOUT_SECS)]
     pub(crate) codex_shim_timeout_secs: u64,
     #[arg(long, default_value_t = 250)]
@@ -155,7 +161,7 @@ pub(crate) struct ServeArgs {
         requires = "grok_shim",
         help = "Optional GENTS agent override for Grok pager turns"
     )]
-    pub(crate) grok_shim_agent_id: Option<String>,
+    pub(crate) grok_shim_agent_did: Option<String>,
     #[arg(
         long,
         value_enum,
@@ -224,6 +230,12 @@ pub(crate) struct ServeArgs {
     )]
     pub(crate) apply_root: Option<PathBuf>,
     #[arg(
+        long = "apply-inference-slot",
+        value_name = "SLOT=PROFILE",
+        requires = "apply_root"
+    )]
+    pub(crate) apply_inference_slots: Vec<String>,
+    #[arg(
         long = "apply-prune",
         default_value_t = false,
         requires = "apply_root",
@@ -276,7 +288,7 @@ pub(crate) struct ChatArgs {
     )]
     pub(crate) session_id: Option<String>,
     #[arg(long, help = "Override the agent for this one-off turn or session")]
-    pub(crate) agent_id: Option<String>,
+    pub(crate) agent_did: Option<String>,
     #[arg(
         long,
         value_name = "OBJECTIVE",

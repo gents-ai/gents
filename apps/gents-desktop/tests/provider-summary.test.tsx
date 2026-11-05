@@ -37,4 +37,17 @@ describe("a provider's page", () => {
     /* the header carries the problem too */
     expect(screen.getAllByText("Not signed in")).toHaveLength(2);
   });
+
+  it("describes a private credential without claiming its secret type", () => {
+    const backend = {
+      ...deployment.inferenceBackends[0]!,
+      authKind: "credential",
+      apiKeyConfigured: true,
+    };
+    renderIn(
+      testApp({ deployments: [deployment] }),
+      <BackendEditor deployment={deployment} backend={backend} accounts={[]} />,
+    );
+    expect(cardOf("Key")).toHaveTextContent("Stored credential");
+  });
 });

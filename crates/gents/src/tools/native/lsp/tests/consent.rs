@@ -56,7 +56,7 @@ impl Fixture {
                 PoolKey {
                     runtime_home: None,
                     session_id: "consent".into(),
-                    agent_id: "agent".into(),
+                    agent_did: "agent".into(),
                     workspace_root: root.clone(),
                     server_name: server.name.clone(),
                     config_digest: config.digest.clone(),

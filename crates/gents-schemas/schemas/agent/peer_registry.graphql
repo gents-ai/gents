@@ -1,6 +1,6 @@
 type PeerRegistry @branchable {
-    peer_id: String @index(unique: true)
-    node_did: String @index
+    peer_id: String @index(unique: true) @immutable
+    node_did: String @index @immutable
     addresses: [String!]!
     templates: [String!]
     display_name: String
@@ -8,4 +8,8 @@ type PeerRegistry @branchable {
     network_id: String @index
     registered_at: DateTime @index(direction: DESC)
     updated_at: DateTime @index(direction: DESC)
+    endpoint_address: String
+    graphql_url: String
+    endpoint_updated_at: String
+    binding_sig: String
 }

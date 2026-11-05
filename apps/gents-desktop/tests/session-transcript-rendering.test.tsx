@@ -29,7 +29,7 @@ function session(content: string): DesktopSessionSnapshot {
   return {
     sessionId: "session-long",
     nodeDid: "did:test:node",
-    agentId: "agent-default",
+    agentDid: "agent-default",
     title: "Long session",
     previewText: content,
     status: "completed",

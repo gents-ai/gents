@@ -3,7 +3,7 @@ use crate::tools::call::lifecycle::admission_fixture::PublishedAdmission;
 /// Fixture writes to a `@branchable` collection also advance its
 /// collection head, so two back-to-back writes can conflict; retry those,
 /// bounded.
-async fn execute_fixture_write(node: &crate::defra_node::EmbeddedNode, mutation: &str) {
+async fn execute_fixture_write(node: &crate::defra_node::Node, mutation: &str) {
     let mut backoff = std::time::Duration::from_millis(5);
     for _ in 0..8 {
         let result = node.execute(mutation).await;
@@ -23,7 +23,7 @@ async fn execute_fixture_write(node: &crate::defra_node::EmbeddedNode, mutation:
     panic!("fixture write kept conflicting: {mutation}");
 }
 
-pub(super) async fn update(node: &crate::defra_node::EmbeddedNode, doc_id: &str, fields: &str) {
+pub(super) async fn update(node: &crate::defra_node::Node, doc_id: &str, fields: &str) {
     let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     execute_fixture_write(node, &format!(
         r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
@@ -31,11 +31,7 @@ pub(super) async fn update(node: &crate::defra_node::EmbeddedNode, doc_id: &str,
     .await;
 }
 
-pub(super) async fn update_request(
-    node: &crate::defra_node::EmbeddedNode,
-    doc_id: &str,
-    fields: &str,
-) {
+pub(super) async fn update_request(node: &crate::defra_node::Node, doc_id: &str, fields: &str) {
     let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     execute_fixture_write(node, &format!(
         r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
@@ -43,7 +39,7 @@ pub(super) async fn update_request(
     .await;
 }
 
-pub(super) async fn remove_parent(node: &crate::defra_node::EmbeddedNode, doc_id: &str) {
+pub(super) async fn remove_parent(node: &crate::defra_node::Node, doc_id: &str) {
     let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     let result = node
         .execute(&format!(
@@ -54,9 +50,10 @@ pub(super) async fn remove_parent(node: &crate::defra_node::EmbeddedNode, doc_id
 }
 
 pub(super) async fn completion_obligations(
-    node: &crate::defra_node::EmbeddedNode,
+    node: &crate::defra_node::Node,
     session_id: &str,
     node_did: &str,
+    requester_did: Option<&str>,
 ) -> (Vec<String>, Vec<serde_json::Value>) {
     let session_id = crate::store::graphql::escape_graphql_string(session_id);
     let response = node
@@ -72,7 +69,7 @@ pub(super) async fn completion_obligations(
             node,
             row["_docID"].as_str().unwrap(),
             node_did,
-            Some(node_did),
+            requester_did,
         )
         .await
         .expect("reconstruct canonical recovery notification");
@@ -96,8 +93,9 @@ pub(super) async fn completion_obligations(
 }
 
 pub(super) async fn settle(admission: &PublishedAdmission) -> usize {
-    crate::tools::background::completion::settle_running_session_message_rows(
+    crate::tools::background::completion::settle_running_session_message_rows_with_access(
         &admission.node,
+        &admission.tool.access().unwrap(),
         &admission.node_did,
     )
     .await

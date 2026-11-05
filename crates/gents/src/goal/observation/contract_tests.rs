@@ -27,6 +27,7 @@ struct RecoveryTrace {
 #[derive(Deserialize)]
 struct Scope {
     node: String,
+    agent: String,
     session: String,
     session_document: String,
     requester: Option<String>,
@@ -44,21 +45,11 @@ async fn fixture() -> Fixture {
     let before = json!({"status":"active","sequence":0,"last_continued_from":null,
         "latest_request":10,"children":[],"blocked_audits":0,"wrapup_requested":false,
         "wrapup_completed":false,"tokens_used":37,"token_budget":1000});
-    let f = Fixture::new(&before).await;
-    crate::session::ensure_session_with_agent_id_and_requester_did(
-        &f.node,
-        SESSION,
-        f.identity.did(),
-        "contract-behavior",
-        Some(f.identity.did()),
-    )
-    .await
-    .unwrap();
-    f
+    Fixture::new(&before).await
 }
 
 async fn session(f: &Fixture) -> SessionOwnerRow {
-    ConfigAccess::local(f.node.clone())
+    f.agent_access()
         .transact_readonly("test.observed_session", |txn| {
             Box::pin(async {
                 crate::session::load_agent_session_owner_in_txn(txn, f.identity.did(), SESSION)
@@ -73,15 +64,21 @@ async fn session(f: &Fixture) -> SessionOwnerRow {
 #[tokio::test]
 async fn generated_goal_observations_drive_signature_and_scope_validation() {
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_observation_cases.len(), 288);
+    assert_eq!(contracts.goal_observation_cases.len(), 504);
     let f = fixture().await;
     let current = session(&f).await;
-    let native = load_canonical_goal(&f.node, f.identity.did(), SESSION)
+    let native = f
+        .agent_access()
+        .transact_readonly("test.native_goal", |txn| {
+            Box::pin(async { load_canonical_goal_in_txn(txn, f.identity.did(), SESSION).await })
+        })
         .await
         .unwrap()
         .unwrap();
     let map = |value: &str| match value {
-        "node" | "requester" => f.identity.did().to_owned(),
+        "node" => f.identity.did().to_owned(),
+        "requester" => f.user.did().to_owned(),
+        "agent" => f.parent.agent_did.clone(),
         "session" => SESSION.to_owned(),
         "session-document" => current.doc_id.clone(),
         other => other.to_owned(),
@@ -90,6 +87,7 @@ async fn generated_goal_observations_drive_signature_and_scope_validation() {
         let mut observation = SessionGoalObservation {
             version: SESSION_GOAL_CONTROL_VERSION,
             node_did: map(&case.scope.node),
+            agent_did: map(&case.scope.agent),
             session_id: map(&case.scope.session),
             session_doc_id: map(&case.scope.session_document),
             requester_did: case.scope.requester.as_deref().map(map),
@@ -110,7 +108,7 @@ async fn generated_goal_observations_drive_signature_and_scope_validation() {
             signature: Vec::new(),
         };
         observation.signature = f
-            .identity
+            .agent
             .sign(&observation.signing_payload().unwrap())
             .await
             .unwrap();
@@ -125,6 +123,29 @@ async fn generated_goal_observations_drive_signature_and_scope_validation() {
             requester_did: observation.requester_did.clone(),
             observation_json: Some(serde_json::to_string(&observation).unwrap()),
         };
+        if case.accepted {
+            let mut node_signed = observation.clone();
+            node_signed.signature = f
+                .identity
+                .sign(&node_signed.signing_payload().unwrap())
+                .await
+                .unwrap();
+            let node_row = ObservationRow {
+                doc_id: row.doc_id.clone(),
+                node_did: row.node_did.clone(),
+                session_id: row.session_id.clone(),
+                session_doc_id: row.session_doc_id.clone(),
+                requester_did: row.requester_did.clone(),
+                observation_json: Some(serde_json::to_string(&node_signed).unwrap()),
+            };
+            assert!(
+                verified(f.identity.as_ref(), &current, &node_row)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "node signature must not replace selected agent signature"
+            );
+        }
         assert_eq!(
             verified(f.identity.as_ref(), &current, &row)
                 .await
@@ -134,11 +155,11 @@ async fn generated_goal_observations_drive_signature_and_scope_validation() {
             "observation: {observation:?}"
         );
     }
-    f.node.shutdown().await;
+    f.node.shutdown().await.expect("node shutdown");
 }
 
 async fn durable_rows(f: &Fixture) -> Value {
-    ConfigAccess::local(f.node.clone())
+    f.agent_access()
         .execute("{ GoalObservation { _docID _version { cid } observation_json } }")
         .await
         .unwrap()["data"]["GoalObservation"]
@@ -182,15 +203,41 @@ async fn generated_goal_rescans_recover_lost_notifications() {
         for closed_feed in [false, true] {
             let f = fixture().await;
             let identity: Arc<dyn NodeIdentity> = f.identity.clone();
-            let access = ConfigAccess::local(f.node.clone());
+            let access = f.agent_access();
             let cancel = CancellationToken::new();
             let (changes_tx, changes) = futures::channel::mpsc::unbounded();
             let changes_tx = (!closed_feed).then_some(changes_tx);
             let (ticks_tx, ticks) = futures::channel::mpsc::unbounded();
             let waiting = Arc::new(tokio::sync::Notify::new());
+            let unavailable = crate::runtime::snapshot::UnavailableAgent::new(
+                gents_protocol::node_readiness::AgentReadinessUnavailableReason::BackendNotConfigured,
+                "fixture",
+            ).with_watcher_identity(f.agent.clone());
+            let snapshot = Arc::new(crate::ActiveRuntimeSnapshot {
+                generation: 1,
+                node: None,
+                local_did: f.identity.did().into(),
+                default_agent_did: f.agent.did().into(),
+                agents: Default::default(),
+                tool_surfaces: Default::default(),
+                backend_admission_configs: Default::default(),
+                unavailable_agents: rapidhash::RapidHashMap::from_iter([(
+                    f.agent.did().to_owned(),
+                    unavailable,
+                )]),
+                active_schedules: Default::default(),
+                unavailable_schedules: Default::default(),
+                active_event_triggers: Default::default(),
+                unavailable_event_triggers: Default::default(),
+                active_tasks: Default::default(),
+                dispatchers: Default::default(),
+                agent_executor_capacities: Default::default(),
+                agent_executor_queue_capacities: Default::default(),
+            });
+            let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(snapshot);
             let run = crate::runtime::agent::p2p_reconcile::session_commands::run_session_command_reconciler_observing(
                 f.node.clone(), identity, cancel.clone(), changes,
-                ObservedTicks { waiting: waiting.clone(), ticks },
+                ObservedTicks { waiting: waiting.clone(), ticks }, Some(snapshot_rx),
             );
             tokio::pin!(run);
             tokio::select! {
@@ -203,7 +250,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
                 f.identity.as_ref(),
                 f.identity.did(),
                 SESSION,
-                Some(f.identity.did()),
+                Some(f.user.did()),
             )
             .await
             .unwrap()
@@ -251,7 +298,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
                 f.identity.as_ref(),
                 f.identity.did(),
                 SESSION,
-                Some(f.identity.did()),
+                Some(f.user.did()),
             )
             .await
             .unwrap()
@@ -273,7 +320,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
                 f.identity.as_ref(),
                 f.identity.did(),
                 SESSION,
-                Some(f.identity.did()),
+                Some(f.user.did()),
             )
             .await
             .unwrap()
@@ -284,7 +331,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
             cancel.cancel();
             run.await.unwrap();
             drop(changes_tx);
-            f.node.shutdown().await;
+            f.node.shutdown().await.expect("node shutdown");
         }
     }
 }
@@ -293,7 +340,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
 async fn invalid_session_does_not_starve_other_goal_observations() {
     let f = fixture().await;
     let identity: Arc<dyn NodeIdentity> = f.identity.clone();
-    let access = ConfigAccess::local(f.node.clone());
+    let access = f.agent_access();
     access
         .write(
             "test.incomplete_goal_session",
@@ -306,15 +353,21 @@ async fn invalid_session_does_not_starve_other_goal_observations() {
         )
         .await
         .unwrap();
-    assert!(reconcile_goal_observations(&f.node, &identity, true, &[])
-        .await
-        .is_err());
+    assert!(reconcile_goal_observations_with_identities(
+        &f.node,
+        &identity,
+        std::slice::from_ref(&f.agent),
+        true,
+        &[]
+    )
+    .await
+    .is_ok());
     assert!(load_session_goal_observation(
         &access,
         identity.as_ref(),
         identity.did(),
         SESSION,
-        Some(identity.did())
+        Some(f.user.did())
     )
     .await
     .unwrap()
@@ -322,29 +375,35 @@ async fn invalid_session_does_not_starve_other_goal_observations() {
     .goal
     .is_some());
     let settled = durable_rows(&f).await;
-    assert!(reconcile_goal_observations(&f.node, &identity, true, &[])
-        .await
-        .is_err());
+    assert!(reconcile_goal_observations_with_identities(
+        &f.node,
+        &identity,
+        std::slice::from_ref(&f.agent),
+        true,
+        &[]
+    )
+    .await
+    .is_ok());
     assert_eq!(durable_rows(&f).await, settled);
-    f.node.shutdown().await;
+    f.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn goal_projection_is_signed_scoped_and_settles_without_writes() {
     let f = fixture().await;
     let identity: Arc<dyn NodeIdentity> = f.identity.clone();
-    let access = ConfigAccess::local(f.node.clone());
+    let access = f.agent_access();
     assert!(load_session_goal_observation(
         &access,
         identity.as_ref(),
         identity.did(),
         SESSION,
-        Some(identity.did())
+        Some(f.user.did())
     )
     .await
     .unwrap()
     .is_none());
-    project_session_goal(&f.node, &identity, SESSION, Some(identity.did()))
+    project_session_goal(&f.node, &identity, &f.agent, SESSION, Some(f.user.did()))
         .await
         .unwrap();
     let first = load_session_goal_observation(
@@ -352,7 +411,7 @@ async fn goal_projection_is_signed_scoped_and_settles_without_writes() {
         identity.as_ref(),
         identity.did(),
         SESSION,
-        Some(identity.did()),
+        Some(f.user.did()),
     )
     .await
     .unwrap()
@@ -362,7 +421,7 @@ async fn goal_projection_is_signed_scoped_and_settles_without_writes() {
         f.goal.goal_id
     );
     let settled = durable_rows(&f).await;
-    project_session_goal(&f.node, &identity, SESSION, Some(identity.did()))
+    project_session_goal(&f.node, &identity, &f.agent, SESSION, Some(f.user.did()))
         .await
         .unwrap();
     assert_eq!(durable_rows(&f).await, settled);
@@ -374,12 +433,12 @@ async fn goal_projection_is_signed_scoped_and_settles_without_writes() {
         identity.as_ref(),
         identity.did(),
         SESSION,
-        Some(identity.did())
+        Some(f.user.did())
     )
     .await
     .unwrap()
     .is_none());
-    project_session_goal(&f.node, &identity, SESSION, Some(identity.did()))
+    project_session_goal(&f.node, &identity, &f.agent, SESSION, Some(f.user.did()))
         .await
         .unwrap();
     assert!(load_session_goal_observation(
@@ -387,19 +446,24 @@ async fn goal_projection_is_signed_scoped_and_settles_without_writes() {
         identity.as_ref(),
         identity.did(),
         SESSION,
-        Some(identity.did())
+        Some(f.user.did())
     )
     .await
     .unwrap()
     .unwrap()
     .goal
     .is_some());
-    let goal = load_canonical_goal(&f.node, identity.did(), SESSION)
+    access
+        .write(
+            "test.delete_goal",
+            &format!(
+                r#"mutation {{ delete_Goal(docID: "{}") {{ _docID }} }}"#,
+                escape_graphql_string(&f.goal.doc_id)
+            ),
+        )
         .await
-        .unwrap()
         .unwrap();
-    delete_goal(&f.node, &goal).await.unwrap();
-    project_session_goal(&f.node, &identity, SESSION, Some(identity.did()))
+    project_session_goal(&f.node, &identity, &f.agent, SESSION, Some(f.user.did()))
         .await
         .unwrap();
     let empty = load_session_goal_observation(
@@ -407,29 +471,29 @@ async fn goal_projection_is_signed_scoped_and_settles_without_writes() {
         identity.as_ref(),
         identity.did(),
         SESSION,
-        Some(identity.did()),
+        Some(f.user.did()),
     )
     .await
     .unwrap()
     .unwrap();
     assert!(empty.goal.is_none());
     let settled = durable_rows(&f).await;
-    project_session_goal(&f.node, &identity, SESSION, Some(identity.did()))
+    project_session_goal(&f.node, &identity, &f.agent, SESSION, Some(f.user.did()))
         .await
         .unwrap();
     assert_eq!(durable_rows(&f).await, settled);
-    f.node.shutdown().await;
+    f.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn retained_signed_observation_refreshes_its_root_without_changing_goal_revision() {
     let f = fixture().await;
     let identity: Arc<dyn NodeIdentity> = f.identity.clone();
-    let access = ConfigAccess::local(f.node.clone());
+    let access = f.agent_access();
     access.write("test.goal_physical_root", &format!(
         "mutation {{update_Goal(docID: \"{}\", input: {{assignment_root_request_doc_id: \"{}\"}}) {{_docID}}}}",
         escape_graphql_string(&f.goal.doc_id), escape_graphql_string(&f.parent.doc_id))).await.unwrap();
-    project_session_goal(&f.node, &identity, SESSION, Some(f.identity.did()))
+    project_session_goal(&f.node, &identity, &f.agent, SESSION, Some(f.user.did()))
         .await
         .unwrap();
     let mut retained = load_session_goal_observation(
@@ -437,7 +501,7 @@ async fn retained_signed_observation_refreshes_its_root_without_changing_goal_re
         f.identity.as_ref(),
         f.identity.did(),
         SESSION,
-        Some(f.identity.did()),
+        Some(f.user.did()),
     )
     .await
     .unwrap()
@@ -458,7 +522,7 @@ async fn retained_signed_observation_refreshes_its_root_without_changing_goal_re
         .unwrap()
         .assignment_root_request_doc_id = None;
     retained.signature = f
-        .identity
+        .agent
         .sign(&retained.signing_payload().unwrap())
         .await
         .unwrap();
@@ -476,7 +540,7 @@ async fn retained_signed_observation_refreshes_its_root_without_changing_goal_re
         f.identity.as_ref(),
         f.identity.did(),
         SESSION,
-        Some(f.identity.did())
+        Some(f.user.did())
     )
     .await
     .unwrap()
@@ -485,7 +549,7 @@ async fn retained_signed_observation_refreshes_its_root_without_changing_goal_re
     .unwrap()
     .assignment_root_request_doc_id
     .is_none());
-    project_session_goal(&f.node, &identity, SESSION, Some(f.identity.did()))
+    project_session_goal(&f.node, &identity, &f.agent, SESSION, Some(f.user.did()))
         .await
         .unwrap();
     let refreshed = load_session_goal_observation(
@@ -493,7 +557,7 @@ async fn retained_signed_observation_refreshes_its_root_without_changing_goal_re
         f.identity.as_ref(),
         f.identity.did(),
         SESSION,
-        Some(f.identity.did()),
+        Some(f.user.did()),
     )
     .await
     .unwrap()
@@ -509,7 +573,7 @@ async fn retained_signed_observation_refreshes_its_root_without_changing_goal_re
         Some(f.parent.doc_id.as_str())
     );
     let stable = durable_rows(&f).await;
-    project_session_goal(&f.node, &identity, SESSION, Some(f.identity.did()))
+    project_session_goal(&f.node, &identity, &f.agent, SESSION, Some(f.user.did()))
         .await
         .unwrap();
     assert_eq!(durable_rows(&f).await, stable);
@@ -527,10 +591,10 @@ async fn retained_signed_observation_refreshes_its_root_without_changing_goal_re
         f.identity.as_ref(),
         f.identity.did(),
         SESSION,
-        Some(f.identity.did())
+        Some(f.user.did())
     )
     .await
     .unwrap()
     .is_none());
-    f.node.shutdown().await;
+    f.node.shutdown().await.expect("node shutdown");
 }

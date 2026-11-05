@@ -1,4 +1,4 @@
-type WorkspaceBinding @index(fields: ["owner_node_did", "binding_id"], unique: true) @branchable {
+type WorkspaceBinding @index(fields: ["owner_node_did", "binding_id"], unique: true) {
     binding_id: String @index @immutable
     workspace_id: String @index @immutable
     request_id: String @index @immutable

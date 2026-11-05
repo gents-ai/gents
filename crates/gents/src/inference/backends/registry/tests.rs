@@ -17,6 +17,25 @@ fn base_backend() -> InferenceBackend {
 }
 
 #[test]
+fn private_credential_rotation_changes_the_keyed_connection_identity() {
+    let mut backend = base_backend();
+    backend.auth = BackendAuth::Credential {
+        id: "private-reference".into(),
+        version: "rotation-one".into(),
+    };
+    let before =
+        crate::inference::admission::backend_connection_fingerprint(&backend.backend_fields());
+    backend.auth = BackendAuth::Credential {
+        id: "private-reference".into(),
+        version: "rotation-two".into(),
+    };
+    let after =
+        crate::inference::admission::backend_connection_fingerprint(&backend.backend_fields());
+    assert_ne!(before, after);
+    assert!(!before.contains("private-reference") && !before.contains("rotation-one"));
+}
+
+#[test]
 fn inference_backend_from_value_parses() {
     let mut value = serde_json::to_value(base_backend()).unwrap();
     value["auth"] = serde_json::json!({"kind": "api_key", "key": "raw-key"});
@@ -95,6 +114,7 @@ fn generated_backend_health_admission_cases_match_registry_and_admission_policy(
         backend.backend_id = case.name.clone();
         backend.enabled = case.enabled;
         let observation = InferenceBackendObservation {
+            metadata_doc_id: None,
             backend_id: backend.backend_id.clone(),
             catalogs: Vec::new(),
             probe_status: Some(case.probe_status.clone()),
@@ -388,6 +408,7 @@ fn pool_auth_round_trips_and_defaults_overage_off() {
 fn admission_rejects_unrelated_observation_and_defaults_capacity() {
     let backend = base_backend();
     let mut observation = InferenceBackendObservation {
+        metadata_doc_id: None,
         backend_id: "different-backend".into(),
         catalogs: Vec::new(),
         probe_status: Some("healthy".into()),
@@ -698,7 +719,7 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
             .catalogs,
         vec![empty]
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -828,7 +849,7 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
         !stored.contains(SECRET),
         "credential material persisted: {stored}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -938,7 +959,7 @@ async fn generated_catalog_refreshes_preserve_payload_commits_and_latest_freshne
             );
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -948,7 +969,7 @@ async fn catalog_freshness_survives_reopen_and_adopts_retained_payloads() -> Res
     let directory = tempfile::tempdir()?;
     let identity = crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
     let open = || {
-        crate::defra_node::EmbeddedNode::builder()
+        crate::defra_node::Node::builder()
             .data_path(directory.path())
             .with_node_identity_did(identity.did())
             .build()
@@ -984,7 +1005,7 @@ async fn catalog_freshness_survives_reopen_and_adopts_retained_payloads() -> Res
         [original]
     );
     drop(access);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     drop(node);
     let node = std::sync::Arc::new(open().await?);
     record_model_catalog(&node, &backend, catalog_action(&actions[2], &backend)?).await?;
@@ -1005,6 +1026,6 @@ async fn catalog_freshness_survives_reopen_and_adopts_retained_payloads() -> Res
         chrono::DateTime::parse_from_rfc3339(&observed.catalogs[0].observed_at)?.timestamp(),
         case["expected"]["observed_at"].as_i64().unwrap()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }

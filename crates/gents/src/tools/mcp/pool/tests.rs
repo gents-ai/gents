@@ -338,13 +338,14 @@ async fn connection_within_idle_ttl_is_reused() {
 }
 
 #[derive(Debug)]
-struct CapturedMcpHttpRequest {
-    method: String,
-    node_did_header: Option<String>,
+pub(crate) struct CapturedMcpHttpRequest {
+    pub(crate) method: String,
+    pub(crate) node_did_header: Option<String>,
     traceparent_header: Option<String>,
 }
 
-async fn spawn_header_capture_mcp_server() -> (String, Arc<Mutex<Vec<CapturedMcpHttpRequest>>>) {
+pub(crate) async fn spawn_header_capture_mcp_server(
+) -> (String, Arc<Mutex<Vec<CapturedMcpHttpRequest>>>) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind mock MCP server");

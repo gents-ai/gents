@@ -61,7 +61,7 @@ async fn submitted_request_survives_refresh_failure_and_requests_scoped_resync()
         request_id: "accepted-request".into(),
         session_id: "accepted-session".into(),
         node_did: "did:test:node".into(),
-        agent_id: Some("agent".into()),
+        agent_did: Some("agent".into()),
     };
     let before = store.projection_revision();
     let accepted = observe_submitted_request(&store, receipt.clone(), async {
@@ -87,7 +87,7 @@ async fn submitted_request_refresh_success_does_not_schedule_another_read() {
         request_id: "accepted-request".into(),
         session_id: "accepted-session".into(),
         node_did: "did:test:node".into(),
-        agent_id: None,
+        agent_did: None,
     };
     let accepted = observe_submitted_request(&store, receipt.clone(), async { Ok(1) }).await;
     assert_eq!(accepted, receipt);

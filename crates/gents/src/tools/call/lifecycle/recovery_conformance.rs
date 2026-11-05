@@ -2,7 +2,7 @@ use super::{AwaitMode, ToolCallLifecycle};
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 async fn update(node: &EmbeddedNode, collection: &str, doc_id: &str, fields: &str) {
     let response = node
@@ -26,7 +26,11 @@ async fn row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
 }
 
 async fn teardown(admission: PublishedAdmission) {
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -156,6 +160,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         let report = ToolCallLifecycle::recover_all_with_executions(
             &admission.node,
             &admission.node_did,
+            &super::recovery_closeout_conformance::recovery_identities(&admission),
             &registry,
         )
         .await
@@ -208,7 +213,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
             &admission.node,
             &session_id,
             &admission.node_did,
-            Some(&admission.node_did),
+            admission.tool.requester_did(),
         )
         .await;
         if let Some(reason) = case.notification_reason.as_deref() {
@@ -241,6 +246,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         let second = ToolCallLifecycle::recover_all_with_executions(
             &admission.node,
             &admission.node_did,
+            &super::recovery_closeout_conformance::recovery_identities(&admission),
             &registry,
         )
         .await
@@ -250,7 +256,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
             &admission.node,
             &session_id,
             &admission.node_did,
-            Some(&admission.node_did),
+            admission.tool.requester_did(),
         )
         .await;
         assert_eq!(messages_after, messages, "{name}");
@@ -313,15 +319,20 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
             let periodic = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
                 &admission.node,
                 &admission.node_did,
+                &super::recovery_closeout_conformance::recovery_identities(&admission),
             )
             .await
             .unwrap();
             assert_eq!(periodic.tool_calls_terminalized, 0, "{name}");
         }
 
-        let report = ToolCallLifecycle::recover_all(&admission.node, &admission.node_did)
-            .await
-            .unwrap();
+        let report = ToolCallLifecycle::recover_all(
+            &admission.node,
+            &admission.node_did,
+            &super::recovery_closeout_conformance::recovery_identities(&admission),
+        )
+        .await
+        .unwrap();
         let actual = row(&admission.node, &tool_doc).await;
         assert_eq!(actual["await_mode"], case.await_mode.as_str(), "{name}");
         match case.disposition.as_str() {
@@ -338,7 +349,7 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
             &admission.node,
             &session_id,
             &admission.node_did,
-            Some(&admission.node_did),
+            admission.tool.requester_did(),
         )
         .await;
         assert_eq!(
@@ -351,9 +362,13 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
             usize::from(case.queue_source.is_some()),
             "{name}"
         );
-        let second = ToolCallLifecycle::recover_all(&admission.node, &admission.node_did)
-            .await
-            .unwrap();
+        let second = ToolCallLifecycle::recover_all(
+            &admission.node,
+            &admission.node_did,
+            &super::recovery_closeout_conformance::recovery_identities(&admission),
+        )
+        .await
+        .unwrap();
         assert_eq!(second.tool_calls_recovered, 0, "{name}");
         teardown(admission).await;
     }
@@ -422,9 +437,13 @@ async fn generated_native_recovery_cases_use_canonical_admission_owner() {
             )
             .await;
         }
-        let report = ToolCallLifecycle::recover_all(&admission.node, &admission.node_did)
-            .await
-            .unwrap();
+        let report = ToolCallLifecycle::recover_all(
+            &admission.node,
+            &admission.node_did,
+            &super::recovery_closeout_conformance::recovery_identities(&admission),
+        )
+        .await
+        .unwrap();
         assert_eq!(report.tool_calls_recovered, 1, "{name}");
         let actual = row(&admission.node, &tool_doc).await;
         assert_eq!(actual["request_doc_id"], request_doc, "{name}");

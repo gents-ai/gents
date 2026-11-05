@@ -6,18 +6,41 @@ use super::super::{ToolCallLifecycle, ToolCallState};
 use super::IllegalToolCallTransition;
 
 async fn published_job_row(name: &str) -> PublishedAdmission {
-    published_admission(PublishedAdmissionOptions {
+    use crate::store::identity::NodeIdentity;
+    let mut admission = published_admission(PublishedAdmissionOptions {
         name: name.to_owned(),
+        real_identity: true,
         await_mode: AwaitMode::Background,
         job_pin: true,
         ..Default::default()
     })
     .await
-    .unwrap()
+    .unwrap();
+    let root =
+        crate::KeyIdentity::load_existing(admission.path.join("test-agent.key"), None).unwrap();
+    assert_eq!(root.did(), admission.node_did);
+    let agent = crate::load_agent(&admission.node, admission.tool.actor().as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    let binding = gents_protocol::agent_identity::AgentIdentityBinding {
+        agent_did: agent.agent_did,
+        creation_nonce: agent.creation_nonce,
+    };
+    let identity = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
+    admission
+        .tool
+        .bind_agent_signer(identity.managed_agent_signer())
+        .unwrap();
+    admission
 }
 
 async fn teardown(admission: PublishedAdmission) {
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -30,7 +53,7 @@ async fn job_row_has_kind_plugin_job() {
         admission.tool.doc_id().unwrap(),
         &admission.node_did,
         "session-job-kind",
-        None,
+        admission.tool.requester_did(),
     )
     .await
     .unwrap()
@@ -45,6 +68,7 @@ async fn orphan_sweep_excludes_job_rows() {
     let report = ToolCallLifecycle::reconcile_orphaned_background_tools(
         &admission.node,
         &admission.node_did,
+        &super::super::recovery_closeout_conformance::recovery_identities(&admission),
         &crate::BackgroundExecutionRegistry::default(),
     )
     .await
@@ -55,7 +79,7 @@ async fn orphan_sweep_excludes_job_rows() {
         admission.tool.doc_id().unwrap(),
         &admission.node_did,
         "session-job-sweep",
-        None,
+        admission.tool.requester_did(),
     )
     .await
     .unwrap()
@@ -124,6 +148,7 @@ async fn published_admission_with_job_pin_loads_as_plugin_job() {
 
     let default = published_admission(PublishedAdmissionOptions {
         name: "job-pin-default".to_owned(),
+        real_identity: true,
         ..Default::default()
     })
     .await

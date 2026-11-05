@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::documents::{Agent, AgentContext, InferenceProfile};
 use gents::session::canonical_rows::{
     decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
@@ -37,7 +37,7 @@ use crate::support::live_inference::{live_target, InferenceTarget};
 use crate::support::test_db;
 use crate::support::TestDb;
 
-const LIVE_AGENT_ID: &str = "live-interrupt";
+const LIVE_AGENT_DID: &str = "live-interrupt";
 const LIVE_SAMPLING_ID: &str = "live-interrupt:live-sampling";
 const LIVE_CONTEXT_ID: &str = "live-interrupt:context";
 
@@ -64,7 +64,7 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     let request_doc_id = create_runtime_request(
         &db.node,
         agent.node_did.as_str(),
-        LIVE_AGENT_ID,
+        LIVE_AGENT_DID,
         request_id,
         session_id,
         "Write a long numbered list from 1 to 200. Use one short sentence per item. Start immediately and keep streaming.",
@@ -485,10 +485,13 @@ async fn upsert_live_backend(node: &Arc<EmbeddedNode>, node_did: &str, target: &
         .await
         .expect("ensure live interrupt fixture principal");
 
+    let root =
+        gents::store::identity::RegisteredIdentity::from_registered_did(node_did, None).unwrap();
+    let binding = gents::store::identity::provision_agent_identity(&root).unwrap();
     let backend = target.backend(node_did);
     let sampling = target.live_sampling(node_did, LIVE_SAMPLING_ID);
     let profile = InferenceProfile {
-        profile_id: default_inference_profile_id_for_agent(LIVE_AGENT_ID),
+        profile_id: default_inference_profile_id_for_agent(LIVE_AGENT_DID),
         sampling_id: Some(LIVE_SAMPLING_ID.to_string()),
         reasoning_effort: Some(ReasoningEffort::High),
         ..target.profile(node_did)
@@ -508,17 +511,18 @@ async fn upsert_live_backend(node: &Arc<EmbeddedNode>, node_did: &str, target: &
         tags: Vec::new(),
     };
     let behavior = Agent {
-        agent_id: LIVE_AGENT_ID.to_string(),
+        agent_did: binding.agent_did.clone(),
+        creation_nonce: binding.creation_nonce,
         node_did: node_did.to_string(),
-        display_name: Some(LIVE_AGENT_ID.to_string()),
+        display_name: Some(LIVE_AGENT_DID.to_string()),
         description: None,
         context_id: Some(LIVE_CONTEXT_ID.to_string()),
-        inference_profile_id: default_inference_profile_id_for_agent(LIVE_AGENT_ID),
+        inference_profile_id: default_inference_profile_id_for_agent(LIVE_AGENT_DID),
         enabled: true,
         tags: Vec::new(),
         created_at: Some("2026-06-02T00:00:00Z".to_string()),
     };
-    principal.default_agent_id = Some(LIVE_AGENT_ID.to_string());
+    principal.default_agent_did = Some(binding.agent_did);
     let documents = vec![
         (
             Collection::InferenceSampling,

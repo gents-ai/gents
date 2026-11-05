@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 #[cfg(test)]
@@ -32,17 +32,23 @@ mod submission;
 pub(crate) use atomic_inputs::next_append_sequence_in_transaction;
 #[cfg(test)]
 pub(crate) use atomic_inputs::persist_background_completion_with_message;
+#[cfg(test)]
 pub(crate) use atomic_inputs::persist_background_completion_with_message_canonical;
+pub(crate) use atomic_inputs::persist_background_completion_with_message_canonical_with_access;
 #[cfg(test)]
 pub(crate) use atomic_inputs::persist_background_completion_with_message_waking;
+#[cfg(test)]
+pub(crate) use atomic_inputs::persist_background_completion_with_message_waking_with_access;
 use atomic_inputs::steering_transaction_attempt;
 #[cfg(test)]
 use atomic_inputs::transaction_created_doc_id;
 pub(crate) use atomic_inputs::ToolNotificationPublication;
-pub use coalescing::reconcile_coalesced_pending_request;
 pub(crate) use coalescing::supersede_pending_mutation;
 use coalescing::{
-    parent_agent_id, queue_row_to_enqueued_request, row_matches_coalesced_source_and_key,
+    parent_agent_did, queue_row_to_enqueued_request, row_matches_coalesced_source_and_key,
+};
+pub use coalescing::{
+    reconcile_coalesced_pending_request, reconcile_coalesced_pending_request_for_with_access,
 };
 pub(crate) use draining::drain_all_pending_session_requests_in_txn;
 pub(crate) use draining::drain_automated_wakeups_in_txn;

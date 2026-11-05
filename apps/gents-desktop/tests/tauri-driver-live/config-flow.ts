@@ -11,7 +11,7 @@ export type ConfigFlowIds = {
   profileId: string;
   toolServiceId: string;
   toolsId: string;
-  agentId: string;
+  agentDid: string;
   taskId: string;
   scheduleId: string;
   eventSourceId: string;
@@ -40,7 +40,7 @@ export function createConfigFlowIds(suffix = Date.now().toString()): ConfigFlowI
     profileId: `minimax-profile-${suffix}`,
     toolServiceId: `http-mcp-${suffix}`,
     toolsId: `repo-tools-${suffix}`,
-    agentId: `config-agent-${suffix}`,
+    agentDid: `config-agent-${suffix}`,
     taskId: `config-task-${suffix}`,
     scheduleId: `config-schedule-${suffix}`,
     eventSourceId: `config-event-source-${suffix}`,
@@ -284,25 +284,27 @@ export async function createAgent({ runner, driver, ids }: ConfigFlowContext) {
   await driver.openConfigSection("agents");
   await driver.user.click(screen.getByRole("button", { name: "New agent" }));
   const name = screen.getByRole("textbox", { name: "Display name" });
-  ids.agentId = name.id.replace(/-name$/, "");
+  ids.agentDid = name.id.replace(/-name$/, "");
   fireEvent.change(name, { target: { value: "Desktop Live Agent" } });
   changeField(
-    `${ids.agentId}-prompt`,
+    `${ids.agentDid}-prompt`,
     `You are Amy running a desktop config acceptance flow. Include sentinel ${ids.suffix} when asked about this test.`,
   );
-  await chooseField(driver, `${ids.agentId}-tools`, /^Repo Audit Readonly Tools/);
-  await chooseField(driver, `${ids.agentId}-profile`, /Desktop Live Profile/);
+  await chooseField(driver, `${ids.agentDid}-tools`, /^Repo Audit Readonly Tools/);
+  await chooseField(driver, `${ids.agentDid}-profile`, /Desktop Live Profile/);
   await driver.user.click(screen.getByRole("button", { name: "Create" }));
   await waitForDeploymentDocument(runner, (current) => {
-    expect(current.agents.some((candidate) => candidate.agentId === ids.agentId)).toBe(
-      true,
-    );
+    expect(
+      current.agents.some((candidate) => candidate.agentDid === ids.agentDid),
+    ).toBe(true);
   });
   await driver.user.click(
     await screen.findByRole("switch", { name: "Desktop Live Agent is disabled" }),
   );
   await waitForDeploymentDocument(runner, (current) => {
-    const agent = current.agents.find((candidate) => candidate.agentId === ids.agentId);
+    const agent = current.agents.find(
+      (candidate) => candidate.agentDid === ids.agentDid,
+    );
     expect(agent?.inferenceProfileId).toBe(ids.profileId);
     expect(agent?.enabled).toBe(true);
     const context = current.contexts.find(
@@ -336,7 +338,7 @@ export async function createTask({ runner, driver, ids }: ConfigFlowContext) {
     const task = current.tasks.find((candidate) => !before.has(candidate.taskId));
     expect(task).toBeDefined();
     ids.taskId = task!.taskId;
-    expect(task!.agentId).toBe(ids.agentId);
+    expect(task!.agentDid).toBe(ids.agentDid);
   });
   await waitFor(
     () => {
@@ -464,7 +466,7 @@ export async function waitForConfigFlowReady(
           current!.nodeReadiness.activeGeneration,
         );
         const readiness = current!.nodeReadiness.agents.find(
-          (status) => status.agentId === ids.agentId,
+          (status) => status.agentDid === ids.agentDid,
         );
         expect(readiness?.state).toBe("ready");
       },

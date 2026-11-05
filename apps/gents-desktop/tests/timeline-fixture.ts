@@ -79,7 +79,7 @@ export const sessionSnapshot = (
 ): DesktopSessionSnapshot => ({
   sessionId: "session-1",
   nodeDid: "did:test:node",
-  agentId: null,
+  agentDid: null,
   title: null,
   previewText: null,
   status: null,

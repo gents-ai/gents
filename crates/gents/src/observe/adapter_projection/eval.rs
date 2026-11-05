@@ -83,7 +83,7 @@ pub fn adapter_projection_eval_jsonl_records(
                         id,
                         status,
                         node_did,
-                        agent_id,
+                        agent_did,
                         parent_request_id,
                         parent_tool_call_id,
                         input,
@@ -100,7 +100,7 @@ pub fn adapter_projection_eval_jsonl_records(
                             metadata: metadata([
                                 ("timestamp", timestamp.clone()),
                                 ("node_did", node_did.clone()),
-                                ("agent_id", agent_id.clone()),
+                                ("agent_did", agent_did.clone()),
                                 ("parent_request_id", parent_request_id.clone()),
                                 ("parent_tool_call_id", parent_tool_call_id.clone()),
                             ]),
@@ -194,7 +194,7 @@ pub fn adapter_projection_eval_jsonl_records(
                             ("kind", Some(node.kind.clone())),
                             ("request_id", node.request_id.clone()),
                             ("node_did", node.node_did.clone()),
-                            ("agent_id", node.agent_id.clone()),
+                            ("agent_did", node.agent_did.clone()),
                             ("parent_request_id", node.parent_request_id.clone()),
                             ("parent_tool_call_id", node.parent_tool_call_id.clone()),
                         ]),
@@ -246,13 +246,13 @@ pub fn adapter_projection_eval_jsonl_records(
                     participant
                         .node_did
                         .as_deref()
-                        .or(participant.agent_id.as_deref())
+                        .or(participant.agent_did.as_deref())
                         .unwrap_or(participant.role.as_str()),
                     EvalRecordFields {
                         role: Some(participant.role.clone()),
                         metadata: metadata([
                             ("node_did", participant.node_did.clone()),
-                            ("agent_id", participant.agent_id.clone()),
+                            ("agent_did", participant.agent_did.clone()),
                         ]),
                         ..EvalRecordFields::default()
                     },
@@ -293,7 +293,7 @@ pub fn adapter_projection_eval_jsonl_records(
                                 delegation.parent_tool_call_id.clone(),
                             ),
                             ("node_did", delegation.node_did.clone()),
-                            ("agent_id", delegation.agent_id.clone()),
+                            ("agent_did", delegation.agent_did.clone()),
                         ]),
                         ..EvalRecordFields::default()
                     },

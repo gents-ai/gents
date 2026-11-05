@@ -506,7 +506,7 @@ mod provider_account_tests {
         gents::ConfigAccess::graphql(format!("http://{address}/api/v0/graphql"))
     }
 
-    async fn serving_node() -> std::sync::Arc<gents::defra_node::EmbeddedNode> {
+    async fn serving_node() -> std::sync::Arc<gents::defra_node::Node> {
         let node = crate::tests::support::node_builder()
             .build()
             .await

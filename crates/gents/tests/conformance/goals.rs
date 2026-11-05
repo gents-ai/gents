@@ -307,7 +307,7 @@ fn generated_task_goal_recovery_cases_fence_request_witness() {
             gents::goal::task_goal_fire_identity(&case.node_did, &case.task_id, &case.fire_key);
         let expected = gents::goal::TaskGoalRequestBinding {
             node_did: case.node_did.clone(),
-            agent_id: case.agent_id.clone(),
+            agent_did: case.agent_did.clone(),
             session_id: identity.session_id,
             request_id: identity.request_id,
             retry_key: identity.retry_key,
@@ -319,10 +319,10 @@ fn generated_task_goal_recovery_cases_fence_request_witness() {
                     .observed_node_did
                     .clone()
                     .expect("present request must emit node_did"),
-                agent_id: case
-                    .observed_agent_id
+                agent_did: case
+                    .observed_agent_did
                     .clone()
-                    .expect("present request must emit agent_id"),
+                    .expect("present request must emit agent_did"),
                 session_id: case
                     .observed_session_id
                     .clone()

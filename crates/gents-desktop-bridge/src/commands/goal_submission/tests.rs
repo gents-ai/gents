@@ -34,7 +34,7 @@ fn submission() -> Value {
 
 fn original(client: &str, node: &str) -> Value {
     json!({"clientDid":client,"commandId":"command","nodeDid":node,
-        "sessionId":"session","sessionDocId":null,"expected":null,"agentId":"fixture-agent",
+        "sessionId":"session","sessionDocId":null,"expected":null,"agentDid":"fixture-agent",
         "cwd":null,"capturedContext":[],"action":{"kind":"create","objective":"Retain this Goal","tokenBudget":null}})
 }
 
@@ -60,7 +60,7 @@ async fn missing_goal_preparation_never_allocates_or_resubmits_work() -> Result<
             let request = serde_json::from_value(json!({
                 "clientDid":client_did,"commandId":command_id,"sessionId":session_id,
                 "nodeDid":"did:fixture:runtime","sessionDocId":null,"expected":null,
-                "agentId":"fixture-agent","cwd":null,"action": {"kind":"create","objective":"Retain this Goal","tokenBudget":null},
+                "agentDid":"fixture-agent","cwd":null,"action": {"kind":"create","objective":"Retain this Goal","tokenBudget":null},
             }))?;
             assert!(super::super::goal::control_goal(&core, request).await.is_err());
         }

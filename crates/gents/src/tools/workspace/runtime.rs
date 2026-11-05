@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use crate::request::lifecycle::WorkspaceLineage;
 use crate::request::watcher::AgentRequest;
@@ -208,7 +208,7 @@ pub async fn seal_on_writer_success(
         execute_seal_workspace_plan(&plan, &mut journal, &mut ctx)
             .map_err(|err| anyhow::anyhow!("{err}"))?
     };
-    flush_seal_outcome(node, &docs, &outcome).await
+    flush_seal_outcome(node, &request.agent_did, &docs, &outcome).await
 }
 
 pub async fn integrate_on_integrator_success(
@@ -270,9 +270,9 @@ pub async fn integrate_on_integrator_success(
         execute_integrate_workspace_plan(&plan, &mut journal, &mut ctx)
             .map_err(|err| anyhow::anyhow!("{err}"))?
     };
-    flush_integrate_outcome(node, &outcome).await?;
+    flush_integrate_outcome(node, &request.agent_did, &outcome).await?;
     finalize_integrate_trunk(&trunk, outcome.pending_head_sha.as_deref())?;
-    release_integrate_binding(node, &docs, &outcome).await?;
+    release_integrate_binding(node, &request.agent_did, &docs, &outcome).await?;
     clear_integrate_journal(&trunk, workspace_id);
     Ok(())
 }
@@ -284,6 +284,7 @@ fn ctx_repository_path(repository: &RepositoryPlacementRef) -> PathBuf {
 /// Explicit operator/ack cleanup. Never invoked from request terminal.
 pub async fn cleanup_workspace(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor_did: &str,
     node_did: &str,
     workspace_id: &str,
     operator_tool_root: Option<&Path>,
@@ -320,7 +321,7 @@ pub async fn cleanup_workspace(
         execute_cleanup_workspace_plan(&plan, &mut journal, &mut ctx)
             .map_err(|err| anyhow::anyhow!("{err}"))?
     };
-    flush_cleanup_outcome(node, &docs, &outcome).await
+    flush_cleanup_outcome(node, actor_did, &docs, &outcome).await
 }
 
 pub async fn writer_request_already_sealed(
@@ -407,7 +408,7 @@ pub async fn materialize_workspace_binding(
         _ => anyhow::bail!("workspace-bound request {workspace_id} is missing workspace_authority"),
     };
     let response = graphql_with_transaction_retry(node, &format!(
-        r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{}"}}}},limit:1) {{request_id node_did workspace_id workspace_owner_node_did workspace_authority workspace_seal_hash}} }}"#,
+        r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{}"}}}},limit:1) {{request_id agent_did node_did workspace_id workspace_owner_node_did workspace_authority workspace_seal_hash}} }}"#,
         escape_graphql_string(request_doc_id)), "bind exact workspace request").await?;
     let actual = crate::store::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
         &response,
@@ -462,7 +463,15 @@ pub async fn materialize_workspace_binding(
         AdmitBinding::Create { binding, release } => {
             let mut docs = release;
             docs.push(binding);
-            super::overlay::persist_workspace_binding_docs(node, &docs).await
+            super::overlay::persist_workspace_binding_docs(
+                node,
+                actual
+                    .agent_did
+                    .as_deref()
+                    .context("workspace request lacks selected Agent DID")?,
+                &docs,
+            )
+            .await
         }
     }
 }
@@ -477,7 +486,7 @@ pub async fn release_writer_binding(
     let owner = super::overlay::request_workspace_owner(request)?;
     crate::store::config_client::ConfigAccess::transact_local_idempotent(
         node,
-        None,
+        Some(identity::Did::new(request.agent_did.clone())?),
         crate::store::config_client::IdempotentTransactionRetry::Standard,
         "workspace.release_writer_binding",
         |txn| {
@@ -674,6 +683,7 @@ async fn load_repository(
 
 async fn flush_seal_outcome(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor_did: &str,
     docs: &MemoryWorkspaceDocuments,
     outcome: &SealWorkspaceOutcome,
 ) -> Result<()> {
@@ -691,11 +701,11 @@ async fn flush_seal_outcome(
         &outcome.receipt,
         &now,
     );
-    crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "workspace.seal_documents",
-        &mutation,
+    crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(actor_did.to_owned())?,
     )
+    .write("workspace.seal_documents", &mutation)
     .await
     .with_context(|| {
         format!(
@@ -708,14 +718,15 @@ async fn flush_seal_outcome(
 
 async fn flush_integrate_outcome(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor_did: &str,
     outcome: &IntegrateWorkspaceOutcome,
 ) -> Result<()> {
     let mutation = workspace_integrate_docs_mutation(&[], &outcome.receipt);
-    crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "workspace.integrate_documents",
-        &mutation,
+    crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(actor_did.to_owned())?,
     )
+    .write("workspace.integrate_documents", &mutation)
     .await
     .with_context(|| {
         format!(
@@ -728,6 +739,7 @@ async fn flush_integrate_outcome(
 
 async fn release_integrate_binding(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor_did: &str,
     docs: &MemoryWorkspaceDocuments,
     outcome: &IntegrateWorkspaceOutcome,
 ) -> Result<()> {
@@ -746,11 +758,11 @@ async fn release_integrate_binding(
         return Ok(());
     }
     let mutation = workspace_integrate_docs_mutation(&released, &outcome.receipt);
-    crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "workspace.release_integrate_binding",
-        &mutation,
+    crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(actor_did.to_owned())?,
     )
+    .write("workspace.release_integrate_binding", &mutation)
     .await
     .with_context(|| {
         format!(
@@ -763,6 +775,7 @@ async fn release_integrate_binding(
 
 async fn flush_cleanup_outcome(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor_did: &str,
     docs: &MemoryWorkspaceDocuments,
     outcome: &CleanupWorkspaceOutcome,
 ) -> Result<()> {
@@ -773,11 +786,11 @@ async fn flush_cleanup_outcome(
         .cloned()
         .collect();
     let mutation = workspace_cleanup_docs_mutation(&outcome.workspace, &bindings);
-    crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "workspace.cleanup_documents",
-        &mutation,
+    crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(actor_did.to_owned())?,
     )
+    .write("workspace.cleanup_documents", &mutation)
     .await
     .with_context(|| {
         format!(

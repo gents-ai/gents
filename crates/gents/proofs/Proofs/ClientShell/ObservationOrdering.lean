@@ -224,6 +224,13 @@ structure State where
   sharedEpoch : Nat := 0
   nodeEpoch : Nat → Nat := fun _ => 0
 
+/-- Runtime documents are read from the selected runtime's authenticated database
+endpoint under the client DID. The observer arms its GraphQL subscriptions before
+requesting the initial snapshot; reconnect, renewal and gaps require a fresh snapshot.
+These epochs reject stale publications from those reads. A local replica is never
+an alternative source for runtime configuration, sessions or transcript data.
+Native subscription delivery may omit permission-denied empty results; document
+policy revocation invalidation remains an upstream limitation, not an access grant. -/
 structure Read where
   dataEpoch : Nat
   requestEventEpoch : Nat
@@ -685,3 +692,41 @@ theorem unapproved_has_no_activation_error (s : State) (authority : Authority) :
   simp [project]
 
 end EnrollmentActivationObservation
+
+namespace RuntimeConnectionObservation
+
+inductive Status where
+  | connecting | connected | disconnected | denied
+  deriving DecidableEq, Repr
+
+inductive Event where
+  | sourceStarted | subscriptionsReady | snapshotSucceeded | transportFailed | permissionDenied
+  deriving DecidableEq, Repr
+
+/-- A direct runtime connection is established only after subscriptions are armed
+and an authenticated snapshot succeeds. A successful empty result is still a
+successful snapshot: ACP may filter every row without returning an error. P2P
+peer or replication observations do not determine this state. -/
+def observe (status : Status) (event : Event) : Status :=
+  match event with
+  | .sourceStarted | .subscriptionsReady => .connecting
+  | .snapshotSucceeded => .connected
+  | .transportFailed => .disconnected
+  | .permissionDenied => .denied
+
+def blocksAdmission (status : Status) : Bool := decide (status ≠ .connected)
+
+theorem pairing_does_not_decide_runtime_admission (status : Status) (p2p sync : Bool) :
+    (if p2p || sync then blocksAdmission status else blocksAdmission status) = blocksAdmission status := by
+  cases p2p <;> cases sync <;> rfl
+
+theorem empty_snapshot_is_connected (status : Status) :
+    observe status .snapshotSucceeded = .connected := by rfl
+
+theorem subscription_alone_is_not_a_completed_read (status : Status) :
+    observe status .subscriptionsReady = .connecting := by rfl
+
+theorem denial_is_not_an_empty_result (status : Status) :
+    observe status .permissionDenied = .denied := by rfl
+
+end RuntimeConnectionObservation

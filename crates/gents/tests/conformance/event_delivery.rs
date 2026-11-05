@@ -2,7 +2,7 @@ use super::*;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::{EmbeddedNode, QueryResponse};
+use gents::defra_node::{Node as EmbeddedNode, QueryResponse};
 use gents::{
     ActiveRuntimeSnapshot, AgentRequest, ConcurrencyMode, DefraWatcher, EventSource,
     ResolvedEventTrigger, ResolvedTask, TriggerSource, Watcher,
@@ -15,6 +15,7 @@ use super::support::mock_subscription::MockUpdateSubscriptionSource;
 const EVENT_SOURCE_COLLECTION: &str = "EventDeliveryDoc";
 const EVENT_SOURCE_TRIGGER_ID: &str = "event-delivery-trigger";
 const EVENT_SOURCE_TASK_ID: &str = "event-delivery-task";
+const EVENT_SOURCE_ID: &str = "event-delivery-source";
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(2);
 const RESCAN_TEST_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -505,13 +506,9 @@ async fn spawn_event_source_runner(
     watch::Sender<Arc<ActiveRuntimeSnapshot>>,
 ) {
     let access = gents::store::config_client::ConfigAccess::local(node.clone());
-    let trigger_doc_id = install_event_delivery_config(&access).await;
-    let mut snapshot = active_snapshot_with_event_trigger();
-    Arc::make_mut(&mut snapshot)
-        .active_event_triggers
-        .get_mut(EVENT_SOURCE_TRIGGER_ID)
-        .unwrap()
-        .trigger_doc_id = trigger_doc_id.clone();
+    let (trigger_doc_id, source_doc_id, task_doc_id) = install_event_delivery_config(&access).await;
+    let snapshot =
+        active_snapshot_with_event_trigger(&trigger_doc_id, &source_doc_id, &task_doc_id);
     let (snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let mut source =
         EventSource::with_subscription_source(Arc::new(mock_subs), snapshot_rx, node, cancel)
@@ -546,7 +543,7 @@ async fn spawn_event_source_runner(
 
 async fn install_event_delivery_config(
     access: &gents::store::config_client::ConfigAccess,
-) -> String {
+) -> (String, String, String) {
     use gents::store::config_client::{
         apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
@@ -555,8 +552,8 @@ async fn install_event_delivery_config(
     let documents = [
         (Collection::InferenceBackend, json!({"backend_id":"event-backend", "name":"Test", "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:8000/v1", "auth":{"kind":"unauthenticated"}})),
         (Collection::InferenceProfile, json!({"profile_id":"event-profile", "backend_id":"event-backend", "model_name":"model"})),
-        (Collection::Agent, json!({"agent_id":AGENT_NAME, "inference_profile_id":"event-profile"})),
-        (Collection::Task, json!({"task_id":EVENT_SOURCE_TASK_ID, "agent_id":AGENT_NAME, "prompt_template":"handle event delivery doc"})),
+        (Collection::Agent, json!({"agent_did":AGENT_NAME, "inference_profile_id":"event-profile"})),
+        (Collection::Task, json!({"task_id":EVENT_SOURCE_TASK_ID, "agent_did":AGENT_NAME, "prompt_template":"handle event delivery doc"})),
         (Collection::EventSource, json!({"event_source_id":"event-delivery-source", "source_collection":EVENT_SOURCE_COLLECTION, "event_kind":"created"})),
         (Collection::Trigger, json!({"trigger_id":EVENT_SOURCE_TRIGGER_ID, "task_id":EVENT_SOURCE_TASK_ID, "enabled":true, "concurrency":"queued_serial", "source":{"kind":"event", "event_source_id":"event-delivery-source"}})),
     ].into_iter().map(|(collection, mut value)| {
@@ -568,11 +565,14 @@ async fn install_event_delivery_config(
         let plan = &plan;
         Box::pin(async move {
             apply_desired_state_plan(txn, plan).await?;
-            let query = format!("{{ Trigger(filter: {{node_did: {{_eq: \"{}\"}}, trigger_id: {{_eq: \"{}\"}}}}) {{_docID}} }}",
-                escape_graphql_string(NODE_DID), escape_graphql_string(EVENT_SOURCE_TRIGGER_ID));
+            let query = format!("{{ Trigger(filter: {{node_did: {{_eq: \"{}\"}}, trigger_id: {{_eq: \"{}\"}}}}) {{_docID}} EventSource(filter: {{node_did: {{_eq: \"{}\"}}, event_source_id: {{_eq: \"{}\"}}}}) {{_docID}} Task(filter: {{node_did: {{_eq: \"{}\"}}, task_id: {{_eq: \"{}\"}}}}) {{_docID}} }}",
+                escape_graphql_string(NODE_DID), escape_graphql_string(EVENT_SOURCE_TRIGGER_ID),
+                escape_graphql_string(NODE_DID), escape_graphql_string(EVENT_SOURCE_ID),
+                escape_graphql_string(NODE_DID), escape_graphql_string(EVENT_SOURCE_TASK_ID));
             let response = txn.execute(&query).await?;
-            Ok::<_, anyhow::Error>(response["data"]["Trigger"][0]["_docID"].as_str()
-                .expect("persisted trigger physical identity").to_owned())
+            let id = |name: &str| response["data"][name][0]["_docID"].as_str()
+                .expect("persisted configuration physical identity").to_owned();
+            Ok::<_, anyhow::Error>((id("Trigger"), id("EventSource"), id("Task")))
         })
     }).await.expect("persist event source configuration")
 }
@@ -620,7 +620,7 @@ async fn admit_event_delivery(
             requester_did: None,
             request_id: fire.request_id.clone(),
             node_did: NODE_DID.into(),
-            agent_id: AGENT_NAME.into(),
+            agent_did: AGENT_NAME.into(),
             session_id: fire.session_id.clone(),
             content: intent.task.prompt_template.clone(),
             execution_origin: ExecutionOrigin::Scheduled,
@@ -661,12 +661,16 @@ async fn install_event_delivery_source_schema(node: &EmbeddedNode) {
         .expect("add_collection for EventDeliveryDoc");
 }
 
-fn active_snapshot_with_event_trigger() -> Arc<ActiveRuntimeSnapshot> {
+fn active_snapshot_with_event_trigger(
+    trigger_doc_id: &str,
+    source_doc_id: &str,
+    task_doc_id: &str,
+) -> Arc<ActiveRuntimeSnapshot> {
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: EVENT_SOURCE_TASK_ID.to_string(),
         name: Some(EVENT_SOURCE_TASK_ID.to_string()),
-        agent_id: AGENT_NAME.to_string(),
+        agent_did: AGENT_NAME.to_string(),
         prompt_template: "handle event delivery doc".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -675,7 +679,10 @@ fn active_snapshot_with_event_trigger() -> Arc<ActiveRuntimeSnapshot> {
     };
     let trigger = ResolvedEventTrigger {
         session_id_template: None,
-        trigger_doc_id: "event-source-trigger-doc".to_string(),
+        trigger_doc_id: trigger_doc_id.to_owned(),
+        event_source_doc_id: source_doc_id.to_owned(),
+        event_source_id: EVENT_SOURCE_ID.to_owned(),
+        task_doc_id: task_doc_id.to_owned(),
         trigger_id: EVENT_SOURCE_TRIGGER_ID.to_string(),
         task_id: task.task_id.clone(),
         task: task.clone(),
@@ -706,7 +713,7 @@ fn active_snapshot(
         generation: 1,
         node: None,
         local_did: NODE_DID.to_string(),
-        default_agent_id: AGENT_NAME.to_string(),
+        default_agent_did: AGENT_NAME.to_string(),
         agents: RapidHashMap::from_iter([(AGENT_NAME.to_string(), runtime_agent(AGENT_NAME))]),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -722,19 +729,19 @@ fn active_snapshot(
     })
 }
 
-fn runtime_agent(agent_id: &str) -> Arc<gents::ResolvedAgent> {
+fn runtime_agent(agent_did: &str) -> Arc<gents::ResolvedAgent> {
     let identity: Arc<dyn gents::NodeIdentity> = Arc::new(crate::support::fixtures::test_identity(
-        &format!("event-delivery-{agent_id}"),
+        &format!("event-delivery-{agent_did}"),
     ));
     let node = Arc::new(gents::RuntimeNode {
         node_did: NODE_DID.to_string(),
         identity,
-        default_agent_id: AGENT_NAME.to_string(),
+        default_agent_did: AGENT_NAME.to_string(),
         display_name: None,
         enabled: true,
     });
     Arc::new(crate::support::fixtures::test_agent_for_node(
-        agent_id, node,
+        agent_did, node,
     ))
 }
 

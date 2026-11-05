@@ -19,15 +19,15 @@ impl ConfigCommandTool {
                     .await
             }
             "list" => bail!(
-                "{resource} has no list: each agent has one; read it with {{\"argv\":[\"{resource}\",\"get\"],\"options\":{{\"agent\":\"AGENT_ID\"}}}} and find agents with [\"agent\",\"list\"]"
+                "{resource} has no list: each agent has one; read it with {{\"argv\":[\"{resource}\",\"get\"],\"options\":{{\"agent\":\"AGENT_DID\"}}}} and find agents with [\"agent\",\"list\"]"
             ),
             "get" => {
-                let (agent_id, rest) = extract_agent_target(&argv[1..])?;
+                let (agent_did, rest) = extract_agent_target(&argv[1..])?;
                 anyhow::ensure!(
                     rest.len() <= 1,
-                    "{resource} get accepts at most one ID and --agent AGENT_ID"
+                    "{resource} get accepts at most one ID and --agent AGENT_DID"
                 );
-                let core = self.target_core(agent_id.as_deref(), resource).await?;
+                let core = self.target_core(agent_did.as_deref(), resource).await?;
                 match rest.first() {
                     Some(id) => self.exact_read(target, id).await,
                     None => self.bound_read(&core, target).await,
@@ -38,12 +38,12 @@ impl ConfigCommandTool {
                     && (verb == "create" || argv.get(1).is_some_and(|word| word == "create")) =>
             {
                 bail!(
-                "tools are created with their agent (agent create); change an agent's tools with {{\"argv\":[\"tools\",\"edit\"],\"options\":{{\"agent\":\"AGENT_ID\"}},\"set\":{{\"GROUP\":VALUE}}}}"
+                "tools are created with their agent (agent create); change an agent's tools with {{\"argv\":[\"tools\",\"edit\"],\"options\":{{\"agent\":\"AGENT_DID\"}},\"set\":{{\"GROUP\":VALUE}}}}"
                 )
             }
             "preview" | "edit" => {
-                let (agent_id, rest) = extract_agent_target(&argv[1..])?;
-                let core = self.target_core(agent_id.as_deref(), resource).await?;
+                let (agent_did, rest) = extract_agent_target(&argv[1..])?;
+                let core = self.target_core(agent_did.as_deref(), resource).await?;
                 let (allow_drop, rest) = extract_allow_drop(&rest)?;
                 anyhow::ensure!(
                     allow_drop.is_empty() || target == SelfConfigTarget::Tools,
@@ -165,7 +165,7 @@ impl ConfigCommandTool {
                     "refreshed": false,
                     "observation": observation,
                     "note": "This backend is credentialed, so self-config did not contact the provider. The catalog is the last credential-free observation published by operator discovery (desktop setup, gents config backend discover-models --backend-id) or the runtime prober; null means none has been recorded yet.",
-                    "resource": "InferenceBackend",
+                    "resource": "InferenceBackendMetadata",
                     "endpoint": backend.endpoint,
                     "provider_kind": backend.provider_kind,
                 }
@@ -185,7 +185,7 @@ impl ConfigCommandTool {
                 "refreshed": true,
                 "observation": observation,
                 "note": "Provider-advertised facts were recorded for this persisted backend. Discovery did not create a profile, select a model, or change an agent.",
-                "resource": "InferenceBackend",
+                "resource": "InferenceBackendMetadata",
                 "endpoint": backend.endpoint,
             }
             .pretty();
@@ -240,11 +240,11 @@ impl ConfigCommandTool {
                 )
                 .await;
         }
-        let (agent_id, target_args) = extract_agent_target(&argv[1..])?;
-        if agent_id.is_none() && matches!(verb, "preview" | "edit") {
+        let (agent_did, target_args) = extract_agent_target(&argv[1..])?;
+        if agent_did.is_none() && matches!(verb, "preview" | "edit") {
             self.require_named_profile_owner(verb).await?;
         }
-        let core = self.target_core(agent_id.as_deref(), "profile").await?;
+        let core = self.target_core(agent_did.as_deref(), "profile").await?;
         let mut rest = target_args.as_slice();
         let target_name = rest
             .first()
@@ -288,7 +288,8 @@ impl ConfigCommandTool {
 
     async fn require_named_profile_owner(&self, verb: &str) -> Result<()> {
         let owner = escape_graphql_string(&self.node_did);
-        let query = format!("{{ Agent(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{agent_id}} }}");
+        let query =
+            format!("{{ Agent(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{agent_did}} }}");
         let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
@@ -302,7 +303,7 @@ impl ConfigCommandTool {
         let mut ids = gents_protocol::graphql::graphql_rows_from_response(&response, "Agent")
             .into_iter()
             .filter_map(|row| {
-                row.get("agent_id")
+                row.get("agent_did")
                     .and_then(Value::as_str)
                     .map(ToOwned::to_owned)
             })
@@ -312,7 +313,7 @@ impl ConfigCommandTool {
             ids.len() <= 1,
             "profile {verb} needs options.agent because this node has several agents: {}. Name the agent whose profile to change; use {:?} for your own",
             ids.join(", "),
-            self.core.agent_id()
+            self.core.agent_did()
         );
         Ok(())
     }

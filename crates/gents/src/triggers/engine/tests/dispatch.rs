@@ -30,6 +30,7 @@ async fn dispatch_renders_goal_objective_with_the_request_template_scope() {
             args_vars: Some(serde_json::json!({"owner": "runtime"})),
             durable_fire_key: "dispatch-goal-fire".to_string(),
             pre_materialized_request_id: None,
+            event_source_generation: None,
             on_result: Box::new(|_| {}),
         })
         .await;
@@ -79,6 +80,7 @@ async fn latest_only_goal_fire_retry_does_not_supersede_its_own_request() {
         args_vars: None,
         durable_fire_key: "schedule:sched-goal-retry:2026-09-02T12:00:00Z".to_string(),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -145,6 +147,7 @@ async fn goal_fire_retry_recovers_after_goal_declaration_is_removed() {
         args_vars: None,
         durable_fire_key: durable_fire_key.to_string(),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -226,6 +229,7 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
         args_vars: None,
         durable_fire_key: super::super::durable_fire_key("event-group", &["same-generation"]),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -298,6 +302,7 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
         args_vars: None,
         durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -364,6 +369,7 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
         args_vars: None,
         durable_fire_key: super::super::durable_fire_key("event-group", &[correlation]),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -420,6 +426,7 @@ async fn dispatch_latest_only_lock_blocks_second_supersede_until_first_materiali
         args_vars: None,
         durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -517,6 +524,7 @@ async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
         args_vars: None,
         durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(move |r| {
             *capture.lock().unwrap() = Some(r);
         }),
@@ -582,6 +590,7 @@ async fn dispatch_scopes_concurrency_by_the_agents_node_did() {
         args_vars: None,
         durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(|_| {}),
     };
     assert!(matches!(
@@ -603,6 +612,7 @@ async fn dispatch_scopes_concurrency_by_the_agents_node_did() {
         args_vars: None,
         durable_fire_key: "dispatch-test-fire".to_string(),
         pre_materialized_request_id: None,
+        event_source_generation: None,
         on_result: Box::new(|_| {}),
     };
     assert!(matches!(
@@ -643,6 +653,7 @@ async fn scheduled_target_uses_stable_receipt_and_actual_session_template_scope(
                 args_vars: None,
                 durable_fire_key: "persisted-due-occurrence".into(),
                 pre_materialized_request_id: None,
+                event_source_generation: None,
                 on_result: Box::new(|_| {}),
             })
             .await;

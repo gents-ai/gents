@@ -75,6 +75,13 @@ pub(super) async fn retain_inventory(
             observed == input,
             "file inventory conflicts with an existing projection"
         );
+        let session = crate::session::load_agent_session_owner_in_txn(
+            txn,
+            &scope.node_did,
+            &scope.session_id,
+        )
+        .await?
+        .context("file inventory source session is unavailable")?;
         let owners = txn
             .document_owners("ToolFileInventory", std::slice::from_ref(&id))
             .await?;
@@ -84,8 +91,8 @@ pub(super) async fn retain_inventory(
                 && owners[0]
                     .owner
                     .as_ref()
-                    .is_some_and(|owner| owner.as_str() == scope.node_did),
-            "file inventory projection is not owned by its source node"
+                    .is_some_and(|owner| owner.as_str() == session.session.agent_did),
+            "file inventory projection is not owned by its selected agent"
         );
         return Ok(());
     }

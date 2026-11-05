@@ -8,7 +8,7 @@ use gents::store::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::{discover_backend_models, BackendProviderKind, Collection};
+use gents::{discover_backend_models, Collection};
 use serde_json::json;
 
 fn backend_plan(contents: &[u8]) -> Result<(InferenceBackend, DesiredStateApplyPlan)> {
@@ -92,6 +92,57 @@ pub(super) async fn backend_pool(args: BackendPoolArgs) -> Result<()> {
 
 pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> Result<()> {
     let (stored, target) = resolve_backend_discovery_target(&args).await?;
+    if let Some(backend) = stored.as_ref().filter(|backend| {
+        matches!(&backend.auth, BackendAuth::Credential { .. }) || backend.auth.uses_node_oauth()
+    }) {
+        let (access, _) =
+            crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+        let models = match &access {
+            ConfigAccess::Local(_) => {
+                let node = access.local_node().context("runtime is unavailable")?;
+                let actor = access
+                    .actor_did()
+                    .context("runtime discovery requires an authenticated actor")?;
+                gents::inference::backends::registry::discover_backend_for_actor(
+                    node,
+                    &identity::Did::new(&actor)?,
+                    &backend.node_did,
+                    &backend.backend_id,
+                )
+                .await?
+            }
+            ConfigAccess::Graphql(endpoint) => {
+                let mut url = reqwest::Url::parse(endpoint.url())?;
+                url.set_path(crate::http::inference_activity::BACKEND_DISCOVERY_PATH);
+                url.set_query(None);
+                url.set_fragment(None);
+                let client = reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()?;
+                let response = endpoint
+                    .authorize(client.post(url))?
+                    .json(&json!({"node_did":backend.node_did.as_str(), "backend_id":backend.backend_id.as_str()}))
+                    .send()
+                    .await?;
+                anyhow::ensure!(
+                    response.status().is_success(),
+                    "runtime backend discovery failed (HTTP {})",
+                    response.status()
+                );
+                let body: serde_json::Value = response.json().await?;
+                serde_json::from_value(
+                    body.get("discovered_models")
+                        .cloned()
+                        .context("runtime discovery returned no models")?,
+                )?
+            }
+        };
+        return crate::print_json(
+            &json!({"backend_id":args.backend_id, "provider_kind":backend.provider_kind.as_str(),
+            "endpoint":backend.endpoint.as_str(), "api_key":(!backend.auth.uses_node_oauth()).then_some("<redacted>"), "discovered_models":models, "catalog_written":true}),
+        );
+    }
     let timeout = std::time::Duration::from_secs(
         stored
             .as_ref()
@@ -106,74 +157,23 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
     )
     .min(timeout);
     let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(connect)
         .timeout(timeout)
         .build()
         .context("building backend discovery client")?;
-    let (oauth_credential, oauth_node_did) = if target.provider_kind.is_node_scoped_oauth() {
-        let account_ref = stored
-            .as_ref()
-            .and_then(|backend| backend.auth.oauth_account_ref());
-        let (credential, owner) =
-            load_oauth_credential_for_discovery(&args, target.provider_kind, account_ref).await?;
-        (credential, Some(owner))
-    } else {
-        (None, None)
-    };
-    let discovered_models = match discover_backend_models(
+    anyhow::ensure!(
+        !target.provider_kind.is_node_scoped_oauth(),
+        "subscription discovery requires --backend-id so the runtime can authorize the selected backend"
+    );
+    let discovered_models = discover_backend_models(
         &client,
         target.provider_kind,
         &target.endpoint,
         target.api_key.as_deref(),
-        oauth_credential.as_ref(),
+        None,
     )
-    .await
-    {
-        Ok(models) => models,
-        Err(error)
-            if target.provider_kind == BackendProviderKind::ChatGptCodex
-                && discovery_error_is_auth(&error) =>
-        {
-            let guidance = gents::inference::auth::credential::classify_chatgpt_auth_error(
-                oauth_node_did.as_deref().unwrap_or(""),
-                gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
-                &gents::inference::auth::credential::OAuthAuthProblem::Expired,
-            );
-            anyhow::bail!("{error:#}\n{guidance}");
-        }
-        Err(error)
-            if target.provider_kind == BackendProviderKind::XaiGrokOAuth
-                && discovery_error_is_auth(&error) =>
-        {
-            let guidance = gents::inference::clients::xai_grok::classify_xai_auth_error(
-                oauth_node_did.as_deref().unwrap_or(""),
-                gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
-                &gents::inference::auth::credential::OAuthAuthProblem::Expired,
-            );
-            anyhow::bail!("{error:#}\n{guidance}");
-        }
-        Err(error)
-            if target.provider_kind == BackendProviderKind::XaiGrokOAuth
-                && discovery_error_is_client_version_gate(&error) =>
-        {
-            anyhow::bail!(
-                "{error:#}\n{}",
-                gents::inference::clients::xai_grok::grok_client_version_gate_guidance()
-            );
-        }
-        Err(error)
-            if target.provider_kind == BackendProviderKind::ClaudeCliSubscription
-                && discovery_error_is_auth(&error) =>
-        {
-            let guidance = gents::inference::auth::claude::classify_claude_auth_error(
-                oauth_node_did.as_deref().unwrap_or(""),
-                gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
-                &gents::inference::auth::credential::OAuthAuthProblem::Expired,
-            );
-            anyhow::bail!("{error:#}\n{guidance}");
-        }
-        Err(error) => return Err(error),
-    };
+    .await?;
 
     let catalog_written = if let Some(backend) = stored.as_ref() {
         let (access, _) =
@@ -191,58 +191,6 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
     }))
 }
 
-async fn load_oauth_credential_for_discovery(
-    args: &BackendDiscoverModelsArgs,
-    provider_kind: BackendProviderKind,
-    account_ref: Option<&str>,
-) -> Result<(
-    Option<gents::inference::auth::credential::OAuthCredential>,
-    String,
-)> {
-    let (provider, _login) = match provider_kind {
-        BackendProviderKind::ChatGptCodex => (
-            gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
-            "gents codex-login",
-        ),
-        BackendProviderKind::XaiGrokOAuth => (
-            gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
-            "gents grok-login",
-        ),
-        BackendProviderKind::ClaudeCliSubscription => (
-            gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
-            "gents claude-login",
-        ),
-        _ => anyhow::bail!("load_oauth_credential_for_discovery called for non-OAuth provider"),
-    };
-    let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
-    let (access, _) =
-        crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let credential = gents::inference::auth::credential::resolve_oauth_credential(
-        &access,
-        &node_did,
-        provider,
-        gents::inference::auth::credential::AccountPick::Reference(account_ref),
-    )
-    .await?;
-    Ok((credential, node_did))
-}
-
-fn discovery_error_is_auth(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<gents::inference::backends::provider::ModelDiscoveryHttpError>()
-            .is_some_and(|http| http.is_auth())
-    })
-}
-
-fn discovery_error_is_client_version_gate(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<gents::inference::backends::provider::ModelDiscoveryHttpError>()
-            .is_some_and(|http| http.is_client_version_gate())
-    })
-}
-
 fn stored_backend_target(backend: &InferenceBackend) -> Result<ResolvedBackendConfig> {
     backend.validate()?;
     Ok(ResolvedBackendConfig {
@@ -250,6 +198,7 @@ fn stored_backend_target(backend: &InferenceBackend) -> Result<ResolvedBackendCo
         openai_wire_api: backend.openai_wire_api,
         endpoint: backend.endpoint.clone(),
         api_key: match &backend.auth {
+            BackendAuth::Credential { .. } => None,
             auth if auth.uses_node_oauth() => None,
             auth => auth.probe_key()?,
         },
@@ -485,7 +434,7 @@ mod tests {
         assert!(error.contains("subscription"), "{error}");
         assert!(matches!(
             stored_auth(&access, "openai").await,
-            BackendAuth::ApiKey { .. }
+            BackendAuth::Credential { .. }
         ));
         let codex = pool_output(&access, DID, "codex", pool(None))
             .await

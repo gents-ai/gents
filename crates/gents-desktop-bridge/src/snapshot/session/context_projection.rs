@@ -68,15 +68,15 @@ pub(super) fn build_session_context_view(
     store: &gents_desktop_core::client::ClientStore,
     context_store: &gents_desktop_core::client::ClientStore,
     node_did: Option<&str>,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     session_id: &str,
     durable_messages: Vec<(Option<i64>, Message)>,
     durable_message_count: usize,
     transcript_totals_exact: bool,
 ) -> SessionContextView {
-    let agent = agent_id.and_then(|agent_id| {
+    let agent = agent_did.and_then(|agent_did| {
         store.agents.iter().find(|row| {
-            row.agent_id == agent_id && node_did.is_none_or(|node_did| row.node_did == node_did)
+            row.agent_did == agent_did && node_did.is_none_or(|node_did| row.node_did == node_did)
         })
     });
     let inference_profile = agent.and_then(|agent| {
@@ -235,7 +235,7 @@ pub(super) fn build_session_context_from_stores(
     store: &ClientStore,
     context_store: &ClientStore,
     node_did: Option<&str>,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     session_id: &str,
     transcript_totals_exact: bool,
 ) -> SessionContextView {
@@ -273,7 +273,7 @@ pub(super) fn build_session_context_from_stores(
         store,
         context_store,
         node_did,
-        agent_id,
+        agent_did,
         session_id,
         durable_messages,
         durable_message_count,
@@ -332,7 +332,7 @@ mod order_profile_tests {
     #[test]
     fn partial_store_display_meter_matches_configured_grouped_and_native_order() {
         let agent = serde_json::from_value(serde_json::json!({
-            "agent_id": "agent", "node_did": "did:test:meter",
+            "agent_did": "agent", "node_did": "did:test:meter",
             "inference_profile_id": "profile"
         }))
         .expect("agent");

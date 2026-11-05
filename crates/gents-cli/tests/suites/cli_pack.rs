@@ -435,7 +435,7 @@ fn wire_target(id: &str) -> serde_json::Value {
     serde_json::json!({
         "target_id": id,
         "target_node_did": FOREIGN_NODE,
-        "agent_id": id,
+        "agent_did": id,
         "name": id,
     })
 }
@@ -465,9 +465,9 @@ fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixt
     init_args.extend_from_slice(init_extra);
     let initialized = run_init_json(scratch, &init_args)?;
     let owner_did = node_did_from_init(&initialized)?;
-    let agent = initialized["default_agent_id"]
+    let agent = initialized["default_agent_did"]
         .as_str()
-        .context("init output missing default_agent_id")?
+        .context("init output missing default_agent_did")?
         .to_owned();
 
     let job_pack = scratch.join("job_plugin_fixture");
@@ -794,9 +794,9 @@ fn uninstalled_job_pack() -> Result<WireFixture> {
         scratch,
         &["--node-name", "pack-digest", "--home", dir_arg(&home)],
     )?;
-    let agent = initialized["default_agent_id"]
+    let agent = initialized["default_agent_did"]
         .as_str()
-        .context("init output missing default_agent_id")?
+        .context("init output missing default_agent_did")?
         .to_owned();
     let job_pack = scratch.join("job_plugin_fixture");
     copy_dir_all(&fixture_pack_dir("job_plugin_fixture"), &job_pack)?;

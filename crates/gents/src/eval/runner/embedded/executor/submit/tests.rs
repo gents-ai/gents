@@ -15,12 +15,17 @@ async fn a_seed_wait_resolves_as_soon_as_reconciliation_reports_an_error() {
     let seed = FixtureDocument {
         collection: "MissingSeedCollection".into(),
         document: json!({"label": "not submitted"}),
+        session_readers: Vec::new(),
+        session_agent_owned: false,
+        expired_client_request: false,
     };
     let error = {
         let waiting = seed_and_await_fire(
             &home,
+            "did:test:unselected",
             &ready,
             &seed,
+            None,
             Some(Duration::from_secs(2)),
             "trial",
             "stage",
@@ -54,10 +59,14 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
         "eval.test.seed_race",
         "RaceSeed",
         &json!({"label": "race"}),
+        None,
     )
     .await
     .unwrap();
-    assert_eq!(fired_request(&home.node, &doc_id).await.unwrap(), None);
+    assert_eq!(
+        fired_request(&access, home.did(), &doc_id).await.unwrap(),
+        None
+    );
 
     create_document(
         &access,
@@ -67,7 +76,7 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
             "request_id": "fired",
             "node_did": home.did(),
             "requester_did": home.did(),
-            "agent_id": "seeded-agent",
+            "agent_did": "did:test:new-agent",
             "session_id": "s-1",
             "content": "x",
             "execution_origin": "event",
@@ -75,6 +84,7 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
             "created_at": "2026-01-01T00:00:00Z",
             "caused_by_source_doc_id": doc_id,
         }),
+        None,
     )
     .await
     .unwrap();
@@ -102,7 +112,8 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
         .await
         .expect("the second observation sees the delayed trigger failure");
     let resolved = resolve_seed_failure(
-        &home.node,
+        &access,
+        home.did(),
         &doc_id,
         failure,
         Some(Duration::from_secs(600)),
@@ -110,7 +121,7 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
     )
     .await
     .unwrap();
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
     let StageSubmission::Submitted {
         request_id,
         remaining,

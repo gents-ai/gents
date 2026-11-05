@@ -62,6 +62,7 @@ async fn a_declared_slot_the_binding_cannot_fill_is_infrastructure() {
     let spec = TrialSpec {
         pack_digest: materialized_digest(&pack_dir),
         pack_dir,
+        agent_slot: "subject".into(),
         inference: frozen_binding(Value::Null),
         trial_dir: runs_dir.join("run-1").join("trials").join("t1"),
         ..TrialSpec::empty_for_tests("t1")
@@ -76,7 +77,7 @@ async fn a_declared_slot_the_binding_cannot_fill_is_infrastructure() {
         reason.contains("inference slots") && reason.contains("profile_id"),
         "{reason}"
     );
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 
     executor.provision(&spec).await;
     let evidence = executor.execute(&spec, CancellationToken::new()).await;
@@ -146,7 +147,7 @@ pub(super) fn write_slot_pack(root: &Path, inference_profile_id: &str) {
         serde_json::to_vec(&json!({
             "node": {},
             "agents": [{
-                "agent_id": "subject",
+                "agent_slot": "subject",
                 "display_name": "Subject",
                 "inference_profile_id": inference_profile_id,
             }],
@@ -200,7 +201,7 @@ async fn provision_then_execute_on_a_bad_pack_digest_is_infrastructure() {
         .await
         .expect("the trial home survives the close");
     assert_eq!(reopened.did(), locator.trial_node_did);
-    reopened.node.shutdown().await;
+    reopened.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -261,6 +262,27 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
         session_id: "s-1".into(),
         home_hint: Some("trial".into()),
     };
+    let subject = crate::eval::runner::subject_binding::SubjectAgent {
+        slot: "subject".into(),
+        agent_did: "seeded-agent".into(),
+    };
+    crate::eval::runner::view::write_evidence_record(
+        &runs.path().join("trial"),
+        &crate::eval::runner::view::EvidenceRecord {
+            evidence_digest: "retained".into(),
+            subject_agent: Some(subject.clone()),
+            evaluator_did: Some(home.did().to_owned()),
+            anchor: crate::eval::Anchor {
+                terminal_states: vec![],
+                requests: 2,
+                inference_calls: 0,
+            },
+            ended_at: None,
+            live: None,
+            goal: vec![],
+        },
+    )
+    .unwrap();
     close(home).await;
 
     let executor = EmbeddedExecutor::new(
@@ -268,10 +290,23 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
         runs.path().to_owned(),
         crate::test_support::runtime_handle(),
     );
-    let evidence = executor.recollect(&locator, &[]).await.unwrap();
+    let capture = Capture::Documents {
+        name: "subject-requests".into(),
+        collection: "AgentRequest".into(),
+        filter: json!({"agent_did":{"_eq":"gents:agent-slot:subject"}, "requester_did":{"_eq":"$evaluator"}}),
+        fields: vec!["request_id".into()],
+    };
+    let evidence = executor.recollect(&locator, &[capture]).await.unwrap();
     assert_eq!(evidence.stages.len(), 2);
     assert!(evidence.anchor.terminal_states.is_empty());
     for stage in evidence.stages {
+        assert_eq!(stage.subject_agent.as_ref(), Some(&subject));
+        let crate::eval::runner::CaptureResult::Documents { rows } =
+            &stage.captures["subject-requests"]
+        else {
+            panic!("subject capture")
+        };
+        assert_eq!(rows.len(), 2);
         assert_eq!(
             serde_json::to_value(stage.terminal_state).unwrap(),
             case["observed_terminal_state"]
@@ -417,7 +452,7 @@ pub(super) async fn seed_request_with_state(home: &EmbeddedHome, request_id: &st
     let request_id = escape_graphql_string(request_id);
     let state = escape_graphql_string(state);
     let mutation = format!(
-        r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "seeded-agent", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "{state}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
+        r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", requester_did: "{node_did}", agent_did: "seeded-agent", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "{state}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
     );
     let response = home.node.execute(&mutation).await;
     assert!(response.errors.is_empty(), "{:?}", response.errors);

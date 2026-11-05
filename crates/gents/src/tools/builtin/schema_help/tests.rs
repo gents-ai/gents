@@ -107,6 +107,9 @@ async fn node() -> Arc<EmbeddedNode> {
 #[tokio::test]
 async fn schema_publication_matches_executable_lean_contract() {
     for case in &crate::lean_vocab_test::lean_contract_snapshot().schema_publication_cases {
+        if !case["native_allowed"].as_bool().unwrap() {
+            continue;
+        }
         let node = node().await;
         let tool = SchemaTool::new(node.clone());
         let access = ConfigAccess::local(node.clone());
@@ -161,6 +164,175 @@ async fn schema_publication_matches_executable_lean_contract() {
         }
         assert!(!surface.tool_names().contains(&"config".to_owned()));
     }
+}
+
+#[tokio::test]
+async fn schema_publication_uses_agent_native_authority() {
+    use crate::store::config_client::NodePermission;
+    use crate::store::identity::{KeyIdentity, NodeIdentity};
+
+    for case in &crate::lean_vocab_test::lean_contract_snapshot().schema_publication_cases {
+        if case["grant"] != true || case["artifact"] != true || case["compatible"] != true {
+            continue;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
+        let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
+        let agent = crate::store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(runtime.did())
+                .with_node_acp_enabled()
+                .build()
+                .await
+                .unwrap(),
+        );
+        let agent_did = identity::Did::new(agent.did()).unwrap();
+        let did_only =
+            crate::store::identity::RegisteredIdentity::from_registered_did(agent.did(), None)
+                .unwrap();
+        assert!(matches!(
+            SchemaTool::for_managed_agent(node.clone(), &did_only),
+            Err(SchemaIdentityError::ConfigClient(
+                crate::store::config_client::ConfigClientError::ManagedAgentSignerRequired
+            ))
+        ));
+        let foreign_root =
+            KeyIdentity::load_or_create(home.path().join("foreign.key"), None).unwrap();
+        let foreign_binding =
+            crate::store::identity::provision_agent_identity(&foreign_root).unwrap();
+        let foreign_agent =
+            crate::store::identity::resolve_agent_identity(&foreign_root, &foreign_binding)
+                .unwrap();
+        assert!(matches!(
+            SchemaTool::for_managed_agent(node.clone(), foreign_agent.as_ref()),
+            Err(SchemaIdentityError::ConfigClient(
+                crate::store::config_client::ConfigClientError::TransactionActorMismatch
+            ))
+        ));
+        let tool = SchemaTool::for_managed_agent(node.clone(), agent.as_ref()).unwrap();
+        assert!(
+            tool.call(args(json!({"argv":["collection","list"]})))
+                .await
+                .is_err(),
+            "collection discovery must honor the agent's native node permission"
+        );
+        let admin =
+            ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
+        admin
+            .grant_node_permission(&agent_did, NodePermission::CollectionGet)
+            .await
+            .unwrap();
+        if case["native_allowed"] == true {
+            admin
+                .grant_node_permission(&agent_did, NodePermission::CollectionPatch)
+                .await
+                .unwrap();
+        }
+        let preview = call(&tool, json!({"argv":["collection","preview","create"],"options":{"sdl":"type AgentSchemaProbe { value: String }"}})).await;
+        let result = tool.call(args(preview["next_call"]["args"].clone())).await;
+        assert_eq!(
+            result.is_ok(),
+            case["accepted"].as_bool().unwrap(),
+            "{case}: {result:?}"
+        );
+        let installed = ConfigAccess::local(node.clone())
+            .collection_version("AgentSchemaProbe")
+            .await
+            .unwrap()
+            .is_some();
+        assert_eq!(installed, case["accepted"].as_bool().unwrap(), "{case}");
+        node.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn schema_view_and_materialization_use_managed_agent_authority() {
+    use crate::store::config_client::NodePermission;
+    use crate::store::identity::{KeyIdentity, NodeIdentity};
+
+    let home = tempfile::tempdir().unwrap();
+    let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
+    let agent = crate::store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_enabled()
+            .build()
+            .await
+            .unwrap(),
+    );
+    let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
+    owner
+        .add_collection("type AgentViewInput { name: String }")
+        .await
+        .unwrap();
+    let actor_did = identity::Did::new(agent.did()).unwrap();
+    let access =
+        ConfigAccess::local_managed_agent(node.clone(), actor_did.clone(), agent.as_ref()).unwrap();
+    assert!(access
+        .add_schema_view(
+            "AgentViewInput { name }",
+            "type AgentViewDenied { name: String }"
+        )
+        .await
+        .is_err());
+    assert!(access
+        .materialize_schema_collection("AgentViewInput")
+        .await
+        .is_err());
+
+    let cases = crate::lean_vocab_test::lean_identity_household_cases();
+    let group = cases
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .unwrap()
+        ._tool_grant_group_cases
+        .iter()
+        .find(|case| case["name"] == "schema-enable-all")
+        .unwrap();
+    let permissions: Vec<_> = group["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|source| NodePermission::parse(source["permission"].as_str().unwrap()).unwrap())
+        .collect();
+    for permission in &permissions {
+        owner
+            .grant_node_permission(&actor_did, *permission)
+            .await
+            .unwrap();
+    }
+    access
+        .add_schema_view(
+            "AgentViewInput { name }",
+            "type AgentViewAllowed { name: String }",
+        )
+        .await
+        .unwrap();
+    access
+        .materialize_schema_collection("AgentViewInput")
+        .await
+        .unwrap();
+    for permission in &permissions {
+        owner
+            .revoke_node_permission(&actor_did, *permission)
+            .await
+            .unwrap();
+    }
+    assert!(access
+        .add_schema_view(
+            "AgentViewInput { name }",
+            "type AgentViewRevoked { name: String }"
+        )
+        .await
+        .is_err());
+    assert!(access
+        .materialize_schema_collection("AgentViewInput")
+        .await
+        .is_err());
+    node.shutdown().await.unwrap();
 }
 
 #[tokio::test]

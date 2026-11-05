@@ -1,4 +1,7 @@
+import Lean
+
 namespace ClientSubmissionReceipt
+open Lean
 
 /-- The caller retains the canonical request identity before transmission. The
 existing local journal's unique request index is the preparation reservation. -/
@@ -27,6 +30,102 @@ inductive Outcome where
   | accepted
   | notDelivered
   deriving DecidableEq, Repr
+
+/-- Cleanup reports retain the original delivery observation and request
+identity. A failed local cleanup cannot convert a confirmed delivery into an
+unresolved or rejected send, and must not authorize a new request identity. -/
+structure Completion where
+  prepared : Prepared
+  outcome : Outcome
+  cleanupFailed : Bool
+  deriving DecidableEq, Repr
+
+def completion (prepared : Prepared) (outcome : Outcome) (cleanupSucceeded : Bool) : Completion :=
+  ⟨prepared, outcome, outcome != .unresolved && !cleanupSucceeded⟩
+
+theorem cleanup_preserves_delivery (prepared : Prepared) (outcome : Outcome)
+    (cleanupSucceeded : Bool) :
+    (completion prepared outcome cleanupSucceeded).prepared = prepared ∧
+      (completion prepared outcome cleanupSucceeded).outcome = outcome := by
+  simp [completion]
+
+theorem unknown_never_claims_cleanup_failure (prepared : Prepared) (cleanupSucceeded : Bool) :
+    (completion prepared .unresolved cleanupSucceeded).cleanupFailed = false := by
+  simp [completion]
+
+/-- A definite native rejection remains attached to the original request
+identity. An ambiguous observation remains unresolved; an absent filtered row
+alone is not a rejection. -/
+structure RejectionObservation where
+  prepared : Prepared
+  outcome : Outcome
+  nativeError : Option Nat
+  deriving DecidableEq, Repr
+
+def rejectionObservation (prepared : Prepared) (outcome : Outcome)
+    (nativeError : Option Nat) : RejectionObservation :=
+  ⟨prepared, outcome, if outcome == .notDelivered then nativeError else none⟩
+
+theorem rejection_preserves_request (prepared : Prepared) (outcome : Outcome) (nativeError : Option Nat) :
+    (rejectionObservation prepared outcome nativeError).prepared = prepared := by rfl
+
+theorem rejection_preserves_native_error (prepared : Prepared) (nativeError : Option Nat) :
+    (rejectionObservation prepared .notDelivered nativeError).nativeError = nativeError := by rfl
+
+theorem unresolved_does_not_report_rejection (prepared : Prepared) (nativeError : Option Nat) :
+    (rejectionObservation prepared .unresolved nativeError).nativeError = none := by rfl
+
+def rejectionCasesJson : String :=
+  let prepared : Prepared := ⟨20, 30, 300⟩
+  (toJson (([Outcome.unresolved, .accepted, .notDelivered]).flatMap fun outcome =>
+    [none, some 71].map fun nativeError =>
+      let observed := rejectionObservation prepared outcome nativeError
+      Json.mkObj [("request", toJson prepared.request),
+        ("outcome", toJson (match outcome with
+          | .unresolved => "unresolved" | .accepted => "accepted" | .notDelivered => "notDelivered")),
+        ("native_error", toJson nativeError), ("expected_request", toJson observed.prepared.request),
+        ("expected_native_error", toJson observed.nativeError)])).compress
+
+/-- An explicit native error while reading a receipt is evidence about that
+read, not proof of non-delivery. The caller retains both the original request
+identity and the error while the outcome stays unresolved. -/
+structure UncertainObservation where
+  prepared : Prepared
+  outcome : Outcome
+  accessError : Option Nat
+  deriving DecidableEq, Repr
+
+def uncertainObservation (prepared : Prepared) (accessError : Option Nat) : UncertainObservation :=
+  ⟨prepared, .unresolved, accessError⟩
+
+theorem uncertain_access_preserves_error_and_identity (prepared : Prepared) (accessError : Option Nat) :
+    (uncertainObservation prepared accessError).prepared = prepared ∧
+      (uncertainObservation prepared accessError).accessError = accessError ∧
+      (uncertainObservation prepared accessError).outcome = .unresolved := by
+  simp [uncertainObservation]
+
+def uncertainErrorCasesJson : String :=
+  let prepared : Prepared := ⟨20, 30, 300⟩
+  (toJson ([none, some 71].map fun error =>
+    let observed := uncertainObservation prepared error
+    Json.mkObj [("request", toJson prepared.request), ("access_error", toJson error),
+      ("expected_request", toJson observed.prepared.request),
+      ("expected_access_error", toJson observed.accessError),
+      ("expected_outcome", toJson "unresolved")])).compress
+
+def cleanupCasesJson : String :=
+  let prepared : Prepared := ⟨20, 30, 300⟩
+  let preparedJson := fun (value : Prepared) => Json.mkObj
+    [("session", toJson value.session), ("request", toJson value.request),
+     ("signedBytes", toJson value.signedBytes)]
+  let outcomeJson := fun (outcome : Outcome) => toJson <| match outcome with
+    | .unresolved => "unresolved" | .accepted => "accepted" | .notDelivered => "notDelivered"
+  (toJson (([Outcome.unresolved, .accepted, .notDelivered]).flatMap fun outcome =>
+    [true, false].map fun success =>
+      let observed := completion prepared outcome success
+      Json.mkObj [("prepared", preparedJson prepared), ("outcome", outcomeJson outcome),
+        ("cleanup_succeeded", toJson success), ("expected_prepared", preparedJson observed.prepared),
+        ("expected_outcome", outcomeJson observed.outcome), ("cleanup_failed", toJson observed.cleanupFailed)])).compress
 
 structure Record where
   intent : Intent

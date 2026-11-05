@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
-use gents::{default_agent_id_for_node, default_inference_profile_id_for_agent};
+use gents::default_inference_profile_id_for_agent;
 use serde_json::Value;
 
 use super::graphql::escape_graphql_string;
@@ -169,17 +169,22 @@ pub async fn assert_runtime_init_state(
 ) -> Result<()> {
     use super::graphql::{first_graphql_row, graphql_query};
 
-    let default_agent_id = default_agent_id_for_node(node_did);
-    let default_profile_id = default_inference_profile_id_for_agent(&default_agent_id);
+    let selected = graphql_query(graphql, &format!("{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", escape_graphql_string(node_did))).await?;
+    let default_agent_did = selected
+        .pointer("/data/Node/0/default_agent_did")
+        .and_then(Value::as_str)
+        .context("initialized node must retain its selected agent")?
+        .to_owned();
+    let default_profile_id = default_inference_profile_id_for_agent(&default_agent_did);
     let query = format!(
         r#"{{
             Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{
                 node_did
-                default_agent_id
+                default_agent_did
                 enabled
             }}
             Agent(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{
-                agent_id
+                agent_did
                 context_id
                 inference_profile_id
                 enabled
@@ -229,8 +234,8 @@ pub async fn assert_runtime_init_state(
         Some(node_did)
     );
     assert_eq!(
-        principal.get("default_agent_id").and_then(Value::as_str),
-        Some(default_agent_id.as_str())
+        principal.get("default_agent_did").and_then(Value::as_str),
+        Some(default_agent_did.as_str())
     );
     assert_eq!(
         principal.get("enabled").and_then(Value::as_bool),
@@ -238,8 +243,8 @@ pub async fn assert_runtime_init_state(
     );
 
     assert_eq!(
-        agent.get("agent_id").and_then(Value::as_str),
-        Some(default_agent_id.as_str())
+        agent.get("agent_did").and_then(Value::as_str),
+        Some(default_agent_did.as_str())
     );
     assert_eq!(
         agent.get("inference_profile_id").and_then(Value::as_str),

@@ -1,6 +1,7 @@
 import Proofs.GoalAutomation.ClientStart
 import Proofs.Conformance.Contracts.Json.SessionDocuments
 import Proofs.Conformance.GoalClientControl
+import Proofs.GoalAutomation.ClientMutation
 
 namespace Conformance.GoalClientStartContracts
 
@@ -8,8 +9,10 @@ open GoalAutomation.ClientStart Conformance.Contracts Lean
 
 def requested : AgentSession.Document :=
   { scope := ⟨1, 10, some 1⟩, agent := 3, createdAt := 5 }
-def empty : State := ⟨none, ⟨false, false, false, false⟩⟩
-def facts : Facts := ⟨⟨true, true, true, false, false⟩, false, 2, 10, true, false, none, none, none, some "initial-assignment", none⟩
+def empty : State := ⟨some requested, ⟨false, false, false, false⟩⟩
+def facts : Facts := ⟨⟨true, true, true, false, false⟩, false, 2, 10, true, false,
+  some "session-document", some "session-document", none, some "initial-assignment", none,
+  3, true, true, 0, 0, true, 0, 0⟩
 
 structure Case where
   name : String
@@ -34,7 +37,15 @@ def boundFacts : Facts :=
     expectedSessionDocument := some "session-document" }
 
 def cases : List Case :=
-  [ { name := "fresh_session" }
+  [ { name := "reserved_session" }
+  , { name := "unreserved_session", before := { empty with session := none },
+      facts := { facts with currentSessionDocument := none, expectedSessionDocument := none } }
+  , { name := "wrong_signed_agent", facts := { facts with selectedAgent := 4 } }
+  , { name := "requester_revoked", facts := { facts with requesterAuthorized := false } }
+  , { name := "concurrent_revocation", facts := { facts with committedAuthorityVersion := 1 } }
+  , { name := "invocation_revoked", facts := { facts with requesterMayInvoke := false } }
+  , { name := "concurrent_invocation_revocation", facts := { facts with committedInvokeVersion := 1 } }
+  , { name := "authority_unavailable", facts := { facts with authorityAvailable := false } }
   , { name := "reuse_session", before := { empty with session := some existing }, facts := boundFacts }
   , { name := "foreign_agent", before := { empty with session := some { existing with agent := 4 } }, facts := boundFacts }
   , { name := "foreign_requester", before := { empty with session := some { existing with scope.requester := some 9 } },
@@ -64,11 +75,47 @@ def sessionJson (session : Option AgentSession.Document) : Json :=
 
 def caseJson (c : Case) : Json :=
   let after := start? c.before requested c.objective c.budget c.facts c.commit
+  let reserved := (reserve? {} requested 1 8 true).getD {}
+  let retried := reserve? reserved requested 1 99 true
+  let agentRequest := { requested with scope.requester := some requested.agent }
+  let agentReserved := (reserve? {} agentRequest requested.agent 12 true).getD {}
+  let receipt : GoalAutomation.ClientMutation.OwnedReceipt := ⟨3, 2, 4, 5⟩
   Json.mkObj [ ("name", toJson c.name), ("session", sessionJson c.before.session),
+    ("reservation", Json.mkObj [
+      ("user_owned", toJson (reserved.owner == some 1)),
+      ("agent_granted", toJson (reserved.worker == some requested.agent)),
+      ("retry_reuses_session", toJson (decide (retried = some reserved))),
+      ("agent_is_owner", toJson (agentReserved.owner == some requested.agent)),
+      ("agent_needs_no_self_grant", toJson agentReserved.worker.isNone)]),
     ("requested", documentJson requested), ("existing_goal", toJson c.before.submission.durableGoal),
     ("objective", toJson c.objective), ("budget", toJson c.budget),
     ("signature_valid", toJson c.facts.authority.signatureValid),
     ("first_request_valid", toJson c.facts.firstRequestValid),
+    ("selected_agent", toJson c.facts.selectedAgent),
+    ("requester_authorized", toJson c.facts.requesterAuthorized),
+    ("authority_available", toJson c.facts.authorityAvailable),
+    ("authority_version", toJson c.facts.authorityVersion),
+    ("committed_authority_version", toJson c.facts.committedAuthorityVersion),
+    ("requester_may_invoke", toJson c.facts.requesterMayInvoke),
+    ("invoke_version", toJson c.facts.invokeVersion),
+    ("committed_invoke_version", toJson c.facts.committedInvokeVersion),
+    ("processing_decision", toJson (match processingDecision c.facts requested.agent with
+      | .allowed => "allowed" | .denied => "denied" | .conflict => "conflict"
+      | .unavailable => "unavailable" | .selectorMismatch => "selector_mismatch")),
+    ("receipt_signer", Json.mkObj [
+      ("selected", toJson (GoalAutomation.ClientMutation.receiptSignerAccepted 3 3 true)),
+      ("runtime", toJson (GoalAutomation.ClientMutation.receiptSignerAccepted 3 1 true))]),
+    ("receipt_ownership", Json.mkObj [
+      ("agent_can_create", toJson (GoalAutomation.ClientMutation.receiptCanCreate 3 3)),
+      ("author_can_create", toJson (GoalAutomation.ClientMutation.receiptCanCreate 3 2)),
+      ("author_can_read_after_revocation", toJson (GoalAutomation.ClientMutation.receiptCanRead receipt 2)),
+      ("author_can_mutate", toJson (GoalAutomation.ClientMutation.receiptCanMutate receipt 2)),
+      ("matches_command", toJson (GoalAutomation.ClientMutation.receiptMatches receipt 4 5)),
+      ("matches_other_digest", toJson (GoalAutomation.ClientMutation.receiptMatches receipt 4 6))]),
+    ("opening_provenance", Json.mkObj [
+      ("delegated_author", toJson (openingProvenanceValid 1 1 2 2)),
+      ("substituted_requester", toJson (openingProvenanceValid 1 2 2 2))]),
+    ("empty_observation", toJson (observedCommands [3] []).isEmpty),
     ("first_goal", toJson c.facts.firstGoalId), ("first_root", toJson c.facts.firstRoot),
     ("now", toJson c.facts.now), ("expires_at", toJson c.facts.expiresAt),
     ("busy", toJson c.facts.unfinishedRequest),

@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use futures::future::BoxFuture;
 use query::TransactionHandle;
 use tracing::{instrument::WithSubscriber, Instrument};

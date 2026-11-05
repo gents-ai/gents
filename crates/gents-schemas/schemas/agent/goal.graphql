@@ -1,6 +1,11 @@
-type Goal @branchable {
+type Goal @policy(id: "8d9e64ca014dddfb01e5a55a5018e0a56d238ea0da1df1b6b33d50b1ac23386a", resource: "children") {
     goal_id: String @index
     session_id: String @index
+    session_doc_id: String @index @immutable
+    agent_did: String @immutable
+    requester_did: String @index @immutable
+    creator_did: String @index @immutable
+    parent_linked: Boolean @index
     node_did: String @index @immutable
     creation_key: String @immutable
     objective: String

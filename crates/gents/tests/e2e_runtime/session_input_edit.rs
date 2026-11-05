@@ -28,12 +28,15 @@ impl Drop for Stop {
 }
 
 async fn rows(db: &TestDb, collection: &str, filter: &str, fields: &str) -> Vec<serde_json::Value> {
-    ConfigAccess::local(db.node.clone())
-        .execute(&format!(
-            "{{ {collection}(filter: {filter}) {{ {fields} }} }}"
-        ))
-        .await
-        .unwrap()["data"][collection]
+    ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    )
+    .execute(&format!(
+        "{{ {collection}(filter: {filter}) {{ {fields} }} }}"
+    ))
+    .await
+    .unwrap()["data"][collection]
         .as_array()
         .unwrap()
         .clone()
@@ -79,7 +82,7 @@ async fn write_command(db: &TestDb, command: &SessionInputEdit) -> String {
         .as_ref()
         .map(|p| format!("\"{}\"", escape_graphql_string(p)))
         .unwrap_or("null".into());
-    let response = ConfigAccess::local(db.node.clone()).write("test.signed_remote_edit", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{
+    let response = ConfigAccess::local_as(db.node.clone(), ::identity::Did::new(db.node_identity.did().to_owned()).unwrap()).write("test.signed_remote_edit", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{
         command_id: "{}", requester_did: "{}", requester_peer_id: {}, node_did: "{}", session_id: "{}", intent_json: "{}"
     }}) {{ _docID }} }}"#, escape_graphql_string(&command.command_id), escape_graphql_string(&command.requester_did), peer,
         escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id),
@@ -507,7 +510,10 @@ impl RemoteEdit<'_> {
                 .collect(),
         };
         let mut native = prepare_pending_user_edit(
-            &ConfigAccess::local(self.client.node.clone()),
+            &ConfigAccess::local_as(
+                self.client.node.clone(),
+                ::identity::Did::new(self.client.node_identity.did().to_owned()).unwrap(),
+            ),
             self.client.node_identity.as_ref(),
             self.admission.clone(),
             did,
@@ -658,8 +664,8 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     let did = db.node_identity.did().to_owned();
     gents::documents::ensure_node(&db.node, &did).await.unwrap();
     let session = "edit-reopen-session";
-    ConfigAccess::local(db.node.clone()).write("test.edit_reopen.session", &format!(
-        r#"mutation {{ create_AgentSession(input: {{ session_id: "{}", node_did: "{}", requester_did: "{}", agent_id: "general", created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,
+    ConfigAccess::local_as(db.node.clone(), ::identity::Did::new(db.node_identity.did().to_owned()).unwrap()).write("test.edit_reopen.session", &format!(
+        r#"mutation {{ create_AgentSession(input: {{ session_id: "{}", node_did: "{}", requester_did: "{}", agent_did: "general", created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,
         escape_graphql_string(session), escape_graphql_string(&did), escape_graphql_string(&did)
     )).await.unwrap();
     let mut original = AgentRequestCreate::base(
@@ -672,7 +678,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         "original durable message",
         "interactive",
         "2026-10-10T00:00:00Z",
-        AgentRequestAdmissionRecord::local_self(&did),
+        AgentRequestAdmissionRecord::client(&did),
     );
     original.input.queue = Some(RequestQueue {
         delivery: QueueDelivery::Steer,
@@ -687,13 +693,16 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     gents::sign_agent_request_create(db.node_identity.as_ref(), &mut original)
         .await
         .unwrap();
-    let response = ConfigAccess::local(db.node.clone())
-        .write(
-            "test.edit_reopen.original",
-            &original.graphql_mutation().unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    )
+    .write(
+        "test.edit_reopen.original",
+        &original.graphql_mutation().unwrap(),
+    )
+    .await
+    .unwrap();
     let original_doc = gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
     let edit = PendingQueueEdit {
         expected_request_doc_ids: vec![original_doc.clone()],
@@ -705,9 +714,12 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         }],
     };
     let replacements = prepare_pending_user_edit(
-        &ConfigAccess::local(db.node.clone()),
+        &ConfigAccess::local_as(
+            db.node.clone(),
+            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+        ),
         db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::local_self(&did),
+        AgentRequestAdmissionRecord::client(&did),
         &did,
         session,
         &did,
@@ -797,9 +809,12 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     let mut stale = command.clone();
     stale.command_id = "edit-after-reopen-stale".into();
     stale.replacements = prepare_pending_user_edit(
-        &ConfigAccess::local(db.node.clone()),
+        &ConfigAccess::local_as(
+            db.node.clone(),
+            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+        ),
         db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::local_self(&did),
+        AgentRequestAdmissionRecord::client(&did),
         &did,
         session,
         &did,
@@ -901,7 +916,7 @@ async fn local_edit_command_as(
         format!("original {suffix}"),
         "interactive",
         "2026-10-10T00:00:00Z",
-        AgentRequestAdmissionRecord::local_self(did),
+        AgentRequestAdmissionRecord::client(did),
     );
     original.input.queue = Some(RequestQueue {
         delivery: QueueDelivery::Steer,
@@ -916,13 +931,16 @@ async fn local_edit_command_as(
     gents::sign_agent_request_create(identity, &mut original)
         .await
         .unwrap();
-    let response = ConfigAccess::local(db.node.clone())
-        .write(
-            "test.duplicate_edit.original",
-            &original.graphql_mutation().unwrap(),
-        )
-        .await
-        .unwrap();
+    let response = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    )
+    .write(
+        "test.duplicate_edit.original",
+        &original.graphql_mutation().unwrap(),
+    )
+    .await
+    .unwrap();
     let original_id = gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
     let edit = PendingQueueEdit {
         expected_request_doc_ids: vec![original_id.clone()],
@@ -934,9 +952,12 @@ async fn local_edit_command_as(
         }],
     };
     let replacements = prepare_pending_user_edit(
-        &ConfigAccess::local(db.node.clone()),
+        &ConfigAccess::local_as(
+            db.node.clone(),
+            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+        ),
         identity,
-        AgentRequestAdmissionRecord::local_self(did),
+        AgentRequestAdmissionRecord::client(did),
         did,
         &session_id,
         did,

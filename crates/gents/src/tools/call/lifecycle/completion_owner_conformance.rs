@@ -8,7 +8,7 @@ use crate::lean_vocab_test::{
 };
 use crate::store::graphql::escape_graphql_string;
 use anyhow::Context;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
 use serde_json::{json, Value};
 
@@ -127,6 +127,19 @@ async fn notification_texts(admission: &PublishedAdmission) -> Vec<(Value, Strin
     notifications
 }
 
+fn recovery_identities(
+    admission: &PublishedAdmission,
+) -> Vec<std::sync::Arc<dyn crate::store::identity::NodeIdentity>> {
+    vec![std::sync::Arc::new(
+        admission
+            .tool
+            .access()
+            .unwrap()
+            .managed_agent_signer()
+            .unwrap(),
+    )]
+}
+
 async fn drive_notification(case: &LeanR6BackgroundingCase) {
     let mut admission = admitted_parent(case, "notification").await;
     let node = &admission.node;
@@ -158,13 +171,21 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
     assert_eq!(pending[0]["lifecycle_state"], "completed", "{}", case.name);
     assert_eq!(pending[0]["request_doc_id"], parent_doc, "{}", case.name);
 
-    let first = ToolCallLifecycle::reconcile_background_completion_side_effects(node, did)
-        .await
-        .expect("redrive durable native completion side effects");
+    let first = ToolCallLifecycle::reconcile_background_completion_side_effects(
+        node,
+        did,
+        &recovery_identities(&admission),
+    )
+    .await
+    .expect("redrive durable native completion side effects");
     assert_eq!(first.side_effects_converged, 1, "{}: {first:?}", case.name);
-    let second = ToolCallLifecycle::reconcile_background_completion_side_effects(node, did)
-        .await
-        .expect("replay completion side effects");
+    let second = ToolCallLifecycle::reconcile_background_completion_side_effects(
+        node,
+        did,
+        &recovery_identities(&admission),
+    )
+    .await
+    .expect("replay completion side effects");
     assert!(second.is_noop(), "{}: {second:?}", case.name);
 
     let notifications = notification_texts(&admission).await;
@@ -240,7 +261,11 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
         "{}: completion changed Goal",
         case.name
     );
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -267,6 +292,7 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
     let admission = admitted_parent(case, "redrive").await;
     let node = &admission.node;
     let did = admission.node_did.as_str();
+    let agent_did = escape_graphql_string(admission.tool.actor().as_str());
     let session = admission.tool.session_id.as_str();
     let parent_doc = admission.tool.request_doc_id().unwrap();
     let parent_row = rows(
@@ -311,7 +337,7 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
             .unwrap();
     let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
-        request_id: "{}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_id: "general",
+        request_id: "{}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_did: "{agent_did}",
         session_id: "{}", content: "background input", input: {input},
         execution_origin: "scheduled", lifecycle_state: "failed",
         failure_reason: "backend admission failed", terminalized_at: "2026-07-15T00:00:00Z",
@@ -330,9 +356,13 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
     assert_eq!(source.len(), 1);
     seed_session_head(node, session, &source[0]).await;
 
-    let first = crate::RequestLifecycle::redrive_failed_background_wakeups(node, did)
-        .await
-        .unwrap();
+    let first = crate::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+        node,
+        did,
+        &recovery_identities(&admission),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         first.redriven > 0,
         case.redrive_allowed.unwrap(),
@@ -340,9 +370,13 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         case.name
     );
     assert_eq!(first.failed, 0, "{}: {first:?}", case.name);
-    let second = crate::RequestLifecycle::redrive_failed_background_wakeups(node, did)
-        .await
-        .unwrap();
+    let second = crate::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+        node,
+        did,
+        &recovery_identities(&admission),
+    )
+    .await
+    .unwrap();
     assert_eq!(second.redriven, 0, "{}: replay added successor", case.name);
     let requests = rows(
         node,
@@ -404,7 +438,11 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         "{}: redrive changed Goal",
         case.name
     );
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -449,7 +487,8 @@ pub(crate) async fn selected_background_wake_with_successor(
     prepare_successor: bool,
 ) -> (SelectedBackgroundWake, Option<String>) {
     use super::admission_fixture::{
-        complete_child, publish_accepted_on_claimed_request, published_session_message_with_owner,
+        complete_child_managed, publish_accepted_on_claimed_request,
+        published_session_message_with_owner,
     };
     use crate::request::lifecycle::{RequestTerminalOutcome, TerminalizeResult};
     use crate::request::watcher::{DefraWatcher, Watcher};
@@ -525,17 +564,27 @@ pub(crate) async fn selected_background_wake_with_successor(
         None
     };
     let wait_header = wait.accepted_header_doc_id().unwrap().to_owned();
-    complete_child(
+    complete_child_managed(
         node,
         &message.caused_request_id,
         did,
         "durable native output",
+        &admission
+            .tool
+            .access()
+            .unwrap()
+            .managed_agent_signer()
+            .unwrap(),
     )
     .await;
     let settled =
-        crate::tools::background::completion::settle_running_session_message_rows(node, did)
-            .await
-            .unwrap();
+        crate::tools::background::completion::settle_running_session_message_rows_with_access(
+            node,
+            &admission.tool.access().unwrap(),
+            did,
+        )
+        .await
+        .unwrap();
     assert_eq!(settled, 1, "the caused request's terminal settles its row");
 
     let notifications = notification_texts(&admission).await;
@@ -605,7 +654,7 @@ pub(crate) async fn selected_background_wake_with_successor(
             .unwrap(),
         TerminalizeResult::Won
     );
-    let mut watcher = DefraWatcher::new(node.clone(), did).expect("request watcher");
+    let mut watcher = DefraWatcher::new_legacy(node.clone(), did).expect("request watcher");
     let selected = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             let selected = watcher
@@ -649,7 +698,7 @@ async fn generated_r6_notification_precedes_continuation_claim() {
     } = selected_background_wake().await;
     let node = &admission.node;
     let did = &admission.node_did;
-    let behavior = selected.agent_id.clone();
+    let behavior = selected.agent_did.clone();
     let mut continuation = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         &behavior,
@@ -676,7 +725,7 @@ async fn generated_r6_notification_precedes_continuation_claim() {
         "claim preserves the preceding assistant wait"
     );
     drop(continuation);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -686,9 +735,17 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     let admission = admitted_parent(case, "over-bound-redrive").await;
     let node = &admission.node;
     let did = admission.node_did.as_str();
-    crate::documents::upsert_node(node, did, None, Some("general"), true, Some(8))
-        .await
-        .expect("set node hop cap");
+    let agent_did = escape_graphql_string(admission.tool.actor().as_str());
+    crate::documents::upsert_node(
+        node,
+        did,
+        None,
+        Some(admission.tool.actor().as_str()),
+        true,
+        Some(8),
+    )
+    .await
+    .expect("set node hop cap");
     let session = admission.tool.session_id.as_str();
     let parent_doc = admission.tool.request_doc_id().unwrap();
     let parent = rows(
@@ -731,7 +788,7 @@ async fn a_retried_over_bound_wake_is_refused_again() {
             .unwrap();
     let deadline = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
     let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
-        request_id: "{refused_wake}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_id: "general",
+        request_id: "{refused_wake}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_did: "{agent_did}",
         session_id: "{}", content: "background input", input: {input},
         execution_origin: "scheduled", lifecycle_state: "failed",
         failure_reason: "AgentRequest causal hop exceeds the target node's max_request_hop",
@@ -747,9 +804,13 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     let source = rows(node, &format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{refused_wake}" }} }}) {{ _docID request_id lifecycle_state created_at }} }}"#), "AgentRequest").await;
     seed_session_head(node, session, &source[0]).await;
 
-    let report = crate::RequestLifecycle::redrive_failed_background_wakeups(node, did)
-        .await
-        .unwrap();
+    let report = crate::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+        node,
+        did,
+        &recovery_identities(&admission),
+    )
+    .await
+    .unwrap();
     assert_eq!(report.redriven, 1, "{report:?}");
     let successor = rows(
         node,
@@ -766,6 +827,10 @@ async fn a_retried_over_bound_wake_is_refused_again() {
         Some(bound),
         hop
     ));
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }

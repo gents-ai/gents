@@ -7,26 +7,26 @@ use crate::request::lifecycle::queue::{
     goal_continuation_agent, goal_continuation_identity, prepare_goal_continuation,
 };
 use crate::store::config_client::ConfigApplyTxn;
-use crate::store::identity::{NodeIdentity, RegisteredIdentity};
+use crate::store::identity::NodeIdentity;
 use gents_protocol::row::AgentRequestRow;
 
-pub(crate) async fn publish_claimed_continuation(
+pub(crate) async fn publish_claimed_continuation_with_identity(
     node: &std::sync::Arc<EmbeddedNode>,
+    identity: &dyn NodeIdentity,
     observed: &GoalDocument,
     parent_request_id: &str,
     content: &str,
     wrapup: bool,
 ) -> Result<Option<GoalResumeReceipt>> {
-    let identity = RegisteredIdentity::from_registered_did(&observed.node_did, None)?;
-    let identity = &identity;
     let stopped = std::sync::Mutex::new(None);
     let stopped_ref = &stopped;
-    // Preserve the automatic queue writer's node actor; target identity signs
-    let receipt = crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "goal.publish_claimed_continuation",
-        move |txn| {
+    let access = crate::ConfigAccess::local_with_optional_agent_signer(
+        node.clone(),
+        identity::Did::new(identity.did())?,
+        identity.managed_agent_signer(),
+    )?;
+    let receipt = access
+        .transact_write("goal.publish_claimed_continuation", move |txn| {
             Box::pin(async move {
                 stage_claimed_continuation(
                     txn,
@@ -39,9 +39,8 @@ pub(crate) async fn publish_claimed_continuation(
                 )
                 .await
             })
-        },
-    )
-    .await?;
+        })
+        .await?;
     if let Some(reason) = stopped
         .into_inner()
         .unwrap_or_else(|poison| poison.into_inner())
@@ -52,17 +51,14 @@ pub(crate) async fn publish_claimed_continuation(
     Ok(receipt)
 }
 
-pub(crate) async fn stop_claimed_continuation_for_unavailable_agent(
-    node: &std::sync::Arc<EmbeddedNode>,
+pub(crate) async fn stop_claimed_continuation_for_unavailable_agent_from_access(
+    access: &crate::ConfigAccess,
     observed: &GoalDocument,
     parent_request_id: &str,
     reason: &str,
 ) -> Result<bool> {
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "goal.stop_unavailable_claimed_continuation",
-        |txn| {
+    access
+        .transact_write("goal.stop_unavailable_claimed_continuation", |txn| {
             Box::pin(async move {
                 let Some(goal) =
                     load_canonical_goal_in_txn(txn, &observed.node_did, &observed.session_id)
@@ -130,9 +126,8 @@ pub(crate) async fn stop_claimed_continuation_for_unavailable_agent(
                 .await?
                 .is_some())
             })
-        },
-    )
-    .await
+        })
+        .await
 }
 
 type StoppedReason = std::sync::Mutex<Option<String>>;
@@ -148,8 +143,8 @@ async fn stage_claimed_continuation(
 ) -> Result<Option<GoalResumeReceipt>> {
     *stopped.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
     anyhow::ensure!(
-        identity.did() == observed.node_did,
-        "claimed publication requires the goal owner's signing identity"
+        txn.actor_did() == Some(identity.did()),
+        "claimed publication transaction must act as its signing agent"
     );
     let Some(goal) =
         load_canonical_goal_in_txn(txn, &observed.node_did, &observed.session_id).await?
@@ -185,6 +180,25 @@ async fn stage_claimed_continuation(
     );
     let parent_row = parents[0];
     let parent = crate::request::watcher::AgentRequest::try_from(parent_row.clone())?;
+    anyhow::ensure!(
+        identity.did() == parent.agent_did,
+        "claimed publication requires the selected agent's signing identity"
+    );
+    let session = escape_graphql_string(&goal.session_id);
+    let node = escape_graphql_string(&goal.node_did);
+    let session_response = txn
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }} }}, limit: 2) {{ agent_did }} }}"#
+        ))
+        .await?;
+    let sessions = session_response
+        .pointer("/data/AgentSession")
+        .and_then(serde_json::Value::as_array)
+        .context("claimed publication session query omitted rows")?;
+    anyhow::ensure!(
+        sessions.len() == 1 && sessions[0]["agent_did"].as_str() == Some(identity.did()),
+        "claimed publication requires the session's selected agent"
+    );
     let behavior = goal_continuation_agent(txn, &parent).await?;
     let sequence = observed.continuation_sequence();
     let now = Utc::now();
@@ -234,7 +248,7 @@ async fn stage_claimed_continuation(
             child,
             &goal.node_did,
             parent_request_id,
-            parent.requester_did.as_deref().unwrap_or(&goal.node_did),
+            parent.requester_did.as_deref().unwrap_or(&parent.agent_did),
         )?;
         let actual: GoalBackedRequestFingerprint =
             serde_json::from_value(serde_json::to_value(child)?)?;

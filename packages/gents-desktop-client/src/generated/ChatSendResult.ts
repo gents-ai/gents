@@ -3,7 +3,7 @@ import type { BridgeError } from "./BridgeError.js";
 import type { ChatSendOutcome } from "./ChatSendOutcome.js";
 import type { ChatSubmissionReceipt } from "./ChatSubmissionReceipt.js";
 
-export type ChatSendResult = { sessionId: string, requestId: string, nodeDid: string, agentId: string | null,
+export type ChatSendResult = { sessionId: string, requestId: string, nodeDid: string, agentDid: string | null,
 /**
  * Absent when the owner accepted the request.
  */

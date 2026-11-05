@@ -2,7 +2,7 @@ import Proofs.ToolPolicy.Meet
 
 namespace PluginJob
 
-/-- An AgentTarget wire ID resolves to `(target_node_did, agent_id)`. -/
+/-- An AgentTarget wire ID resolves to `(target_node_did, agent_did)`. -/
 abbrev Target := String × String
 
 namespace TargetResolution

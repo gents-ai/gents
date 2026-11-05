@@ -762,21 +762,6 @@ pub struct SessionLiveDeltaView {
     pub reasoning: Option<SessionLiveTextPatchView>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionHydrationView {
-    pub session_id: String,
-    pub node_did: String,
-    pub phase: String,
-    pub merged_count: usize,
-    pub covered_count: usize,
-    pub served_count: Option<usize>,
-    /// The signed rejection detail, or why this client cannot read it.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    #[ts(optional = nullable)]
-    pub detail: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopSessionSnapshot {
@@ -785,7 +770,7 @@ pub struct DesktopSessionSnapshot {
     pub live_cursor: Option<String>,
     pub session_id: String,
     pub node_did: Option<String>,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub title: Option<String>,
     pub preview_text: Option<String>,
     pub status: Option<String>,
@@ -805,9 +790,6 @@ pub struct DesktopSessionSnapshot {
     pub folded_inputs: Vec<FoldedInputView>,
     pub context: SessionContextView,
     pub timeline_items: Vec<RenderedTimelineItem>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    #[ts(optional = nullable)]
-    pub hydration: Option<SessionHydrationView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub timeline_page: Option<SessionTimelinePageView>,

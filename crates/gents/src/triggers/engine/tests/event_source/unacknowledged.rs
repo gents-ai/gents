@@ -3,7 +3,7 @@ use super::*;
 const RESCAN: Duration = Duration::from_millis(50);
 
 struct Delivery {
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     snapshot_tx: watch::Sender<Arc<ActiveRuntimeSnapshot>>,
     source: EventSource,
     engine: TriggerEngine,
@@ -14,6 +14,7 @@ fn ping_trigger(emit_outcome: bool) -> ResolvedEventTrigger {
     let task = ResolvedTask {
         emit_outcome,
         task_id: "ping-task".to_string(),
+        agent_did: crate::triggers::callback::test_agent_did(),
         ..resolved_task("Handle the ping: {{ doc.message }}")
     };
     ResolvedEventTrigger {
@@ -22,22 +23,87 @@ fn ping_trigger(emit_outcome: bool) -> ResolvedEventTrigger {
     }
 }
 
-fn ping_snapshot(generation: u64, emit_outcome: bool) -> Arc<ActiveRuntimeSnapshot> {
-    snapshot_with_event_triggers(
-        generation,
-        RapidHashMap::from_iter([("ping-trigger".to_string(), ping_trigger(emit_outcome))]),
+async fn ping_snapshot(
+    node: &Arc<defra_node::Node>,
+    generation: u64,
+    emit_outcome: bool,
+) -> Arc<ActiveRuntimeSnapshot> {
+    use crate::store::identity::NodeIdentity;
+    let root = crate::triggers::callback::test_root_identity();
+    let mut agent = event_test_behavior().as_ref().clone();
+    agent.agent_identity = crate::triggers::callback::test_agent_identity();
+    agent.agent_did = agent.agent_identity.did().to_owned();
+    let runtime_node = Arc::new(crate::store::identity::RuntimeNode {
+        node_did: root.did().to_owned(),
+        identity: Arc::new(root),
+        default_agent_did: agent.agent_did.clone(),
+        display_name: None,
+        enabled: true,
+    });
+    agent.node = runtime_node.clone();
+    let mut trigger = ping_trigger(emit_outcome);
+    hydrate_event_config_ids(node, &mut trigger).await;
+    let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+        agent.agent_did.clone(),
+        vec![Arc::new(agent)],
+        RapidHashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
     )
+    .with_node(runtime_node)
+    .with_local_did(crate::request::lifecycle::test_support::PIN_FIXED_DID.into())
+    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+        event_triggers: RapidHashMap::from_iter([("ping-trigger".to_string(), trigger)]),
+        ..Default::default()
+    });
+    Arc::new(resolved.activate(generation, RapidHashMap::new()))
+}
+
+async fn ping_node(schema: &str, emit_outcome: bool) -> Arc<defra_node::Node> {
+    let node = Arc::new(
+        crate::triggers::callback::test_node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(&node).await.unwrap();
+    let owner = crate::request::lifecycle::test_support::PIN_FIXED_DID;
+    crate::triggers::callback::seed_test_agent(&node, owner).await;
+    node.add_collection(schema).await.unwrap();
+    crate::triggers::callback::seed_test_configuration(
+        &node,
+        owner,
+        vec![
+            (
+                crate::Collection::Task,
+                serde_json::json!({"task_id":"ping-task",
+            "agent_did":crate::triggers::callback::test_agent_did(),
+            "prompt_template":"Handle the ping: {{ doc.message }}", "emit_outcome":emit_outcome}),
+            ),
+            (
+                crate::Collection::EventSource,
+                serde_json::json!({"event_source_id":"ping-trigger",
+            "source_collection":"OutcomePing", "event_kind":"created"}),
+            ),
+            (
+                crate::Collection::Trigger,
+                serde_json::json!({"trigger_id":"ping-trigger", "task_id":"ping-task",
+            "concurrency":"parallel", "source":{"kind":"event","event_source_id":"ping-trigger"}}),
+            ),
+        ],
+    )
+    .await;
+    node
 }
 
 #[tokio::test]
 async fn seeded_arrival_delivery_does_not_wait_for_the_mutation_gate() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    node.add_collection("type OutcomePing { message: String }")
-        .await
-        .unwrap();
-    let snapshot = ping_snapshot(1, false);
-    persist_event_bindings(&node, &snapshot).await;
+    let node = ping_node(
+        "type OutcomePing { message: String handoff_id: String }",
+        false,
+    )
+    .await;
+    let snapshot = ping_snapshot(&node, 1, false).await;
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
     source.reconcile_subscriptions(&snapshot).await;
@@ -65,15 +131,16 @@ async fn seeded_arrival_delivery_does_not_wait_for_the_mutation_gate() {
 }
 
 async fn first_delivery(emit_outcome: bool) -> (Delivery, FireIntent) {
-    first_delivery_on("type OutcomePing { message: String }", emit_outcome).await
+    first_delivery_on(
+        "type OutcomePing { message: String handoff_id: String }",
+        emit_outcome,
+    )
+    .await
 }
 
 async fn first_delivery_on(schema: &str, emit_outcome: bool) -> (Delivery, FireIntent) {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    node.add_collection(schema).await.unwrap();
-    let snapshot = ping_snapshot(1, emit_outcome);
-    persist_event_bindings(&node, snapshot.as_ref()).await;
+    let node = ping_node(schema, emit_outcome).await;
+    let snapshot = ping_snapshot(&node, 1, emit_outcome).await;
     let (snapshot_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx.clone(), node.clone(), CancellationToken::new())
         .with_rescan_interval(RESCAN);
@@ -114,8 +181,8 @@ async fn first_delivery_on(schema: &str, emit_outcome: bool) -> (Delivery, FireI
 
 impl Delivery {
     async fn cursor(&self) -> String {
-        let owner = event_test_behavior().node_did().to_owned();
-        crate::store::config_client::ConfigAccess::local(self.node.clone())
+        let owner = crate::request::lifecycle::test_support::PIN_FIXED_DID.to_owned();
+        crate::triggers::callback::test_agent_access(&self.node)
             .transact_write("test.unacknowledged_cursor", |txn| {
                 let owner = &owner;
                 Box::pin(async move {
@@ -242,7 +309,10 @@ async fn refused_fire_fails_once_visibly_and_is_delivered_once_after_reconfigura
         vec![delivery.doc_id.clone()]
     );
 
-    delivery.snapshot_tx.send(ping_snapshot(2, false)).unwrap();
+    delivery
+        .snapshot_tx
+        .send(ping_snapshot(&delivery.node, 2, false).await)
+        .unwrap();
     let node = delivery.node.clone();
     let intent = tokio::time::timeout(Duration::from_secs(5), delivery.source.next_fire())
         .await
@@ -252,7 +322,12 @@ async fn refused_fire_fails_once_visibly_and_is_delivered_once_after_reconfigura
         intent.event_vars["source_doc_id"].as_str(),
         Some(delivery.doc_id.as_str())
     );
-    let result = admit_observed_event(&node, &intent).await;
+    let result = admit_selected_event(
+        &node,
+        &intent,
+        crate::request::lifecycle::test_support::PIN_FIXED_DID,
+    )
+    .await;
     (intent.on_result)(result);
     let repeats = delivery.drain(Duration::from_secs(1), |_| None).await;
     assert_eq!(repeats, 0, "an admitted arrival fired again");
@@ -471,7 +546,12 @@ async fn repaired_document_is_delivered_once(drop_notification: bool) {
         .expect("the repaired document was not retried")
         .expect("source closed");
     assert_eq!(intent.doc_vars.as_ref().unwrap()["handoff_id"], "handoff-1");
-    let result = admit_observed_event(&node, &intent).await;
+    let result = admit_selected_event(
+        &node,
+        &intent,
+        crate::request::lifecycle::test_support::PIN_FIXED_DID,
+    )
+    .await;
     (intent.on_result)(result);
     assert_eq!(delivery.drain(Duration::from_secs(1), |_| None).await, 0);
     assert!(delivery.pending_documents().await.is_empty());

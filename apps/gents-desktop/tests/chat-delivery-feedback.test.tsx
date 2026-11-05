@@ -29,7 +29,7 @@ function fixture(sending = false) {
     nodeDid,
     requestId: "original-request",
     sessionId: "original-session",
-    agentId: "default",
+    agentDid: "default",
     content: "Original message",
     cwd: "/original",
   };

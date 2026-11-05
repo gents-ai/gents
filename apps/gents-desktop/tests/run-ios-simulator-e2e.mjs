@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -11,6 +12,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createIosReconnectFixture } from "./ios-reconnect-fixture.mjs";
 
 const TESTS_ROOT = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(TESTS_ROOT, "..");
@@ -29,6 +31,16 @@ const args = new Set(process.argv.slice(2));
 const skipBuild = args.has("--skip-build");
 const keepData = args.has("--keep-data");
 const measurePerformance = args.has("--measure");
+const reconnect = args.has("--reconnect");
+const interruption = new AbortController();
+const signalHandlers = new Map();
+if (reconnect) {
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    const handler = () => interruption.abort(new Error(`Interrupted by ${signal}`));
+    signalHandlers.set(signal, handler);
+    process.on(signal, handler);
+  }
+}
 const runnerMonotonicOrigin = process.hrtime.bigint();
 const artifactArgument = process.argv
   .slice(2)
@@ -38,8 +50,14 @@ const runs = Number.parseInt(runsArgument?.split("=")[1] ?? "1", 10);
 if (!Number.isInteger(runs) || runs < 1) {
   throw new Error("--runs must be a positive integer");
 }
+if (reconnect && (runs !== 1 || keepData || measurePerformance)) {
+  throw new Error(
+    "--reconnect requires one run with fresh simulator data and no performance measurement",
+  );
+}
 
 function run(command, commandArgs, options = {}) {
+  interruption.signal.throwIfAborted();
   const printable = [command, ...commandArgs].join(" ");
   process.stdout.write(`\n$ ${printable}\n`);
   execFileSync(command, commandArgs, {
@@ -51,6 +69,7 @@ function run(command, commandArgs, options = {}) {
 }
 
 function capture(command, commandArgs, options = {}) {
+  interruption.signal.throwIfAborted();
   return execFileSync(command, commandArgs, {
     cwd: options.cwd ?? APP_ROOT,
     env: options.env ?? process.env,
@@ -87,11 +106,18 @@ function simulator() {
 
 function issuerSettings() {
   const remote = process.env.GENTS_E2E_ISSUER_SSH?.trim();
+  const repoRoot = resolve(APP_ROOT, "..", "..");
+  const targetRoot = resolve(repoRoot, process.env.CARGO_TARGET_DIR ?? "target");
+  const fastDevBinary = join(targetRoot, "fast-dev", "gents");
   const releaseBinary = resolve(APP_ROOT, "..", "..", "target", "release", "gents");
   const debugBinary = resolve(APP_ROOT, "..", "..", "target", "debug", "gents");
   const binary =
     process.env.GENTS_E2E_ISSUER_GENTS?.trim() ||
-    (existsSync(releaseBinary) ? releaseBinary : debugBinary);
+    (reconnect
+      ? fastDevBinary
+      : existsSync(releaseBinary)
+        ? releaseBinary
+        : debugBinary);
   const home =
     process.env.GENTS_E2E_ISSUER_HOME?.trim() ||
     join(homedir(), ".gents", "iphone-e2e");
@@ -108,7 +134,10 @@ function runIssuer(settings, commandArgs) {
     ? spawnSync("ssh", [settings.remote, settings.binary, ...commandArgs], {
         encoding: "utf8",
       })
-    : spawnSync(settings.binary, commandArgs, { encoding: "utf8" });
+    : spawnSync(settings.binary, commandArgs, {
+        encoding: "utf8",
+        env: settings.env ?? process.env,
+      });
 }
 
 function issuerFailureDetail(result) {
@@ -128,13 +157,19 @@ function enrollmentServerAddress() {
 }
 
 async function approveEnrollment(settings, requestId) {
-  process.stdout.write(`Approving authenticated enrollment ${requestId}…\n`);
+  await runEnrollmentDecision(settings, requestId, "grant");
+  await runEnrollmentDecision(settings, requestId, "approve");
+}
+
+async function runEnrollmentDecision(settings, requestId, action) {
+  process.stdout.write(`${action} authenticated enrollment ${requestId}…\n`);
   const deadline = Date.now() + 30_000;
   while (true) {
+    interruption.signal.throwIfAborted();
     const result = runIssuer(settings, [
       "p2p",
       "enrollment",
-      "approve",
+      action,
       requestId,
       "--home",
       settings.home,
@@ -148,7 +183,7 @@ async function approveEnrollment(settings, requestId) {
       !detail.includes(`no fresh pending enrollment request ${requestId}`) ||
       Date.now() >= deadline
     ) {
-      throw new Error(`Could not approve E2E enrollment: ${detail}`);
+      throw new Error(`Could not ${action} E2E enrollment: ${detail}`);
     }
     await delay(500);
   }
@@ -211,6 +246,7 @@ async function waitForScenario({
   artifactRoot,
   statusPath,
   enrollmentOperator,
+  reconnectFixture,
 }) {
   const timeoutMs = Number.parseInt(
     process.env.GENTS_E2E_TIMEOUT_MS ?? `${DEFAULT_TIMEOUT_MS}`,
@@ -225,8 +261,10 @@ async function waitForScenario({
   let passedAt = null;
   const processSamples = [];
   const approvedRequestIds = new Set();
+  let liveDocumentId = null;
 
   while (Date.now() < deadline) {
+    interruption.signal.throwIfAborted();
     const processSample = sampleProcess(pid);
     if (processSample) processSamples.push(processSample);
     const status = readStatus(statusPath);
@@ -249,7 +287,31 @@ async function waitForScenario({
           approvedRequestIds.add(requestId);
         }
       }
+      if (status.stage === "reconnect-arm") {
+        if (!reconnectFixture) throw new Error("Unexpected reconnect scenario");
+        reconnectFixture.setOnline(false);
+      }
+      if (status.stage === "reconnect-offline") {
+        if (!reconnectFixture) throw new Error("Unexpected reconnect scenario");
+        reconnectFixture.writeName(`${reconnectFixture.correlationId}-offline`);
+        reconnectFixture.setOnline(true);
+      }
+      if (status.stage === "reconnect-caught-up") {
+        if (!reconnectFixture) throw new Error("Unexpected reconnect scenario");
+        reconnectFixture.beginAgentEvidence();
+        liveDocumentId = reconnectFixture.writeName(
+          `${reconnectFixture.correlationId}-live`,
+        );
+      }
       if (status.stage === "passed") {
+        if (
+          reconnectFixture &&
+          (!liveDocumentId || !reconnectFixture.observedAgentDocument(liveDocumentId))
+        ) {
+          throw new Error(
+            "The changed Agent document was not observed on its re-armed SSE stream",
+          );
+        }
         passedAt ??= Date.now();
       }
       if (status.stage === "failed") {
@@ -298,159 +360,217 @@ function delay(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
 
-const device = simulator();
-if (!device) {
+const selectedDevice = simulator();
+if (!selectedDevice) {
   throw new Error("No available iPhone Simulator was found");
 }
-process.stdout.write(`Using ${device.name} (${device.udid})\n`);
-
-if (device.state !== "Booted") {
-  run("xcrun", ["simctl", "boot", device.udid]);
-}
-run("open", ["-a", "Simulator"]);
-run("xcrun", ["simctl", "bootstatus", device.udid, "-b"]);
-
-const artifactRoot = artifactArgument
-  ? resolve(APP_ROOT, artifactArgument.split("=")[1])
-  : mkdtempSync(join(tmpdir(), "gents-ios-e2e-"));
-mkdirSync(artifactRoot, { recursive: true });
-const appBundle =
-  process.env.GENTS_IOS_APP_BUNDLE?.trim() ||
-  join(APPLE_ROOT, "build", "arm64-sim", "Gents.app");
-
-if (!skipBuild) {
-  run("npm", ["run", "build"], { env: nativeE2eBuildEnv });
-  const priorTauriBuild = join(APPLE_ROOT, "build");
-  if (existsSync(priorTauriBuild)) {
-    renameSync(priorTauriBuild, join(artifactRoot, "prior-tauri-build"));
+let disposableDeviceId = null;
+let reconnectFixture = null;
+let device = selectedDevice;
+try {
+  if (reconnect) {
+    const types = JSON.parse(
+      capture("xcrun", ["simctl", "list", "devicetypes", "-j"]),
+    ).devicetypes;
+    const type =
+      types.find((item) => item.identifier === selectedDevice.deviceTypeIdentifier) ??
+      types.find((item) => item.name === selectedDevice.name);
+    if (!type)
+      throw new Error(`No simulator device type matches ${selectedDevice.name}`);
+    disposableDeviceId = capture("xcrun", [
+      "simctl",
+      "create",
+      `gents-reconnect-${randomBytes(6).toString("hex")}`,
+      type.identifier,
+      selectedDevice.runtime,
+    ]).trim();
+    device = { ...selectedDevice, udid: disposableDeviceId, state: "Shutdown" };
   }
-  run(
-    "npm",
-    [
-      "run",
-      "tauri",
-      "--",
-      "ios",
-      "build",
-      "--debug",
-      "--target",
-      "aarch64-sim",
-      "--ci",
-      "--config",
-      "src-tauri/tauri.e2e.conf.json",
-      "--",
-      "--features",
-      "native-e2e",
-    ],
-    { cwd: APP_ROOT, env: nativeE2eBuildEnv },
-  );
-}
+  process.stdout.write(`Using ${device.name} (${device.udid})\n`);
 
-if (!existsSync(appBundle)) {
-  throw new Error(`Simulator app bundle does not exist: ${appBundle}`);
-}
-
-if (!keepData) {
-  const uninstall = spawnSync(
-    "xcrun",
-    ["simctl", "uninstall", device.udid, APP_BUNDLE_ID],
-    { encoding: "utf8" },
-  );
-  if (
-    uninstall.status !== 0 &&
-    !uninstall.stderr.includes("No such file") &&
-    !uninstall.stderr.includes("not installed")
-  ) {
-    process.stderr.write(`Simulator reset warning: ${uninstall.stderr}`);
+  if (device.state !== "Booted") {
+    run("xcrun", ["simctl", "boot", device.udid]);
   }
-}
+  run("open", ["-a", "Simulator"]);
+  run("xcrun", ["simctl", "bootstatus", device.udid, "-b"]);
 
-run("xcrun", ["simctl", "install", device.udid, appBundle]);
-const dataContainer = capture("xcrun", [
-  "simctl",
-  "get_app_container",
-  device.udid,
-  APP_BUNDLE_ID,
-  "data",
-]).trim();
-const statusPath = join(dataContainer, "tmp", STATUS_FILENAME);
-const eventsPath = join(dataContainer, "tmp", EVENTS_FILENAME);
-const enrollmentOperator = issuerSettings();
-const serverAddress = enrollmentServerAddress();
+  const artifactBase = artifactArgument
+    ? resolve(APP_ROOT, artifactArgument.split("=")[1])
+    : mkdtempSync(join(tmpdir(), "gents-ios-e2e-"));
+  mkdirSync(artifactBase, { recursive: true });
+  const artifactRoot = reconnect
+    ? mkdtempSync(join(artifactBase, "ios-reconnect-"))
+    : artifactBase;
+  const appBundle =
+    process.env.GENTS_IOS_APP_BUNDLE?.trim() ||
+    join(APPLE_ROOT, "build", "arm64-sim", "Gents.app");
 
-{
-  const measurementRuns = [];
-  for (let index = 1; index <= runs; index += 1) {
-    rmSync(statusPath, { force: true });
-    rmSync(eventsPath, { force: true });
-    const defaultPrompt = `Reply with only the uppercase underscore form of: isolated iphone simulator e2e run ${index}.`;
-    const defaultExpected = `ISOLATED_IPHONE_SIMULATOR_E2E_RUN_${index}`;
-    const launchEnvironment = {
-      ...process.env,
-      SIMCTL_CHILD_GENTS_NATIVE_E2E: "1",
-      SIMCTL_CHILD_GENTS_E2E_AGENT_LABEL:
-        process.env.GENTS_E2E_AGENT_LABEL?.trim() || "Enrolled Agent",
-      SIMCTL_CHILD_GENTS_E2E_SERVER_ADDRESS: serverAddress,
-      SIMCTL_CHILD_GENTS_E2E_PROMPT:
-        process.env.GENTS_E2E_PROMPT?.trim() || defaultPrompt,
-      SIMCTL_CHILD_GENTS_E2E_EXPECTED_RESPONSE:
-        process.env.GENTS_E2E_EXPECTED_RESPONSE?.trim() || defaultExpected,
-      SIMCTL_CHILD_GENTS_E2E_EXPECT_EMPTY_SESSIONS:
-        index === 1 && !keepData ? "1" : "0",
-      SIMCTL_CHILD_GENTS_E2E_CORRELATION_ID: `ios-${gitRevision().slice(0, 12)}-${index}`,
-      SIMCTL_CHILD_GENTS_MOBILE_PERFORMANCE: measurePerformance ? "1" : "0",
-      SIMCTL_CHILD_RUST_BACKTRACE: "full",
-      SIMCTL_CHILD_RUST_LOG: process.env.RUST_LOG?.trim() || "info",
-    };
-
-    process.stdout.write(`\nRunning isolated prompt round-trip ${index}/${runs}…\n`);
-    const launchedAt = process.hrtime.bigint();
-    const launchResult = capture(
-      "xcrun",
-      ["simctl", "launch", "--terminate-running-process", device.udid, APP_BUNDLE_ID],
-      { env: launchEnvironment },
+  if (!skipBuild) {
+    run("npm", ["run", "build"], { env: nativeE2eBuildEnv });
+    const priorTauriBuild = join(APPLE_ROOT, "build");
+    if (existsSync(priorTauriBuild)) {
+      renameSync(priorTauriBuild, join(artifactRoot, "prior-tauri-build"));
+    }
+    run(
+      "npm",
+      [
+        "run",
+        "tauri",
+        "--",
+        "ios",
+        "build",
+        "--debug",
+        "--target",
+        "aarch64-sim",
+        "--ci",
+        "--config",
+        "src-tauri/tauri.e2e.conf.json",
+        "--",
+        "--features",
+        "native-e2e",
+      ],
+      { cwd: APP_ROOT, env: nativeE2eBuildEnv },
     );
-    const pid = Number.parseInt(launchResult.match(/: (\d+)\s*$/)?.[1] ?? "", 10);
-    if (!Number.isInteger(pid)) {
-      throw new Error(`Could not parse Gents simulator PID from ${launchResult}`);
-    }
-    const scenarioEvidence = await waitForScenario({
-      deviceId: device.udid,
-      pid,
-      runIndex: index,
-      artifactRoot,
-      statusPath,
-      enrollmentOperator,
-    });
-    if (measurePerformance) {
-      const events = readEvents(eventsPath);
-      const boundaries = eventBoundaries(events);
-      measurementRuns.push({
-        runIndex: index,
-        temperature: index === 1 && !keepData ? "cold-data" : "warm-data",
-        launchElapsedMs: Number(process.hrtime.bigint() - launchedAt) / 1_000_000,
-        events,
-        boundaries,
-        dataset: {
-          sessionIndexRows:
-            boundaries["session-index-visible"]?.metrics?.ui?.sessionRows ?? null,
-          transcriptCardsAtPass:
-            boundaries.passed?.metrics?.ui?.transcriptCards ?? null,
-          transcriptTurnBlocksAtPass:
-            boundaries.passed?.metrics?.ui?.transcriptTurnBlocks ?? null,
-        },
-        observerResponseMerges: observerResponseMerges(boundaries),
-        process: summarizeProcessSamples(scenarioEvidence.processSamples),
-      });
+  }
+
+  if (!existsSync(appBundle)) {
+    throw new Error(`Simulator app bundle does not exist: ${appBundle}`);
+  }
+
+  if (!keepData && !reconnect) {
+    const uninstall = spawnSync(
+      "xcrun",
+      ["simctl", "uninstall", device.udid, APP_BUNDLE_ID],
+      { encoding: "utf8" },
+    );
+    if (
+      uninstall.status !== 0 &&
+      !uninstall.stderr.includes("No such file") &&
+      !uninstall.stderr.includes("not installed")
+    ) {
+      process.stderr.write(`Simulator reset warning: ${uninstall.stderr}`);
     }
   }
-  if (measurePerformance) {
-    writeNativePerformanceArtifacts({ artifactRoot, device, runs: measurementRuns });
+
+  run("xcrun", ["simctl", "install", device.udid, appBundle]);
+  const dataContainer = capture("xcrun", [
+    "simctl",
+    "get_app_container",
+    device.udid,
+    APP_BUNDLE_ID,
+    "data",
+  ]).trim();
+  const statusPath = join(dataContainer, "tmp", STATUS_FILENAME);
+  const eventsPath = join(dataContainer, "tmp", EVENTS_FILENAME);
+  const issuer = issuerSettings();
+  reconnectFixture = reconnect
+    ? await createIosReconnectFixture(issuer.binary, artifactRoot, interruption.signal)
+    : null;
+  const enrollmentOperator = reconnectFixture
+    ? {
+        binary: issuer.binary,
+        home: reconnectFixture.home,
+        env: { ...process.env, GENTS_DESKTOP_HOME: reconnectFixture.owner },
+      }
+    : issuer;
+  const serverAddress = reconnectFixture?.statusUrl ?? enrollmentServerAddress();
+
+  {
+    const measurementRuns = [];
+    for (let index = 1; index <= runs; index += 1) {
+      rmSync(statusPath, { force: true });
+      rmSync(eventsPath, { force: true });
+      const defaultPrompt = `Reply with only the uppercase underscore form of: isolated iphone simulator e2e run ${index}.`;
+      const defaultExpected = `ISOLATED_IPHONE_SIMULATOR_E2E_RUN_${index}`;
+      const launchEnvironment = {
+        ...process.env,
+        SIMCTL_CHILD_GENTS_NATIVE_E2E: "1",
+        SIMCTL_CHILD_GENTS_E2E_AGENT_LABEL: reconnectFixture
+          ? "iOS Reconnect Fixture"
+          : process.env.GENTS_E2E_AGENT_LABEL?.trim() || "Enrolled Agent",
+        SIMCTL_CHILD_GENTS_E2E_SERVER_ADDRESS: serverAddress,
+        SIMCTL_CHILD_GENTS_E2E_PROMPT:
+          process.env.GENTS_E2E_PROMPT?.trim() || defaultPrompt,
+        SIMCTL_CHILD_GENTS_E2E_EXPECTED_RESPONSE:
+          process.env.GENTS_E2E_EXPECTED_RESPONSE?.trim() || defaultExpected,
+        SIMCTL_CHILD_GENTS_E2E_EXPECT_EMPTY_SESSIONS:
+          index === 1 && !keepData ? "1" : "0",
+        SIMCTL_CHILD_GENTS_E2E_CORRELATION_ID:
+          reconnectFixture?.correlationId ??
+          `ios-${gitRevision().slice(0, 12)}-${index}`,
+        SIMCTL_CHILD_GENTS_MOBILE_PERFORMANCE: measurePerformance ? "1" : "0",
+        SIMCTL_CHILD_RUST_BACKTRACE: "full",
+        SIMCTL_CHILD_RUST_LOG: process.env.RUST_LOG?.trim() || "info",
+      };
+
+      process.stdout.write(`\nRunning isolated prompt round-trip ${index}/${runs}…\n`);
+      const launchedAt = process.hrtime.bigint();
+      const launchResult = capture(
+        "xcrun",
+        ["simctl", "launch", "--terminate-running-process", device.udid, APP_BUNDLE_ID],
+        { env: launchEnvironment },
+      );
+      const pid = Number.parseInt(launchResult.match(/: (\d+)\s*$/)?.[1] ?? "", 10);
+      if (!Number.isInteger(pid)) {
+        throw new Error(`Could not parse Gents simulator PID from ${launchResult}`);
+      }
+      const scenarioEvidence = await waitForScenario({
+        deviceId: device.udid,
+        pid,
+        runIndex: index,
+        artifactRoot,
+        statusPath,
+        enrollmentOperator,
+        reconnectFixture,
+      });
+      if (measurePerformance) {
+        const events = readEvents(eventsPath);
+        const boundaries = eventBoundaries(events);
+        measurementRuns.push({
+          runIndex: index,
+          temperature: index === 1 && !keepData ? "cold-data" : "warm-data",
+          launchElapsedMs: Number(process.hrtime.bigint() - launchedAt) / 1_000_000,
+          events,
+          boundaries,
+          dataset: {
+            sessionIndexRows:
+              boundaries["session-index-visible"]?.metrics?.ui?.sessionRows ?? null,
+            transcriptCardsAtPass:
+              boundaries.passed?.metrics?.ui?.transcriptCards ?? null,
+            transcriptTurnBlocksAtPass:
+              boundaries.passed?.metrics?.ui?.transcriptTurnBlocks ?? null,
+          },
+          observerResponseMerges: observerResponseMerges(boundaries),
+          process: summarizeProcessSamples(scenarioEvidence.processSamples),
+        });
+      }
+    }
+    if (measurePerformance) {
+      writeNativePerformanceArtifacts({ artifactRoot, device, runs: measurementRuns });
+    }
+  }
+
+  process.stdout.write(`\nIsolated iPhone Simulator E2E passed ${runs} run(s).\n`);
+  process.stdout.write(`Result screenshots: ${artifactRoot}\n`);
+} finally {
+  try {
+    await reconnectFixture?.cleanup();
+  } finally {
+    if (disposableDeviceId) {
+      spawnSync("xcrun", ["simctl", "shutdown", disposableDeviceId], {
+        stdio: "ignore",
+      });
+      const deletion = spawnSync("xcrun", ["simctl", "delete", disposableDeviceId], {
+        encoding: "utf8",
+      });
+      if (deletion.status !== 0)
+        process.stderr.write(
+          `Could not delete disposable simulator ${disposableDeviceId}: ${deletion.stderr}\n`,
+        );
+    }
+    for (const [signal, handler] of signalHandlers) process.off(signal, handler);
   }
 }
-
-process.stdout.write(`\nIsolated iPhone Simulator E2E passed ${runs} run(s).\n`);
-process.stdout.write(`Result screenshots: ${artifactRoot}\n`);
 
 function eventBoundaries(events) {
   const first = events.find((event) => event.stage === "starting")?.monotonicMs;

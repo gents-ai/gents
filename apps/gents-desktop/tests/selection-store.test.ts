@@ -5,7 +5,7 @@ import { createSelectionStore, selection } from "../src/hooks/selectionStore";
 const route = {
   itemId: "item-1",
   nodeDid: "node-a",
-  agentId: "engineer",
+  agentDid: "engineer",
   sessionId: "session-1",
 };
 
@@ -15,7 +15,7 @@ describe("the selection store", () => {
     selection.openMailboxRoute(store, route);
     expect(store.getState()).toMatchObject({
       nodeDid: "node-a",
-      agentId: "engineer",
+      agentDid: "engineer",
       sessionId: "session-1",
       mailboxRoute: route,
     });
@@ -67,6 +67,6 @@ describe("the selection store", () => {
     expect(selection.selectNode(store, "node-a")).toBe(false);
     expect(store.getState().sessionId).toBe("session-1");
     expect(selection.selectNode(store, "node-b")).toBe(true);
-    expect(store.getState()).toMatchObject({ sessionId: null, agentId: null });
+    expect(store.getState()).toMatchObject({ sessionId: null, agentDid: null });
   });
 });

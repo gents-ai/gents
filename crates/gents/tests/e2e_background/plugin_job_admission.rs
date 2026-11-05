@@ -75,8 +75,8 @@ async fn boot(
         AcceptedTurnSpec {
             backend_id: "plugin-job-backend",
             model: MODEL,
-            parent_agent_id: PARENT,
-            configured_agent_ids: &[PARENT, CHILD],
+            parent_agent_did: PARENT,
+            configured_agent_dids: &[PARENT, CHILD],
             request_id: &format!("{session_id}-parent"),
             session_id,
             prompt: &format!("{session_id} start"),

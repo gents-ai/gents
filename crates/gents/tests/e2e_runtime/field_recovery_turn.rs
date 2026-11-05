@@ -58,8 +58,8 @@ async fn writer_recovers_complete_large_task_contract_in_provider_input() {
         AcceptedTurnSpec {
             backend_id: "field-recovery",
             model: "field-recovery-model",
-            parent_agent_id: behavior,
-            configured_agent_ids: &[behavior],
+            parent_agent_did: behavior,
+            configured_agent_dids: &[behavior],
             request_id: "field-recovery-request",
             session_id: "field-recovery-session",
             prompt: "Read the complete writer task contract.",

@@ -101,6 +101,9 @@ async fn publish_one(runtime: &gents::Gents, directory: PathBuf, id: uuid::Uuid)
             return Ok(());
         }
         Err(gents::session::mailbox::RuntimeNoticeError::Unavailable(error)) => return Err(error),
+        Err(error @ gents::session::mailbox::RuntimeNoticeError::MissingClaimProvenance) => {
+            return Err(error.into())
+        }
     }
     tokio::task::spawn_blocking(move || files::write_json(&marker, &true)).await??;
     Ok(())

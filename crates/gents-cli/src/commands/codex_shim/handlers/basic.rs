@@ -88,7 +88,7 @@ pub(super) async fn handle_basic_request(
             let model_id = load_bound_model_selection_id_for_state(
                 &state.node,
                 &state.node_did,
-                &state.agent_id,
+                &state.agent_did,
             )
             .await
             .context("resolving current model selection for ConfigRead")?;
@@ -284,7 +284,7 @@ mod tests {
     use std::time::Duration;
 
     use chrono::Utc;
-    use gents::defra_node::EmbeddedNode;
+    use gents::defra_node::Node as EmbeddedNode;
     use gents::documents::{AdvertisedModel, BackendAuth, BackendModelCatalog};
     use gents::inference::auth::credential::{
         oauth_credential_id, upsert_oauth_credential, OAuthCredential,
@@ -323,7 +323,7 @@ mod tests {
                 "http://127.0.0.1/graphql",
             ),
             node_did: Arc::from(DID),
-            agent_id: Arc::from("default"),
+            agent_did: Arc::from("default"),
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),
             poll_interval: Duration::from_millis(10),
@@ -384,7 +384,8 @@ mod tests {
         write_agent_document(
             &access,
             &gents::AgentDocument {
-                agent_id: "default".into(),
+                creation_nonce: "a".repeat(64),
+                agent_did: "default".into(),
                 node_did: DID.into(),
                 display_name: None,
                 description: None,
@@ -401,6 +402,7 @@ mod tests {
 
     fn backend(provider_kind: BackendProviderKind, auth: BackendAuth) -> InferenceBackend {
         InferenceBackend {
+            physical_doc_id: None,
             node_did: DID.into(),
             backend_id: "backend-usage-a".into(),
             name: "backend-usage-a".into(),

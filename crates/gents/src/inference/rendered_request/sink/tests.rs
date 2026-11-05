@@ -1,5 +1,207 @@
 use super::*;
+use crate::store::identity::NodeIdentity;
 use serde_json::{json, Value};
+
+fn fixture_identities() -> &'static (Arc<crate::KeyIdentity>, Arc<dyn NodeIdentity>) {
+    static IDENTITIES: std::sync::OnceLock<(Arc<crate::KeyIdentity>, Arc<dyn NodeIdentity>)> =
+        std::sync::OnceLock::new();
+    IDENTITIES.get_or_init(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let root = Arc::new(
+            crate::KeyIdentity::load_or_create(directory.path().join("root.key"), None).unwrap(),
+        );
+        let binding = crate::store::identity::provision_agent_identity(root.as_ref()).unwrap();
+        let agent =
+            crate::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
+        (root, agent)
+    })
+}
+
+async fn fixture_node() -> Arc<EmbeddedNode> {
+    let (root, agent) = fixture_identities();
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(root.did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    access
+        .transact_write("test.capture_session", |txn| {
+            Box::pin(async move {
+                crate::session::ensure_session_in_txn(
+                    txn,
+                    "session",
+                    root.did(),
+                    agent.did(),
+                    None,
+                    None,
+                    None,
+                    "2026-01-01T00:00:00Z",
+                )
+                .await
+                .map(|_| ())
+            })
+        })
+        .await
+        .unwrap();
+    node
+}
+
+fn fixture_sink(node: &Arc<EmbeddedNode>) -> DefraRenderedRequestSink {
+    DefraRenderedRequestSink {
+        node: node.clone(),
+        agent_signer: Some(fixture_identities().1.managed_agent_signer().unwrap()),
+    }
+}
+
+#[tokio::test]
+async fn failed_capture_publication_rolls_back_bound_blocks_and_record() {
+    use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+
+    let (root, agent) = fixture_identities();
+    let sibling_binding = crate::store::identity::provision_agent_identity(root.as_ref()).unwrap();
+    let sibling =
+        crate::store::identity::resolve_agent_identity(root.as_ref(), &sibling_binding).unwrap();
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(root.did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    let policy = node
+        .add_dac_policy_with_counter_as(
+            &defra_core::RequestContext::default().with_identity(Some(root.did().to_owned())),
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
+        .await
+        .unwrap();
+    for (name, schema) in [
+        ("RenderedRequest", gents_protocol::schemas::RENDERED_REQUEST),
+        (
+            "RenderedRequestBlock",
+            gents_protocol::schemas::RENDERED_REQUEST_BLOCK,
+        ),
+    ] {
+        let bound = if schema.contains("@policy(") {
+            schema.to_owned()
+        } else {
+            schema.replacen(
+                &format!("type {name}"),
+                &format!("type {name} @policy(id: \"{policy}\", resource: \"children\")"),
+                1,
+            )
+        };
+        node.add_collection(&bound).await.unwrap();
+    }
+    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    access
+        .transact_write("test.capture.session", |txn| {
+            Box::pin(async move {
+                crate::session::ensure_session_in_txn(
+                    txn,
+                    "session",
+                    root.did(),
+                    agent.did(),
+                    None,
+                    None,
+                    None,
+                    "2026-01-01T00:00:00Z",
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
+    let session = access
+        .execute(r#"{ AgentSession { _docID } }"#)
+        .await
+        .unwrap()["data"]["AgentSession"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    access
+        .add_actor_relationship(
+            "AgentSession",
+            &session,
+            "reader",
+            &root.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+    let reader = ConfigAccess::local_as(node.clone(), root.did().parse().unwrap());
+    let sibling_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        sibling.did().parse().unwrap(),
+        sibling.as_ref(),
+    )
+    .unwrap();
+    let sink = fixture_sink(&node);
+    sink.capture(rendered_turn(
+        0,
+        json!({"messages": [capture_text(1, 8192)]}),
+    ))
+    .await
+    .unwrap();
+    let query = "{ RenderedRequest { _docID } RenderedRequestBlock { _docID } }";
+    let before = reader.execute(query).await.unwrap();
+    for collection in ["RenderedRequest", "RenderedRequestBlock"] {
+        assert!(!before["data"][collection].as_array().unwrap().is_empty());
+        assert!(
+            sibling_access.execute(query).await.unwrap()["data"][collection]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+    let failed = rendered_turn(1, json!({"messages": [capture_text(2, 8192)]}));
+    let (result, mutations) =
+        ConfigApplyTxn::with_successful_mutation_failure_at(Some(1), sink.capture(failed)).await;
+    assert!(result.is_err());
+    assert_eq!(mutations, 1);
+    assert_eq!(reader.execute(query).await.unwrap(), before);
+    assert_eq!(access.execute(query).await.unwrap(), before);
+    node.shutdown().await.unwrap();
+}
+
+#[test]
+fn generated_capture_block_scope_cases_use_physical_session_identity() {
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().capture_block_scope_cases;
+    assert!(!cases.is_empty());
+    for case in cases {
+        let field = |name: &str| case[name].as_str().expect("block scope case field");
+        let first = BlockScope {
+            session_doc_id: field("first_session").into(),
+            agent_did: String::new(),
+        };
+        let second = BlockScope {
+            session_doc_id: field("second_session").into(),
+            agent_did: String::new(),
+        };
+        let left = first.key(field("first_digest"));
+        let right = second.key(field("second_digest"));
+        assert_eq!(
+            left == right,
+            case["same_storage_identity"].as_bool().unwrap()
+        );
+    }
+}
 
 fn capture_text(seed: u64, len: usize) -> String {
     let mut state = seed;
@@ -14,6 +216,7 @@ fn capture_text(seed: u64, len: usize) -> String {
 }
 
 fn rendered_turn(turn_index: usize, request_json: Value) -> RenderedCompletionRequest {
+    let (root, agent) = fixture_identities();
     let capture_scope = "inference.1".to_string();
     let assembly_trace = super::super::AssemblyTrace::from_effective_messages(
         super::super::AssemblyBuildPath::Budgeted,
@@ -21,7 +224,7 @@ fn rendered_turn(turn_index: usize, request_json: Value) -> RenderedCompletionRe
     );
     RenderedCompletionRequest {
         capture_key: super::super::capture_key(
-            "did:key:test",
+            root.did(),
             "session",
             "",
             &capture_scope,
@@ -36,9 +239,9 @@ fn rendered_turn(turn_index: usize, request_json: Value) -> RenderedCompletionRe
         capture_scope: capture_scope.clone(),
         turn_index,
         attempt: 0,
-        node_did: "did:key:test".into(),
+        node_did: root.did().into(),
         requester_did: String::new(),
-        agent_id: "behavior".into(),
+        agent_did: agent.did().to_owned(),
         session_id: "session".into(),
         model_name: "model".into(),
         source: super::super::RenderedRequestSource::OpenAiChatCompletions,
@@ -93,9 +296,8 @@ async fn capture_and_context_accounting_commit_together() {
         ProvenanceManifest, CONTEXT_ACCOUNTING_VERSION,
     };
 
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+    let node = fixture_node().await;
+    let sink = fixture_sink(&node);
     crate::store::config_client::ConfigAccess::write_local_response(
         &node,
         "test.create_accounting_call",
@@ -191,14 +393,13 @@ async fn capture_and_context_accounting_commit_together() {
         );
         assert_eq!(block_rows(&node).await.len(), original_blocks);
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn capture_writes_blocks_and_a_manifest_that_decode_back() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+    let node = fixture_node().await;
+    let sink = fixture_sink(&node);
     let rendered = rendered_turn(
         0,
         json!({"model": "m", "messages": [{"role": "user", "content": capture_text(1, 9 * 1024)}]}),
@@ -235,14 +436,13 @@ async fn capture_writes_blocks_and_a_manifest_that_decode_back() {
         provenance,
         super::super::canonical_json(&rendered.provenance_payload_json)
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn repeated_tool_output_is_stored_once_across_wire_and_native_payloads() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+    let node = fixture_node().await;
+    let sink = fixture_sink(&node);
     let text = capture_text(73, 8 * 1024);
     let mut rendered = rendered_turn(
         0,
@@ -278,14 +478,13 @@ async fn repeated_tool_output_is_stored_once_across_wire_and_native_payloads() {
         decoded,
         (rendered.request_json, rendered.provenance_payload_json)
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn a_shared_prefix_writes_only_new_blocks_and_a_small_manifest() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+    let node = fixture_node().await;
+    let sink = fixture_sink(&node);
 
     let prefix = capture_text(7, 24 * 1024);
     let first = rendered_turn(
@@ -346,14 +545,13 @@ async fn a_shared_prefix_writes_only_new_blocks_and_a_small_manifest() {
         .unwrap(),
         super::super::canonical_json(&second.request_json)
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn a_reused_block_pins_the_existing_row_field_commit() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+    let node = fixture_node().await;
+    let sink = fixture_sink(&node);
 
     let body = capture_text(11, 12 * 1024);
     let first = rendered_turn(
@@ -411,7 +609,7 @@ async fn a_reused_block_pins_the_existing_row_field_commit() {
         }
     }
     assert!(block_rows(node.as_ref()).await.len() > first_blocks.len());
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 async fn manifest_entries(
@@ -440,9 +638,8 @@ async fn manifest_entries(
 
 #[tokio::test]
 async fn deleted_blocks_never_publish_dangling_references() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+    let node = fixture_node().await;
+    let sink = fixture_sink(&node);
     let body = json!({"messages":[{"role":"user","content":capture_text(89, 24 * 1024)}]});
     let first = rendered_turn(0, body.clone());
     sink.capture(first.clone()).await.unwrap();
@@ -467,33 +664,24 @@ async fn deleted_blocks_never_publish_dangling_references() {
     let next = rendered_turn(1, body);
     let error = sink.capture(next.clone()).await.unwrap_err();
     assert!(format!("{error:#}").contains("deleted"), "{error:#}");
-    assert!(sink.stored_fact(&next.capture_key).await.unwrap().is_none());
-    let reopened = DefraRenderedRequestSink::new(Arc::clone(&node));
+    assert!(sink.stored_fact(&next).await.unwrap().is_none());
+    let reopened = fixture_sink(&node);
     let error = reopened.capture(next.clone()).await.unwrap_err();
     assert!(format!("{error:#}").contains("deleted"), "{error:#}");
-    assert!(reopened
-        .stored_fact(&next.capture_key)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(reopened.stored_fact(&next).await.unwrap().is_none());
     let unrelated = rendered_turn(
         2,
         json!({"messages": [{"role": "user", "content": "fresh"}]}),
     );
     reopened.capture(unrelated.clone()).await.unwrap();
-    assert!(reopened
-        .stored_fact(&unrelated.capture_key)
-        .await
-        .unwrap()
-        .is_some());
-    node.shutdown().await;
+    assert!(reopened.stored_fact(&unrelated).await.unwrap().is_some());
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn shared_manifest_roots_stay_small_and_reconstruct_after_reopen() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let mut sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+    let node = fixture_node().await;
+    let mut sink = fixture_sink(&node);
     let mut messages = vec![json!({"role": "user", "content": capture_text(71, 256 * 1024)})];
     let mut first_pins = std::collections::BTreeSet::new();
     let mut flat_bytes = 0;
@@ -501,7 +689,7 @@ async fn shared_manifest_roots_stay_small_and_reconstruct_after_reopen() {
     let mut shared_nodes = std::collections::BTreeMap::new();
     for turn in 0..12 {
         if turn == 6 {
-            sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+            sink = fixture_sink(&node);
         }
         messages.push(json!({"role": "user", "content": capture_text(100 + turn as u64, 4096)}));
         let rendered = rendered_turn(turn, json!({"model":"m","messages":messages}));
@@ -579,14 +767,13 @@ async fn shared_manifest_roots_stay_small_and_reconstruct_after_reopen() {
         shared_bytes < flat_bytes,
         "shared={shared_bytes}, flat={flat_bytes}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn same_capture_key_cannot_rebind_its_transport_route() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+    let node = fixture_node().await;
+    let sink = fixture_sink(&node);
     let mut first = rendered_turn(
         0,
         json!({"messages": [{"role": "user", "content": capture_text(3, 3 * 1024)}]}),
@@ -603,14 +790,13 @@ async fn same_capture_key_cannot_rebind_its_transport_route() {
         error.to_string().contains("integrity violation"),
         "{error:#}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn re_delivering_a_capture_is_idempotent() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+    let node = fixture_node().await;
+    let sink = fixture_sink(&node);
     let rendered = rendered_turn(
         0,
         json!({"messages": [{"role": "user", "content": capture_text(5, 5 * 1024)}]}),
@@ -626,14 +812,13 @@ async fn re_delivering_a_capture_is_idempotent() {
         blocks_after_first,
         "no block may be written twice"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn concurrent_identical_captures_store_each_block_once() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+    let node = fixture_node().await;
+    let sink = fixture_sink(&node);
 
     let request_json = json!({
         "model": "m",
@@ -675,7 +860,7 @@ async fn concurrent_identical_captures_store_each_block_once() {
             super::super::canonical_json(&request_json)
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 async fn block_payload_bytes(node: &EmbeddedNode) -> std::collections::BTreeMap<String, usize> {
@@ -748,9 +933,8 @@ fn agent_loop_turn(turn: usize) -> RenderedCompletionRequest {
 
 #[tokio::test]
 async fn a_repeated_agent_loop_request_stores_only_its_appended_turn() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+    let node = fixture_node().await;
+    let sink = fixture_sink(&node);
     let mut stored = std::collections::BTreeMap::new();
     let mut first_provenance_leaf = None;
     let mut checked_turns = 0;
@@ -834,7 +1018,7 @@ async fn a_repeated_agent_loop_request_stores_only_its_appended_turn() {
         checked_turns >= 24,
         "the provenance trace must span several blocks"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[test]
@@ -845,4 +1029,187 @@ fn the_collection_names_are_valid_graphql_identifiers() {
     crate::store::graphql::validate_collection_identifier(RENDERED_REQUEST_BLOCK_COLLECTION)
         .expect("RenderedRequestBlock must be a valid GraphQL identifier");
     assert_eq!(RENDERED_REQUEST_BLOCK_COLLECTION, "RenderedRequestBlock");
+}
+
+#[tokio::test]
+async fn title_capture_uses_parent_session_and_managed_agent_native_signatures() {
+    use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+    use crate::store::config_client::ConfigAccess;
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .with_node_identity_did(root.did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let root_did = escape_graphql_string(root.did());
+    let root_access = ConfigAccess::local(node.clone());
+    root_access.write("test.title_capture.node", &format!(r#"mutation {{ create_Node(input: {{node_did: "{root_did}", display_name: "fixture", enabled: true}}) {{ _docID }} }}"#)).await.unwrap();
+    let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
+    crate::test_support::install_test_agent_binding(&node, root.did(), "title capture", &binding)
+        .await;
+    let agent = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
+    assert_ne!(root.did(), agent.did());
+    let signer = agent.managed_agent_signer().unwrap();
+    let agent_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_result = agent_access.write("test.title_capture.session", &format!(
+        r#"mutation {{ create_AgentSession(input: {{session_id: "{}", node_did: "{root_did}", requester_did: "{root_did}", agent_did: "{}", created_at: "2026-01-01T00:00:00Z"}}) {{ _docID }} }}"#,
+        escape_graphql_string(&session_id), escape_graphql_string(agent.did()),
+    )).await.unwrap();
+    let session_doc =
+        crate::store::graphql::created_doc_id(&session_result, "AgentSession").unwrap();
+    let mut create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        uuid::Uuid::new_v4().to_string(),
+        root.did(),
+        root.did(),
+        agent.did(),
+        session_id.clone(),
+        "Name this conversation",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        AgentRequestAdmissionRecord::local_self(root.did()),
+    );
+    create.session_doc_id = Some(session_doc.clone());
+    crate::sign_agent_request_create(&root, &mut create)
+        .await
+        .unwrap();
+    let parent_result = root_access
+        .write(
+            "test.title_capture.parent",
+            &create.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
+    let parent_doc = crate::store::graphql::created_doc_id(&parent_result, "AgentRequest").unwrap();
+    ConfigAccess::local_as(node.clone(), root.did().parse().unwrap())
+        .add_actor_relationship(
+            "AgentRequest",
+            &parent_doc,
+            "working_agent",
+            &agent.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+    let parent = crate::request::admission::load_request_for_admission_test(&node, &parent_doc)
+        .await
+        .unwrap();
+    let auxiliary = crate::request::lifecycle::materialize::write_pending_auxiliary_request(
+        &node,
+        &parent,
+        RequestPurpose::TitleAudit,
+        parent.content.clone(),
+        None,
+        &signer,
+    )
+    .await
+    .unwrap();
+    let mut lifecycle =
+        RequestLifecycle::new_with_node_did(node.clone(), agent.did(), root.did(), auxiliary, 60);
+    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let auxiliary = lifecycle.request();
+    let mut rendered = rendered_turn(
+        0,
+        json!({"model": "m", "messages": [{"role": "user", "content": capture_text(1, 9 * 1024)}]}),
+    );
+    rendered.node_did = root.did().into();
+    rendered.agent_did = agent.did().into();
+    rendered.requester_did = agent.did().into();
+    rendered.session_id = session_id;
+    rendered.request_doc_id = auxiliary.doc_id.clone();
+    rendered.request_id = auxiliary.request_id.clone();
+    rendered.request_commit_cid = lifecycle.request_commit_cid().unwrap().into();
+    rendered.capture_scope = "title.1".into();
+    rendered.capture_key = super::super::capture_key(
+        &rendered.node_did,
+        &rendered.session_id,
+        &rendered.request_doc_id,
+        &rendered.capture_scope,
+        rendered.turn_index,
+        rendered.attempt,
+    )
+    .unwrap();
+    rendered.provenance_json =
+        serde_json::to_value(super::super::ProvenanceManifest::captured_only(
+            rendered.capture_scope.clone(),
+            None,
+            None,
+            rendered.assembly_trace.clone(),
+        ))
+        .unwrap();
+    let sink = DefraRenderedRequestSink {
+        node: node.clone(),
+        agent_signer: Some(signer),
+    };
+    sink.capture(rendered.clone()).await.unwrap();
+
+    let response = crate::store::graphql::graphql_with_transaction_retry(
+        &node,
+        &format!(r#"{{ RenderedRequest(filter: {{capture_key: {{_eq: "{}"}}}}) {{ _docID session_doc_id requester_did agent_did request_doc_id capture_scope request_json }} RenderedRequestBlock {{ _docID session_doc_id agent_did payload }} }}"#, escape_graphql_string(&rendered.capture_key)),
+        "test.title_capture.read",
+    ).await.unwrap();
+    let data = response.data.unwrap();
+    let captures = data["RenderedRequest"].as_array().unwrap();
+    assert_eq!(captures.len(), 1);
+    let capture = &captures[0];
+    assert_eq!(capture["session_doc_id"], session_doc);
+    assert_eq!(capture["requester_did"], agent.did());
+    assert_eq!(capture["agent_did"], agent.did());
+    assert_eq!(capture["request_doc_id"], rendered.request_doc_id);
+    assert_eq!(capture["capture_scope"], "title.1");
+    let blocks = data["RenderedRequestBlock"].as_array().unwrap();
+    assert!(blocks.len() > 1);
+    let mut docs = vec![capture["_docID"].as_str().unwrap()];
+    for block in blocks {
+        assert_eq!(block["session_doc_id"], session_doc);
+        assert_eq!(block["agent_did"], agent.did());
+        assert!(block["payload"]
+            .as_str()
+            .is_some_and(|payload| !payload.is_empty()));
+        docs.push(block["_docID"].as_str().unwrap());
+    }
+    for doc in docs {
+        let commits =
+            crate::store::graphql::composite_commits(&node, doc, "test.title_capture.signatures")
+                .await
+                .unwrap();
+        assert!(!commits.is_empty());
+        for commit in commits {
+            let (block, signature) = node
+                .authorized_signed_block_bytes(&commit.cid, Some(agent.did()))
+                .await
+                .unwrap();
+            let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();
+            let signature = defra_core::block::Signature::from_dag_cbor(&signature).unwrap();
+            let actual =
+                db::block::verify::verified_signature_signer_did(&block, &signature).unwrap();
+            assert_eq!(actual, agent.did());
+        }
+    }
+    let (request, _) = super::super::decode_capture_pair_embedded(
+        node.as_ref(),
+        gents_protocol::rendered_request::CAPTURE_VERSION,
+        capture["request_json"].as_str().unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        request,
+        super::super::canonical_json(&rendered.request_json)
+    );
+    node.shutdown().await.unwrap();
 }

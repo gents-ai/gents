@@ -540,7 +540,7 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
                 .unwrap();
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[cfg(unix)]
@@ -666,7 +666,7 @@ async fn interrupted_foreground_with_unverified_exit_remains_background_controll
             .await
     );
     process.finish().await;
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[cfg(unix)]
@@ -675,13 +675,22 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     use crate::tools::exec::ownership::test_support::OwnedTestProcess;
     let modeled =
         crate::lean_vocab_test::lean_r6_backgrounding_case("recovery_transfer_at_capacity");
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let home = tempfile::tempdir().unwrap();
+    let root = KeyIdentity::load_or_create(home.path().join("node.key"), None).unwrap();
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(root.did())
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let mut hook =
+        DefraSessionHook::with_identity(node.clone(), root.did(), FailurePolicy::default());
     let session = hook.session_id().await.unwrap();
     let deadline = Utc::now() + chrono::Duration::minutes(5);
-    bind_interruptible_request(&node, &hook, "recovery-parent", &session, deadline).await;
+    bind_managed_hook_request(&mut hook, "recovery-parent", &root, deadline).await;
+    let signer = hook_managed_identity(&hook, "recovery-parent").await;
     let mut lifecycle = accepted_hook_tool_lifecycle(
         &hook,
         "failed-handoff",
@@ -719,16 +728,17 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     assert_eq!(row["lifecycle_state"], modeled.terminal_state);
     let request_doc = hook.active_request_doc_id().await.unwrap();
     let escaped = crate::store::graphql::escape_graphql_string(&request_doc);
-    crate::store::config_client::ConfigAccess::write_local(&node, "test.terminal_parent_with_retained_process", &format!(
+    crate::ConfigAccess::local_managed_agent(node.clone(), identity::Did::new(signer.did()).unwrap(), signer.as_ref()).unwrap().write("test.terminal_parent_with_retained_process", &format!(
         r#"mutation {{ update_AgentRequest(docID: "{escaped}", input: {{ lifecycle_state: "failed" }}) {{ _docID }} }}"#
     )).await.unwrap();
-    let report = crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_terminal_parent_owned_tools_with_executions(&node, &hook.node_did, &registry).await.unwrap();
+    let report = crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_terminal_parent_owned_tools_with_executions(&node, &hook.node_did, &[signer.clone()], &registry).await.unwrap();
     assert_eq!(report.tool_calls_terminalized, 0);
     let row = fetch_tool_call_row(&node, &session, "failed-handoff").await;
     assert_eq!(row["lifecycle_state"], modeled.terminal_state);
     crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
         &node,
         &hook.node_did,
+        &[signer.clone()],
         &registry,
     )
     .await
@@ -741,11 +751,14 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
         &doc,
         &hook.node_did,
         &session,
-        None,
+        Some(signer.did()),
     )
     .await
     .unwrap()
     .unwrap();
+    settling
+        .bind_agent_signer(signer.managed_agent_signer())
+        .unwrap();
     registry.set_cancellation_reason("failed-handoff", &doc, "operator requested stop", false);
     assert!(matches!(
         registry.stop_native_process("failed-handoff", &doc).await,
@@ -769,6 +782,7 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
         &node,
         &hook.node_did,
+        &[signer.clone()],
         &registry,
     )
     .await
@@ -778,7 +792,7 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     assert_eq!(row["cancel_cause"], "userCancelled");
     assert!(!registry.contains("failed-handoff", &doc).await);
     process.finish().await;
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -833,7 +847,7 @@ async fn confirmation_before_worker_release_keeps_typed_stop_receipt() {
     let row = fetch_tool_call_row(&node, &session, "early-confirm").await;
     assert_eq!(row["cancel_cause"], "userCancelled");
     assert!(!registry.contains("early-confirm", &doc).await);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -874,7 +888,7 @@ async fn interruption_before_native_registration_cancels_without_starting_proces
         .background_executions
         .active_tool_call_doc_ids()
         .is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -924,5 +938,5 @@ async fn interrupt_sweep_preserves_confirmed_timeout_intent() {
     let row = fetch_tool_call_row(&node, &session, "timeout-first-sweep").await;
     assert_eq!(row["lifecycle_state"], "timedOut");
     assert!(!registry.contains("timeout-first-sweep", &doc).await);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

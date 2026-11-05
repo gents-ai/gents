@@ -216,7 +216,7 @@ pub async fn wait_for_request(
                 ) {{
                     request_id
                     session_id
-                    agent_id
+                    agent_did
                 }}
             }}"#,
             gents::session::public_request_filter(&format!(
@@ -235,14 +235,14 @@ pub async fn wait_for_request(
                 .get("session_id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("AgentRequest row missing session_id: {row}"))?;
-            let agent_id = row
-                .get("agent_id")
+            let agent_did = row
+                .get("agent_did")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             return Ok((
                 request_id.to_string(),
                 session_id.to_string(),
-                agent_id.to_string(),
+                agent_did.to_string(),
             ));
         }
 
@@ -480,7 +480,7 @@ pub async fn canonical_tool_result_text(graphql: &str, call: &Value) -> Result<S
 pub async fn wait_for_completed_inference_agents(
     graphql: &str,
     backend_id: &str,
-    expected_agent_ids: &[&str],
+    expected_agent_dids: &[&str],
 ) -> Result<Vec<Value>> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -493,7 +493,7 @@ pub async fn wait_for_completed_inference_agents(
                         order: {{ queued_at: ASC }}
                     ) {{
                         request_id
-                        agent_id
+                        agent_did
                         backend_id
                         call_kind
                         call_state
@@ -508,9 +508,9 @@ pub async fn wait_for_completed_inference_agents(
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let all_completed = expected_agent_ids.iter().all(|expected| {
+        let all_completed = expected_agent_dids.iter().all(|expected| {
             rows.iter().any(|row| {
-                row.get("agent_id").and_then(Value::as_str) == Some(*expected)
+                row.get("agent_did").and_then(Value::as_str) == Some(*expected)
                     && row.get("call_kind").and_then(Value::as_str) == Some("inference")
                     && row.get("call_state").and_then(Value::as_str) == Some("completed")
             })
@@ -522,7 +522,7 @@ pub async fn wait_for_completed_inference_agents(
         if Instant::now() >= deadline {
             bail!(
                 "timed out waiting for completed inference calls on backend {backend_id} for agents {:?}; last rows={}",
-                expected_agent_ids,
+                expected_agent_dids,
                 Value::Array(rows)
             );
         }

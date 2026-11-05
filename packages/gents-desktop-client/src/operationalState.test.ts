@@ -16,7 +16,7 @@ function deployment(
 ): DeploymentView {
   const {
     readinessSource = { state: "current" },
-    readinessStatus = { state: "ready", agentId: "default" },
+    readinessStatus = { state: "ready", agentDid: "default" },
     ...deploymentOverrides
   } = overrides;
   return {
@@ -27,7 +27,9 @@ function deployment(
     source: "enrollment",
     graphql: null,
     dialSucceeded: true,
+    runtimeConnection: "connected",
     chatSafe: true,
+    pairingReady: true,
     routes: [],
     pairing: [],
     lastError: null,
@@ -43,7 +45,7 @@ function deployment(
     },
     agents: [
       {
-        agentId: "default",
+        agentDid: "default",
         nodeDid: "did:key:node",
         displayName: "Default",
         description: null,
@@ -75,7 +77,7 @@ function deployment(
     mailboxItems: [],
     node: {
       nodeDid: "did:key:node",
-      defaultAgentId: "default",
+      defaultAgentDid: "default",
     } as DeploymentView["node"],
     ...deploymentOverrides,
   };
@@ -86,6 +88,7 @@ function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
     state: "healthy",
     lastError: null,
     connectedPeerCount: 1,
+    activationErrorCount: 0,
     pendingDagCount: 0,
     persistedPendingDagCount: 0,
     pushRetryMarkerCount: 0,
@@ -96,13 +99,13 @@ function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
 }
 
 describe("deployment operational state", () => {
-  it("projects one shared offline wait while recovery runs automatically", () => {
+  it("keeps P2P recovery separate from a connected runtime", () => {
     const state = projectDeploymentOperationalState(
       deployment({ dialSucceeded: false }),
     );
 
-    expect(state.admissionBlocker).toBe(state.transport);
-    expect(state.summary).toBe(state.transport);
+    expect(state.admissionBlocker).toBeNull();
+    expect(state.summary.kind).toBe("ready");
     expect(state.transport).toMatchObject({
       layer: "p2p",
       kind: "waiting",
@@ -111,19 +114,19 @@ describe("deployment operational state", () => {
     });
   });
 
-  it("keeps signed route preparation distinct from transport", () => {
+  it("keeps pairing preparation distinct from runtime admission", () => {
     const state = projectDeploymentOperationalState(
-      deployment({ chatSafe: false }),
+      deployment({ pairingReady: false }),
     );
 
     expect(state.transport.kind).toBe("ready");
-    expect(state.admissionBlocker).toBe(state.route);
+    expect(state.admissionBlocker).toBeNull();
     expect(state.route).toMatchObject({
       layer: "route",
       kind: "waiting",
-      reason: "pairing_not_accepted",
-      label: "Waiting for pairing request acceptance",
-      shortLabel: "Waiting for pairing",
+      reason: "route_not_ready",
+      label: "Preparing peer pairing",
+      shortLabel: "Preparing",
     });
   });
 
@@ -132,11 +135,11 @@ describe("deployment operational state", () => {
       deployment({
         node: {
           nodeDid: "did:key:node",
-          defaultAgentId: null,
+          defaultAgentDid: null,
         } as DeploymentView["node"],
         agents: [
           {
-            agentId: "did:key:node:default",
+            agentDid: "did:key:node:default",
             displayName: "Amy",
             enabled: true,
             isDefault: false,
@@ -144,7 +147,7 @@ describe("deployment operational state", () => {
         ],
         readinessStatus: {
           state: "ready",
-          agentId: "did:key:node:default",
+          agentDid: "did:key:node:default",
         },
       }),
     );
@@ -192,14 +195,14 @@ describe("deployment operational state", () => {
     });
   });
 
-  it("blocks a disconnected local host despite retained Ready state", () => {
+  it("blocks a disconnected runtime despite retained Ready state", () => {
     const state = projectDeploymentOperationalState(
-      deployment({ source: "local-standard", dialSucceeded: false }),
+      deployment({ source: "local-standard", runtimeConnection: "disconnected" }),
     );
     expect(state.agent.kind).toBe("ready");
-    expect(state.admissionBlocker).toBe(state.transport);
-    expect(state.summary).toBe(state.transport);
-    expect(state.summary.shortLabel).toBe("Not connected");
+    expect(state.admissionBlocker).toBe(state.connection);
+    expect(state.summary).toBe(state.connection);
+    expect(state.summary.shortLabel).toBe("Connecting");
   });
 
   it("does not let unrelated database work block current signed readiness", () => {
@@ -210,8 +213,8 @@ describe("deployment operational state", () => {
     );
 
     expect(state.admissionBlocker).toBeNull();
-    expect(state.summary).toBe(state.sync);
-    expect(state.summary).toMatchObject({
+    expect(state.summary.kind).toBe("ready");
+    expect(state.sync).toMatchObject({
       layer: "sync",
       kind: "syncing",
       shortLabel: "Syncing",
@@ -233,7 +236,7 @@ describe("deployment operational state", () => {
 
     expect(state.admissionBlocker).toBeNull();
     expect(state.agent.kind).toBe("ready");
-    expect(state.summary).toBe(state.sync);
+    expect(state.summary.kind).toBe("ready");
     expect(state.sync).toMatchObject({
       layer: "sync",
       kind: "syncing",
@@ -241,7 +244,7 @@ describe("deployment operational state", () => {
     });
   });
 
-  it("surfaces a runtime version mismatch without offering a futile reconnect", () => {
+  it("reports P2P schema mismatch separately from runtime readiness", () => {
     const detail =
       "this app and the agent runtime are different Gents versions; update the app and the runtime to the same version";
     const state = projectDeploymentOperationalState(
@@ -250,7 +253,7 @@ describe("deployment operational state", () => {
       syncHealth({ state: "incompatible", lastError: detail }),
     );
 
-    expect(state.summary).toBe(state.sync);
+    expect(state.summary.kind).toBe("ready");
     expect(state.sync).toMatchObject({
       layer: "sync",
       kind: "blocked",
@@ -269,7 +272,7 @@ describe("deployment operational state", () => {
           activeGeneration: 1,
           routerGeneration: 1,
           updatedAt: "2000-01-01T00:00:00Z",
-          agents: [{ state: "ready", agentId: "default" }],
+          agents: [{ state: "ready", agentDid: "default" }],
         },
       }),
       null,
@@ -286,7 +289,7 @@ describe("deployment operational state", () => {
   it("offers backend configuration only on the host that owns it", () => {
     const readinessStatus = {
       state: "unavailable" as const,
-      agentId: "default",
+      agentDid: "default",
       reason: "backend_not_configured" as const,
     };
     const remote = projectDeploymentOperationalState(
@@ -309,7 +312,7 @@ describe("deployment operational state", () => {
       deployment({
         readinessStatus: {
           state: "unavailable",
-          agentId: "default",
+          agentDid: "default",
           reason: "tool_surface_unavailable",
         },
       }),
@@ -327,7 +330,7 @@ describe("deployment operational state", () => {
       deployment({
         readinessStatus: {
           state: "unavailable",
-          agentId: "default",
+          agentDid: "default",
           reason: "agent_disabled",
         },
       }),

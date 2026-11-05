@@ -15,7 +15,7 @@ import type { ShellStores } from "./shellProjection";
 export type AnswerCacheBinding = {
   clientDid: string;
   nodeDid: string;
-  agentId: string;
+  agentDid: string;
   sessionId: string;
   itemId: string;
   sourceItemId: string;
@@ -27,7 +27,7 @@ type AnswerObservation = Pick<MailboxItemObservation, "terminal"> & {
     | "itemId"
     | "requesterDid"
     | "targetNodeDid"
-    | "targetAgentId"
+    | "targetAgentDid"
     | "sessionId"
     | "kind"
     | "action"
@@ -51,15 +51,14 @@ export function mayRetireMailboxAnswer(
     [
       binding.clientDid,
       binding.nodeDid,
-      binding.agentId,
+      binding.agentDid,
       binding.sessionId,
       binding.itemId,
     ].every((id) => id.length > 0) &&
     item &&
     observation?.terminal &&
-    item.requesterDid === binding.clientDid &&
     item.targetNodeDid === binding.nodeDid &&
-    item.targetAgentId === binding.agentId &&
+    item.targetAgentDid === binding.agentDid &&
     item.sessionId === binding.sessionId &&
     item.itemId === binding.itemId &&
     item.kind === "ask" &&
@@ -75,7 +74,7 @@ function bindingOf(draft: ChatDraft): AnswerCacheBinding | null {
     return {
       clientDid: draft.clientDid,
       nodeDid: draft.nodeDid,
-      agentId: request.agentId ?? "",
+      agentDid: request.agentDid ?? "",
       sessionId: draft.sessionId,
       itemId: draft.mailbox.itemId,
       sourceItemId: request.causedBySourceDocId ?? "",
@@ -125,7 +124,7 @@ export function observeMailboxAnswerRetirement({
       if (
         stores.fleet
           .getState()
-          .mailboxOf[draft.nodeDid]?.some(
+          .mailboxOf[draft.mailbox!.nodeDid]?.some(
             (item) => item.itemId === binding.itemId && item.status === "open",
           )
       )
@@ -167,9 +166,14 @@ export function observeMailboxAnswerRetirement({
     };
     const observation = await api.observeMailboxItem({
       clientDid: binding.clientDid,
+      nodeDid: draft.mailbox!.nodeDid,
       itemId: binding.itemId,
     });
-    if (!current() || !mayRetireMailboxAnswer(binding, observation, clientDid(), true))
+    if (
+      observation?.item.nodeDid !== draft.mailbox!.nodeDid ||
+      !current() ||
+      !mayRetireMailboxAnswer(binding, observation, clientDid(), true)
+    )
       return;
     await api.acknowledgeChatSubmission(draft.result!.submissionReceipt!);
     if (current() && mayRetireMailboxAnswer(binding, observation, clientDid(), true))

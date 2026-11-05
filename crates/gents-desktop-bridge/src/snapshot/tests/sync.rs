@@ -1,8 +1,5 @@
 use std::time::{Duration, SystemTime};
 
-use gents::runtime::agent::p2p_reconcile::session_hydration::{
-    ClientHydrationPhase, ClientHydrationProgress,
-};
 use gents_desktop_core::client::{
     project_sync_health, ClientSyncStateSnapshot, P2PHealth, P2PHealthStatus,
     P2pSyncStatusSnapshot, PairingCollectionStatus, SyncHealthState, STUCK_THRESHOLD_ATTEMPTS,
@@ -11,51 +8,11 @@ use gents_desktop_core::remote_admin::PairingErrorClass;
 use serde_json::json;
 
 use crate::contract::EVENT_REASONS;
-use crate::snapshot::{to_hydration_view, to_pairing_collection_view, to_sync_health_view};
+use crate::snapshot::{to_pairing_collection_view, to_sync_health_view};
 use crate::types::ClientUpdateEvent;
 
 fn t(secs: u64) -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
-}
-
-fn serving_progress() -> ClientHydrationProgress {
-    ClientHydrationProgress {
-        session_id: "session-1".into(),
-        node_did: "did:test:agent".into(),
-        phase: ClientHydrationPhase::Serving,
-        merged_count: 4,
-        covered_count: 3,
-        served_count: Some(11),
-        ..ClientHydrationProgress::default()
-    }
-}
-
-#[test]
-fn ownership_refusal_is_unreadable_not_a_retryable_failure() {
-    let failed = ClientHydrationProgress {
-        phase: ClientHydrationPhase::Failed,
-        ..serving_progress()
-    };
-    let view = to_hydration_view(
-        &failed,
-        Some(
-            gents::runtime::agent::p2p_reconcile::session_hydration::SESSION_OWNERSHIP_MISMATCH
-                .into(),
-        ),
-    );
-    assert_eq!(view.phase, "unreadable");
-    assert!(view
-        .detail
-        .is_some_and(|detail| detail.contains("another requester")));
-
-    let other = to_hydration_view(&failed, Some("peer pairing does not match".into()));
-    assert_eq!(other.phase, "failed");
-    assert_eq!(other.detail.as_deref(), Some("peer pairing does not match"));
-
-    assert_eq!(
-        to_hydration_view(&serving_progress(), Some("stale".into())).detail,
-        None
-    );
 }
 
 #[test]

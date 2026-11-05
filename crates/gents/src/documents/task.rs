@@ -14,7 +14,7 @@ pub struct Task {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub description: Option<String>,
-    pub agent_id: String,
+    pub agent_did: String,
     pub prompt_template: String,
     /// Emit one durable FireOutcome at the terminal boundary.
     #[serde(

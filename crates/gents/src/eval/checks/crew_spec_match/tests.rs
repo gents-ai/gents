@@ -21,7 +21,7 @@ fn home() -> StageEvidence {
         (
             "agents",
             vec![
-                json!({"agent_id": "worker-a", "context_id": "c1", "inference_profile_id": "glm-a"}),
+                json!({"agent_did": "worker-a", "context_id": "c1", "inference_profile_id": "glm-a"}),
             ],
         ),
         (
@@ -56,7 +56,7 @@ fn params() -> Value {
         "rows": [{"capture": "tasks", "key": "task_id", "id": "work-a", "category": "emit_outcome",
                   "expect": [{"field": "emit_outcome", "equals": true}]}],
         "agents": {"agents": "agents", "contexts": "contexts", "tools": "tools", "expect": [
-            {"agent_id": "worker-a", "category": "least_privilege",
+            {"agent_did": "worker-a", "category": "least_privilege",
              "agent": [{"field": "inference_profile_id", "equals": "glm-a"}],
              "context": [{"field": "system_prompt", "contains": "GLM worker"}],
              "tools": [{"field": "host.files.mode", "equals": "ReadWrite"}, {"field": "agents.enabled", "equals": false}]}
@@ -69,8 +69,8 @@ fn params() -> Value {
 #[test]
 fn multiple_hops_require_the_connected_limit_and_the_reported_model() {
     let params = json!({"links":[
-        {"capture":"agents","key":"agent_id","id":"engineer","field":"inference_profile_id","target_capture":"profiles","target_key":"profile_id","reported_fields":["model_name"]},
-        {"capture":"agents","key":"agent_id","id":"engineer","field":"inference_profile_id","target_capture":"profiles","target_key":"profile_id","via":[{"field":"execution_id","target_capture":"executions","target_key":"execution_id"}],"expect":[{"field":"max_turns","equals":30}]}
+        {"capture":"agents","key":"agent_did","id":"engineer","field":"inference_profile_id","target_capture":"profiles","target_key":"profile_id","reported_fields":["model_name"]},
+        {"capture":"agents","key":"agent_did","id":"engineer","field":"inference_profile_id","target_capture":"profiles","target_key":"profile_id","via":[{"field":"execution_id","target_capture":"executions","target_key":"execution_id"}],"expect":[{"field":"max_turns","equals":30}]}
     ]});
     assert!(
         jsonschema::validator_for(&CrewSpecMatch.describe().params_schema)
@@ -81,7 +81,7 @@ fn multiple_hops_require_the_connected_limit_and_the_reported_model() {
         let mut e = stage(&[
             (
                 "agents",
-                vec![json!({"agent_id":"engineer","inference_profile_id":"chosen"})],
+                vec![json!({"agent_did":"engineer","inference_profile_id":"chosen"})],
             ),
             (
                 "profiles",
@@ -122,7 +122,7 @@ fn multiple_hops_require_the_connected_limit_and_the_reported_model() {
 
 #[test]
 fn reverse_reference_hops_do_not_accept_a_disconnected_task() {
-    let params = json!({"links":[{"capture":"sources","key":"source_collection","id":"Note","field":"event_source_id","target_capture":"triggers","target_key":"source.event_source_id","via":[{"field":"task_id","target_capture":"tasks","target_key":"task_id"}],"expect":[{"field":"agent_id","equals":"reviewer"}]}]});
+    let params = json!({"links":[{"capture":"sources","key":"source_collection","id":"Note","field":"event_source_id","target_capture":"triggers","target_key":"source.event_source_id","via":[{"field":"task_id","target_capture":"tasks","target_key":"task_id"}],"expect":[{"field":"agent_did","equals":"reviewer"}]}]});
     for (bound, score) in [("wanted", 10000), ("decoy", 5000)] {
         let e = stage(&[
             (
@@ -136,8 +136,8 @@ fn reverse_reference_hops_do_not_accept_a_disconnected_task() {
             (
                 "tasks",
                 vec![
-                    json!({"task_id":"wanted","agent_id":"reviewer"}),
-                    json!({"task_id":"decoy","agent_id":"writer"}),
+                    json!({"task_id":"wanted","agent_did":"reviewer"}),
+                    json!({"task_id":"decoy","agent_did":"writer"}),
                 ],
             ),
         ]);
@@ -147,7 +147,7 @@ fn reverse_reference_hops_do_not_accept_a_disconnected_task() {
 
 #[test]
 fn completion_record_requires_a_write_path_for_its_metadata() {
-    let params = json!({"agents":{"agents":"agents","contexts":"contexts","tools":"tools","expect":[{"agent_id":"worker-a","datastore":{"surfaces":"surfaces","create":["Result"],"query":[],"required_fields":{"Result":["handoff_id"]}}}]}});
+    let params = json!({"agents":{"agents":"agents","contexts":"contexts","tools":"tools","expect":[{"agent_did":"worker-a","datastore":{"surfaces":"surfaces","create":["Result"],"query":[],"required_fields":{"Result":["handoff_id"]}}}]}});
     assert!(
         jsonschema::validator_for(&CrewSpecMatch.describe().params_schema)
             .unwrap()
@@ -208,7 +208,7 @@ fn multi_hop_feedback_names_the_field_owner() {
 
 #[test]
 fn selected_profile_label_uses_its_id_only_when_the_name_is_null() {
-    let params = json!({"links":[{"capture":"agents","key":"agent_id","id":"engineer","field":"inference_profile_id","target_capture":"profiles","target_key":"profile_id","expect":[{"field":"display_name","fallback_field":"profile_id","equals":"Research"}]}]});
+    let params = json!({"links":[{"capture":"agents","key":"agent_did","id":"engineer","field":"inference_profile_id","target_capture":"profiles","target_key":"profile_id","expect":[{"field":"display_name","fallback_field":"profile_id","equals":"Research"}]}]});
     for (profile, met) in [
         (json!({"profile_id":"Research"}), true),
         (json!({"profile_id":"Research","display_name":null}), true),
@@ -221,7 +221,7 @@ fn selected_profile_label_uses_its_id_only_when_the_name_is_null() {
         let evidence = stage(&[
             (
                 "agents",
-                vec![json!({"agent_id":"engineer","inference_profile_id":"Research"})],
+                vec![json!({"agent_did":"engineer","inference_profile_id":"Research"})],
             ),
             (
                 "profiles",
@@ -243,7 +243,7 @@ fn selected_profile_label_uses_its_id_only_when_the_name_is_null() {
 
 #[test]
 fn selected_datastore_contract_rejects_runtime_keys_decoys_and_missing_calls() {
-    let params = json!({"agents":{"agents":"agents","contexts":"contexts","tools":"tools","expect":[{"agent_id":"worker-a","datastore":{"surfaces":"surfaces","create":["Result"],"query":["Result"],"caller_fields":{"Result":["correlation","result"]},"query_fields":{"Result":["correlation","result"]},"lookup_by":"correlation","called_create":["Result"],"called_query":["Result"]}}]}});
+    let params = json!({"agents":{"agents":"agents","contexts":"contexts","tools":"tools","expect":[{"agent_did":"worker-a","datastore":{"surfaces":"surfaces","create":["Result"],"query":["Result"],"caller_fields":{"Result":["correlation","result"]},"query_fields":{"Result":["correlation","result"]},"lookup_by":"correlation","called_create":["Result"],"called_query":["Result"]}}]}});
     let mut e = home();
     let tool = json!({"tools_id":"t1","datastore":{"datastore_tool_surface_ids":["arbitrary-id"]}});
     let surface = json!({"_docID":"physical-surface","surface_id":"arbitrary-id","node_did":"did:x","entries":[{"kind":"create","tool_name":"save_result","collection":"Result","description":"Save the caller's result","fields":[{"name":"correlation","required":true},{"name":"result","required":true}]},{"kind":"query","tool_name":"find_result","collection":"Result","description":"Find results by the caller's key","fields":["correlation","result"],"filter_fields":[{"name":"correlation"}]}]});
@@ -339,8 +339,8 @@ fn selected_datastore_contract_rejects_runtime_keys_decoys_and_missing_calls() {
 #[test]
 fn named_roles_follow_actual_ids_and_reject_ambiguous_or_wrong_grants() {
     let params = json!({"agents":{"agents":"agents","contexts":"contexts","tools":"tools","expect":[
-        {"agent_id":"coordinator","source_match":{"field":"display_name","matches":"(?i)\\bcoordinator\\b"},"delegates":{"targets":"targets","agents":["reviewer"]}},
-        {"agent_id":"reviewer","source_match":{"field":"display_name","matches":"(?i)\\breviewer\\b"},"tools":[{"field":"host.bash.mode","equals":"Off"}]}
+        {"agent_did":"coordinator","source_match":{"field":"display_name","matches":"(?i)\\bcoordinator\\b"},"delegates":{"targets":"targets","agents":["reviewer"]}},
+        {"agent_did":"reviewer","source_match":{"field":"display_name","matches":"(?i)\\breviewer\\b"},"tools":[{"field":"host.bash.mode","equals":"Off"}]}
     ]}});
     assert!(
         jsonschema::validator_for(&CrewSpecMatch.describe().params_schema)
@@ -351,8 +351,8 @@ fn named_roles_follow_actual_ids_and_reject_ambiguous_or_wrong_grants() {
         (
             "agents",
             vec![
-                json!({"agent_id":"did:x:desk-coordinator","display_name":"Research desk Coordinator","context_id":"c"}),
-                json!({"agent_id":"did:x:random-42","display_name":"Research desk Reviewer","context_id":"r"}),
+                json!({"agent_did":"did:x:desk-coordinator","display_name":"Research desk Coordinator","context_id":"c"}),
+                json!({"agent_did":"did:x:random-42","display_name":"Research desk Reviewer","context_id":"r"}),
             ],
         ),
         (
@@ -372,7 +372,7 @@ fn named_roles_follow_actual_ids_and_reject_ambiguous_or_wrong_grants() {
         (
             "targets",
             vec![
-                json!({"target_id":"review-route","node_did":"did:x","target_node_did":"did:x","agent_id":"did:x:random-42"}),
+                json!({"target_id":"review-route","node_did":"did:x","target_node_did":"did:x","agent_did":"did:x:random-42"}),
             ],
         ),
     ]);
@@ -388,11 +388,11 @@ fn named_roles_follow_actual_ids_and_reject_ambiguous_or_wrong_grants() {
             unreachable!()
         };
         match mutation {
-            0 => rows[0]["agent_id"] = json!("reviewer"),
+            0 => rows[0]["agent_did"] = json!("reviewer"),
             1 => rows[0]["target_node_did"] = json!("did:foreign"),
-            2 => rows[0]["agent_id"] = json!("did:x:desk-coordinator"),
+            2 => rows[0]["agent_did"] = json!("did:x:desk-coordinator"),
             3 => {
-                rows.push(json!({"agent_id":"another","display_name":"Reviewer","context_id":"r"}))
+                rows.push(json!({"agent_did":"another","display_name":"Reviewer","context_id":"r"}))
             }
             4 => {
                 rows.pop();
@@ -414,7 +414,7 @@ fn named_roles_follow_actual_ids_and_reject_ambiguous_or_wrong_grants() {
 
 #[test]
 fn delegates_follow_selected_targets_and_reject_foreign_or_extra_grants() {
-    let params = json!({"agents":{"agents":"agents","contexts":"contexts","tools":"tools","expect":[{"agent_id":"worker-a","delegates":{"targets":"targets","agents":["reviewer"]}}]}});
+    let params = json!({"agents":{"agents":"agents","contexts":"contexts","tools":"tools","expect":[{"agent_did":"worker-a","delegates":{"targets":"targets","agents":["reviewer"]}}]}});
     for (selected, owner, score) in [
         ("right", "did:x", 10000),
         ("wrong", "did:x", 5000),
@@ -429,7 +429,7 @@ fn delegates_follow_selected_targets_and_reject_foreign_or_extra_grants() {
                 ],
             },
         );
-        e.captures.insert("targets".into(),CaptureResult::Documents{rows:vec![json!({"target_id":"right","node_did":"did:x","target_node_did":owner,"agent_id":"scope:reviewer"}),json!({"target_id":"wrong","node_did":"did:x","target_node_did":"did:x","agent_id":"scope:writer"})]});
+        e.captures.insert("targets".into(),CaptureResult::Documents{rows:vec![json!({"target_id":"right","node_did":"did:x","target_node_did":owner,"agent_did":"scope:reviewer"}),json!({"target_id":"wrong","node_did":"did:x","target_node_did":"did:x","agent_did":"scope:writer"})]});
         assert_eq!(CrewSpecMatch.evaluate(&params, &e).score_bp, Some(score));
     }
 }
@@ -481,7 +481,7 @@ fn source_match_follows_one_role_and_rejects_ambiguity_and_decoys() {
         ("Reviewer", "right", true, 0),
     ] {
         let mut agents = vec![
-            json!({"agent_id":"unpredictable-id","display_name":name,"inference_profile_id":selected}),
+            json!({"agent_did":"unpredictable-id","display_name":name,"inference_profile_id":selected}),
         ];
         if duplicate {
             agents.push(agents[0].clone());
@@ -504,8 +504,29 @@ fn source_match_follows_one_role_and_rejects_ambiguity_and_decoys() {
 }
 
 #[test]
+fn exact_link_rejects_a_prefixed_session_or_call_id() {
+    let params = json!({"links":[{"capture":"requests","source_match":{"field":"content","equals":"token"},"field":"session_id","target_capture":"sessions","target_key":"session_id","exact":true}]});
+    let mut evidence = stage(&[
+        (
+            "requests",
+            vec![json!({"content":"token", "session_id":"child"})],
+        ),
+        ("sessions", vec![json!({"session_id":"child"})]),
+    ]);
+    assert_eq!(
+        CrewSpecMatch.evaluate(&params, &evidence).score_bp,
+        Some(10000)
+    );
+    let CaptureResult::Documents { rows } = evidence.captures.get_mut("sessions").unwrap() else {
+        unreachable!()
+    };
+    rows[0]["session_id"] = json!("other:child");
+    assert!(CrewSpecMatch.evaluate(&params, &evidence).score_bp.unwrap() < 10000);
+}
+
+#[test]
 fn null_tools_selection_has_no_grants_but_a_dangling_reference_fails() {
-    let params = json!({"agents":{"agents":"agents","contexts":"contexts","tools":"tools","expect":[{"agent_id":"planner","tools":[{"field":"host.bash.mode","matches":"^(Off|null)$"},{"field":"agents.enabled","matches":"^(false|null)$"}]}]}});
+    let params = json!({"agents":{"agents":"agents","contexts":"contexts","tools":"tools","expect":[{"agent_did":"planner","tools":[{"field":"host.bash.mode","matches":"^(Off|null)$"},{"field":"agents.enabled","matches":"^(false|null)$"}]}]}});
     for (context, expected) in [
         (json!({"context_id":"c","tools_id":null}), 10000),
         (json!({"context_id":"c","tools_id":"missing"}), 3333),
@@ -514,7 +535,7 @@ fn null_tools_selection_has_no_grants_but_a_dangling_reference_fails() {
         let evidence = stage(&[
             (
                 "agents",
-                vec![json!({"agent_id":"planner","context_id":"c"})],
+                vec![json!({"agent_did":"planner","context_id":"c"})],
             ),
             ("contexts", vec![context]),
             ("tools", vec![]),
@@ -574,12 +595,12 @@ fn a_missing_agent_fails_its_whole_chain() {
 }
 
 #[test]
-fn a_node_scoped_agent_id_matches_its_declared_id() {
+fn a_node_scoped_agent_did_matches_its_declared_id() {
     let mut evidence = home();
     evidence.captures.insert(
         "agents".into(),
         CaptureResult::Documents {
-            rows: vec![json!({"agent_id": "did:key:z6Mk:worker-a", "context_id": "c1", "inference_profile_id": "glm-a"})],
+            rows: vec![json!({"agent_did": "did:key:z6Mk:worker-a", "context_id": "c1", "inference_profile_id": "glm-a"})],
         },
     );
     let verdict = CrewSpecMatch.evaluate(&params(), &evidence);
@@ -616,4 +637,13 @@ fn doc_fields_reads_each_name_once_and_ignores_other_roots() {
 fn params_that_require_nothing_are_the_grader() {
     let verdict = CrewSpecMatch.evaluate(&json!({}), &home());
     assert_eq!(verdict.kind, OutcomeKind::Grader);
+}
+
+#[test]
+fn full_did_does_not_match_another_identifier_by_suffix() {
+    assert!(is_id("did:key:actual-subject", "did:key:actual-subject"));
+    assert!(!is_id(
+        "did:foreign:did:key:actual-subject",
+        "did:key:actual-subject"
+    ));
 }

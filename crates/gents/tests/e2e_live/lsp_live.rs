@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::documents::{FileTools, HostTools, IntegrationTools, LspTools, Tools};
 use gents::{DocumentRuntimeOptions, FileToolMode, Gents, ToolCeiling};
 
@@ -111,7 +111,7 @@ fn load_pack_system_prompt(root: &std::path::Path) -> anyhow::Result<String> {
     let agent = config
         .agents
         .iter()
-        .find(|agent| agent.agent_id == "lsp-coder")
+        .find(|agent| agent.agent_did == "lsp-coder")
         .context("pack has no lsp-coder Agent")?;
     let context_id = agent
         .context_id
@@ -157,7 +157,7 @@ fn lsp_pack_prompt_follows_agent_context_sidecar_reference() {
         root.path().join("pack_config.json"),
         serde_json::to_vec(&serde_json::json!({
             "node":{},
-            "agents":[{"agent_id":"lsp-coder","context_id":"distinct-context","inference_profile_id":"gents:inference-slot:coder"}],
+            "agents":[{"agent_did":"lsp-coder","context_id":"distinct-context","inference_profile_id":"gents:inference-slot:coder"}],
             "contexts":[{"context_id":"distinct-context","system_prompt":"./custom_assets/prompt.md"}]
         })).unwrap(),
     ).unwrap();
@@ -232,12 +232,12 @@ async fn lsp_live_model_uses_rust_analyzer() {
     let db = test_db("lsp-live").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("lsp-live"));
 
-    let (node_did, agent_id) = bind_target(&db.node, identity.as_ref(), &live_target()).await;
+    let (node_did, agent_did) = bind_target(&db.node, identity.as_ref(), &live_target()).await;
 
     configure_agent_tools(
         &db.node,
         &node_did,
-        &agent_id,
+        &agent_did,
         Some(pack_system_prompt()),
         Tools {
             tools_id: "lsp-live-tools".to_string(),
@@ -282,7 +282,7 @@ async fn lsp_live_model_uses_rust_analyzer() {
     create_runtime_request(
         &db.node,
         &node_did,
-        &agent_id,
+        &agent_did,
         unscripted_request_id,
         "lsp-live-unscripted-session-1",
         &pack_unscripted_prompt(),
@@ -330,7 +330,7 @@ async fn lsp_live_model_uses_rust_analyzer() {
     create_runtime_request(
         &db.node,
         &node_did,
-        &agent_id,
+        &agent_did,
         request_id,
         "lsp-live-session-1",
         &prompt,

@@ -39,7 +39,7 @@ pub(super) fn at(seconds: i64) -> DateTime<Utc> {
 
 pub(super) async fn connect_accounts_at(f: &Fixture, seconds: i64) {
     execute(
-        &f.node,
+        &f.user_access(),
         &format!(
             r#"mutation {{ update_OAuthCredential(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ connected_at: "{}" }}) {{ _docID }} }}"#,
             escape_graphql_string(f.identity.did()),
@@ -118,7 +118,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
             panic!("{}: not a usage limit", case.name);
         };
         execute(
-            &f.node,
+            &f.agent_access(),
             &format!(
                 r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ last_failure: "{}" }}) {{ _docID }} }}"#,
                 escape_graphql_string(&f.goal.doc_id),
@@ -156,7 +156,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
         }
         if !facts.backend_enabled {
             execute(
-                &f.node,
+                &f.user_access(),
                 &format!(
                     r#"mutation {{ update_InferenceBackend(filter: {{ node_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#,
                     escape_graphql_string(did),
@@ -167,11 +167,13 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
         }
         assert_eq!(f.observe().await, case.before, "{} initial", case.name);
 
-        let goal = load_canonical_goal(&f.node, did, SESSION)
-            .await
-            .unwrap()
-            .unwrap();
-        let result = resume_at_reset(&f.node, f.identity.as_ref(), &goal, at(facts.now))
+        let goal = f.current_goal().await;
+        let agent = crate::store::identity::RegisteredIdentity::from_registered_did(
+            &f.parent.agent_did,
+            None,
+        )
+        .unwrap();
+        let result = resume_at_reset(&f.node, &agent, &goal, at(facts.now))
             .await
             .unwrap();
         match case.outcome.as_str() {
@@ -202,7 +204,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
                 case.name
             );
         }
-        f.node.shutdown().await;
+        f.node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -213,11 +215,8 @@ async fn observe_repeat(f: &Fixture, first_child: &str) -> Value {
         id if id.starts_with("goal-cont-") => 40,
         id => panic!("unknown request {id}"),
     };
-    let g = load_canonical_goal(&f.node, f.identity.did(), SESSION)
-        .await
-        .unwrap()
-        .unwrap();
-    let rows = request_rows(&f.node).await;
+    let g = f.current_goal().await;
+    let rows = request_rows(&f.agent_access()).await;
     let children: Vec<Value> = rows
         .iter()
         .filter(|r| {

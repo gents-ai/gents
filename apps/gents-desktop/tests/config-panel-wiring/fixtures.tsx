@@ -11,6 +11,7 @@ export const deployment: DeploymentView = {
   source: "local",
   graphql: null,
   dialSucceeded: true,
+  runtimeConnection: "connected",
   chatSafe: true,
   routes: [],
   pairing: [],
@@ -18,7 +19,7 @@ export const deployment: DeploymentView = {
   node: {
     nodeDid: "did:key:z6MkAgent",
     displayName: "Local Agent",
-    defaultAgentId: "default",
+    defaultAgentDid: "default",
     enabled: true,
     createdAt: null,
     createdBy: null,
@@ -26,7 +27,8 @@ export const deployment: DeploymentView = {
   nodeConfig: null,
   agentConfigs: [
     {
-      agent_id: "default",
+      agent_did: "default",
+      creation_nonce: "01".repeat(32),
       node_did: "did:key:z6MkAgent",
       display_name: "Default",
       description: null,
@@ -37,7 +39,8 @@ export const deployment: DeploymentView = {
       created_at: null,
     },
     {
-      agent_id: "ops",
+      agent_did: "ops",
+      creation_nonce: "02".repeat(32),
       node_did: "did:key:z6MkAgent",
       display_name: "Ops",
       description: null,
@@ -55,13 +58,14 @@ export const deployment: DeploymentView = {
     routerGeneration: 1,
     updatedAt: "2026-08-28T00:00:00Z",
     agents: [
-      { state: "ready", agentId: "default" },
-      { state: "ready", agentId: "ops" },
+      { state: "ready", agentDid: "default" },
+      { state: "ready", agentDid: "ops" },
     ],
   },
   agents: [
     {
-      agentId: "default",
+      agentDid: "default",
+      creationNonce: "01".repeat(32),
       nodeDid: "did:key:z6MkAgent",
       displayName: "Default",
       description: null,
@@ -73,7 +77,8 @@ export const deployment: DeploymentView = {
       createdAt: null,
     },
     {
-      agentId: "ops",
+      agentDid: "ops",
+      creationNonce: "02".repeat(32),
       nodeDid: "did:key:z6MkAgent",
       displayName: "Ops",
       description: null,
@@ -87,7 +92,7 @@ export const deployment: DeploymentView = {
   ],
   agentEnvironments: [
     {
-      agentId: "default",
+      agentDid: "default",
       displayName: "Default",
       enabled: true,
       isDefault: true,
@@ -102,7 +107,7 @@ export const deployment: DeploymentView = {
       activeSessionCount: 0,
     },
     {
-      agentId: "ops",
+      agentDid: "ops",
       displayName: "Ops",
       enabled: true,
       isDefault: false,
@@ -277,7 +282,7 @@ export const deployment: DeploymentView = {
       taskId: "task-a",
       name: "Task A",
       description: null,
-      agentId: "default",
+      agentDid: "default",
       emitOutcome: false,
       promptTemplate: "Run task A",
       goalObjectiveTemplate: null,
@@ -300,7 +305,7 @@ export const deployment: DeploymentView = {
       taskId: "task-b",
       name: "Task B",
       description: null,
-      agentId: "ops",
+      agentDid: "ops",
       emitOutcome: false,
       promptTemplate: "Run task B",
       goalObjectiveTemplate: null,

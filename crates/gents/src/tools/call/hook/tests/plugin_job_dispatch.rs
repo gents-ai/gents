@@ -77,6 +77,7 @@ struct Step0 {
     cwd: Option<tempfile::TempDir>,
     node: Arc<EmbeddedNode>,
     hook: DefraSessionHook,
+    worker: Arc<dyn NodeIdentity>,
     request_id: String,
     session_id: String,
     data: bool,
@@ -206,29 +207,23 @@ async fn step0(output: Value, options: Options) -> Step0 {
     node.add_collection("type Plain { body: String }")
         .await
         .unwrap();
-    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
-    crate::test_support::install_test_agent(&node, identity.did(), "worker").await;
+    let worker_binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+    crate::test_support::install_test_agent_binding(
+        &node,
+        identity.did(),
+        "worker",
+        &worker_binding,
+    )
+    .await;
+    let worker =
+        crate::store::identity::resolve_agent_identity(&identity, &worker_binding).unwrap();
     insert(
         &node,
         "AgentTarget",
         json!({"target_id": "t-worker", "node_did": identity.did(), "target_node_did": identity.did(),
-               "agent_id": "worker", "name": "worker"}),
+               "agent_did": worker.did(), "name": "worker"}),
     )
     .await;
-    let tools: crate::documents::Tools = serde_json::from_value(json!({
-        "tools_id": "general:tools",
-        "node_did": identity.did(),
-        "agents": {"enabled": true, "target_ids": ["t-worker"]},
-        "integrations": {"plugins": [{"plugin": "team/plugin", "job": options.settings}]},
-    }))
-    .unwrap();
-    crate::store::config_client::write_tools_document(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        &tools,
-    )
-    .await
-    .unwrap();
-
     let home = tempfile::tempdir().unwrap();
     install_plugin(
         home.path(),
@@ -248,21 +243,75 @@ async fn step0(output: Value, options: Options) -> Step0 {
     let mut hook =
         DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_job_tools(RapidHashMap::from_iter([(TOOL.to_owned(), binding)]));
-    if options.driver {
-        hook = hook.with_job_driver(JobDriver::new(JobRuntime {
-            node: node.clone(),
-            plugins: Arc::new(PluginExecutor::new(Some(home.path().to_owned()))),
-            home: home.path().to_owned(),
-            tool_root: cwd.as_ref().map(|cwd| cwd.path().to_owned()),
-        }));
-    }
     let session_id = hook.session_id().await.unwrap();
     let request_id = format!("step0-{}", uuid::Uuid::new_v4());
     let cause = match options.hop {
         0 => None,
         depth => Some(job_ancestry(&node, depth).await),
     };
-    bind_request_at_hop(&node, &hook, &request_id, &session_id, options.hop, cause).await;
+    let lifecycle = request_at_hop(
+        &node,
+        &identity,
+        &request_id,
+        &session_id,
+        options.hop,
+        cause,
+    )
+    .await;
+    let caller_signer = lifecycle.managed_agent_signer().unwrap();
+    hook.actor = Some(identity::Did::new(caller_signer.did()).unwrap());
+    hook = hook.with_managed_identity(&caller_signer).unwrap();
+    let tools: crate::documents::Tools = serde_json::from_value(json!({
+        "tools_id": format!("{}:tools", caller_signer.did()),
+        "node_did": identity.did(),
+        "agents": {"enabled": true, "target_ids": ["t-worker"]},
+        "integrations": {"plugins": [{"plugin": "team/plugin", "job": hook.job_tools.get(TOOL).unwrap().settings}]},
+    })).unwrap();
+    crate::store::config_client::write_tools_document(
+        &crate::ConfigAccess::local(node.clone()),
+        &tools,
+    )
+    .await
+    .unwrap();
+    if options.driver {
+        let runtime = JobRuntime::new(
+            node.clone(),
+            Arc::new(PluginExecutor::new(Some(home.path().to_owned()))),
+            home.path().to_owned(),
+            cwd.as_ref().map(|cwd| cwd.path().to_owned()),
+        );
+        let mut unavailable_agents = rapidhash::RapidHashMap::default();
+        for agent in [
+            Arc::new(caller_signer.clone()) as Arc<dyn NodeIdentity>,
+            worker.clone(),
+        ] {
+            unavailable_agents.insert(agent.did().to_owned(), crate::runtime::snapshot::UnavailableAgent::new(
+                gents_protocol::node_readiness::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid, "job fixture",
+            ).with_watcher_identity(agent));
+        }
+        let snapshot = Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
+            generation: 1,
+            node: None,
+            local_did: identity.did().to_owned(),
+            default_agent_did: caller_signer.did().to_owned(),
+            agents: Default::default(),
+            tool_surfaces: Default::default(),
+            backend_admission_configs: Default::default(),
+            unavailable_agents,
+            active_schedules: Default::default(),
+            unavailable_schedules: Default::default(),
+            active_event_triggers: Default::default(),
+            unavailable_event_triggers: Default::default(),
+            active_tasks: Default::default(),
+            dispatchers: Default::default(),
+            agent_executor_capacities: Default::default(),
+            agent_executor_queue_capacities: Default::default(),
+        });
+        let (_sender, receiver) = tokio::sync::watch::channel(snapshot);
+        runtime.bind_snapshot(receiver).unwrap();
+        hook = hook.with_job_driver(JobDriver::new(runtime));
+    }
+    bind_claimed_hook_request(&hook, lifecycle, Utc::now() + chrono::Duration::minutes(5)).await;
     hook.on_completion_call(&user_text_message("run the workflow"), &[])
         .await;
     Step0 {
@@ -271,6 +320,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         cwd,
         node,
         hook,
+        worker,
         request_id,
         session_id,
         data: options.data,
@@ -279,17 +329,14 @@ async fn step0(output: Value, options: Options) -> Step0 {
     }
 }
 
-async fn bind_request_at_hop(
+async fn request_at_hop(
     node: &Arc<EmbeddedNode>,
-    hook: &DefraSessionHook,
+    identity: &crate::store::identity::KeyIdentity,
     request_id: &str,
     session_id: &str,
     hop: u32,
     cause: Option<(String, String)>,
-) {
-    let identity =
-        crate::store::identity::RegisteredIdentity::from_registered_did(&hook.node_did, None)
-            .expect("registered job fixture identity");
+) -> crate::RequestLifecycle {
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
@@ -326,10 +373,10 @@ async fn bind_request_at_hop(
     }
     let lifecycle =
         crate::tools::call::lifecycle::admission_fixture::claimed_signed_request_create(
-            node, &identity, create,
+            node, identity, create,
         )
         .await;
-    bind_claimed_hook_request(hook, lifecycle, Utc::now() + chrono::Duration::minutes(5)).await;
+    lifecycle
 }
 
 /// The (request, tool call) documents the calling request is caused by: a
@@ -342,7 +389,7 @@ async fn job_ancestry(node: &Arc<EmbeddedNode>, depth: u32) -> (String, String) 
             "node_did": "owner",
             "requester_did": null,
             "session_id": session,
-            "agent_id": "configured",
+            "agent_did": "configured",
             "lifecycle_state": "processing",
         });
         if let Some((request_doc_id, call_doc_id)) = parent {
@@ -462,7 +509,7 @@ impl Step0 {
         let response = self
             .node
             .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{ _docID request_id session_id agent_id }} }}"#,
+                r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{ _docID request_id session_id agent_did }} }}"#,
                 job_spawn_key(root, slot, 0)
             ))
             .await;
@@ -482,7 +529,7 @@ impl Step0 {
     }
 
     async fn finish(self) {
-        self.node.shutdown().await;
+        self.node.shutdown().await.expect("shut down test node");
     }
 }
 
@@ -772,7 +819,7 @@ async fn adoption_commits_flip_pin_progress_effects_and_receipt_in_one_transacti
     );
     let child = step.child_request(doc, "s").await;
     assert_eq!(child["session_id"], job_session_id(doc, "s", 0));
-    assert_eq!(child["agent_id"], "worker");
+    assert_eq!(child["agent_did"], step.worker.did());
     assert_eq!(answer["status"], "running", "{answer}");
     assert_eq!(step.stored_reply(&row).await, answer);
     step.finish().await;
@@ -858,11 +905,12 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     let root_id = root["_docID"].as_str().unwrap().to_owned();
     let root_pin = step.pin_of(&root).await;
     let child = step.child_request(&root_id, "s").await;
-    crate::tools::call::lifecycle::admission_fixture::complete_child(
+    crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
         &step.node,
         child["request_id"].as_str().unwrap(),
         &step.hook.node_did,
         "done",
+        step.worker.as_ref(),
     )
     .await;
     finish_job(&step, &root_id).await;

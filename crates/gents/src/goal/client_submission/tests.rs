@@ -1,39 +1,58 @@
 use super::*;
 use crate::runtime::agent::p2p_reconcile::session_goal_control::process_command;
-use crate::store::identity::KeyIdentity;
-use defra_node::EmbeddedNode;
-use gents_protocol::goal_control::{
-    GoalControlOutcome, GoalOperation, GoalRevision, SESSION_GOAL_CONTROL_VERSION,
-};
+use gents_protocol::goal_control::{GoalOperation, GoalRevision, SESSION_GOAL_CONTROL_VERSION};
 use serde_json::json;
 use std::sync::Arc;
-use std::time::Duration;
 
 #[tokio::test]
-async fn submission_returns_verified_rejection_after_ignoring_invalid_receipts() {
-    let temp = tempfile::tempdir().unwrap();
-    let identity: Arc<dyn NodeIdentity> =
-        Arc::new(KeyIdentity::load_or_create(temp.path().join("runtime.key"), None).unwrap());
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
+async fn cross_actor_command_remains_durable_and_blocked_without_atomic_authorization() {
+    let modeled = crate::lean_vocab_test::lean_contract_snapshot()
+        .goal_client_start_cases
+        .iter()
+        .find(|case| case["name"] == "authority_unavailable")
+        .expect("modeled unavailable authorization");
+    let fixture = crate::goal::operator_resume::support::Fixture::new(&json!({
+        "status": "active", "sequence": 0, "blocked_audits": 0,
+        "wrapup_requested": false, "wrapup_completed": false,
+        "tokens_used": 0, "token_budget": 1000, "last_continued_from": null
+    }))
+    .await;
+    let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
+    let user = fixture.user.clone();
+    let access = ConfigAccess::local_as(
+        fixture.node.clone(),
+        ::identity::Did::new(user.did()).unwrap(),
     );
-    crate::store::schema::ensure_runtime_schemas(&node)
+    let session = access
+        .transact_readonly("test.blocked_session", |txn| {
+            Box::pin(async {
+                crate::session::load_agent_session_owner_in_txn(
+                    txn,
+                    identity.did(),
+                    crate::goal::operator_resume::support::SESSION,
+                )
+                .await
+            })
+        })
         .await
+        .unwrap()
         .unwrap();
-    let access = ConfigAccess::local(node.clone());
     let now = Utc::now();
     let command = SessionGoalControl {
         version: SESSION_GOAL_CONTROL_VERSION,
-        command_id: "rejected-control".into(),
-        requester_did: identity.did().into(),
+        command_id: "blocked-control".into(),
+        requester_did: user.did().into(),
         requester_peer_id: None,
         node_did: identity.did().into(),
-        session_id: "absent-session".into(),
-        session_doc_id: Some("absent-session-document".into()),
+        agent_did: fixture.parent.agent_did.clone(),
+        agent_doc_id: crate::goal::client_control::agent_document_for_test(
+            &access,
+            identity.did(),
+            &fixture.parent.agent_did,
+        )
+        .await,
+        session_id: crate::goal::operator_resume::support::SESSION.into(),
+        session_doc_id: Some(session.doc_id),
         issued_at: now.to_rfc3339(),
         expires_at: (now + chrono::Duration::minutes(5)).to_rfc3339(),
         expected: Some(GoalRevision {
@@ -42,187 +61,47 @@ async fn submission_returns_verified_rejection_after_ignoring_invalid_receipts()
         }),
         operation: GoalOperation::Pause {},
         initial_request: None,
+        native_evidence: None,
         signature: Vec::new(),
     };
-    let prepared = prepare_session_goal_control(identity.as_ref(), command.clone())
+    let prepared = prepare_session_goal_control(&access, user.as_ref(), command)
         .await
         .unwrap();
-    let before = access
-        .execute("{ AgentSessionGoalControl { _docID } }")
+    let error = submit_prepared_session_goal_control(&access, user.as_ref(), &prepared)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("blocked"));
+    let before = access.execute("{ AgentSessionGoalControl { _docID intent_json } AgentRequest { _docID } Goal { _docID status } }").await.unwrap();
+    let doc_id = before["data"]["AgentSessionGoalControl"][0]["_docID"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<SessionGoalControl>(
+            before["data"]["AgentSessionGoalControl"][0]["intent_json"]
+                .as_str()
+                .unwrap()
+        )
+        .unwrap(),
+        prepared
+    );
+    process_command(&fixture.node, &identity, doc_id, fixture.agent.as_ref())
         .await
         .unwrap();
-    assert_eq!(before["data"]["AgentSessionGoalControl"], json!([]));
+    assert_eq!(modeled["published"].as_bool(), Some(false));
+    assert_eq!(access.execute("{ AgentSessionGoalControl { _docID intent_json } AgentRequest { _docID } Goal { _docID status } }").await.unwrap(), before);
     assert!(
-        recover_session_goal_control(&access, identity.as_ref(), &prepared)
+        recover_session_goal_control(&access, user.as_ref(), &prepared)
             .await
             .unwrap()
             .is_none()
     );
-    assert_eq!(
-        access
-            .execute("{ AgentSessionGoalControl { _docID } }")
-            .await
-            .unwrap(),
-        before,
-        "preparation and observation must not publish an intent"
-    );
-    let submission = submit_session_goal_control(&access, identity.as_ref(), command);
-    tokio::pin!(submission);
-    let (doc_id, command): (String, SessionGoalControl) =
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let response = tokio::select! {
-                    result = &mut submission => panic!("submission returned without a receipt: {result:?}"),
-                    response = access.execute("{ AgentSessionGoalControl { _docID intent_json } }") => response.unwrap(),
-                };
-                if let Some(row) = response["data"]["AgentSessionGoalControl"]
-                    .as_array()
-                    .unwrap()
-                    .first()
-                {
-                    break (
-                        row["_docID"].as_str().unwrap().to_owned(),
-                        serde_json::from_str(row["intent_json"].as_str().unwrap()).unwrap(),
-                    );
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        command, prepared,
-        "publication must retain its prepared bytes"
-    );
-    let mut invalid = SessionGoalControlReceipt {
-        version: SESSION_GOAL_CONTROL_VERSION,
-        command_id: command.command_id.clone(),
-        command_digest: command.computed_digest().unwrap(),
-        requester_did: command.requester_did.clone(),
-        node_did: command.node_did.clone(),
-        session_id: command.session_id.clone(),
-        outcome: GoalControlOutcome::Rejected {
-            reason: "untrusted refusal".into(),
-        },
-        processed_at: now.to_rfc3339(),
-        signature: Vec::new(),
-    };
-    for foreign_scope in [false, true] {
-        if foreign_scope {
-            invalid.session_id = "another-session".into();
-        }
-        invalid.signature = identity
-            .sign(&invalid.signing_payload().unwrap())
-            .await
-            .unwrap();
-        if !foreign_scope {
-            invalid.signature[0] ^= 1;
-        }
-        access
-            .write(
-                "test.goal_submission_untrusted_receipt",
-                &format!(
-                    r#"mutation {{ update_AgentSessionGoalControl(docID: "{}", input: {{ receipt_json: "{}" }}) {{ _docID }} }}"#,
-                    escape_graphql_string(&doc_id),
-                    escape_graphql_string(&serde_json::to_string(&invalid).unwrap())
-                ),
-            )
-            .await
-            .unwrap();
-        assert!(
-            tokio::time::timeout(Duration::from_millis(600), &mut submission)
-                .await
-                .is_err(),
-            "untrusted receipt ended the wait (foreign scope: {foreign_scope})"
-        );
-        assert!(
-            recover_session_goal_control(&access, identity.as_ref(), &prepared)
-                .await
-                .unwrap()
-                .is_none()
-        );
-    }
-    process_command(&node, &identity, &doc_id).await.unwrap();
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentSessionGoalControl(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ receipt_json }} }}"#,
-            escape_graphql_string(&doc_id)
-        ))
-        .await
-        .unwrap();
-    let expected: SessionGoalControlReceipt = serde_json::from_str(
-        response["data"]["AgentSessionGoalControl"][0]["receipt_json"]
-            .as_str()
-            .unwrap(),
-    )
-    .unwrap();
-    expected.validate_for(&command).unwrap();
-    assert!(identity
-        .verify(
-            identity.did(),
-            &expected.signing_payload().unwrap(),
-            &expected.signature
-        )
-        .await
-        .unwrap());
-    assert!(matches!(
-        expected.outcome,
-        GoalControlOutcome::Rejected { .. }
-    ));
-    let received = tokio::time::timeout(Duration::from_secs(5), &mut submission)
-        .await
-        .unwrap()
-        .expect("verified runtime rejection remains a typed receipt");
-    assert_eq!(received, expected);
-    let query = "{ AgentSessionGoalControl { _docID intent_json receipt_json } }";
-    let before = access.execute(query).await.unwrap();
-    assert_eq!(
-        recover_session_goal_control(&access, identity.as_ref(), &prepared)
-            .await
-            .unwrap(),
-        Some(expected.clone())
-    );
-    assert_eq!(
-        submit_prepared_session_goal_control(&access, identity.as_ref(), &prepared)
-            .await
-            .unwrap(),
-        expected
-    );
-    let mut changed = prepared.clone();
-    changed.operation = GoalOperation::Stop {};
-    let changed = prepare_session_goal_control(identity.as_ref(), changed)
-        .await
-        .unwrap();
     assert!(
-        recover_session_goal_control(&access, identity.as_ref(), &changed)
+        submit_prepared_session_goal_control(&access, user.as_ref(), &prepared)
             .await
-            .is_err()
+            .unwrap_err()
+            .to_string()
+            .contains("blocked")
     );
-    assert!(
-        submit_prepared_session_goal_control(&access, identity.as_ref(), &changed)
-            .await
-            .is_err()
-    );
-    let mut corrupted = prepared;
-    corrupted.signature[0] ^= 1;
-    assert!(
-        recover_session_goal_control(&access, identity.as_ref(), &corrupted)
-            .await
-            .is_err()
-    );
-    assert!(
-        submit_prepared_session_goal_control(&access, identity.as_ref(), &corrupted)
-            .await
-            .is_err()
-    );
-    assert_eq!(access.execute(query).await.unwrap(), before);
-    let response = access
-        .execute("{ AgentRequest { _docID } AgentSessionGoalControl { _docID } }")
-        .await
-        .unwrap();
-    assert_eq!(response["data"]["AgentRequest"], json!([]));
-    assert_eq!(
-        response["data"]["AgentSessionGoalControl"],
-        json!([{ "_docID": doc_id }])
-    );
+    assert_eq!(access.execute("{ AgentSessionGoalControl { _docID intent_json } AgentRequest { _docID } Goal { _docID status } }").await.unwrap(), before);
+    fixture.node.shutdown().await.expect("node shutdown");
 }

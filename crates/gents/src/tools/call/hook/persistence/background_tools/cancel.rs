@@ -140,7 +140,7 @@ impl DefraSessionHook {
         }
         if lifecycle.kind() == crate::tools::call::lifecycle::ToolRowKind::PluginJob {
             let result = match crate::tools::background::job::control::control_by_doc_id(
-                &crate::store::config_client::ConfigAccess::local(self.node.clone()),
+                &self.actor_access()?,
                 &caller,
                 lifecycle
                     .doc_id()
@@ -153,6 +153,7 @@ impl DefraSessionHook {
                     "ok": true,
                     "tool_call_id": background_tool_call_id,
                     "status": match outcome {
+                        gents_protocol::job::JobControlOutcome::Queued { .. } => "queued",
                         gents_protocol::job::JobControlOutcome::Applied { .. } => "cancelled",
                         gents_protocol::job::JobControlOutcome::AlreadyTerminal { .. } => {
                             "already_terminal"
@@ -188,6 +189,11 @@ impl DefraSessionHook {
         )
         .await?
         {
+            crate::tools::call::control::CancelBackgroundToolCallOutcome::Queued { .. } => {
+                json_string(json!({
+                    "ok": true, "tool_call_id": background_tool_call_id, "status": "queued", "error": null
+                }))
+            }
             crate::tools::call::control::CancelBackgroundToolCallOutcome::Cancelled { .. } => {
                 cancel_process_reply(
                     background_tool_call_id,

@@ -1,12 +1,13 @@
 use crate::inference::llm::message::Message;
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
 use crate::store::graphql::escape_graphql_string;
 
 mod archive;
 pub mod canonical_rows;
+pub(crate) mod child_ownership;
 pub mod mailbox;
 pub mod message;
 pub mod origin;
@@ -27,6 +28,9 @@ mod query;
 mod request_output;
 mod rows;
 mod sessions;
+pub(crate) use sessions::{
+    close_session_with_access, recover_agent_session_relationships_with_access,
+};
 pub(crate) mod title_text;
 pub use title_text::display_session_title;
 #[cfg(test)]
@@ -38,7 +42,9 @@ pub use crate::tools::call::lifecycle::query::{
     load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
     CanonicalToolCallPresentation,
 };
+#[cfg(test)]
 pub(crate) use compaction_entries::load_prompt_compaction_state;
+pub(crate) use compaction_entries::load_prompt_compaction_state_with_access;
 pub use compaction_entries::{compaction_key, load_compaction_entries};
 #[cfg(test)]
 pub(crate) use compaction_entries::{
@@ -48,15 +54,18 @@ pub(crate) use compaction_entries::{
     save_exact_compaction_entry, NewExactSessionCompaction, StaleCompactionGeneration,
 };
 pub use control::{resume_session, stop_session, SessionStopReceipt};
+pub(crate) use control::{resume_session_with_access, stop_session_with_access};
 pub use fork::{
-    fork, fork_edit_on, fork_on, fork_via_http, is_user_turn, ForkBoundary, ForkError, ForkOutcome,
-    ForkParams,
+    fork, fork_edit_on, fork_on, fork_via_http, is_user_turn, publish_fork_relationships,
+    ForkBoundary, ForkError, ForkOutcome, ForkParams, ForkRelationshipIntent,
 };
 #[cfg(test)]
 pub(crate) use history::load_history_through_sequence;
+#[cfg(test)]
+pub(crate) use history::load_sequenced_history_projection;
 pub use history::{load_history, sequence_message_key};
 pub(crate) use history::{
-    load_sequenced_history_for_request, load_sequenced_history_projection,
+    load_sequenced_history_for_request, load_sequenced_history_projection_on,
     retry_has_published_input,
 };
 pub use observations::apply_title_in_txn;
@@ -85,15 +94,20 @@ pub(crate) use output::reader::{
     load_canonical_message_in_txn, load_request_headers_in_txn, TxnCanonicalReader,
 };
 pub(crate) use output::replay_request::validate_canonical_replay_boundary;
-pub(crate) use output::replay_tags::resolve_canonical_replay_tags;
+pub(crate) use output::replay_tags::resolve_canonical_replay_tags_on;
 pub use output::CanonicalOutputReadError;
 pub(crate) use output::CanonicalReplayScope;
 pub(crate) use query::session_is_stopped;
 pub(crate) use query::session_stopped_in_txn;
+pub(crate) use query::validate_agent_session;
 pub use query::{
-    decode_session_row, public_request_filter, session_scope_filter, AGENT_SESSION_FIELDS,
+    client_requester_scope, decode_session_row, public_request_filter, session_scope_filter,
+    AGENT_SESSION_FIELDS,
 };
-pub(crate) use query::{load_session_agent_id, load_session_requester_scope, require_session};
+pub(crate) use query::{
+    load_session_agent_did, load_session_agent_selection, load_session_requester_scope,
+    require_session,
+};
 pub use request_output::{
     observe_request_output, CanonicalPresentation, CanonicalRequestOutput, CanonicalSelectedSource,
 };
@@ -103,12 +117,18 @@ pub use sessions::load_agent_session_owner_in_txn;
 pub use sessions::load_agent_session_row_in_txn;
 #[cfg(test)]
 pub(crate) use sessions::{
-    create_session_with_agent_id, create_session_with_id,
-    ensure_session_with_agent_id_and_requester_did,
+    create_session_with_agent_did, create_session_with_id,
+    ensure_session_with_agent_did_and_requester_did,
 };
 pub(crate) use sessions::{
-    ensure_session_in_txn, max_sequence, reopen_session_in_txn, touch_session_in_txn,
+    ensure_reserved_session_in_txn, ensure_session_in_txn, finalize_agent_new_session_in_txn,
+    grant_created_session_relationships, max_sequence_as, reopen_session_in_txn,
+    stage_agent_new_session_in_txn, stage_created_session_relationships_in_txn,
+    stage_session_relationships_in_txn, touch_session_in_txn,
 };
+
+#[cfg(test)]
+pub(crate) use sessions::max_sequence;
 
 pub(crate) fn requester_did_create_field(requester_did: Option<&str>) -> String {
     requester_did

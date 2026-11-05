@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 use tracing::{instrument::WithSubscriber, Instrument};
 
@@ -53,6 +53,9 @@ impl ConfigAccess {
         Some(Self::Local(LocalConfigAccess {
             node: Arc::clone(&claim.node),
             gate,
+            identity: None,
+            agent_signer: None,
+            client_signed_writes: false,
         }))
     }
 
@@ -72,9 +75,10 @@ impl ConfigAccess {
     ) -> Result<defra_node::QueryResponse> {
         let document = document.to_owned();
         let operation = operation.to_owned();
+        let identity = local.identity().cloned();
         local
             .run_owned(move |node| async move {
-                Self::execute_local_read(&node, &document, &operation).await
+                Self::execute_local_read(&node, &document, &operation, identity).await
             })
             .await
     }
@@ -103,16 +107,19 @@ impl ConfigAccess {
             reached.notify_one();
             std::future::pending::<()>().await;
         }
-        Self::execute_local_read(node, document, operation).await
+        Self::execute_local_read(node, document, operation, None).await
     }
 
     async fn execute_local_read(
         node: &EmbeddedNode,
         document: &str,
         operation: &str,
+        identity: Option<identity::Did>,
     ) -> Result<defra_node::QueryResponse> {
         let started = Instant::now();
-        let response = node.execute(document).await;
+        let response = node
+            .execute_request(query::QueryRequest::new(document).with_identity(identity))
+            .await;
         let elapsed = started.elapsed();
         if elapsed > Duration::from_secs(1) {
             tracing::warn!(
@@ -142,10 +149,17 @@ impl ConfigAccess {
                 finish_auto_commit(&telemetry, result, graphql::affected_documents)
             }
             Self::Local(local) => {
+                local.require_mutation_signer()?;
                 let telemetry = Arc::new(auto_commit_telemetry(operation, WriteBackend::Embedded)?);
-                let response =
-                    Self::execute_local_mutation(local.node(), operation, mutation, telemetry)
-                        .await?;
+                let response = Self::execute_local_mutation(
+                    local.node(),
+                    operation,
+                    mutation,
+                    telemetry,
+                    local.identity().cloned(),
+                    local.agent_signer.clone(),
+                )
+                .await?;
                 Ok(crate::store::graphql::into_data_envelope(response.data))
             }
         }
@@ -281,7 +295,8 @@ impl ConfigAccess {
         graphql::ensure_mutation_document(mutation)?;
         let operation = WriteOperation::new(operation)?;
         let telemetry = Arc::new(auto_commit_telemetry(operation, WriteBackend::Embedded)?);
-        let response = Self::execute_local_mutation(node, operation, mutation, telemetry).await?;
+        let response =
+            Self::execute_local_mutation(node, operation, mutation, telemetry, None, None).await?;
         Ok(crate::store::graphql::into_data_envelope(response.data))
     }
 
@@ -293,7 +308,7 @@ impl ConfigAccess {
         graphql::ensure_mutation_document(mutation)?;
         let operation = WriteOperation::new(operation)?;
         let telemetry = Arc::new(auto_commit_telemetry(operation, WriteBackend::Embedded)?);
-        Self::execute_local_mutation(node, operation, mutation, telemetry).await
+        Self::execute_local_mutation(node, operation, mutation, telemetry, None, None).await
     }
 
     async fn execute_local_mutation(
@@ -301,6 +316,8 @@ impl ConfigAccess {
         operation: WriteOperation,
         mutation: &str,
         telemetry: Arc<AttemptTelemetry>,
+        identity: Option<identity::Did>,
+        signer: Option<crate::store::identity::ManagedAgentSigner>,
     ) -> Result<defra_node::QueryResponse> {
         let write_guard = match mutation_write_gate(node).acquire(operation).await {
             Ok(guard) => guard,
@@ -343,7 +360,14 @@ impl ConfigAccess {
                 }
                 let started = Instant::now();
                 native_completion.started = true;
-                let result = node.execute(&mutation).await;
+                let request = query::QueryRequest::new(&mutation).with_identity(identity);
+                let result = match signer {
+                    Some(signer) => {
+                        node.execute_request_with_signer(request, signer.native())
+                            .await
+                    }
+                    None => node.execute_request(request).await,
+                };
                 let elapsed = started.elapsed();
                 record_slow_native_phase(Some(operation.as_str()), "auto-commit", elapsed);
                 let successful = !result.has_errors();

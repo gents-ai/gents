@@ -14,7 +14,7 @@ pub async fn save_node_config(core: &ClientCore, request: NodeConfigSaveRequest)
 }
 
 pub async fn set_default_agent(core: &ClientCore, request: DefaultAgentSetRequest) -> Result<()> {
-    core.set_default_agent(&request.node_did, &request.agent_id)
+    core.set_default_agent(&request.node_did, &request.agent_did)
         .await
 }
 
@@ -85,7 +85,7 @@ pub async fn delete_tool_service_config(
 
 #[cfg_attr(test, allow(dead_code))]
 pub async fn delete_agent_config(core: &ClientCore, request: AgentDeleteRequest) -> Result<()> {
-    core.delete_agent(&request.agent_id, &request.node_did)
+    core.delete_agent(&request.agent_did, &request.node_did)
         .await
 }
 

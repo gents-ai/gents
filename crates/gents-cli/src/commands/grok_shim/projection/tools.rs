@@ -2,7 +2,7 @@ use rapidhash::RapidHashMap;
 use std::{char::REPLACEMENT_CHARACTER, sync::Arc};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::tools::call::lifecycle::{load_tool_call_presentation, CanonicalToolCallPresentation};
@@ -794,7 +794,7 @@ mod tests {
         id: &str,
         session: &str,
     ) -> gents_protocol::row::AgentRequestRow {
-        let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", node_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", agent_id: "test", content: "test", lifecycle_state: "pending"}}) {{ _docID }} }}"#, escape_graphql_string(id), escape_graphql_string(session))).await;
+        let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", node_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", agent_did: "test", content: "test", lifecycle_state: "pending"}}) {{ _docID }} }}"#, escape_graphql_string(id), escape_graphql_string(session))).await;
         ensure_no_errors(&response, "seed projection request").unwrap();
         let physical = gents_protocol::graphql::extract_mutation_doc_id(
             &json!({"data":response.data}),

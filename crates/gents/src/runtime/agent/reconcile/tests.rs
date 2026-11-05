@@ -19,7 +19,7 @@ use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
 use crate::tools::surface::{AgentToolSurfaceConfig, ToolCeiling, ToolSurface};
 
-async fn test_node() -> Arc<defra_node::EmbeddedNode> {
+async fn test_node() -> Arc<defra_node::Node> {
     Arc::new(crate::test_support::node_builder().build().await.unwrap())
 }
 
@@ -39,23 +39,23 @@ fn stub_runtime_node() -> Arc<RuntimeNode> {
     Arc::new(RuntimeNode {
         node_did: identity.did().to_string(),
         identity,
-        default_agent_id: String::new(),
+        default_agent_did: String::new(),
         display_name: None,
         enabled: true,
     })
 }
 
 async fn snapshot_for_agents(
-    node: &Arc<defra_node::EmbeddedNode>,
-    default_agent_id: &str,
+    node: &Arc<defra_node::Node>,
+    default_agent_did: &str,
     agents: Vec<Arc<ResolvedAgent>>,
 ) -> ResolvedRuntimeSnapshot {
-    snapshot_for_agents_with_node(node, default_agent_id, agents, stub_runtime_node()).await
+    snapshot_for_agents_with_node(node, default_agent_did, agents, stub_runtime_node()).await
 }
 
 async fn snapshot_for_agents_with_node(
-    node: &Arc<defra_node::EmbeddedNode>,
-    default_agent_id: &str,
+    node: &Arc<defra_node::Node>,
+    default_agent_did: &str,
     agents: Vec<Arc<ResolvedAgent>>,
     runtime_node: Arc<RuntimeNode>,
 ) -> ResolvedRuntimeSnapshot {
@@ -66,10 +66,10 @@ async fn snapshot_for_agents_with_node(
             .resolve(node, agent_config.node_did(), &Default::default())
             .await
             .unwrap();
-        tool_surfaces.insert(agent_config.agent_id.clone(), Arc::new(tool_surface));
+        tool_surfaces.insert(agent_config.agent_did.clone(), Arc::new(tool_surface));
     }
     ResolvedRuntimeSnapshot::from_parts(
-        default_agent_id.to_string(),
+        default_agent_did.to_string(),
         agents,
         tool_surfaces,
         RapidHashMap::new(),
@@ -78,8 +78,8 @@ async fn snapshot_for_agents_with_node(
 }
 
 async fn snapshot_for_agents_with_admission(
-    node: &Arc<defra_node::EmbeddedNode>,
-    default_agent_id: &str,
+    node: &Arc<defra_node::Node>,
+    default_agent_did: &str,
     agents: Vec<Arc<ResolvedAgent>>,
     backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
 ) -> ResolvedRuntimeSnapshot {
@@ -90,10 +90,10 @@ async fn snapshot_for_agents_with_admission(
             .resolve(node, agent_config.node_did(), &Default::default())
             .await
             .unwrap();
-        tool_surfaces.insert(agent_config.agent_id.clone(), Arc::new(tool_surface));
+        tool_surfaces.insert(agent_config.agent_did.clone(), Arc::new(tool_surface));
     }
     ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-        default_agent_id.to_string(),
+        default_agent_did.to_string(),
         agents,
         tool_surfaces,
         backend_admission_configs,
@@ -118,7 +118,7 @@ fn backend_admission_config(
     }
 }
 
-fn background_child_request(index: usize, agent_id: &str) -> AgentRequest {
+fn background_child_request(index: usize, agent_did: &str) -> AgentRequest {
     AgentRequest {
         retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
@@ -126,7 +126,7 @@ fn background_child_request(index: usize, agent_id: &str) -> AgentRequest {
         request_id: format!("child-request-{index}"),
         node_did: "did:test:background-fanout-test".to_string(),
         requester_did: None,
-        agent_id: agent_id.to_string(),
+        agent_did: agent_did.to_string(),
         session_id: format!("child-session-{index}"),
         content: format!("background child {index}"),
         max_total_tokens: None,
@@ -251,7 +251,7 @@ async fn pairing_desired_read_failure_applies_no_operations() {
     assert!(read_failure_is_noop_self_loop(test_node().await).await);
 }
 
-async fn read_failure_is_noop_self_loop(node: Arc<defra_node::EmbeddedNode>) -> bool {
+async fn read_failure_is_noop_self_loop(node: Arc<defra_node::Node>) -> bool {
     use crate::runtime::agent::p2p_reconcile::{
         reconcile_peer_tick, EmbeddedRemoteP2pAdmin, LoadedPairingApplied, PairingDesired,
         PairingStateStore,
@@ -475,7 +475,7 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
     })
     .await
     .expect("dropping the slot owner must abort and drop its held executor");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -732,13 +732,21 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
 
 #[tokio::test]
 async fn generation_supervisor_restages_slot_on_api_key_rotation() {
-    let node = test_node().await;
+    let identity = test_identity("rotation-general");
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = "did:test:reconcile-key-rotation";
-    let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did);
+    let node_did = identity.did().to_string();
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), &node_did);
 
-    let mut agent_config = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("rotation-general"));
+    let mut agent_config = PendingAgent::new("general").build_with_identity_for_test(identity);
+    let agent_did = agent_config.agent_did.clone();
+    let signer = agent_config.agent_identity.managed_agent_signer().unwrap();
     agent_config.backend_id = Some("backend-general".to_string());
     agent_config.backend_auth = crate::documents::BackendAuth::ApiKey {
         key: "fixture-old-key".into(),
@@ -761,18 +769,20 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     };
     let initial_snapshot = snapshot_for_agents_with_admission(
         &node,
-        "general",
+        &agent_did,
         vec![Arc::new(agent_config.clone())],
         admission(crate::turn::completion_factory::agent_connection_fingerprint(&agent_config)),
     )
-    .await;
+    .await
+    .with_node(agent_config.node.clone());
     let rotated_snapshot = snapshot_for_agents_with_admission(
         &node,
-        "general",
+        &agent_did,
         vec![Arc::new(rotated)],
         admission(new_connection.clone()),
     )
-    .await;
+    .await
+    .with_node(agent_config.node.clone());
 
     let (built_tx, mut built_rx) = mpsc::unbounded_channel::<(u64, String)>();
     let runner = move |agent_config: Arc<ResolvedAgent>,
@@ -821,7 +831,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     )
     .await
     .unwrap();
-    let initial_dispatcher = supervisor.current_snapshot().dispatchers["general"].clone();
+    let initial_dispatcher = supervisor.current_snapshot().dispatchers[&agent_did].clone();
     let first = tokio::time::timeout(Duration::from_secs(5), built_rx.recv())
         .await
         .unwrap()
@@ -836,7 +846,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
         .await
         .expect("key rotation should publish a generation")
         .unwrap();
-    let updated_dispatcher = active_rx.borrow().dispatchers["general"].clone();
+    let updated_dispatcher = active_rx.borrow().dispatchers[&agent_did].clone();
     assert!(
         !initial_dispatcher.same_channel(&updated_dispatcher),
         "a key rotation must restage the slot"
@@ -857,13 +867,14 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     );
 
     let mut admitted = registry
-        .acquire_with_connection_for_test(
+        .acquire_with_connection_and_signer_for_test(
             "req-rotated-slot",
             "backend-general",
-            "general",
-            node_did,
+            &agent_did,
+            &node_did,
             crate::inference::admission::CallKind::Inference,
             &new_connection,
+            Some(signer),
         )
         .await
         .expect("calls from the rotated slot are admitted");
@@ -1035,10 +1046,7 @@ struct RuntimeStatusRow {
     last_reconcile_error: String,
 }
 
-async fn fetch_runtime_status(
-    node: &Arc<defra_node::EmbeddedNode>,
-    node_did: &str,
-) -> RuntimeStatusRow {
+async fn fetch_runtime_status(node: &Arc<defra_node::Node>, node_did: &str) -> RuntimeStatusRow {
     let node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
@@ -1067,7 +1075,7 @@ async fn fetch_runtime_status(
 }
 
 async fn await_settled_runtime_status(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
 ) -> RuntimeStatusRow {
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -1119,7 +1127,7 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
                 *starts
                     .lock()
                     .unwrap()
-                    .entry(agent_config.agent_id.clone())
+                    .entry(agent_config.agent_did.clone())
                     .or_default() += 1;
                 loop {
                     tokio::select! {
@@ -1404,27 +1412,27 @@ impl SlotFailurePolicy for PublisherBackedSlotFailurePolicy {
         1
     }
 
-    async fn on_slot_created(&self, agent_id: &str, generation: u64) -> Result<()> {
+    async fn on_slot_created(&self, agent_did: &str, generation: u64) -> Result<()> {
         self.runtime_status
             .readiness()
-            .register_slot(agent_id, generation)
+            .register_slot(agent_did, generation)
             .await
             .context("register test slot standing")?;
         Ok(())
     }
 
-    async fn try_demote(&self, agent_id: &str, generation: u64, error: &str) -> Result<bool> {
+    async fn try_demote(&self, agent_did: &str, generation: u64, error: &str) -> Result<bool> {
         self.runtime_status
             .readiness()
-            .demote_slot(agent_id, generation, error.to_string())
+            .demote_slot(agent_did, generation, error.to_string())
             .await
             .context("demote test slot")
     }
 
-    async fn on_slot_retired(&self, agent_id: &str, generation: u64, _recreated: bool) {
+    async fn on_slot_retired(&self, agent_did: &str, generation: u64, _recreated: bool) {
         self.runtime_status
             .readiness()
-            .retire_slot(agent_id, generation)
+            .retire_slot(agent_did, generation)
             .await
             .expect("retire test slot");
     }
@@ -1441,22 +1449,22 @@ impl SlotFailurePolicy for FailSecondRegistrationPolicy {
         1
     }
 
-    async fn on_slot_created(&self, _agent_id: &str, _generation: u64) -> Result<()> {
+    async fn on_slot_created(&self, _agent_did: &str, _generation: u64) -> Result<()> {
         if self.registrations.fetch_add(1, Ordering::SeqCst) == 1 {
             anyhow::bail!("injected slot registration failure");
         }
         Ok(())
     }
 
-    async fn try_demote(&self, _agent_id: &str, _generation: u64, _error: &str) -> Result<bool> {
+    async fn try_demote(&self, _agent_did: &str, _generation: u64, _error: &str) -> Result<bool> {
         Ok(false)
     }
 
-    async fn on_slot_retired(&self, agent_id: &str, generation: u64, _recreated: bool) {
+    async fn on_slot_retired(&self, agent_did: &str, generation: u64, _recreated: bool) {
         self.retired
             .lock()
             .unwrap()
-            .push((agent_id.to_string(), generation));
+            .push((agent_did.to_string(), generation));
     }
 }
 
@@ -1633,7 +1641,7 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
         "supervisor lost retired slot drain failure: {error:#}"
     );
     runtime_status_owner.close().await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -1934,17 +1942,25 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let runtime_node = Arc::new(RuntimeNode {
         node_did: identity.did().to_string(),
         identity: identity.clone(),
-        default_agent_id: String::new(),
+        default_agent_did: String::new(),
         display_name: None,
         enabled: true,
     });
 
+    let binding =
+        crate::store::identity::provision_agent_identity(runtime_node.identity.as_ref()).unwrap();
+    let agent_identity =
+        crate::store::identity::resolve_agent_identity(runtime_node.identity.as_ref(), &binding)
+            .unwrap();
+    let agent_did = binding.agent_did;
     let initial_agent = Arc::new(ResolvedAgent {
+        configuration: crate::inference::resolved::ResolvedConfiguration::Static,
         profile_id: None,
         skills: Vec::new(),
         oauth_pool: Vec::new(),
-        agent_id: "general".to_string(),
+        agent_did,
         node: runtime_node.clone(),
+        agent_identity,
         backend_id: Some("backend-general".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
@@ -2097,24 +2113,24 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
         fn build_failure_budget(&self) -> u32 {
             3
         }
-        async fn on_slot_created(&self, _agent_id: &str, _generation: u64) -> Result<()> {
+        async fn on_slot_created(&self, _agent_did: &str, _generation: u64) -> Result<()> {
             Ok(())
         }
 
         async fn try_demote(
             &self,
-            _agent_id: &str,
+            _agent_did: &str,
             _generation: u64,
             _error: &str,
         ) -> Result<bool> {
             self.demote_calls.fetch_add(1, Ordering::SeqCst);
             Ok(false)
         }
-        async fn on_slot_retired(&self, agent_id: &str, _generation: u64, recreated: bool) {
+        async fn on_slot_retired(&self, agent_did: &str, _generation: u64, recreated: bool) {
             self.retired
                 .lock()
                 .expect("retired mutex")
-                .push((agent_id.to_string(), recreated));
+                .push((agent_did.to_string(), recreated));
         }
     }
 
@@ -2198,18 +2214,18 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
 }
 
 async fn plugin_resolution_surfaces(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
 ) -> (Arc<ResolvedAgent>, Arc<ToolSurface>, Arc<ToolSurface>) {
     let mut agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("plugin-resolution-fingerprint"));
     let tools: crate::documents::Tools = serde_json::from_value(serde_json::json!({
-        "tools_id": format!("{}:tools", agent_config.agent_id),
+        "tools_id": format!("{}:tools", agent_config.agent_did),
         "node_did": agent_config.node_did(),
         "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
     }))
     .unwrap();
     agent_config.tools = AgentToolSurfaceConfig::from_tools_document(
-        &agent_config.agent_id.clone(),
+        &agent_config.agent_did.clone(),
         &tools,
         &ToolCeiling::meta_only(),
         Vec::new(),

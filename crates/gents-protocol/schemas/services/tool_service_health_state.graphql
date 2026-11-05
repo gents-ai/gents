@@ -1,4 +1,4 @@
-type ToolServiceHealthState {
+type ToolServiceHealthState @policy(id: "8d9e64ca014dddfb01e5a55a5018e0a56d238ea0da1df1b6b33d50b1ac23386a", resource: "operations") {
     service_id: String @index
     node_did: String @index
     endpoint: String

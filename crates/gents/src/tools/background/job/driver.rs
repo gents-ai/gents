@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio::sync::Semaphore;
 
 use super::admit::{Refusal, StepRow};
@@ -36,6 +36,9 @@ pub(super) use settle::{refusal_text, terminal_text};
 pub use settle::{settle_plugin_job, Settlement};
 pub use step::{run_step, StepOutcome};
 
+pub(crate) type AgentSnapshots =
+    tokio::sync::watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>>;
+
 /// The handles one job step needs on its own runtime. The runtime's single
 /// `JobDriver` holds the one value; tests build it directly.
 #[derive(Clone)]
@@ -46,6 +49,73 @@ pub struct JobRuntime {
     pub home: PathBuf,
     /// The operator tool root: step 0's working folder when the request names no workspace.
     pub tool_root: Option<PathBuf>,
+    pub(crate) agent_snapshots: Arc<std::sync::RwLock<Option<AgentSnapshots>>>,
+}
+
+impl JobRuntime {
+    pub fn new(
+        node: Arc<EmbeddedNode>,
+        plugins: Arc<PluginExecutor>,
+        home: PathBuf,
+        tool_root: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            node,
+            plugins,
+            home,
+            tool_root,
+            agent_snapshots: Default::default(),
+        }
+    }
+
+    /// Startup resolves Agent bindings before starting background completion
+    /// recovery. A recovered job must use that registered Agent signer; a
+    /// missing signer fails instead of using the runtime's node key.
+    pub(super) fn agent_identity(
+        &self,
+        node_did: &str,
+        agent_did: &str,
+    ) -> Result<Arc<dyn crate::store::identity::NodeIdentity>> {
+        anyhow::ensure!(
+            self.node.node_identity_did() == Some(node_did),
+            "plugin job caller belongs to another runtime node"
+        );
+        anyhow::ensure!(agent_did != node_did, "plugin job requires an agent DID");
+        let snapshots = self
+            .agent_snapshots
+            .read()
+            .map_err(|_| anyhow::anyhow!("job snapshot binding unavailable"))?;
+        let snapshot = snapshots
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("job runtime has no active agent snapshot"))?
+            .borrow();
+        snapshot
+            .watcher_identities()?
+            .into_iter()
+            .find(|identity| identity.did() == agent_did)
+            .ok_or_else(|| anyhow::anyhow!("job agent identity unavailable in active snapshot"))
+    }
+
+    pub(crate) fn bind_snapshot(&self, snapshots: AgentSnapshots) -> Result<()> {
+        *self
+            .agent_snapshots
+            .write()
+            .map_err(|_| anyhow::anyhow!("job snapshot binding unavailable"))? = Some(snapshots);
+        Ok(())
+    }
+
+    pub(super) fn agent_access(&self, actor: &identity::Did) -> Result<ConfigAccess> {
+        let node_did = self
+            .node
+            .node_identity_did()
+            .ok_or_else(|| anyhow::anyhow!("job runtime has no node identity"))?;
+        let agent = self.agent_identity(node_did, actor.as_str())?;
+        Ok(ConfigAccess::local_managed_agent(
+            self.node.clone(),
+            actor.clone(),
+            agent.as_ref(),
+        )?)
+    }
 }
 
 /// A step invocation that failed: the failures that count towards
@@ -119,8 +189,11 @@ pub fn step_failure_decision(
 }
 
 /// Whether a wake came while the row's step was in flight.
-#[derive(Debug, Default)]
-struct Dirty(bool);
+#[derive(Debug)]
+struct Dirty {
+    dirty: bool,
+    actor: identity::Did,
+}
 
 /// A row's consecutive step failures, held in memory (one active runtime per
 /// node: a restart resets them), and the row and children's observations
@@ -181,52 +254,77 @@ impl JobDriver {
     }
 
     /// Wakes the row: starts its step, or marks it dirty when one is in flight.
-    pub fn kick(&self, row_doc_id: &str) {
-        #[cfg(test)]
-        self.kicked.lock().unwrap().push(row_doc_id.to_owned());
+    pub fn kick(&self, row_doc_id: &str, actor: &identity::Did) -> Result<()> {
         let mut in_flight = self.in_flight.lock().expect("in-flight rows lock");
         if let Some(dirty) = in_flight.get_mut(row_doc_id) {
-            dirty.0 = true;
-            return;
+            anyhow::ensure!(&dirty.actor == actor, "job wake changed the selected agent");
+            #[cfg(test)]
+            self.kicked.lock().unwrap().push(row_doc_id.to_owned());
+            dirty.dirty = true;
+            return Ok(());
         }
         let Ok(work) = self.service_admission.admit() else {
-            return;
+            return Ok(());
         };
-        in_flight.insert(row_doc_id.to_owned(), Dirty::default());
+        #[cfg(test)]
+        self.kicked.lock().unwrap().push(row_doc_id.to_owned());
+        in_flight.insert(
+            row_doc_id.to_owned(),
+            Dirty {
+                dirty: false,
+                actor: actor.clone(),
+            },
+        );
         let driver = self.this.upgrade().expect("a driver is held by its Arc");
         let row_doc_id = row_doc_id.to_owned();
-        tokio::spawn(async move { driver.drive(&row_doc_id, work).await });
+        let actor = actor.clone();
+        tokio::spawn(async move { driver.drive(&row_doc_id, &actor, work).await });
+        Ok(())
     }
 
     /// Runs one step of the row now and returns what it did. `None` when a
     /// step of the row is already in flight: that step re-runs once for this
     /// call, as for a wake.
-    pub async fn step_now(&self, row_doc_id: &str) -> Option<Result<StepOutcome>> {
+    pub async fn step_now(
+        &self,
+        row_doc_id: &str,
+        actor: &identity::Did,
+    ) -> Option<Result<StepOutcome>> {
         let work;
         {
             let mut in_flight = self.in_flight.lock().expect("in-flight rows lock");
             if let Some(dirty) = in_flight.get_mut(row_doc_id) {
-                dirty.0 = true;
+                if &dirty.actor != actor {
+                    return Some(Err(anyhow::anyhow!("job step changed the selected agent")));
+                }
+                dirty.dirty = true;
                 return None;
             }
             work = match self.service_admission.admit() {
                 Ok(work) => work,
                 Err(error) => return Some(Err(error.into())),
             };
-            in_flight.insert(row_doc_id.to_owned(), Dirty::default());
+            in_flight.insert(
+                row_doc_id.to_owned(),
+                Dirty {
+                    dirty: false,
+                    actor: actor.clone(),
+                },
+            );
         }
-        let (again, outcome) = self.step_once(row_doc_id).await;
+        let (again, outcome) = self.step_once(row_doc_id, actor).await;
         let mut in_flight = self.in_flight.lock().expect("in-flight rows lock");
         let dirty = std::mem::take(
             &mut in_flight
                 .get_mut(row_doc_id)
                 .expect("the row is in flight")
-                .0,
+                .dirty,
         );
         if again || dirty {
             let driver = self.this.upgrade().expect("a driver is held by its Arc");
             let row_doc_id = row_doc_id.to_owned();
-            tokio::spawn(async move { driver.drive(&row_doc_id, work).await });
+            let actor = actor.clone();
+            tokio::spawn(async move { driver.drive(&row_doc_id, &actor, work).await });
         } else {
             in_flight.remove(row_doc_id);
         }
@@ -246,6 +344,7 @@ impl JobDriver {
     pub async fn hold_steps<T>(
         &self,
         row_doc_id: &str,
+        actor: &identity::Did,
         f: impl std::future::Future<Output = T>,
     ) -> Option<T> {
         let work;
@@ -255,15 +354,28 @@ impl JobDriver {
                 return None;
             }
             work = self.service_admission.admit().ok()?;
-            in_flight.insert(row_doc_id.to_owned(), Dirty::default());
+            in_flight.insert(
+                row_doc_id.to_owned(),
+                Dirty {
+                    dirty: false,
+                    actor: actor.clone(),
+                },
+            );
         }
         let out = f.await;
         let mut in_flight = self.in_flight.lock().expect("in-flight rows lock");
-        if in_flight.get(row_doc_id).is_some_and(|dirty| dirty.0) {
-            in_flight.insert(row_doc_id.to_owned(), Dirty::default());
+        if in_flight.get(row_doc_id).is_some_and(|dirty| dirty.dirty) {
+            in_flight.insert(
+                row_doc_id.to_owned(),
+                Dirty {
+                    dirty: false,
+                    actor: actor.clone(),
+                },
+            );
             let driver = self.this.upgrade().expect("a driver is held by its Arc");
             let row_doc_id = row_doc_id.to_owned();
-            tokio::spawn(async move { driver.drive(&row_doc_id, work).await });
+            let actor = actor.clone();
+            tokio::spawn(async move { driver.drive(&row_doc_id, &actor, work).await });
         } else {
             in_flight.remove(row_doc_id);
         }
@@ -271,15 +383,20 @@ impl JobDriver {
     }
 
     /// Steps the row until no wake or retry is left.
-    async fn drive(&self, row_doc_id: &str, _work: crate::runtime::service::RuntimeServiceWork) {
+    async fn drive(
+        &self,
+        row_doc_id: &str,
+        actor: &identity::Did,
+        _work: crate::runtime::service::RuntimeServiceWork,
+    ) {
         loop {
-            let (again, _) = self.step_once(row_doc_id).await;
+            let (again, _) = self.step_once(row_doc_id, actor).await;
             let mut in_flight = self.in_flight.lock().expect("in-flight rows lock");
             let dirty = std::mem::take(
                 &mut in_flight
                     .get_mut(row_doc_id)
                     .expect("the row is in flight")
-                    .0,
+                    .dirty,
             );
             if !(again || dirty) {
                 in_flight.remove(row_doc_id);
@@ -289,13 +406,17 @@ impl JobDriver {
     }
 
     /// One step of the row, and whether it must run again.
-    async fn step_once(&self, row_doc_id: &str) -> (bool, Result<StepOutcome>) {
+    async fn step_once(
+        &self,
+        row_doc_id: &str,
+        actor: &identity::Did,
+    ) -> (bool, Result<StepOutcome>) {
         let _permit = self
             .permits
             .acquire()
             .await
             .expect("the step semaphore is never closed");
-        let outcome = run_step(&self.runtime, row_doc_id).await;
+        let outcome = run_step(&self.runtime, row_doc_id, actor).await;
         let again = match &outcome {
             Ok(StepOutcome::Stale) => true,
             Ok(_) => {
@@ -310,7 +431,7 @@ impl JobDriver {
                     tracing::warn!(row_doc_id, error = %format!("{error:#}"), "job step did not run");
                     false
                 }
-                Some(failure) => match self.step_failed(row_doc_id, failure).await {
+                Some(failure) => match self.step_failed(row_doc_id, actor, failure).await {
                     Ok(verdict) => verdict == FailureVerdict::Retry,
                     Err(error) => {
                         tracing::warn!(row_doc_id, error = %format!("{error:#}"), "job step failure was not settled");
@@ -324,8 +445,13 @@ impl JobDriver {
 
     /// Reads the row and its children's observations, counts the failure and,
     /// on the third, fails the row closed with `plugin_job_step_failed`.
-    async fn step_failed(&self, row_doc_id: &str, error: &StepFailure) -> Result<FailureVerdict> {
-        let access = ConfigAccess::local(self.runtime.node.clone());
+    async fn step_failed(
+        &self,
+        row_doc_id: &str,
+        actor: &identity::Did,
+        error: &StepFailure,
+    ) -> Result<FailureVerdict> {
+        let access = self.runtime.agent_access(actor)?;
         let mut lifecycle = load_lifecycle(&access, row_doc_id).await?;
         let row = read_step_row(&access, row_doc_id).await?;
         let observed = observe_live_children(&access, &row, lifecycle.node_did()).await?;

@@ -20,7 +20,7 @@ async fn signed_request(
         id,
         identity.did(),
         identity.did(),
-        "task-agent",
+        "did:test:task-agent",
         session,
         "Task assignment input",
         "interactive",
@@ -93,7 +93,7 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
         let other = KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap();
         let path = directory.path().join("store");
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .data_path(&path)
                 .build()
@@ -258,10 +258,10 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
         );
         assert_eq!(outcome_rows(&access).await, before, "{name}: rollback");
         drop(access);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         drop(node);
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .data_path(&path)
                 .build()
@@ -271,12 +271,16 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
         let access = ConfigAccess::local(node.clone());
         let due = case["recover_reason"].as_str();
         assert_eq!(
-            recover_outcomes(&node, identity.did()).await.unwrap(),
+            recover_outcomes(&node, identity.did(), "did:test:task-agent")
+                .await
+                .unwrap(),
             usize::from(due.is_some()),
             "{name}: recovery"
         );
         assert_eq!(
-            recover_outcomes(&node, identity.did()).await.unwrap(),
+            recover_outcomes(&node, identity.did(), "did:test:task-agent")
+                .await
+                .unwrap(),
             0,
             "{name}: replay"
         );
@@ -292,6 +296,6 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
         } else {
             assert_eq!(after, before, "{name}: settled outcome changed");
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

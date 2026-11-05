@@ -176,6 +176,7 @@ async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
     for product in PRODUCTS {
         let spec = preset(product);
         let original = crate::InferenceBackend {
+            physical_doc_id: None,
             node_did: did.to_owned(),
             backend_id: format!("{}-original", product.provider()),
             name: format!("{product:?}"),

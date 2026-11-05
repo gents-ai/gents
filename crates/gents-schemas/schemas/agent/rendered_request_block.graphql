@@ -1,17 +1,17 @@
 # Immutable capture or reduction content, or an ordered manifest of child
 # references. Captures, provider-context reductions and their blocks are one
-# sync unit: a manifest without its blocks is undecodable and a block without a
-# referencing manifest is inert, so neither is delivered, backed up or pruned
-# without the other. `@branchable` is deliberate and irreversible. `content_key` (sha256
+# retention unit: a manifest without its blocks is undecodable and a block without
+# a referencing manifest is inert. `content_key` (sha256
 # over the payload bytes) is dedupe/lookup only, never integrity evidence:
 # integrity rides on the DefraDB field commit CID of `payload`, pinned in the
 # referencing manifest and re-checked at read time. A reference never broadens
 # access: reading a capture's body means reading every block it names. Blocks
-# dedupe across every agent, session and DID; once per-DID ACP applies to
-# captures, that scope must become per-node. Indexes are deliberately few:
+# dedupe within a physical session. Indexes are deliberately few:
 # blocks are the highest-volume collection.
-type RenderedRequestBlock @branchable {
-    content_key: String @index(unique: true) @immutable
+type RenderedRequestBlock @policy(id: "8d9e64ca014dddfb01e5a55a5018e0a56d238ea0da1df1b6b33d50b1ac23386a", resource: "children") @index(fields: ["session_doc_id", "content_key"], unique: true) {
+    session_doc_id: String @index @immutable
+    agent_did: String @immutable
+    content_key: String @index @immutable
     # UTF-8 content bytes or encoded child references, never rewritten.
     # The capture tree height distinguishes leaves from manifest nodes.
     payload: String @immutable

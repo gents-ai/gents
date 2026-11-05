@@ -151,11 +151,11 @@ describe("canonical tool selections", () => {
     const user = userEvent.setup();
     renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
     expect(screen.getByRole("switch", { name: "Install packs" })).not.toBeChecked();
-    await user.click(screen.getByRole("switch", { name: "Memory" }));
+    await user.click(screen.getByRole("switch", { name: "Read and update goals" }));
     expect(api.saveToolsConfig).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Save" }));
     const tools = api.saveToolsConfig.mock.calls[0][0].document;
-    expect(tools.built_ins).toEqual({ enable_memory: true });
+    expect(tools.built_ins).toEqual({ enable_goal_tools: true });
     expect(tools.self_config).toBeNull();
     expect(tools.host.files.mode).toBe("ReadOnly");
   });
@@ -179,7 +179,7 @@ describe("canonical tool selections", () => {
     expect(pack.agent_targets[0]).toMatchObject({
       node_did: deployment.nodeDid,
       target_node_did: deployment.nodeDid,
-      agent_id: "ops",
+      agent_did: "ops",
       name: "Ops",
     });
     expect(pack.tools[0].agents).toEqual({
@@ -433,7 +433,7 @@ describe("canonical tool selections", () => {
     };
     const view = { ...deployment, tools: [configured] };
     const rendered = renderIn(app, <ToolsPanel deployment={view} item="tools-a" />);
-    await user.click(screen.getByRole("switch", { name: "Memory" }));
+    await user.click(screen.getByRole("switch", { name: "Read and update goals" }));
     await user.click(screen.getByRole("button", { name: "Save" }));
     const saved = api.saveToolsConfig.mock.calls[0][0].document;
     expect(saved.host.cli).toEqual([{ name: "git", timeout_secs: 12 }]);
@@ -443,7 +443,7 @@ describe("canonical tool selections", () => {
       <ToolsPanel deployment={{ ...view, tools: [saved] }} item="tools-a" />,
     );
     await waitFor(() =>
-      expect(screen.getByRole("switch", { name: "Memory" })).toBeChecked(),
+      expect(screen.getByRole("switch", { name: "Read and update goals" })).toBeChecked(),
     );
   });
 

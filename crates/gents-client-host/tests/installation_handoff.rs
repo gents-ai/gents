@@ -68,7 +68,7 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
         "installation_handoff.seed",
         &format!(
             r#"mutation {{ create_AgentSession(input: {{session_id: "retained-session",
-            node_did: "{did}", requester_did: "{did}", agent_id: "agent",
+            node_did: "{did}", requester_did: "{did}", agent_did: "agent",
             created_at: "2026-10-25T00:00:00Z"}}) {{ _docID }} }}"#
         ),
     )

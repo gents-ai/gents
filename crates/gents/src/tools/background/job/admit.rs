@@ -31,7 +31,7 @@ pub struct RootCall {
     pub agent_budget: Option<u32>,
 }
 
-/// Lean `Child`: the retry key, the `(node_did, agent_id)` target and the
+/// Lean `Child`: the retry key, the `(node_did, agent_did)` target and the
 /// slot attempt's message count.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StepChild {
@@ -97,7 +97,7 @@ pub struct StepContext {
     pub max_hop: Option<u32>,
     pub target_hops: Vec<((String, String), u32)>,
     /// The host's resolution of the AgentTarget ids the caller can see to
-    /// Lean's `(target_node_did, agent_id)` targets; the protocol, ceilings and
+    /// Lean's `(target_node_did, agent_did)` targets; the protocol, ceilings and
     /// `dynamic_targets` name targets by these ids.
     pub target_ids: Vec<(String, (String, String))>,
     pub live_background: u32,

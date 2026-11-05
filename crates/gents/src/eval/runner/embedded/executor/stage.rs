@@ -7,31 +7,27 @@ use serde_json::Value;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use super::capture::{capture_documents, run_captures};
+use super::capture::{capture_documents_with_access, run_captures_with_access, CaptureBindings};
 use super::evidence::usage_of;
 use super::outcome::{provider_reason, stage_failure_kind, trigger_failure};
 use super::settle::{extend_with_later_requests, remaining_of, settle_home};
 use super::submit::{seed_and_await_fire, submit_stage, StageSubmission};
 use super::{Reconciled, POLL};
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node as EmbeddedNode;
 use crate::eval::runner::embedded::home::{EmbeddedHome, RunningRuntime};
 use crate::eval::runner::embedded::observe::{
-    await_terminal, collect_request_evidence, poll_request, RequestEvidence, TerminalObservation,
+    await_submitted_terminal_with_access, await_terminal_with_access,
+    collect_request_evidence_with_access, poll_request_with_access, NoHook, RequestEvidence,
+    TerminalObservation,
 };
+#[cfg(test)]
+use crate::eval::runner::embedded::observe::{collect_request_evidence, poll_request};
 use crate::eval::runner::executor::{Capture, StageEvidence, StageSpec, TrialLocator, TrialSpec};
 use crate::eval::OutcomeKind;
 
 const GRACE: Duration = Duration::from_secs(30);
 
-pub(super) async fn run_stages(
-    spec: &TrialSpec,
-    cancel: &CancellationToken,
-    home: &EmbeddedHome,
-    runtime: &RunningRuntime,
-    locator: &TrialLocator,
-    workspace: &Path,
-    ready: &watch::Receiver<Reconciled>,
-) -> Vec<StageEvidence> {
+pub(super) async fn run_stages(spec: &TrialSpec, env: &StageEnv<'_>) -> Vec<StageEvidence> {
     let mut stages = Vec::new();
     for authored in &spec.stages {
         let mut reviewed = authored.clone();
@@ -45,6 +41,7 @@ pub(super) async fn run_stages(
                 Err(error) => {
                     tracing::warn!(%error, "eval review could not be prepared");
                     stages.push(StageEvidence {
+                        subject_agent: None,
                         stage_id: authored.stage_id.clone(),
                         request_id: None,
                         terminal_state: None,
@@ -62,15 +59,7 @@ pub(super) async fn run_stages(
         }
         let stage = &reviewed;
         spec.progress.stage_started(&stage.stage_id);
-        let env = StageEnv {
-            cancel,
-            home,
-            runtime,
-            locator,
-            workspace,
-            ready,
-        };
-        let evidence = run_stage(spec, &env, stage).await;
+        let evidence = run_stage(spec, env, stage).await;
         let mut summary = spec.review.summarize(&evidence);
         summary["usage"] =
             serde_json::to_value(usage_of(&evidence.inference_calls)).unwrap_or(Value::Null);
@@ -86,42 +75,61 @@ pub(super) async fn run_stages(
 }
 
 #[derive(Clone, Copy)]
-struct StageEnv<'a> {
-    cancel: &'a CancellationToken,
-    home: &'a EmbeddedHome,
-    runtime: &'a RunningRuntime,
-    locator: &'a TrialLocator,
-    workspace: &'a Path,
-    ready: &'a watch::Receiver<Reconciled>,
+pub(super) struct StageEnv<'a> {
+    pub(super) agent_did: &'a str,
+    pub(super) cancel: &'a CancellationToken,
+    pub(super) home: &'a EmbeddedHome,
+    pub(super) runtime: &'a RunningRuntime,
+    pub(super) locator: &'a TrialLocator,
+    pub(super) workspace: &'a Path,
+    pub(super) ready: &'a watch::Receiver<Reconciled>,
 }
 
 async fn run_stage(spec: &TrialSpec, env: &StageEnv<'_>, stage: &StageSpec) -> StageEvidence {
     let StageEnv {
-        cancel,
         home,
-        runtime,
         locator,
         workspace,
-        ready,
+        ..
     } = *env;
-    let observed = submit_and_observe(spec, cancel, home, runtime, locator, stage, ready).await;
+    let observed = submit_and_observe(spec, env, stage).await;
     StageEvidence {
+        subject_agent: Some(super::super::super::subject_binding::SubjectAgent {
+            slot: spec.agent_slot.clone(),
+            agent_did: env.agent_did.to_owned(),
+        }),
         stage_id: stage.stage_id.clone(),
-        request_id: observed.request_id,
+        request_id: observed.request_id.clone(),
         terminal_state: observed.terminal_state,
         provider_reason: provider_reason(observed.failure_kind, &observed.evidence),
         failure_kind: observed.failure_kind,
         messages: observed.evidence.messages,
         tool_calls: observed.evidence.tool_calls,
         inference_calls: observed.evidence.inference_calls,
-        captures: run_captures(
-            &home.node,
-            &locator.trial_node_did,
-            &locator.session_id,
-            workspace,
-            &stage.captures,
-        )
-        .await,
+        captures: match home.client_access(&spec.evaluator_did) {
+            Ok(access) => {
+                run_captures_with_access(
+                    &access,
+                    &locator.trial_node_did,
+                    &locator.session_id,
+                    workspace,
+                    &stage.captures,
+                    CaptureBindings {
+                        subject: Some(&super::super::super::subject_binding::SubjectAgent {
+                            slot: spec.agent_slot.clone(),
+                            agent_did: env.agent_did.to_owned(),
+                        }),
+                        evaluator_did: Some(&spec.evaluator_did),
+                        request_id: observed.request_id.as_deref(),
+                    },
+                )
+                .await
+            }
+            Err(error) => {
+                tracing::warn!(%error, "eval captures have an invalid evaluator identity");
+                Default::default()
+            }
+        },
         prods: observed.prods,
     }
 }
@@ -155,6 +163,7 @@ impl ObservedStage {
 
 async fn observe_stage_terminal(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     cancel: &CancellationToken,
     runtime: &RunningRuntime,
     request_id: &str,
@@ -163,18 +172,18 @@ async fn observe_stage_terminal(
     let watch_started = std::time::Instant::now();
     let stopped;
     let observed = tokio::select! {
-        observed = await_terminal(node, request_id, remaining, GRACE) => {
+        observed = await_submitted_terminal_with_access(node, access, request_id, remaining, GRACE, &NoHook) => {
             stopped = false;
             observed
         }
         () = cancel.cancelled() => {
             stopped = true;
-            interrupt_and_settle(node, request_id).await
+            interrupt_and_settle(node, access, request_id).await
         }
         // Nothing is left to settle the request; the request may have settled
         // within the same poll, so one last unbounded read first.
         () = runtime_exited(runtime) => {
-            let row = poll_request(node, request_id).await.ok().flatten();
+            let row = poll_request_with_access(access, request_id).await.ok().flatten();
             let settled = row.and_then(|row| {
                 let terminal_state = RequestLifecycleState::parse(row.lifecycle_state.as_deref()?)
                     .ok()
@@ -195,30 +204,59 @@ async fn observe_stage_terminal(
 
 async fn submit_and_observe(
     spec: &TrialSpec,
-    cancel: &CancellationToken,
-    home: &EmbeddedHome,
-    runtime: &RunningRuntime,
-    locator: &TrialLocator,
+    env: &StageEnv<'_>,
     stage: &StageSpec,
-    ready: &watch::Receiver<Reconciled>,
 ) -> ObservedStage {
+    let StageEnv {
+        agent_did,
+        cancel,
+        home,
+        runtime,
+        locator,
+        ready,
+        ..
+    } = *env;
+    let access = match home.client_access(&spec.evaluator_did) {
+        Ok(access) => access,
+        Err(error) => {
+            tracing::warn!(%error, "eval stage has an invalid evaluator identity");
+            return ObservedStage::unsubmitted();
+        }
+    };
     let stage_started = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let deadline = stage.deadline_secs.map(Duration::from_secs);
     let started = Instant::now();
     let submit = async {
         match &stage.seed {
             Some(seed) => {
-                seed_and_await_fire(home, ready, seed, deadline, &spec.trial_id, &stage.stage_id)
-                    .await
+                let schema = super::install::trusted_seed_schema(spec, &seed.collection)?;
+                seed_and_await_fire(
+                    home,
+                    &spec.evaluator_did,
+                    ready,
+                    seed,
+                    Some(&schema),
+                    deadline,
+                    &spec.trial_id,
+                    &stage.stage_id,
+                )
+                .await
             }
             None => {
                 let request_id = uuid::Uuid::new_v4().to_string();
-                submit_stage(&home.node, locator, &spec.agent_id, stage, &request_id)
-                    .await
-                    .map(|()| StageSubmission::Submitted {
-                        request_id,
-                        remaining: deadline,
-                    })
+                submit_stage(
+                    home,
+                    &spec.evaluator_did,
+                    locator,
+                    agent_did,
+                    stage,
+                    &request_id,
+                )
+                .await
+                .map(|()| StageSubmission::Submitted {
+                    request_id,
+                    remaining: deadline,
+                })
             }
         }
     };
@@ -252,7 +290,7 @@ async fn submit_and_observe(
     };
 
     let (observed, stopped) =
-        observe_stage_terminal(&home.node, cancel, runtime, &request_id, remaining).await;
+        observe_stage_terminal(&home.node, &access, cancel, runtime, &request_id, remaining).await;
     let observed = match observed {
         Ok(observed) => Some(observed),
         Err(error) => {
@@ -272,7 +310,7 @@ async fn submit_and_observe(
         tokio::select! {
             biased;
             () = cancel.cancelled() => {}
-            quiet = settle_home(&home.node, budget) => match quiet {
+            quiet = settle_home(&access, budget) => match quiet {
                 Ok(true) => {}
                 Ok(false) => tracing::warn!(
                     trial_id = %spec.trial_id,
@@ -290,13 +328,13 @@ async fn submit_and_observe(
     }
 
     let (prods, prod_failed) = if settling {
-        continue_until_done(spec, cancel, home, locator, stage, deadline, started).await
+        continue_until_done(spec, env, stage, deadline, started).await
     } else {
         (0, false)
     };
 
     let mut collected = true;
-    let mut evidence = collect_request_evidence(&home.node, &request_id)
+    let mut evidence = collect_request_evidence_with_access(&access, &request_id)
         .await
         .unwrap_or_else(|error| {
             tracing::warn!(
@@ -317,7 +355,7 @@ async fn submit_and_observe(
     };
     if settling && collected {
         if let Err(error) =
-            extend_with_later_requests(&home.node, &locator.session_id, &request_id, &mut evidence)
+            extend_with_later_requests(&access, &locator.session_id, &request_id, &mut evidence)
                 .await
         {
             tracing::warn!(
@@ -364,13 +402,25 @@ async fn submit_and_observe(
 
 async fn continue_until_done(
     spec: &TrialSpec,
-    cancel: &CancellationToken,
-    home: &EmbeddedHome,
-    locator: &TrialLocator,
+    env: &StageEnv<'_>,
     stage: &StageSpec,
     deadline: Option<Duration>,
     started: Instant,
 ) -> (u32, bool) {
+    let StageEnv {
+        agent_did,
+        cancel,
+        home,
+        locator,
+        ..
+    } = *env;
+    let access = match home.client_access(&spec.evaluator_did) {
+        Ok(access) => access,
+        Err(error) => {
+            tracing::warn!(%error, "eval continuation has an invalid evaluator identity");
+            return (0, true);
+        }
+    };
     let Some(continuation) = &stage.continuation else {
         return (0, false);
     };
@@ -392,8 +442,8 @@ async fn continue_until_done(
     };
     let mut prods = 0;
     while prods < continuation.max && !cancel.is_cancelled() {
-        match capture_documents(
-            &home.node,
+        match capture_documents_with_access(
+            &access,
             collection,
             filter,
             fields,
@@ -417,8 +467,15 @@ async fn continue_until_done(
             break;
         }
         let request_id = uuid::Uuid::new_v4().to_string();
-        if let Err(error) =
-            submit_stage(&home.node, locator, &spec.agent_id, &prod, &request_id).await
+        if let Err(error) = submit_stage(
+            home,
+            &spec.evaluator_did,
+            locator,
+            agent_did,
+            &prod,
+            &request_id,
+        )
+        .await
         {
             tracing::warn!(
                 error = %format!("{error:#}"),
@@ -432,13 +489,13 @@ async fn continue_until_done(
         tokio::select! {
             biased;
             () = cancel.cancelled() => break,
-            _ = await_terminal(&home.node, &request_id, remaining, GRACE) => {}
+            _ = await_submitted_terminal_with_access(&home.node, &access, &request_id, remaining, GRACE, &NoHook) => {}
         }
         let remaining = remaining_of(deadline, started);
         tokio::select! {
             biased;
             () = cancel.cancelled() => break,
-            _ = settle_home(&home.node, remaining) => {}
+            _ = settle_home(&access, remaining) => {}
         }
     }
     (prods, false)
@@ -452,12 +509,33 @@ async fn runtime_exited(runtime: &RunningRuntime) {
 
 async fn interrupt_and_settle(
     node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     request_id: &str,
 ) -> Result<TerminalObservation> {
-    crate::request::interrupt::interrupt_request(node, request_id)
-        .await
-        .context("interrupting a cancelled stage")?;
-    await_terminal(node, request_id, Some(Duration::ZERO), GRACE).await
+    let row = poll_request_with_access(access, request_id)
+        .await?
+        .context("cancelled stage request is unavailable")?;
+    crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+        access,
+        row.doc_id
+            .as_deref()
+            .context("request has no physical identity")?,
+        row.node_did
+            .as_deref()
+            .context("request has no node identity")?,
+        row.requester_did.as_deref(),
+    )
+    .await
+    .context("interrupting a cancelled stage")?;
+    await_terminal_with_access(
+        node,
+        access,
+        request_id,
+        Some(Duration::ZERO),
+        GRACE,
+        &NoHook,
+    )
+    .await
 }
 
 #[cfg(test)]

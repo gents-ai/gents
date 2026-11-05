@@ -99,7 +99,7 @@ pub struct AdapterProjectionEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_node_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_agent_id: Option<String>,
+    pub source_agent_did: Option<String>,
     pub redaction_mode: ProjectionRedactionMode,
     pub provenance: ProjectionProvenance,
     /// Never bodies: the timeline never selects `request_json`, so a captured
@@ -268,7 +268,7 @@ pub enum OpenAiCodexTraceItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         node_did: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        agent_id: Option<String>,
+        agent_did: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         parent_request_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -328,7 +328,7 @@ pub struct LangGraphNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_request_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -377,7 +377,7 @@ pub struct MultiAgentParticipant {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub role: String,
 }
 
@@ -401,7 +401,7 @@ pub struct MultiAgentDelegation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

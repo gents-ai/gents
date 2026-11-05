@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
-import { bridgeCommand } from "@source-inc/gents-desktop-client";
+import {
+  bridgeCommand,
+  type DesktopClientSnapshot,
+} from "@source-inc/gents-desktop-client";
 import { runNativeLocalE2e, type NativeLocalSetup } from "./nativeLocalE2e";
 
 import {
@@ -108,7 +111,9 @@ async function runNativeSimulatorE2e() {
     await reportStatus({ stage: "starting" });
     await waitFor(
       () =>
-        /Sessions|Let’s get set up|Nodes/.test(document.body.textContent ?? "")
+        /Sessions|Let’s get set up|Connect to your node|Nodes/.test(
+          document.body.textContent ?? "",
+        )
           ? document.body
           : null,
       30_000,
@@ -127,10 +132,19 @@ async function runNativeSimulatorE2e() {
       await reportStatus({ stage: "enrollment" });
       await enrollNode(config);
       await waitFor(
-        () => findAgentDeploymentControl(config.agentLabel),
+        () =>
+          findAgentDeploymentControl(config.agentLabel) ??
+          (config.correlationId.startsWith("ios-reconnect-")
+            ? findNewSessionScreen(config.agentLabel)
+            : null),
         300_000,
         `${config.agentLabel} deployment`,
       );
+    }
+    if (config.correlationId.startsWith("ios-reconnect-")) {
+      await runReconnectScenario(config);
+      await reportStatus({ stage: "passed" });
+      return;
     }
     await reportStatus({ stage: "waiting-ready" });
     const currentChatButton = await waitFor(
@@ -215,24 +229,6 @@ async function runNativeSimulatorE2e() {
       `${config.agentLabel} terminal turn state`,
     );
 
-    await reportStatus({ stage: "waiting-hydration" });
-    await waitFor(
-      () => {
-        const status = document.querySelector<HTMLElement>(
-          '[data-testid="session-loading-status"]',
-        );
-        if (
-          status?.dataset.loadingLayer === "sessionSync" &&
-          status.dataset.loadingPhase === "failed"
-        ) {
-          throw new Error(status.textContent?.trim() || "Session hydration failed");
-        }
-        return status?.dataset.loadingLayer === "sessionSync" ? null : document.body;
-      },
-      180_000,
-      `${config.agentLabel} completed session hydration`,
-    );
-
     await reportStatus({ stage: "passed" });
   } catch (error) {
     const detail = errorText(error);
@@ -240,48 +236,161 @@ async function runNativeSimulatorE2e() {
   }
 }
 
-async function enrollNode(config: NativeE2eConfig) {
-  const disclosure = await waitFor(
-    () =>
-      document.querySelector<HTMLElement>(
-        '[data-testid="fleet-remote-disclosure"] summary',
-      ),
-    30_000,
-    "remote-node disclosure",
+async function runReconnectScenario(config: NativeE2eConfig) {
+  const snapshot = () =>
+    invoke<DesktopClientSnapshot>(bridgeCommand("desktop_client_snapshot"));
+  const metrics = () =>
+    invoke<{ events_received: number } | null>(
+      bridgeCommand("desktop_observer_metrics"),
+    );
+  const initial = await waitForAsync(async () => {
+    const deployments = (await snapshot()).client?.deployments ?? [];
+    const matches = deployments.filter(
+      (deployment) => deployment.label === config.agentLabel,
+    );
+    return matches.length === 1 && matches[0].runtimeConnection === "connected"
+      ? matches[0]
+      : null;
+  }, "connected isolated runtime");
+  const nodeDid = initial.nodeDid;
+  const agent = initial.agentConfigs.find(
+    (row) => row.agent_did === initial.node.defaultAgentDid,
   );
-  disclosure.click();
+  if (!agent) throw new Error("Isolated reconnect agent is missing");
+  if (!findNewSessionScreen(config.agentLabel)) {
+    const chat = await waitFor(
+      () => findAgentChatButton(config.agentLabel),
+      180_000,
+      "isolated runtime chat control",
+    );
+    chat.click();
+    const newSession = await waitFor(
+      () =>
+        document.querySelector<HTMLButtonElement>(
+          '[data-testid="session-new"]:not(:disabled)',
+        ),
+      180_000,
+      "isolated runtime new-session control",
+    );
+    newSession.click();
+    const newChat = await waitFor(
+      () => findNewChatButton(config.agentLabel),
+      180_000,
+      "isolated runtime new-chat control",
+    );
+    newChat.click();
+  }
+  await waitFor(
+    () => findNewSessionScreen(config.agentLabel),
+    30_000,
+    "new-session screen",
+  );
+  const offlineName = `${config.correlationId}-offline`;
+  const liveName = `${config.correlationId}-live`;
+  const deployment = async () =>
+    (await snapshot()).client?.deployments.find((row) => row.nodeDid === nodeDid);
 
-  const serverAddressInput = await waitFor(
+  await reportStatus({ stage: "reconnect-arm" });
+  await waitForAsync(
+    async () =>
+      (await deployment())?.runtimeConnection === "disconnected" ? true : null,
+    "runtime disconnection",
+  );
+  await reportStatus({ stage: "reconnect-offline" });
+  await waitForAsync(async () => {
+    const row = await deployment();
+    return row?.runtimeConnection === "connected" &&
+      row.agentConfigs.some(
+        (item) =>
+          item.agent_did === agent.agent_did && item.display_name === offlineName,
+      ) &&
+      document
+        .querySelector('[data-testid="session-screen"]')
+        ?.textContent?.includes(offlineName)
+      ? true
+      : null;
+  }, "offline change in the reconnected snapshot and UI");
+  const baseline = await metrics();
+  if (!baseline) throw new Error("Observer metrics are unavailable");
+  await reportStatus({ stage: "reconnect-caught-up" });
+  await waitForAsync(async () => {
+    const row = await deployment();
+    const observed = await metrics();
+    return row?.runtimeConnection === "connected" &&
+      row.agentConfigs.some(
+        (item) => item.agent_did === agent.agent_did && item.display_name === liveName,
+      ) &&
+      document
+        .querySelector('[data-testid="session-screen"]')
+        ?.textContent?.includes(liveName) &&
+      observed &&
+      observed.events_received > baseline.events_received
+      ? true
+      : null;
+  }, "post-reconnect live change in the snapshot and UI");
+}
+
+function findNewSessionScreen(label: string): HTMLElement | null {
+  const screen = document.querySelector<HTMLElement>('[data-testid="session-screen"]');
+  return screen?.textContent?.includes(label) ? screen : null;
+}
+
+async function waitForAsync<T>(
+  sample: () => Promise<T | null>,
+  description: string,
+): Promise<T> {
+  const deadline = window.performance.now() + 180_000;
+  while (window.performance.now() < deadline) {
+    const value = await sample();
+    if (value) return value;
+    await delay(250);
+  }
+  throw new Error(`Timed out waiting for ${description}`);
+}
+
+async function enrollNode(config: NativeE2eConfig) {
+  const onboardingInput = await waitFor(
     () =>
       document.querySelector<HTMLInputElement>(
-        '[data-testid="fleet-add-server-address"]',
+        'input[placeholder="https://gents.example.net:8787"]',
       ),
-    10_000,
+    30_000,
     "server address input",
   );
-  setControlledValue(serverAddressInput, config.serverAddress);
+  setControlledValue(onboardingInput, config.serverAddress);
 
   const submit = await waitFor(
-    () => {
-      const button = document.querySelector<HTMLButtonElement>(
-        '[data-testid="fleet-fetch-status"]',
-      );
-      return button && !button.disabled ? button : null;
-    },
+    () => findEnabledButton("Request access"),
     10_000,
     "enabled enrollment request button",
   );
   submit.click();
 
   const requestId = await waitFor(
-    () =>
-      document
-        .querySelector<HTMLElement>('[data-testid="fleet-import-status"]')
-        ?.textContent?.match(/Enrollment request (\S+) sent/)?.[1] ?? null,
+    () => {
+      const label = Array.from(document.querySelectorAll("dt")).find(
+        (item) => item.textContent?.trim() === "Request",
+      );
+      return label?.nextElementSibling?.textContent?.trim() || null;
+    },
     30_000,
     "enrollment request ID",
   );
   await reportStatus({ stage: "enrollment-pending", detail: requestId });
+  const proceed = await waitFor(
+    () => findEnabledButton("Continue"),
+    300_000,
+    "approved enrollment continuation",
+  );
+  proceed.click();
+}
+
+function findEnabledButton(label: string): HTMLButtonElement | null {
+  return (
+    Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === label && !button.disabled,
+    ) ?? null
+  );
 }
 
 function setControlledValue(
@@ -312,9 +421,7 @@ async function waitFor<T>(
     if (value) {
       return value;
     }
-    const enrollmentError = document.querySelector<HTMLElement>(
-      '[data-testid="fleet-import-status"].fleet-inline-error',
-    );
+    const enrollmentError = document.querySelector<HTMLElement>('[role="alert"]');
     if (enrollmentError?.textContent?.trim()) {
       throw new Error(enrollmentError.textContent.trim());
     }

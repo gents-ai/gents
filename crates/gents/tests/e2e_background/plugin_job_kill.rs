@@ -115,8 +115,8 @@ async fn boot_wide_job(
         AcceptedTurnSpec {
             backend_id: "plugin-job-backend",
             model: MODEL,
-            parent_agent_id: PARENT,
-            configured_agent_ids: &[PARENT, CHILD],
+            parent_agent_did: PARENT,
+            configured_agent_dids: &[PARENT, CHILD],
             request_id: &format!("{session_id}-parent"),
             session_id,
             prompt: &format!("{session_id} start"),
@@ -332,6 +332,7 @@ async fn operator_cancel_client_cancel_and_non_job_stop_each_end_the_row_cancell
     let outcome = cancel_background_tool_call(
         job.h.db.node.clone(),
         &BackgroundExecutionRegistry::default(),
+        job.h.db.node_identity.did(),
         &job.session_id,
         TOOL_CALL,
     )
@@ -350,6 +351,7 @@ async fn operator_cancel_client_cancel_and_non_job_stop_each_end_the_row_cancell
     let outcome = cancel_session_background_process(
         job.h.db.node.clone(),
         &BackgroundExecutionRegistry::default(),
+        &did,
         &did,
         Some(&did),
         &job.session_id,
@@ -573,8 +575,8 @@ async fn paired_job(name: &str) -> (JobHarness, BootedAgent, TestDb, tempfile::T
         AcceptedTurnSpec {
             backend_id: "plugin-job-backend",
             model: MODEL,
-            parent_agent_id: PARENT,
-            configured_agent_ids: &[PARENT, CHILD],
+            parent_agent_did: PARENT,
+            configured_agent_dids: &[PARENT, CHILD],
             request_id: &format!("{session_id}-parent"),
             session_id: &session_id,
             prompt: &format!("{session_id} start"),

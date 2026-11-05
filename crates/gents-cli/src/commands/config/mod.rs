@@ -34,6 +34,8 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             AgentCommand::Create(args) => behavior::agent_create(args).await,
             AgentCommand::Clone(args) => behavior::agent_clone(args).await,
             AgentCommand::Disable(args) => behavior::agent_disable(args).await,
+            AgentCommand::GrantSelfConfig(args) => behavior::agent_self_config_permission(args, true).await,
+            AgentCommand::RevokeSelfConfig(args) => behavior::agent_self_config_permission(args, false).await,
             AgentCommand::List(args) => crud::config_list(crud::AGENT_SPEC, args).await,
             AgentCommand::Show(args) => behavior::agent_show(args).await,
             AgentCommand::Rm(args) => crud::config_rm(crud::AGENT_SPEC, args).await,

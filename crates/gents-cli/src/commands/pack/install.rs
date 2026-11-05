@@ -36,7 +36,7 @@ pub(crate) async fn install_documents_pack(
                     needs_runtime_store = true;
                     break;
                 }
-                let config = gents::pack::load_pack_config(
+                let config = gents::pack::load_pack_authoring_config(
                     source.manifest(),
                     &gents::pack::PackInstallOptions {
                         node_did: owner.to_owned(),
@@ -44,7 +44,7 @@ pub(crate) async fn install_documents_pack(
                     &|path| Ok(source.asset(path)?.to_vec()),
                     &|name| std::env::var(name).ok(),
                 )?;
-                if config.tools.iter().any(|tools| {
+                if config.documents.tools.iter().any(|tools| {
                     tools
                         .integrations
                         .as_ref()
@@ -83,27 +83,10 @@ pub(crate) async fn install_documents_pack_resolved(
     let requested = parse_inference_slot_bindings(&args.inference_slots)?;
     let temp = tempfile::tempdir()?;
     gents::pack::materialize::materialize(pack.archive(), temp.path())?;
-    let (mut authored, mut report) = crate::desired_state::load_manifest_root(temp.path());
-    if authored.is_none() {
-        (authored, report) =
-            crate::desired_state::load_manifest_root_for_owner(temp.path(), Some(owner));
-    }
-    anyhow::ensure!(
-        authored.is_some(),
-        "invalid pack configuration: {:?}",
-        report.errors
-    );
-    let mut authored = authored.expect("checked pack configuration");
-    super::super::config::binding::rebind_manifest_to_node(
-        &mut authored,
-        owner,
-        args.force_rebind_concrete_did,
-    )?;
-    let prepared = gents::pack::prepare_document_pack_install(
+    let prepared = gents::pack::prepare_document_pack_archive(
         access,
         owner,
-        pack.manifest(),
-        &authored,
+        pack.archive(),
         &requested,
         &dependencies
             .iter()
@@ -111,7 +94,6 @@ pub(crate) async fn install_documents_pack_resolved(
             .collect::<Vec<_>>(),
         gents::pack::InstalledVia::Operator,
         args.scope.graphql.is_none().then_some(home.as_path()),
-        Some(pack.archive()),
         &|name| std::env::var(name).ok(),
     )
     .await?;
@@ -339,7 +321,9 @@ pub(super) async fn install_documents_command(
     }
     .await;
     if let Some(node) = access.local_node() {
-        node.shutdown().await;
+        if let Err(error) = node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+        }
     }
     crate::print_json(&result?)
 }
@@ -419,7 +403,9 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             .await;
             if let Some((access, _)) = &notification_scope {
                 if let Some(node) = access.local_node() {
-                    node.shutdown().await;
+                    if let Err(error) = node.shutdown().await {
+                        tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+                    }
                 }
             }
             let (record, installed_plugins) = result?;

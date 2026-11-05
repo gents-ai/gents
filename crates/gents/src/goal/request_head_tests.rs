@@ -295,7 +295,7 @@ fn signed_row(create: &AgentRequestCreate, doc: u64) -> AgentRequestRow {
         request_id: create.request_id.clone(),
         node_did: Some(create.node_did.clone()),
         requester_did: Some(create.requester_did.clone()),
-        agent_id: Some(create.agent_id.clone()),
+        agent_did: Some(create.agent_did.clone()),
         session_id: Some(create.session_id.clone()),
         retry_parent_request: create.retry_parent_request.clone(),
         retry_parent_request_doc_id: create.retry_parent_request_doc_id.clone(),
@@ -573,22 +573,45 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
     use crate::store::config_client::ConfigAccess;
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
+    let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+    let agent = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::local(node.clone());
-    let mut goal = set_goal(
-        &node,
+    let access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    access
+        .transact_write("test.assignment_session", |txn| {
+            Box::pin(crate::session::ensure_session_in_txn(
+                txn,
+                "bound-session",
+                identity.did(),
+                agent.did(),
+                Some(agent.did()),
+                None,
+                None,
+                "2026-01-01T00:00:00Z",
+            ))
+        })
+        .await
+        .unwrap();
+    let mut goal = set_goal_from_access(
+        &access,
         identity.did(),
         "bound-session",
         Some("next assignment"),
         Some(GoalStatus::Active),
         Some(None),
+        None,
     )
     .await
     .unwrap();
@@ -600,15 +623,15 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
             RequestPurpose::Normal,
             id,
             identity.did(),
-            identity.did(),
-            "head-behavior",
+            agent.did(),
+            agent.did(),
             "bound-session",
             "root",
             "interactive",
             created,
-            AgentRequestAdmissionRecord::local_self(identity.did()),
+            AgentRequestAdmissionRecord::local_self(agent.did()),
         );
-        crate::sign_agent_request_create(&identity, &mut create)
+        crate::sign_agent_request_create(agent.as_ref(), &mut create)
             .await
             .unwrap();
         access
@@ -639,7 +662,7 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
     for sequence in [1, 2] {
         let mut child = prepare_goal_continuation(
             &parent,
-            "head-behavior".into(),
+            agent.did().into(),
             &goal.goal_id,
             "old continuation",
             sequence,
@@ -648,7 +671,7 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
             parent.request_hop,
         )
         .unwrap();
-        crate::sign_agent_request_create(&identity, &mut child)
+        crate::sign_agent_request_create(agent.as_ref(), &mut child)
             .await
             .unwrap();
         access
@@ -667,8 +690,8 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
             .find(|row| row.request_id == child.request_id)
             .unwrap();
         let request = crate::request::watcher::AgentRequest::try_from(old_child.clone()).unwrap();
-        let allowed =
-            ConfigAccess::transact_local_write(&node, None, "test.late_goal_claim", |txn| {
+        let allowed = access
+            .transact_write("test.late_goal_claim", |txn| {
                 let request = &request;
                 Box::pin(async move {
                     fence_goal_continuation_claim_in_txn(txn, request, "2026-01-01T00:00:03Z").await

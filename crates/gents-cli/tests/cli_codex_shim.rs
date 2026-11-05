@@ -51,12 +51,12 @@ async fn select_default_agent_skills(
     node_did: &str,
     skill_ids: &[&str],
 ) -> Result<()> {
-    let agent_id = escape_graphql_string(&format!("{node_did}:default"));
+    let agent_did = escape_graphql_string(&format!("{node_did}:default"));
     let node_did = escape_graphql_string(node_did);
     let agent = graphql_query(
         graphql,
         &format!(
-            r#"{{ Agent(filter: {{node_did: {{_eq: "{node_did}"}}, agent_id: {{_eq: "{agent_id}"}}}}, limit: 1) {{context_id}} }}"#
+            r#"{{ Agent(filter: {{node_did: {{_eq: "{node_did}"}}, agent_did: {{_eq: "{agent_did}"}}}}, limit: 1) {{context_id}} }}"#
         ),
     )
     .await?;

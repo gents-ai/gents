@@ -1,4 +1,4 @@
-type InferenceCall @branchable {
+type InferenceCall @policy(id: "8d9e64ca014dddfb01e5a55a5018e0a56d238ea0da1df1b6b33d50b1ac23386a", resource: "children") {
     call_id: String @index(unique: true)
     runtime_instance_id: String @index
     request_id: String @index
@@ -8,7 +8,7 @@ type InferenceCall @branchable {
     profile_id: String @index @immutable
     call_seq: Int
     backend_id: String @index
-    agent_id: String @index
+    agent_did: String @index
     node_did: String @index
     call_kind: String @index
     attempt: Int

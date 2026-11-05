@@ -50,8 +50,8 @@ export function NewReferenceDialog({
   const node_did = deployment.nodeDid;
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [agentId, setAgentId] = useState(
-    defaultAgentOf(deployment)?.agentId ?? deployment.agents[0]?.agentId ?? "",
+  const [agentDid, setAgentDid] = useState(
+    defaultAgentOf(deployment)?.agentDid ?? deployment.agents[0]?.agentDid ?? "",
   );
   const [preset, setPreset] = useState<(typeof PRESETS)[number]["id"]>("daily");
   const [cron, setCron] = useState("");
@@ -72,7 +72,7 @@ export function NewReferenceDialog({
     try {
       if (kind === "task") {
         if (!prompt.trim()) throw new Error("Say what the agent should do.");
-        if (!agentId) throw new Error("Choose the agent that runs it.");
+        if (!agentDid) throw new Error("Choose the agent that runs it.");
         finish({
           kind,
           document: {
@@ -80,7 +80,7 @@ export function NewReferenceDialog({
             task_id: newId("task"),
             display_name: name.trim() || prompt.trim().split("\n")[0].slice(0, 60),
             description: null,
-            agent_id: agentId,
+            agent_did: agentDid,
             prompt_template: prompt.trim(),
             emit_outcome: false,
             goal_objective_template: null,
@@ -157,18 +157,18 @@ export function NewReferenceDialog({
                 <FieldLabel htmlFor="new-ref-agent">Who</FieldLabel>
                 <Select
                   items={deployment.agents.map((b) => ({
-                    value: b.agentId,
+                    value: b.agentDid,
                     label: b.displayName,
                   }))}
-                  value={agentId}
-                  onValueChange={(v) => v && setAgentId(v)}
+                  value={agentDid}
+                  onValueChange={(v) => v && setAgentDid(v)}
                 >
                   <SelectTrigger id="new-ref-agent" className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     {deployment.agents.map((b) => (
-                      <SelectItem key={b.agentId} value={b.agentId}>
+                      <SelectItem key={b.agentDid} value={b.agentDid}>
                         {b.displayName}
                       </SelectItem>
                     ))}

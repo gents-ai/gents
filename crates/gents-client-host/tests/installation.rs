@@ -139,7 +139,7 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
         "installation_upgrade.seed",
         &format!(
             r#"mutation {{ create_AgentSession(input: {{session_id: "retained-session",
-            node_did: "{did}", requester_did: "{did}", agent_id: "agent",
+            node_did: "{did}", requester_did: "{did}", agent_did: "agent",
             created_at: "2026-10-25T00:00:00Z"}}) {{ _docID }} }}"#
         ),
     )

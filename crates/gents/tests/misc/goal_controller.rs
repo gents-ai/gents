@@ -2,12 +2,11 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::{EmbeddedNode, HttpConfig};
+use gents::defra_node::{HttpConfig, Node as EmbeddedNode};
 use gents::goal::{
-    claim_continuation, claim_retry_continuation, create_goal_for_session,
-    delete_goals_for_session, load_canonical_goal, load_goals_for_session, session_token_usage,
-    set_goal, set_goal_from_access, update_goal_fields_if_status, CreateGoalForSessionError,
-    CreateGoalForSessionOutcome, GoalStatus,
+    claim_continuation, claim_retry_continuation, load_canonical_goal, load_goals_for_session,
+    session_token_usage, set_goal, set_goal_from_access, update_goal_fields_if_status,
+    CreateGoalForSessionError, CreateGoalForSessionOutcome, GoalStatus,
 };
 use gents::store::graphql::escape_graphql_string;
 use gents::{
@@ -25,6 +24,230 @@ use crate::support::{
 
 const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);
+
+async fn atomic_goal_link_case(actor: &'static str, collection: &'static str) -> serde_json::Value {
+    tokio::task::spawn_blocking(move || {
+        let contracts: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        contracts["goal_link_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| {
+                case["actor"] == actor
+                    && case["collection"] == collection
+                    && case["mode"] == "fresh"
+                    && case["commit"] == true
+            })
+            .unwrap()
+            .clone()
+    })
+    .await
+    .unwrap()
+}
+
+async fn goal_creation_actors(db: &TestDb) -> (gents::KeyIdentity, Arc<dyn NodeIdentity>) {
+    use gents::request::lifecycle::{
+        build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
+    };
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+
+    let directory = tempfile::tempdir().expect("goal actor key directory");
+    let user = gents::KeyIdentity::load_or_create(directory.path().join("user.key"), None)
+        .expect("goal client identity");
+    let binding = gents::store::identity::provision_agent_identity(db.node_identity.as_ref())
+        .expect("goal agent binding");
+    let agent = gents::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .expect("goal agent identity");
+    let admin = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
+    let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+        "node_did": db.node_identity.did(), "agent_did": binding.agent_did,
+        "creation_nonce": binding.creation_nonce, "display_name": "Goal fixture Agent",
+        "inference_profile_id": "goal-fixture-profile", "enabled": true,
+    }))
+    .unwrap();
+    let created = admin
+        .write(
+            "test.goal_creation_agent",
+            &format!("mutation {{ create_Agent(input: {input}) {{ _docID }} }}",),
+        )
+        .await
+        .unwrap();
+    let agent_doc = gents::store::graphql::created_doc_id(&created, "Agent").unwrap();
+    admin
+        .add_actor_relationship(
+            "Agent",
+            &agent_doc,
+            "session_writer",
+            &user.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+    admin
+        .add_actor_relationship(
+            "Agent",
+            &agent_doc,
+            "executor",
+            &agent.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+    let access = db.client_access(&user);
+    let spec = RequestSpec::new(
+        RequestPurpose::Normal,
+        RequestIdentity {
+            node_did: db.node_identity.did().into(),
+            requester_did: Some(user.did().into()),
+            agent_did: agent.did().into(),
+            session_id: SESSION.into(),
+            request_id: "goal-session-reservation".into(),
+            content: "reserve session".into(),
+            execution_origin: ExecutionOrigin::Interactive,
+            created_at: "2026-11-04T00:00:00Z".into(),
+        },
+        AgentRequestAdmissionRecord::client(user.did()),
+    );
+    build_signed_client_request(&access, spec, RequestSigner::Identity(&user))
+        .await
+        .expect("reserve user-owned goal session");
+    (user, agent)
+}
+
+async fn goal_fixture_request(
+    db: &TestDb,
+    user: &gents::KeyIdentity,
+    agent: &Arc<dyn NodeIdentity>,
+    request_id: &str,
+) -> String {
+    use gents::request::lifecycle::{
+        build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
+        RequestSigner, RequestSpec,
+    };
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    let client = db.client_access(user);
+    let spec = RequestSpec::new(
+        RequestPurpose::Normal,
+        RequestIdentity {
+            node_did: db.node_identity.did().into(),
+            requester_did: Some(user.did().into()),
+            agent_did: agent.did().into(),
+            session_id: SESSION.into(),
+            request_id: request_id.into(),
+            content: "completed baseline request".into(),
+            execution_origin: ExecutionOrigin::Interactive,
+            created_at: "2026-11-04T00:00:00Z".into(),
+        },
+        AgentRequestAdmissionRecord::client(user.did()),
+    );
+    let create = build_signed_client_request(&client, spec, RequestSigner::Identity(user))
+        .await
+        .unwrap();
+    submit_client_request(&client, &create).await.unwrap();
+    let request = escape_graphql_string(request_id);
+    let rows = client
+        .execute(&format!(
+            r#"{{AgentRequest(filter: {{request_id: {{_eq: "{request}"}}}}) {{_docID}}}}"#
+        ))
+        .await
+        .unwrap();
+    let doc = rows["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let agent_access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let escaped = escape_graphql_string(&doc);
+    let changed = agent_access.write("test.goal_baseline_complete", &format!(r#"mutation {{update_AgentRequest(docID: "{escaped}", input: {{lifecycle_state: "completed"}}) {{_docID}}}}"#)).await.unwrap();
+    assert_eq!(
+        changed["data"]["update_AgentRequest"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    doc
+}
+
+async fn goal_fixture_usage(
+    db: &TestDb,
+    agent: &Arc<dyn NodeIdentity>,
+    request_id: &str,
+    request_doc: &str,
+    call_id: &str,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+) {
+    goal_fixture_usage_for_node(
+        &db.node,
+        db.node_identity.did(),
+        SESSION,
+        agent,
+        request_id,
+        request_doc,
+        call_id,
+        prompt_tokens,
+        completion_tokens,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn goal_fixture_usage_for_node(
+    node: &Arc<EmbeddedNode>,
+    node_did: &str,
+    session_id: &str,
+    agent: &Arc<dyn NodeIdentity>,
+    request_id: &str,
+    request_doc: &str,
+    call_id: &str,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+) {
+    let access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    access.transact_write("test.goal_baseline_usage", |txn| {
+        Box::pin(async move {
+            let session = txn.execute(&format!(r#"{{AgentSession(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{_docID}}}}"#,
+                escape_graphql_string(node_did), escape_graphql_string(session_id))).await?;
+            let session_doc = session["data"]["AgentSession"][0]["_docID"].as_str().expect("baseline session document");
+            let input = serde_json::json!({
+                "call_id": call_id, "runtime_instance_id": "goal-baseline-test", "request_id": request_id,
+                "request_doc_id": request_doc, "session_id": session_id, "call_seq": 1,
+                "backend_id": "backend-test", "agent_did": agent.did(), "node_did": node_did,
+                "call_kind": "inference", "attempt": 1, "call_state": "completed",
+                "queued_at": "2026-07-15T00:00:00Z", "started_at": "2026-07-15T00:00:00Z",
+                "ended_at": "2026-07-15T00:00:01Z", "priority": 0, "queue_depth_at_enqueue": 0,
+                "controller_generation": 1, "backend_config_fingerprint": "goal-baseline-test",
+                "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "cached_input_tokens": 0,
+            });
+            let created = txn.execute_with_variables(
+                "mutation($input: InferenceCallMutationInputArg!) { add_InferenceCall(input: $input) { _docID } }",
+                &serde_json::json!({"input": input}),
+            ).await?;
+            let doc = gents::store::graphql::created_doc_id(&created, "InferenceCall")?;
+            txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
+            Ok::<_, anyhow::Error>(())
+        })
+    }).await.expect("seed agent-owned usage linked to the session");
+}
+
+async fn load_goal_as(access: &ConfigAccess, node_did: &str) -> Option<gents::goal::GoalDocument> {
+    access
+        .transact_readonly("test.load_client_goal", |txn| {
+            Box::pin(gents::goal::load_canonical_goal_in_txn(
+                txn, node_did, SESSION,
+            ))
+        })
+        .await
+        .unwrap()
+}
 
 async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, content: &str) {
     use gents::defra_node::QueryRequest;
@@ -212,7 +435,7 @@ fn snapshot(local_did: &str) -> Arc<ActiveRuntimeSnapshot> {
         generation: 1,
         node: None,
         local_did: local_did.to_string(),
-        default_agent_id: crate::support::AGENT_NAME.to_string(),
+        default_agent_did: crate::support::AGENT_NAME.to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -233,6 +456,15 @@ async fn publish_node_readiness(
     process_state: gents_protocol::row::NodeReadinessProcessState,
     behavior: Option<gents_protocol::row::AgentReadinessUnavailableReason>,
 ) {
+    publish_node_readiness_for_agent(db, process_state, behavior, crate::support::AGENT_NAME).await;
+}
+
+async fn publish_node_readiness_for_agent(
+    db: &TestDb,
+    process_state: gents_protocol::row::NodeReadinessProcessState,
+    behavior: Option<gents_protocol::row::AgentReadinessUnavailableReason>,
+    agent_did: &str,
+) {
     use gents_protocol::row::{
         AgentReadinessEntry, AgentReadinessState, NodeReadinessSnapshot,
         NODE_READINESS_FORMAT_VERSION,
@@ -242,9 +474,9 @@ async fn publish_node_readiness(
         process_state,
         active_generation: 1,
         router_generation: 1,
-        default_agent_id: crate::support::AGENT_NAME.to_string(),
+        default_agent_did: agent_did.to_string(),
         agents: vec![AgentReadinessEntry {
-            agent_id: crate::support::AGENT_NAME.to_string(),
+            agent_did: agent_did.to_string(),
             state: if behavior.is_some() {
                 AgentReadinessState::Unavailable
             } else {
@@ -303,6 +535,76 @@ async fn source(db: &TestDb) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnap
     unready_source(db)
 }
 
+async fn source_for_agent(
+    db: &TestDb,
+    agent_identity: &Arc<dyn NodeIdentity>,
+) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
+    publish_node_readiness_for_agent(
+        db,
+        gents_protocol::row::NodeReadinessProcessState::Ready,
+        None,
+        agent_identity.did(),
+    )
+    .await;
+    let node =
+        crate::support::fixtures::test_node_for(db.node_identity.clone(), agent_identity.did());
+    let agent =
+        crate::support::fixtures::test_agent_with_identity(node.clone(), agent_identity.clone());
+    let mut current = (*snapshot(db.node_identity.did())).clone();
+    current.node = Some(node);
+    current.default_agent_did = agent_identity.did().to_owned();
+    current
+        .agents
+        .insert(agent_identity.did().to_owned(), Arc::new(agent));
+    let (tx, rx) = watch::channel(Arc::new(current));
+    let subscriptions: Arc<dyn UpdateSubscriptionSource> =
+        Arc::new(MockUpdateSubscriptionSource::new());
+    (
+        GoalSource::with_subscription_source(
+            subscriptions,
+            rx,
+            db.node.clone(),
+            CancellationToken::new(),
+        )
+        .with_rescan_interval(RESCAN),
+        tx,
+    )
+}
+
+async fn create_goal_session_for_agent(db: &TestDb, agent_identity: &Arc<dyn NodeIdentity>) {
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(db.node_identity.did()).unwrap(),
+    );
+    let mut session = crate::support::session_document_in_scope(
+        db.node_identity.did(),
+        SESSION,
+        agent_identity.did(),
+        "2026-07-15T00:00:00Z",
+    );
+    session.requester_did = Some(db.node_identity.did().to_owned());
+    let input =
+        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
+            .unwrap();
+    let response = access
+        .write(
+            "test.goal_session",
+            &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
+        )
+        .await
+        .expect("create goal session");
+    let doc = gents::store::graphql::created_doc_id(&response, "AgentSession").unwrap();
+    access
+        .add_actor_relationship(
+            "AgentSession",
+            &doc,
+            "working_agent",
+            &identity::Did::new(agent_identity.did()).unwrap(),
+        )
+        .await
+        .expect("grant goal session to selected Agent");
+}
+
 async fn wait_for_goal_transition(
     db: &TestDb,
     source: &mut GoalSource,
@@ -356,6 +658,23 @@ async fn seed_signed_terminal_request_in_session(
     session: &str,
     state: &str,
 ) -> String {
+    seed_signed_terminal_request_for_agent(
+        db,
+        request_id,
+        session,
+        state,
+        crate::support::AGENT_NAME,
+    )
+    .await
+}
+
+async fn seed_signed_terminal_request_for_agent(
+    db: &TestDb,
+    request_id: &str,
+    session: &str,
+    state: &str,
+    agent_did: &str,
+) -> String {
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
@@ -366,7 +685,7 @@ async fn seed_signed_terminal_request_in_session(
         request_id,
         did,
         did,
-        crate::support::AGENT_NAME,
+        agent_did,
         session,
         "hello",
         "interactive",
@@ -400,6 +719,7 @@ async fn seed_failed_request(db: &TestDb, request_id: &str) -> String {
 
 struct GoalBackgroundHandoff {
     runtime: crate::support::accepted_turn::AcceptedTurnRuntime,
+    agent_identity: Arc<dyn NodeIdentity>,
     parent_doc_id: String,
     background_executions: gents::tools::call::hook::BackgroundExecutionRegistry,
     process_tool_call_id: String,
@@ -407,21 +727,22 @@ struct GoalBackgroundHandoff {
 
 async fn boot_goal_background_handoff_with_plans(
     db: &TestDb,
+    agent_identity: Arc<dyn NodeIdentity>,
     request_id: &str,
     entered_path: &std::path::Path,
     release_path: &std::path::Path,
     child_plans: Vec<crate::support::streaming_backend::StreamPlan>,
 ) -> GoalBackgroundHandoff {
     let did = db.node_identity.did();
-    let behavior = "goal-background-handoff";
+    let behavior = agent_identity.did();
     let prompt = "start late background handoff";
     let prepared = crate::support::accepted_turn::prepare_accepted_turn(
         db,
         crate::support::accepted_turn::AcceptedTurnSpec {
             backend_id: "goal-background-backend",
             model: "test-model",
-            parent_agent_id: behavior,
-            configured_agent_ids: &[behavior],
+            parent_agent_did: behavior,
+            configured_agent_dids: &[behavior],
             request_id,
             session_id: SESSION,
             prompt,
@@ -504,6 +825,7 @@ async fn boot_goal_background_handoff_with_plans(
             if entered_path.exists() {
                 return GoalBackgroundHandoff {
                     runtime,
+                    agent_identity,
                     parent_doc_id: parent_doc,
                     background_executions,
                     process_tool_call_id: row["tool_call_id"]
@@ -526,6 +848,8 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     use gents::inference::llm::message::{Message, Text, ToolResultContent, UserContent};
 
     let db = test_db("goal-real-process-wait-wake").await;
+    let agent_identity = crate::support::managed_agent(&db).await;
+    create_goal_session_for_agent(&db, &agent_identity).await;
     let parent_request_id = "goal-real-process-parent";
     let objective = "goal-real-process-wake-1973";
     struct ReleaseOnDrop {
@@ -564,6 +888,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
         ..
     } = boot_goal_background_handoff_with_plans(
         &db,
+        agent_identity,
         parent_request_id,
         &entered_path,
         &release_path,
@@ -857,7 +1182,7 @@ struct ChildRow {
     node_did: String,
     requester_did: Option<String>,
     session_id: String,
-    agent_id: Option<String>,
+    agent_did: Option<String>,
     caused_by_parent_request_id: Option<String>,
     caused_by_parent_request_doc_id: Option<String>,
     caused_by_trigger_id: Option<String>,
@@ -878,7 +1203,7 @@ async fn goal_children(db: &TestDb) -> Vec<ChildRow> {
         .execute(
             r#"{
                 AgentRequest(filter: { caused_by_trigger_kind: { _eq: "goal" } }) {
-                    _docID request_id node_did requester_did session_id agent_id caused_by_parent_request_id caused_by_parent_request_doc_id
+                    _docID request_id node_did requester_did session_id agent_did caused_by_parent_request_id caused_by_parent_request_doc_id
                     caused_by_trigger_id caused_by_trigger_kind input lifecycle_state
                     retry_key request_hop workspace_id workspace_authority
                     workspace_owner_node_did workspace_seal_hash
@@ -903,6 +1228,8 @@ async fn goal_children(db: &TestDb) -> Vec<ChildRow> {
 #[tokio::test]
 async fn goal_continuation_preserves_nested_workspace_lineage() {
     let db = test_db("goal-nested-workspace-lineage").await;
+    let agent_identity = crate::support::managed_agent(&db).await;
+    create_goal_session_for_agent(&db, &agent_identity).await;
     let did = db.node_identity.did();
     let admission = gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did);
     let mut parent = gents_protocol::request_admission::AgentRequestCreate::base(
@@ -910,7 +1237,7 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
         "parent-nested-workspace",
         did,
         did,
-        crate::support::AGENT_NAME,
+        agent_identity.did(),
         SESSION,
         "nested durable work",
         "interactive",
@@ -926,7 +1253,7 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
     parent.workspace_authority = Some("readOnly".to_string());
     parent.workspace_owner_node_did = Some(did.to_string());
     parent.workspace_seal_hash = Some("seal-hash".to_string());
-    gents::sign_agent_request_create_as_registered_target(&mut parent)
+    gents::sign_agent_request_create(db.node_identity.as_ref(), &mut parent)
         .await
         .expect("sign nested parent");
     let response = db
@@ -966,7 +1293,7 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
     .await
     .expect("set goal");
 
-    let (mut source, _tx) = source(&db).await;
+    let (mut source, _tx) = source_for_agent(&db, &agent_identity).await;
     tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("lineage continuation timed out")
@@ -991,11 +1318,15 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
         .continuation_sequence;
     drop(source);
     for _ in 0..2 {
-        let recovered = gents::RequestLifecycle::recover_all(&db.node, did)
-            .await
-            .unwrap();
+        let recovered = gents::RequestLifecycle::recover_all_with_identities(
+            &db.node,
+            did,
+            std::slice::from_ref(&agent_identity),
+        )
+        .await
+        .unwrap();
         assert_eq!(recovered.requests_recovered, 0);
-        let (mut restarted, _restart_tx) = self::source(&db).await;
+        let (mut restarted, _restart_tx) = source_for_agent(&db, &agent_identity).await;
         assert!(
             tokio::time::timeout(Duration::from_millis(200), restarted.next_fire())
                 .await
@@ -1092,7 +1423,7 @@ async fn completed_request_materializes_exactly_one_same_session_goal_child() {
     assert_eq!(children.len(), 1);
     let child = &children[0];
     assert_eq!(child.session_id, SESSION);
-    assert_eq!(child.agent_id.as_deref(), Some(crate::support::AGENT_NAME));
+    assert_eq!(child.agent_did.as_deref(), Some(crate::support::AGENT_NAME));
     assert_eq!(
         child.caused_by_parent_request_id.as_deref(),
         Some("parent-complete")
@@ -1200,7 +1531,7 @@ async fn foreign_retry_key_collision_is_rejected_instead_of_reused() {
     let mutation = format!(
         r#"mutation {{ create_AgentRequest(input: {{
             request_id: "foreign-retry-collision", purpose: "normal", node_did: "did:key:foreign",
-            agent_id: "foreign", session_id: "foreign-session",
+            agent_did: "foreign", session_id: "foreign-session",
             retry_root_request: "foreign-retry-collision",
             retry_key: "{}",
             content: "foreign", lifecycle_state: "completed",
@@ -1272,9 +1603,14 @@ async fn restart_materializes_a_claimed_continuation_after_crash() {
     )
     .await
     .expect("set goal");
-    assert!(claim_continuation(&db.node, &goal, "parent-claimed")
-        .await
-        .expect("claim continuation"));
+    assert!(claim_continuation(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &goal,
+        "parent-claimed"
+    )
+    .await
+    .expect("claim continuation"));
     assert!(goal_children(&db).await.is_empty());
 
     let (mut restarted, _restart_tx) = source(&db).await;
@@ -1299,11 +1635,16 @@ async fn restart_materializes_claimed_retry_without_charging_it_twice() {
     )
     .await
     .expect("set goal");
-    assert!(
-        claim_retry_continuation(&db.node, &goal, "parent-claimed-retry", 1, "failed",)
-            .await
-            .expect("atomically charge and claim retry")
-    );
+    assert!(claim_retry_continuation(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &goal,
+        "parent-claimed-retry",
+        1,
+        "failed",
+    )
+    .await
+    .expect("atomically charge and claim retry"));
 
     let (mut restarted, _tx) = source(&db).await;
     tokio::time::timeout(Duration::from_secs(2), restarted.next_fire())
@@ -1332,11 +1673,16 @@ async fn restart_materializes_claimed_wrapup_retry_without_charging_it_twice() {
     )
     .await
     .expect("set budget-limited goal");
-    assert!(
-        claim_retry_continuation(&db.node, &goal, "parent-claimed-wrapup-retry", 1, "failed",)
-            .await
-            .expect("atomically charge and claim wrap-up retry")
-    );
+    assert!(claim_retry_continuation(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &goal,
+        "parent-claimed-wrapup-retry",
+        1,
+        "failed",
+    )
+    .await
+    .expect("atomically charge and claim wrap-up retry"));
 
     let (mut restarted, _tx) = source(&db).await;
     tokio::time::timeout(Duration::from_secs(2), restarted.next_fire())
@@ -1370,9 +1716,14 @@ async fn continuation_claim_rejects_a_stale_active_status_snapshot() {
     seed_goal_fields(db.node.as_ref(), &stale, r#"status: "paused""#)
         .await
         .expect("pause goal");
-    assert!(!claim_continuation(&db.node, &stale, "parent-stale")
-        .await
-        .expect("stale claim returns cleanly"));
+    assert!(!claim_continuation(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &stale,
+        "parent-stale"
+    )
+    .await
+    .expect("stale claim returns cleanly"));
 }
 
 #[tokio::test]
@@ -1393,6 +1744,7 @@ async fn controller_status_cas_never_overwrites_a_newer_completion() {
         .expect("complete goal");
     assert!(!update_goal_fields_if_status(
         &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
         &stale,
         GoalStatus::Active,
         r#"status: "paused", last_failure: "stale controller""#,
@@ -1419,9 +1771,14 @@ async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStat
     .await
     .expect("set active goal");
     assert_eq!(stale.continuation_sequence(), 0);
-    assert!(claim_continuation(&db.node, &stale, "newly-claimed-parent")
-        .await
-        .expect("claim newer continuation"));
+    assert!(claim_continuation(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &stale,
+        "newly-claimed-parent"
+    )
+    .await
+    .expect("claim newer continuation"));
     let claimed = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
         .await
         .expect("load claimed goal")
@@ -1437,9 +1794,15 @@ async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStat
         status.as_str()
     );
     assert!(
-        !update_goal_fields_if_status(&db.node, &stale, GoalStatus::Active, &fields,)
-            .await
-            .expect("stale controller mutation returns cleanly"),
+        !update_goal_fields_if_status(
+            &db.node,
+            &identity::Did::new(db.node_identity.did()).unwrap(),
+            &stale,
+            GoalStatus::Active,
+            &fields,
+        )
+        .await
+        .expect("stale controller mutation returns cleanly"),
         "same status must not authorize an older continuation snapshot"
     );
     let current = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
@@ -1456,11 +1819,15 @@ async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStat
         claimed.last_continued_from_request_id
     );
     assert_eq!(current.last_failure, claimed.last_failure);
-    assert!(
-        update_goal_fields_if_status(&db.node, &current, GoalStatus::Active, &fields,)
-            .await
-            .expect("current controller mutation")
-    );
+    assert!(update_goal_fields_if_status(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &current,
+        GoalStatus::Active,
+        &fields,
+    )
+    .await
+    .expect("current controller mutation"));
     let updated = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
         .await
         .expect("reload current update")
@@ -1482,8 +1849,10 @@ async fn controller_block_rejects_same_status_from_an_older_continuation() {
 #[tokio::test]
 async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
     let db = test_db("goal-model-create").await;
-    let created = create_goal_for_session(
-        &db.node,
+    let (user, agent) = goal_creation_actors(&db).await;
+    let client = db.client_access(&user);
+    let created = gents::goal::create_goal_for_session_from_access(
+        &client,
         db.node_identity.did(),
         SESSION,
         "Ship the feature",
@@ -1492,9 +1861,41 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
     .await
     .expect("create model goal");
     assert!(matches!(created, CreateGoalForSessionOutcome::Created(_)));
+    assert_ne!(user.did(), db.node_identity.did());
+    assert_ne!(user.did(), agent.did());
+    let rows = client.execute("{ Goal { _docID session_doc_id agent_did creator_did parent_linked } GoalCreationClaim { _docID session_doc_id agent_did creator_did parent_linked } }").await.unwrap();
+    for collection in ["Goal", "GoalCreationClaim"] {
+        let row = &rows["data"][collection][0];
+        assert_eq!(row["agent_did"], agent.did());
+        assert_eq!(row["creator_did"], user.did());
+        let modeled = atomic_goal_link_case("user", collection).await;
+        assert_eq!(row["parent_linked"], modeled["initial"]["linked"]);
+        let doc = row["_docID"].as_str().unwrap().to_owned();
+        let owners = client
+            .transact_readonly("test.client_goal_owner", |txn| {
+                let doc = &doc;
+                Box::pin(async move {
+                    txn.document_owners(collection, std::slice::from_ref(doc))
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            owners[0].owner.as_ref().map(|owner| owner.as_str()),
+            Some(user.did())
+        );
+        let escaped = escape_graphql_string(&doc);
+        let history = client.execute(&format!(r#"{{ _commits(docID: "{escaped}", filter: {{fieldName: {{_eq: "_C"}}}}, order: {{height: ASC}}, limit: 1) {{cid}} }}"#)).await.unwrap();
+        let cid = history["data"]["_commits"][0]["cid"].as_str().unwrap();
+        assert_eq!(
+            db.node.verified_block_signer_did(cid).await.unwrap(),
+            user.did()
+        );
+    }
 
-    let duplicate = create_goal_for_session(
-        &db.node,
+    let duplicate = gents::goal::create_goal_for_session_from_access(
+        &client,
         db.node_identity.did(),
         SESSION,
         " Ship the feature ",
@@ -1507,15 +1908,15 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
         CreateGoalForSessionOutcome::Idempotent(_)
     ));
     assert_eq!(
-        load_goals_for_session(db.node.as_ref(), db.node_identity.did(), SESSION)
-            .await
-            .expect("load model goals")
+        client.execute("{ Goal { _docID } }").await.unwrap()["data"]["Goal"]
+            .as_array()
+            .unwrap()
             .len(),
         1
     );
 
-    let error = create_goal_for_session(
-        &db.node,
+    let error = gents::goal::create_goal_for_session_from_access(
+        &client,
         db.node_identity.did(),
         SESSION,
         "Different objective",
@@ -1524,9 +1925,8 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
     .await
     .expect_err("conflicting create must fail");
     assert!(matches!(error, CreateGoalForSessionError::Conflict));
-    let unchanged = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+    let unchanged = load_goal_as(&client, db.node_identity.did())
         .await
-        .expect("load unchanged goal")
         .expect("goal remains");
     assert_eq!(unchanged.objective, "Ship the feature");
     assert_eq!(unchanged.token_budget, Some(1_000));
@@ -1535,8 +1935,15 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
 #[tokio::test]
 async fn clearing_a_goal_also_clears_its_creation_claim() {
     let db = test_db("goal-model-create-clear").await;
-    create_goal_for_session(
-        &db.node,
+    let (_user, agent) = goal_creation_actors(&db).await;
+    let access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    gents::goal::create_goal_for_session_from_access(
+        &access,
         db.node_identity.did(),
         SESSION,
         "First objective",
@@ -1544,14 +1951,18 @@ async fn clearing_a_goal_also_clears_its_creation_claim() {
     )
     .await
     .expect("create first goal");
-    assert_eq!(
-        delete_goals_for_session(&db.node, db.node_identity.did(), SESSION)
-            .await
-            .expect("clear goal and claim"),
-        1
-    );
-    let replacement = create_goal_for_session(
-        &db.node,
+    let cleared = access.transact_write("test.clear_agent_goal", |txn| {
+        Box::pin(async move {
+            let goal = txn.execute(r#"mutation { delete_Goal(filter: {session_id: {_eq: "goal-session"}}) {_docID} }"#).await?;
+            let claim = txn.execute(r#"mutation { delete_GoalCreationClaim(filter: {session_id: {_eq: "goal-session"}}) {_docID} }"#).await?;
+            let goals = goal["data"]["delete_Goal"].as_array().map_or(0, Vec::len);
+            let claims = claim["data"]["delete_GoalCreationClaim"].as_array().map_or(0, Vec::len);
+            Ok::<_, anyhow::Error>((goals, claims))
+        })
+    }).await.expect("clear Goal and creation claim as their Agent owner");
+    assert_eq!(cleared, (1, 1));
+    let replacement = gents::goal::create_goal_for_session_from_access(
+        &access,
         db.node_identity.did(),
         SESSION,
         "Replacement objective",
@@ -1568,11 +1979,14 @@ async fn clearing_a_goal_also_clears_its_creation_claim() {
 #[tokio::test]
 async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_spend() {
     let db = test_db("goal-baseline-prior-usage").await;
-    seed_completed_request(&db, "parent-baseline").await;
-    seed_usage(
-        &db.node,
-        db.node_identity.did(),
+    let (user, agent) = goal_creation_actors(&db).await;
+    let client = db.client_access(&user);
+    let request_doc = goal_fixture_request(&db, &user, &agent, "parent-baseline").await;
+    goal_fixture_usage(
+        &db,
+        &agent,
         "parent-baseline",
+        &request_doc,
         "baseline-call",
         1000,
         50,
@@ -1581,8 +1995,8 @@ async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_
 
     // The fresh create must snapshot the session's usage at creation time so
     // pre-goal spend is never charged against the new goal.
-    let created = create_goal_for_session(
-        &db.node,
+    let created = gents::goal::create_goal_for_session_from_access(
+        &client,
         db.node_identity.did(),
         SESSION,
         "Baseline prior usage",
@@ -1598,28 +2012,33 @@ async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_
     assert_eq!(goal.tokens_used, Some(0));
 
     // Only spend arriving after creation is charged.
-    seed_usage(
-        &db.node,
-        db.node_identity.did(),
+    goal_fixture_usage(
+        &db,
+        &agent,
         "parent-baseline",
+        &request_doc,
         "post-goal-call",
         400,
         50,
     )
     .await;
-    let refreshed = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+    let refreshed = load_goal_as(&client, db.node_identity.did())
         .await
-        .expect("load goal")
         .expect("goal exists");
     assert_eq!(refreshed.token_usage_baseline, Some(1050));
     assert_eq!(refreshed.tokens_used, Some(0));
-    let tokens = gents::goal::refresh_goal_usage(&db.node, &refreshed)
+    let agent_access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let tokens = gents::goal::refresh_goal_usage_from_access(&agent_access, &refreshed)
         .await
         .expect("refresh usage");
     assert_eq!(tokens, 450);
-    let charged = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+    let charged = load_goal_as(&client, db.node_identity.did())
         .await
-        .expect("load goal")
         .expect("goal exists");
     assert_eq!(charged.token_usage_baseline, Some(1050));
     assert_eq!(charged.tokens_used, Some(450));
@@ -1628,18 +2047,21 @@ async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_
 #[tokio::test]
 async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
     let db = test_db("goal-baseline-idempotent").await;
-    seed_completed_request(&db, "parent-idempotent").await;
-    seed_usage(
-        &db.node,
-        db.node_identity.did(),
+    let (user, agent) = goal_creation_actors(&db).await;
+    let client = db.client_access(&user);
+    let request_doc = goal_fixture_request(&db, &user, &agent, "parent-idempotent").await;
+    goal_fixture_usage(
+        &db,
+        &agent,
         "parent-idempotent",
+        &request_doc,
         "first-call",
         1000,
         50,
     )
     .await;
-    let created = create_goal_for_session(
-        &db.node,
+    let created = gents::goal::create_goal_for_session_from_access(
+        &client,
         db.node_identity.did(),
         SESSION,
         "Baseline prior usage",
@@ -1656,17 +2078,18 @@ async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
     // More spend arrives, then the same create replays. The idempotent path
     // must return the existing row untouched: baseline stays at the creation
     // snapshot even though session usage has moved on.
-    seed_usage(
-        &db.node,
-        db.node_identity.did(),
+    goal_fixture_usage(
+        &db,
+        &agent,
         "parent-idempotent",
+        &request_doc,
         "second-call",
         400,
         50,
     )
     .await;
-    let duplicate = create_goal_for_session(
-        &db.node,
+    let duplicate = gents::goal::create_goal_for_session_from_access(
+        &client,
         db.node_identity.did(),
         SESSION,
         " Baseline prior usage ",
@@ -1683,22 +2106,29 @@ async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
 
     // An owner-level set_goal replay is also idempotent and must not reset the
     // baseline after post-goal spend.
-    let replayed = set_goal(
-        &db.node,
+    let agent_access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let replayed = set_goal_from_access(
+        &agent_access,
         db.node_identity.did(),
         SESSION,
         Some("Baseline prior usage"),
         Some(GoalStatus::Active),
         Some(Some(10_000)),
+        None,
     )
     .await
     .expect("set_goal replay");
     assert_eq!(replayed.token_usage_baseline, Some(1050));
     assert_eq!(replayed.tokens_used, Some(0));
     assert_eq!(
-        load_goals_for_session(db.node.as_ref(), db.node_identity.did(), SESSION)
-            .await
-            .expect("load goals")
+        client.execute("{ Goal { _docID } }").await.unwrap()["data"]["Goal"]
+            .as_array()
+            .unwrap()
             .len(),
         1
     );
@@ -1707,9 +2137,11 @@ async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
 #[tokio::test]
 async fn fresh_goal_with_zero_prior_usage_starts_charging_from_zero() {
     let db = test_db("goal-baseline-zero").await;
-    seed_completed_request(&db, "parent-zero").await;
-    let created = create_goal_for_session(
-        &db.node,
+    let (user, agent) = goal_creation_actors(&db).await;
+    let client = db.client_access(&user);
+    let request_doc = goal_fixture_request(&db, &user, &agent, "parent-zero").await;
+    let created = gents::goal::create_goal_for_session_from_access(
+        &client,
         db.node_identity.did(),
         SESSION,
         "Zero prior usage",
@@ -1723,26 +2155,31 @@ async fn fresh_goal_with_zero_prior_usage_starts_charging_from_zero() {
     };
     assert_eq!(goal.token_usage_baseline, Some(0));
     assert_eq!(goal.tokens_used, Some(0));
-    seed_usage(
-        &db.node,
-        db.node_identity.did(),
+    goal_fixture_usage(
+        &db,
+        &agent,
         "parent-zero",
+        &request_doc,
         "only-call",
         400,
         50,
     )
     .await;
-    let refreshed = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+    let refreshed = load_goal_as(&client, db.node_identity.did())
         .await
-        .expect("load goal")
         .expect("goal exists");
-    let tokens = gents::goal::refresh_goal_usage(&db.node, &refreshed)
+    let agent_access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let tokens = gents::goal::refresh_goal_usage_from_access(&agent_access, &refreshed)
         .await
         .expect("refresh usage");
     assert_eq!(tokens, 450);
-    let charged = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+    let charged = load_goal_as(&client, db.node_identity.did())
         .await
-        .expect("load goal")
         .expect("goal exists");
     assert_eq!(charged.token_usage_baseline, Some(0));
     assert_eq!(charged.tokens_used, Some(450));
@@ -1790,25 +2227,71 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
     })
     .await
     .expect("HTTP listener");
-    let access = ConfigAccess::graphql_as(endpoint.clone(), did.clone());
-
-    create_request_for_agent_with_signed_fields(
-        node.as_ref(),
-        &did,
-        "http-baseline-request",
-        SESSION,
-        "completed",
-        "2026-07-15T00:00:00Z",
-        None,
-        None,
-        None,
-        None,
-    )
-    .await;
-    seed_usage(
+    let access = ConfigAccess::Graphql(
+        gents::store::config_client::GraphqlEndpoint::as_principal(&endpoint, &did)
+            .with_client_signing_capability(identity.client_signing_capability().unwrap())
+            .unwrap(),
+    );
+    let binding = gents::store::identity::provision_agent_identity(&identity).unwrap();
+    let selected_agent =
+        gents::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
+    let local = ConfigAccess::local_as(node.clone(), did.parse().unwrap());
+    let agent_input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+        "node_did": did, "agent_did": binding.agent_did, "creation_nonce": binding.creation_nonce,
+        "display_name": "HTTP Goal Agent", "inference_profile_id": "http-goal-profile", "enabled": true,
+    })).unwrap();
+    let agent_row = local
+        .write(
+            "test.http_goal_agent",
+            &format!("mutation {{create_Agent(input: {agent_input}) {{_docID}}}}",),
+        )
+        .await
+        .unwrap();
+    let agent_doc = gents::store::graphql::created_doc_id(&agent_row, "Agent").unwrap();
+    local
+        .add_actor_relationship(
+            "Agent",
+            &agent_doc,
+            "executor",
+            &selected_agent.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+    use gents::request::lifecycle::{
+        build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
+        RequestSigner, RequestSpec,
+    };
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    let spec = RequestSpec::new(
+        RequestPurpose::Normal,
+        RequestIdentity {
+            node_did: did.clone(),
+            requester_did: Some(did.clone()),
+            agent_did: selected_agent.did().into(),
+            session_id: SESSION.into(),
+            request_id: "http-baseline-request".into(),
+            content: "baseline".into(),
+            execution_origin: ExecutionOrigin::Interactive,
+            created_at: "2026-07-15T00:00:00Z".into(),
+        },
+        AgentRequestAdmissionRecord::client(&did),
+    );
+    let request = build_signed_client_request(&access, spec, RequestSigner::Identity(&identity))
+        .await
+        .unwrap();
+    let session_doc = request.session_doc_id.clone().unwrap();
+    submit_client_request(&access, &request).await.unwrap();
+    let request_rows = access.execute("{ AgentRequest(filter: { request_id: { _eq: \"http-baseline-request\" } }) { _docID } }").await.unwrap();
+    let request_doc = request_rows["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
+        .unwrap();
+    goal_fixture_usage_for_node(
         &node,
         &did,
+        SESSION,
+        &selected_agent,
         "http-baseline-request",
+        request_doc,
         "http-baseline-call",
         1000,
         50,
@@ -1828,6 +2311,92 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
     .expect("set goal over HTTP");
     assert_eq!(goal.token_usage_baseline, Some(1050));
     assert_eq!(goal.tokens_used, Some(0));
+    let escaped = escape_graphql_string(&goal.doc_id);
+    let rows = access.execute(&format!(r#"{{ Goal(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ session_doc_id agent_did creator_did parent_linked }} _commits(docID: "{escaped}", filter: {{ fieldName: {{ _eq: "_C" }} }}, order: {{ height: ASC }}, limit: 1) {{ cid }} }}"#)).await.unwrap();
+    let goal_row = &rows["data"]["Goal"][0];
+    assert_eq!(goal_row["session_doc_id"], session_doc);
+    assert_eq!(goal_row["agent_did"], selected_agent.did());
+    assert_eq!(goal_row["creator_did"], did);
+    let modeled = atomic_goal_link_case("user", "Goal").await;
+    assert_eq!(goal_row["parent_linked"], modeled["initial"]["linked"]);
+    let cid = rows["data"]["_commits"][0]["cid"].as_str().unwrap();
+    assert_eq!(
+        node.verified_block_signer_did(cid).await.unwrap(),
+        identity.did()
+    );
+
+    let client_session = "http-client-goal";
+    let mut session = crate::support::session_document_in_scope(
+        &did,
+        client_session,
+        selected_agent.did(),
+        "2026-07-15T00:00:00Z",
+    );
+    session.requester_did = Some(did.clone());
+    let input =
+        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
+            .unwrap();
+    let session = local
+        .write(
+            "test.http_client_goal_session",
+            &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}",),
+        )
+        .await
+        .unwrap();
+    let client_session_doc =
+        gents::store::graphql::created_doc_id(&session, "AgentSession").unwrap();
+    local
+        .add_actor_relationship(
+            "AgentSession",
+            &client_session_doc,
+            "working_agent",
+            &selected_agent.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+    let created = gents::goal::create_goal_for_session_from_access(
+        &access,
+        &did,
+        client_session,
+        "Client-authored Goal",
+        Some(500),
+    )
+    .await
+    .expect("create client Goal and claim over authenticated HTTP");
+    assert!(matches!(created, CreateGoalForSessionOutcome::Created(_)));
+    let retried = gents::goal::create_goal_for_session_from_access(
+        &access,
+        &did,
+        client_session,
+        "Client-authored Goal",
+        Some(500),
+    )
+    .await
+    .expect("retry client Goal over the same authenticated access");
+    assert!(matches!(
+        retried,
+        CreateGoalForSessionOutcome::Idempotent(_)
+    ));
+    assert_eq!(created.goal().doc_id, retried.goal().doc_id);
+    for collection in ["Goal", "GoalCreationClaim"] {
+        let session_doc = escape_graphql_string(&client_session_doc);
+        let rows = access.execute(&format!(r#"{{ {collection}(filter: {{session_doc_id: {{_eq: "{session_doc}"}}}}) {{_docID session_doc_id agent_did creator_did parent_linked}} }}"#)).await.unwrap();
+        let rows = rows["data"][collection].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row["session_doc_id"], client_session_doc);
+        assert_eq!(row["agent_did"], selected_agent.did());
+        assert_eq!(row["creator_did"], did);
+        let modeled = atomic_goal_link_case("user", collection).await;
+        assert_eq!(row["parent_linked"], modeled["initial"]["linked"]);
+        let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
+        let history = access.execute(&format!(r#"{{ _commits(docID: "{doc}", filter: {{fieldName: {{_eq: "_C"}}}}, order: {{height: ASC}}, limit: 1) {{cid}} }}"#)).await.unwrap();
+        let cid = history["data"]["_commits"][0]["cid"].as_str().unwrap();
+        assert_eq!(
+            node.verified_block_signer_did(cid).await.unwrap(),
+            identity.did()
+        );
+    }
 }
 
 fn free_address() -> std::net::SocketAddr {
@@ -1835,63 +2404,20 @@ fn free_address() -> std::net::SocketAddr {
     listener.local_addr().expect("ephemeral address")
 }
 
-async fn seed_usage(
-    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
-    node_did: &str,
-    request_id: &str,
-    call_id: &str,
-    prompt_tokens: i64,
-    completion_tokens: i64,
-) {
-    let request_doc_id = escape_graphql_string(
-        &crate::support::exact_request_doc_id(node.as_ref(), request_id).await,
-    );
-    let node_did = escape_graphql_string(node_did);
-    let request_id = escape_graphql_string(request_id);
-    let call_id = escape_graphql_string(call_id);
-    let usage = format!(
-        r#"mutation {{
-            add_InferenceCall(input: {{
-                call_id: "{call_id}",
-                runtime_instance_id: "goal-baseline-test",
-                request_id: "{request_id}",
-                request_doc_id: "{request_doc_id}",
-                call_seq: 1,
-                backend_id: "backend-test",
-                agent_id: "test",
-                node_did: "{node_did}",
-                call_kind: "inference",
-                attempt: 1,
-                call_state: "completed",
-                queued_at: "2026-07-15T00:00:00Z",
-                started_at: "2026-07-15T00:00:00Z",
-                ended_at: "2026-07-15T00:00:01Z",
-                priority: 0,
-                queue_depth_at_enqueue: 0,
-                controller_generation: 1,
-                backend_config_fingerprint: "goal-baseline-test",
-                prompt_tokens: {prompt_tokens},
-                completion_tokens: {completion_tokens},
-                cached_input_tokens: 0
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&usage).await;
-    assert!(!response.has_errors(), "seed usage: {:?}", response.errors);
-}
-
 async fn signed_goal_backed_request(
     db: &TestDb,
+    agent: &Arc<dyn NodeIdentity>,
     request_id: &str,
 ) -> gents_protocol::request_admission::AgentRequestCreate {
     let did = db.node_identity.did();
-    let admission = gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did);
+    let admission =
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent.did());
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
         did,
-        did,
-        crate::support::AGENT_NAME,
+        agent.did(),
+        agent.did(),
         SESSION,
         "Begin durable work",
         "interactive",
@@ -1899,7 +2425,7 @@ async fn signed_goal_backed_request(
         admission,
     );
     create.retry_key = Some(format!("goal-submit:{SESSION}"));
-    gents::sign_agent_request_create_as_registered_target(&mut create)
+    gents::sign_agent_request_create(agent.as_ref(), &mut create)
         .await
         .expect("sign goal-backed request");
     create
@@ -1908,8 +2434,14 @@ async fn signed_goal_backed_request(
 #[tokio::test]
 async fn goal_backed_submission_commits_goal_before_request_visibility_and_retries_idempotently() {
     let db = test_db("goal-backed-submit").await;
-    let access = ConfigAccess::local(db.node.clone());
-    let create = signed_goal_backed_request(&db, "goal-backed-first").await;
+    let agent = crate::support::managed_agent(&db).await;
+    let access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let create = signed_goal_backed_request(&db, &agent, "goal-backed-first").await;
     let first = gents::goal::submit_goal_backed_request(
         &access,
         db.node_identity.did(),
@@ -1921,26 +2453,45 @@ async fn goal_backed_submission_commits_goal_before_request_visibility_and_retri
     .await
     .expect("atomic goal submission");
     assert_eq!(first, gents::goal::GoalBackedRequestDisposition::Created);
-
-    let response = db
-        .node
-        .execute(r#"{ Goal { goal_id } AgentRequest(filter: { retry_key: { _eq: "goal-submit:goal-session" } }) { request_id lifecycle_state } }"#)
-        .await;
-    assert!(
-        !response.has_errors(),
-        "load atomic pair: {:?}",
-        response.errors
-    );
+    let binding = access.execute(
+        "{ AgentSession { _docID agent_did requester_did } Goal { _docID session_doc_id agent_did creator_did parent_linked assignment_root_request_doc_id } GoalCreationClaim { _docID session_doc_id agent_did creator_did parent_linked } AgentRequest { _docID } }",
+    ).await.unwrap();
+    let session = &binding["data"]["AgentSession"][0];
+    let request = &binding["data"]["AgentRequest"][0];
+    assert_eq!(session["agent_did"], agent.did());
+    assert_eq!(session["requester_did"], agent.did());
+    for collection in ["Goal", "GoalCreationClaim"] {
+        let row = &binding["data"][collection][0];
+        assert_eq!(row["session_doc_id"], session["_docID"]);
+        assert_eq!(row["agent_did"], agent.did());
+        assert_eq!(row["creator_did"], agent.did());
+        let modeled = atomic_goal_link_case("agent", collection).await;
+        assert_eq!(row["parent_linked"], modeled["initial"]["linked"]);
+        let doc = row["_docID"].as_str().unwrap().to_owned();
+        let owners = access
+            .transact_readonly("test.goal_backed_native_owner", |txn| {
+                let doc = &doc;
+                Box::pin(async move {
+                    txn.document_owners(collection, std::slice::from_ref(doc))
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            owners[0].owner.as_ref().map(|owner| owner.as_str()),
+            Some(agent.did())
+        );
+    }
     assert_eq!(
-        response.data.as_ref().unwrap()["Goal"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
+        binding["data"]["Goal"][0]["assignment_root_request_doc_id"],
+        request["_docID"]
     );
-    let requests = response.data.as_ref().unwrap()["AgentRequest"]
-        .as_array()
-        .unwrap();
+
+    let response = access.execute(r#"{ Goal { goal_id } AgentRequest(filter: { retry_key: { _eq: "goal-submit:goal-session" } }) { request_id lifecycle_state } }"#)
+        .await.expect("load atomic pair as selected Agent");
+    assert_eq!(response["data"]["Goal"].as_array().unwrap().len(), 1);
+    let requests = response["data"]["AgentRequest"].as_array().unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["lifecycle_state"], "pending");
 
@@ -1956,13 +2507,21 @@ async fn goal_backed_submission_commits_goal_before_request_visibility_and_retri
     .expect("idempotent atomic retry");
     assert_eq!(retry, gents::goal::GoalBackedRequestDisposition::Idempotent);
 
-    let committed_goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+    let committed_goal = access
+        .transact_readonly("test.load_committed_goal", |txn| {
+            Box::pin(gents::goal::load_canonical_goal_in_txn(
+                txn,
+                db.node_identity.did(),
+                SESSION,
+            ))
+        })
         .await
         .expect("load committed goal")
         .expect("goal exists");
-    seed_goal_fields(db.node.as_ref(), &committed_goal, r#"status: "complete""#)
-        .await
-        .expect("simulate progress after an ambiguous commit acknowledgement");
+    access.write("test.goal_backed_progress", &format!(
+        r#"mutation {{ update_Goal(docID: "{}", input: {{ status: "complete" }}) {{ _docID }} }}"#,
+        escape_graphql_string(&committed_goal.doc_id),
+    )).await.expect("simulate progress after an ambiguous commit acknowledgement");
     let late_retry = gents::goal::submit_goal_backed_request(
         &access,
         db.node_identity.did(),
@@ -1982,8 +2541,14 @@ async fn goal_backed_submission_commits_goal_before_request_visibility_and_retri
 #[tokio::test]
 async fn goal_backed_retry_rejects_changed_logical_request_fields() {
     let db = test_db("goal-backed-submit-fingerprint-conflict").await;
-    let access = ConfigAccess::local(db.node.clone());
-    let create = signed_goal_backed_request(&db, "goal-backed-fingerprint").await;
+    let agent = crate::support::managed_agent(&db).await;
+    let access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let create = signed_goal_backed_request(&db, &agent, "goal-backed-fingerprint").await;
     gents::goal::submit_goal_backed_request(
         &access,
         db.node_identity.did(),
@@ -2000,7 +2565,7 @@ async fn goal_backed_retry_rejects_changed_logical_request_fields() {
         "queue": {"source": "goal", "policy": "coalesce", "key": "changed"}
     }))
     .unwrap();
-    gents::sign_agent_request_create_as_registered_target(&mut changed)
+    gents::sign_agent_request_create(agent.as_ref(), &mut changed)
         .await
         .expect("re-sign changed request");
     let error = gents::goal::submit_goal_backed_request(
@@ -2021,18 +2586,42 @@ async fn goal_backed_retry_rejects_changed_logical_request_fields() {
 #[tokio::test]
 async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publishing() {
     let db = test_db("goal-backed-submit-terminal-goal").await;
-    let access = ConfigAccess::local(db.node.clone());
-    set_goal(
-        &db.node,
+    let agent = crate::support::managed_agent(&db).await;
+    let access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let mut session = crate::support::session_document_in_scope(
+        db.node_identity.did(),
+        SESSION,
+        agent.did(),
+        "2026-07-15T00:00:00Z",
+    );
+    session.requester_did = Some(agent.did().to_owned());
+    let input =
+        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
+            .unwrap();
+    access
+        .write(
+            "test.goal_backed_terminal_session",
+            &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}",),
+        )
+        .await
+        .unwrap();
+    set_goal_from_access(
+        &access,
         db.node_identity.did(),
         SESSION,
         Some("Already terminal"),
         Some(GoalStatus::Complete),
         None,
+        None,
     )
     .await
     .expect("set terminal goal");
-    let create = signed_goal_backed_request(&db, "goal-backed-terminal").await;
+    let create = signed_goal_backed_request(&db, &agent, "goal-backed-terminal").await;
     let error = gents::goal::submit_goal_backed_request(
         &access,
         db.node_identity.did(),
@@ -2044,20 +2633,15 @@ async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publish
     .await
     .expect_err("terminal goal must reject a new first request");
     assert!(error.to_string().contains("non-active goal"));
-    let response = db
-        .node
+    let response = access
         .execute("{ AgentRequest { request_id } GoalCreationClaim { creation_key } }")
-        .await;
-    assert!(
-        !response.has_errors(),
-        "query terminal rollback: {:?}",
-        response.errors
-    );
-    assert!(response.data.as_ref().unwrap()["AgentRequest"]
+        .await
+        .expect("query terminal rollback as selected Agent");
+    assert!(response["data"]["AgentRequest"]
         .as_array()
         .unwrap()
         .is_empty());
-    assert!(response.data.as_ref().unwrap()["GoalCreationClaim"]
+    assert!(response["data"]["GoalCreationClaim"]
         .as_array()
         .unwrap()
         .is_empty());
@@ -2066,8 +2650,14 @@ async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publish
 #[tokio::test]
 async fn goal_backed_submission_discards_goal_when_request_staging_fails() {
     let db = test_db("goal-backed-submit-rollback").await;
-    let access = ConfigAccess::local(db.node.clone());
-    let mut invalid = signed_goal_backed_request(&db, "goal-backed-invalid").await;
+    let agent = crate::support::managed_agent(&db).await;
+    let access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let mut invalid = signed_goal_backed_request(&db, &agent, "goal-backed-invalid").await;
     invalid.initial_lifecycle_state =
         gents_protocol::client_protocol::RequestLifecycleState::Processing;
     let error = gents::goal::submit_goal_backed_request(
@@ -2081,50 +2671,51 @@ async fn goal_backed_submission_discards_goal_when_request_staging_fails() {
     .await
     .expect_err("invalid request must abort transaction");
     assert!(error.to_string().contains("pending state"));
-    assert!(
-        load_goals_for_session(db.node.as_ref(), db.node_identity.did(), SESSION)
-            .await
-            .expect("load rolled-back goals")
-            .is_empty()
-    );
-    let response = db
-        .node
-        .execute("{ GoalCreationClaim { creation_key } AgentRequest { request_id } }")
-        .await;
-    assert!(
-        !response.has_errors(),
-        "load rollback state: {:?}",
-        response.errors
-    );
-    assert!(response.data.as_ref().unwrap()["GoalCreationClaim"]
-        .as_array()
-        .unwrap()
-        .is_empty());
-    assert!(response.data.as_ref().unwrap()["AgentRequest"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    let response = access.execute("{ AgentSession { _docID } Goal { _docID } GoalCreationClaim { creation_key } AgentRequest { request_id } }")
+        .await.expect("load rollback state as selected Agent");
+    for collection in ["AgentSession", "Goal", "GoalCreationClaim", "AgentRequest"] {
+        assert!(
+            response["data"][collection].as_array().unwrap().is_empty(),
+            "{collection} escaped the aborted transaction"
+        );
+    }
 }
 
 #[tokio::test]
 async fn concurrent_model_goal_create_converges_to_one_physical_goal() {
     let db = test_db("goal-model-create-concurrent").await;
-    let left_node = db.node.clone();
-    let right_node = db.node.clone();
-    let did = db.node_identity.did().to_string();
+    let (user, _agent) = goal_creation_actors(&db).await;
+    let client = db.client_access(&user);
+    let left_client = client.clone();
+    let observer = client.clone();
+    let did = db.node_identity.did().to_owned();
     let left_did = did.clone();
     let left = tokio::spawn(async move {
-        create_goal_for_session(&left_node, &left_did, SESSION, "Concurrent objective", None).await
+        gents::goal::create_goal_for_session_from_access(
+            &left_client,
+            &left_did,
+            SESSION,
+            "Concurrent objective",
+            None,
+        )
+        .await
     });
     let right = tokio::spawn(async move {
-        create_goal_for_session(&right_node, &did, SESSION, "Concurrent objective", None).await
+        gents::goal::create_goal_for_session_from_access(
+            &client,
+            &did,
+            SESSION,
+            "Concurrent objective",
+            None,
+        )
+        .await
     });
     left.await.expect("left task").expect("left create");
     right.await.expect("right task").expect("right create");
     assert_eq!(
-        load_goals_for_session(db.node.as_ref(), db.node_identity.did(), SESSION)
-            .await
-            .expect("load converged goals")
+        observer.execute("{ Goal { _docID } }").await.unwrap()["data"]["Goal"]
+            .as_array()
+            .unwrap()
             .len(),
         1
     );
@@ -2273,6 +2864,8 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
     let objective = "Respect the budget even when execution fails";
     for terminal in ["failed", "dead"] {
         let db = test_db(&format!("goal-budget-after-{terminal}")).await;
+        let agent_identity = crate::support::managed_agent(&db).await;
+        create_goal_session_for_agent(&db, &agent_identity).await;
         set_goal(
             &db.node,
             db.node_identity.did(),
@@ -2296,20 +2889,27 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         );
         let GoalBackgroundHandoff {
             runtime,
+            agent_identity,
             parent_doc_id: parent_doc,
             background_executions,
             process_tool_call_id,
         } = boot_goal_background_handoff_with_plans(
             &db,
+            agent_identity,
             parent,
             &entered_path,
             &release_path,
             vec![hold_wrapup],
         )
         .await;
-        let prior_usage = session_token_usage(&db.node, db.node_identity.did(), SESSION)
-            .await
-            .unwrap();
+        let prior_usage = session_token_usage(
+            &db.node,
+            &identity::Did::new(db.node_identity.did()).unwrap(),
+            db.node_identity.did(),
+            SESSION,
+        )
+        .await
+        .unwrap();
         assert!(
             prior_usage < 100,
             "the held parent has not exhausted the Goal budget"
@@ -2340,9 +2940,14 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             .await
             .unwrap();
         assert_eq!(
-            session_token_usage(&db.node, db.node_identity.did(), SESSION)
-                .await
-                .unwrap(),
+            session_token_usage(
+                &db.node,
+                &identity::Did::new(db.node_identity.did()).unwrap(),
+                db.node_identity.did(),
+                SESSION
+            )
+            .await
+            .unwrap(),
             expected_usage,
         );
 
@@ -2390,7 +2995,13 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             rows[0]["completion_notification_delivered_at"].is_string(),
             "the worker must publish its completion before ownership ends: {delivery}"
         );
-        gents::tools::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, db.node_identity.did()).await.unwrap();
+        gents::tools::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
+            &db.node,
+            db.node_identity.did(),
+            std::slice::from_ref(&agent_identity),
+        )
+        .await
+        .unwrap();
         let observed = db.node.execute(
             "{ AgentRequest { _docID request_id created_at lifecycle_state execution_origin caused_by_trigger_kind caused_by_parent_request_id } AgentMessage { _docID node_did requester_did request_doc_id } AgentToolCall { _docID tool_name lifecycle_state completion_notification_delivered_at } }",
         ).await;
@@ -2504,7 +3115,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             "the Goal child must be able to load the parent's durable background input"
         );
 
-        let (mut restarted, _restart_tx) = self::source(&db).await;
+        let (mut restarted, _restart_tx) = source_for_agent(&db, &agent_identity).await;
         let restarted_fire =
             tokio::time::timeout(Duration::from_millis(200), restarted.next_fire()).await;
         assert!(
@@ -2532,7 +3143,17 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
 #[tokio::test]
 async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     let db = test_db("goal-budget-wrapup").await;
-    seed_completed_request(&db, "parent-budget").await;
+    let agent_identity = crate::support::managed_agent(&db).await;
+    create_goal_session_for_agent(&db, &agent_identity).await;
+    let parent_doc = seed_signed_terminal_request_for_agent(
+        &db,
+        "parent-budget",
+        SESSION,
+        "completed",
+        agent_identity.did(),
+    )
+    .await;
+    publish_canonical_terminal_activity(&db, &parent_doc, "durable progress").await;
     set_goal(
         &db.node,
         db.node_identity.did(),
@@ -2555,7 +3176,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
             request_doc_id: "{usage_request_doc}",
             call_seq: 1,
             backend_id: "backend-test",
-            agent_id: "test",
+            agent_did: "{agent_did}",
             node_did: "{}",
             call_kind: "inference",
             attempt: 1,
@@ -2578,7 +3199,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
             request_doc_id: "{usage_request_doc}",
             call_seq: 1,
             backend_id: "backend-test",
-            agent_id: "test",
+            agent_did: "{agent_did}",
             node_did: "did:key:foreign-goal-owner",
             call_kind: "inference",
             attempt: 1,
@@ -2595,7 +3216,8 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
             cached_input_tokens: 0
         }}) {{ _docID }}
     }}"#,
-        db.node_identity.did()
+        escape_graphql_string(db.node_identity.did()),
+        agent_did = escape_graphql_string(agent_identity.did()),
     );
     let response = db.node.execute(&usage).await;
     assert!(!response.has_errors(), "seed usage: {:?}", response.errors);
@@ -2623,7 +3245,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
         1
     );
 
-    let (mut source, _snapshot_tx) = source(&db).await;
+    let (mut source, _snapshot_tx) = source_for_agent(&db, &agent_identity).await;
     tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("goal source timed out")
@@ -2659,19 +3281,28 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     );
     let continuation_sequence = goal.continuation_sequence;
     assert_eq!(
-        session_token_usage(&db.node, db.node_identity.did(), SESSION)
-            .await
-            .expect("session usage before repeated recovery"),
+        session_token_usage(
+            &db.node,
+            &identity::Did::new(db.node_identity.did()).unwrap(),
+            db.node_identity.did(),
+            SESSION
+        )
+        .await
+        .expect("session usage before repeated recovery"),
         105,
     );
     drop(source);
     for _ in 0..2 {
-        let recovered = gents::RequestLifecycle::recover_all(&db.node, db.node_identity.did())
-            .await
-            .expect("repeat lease recovery");
+        let recovered = gents::RequestLifecycle::recover_all_with_identities(
+            &db.node,
+            db.node_identity.did(),
+            std::slice::from_ref(&agent_identity),
+        )
+        .await
+        .expect("repeat lease recovery");
         assert_eq!(recovered.requests_recovered, 0);
         assert_eq!(recovered.responses_recovered, 0);
-        let (mut restarted, _restart_tx) = self::source(&db).await;
+        let (mut restarted, _restart_tx) = source_for_agent(&db, &agent_identity).await;
         assert!(
             tokio::time::timeout(Duration::from_millis(200), restarted.next_fire())
                 .await
@@ -2691,9 +3322,14 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
         assert_eq!(current.continuation_sequence, continuation_sequence);
         assert_eq!(current.wrapup_completed, Some(true));
         assert_eq!(
-            session_token_usage(&db.node, db.node_identity.did(), SESSION)
-                .await
-                .unwrap(),
+            session_token_usage(
+                &db.node,
+                &identity::Did::new(db.node_identity.did()).unwrap(),
+                db.node_identity.did(),
+                SESSION
+            )
+            .await
+            .unwrap(),
             105,
             "recovery must preserve the session charge, including cached input exactly once",
         );
@@ -2726,7 +3362,7 @@ async fn session_token_usage_charges_cached_input_as_part_of_the_total() {
             request_doc_id: "{usage_request_doc}",
             call_seq: 1,
             backend_id: "backend-test",
-            agent_id: "test",
+            agent_did: "test",
             node_did: "{}",
             call_kind: "inference",
             attempt: 1,
@@ -2748,9 +3384,14 @@ async fn session_token_usage_charges_cached_input_as_part_of_the_total() {
     let response = db.node.execute(&usage).await;
     assert!(!response.has_errors(), "seed usage: {:?}", response.errors);
 
-    let tokens = session_token_usage(&db.node, db.node_identity.did(), SESSION)
-        .await
-        .expect("session token usage");
+    let tokens = session_token_usage(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        db.node_identity.did(),
+        SESSION,
+    )
+    .await
+    .expect("session token usage");
     assert_eq!(tokens, 1050);
 }
 
@@ -2976,7 +3617,7 @@ async fn seed_a_passed_reset(db: &TestDb, opted_in: bool) {
                 }}) {{ _docID }}
                 add_InferenceCall(input: {{
                     call_id: "limited-call", request_id: "usage-limited-request", call_seq: 1,
-                    backend_id: "reset-backend", agent_id: "{agent}", node_did: "{did}",
+                    backend_id: "reset-backend", agent_did: "{agent}", node_did: "{did}",
                     call_kind: "inference", attempt: 1, call_state: "failed",
                     queued_at: "2026-07-15T00:00:05Z", started_at: "2026-07-15T00:00:05Z",
                     ended_at: "2026-07-15T00:00:10Z", failure_reason: "{RENDERED_LIMIT}"
@@ -3321,9 +3962,23 @@ async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() 
             .unwrap()
             .unwrap();
         let claimed = if retry {
-            claim_retry_continuation(&db.node, &before, "last-parent", 1, "failed").await
+            claim_retry_continuation(
+                &db.node,
+                &identity::Did::new(db.node_identity.did()).unwrap(),
+                &before,
+                "last-parent",
+                1,
+                "failed",
+            )
+            .await
         } else {
-            claim_continuation(&db.node, &before, "last-parent").await
+            claim_continuation(
+                &db.node,
+                &identity::Did::new(db.node_identity.did()).unwrap(),
+                &before,
+                "last-parent",
+            )
+            .await
         };
         assert!(claimed.expect("MAX-1 must permit one final sequence advance"));
         let exhausted = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
@@ -3339,6 +3994,7 @@ async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() 
         let rejected = if retry {
             claim_retry_continuation(
                 &db.node,
+                &identity::Did::new(db.node_identity.did()).unwrap(),
                 &exhausted,
                 "must-not-be-claimed",
                 2,
@@ -3346,7 +4002,13 @@ async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() 
             )
             .await
         } else {
-            claim_continuation(&db.node, &exhausted, "must-not-be-claimed").await
+            claim_continuation(
+                &db.node,
+                &identity::Did::new(db.node_identity.did()).unwrap(),
+                &exhausted,
+                "must-not-be-claimed",
+            )
+            .await
         };
         assert!(
             rejected.is_err(),
@@ -3413,9 +4075,13 @@ async fn stale_usage_refresh_preserves_completed_goal_time_accounting() {
     assert_eq!(completed.active_time_seconds, Some(73));
     assert!(completed.active_started_at.is_none());
 
-    gents::goal::refresh_goal_usage(&db.node, &stale)
-        .await
-        .expect("stale usage observation must safely skip obsolete accounting writes");
+    gents::goal::refresh_goal_usage(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &stale,
+    )
+    .await
+    .expect("stale usage observation must safely skip obsolete accounting writes");
     let after = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
         .await
         .unwrap()
@@ -3479,7 +4145,7 @@ async fn seed_operator_resume_parent(db: &TestDb, request_id: &str) -> String {
 async fn operator_resume_child_row(db: &TestDb, doc_id: &str) -> serde_json::Value {
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
-        _docID request_id node_did requester_did session_id agent_id lifecycle_state
+        _docID request_id node_did requester_did session_id agent_did lifecycle_state
         content created_at execution_origin retry_key input admission_kind admission_signer_did
         admission_signature runtime_issuer_did runtime_source_request_id runtime_source_kind
         caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind
@@ -3513,7 +4179,10 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     set_goal(&db.node, did, SESSION, None, Some(GoalStatus::Paused), None)
         .await
         .unwrap();
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let receipt = gents::goal::resume_goal_request(
         &access,
         db.node_identity.as_ref(),
@@ -3548,7 +4217,7 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
         assert_eq!(child[field], did, "{field}");
     }
     assert_eq!(child["session_id"], SESSION);
-    assert_eq!(child["agent_id"], crate::support::AGENT_NAME);
+    assert_eq!(child["agent_did"], crate::support::AGENT_NAME);
     assert_eq!(child["lifecycle_state"], "pending");
     assert_eq!(child["execution_origin"], "scheduled");
     assert_eq!(child["runtime_source_request_id"], "resume-parent");
@@ -3576,6 +4245,7 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     assert!(
         !update_goal_fields_if_status(
             &db.node,
+            &identity::Did::new(db.node_identity.did()).unwrap(),
             &stale_active,
             GoalStatus::Active,
             r#"status: "paused""#
@@ -3609,7 +4279,10 @@ async fn operator_resume_retry_after_goal_progress_returns_original_child_withou
     )
     .await
     .unwrap();
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let first = gents::goal::resume_goal_request(
         &access,
         db.node_identity.as_ref(),
@@ -3676,7 +4349,10 @@ async fn operator_resume_rejects_foreign_identity_even_with_target_key_registere
     )
     .await
     .unwrap();
-    let access = ConfigAccess::local(target.node.clone());
+    let access = ConfigAccess::local_as(
+        target.node.clone(),
+        ::identity::Did::new(target.node_identity.did().to_owned()).unwrap(),
+    );
     assert!(gents::goal::resume_goal_request(
         &access,
         foreign.node_identity.as_ref(),
@@ -3728,7 +4404,10 @@ async fn operator_resume_rejects_busy_session_and_old_predecessor() {
         )
         .await
         .unwrap();
-        let access = ConfigAccess::local(db.node.clone());
+        let access = ConfigAccess::local_as(
+            db.node.clone(),
+            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+        );
         assert!(gents::goal::resume_goal_request(
             &access,
             db.node_identity.as_ref(),
@@ -3769,7 +4448,10 @@ async fn resume_resets_blocked_audit_identity_and_count() {
     .unwrap();
     seed_goal_fields(db.node.as_ref(), &goal,
         r#"status: "blocked", consecutive_blocked_audits: 3, last_blocked_request_id: "request-3", last_blocked_reason: "needs approval", active_started_at: null"#).await.unwrap();
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let receipt = gents::goal::resume_goal_request(
         &access,
         db.node_identity.as_ref(),
@@ -3806,7 +4488,10 @@ async fn concurrent_operator_resumes_publish_one_child() {
     )
     .await
     .unwrap();
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let (left, right) = tokio::join!(
         gents::goal::resume_goal_request(
             &access,
@@ -3854,7 +4539,10 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
     )
     .await
     .unwrap();
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let first = gents::goal::resume_goal_request(
         &access,
         db.node_identity.as_ref(),
@@ -3870,7 +4558,7 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
         .unwrap();
     let original = db.node.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
-            request_id node_did requester_did admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind agent_id session_id retry_parent_request retry_parent_request_doc_id retry_root_request retry_key content max_total_tokens input execution_origin caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id created_at retry_count max_retries valid_until request_hop caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash lifecycle_state
+            request_id node_did requester_did admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind agent_did session_id retry_parent_request retry_parent_request_doc_id retry_root_request retry_key content max_total_tokens input execution_origin caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id created_at retry_count max_retries valid_until request_hop caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash lifecycle_state
         }} }}"#, gents::store::graphql::escape_graphql_string(&first.doc_id),
     )).await;
     assert!(!original.has_errors(), "{:?}", original.errors);
@@ -3964,7 +4652,10 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
         .await
         .unwrap();
         let error = gents::goal::resume_goal_request(
-            &ConfigAccess::local(db.node.clone()),
+            &ConfigAccess::local_as(
+                db.node.clone(),
+                ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+            ),
             db.node_identity.as_ref(),
             did,
             SESSION,
@@ -4015,7 +4706,10 @@ async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
     .await
     .unwrap();
     let receipt = gents::goal::resume_goal_request(
-        &ConfigAccess::local(db.node.clone()),
+        &ConfigAccess::local_as(
+            db.node.clone(),
+            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+        ),
         db.node_identity.as_ref(),
         did,
         SESSION,
@@ -4047,7 +4741,7 @@ async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
 }
 
 async fn seed_goal_fields(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     goal: &gents::goal::GoalDocument,
     fields: &str,
 ) -> anyhow::Result<()> {
@@ -4129,7 +4823,7 @@ async fn seed_same_second_canonical_goal_child(
         requester_did: None,
         request_id: child_id.clone(),
         node_did: did.to_owned(),
-        agent_id: crate::support::AGENT_NAME.to_owned(),
+        agent_did: crate::support::AGENT_NAME.to_owned(),
         session_id: SESSION.to_owned(),
         content: "The canonical continuation made durable progress".to_owned(),
         execution_origin: gents::request::lifecycle::ExecutionOrigin::Scheduled,
@@ -4245,7 +4939,10 @@ async fn operator_resume_accepts_same_second_child_that_sorts_before_root() {
         let (child_id, child_doc) =
             seed_same_second_canonical_goal_child(&db, parent_id, true).await;
         let receipt = gents::goal::resume_goal_request(
-            &ConfigAccess::local(db.node.clone()),
+            &ConfigAccess::local_as(
+                db.node.clone(),
+                ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+            ),
             db.node_identity.as_ref(),
             db.node_identity.did(),
             SESSION,
@@ -4381,7 +5078,7 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].session_id, SESSION);
     assert_eq!(
-        children[0].agent_id.as_deref(),
+        children[0].agent_did.as_deref(),
         Some(crate::support::AGENT_NAME)
     );
     assert_eq!(
@@ -4586,9 +5283,14 @@ async fn claimed_continuation_waits_for_readiness_before_materializing() {
     )
     .await
     .expect("set goal");
-    assert!(claim_continuation(&db.node, &goal, "parent-claimed-waits")
-        .await
-        .expect("claim continuation"));
+    assert!(claim_continuation(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &goal,
+        "parent-claimed-waits"
+    )
+    .await
+    .expect("claim continuation"));
     publish_node_readiness(&db, Process::Recovering, None).await;
     let claimed = canonical_goal_json(&db).await;
     let (mut source, _tx) = unready_source(&db);

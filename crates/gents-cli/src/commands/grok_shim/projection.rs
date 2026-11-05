@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::{json, Map, Value};
 
 pub(crate) mod caused_sessions;
@@ -328,6 +328,7 @@ where
 pub(crate) struct ProjectionEngine {
     pub(crate) background_executions: gents::tools::call::hook::BackgroundExecutionRegistry,
     node: Arc<EmbeddedNode>,
+    actor: identity::Did,
     bound: BoundModelContext,
     sequencer: Arc<ProjectionSequencer>,
     channel: SessionUpdateChannel,
@@ -338,16 +339,28 @@ pub(crate) struct ProjectionEngine {
 }
 
 impl ProjectionEngine {
-    pub(crate) fn new(node: Arc<EmbeddedNode>, bound: BoundModelContext) -> Self {
+    pub(crate) fn new(
+        node: Arc<EmbeddedNode>,
+        bound: BoundModelContext,
+        actor: identity::Did,
+    ) -> Self {
         let sequencer = Arc::new(ProjectionSequencer::new());
         Self {
             node,
+            actor,
             bound,
             background_executions: Default::default(),
             channel: SessionUpdateChannel::new(sequencer.clone()),
             sequencer,
             delivered_job_runs: Default::default(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(node: Arc<EmbeddedNode>, bound: BoundModelContext) -> Self {
+        let actor = identity::Did::new(node.node_identity_did().expect("test node identity"))
+            .expect("test node DID");
+        Self::new(node, bound, actor)
     }
 
     pub(super) fn record_job_runs(&self, session: &str, runs: &std::collections::BTreeSet<String>) {
@@ -410,7 +423,8 @@ impl ProjectionEngine {
         )
         .await?;
         cursor.observe_timestamps(&messages);
-        if let Some(sample) = context::load(&self.node, request).await? {
+        let access = gents::ConfigAccess::local_as(self.node.clone(), self.actor.clone());
+        if let Some(sample) = context::load(&access, request).await? {
             self.sequencer.observe_context(session_id, sample);
         }
         let durable_rows = durable_row_views(&messages);
@@ -1421,11 +1435,11 @@ where
 pub(crate) async fn resolve_bound_model_context(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<BoundModelContext> {
     use crate::commands::inference_binding::{load_bound_context_window, load_bound_profile};
-    let profile = load_bound_profile(node, node_did, agent_id).await?;
-    let context_window = load_bound_context_window(node, node_did, agent_id).await?;
+    let profile = load_bound_profile(node, node_did, agent_did).await?;
+    let context_window = load_bound_context_window(node, node_did, agent_did).await?;
     Ok(BoundModelContext::new(
         profile.model_name.clone(),
         profile.model_name,
@@ -1468,7 +1482,7 @@ mod tests {
         seed_canonical_assistant_message(&node, &request, &message_key, 1, "thinking", "answer")
             .await;
 
-        let engine = ProjectionEngine::new(
+        let engine = ProjectionEngine::new_for_test(
             node,
             BoundModelContext::new(
                 "GLM-5.3-NVFP4".to_string(),
@@ -1525,7 +1539,7 @@ mod tests {
         gents::store::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .expect("runtime schemas");
-        let engine = ProjectionEngine::new(
+        let engine = ProjectionEngine::new_for_test(
             node,
             BoundModelContext::new(
                 "GLM-5.3-NVFP4".to_string(),
@@ -1541,7 +1555,7 @@ mod tests {
         session: &str,
         request_id: &str,
     ) -> gents_protocol::row::AgentRequestRow {
-        let result = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", node_did: "{NODE_DID}", requester_did: "{NODE_DID}", agent_id: "test", content: "projection fixture", lifecycle_state: "pending"}}) {{_docID}} }}"#, gents::store::graphql::escape_graphql_string(request_id), gents::store::graphql::escape_graphql_string(session))).await;
+        let result = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", node_did: "{NODE_DID}", requester_did: "{NODE_DID}", agent_did: "test", content: "projection fixture", lifecycle_state: "pending"}}) {{_docID}} }}"#, gents::store::graphql::escape_graphql_string(request_id), gents::store::graphql::escape_graphql_string(session))).await;
         ensure_no_errors(&result, "seed projection request").unwrap();
         let doc = gents_protocol::graphql::extract_mutation_doc_id(
             &json!({"data":result.data}),
@@ -1757,7 +1771,7 @@ mod tests {
                     request_id: "{escaped_child}"
                     node_did: "{NODE_DID}"
                     requester_did: "{NODE_DID}"
-                    agent_id: "test-child"
+                    agent_did: "test-child"
                     session_id: "s-chron-child"
                     caused_by_parent_request_id: "{escaped_parent}"
                     caused_by_parent_request_doc_id: "{escaped_parent_doc}"
@@ -1788,7 +1802,7 @@ mod tests {
         crate::caused_sessions::fixtures::create_started_session(
             &engine.node,
             gents_protocol::session::AgentSession {
-                agent_id: "test-child".into(),
+                agent_did: "test-child".into(),
                 ..crate::caused_sessions::fixtures::fixture_session(NODE_DID, "s-chron-child")
             },
             gents_protocol::session::SessionReference {
@@ -1875,10 +1889,12 @@ mod tests {
         );
         let mut foreign = request.clone();
         foreign.session_id = Some("foreign-session".into());
-        assert!(context::load(&engine.node, &foreign)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            context::load(&gents::ConfigAccess::local(engine.node.clone()), &foreign)
+                .await
+                .unwrap()
+                .is_none()
+        );
         engine
             .project_request_updates(&request, &mut cursor, None)
             .await

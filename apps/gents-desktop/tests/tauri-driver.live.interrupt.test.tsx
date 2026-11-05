@@ -1,8 +1,15 @@
+import { createServer, request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+
 import { screen, waitFor } from "@testing-library/react";
 import { isTerminalTurnState } from "@source-inc/gents-desktop-client";
 import { expect, it } from "vitest";
 
-import { expectLatestSendResult, withLiveDesktop } from "./tauri-driver-live/harness";
+import {
+  expectLatestSendResult,
+  liveRunnerOptionsFromEnv,
+  withLiveDesktop,
+} from "./tauri-driver-live/harness";
 import {
   describeLive,
   expectCompletedSession,
@@ -13,7 +20,161 @@ import {
 const FOLLOW_UP_PROMPT =
   "After the interrupt flow, answer with exactly one short sentence: ready-after-interrupt.";
 
+async function withHeldTargetInference(
+  run: (proxy: { inferenceUrl: string; attempts: () => number }) => Promise<void>,
+) {
+  const options = liveRunnerOptionsFromEnv();
+  const upstream = new URL(options.agentTargetInferenceUrl ?? options.inferenceUrl!);
+  let attempts = 0;
+  const pending = new Set<ReturnType<typeof httpRequest>>();
+  const server = createServer(async (incoming, outgoing) => {
+    try {
+      const chunks: Buffer[] = [];
+      for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
+      const body = Buffer.concat(chunks);
+      if (
+        incoming.method === "POST" &&
+        body.toString("utf8").includes("live-child-control") &&
+        /\/(chat\/completions|completions|responses|messages)(?:\?|$)/.test(
+          incoming.url ?? "",
+        )
+      ) {
+        attempts += 1;
+        return;
+      }
+      const suffix = (incoming.url ?? "/v1").replace(/^\/v1/, "");
+      const target = new URL(`${upstream.href.replace(/\/$/, "")}${suffix}`);
+      const headers = { ...incoming.headers, host: target.host };
+      delete headers["transfer-encoding"];
+      if (body.length || incoming.headers["content-length"]) {
+        headers["content-length"] = String(body.length);
+      }
+      const request = (target.protocol === "https:" ? httpsRequest : httpRequest)(
+        target,
+        { method: incoming.method, headers },
+        (response) => {
+          if (response.statusCode === undefined) {
+            outgoing.destroy();
+            return;
+          }
+          outgoing.writeHead(response.statusCode, response.headers);
+          response.pipe(outgoing);
+        },
+      );
+      pending.add(request);
+      request.on("close", () => pending.delete(request));
+      request.on("error", () => outgoing.destroy());
+      outgoing.on("close", () => request.destroy());
+      request.end(body);
+    } catch {
+      outgoing.destroy();
+    }
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string")
+    throw new Error("Proxy has no TCP address");
+  try {
+    await run({
+      inferenceUrl: `http://127.0.0.1:${address.port}/v1`,
+      attempts: () => attempts,
+    });
+  } finally {
+    for (const request of pending) request.destroy();
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
+
 describeLive("Tauri app live interrupt flow", () => {
+  it("lets the user read and interrupt a running spawned session", async () => {
+    await withHeldTargetInference(async (proxy) => {
+      const options = liveRunnerOptionsFromEnv();
+      await withLiveDesktop(
+        async ({ runner, driver, deployment }) => {
+          const target = deployment.agentTargets[0];
+          expect(target, "live fixture did not expose an agent target").toBeDefined();
+          await driver.ready();
+          await driver.openChat();
+          await driver.typeComposer(
+            "Use the configured local agent target. Call agent_new with that agent and ask it to read workspace/AGENTS.md and return the phrase live-child-control with one short finding. Then reply with one sentence saying it has started.",
+          );
+          await driver.pressEnter();
+          await waitFor(() => expect(runner.sendResults).toHaveLength(1));
+          const parent = expectLatestSendResult(runner, "child control parent");
+
+          const child = await waitFor(
+            async () => {
+              const fleet = await runner.adapter.fetchDesktopSnapshot();
+              const parentSummary = fleet.client?.deployments
+                .flatMap((node) => node.sessions)
+                .find(
+                  (candidate) =>
+                    candidate.nodeDid === runner.nodeDid &&
+                    candidate.sessionId === parent.sessionId,
+                );
+              expect(parentSummary?.requesterDid).toBeTruthy();
+              const provenance = await runner.adapter.sessionProvenance({
+                sessionId: parent.sessionId,
+                nodeDid: runner.nodeDid,
+                requesterDid: parentSummary!.requesterDid,
+              });
+              expect(provenance.started).toHaveLength(1);
+              const link = provenance.started[0]!;
+              expect(link.sessionId).not.toBe(parent.sessionId);
+              const snapshot = await runner.adapter.fetchSessionSnapshot(
+                link.sessionId,
+                link.nodeDid,
+              );
+              expect(proxy.attempts()).toBeGreaterThan(0);
+              expect(snapshot?.agentDid).toBe(target!.agent_did);
+              expect(snapshot?.turnState).toBe("running");
+              expect(snapshot?.latestRequestId).toBeTruthy();
+              expect(
+                snapshot?.timelineItems.some(
+                  (item) =>
+                    (item.kind === "userMessage" || item.kind === "automatedInput") &&
+                    /live-child-control/i.test(item.content ?? ""),
+                ),
+                "the user should be able to read the spawned session's request",
+              ).toBe(true);
+              return { ...link, requestId: snapshot!.latestRequestId! };
+            },
+            { timeout: 120_000 },
+          );
+
+          const result = await runner.adapter.interruptRequest({
+            nodeDid: child.nodeDid,
+            requestId: child.requestId,
+            cause: "userCancelled",
+          });
+          expect(result.requestId).toBe(child.requestId);
+          expect(result.accepted).toBe(true);
+          expect(result.alreadyInterrupted).toBe(false);
+          const interrupted = await runner.waitForRequestCompletion(child);
+          expect(interrupted.sessionId).toBe(child.sessionId);
+          expect(interrupted.latestRequestId).toBe(child.requestId);
+          expect(interrupted.turnState).toBe("interrupted");
+          expect(interrupted.latestRequestOutcome?.cancelCause?.cause).toBe(
+            "userCancelled",
+          );
+          expect(interrupted.latestRequestOutcome?.cancelCause?.source).toBe(
+            "requestInterrupt",
+          );
+        },
+        {
+          agentTargetInferenceUrl: proxy.inferenceUrl,
+          agentTargetProvider: options.agentTargetProvider ?? options.provider,
+        },
+      );
+    });
+  }, 600_000);
+
   it.each(["immediate", "streaming"] as const)(
     "recovers the composer after %s interruption",
     async (phase) => {

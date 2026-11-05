@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::goal::{GoalDocument, GoalStatus};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -78,9 +78,14 @@ impl GoalCommand {
     pub(super) async fn execute(
         &self,
         node: &Arc<EmbeddedNode>,
+        actor: &identity::Did,
         principal: &str,
         session: &str,
     ) -> Result<String> {
+        anyhow::ensure!(
+            actor.as_str() != principal,
+            "Grok goal access requires a client identity, not the node identity"
+        );
         anyhow::ensure!(
             !matches!(self, Self::Create { .. }),
             "goal creation must use atomic request admission"
@@ -119,7 +124,8 @@ impl GoalCommand {
             goal =
                 gents::goal::set_goal(node, principal, session, None, Some(status), None).await?;
         }
-        goal.tokens_used = Some(gents::goal::session_token_usage(node, principal, session).await?);
+        goal.tokens_used =
+            Some(gents::goal::session_token_usage(node, actor, principal, session).await?);
         Ok(format!(
             "Goal: {}\nStatus: {}\nTokens used: {}{}",
             goal.objective,
@@ -141,15 +147,20 @@ impl GoalCursor {
     pub(super) async fn refresh(
         &mut self,
         node: &Arc<EmbeddedNode>,
+        actor: &identity::Did,
         principal: &str,
         session: &str,
         sender: &PromptSender,
         projections: &ProjectionEngine,
     ) -> Result<()> {
+        anyhow::ensure!(
+            actor.as_str() != principal,
+            "Grok goal access requires a client identity, not the node identity"
+        );
         let mut goal = gents::goal::load_canonical_goal(node, principal, session).await?;
         if let Some(goal) = goal.as_mut() {
             goal.tokens_used =
-                Some(gents::goal::session_token_usage(node, principal, session).await?);
+                Some(gents::goal::session_token_usage(node, actor, principal, session).await?);
         }
         let observed = goal
             .as_ref()
@@ -313,7 +324,7 @@ mod tests {
         gents::store::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
-        let projections = ProjectionEngine::new(
+        let projections = ProjectionEngine::new_for_test(
             node.clone(),
             BoundModelContext::new("model".into(), "Model".into(), 1000),
         );
@@ -322,6 +333,7 @@ mod tests {
             buffer: buffer.clone(),
         };
         let mut cursor = GoalCursor::default();
+        let actor = identity::Did::new("did:key:goal-test").unwrap();
         for (id, agent, session) in [
             ("owned", "principal", "session"),
             ("foreign-agent", "other", "session"),
@@ -343,16 +355,16 @@ mod tests {
             outbound: super::super::server::AcpOutbound::for_frames(tx),
         };
         assert!(cursor
-            .refresh(&node, "principal", "session", &failed, &projections)
+            .refresh(&node, &actor, "principal", "session", &failed, &projections)
             .await
             .is_err());
         assert!(cursor.delivered.is_none());
         cursor
-            .refresh(&node, "principal", "session", &sender, &projections)
+            .refresh(&node, &actor, "principal", "session", &sender, &projections)
             .await
             .unwrap();
         cursor
-            .refresh(&node, "principal", "session", &sender, &projections)
+            .refresh(&node, &actor, "principal", "session", &sender, &projections)
             .await
             .unwrap();
         assert_eq!(buffer.lock().await.len(), 1);
@@ -372,7 +384,7 @@ mod tests {
         let blocked = node.execute(r#"mutation {update_Goal(filter:{goal_id:{_eq:"owned"}}, input:{status:"blocked"}) {_docID}}"#).await;
         ensure_no_errors(&blocked, "blocked fixture").unwrap();
         let reply = GoalCommand::Pause
-            .execute(&node, "principal", "session")
+            .execute(&node, &actor, "principal", "session")
             .await
             .unwrap();
         assert!(reply.contains("Goal remains blocked"), "{reply}");
@@ -389,11 +401,11 @@ mod tests {
             .await;
         ensure_no_errors(&removed, "remove goal fixture").unwrap();
         cursor
-            .refresh(&node, "principal", "session", &sender, &projections)
+            .refresh(&node, &actor, "principal", "session", &sender, &projections)
             .await
             .unwrap();
         cursor
-            .refresh(&node, "principal", "session", &sender, &projections)
+            .refresh(&node, &actor, "principal", "session", &sender, &projections)
             .await
             .unwrap();
         let lines = buffer.lock().await;
@@ -408,7 +420,7 @@ mod tests {
         }) {_docID}}"#).await;
         ensure_no_errors(&recreated, "recreate same logical goal").unwrap();
         cursor
-            .refresh(&node, "principal", "session", &sender, &projections)
+            .refresh(&node, &actor, "principal", "session", &sender, &projections)
             .await
             .unwrap();
         let lines = buffer.lock().await;
@@ -444,7 +456,7 @@ mod tests {
             .await
             .unwrap();
         cursor
-            .refresh(&node, "principal", "session", &sender, &projections)
+            .refresh(&node, &actor, "principal", "session", &sender, &projections)
             .await
             .unwrap();
         let snapshot = node
@@ -454,7 +466,7 @@ mod tests {
         let updated = node.execute(r#"mutation {update_InferenceCall(filter:{call_id:{_eq:"usage-call"}},input:{completion_tokens:8}) {_docID}}"#).await;
         ensure_no_errors(&updated, "late completion usage").unwrap();
         cursor
-            .refresh(&node, "principal", "session", &sender, &projections)
+            .refresh(&node, &actor, "principal", "session", &sender, &projections)
             .await
             .unwrap();
         let lines = buffer.lock().await;
@@ -466,7 +478,7 @@ mod tests {
         assert_eq!(late["params"]["update"]["status"], "complete");
         drop(lines);
         let reply = GoalCommand::Status
-            .execute(&node, "principal", "session")
+            .execute(&node, &actor, "principal", "session")
             .await
             .unwrap();
         assert!(reply.contains("Tokens used: 28"), "{reply}");

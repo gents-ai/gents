@@ -220,45 +220,22 @@ fn oauth_credential_from_value_rejects_a_blank_refresh_token() {
 }
 
 #[test]
-fn upsert_update_block_omits_immutable_node_did() {
-    let mutation = oauth_credential_upsert_mutation(&sample_credential());
-
-    let update_idx = mutation
-        .find("update:")
-        .expect("mutation has an update block");
-    let (add_block, update_block) = mutation.split_at(update_idx);
-
-    assert!(
-        !update_block.contains("node_did:"),
-        "update block must omit immutable node_did: {update_block}"
-    );
-    assert!(
-        update_block.contains("access_token:") && update_block.contains("refresh_token:"),
-        "update block must still rotate token fields: {update_block}"
-    );
-    assert!(
-        add_block.contains("node_did:") && add_block.contains("credential_id:"),
-        "add block must set node_did and credential_id: {add_block}"
-    );
-}
-
-#[test]
-fn account_fields_are_only_in_the_add_block() {
+fn credential_update_omits_set_once_fields_and_retains_tokens() {
     let mut credential = sample_credential();
-    credential.account_ref = Some("acct-b".to_string());
+    credential.account_ref = Some("acct-b".to_owned());
     credential.connected_at = Some(DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap());
-    let mutation = oauth_credential_upsert_mutation(&credential);
-    let (add_block, update_block) = mutation.split_at(mutation.find("update:").unwrap());
-
-    assert!(
-        add_block.contains(r#"account_ref: "acct-b""#)
-            && add_block.contains(r#"connected_at: "2023-11-14T22:13:20Z""#),
-        "add block must set the account fields: {add_block}"
-    );
-    assert!(
-        !update_block.contains("account_ref") && !update_block.contains("connected_at"),
-        "update block must never rewrite the account fields: {update_block}"
-    );
+    let created = super::rows::credential_input(&credential, &[]).unwrap();
+    let mut omitted = SET_ONCE_FIELDS.to_vec();
+    omitted.push("credential_id");
+    let updated = super::rows::credential_input(&credential, &omitted).unwrap();
+    assert_eq!(created["node_did"], credential.node_did);
+    assert_eq!(created["account_ref"], "acct-b");
+    assert!(created.get("connected_at").is_some());
+    for field in omitted {
+        assert!(updated.get(field).is_none(), "{field}");
+    }
+    assert_eq!(updated["access_token"], credential.access_token);
+    assert_eq!(updated["refresh_token"], credential.refresh_token);
 }
 
 #[tokio::test]

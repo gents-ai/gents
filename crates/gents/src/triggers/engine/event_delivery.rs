@@ -11,6 +11,113 @@ use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retr
 
 pub(crate) const GROUP_RECOVERY_PAGE_SIZE: usize = 256;
 
+pub(crate) fn event_source_generation(source: &EventSource) -> Result<Value> {
+    source.validate()?;
+    let (expected_count, expected_field, timeout, minimum) =
+        crate::runtime::agent::document_view::group_projection(source);
+    Ok(json!({
+        "collection": source.source_collection,
+        "event_kind": source.event_kind.as_deref().map(str::trim).filter(|value| !value.is_empty()).unwrap_or("created"),
+        "filter": source.filter,
+        "correlation": source.correlation_field.as_deref().filter(|value| !value.trim().is_empty()),
+        "grouped": source.group.is_some(),
+        "expected_count": expected_count,
+        "expected_field": expected_field,
+        "timeout": timeout,
+        "minimum": minimum,
+        "workspace_authority": source.workspace_authority.as_ref().map(|authority| authority.as_str()),
+    }))
+}
+
+pub(crate) fn resolved_event_source_generation(trigger: &ResolvedEventTrigger) -> Value {
+    json!({
+        "collection": trigger.source_collection,
+        "event_kind": trigger.event_kind,
+        "filter": trigger.filter,
+        "correlation": trigger.correlation_field,
+        "grouped": trigger.fire_mode == crate::runtime::snapshot::EventTriggerFireMode::PerGroup,
+        "expected_count": trigger.expected_count,
+        "expected_field": trigger.expected_count_field,
+        "timeout": trigger.group_timeout_secs,
+        "minimum": trigger.group_min_count,
+        "workspace_authority": trigger.workspace_authority,
+    })
+}
+
+pub(crate) struct EventConfigDocIds<'a> {
+    pub trigger: &'a str,
+    pub source: &'a str,
+    pub task: &'a str,
+}
+
+fn execution_generation(
+    task: &crate::runtime::snapshot::ResolvedTask,
+    source_id: &str,
+    session_template: Option<&str>,
+    concurrency: crate::documents::ConcurrencyMode,
+    ids: &EventConfigDocIds<'_>,
+) -> Value {
+    json!({
+        "task_id": task.task_id, "agent": task.agent_did, "name": task.name,
+        "prompt": task.prompt_template, "objective": task.goal_objective_template,
+        "budget": task.goal_token_budget, "output": task.output_schema_ref,
+        "hooks": serde_json::to_string(&task.hooks).expect("Task hooks contain serializable fields"),
+        "emit": task.emit_outcome,
+        "source_id": source_id, "trigger_doc": ids.trigger, "source_doc": ids.source,
+        "task_doc": ids.task, "session_template": session_template,
+        "concurrency": concurrency,
+    })
+}
+
+pub(crate) fn event_execution_generation(
+    trigger: &crate::documents::Trigger,
+    task: &crate::documents::Task,
+    ids: &EventConfigDocIds<'_>,
+) -> Result<Value> {
+    let crate::documents::TriggerSource::Event { event_source_id } = &trigger.source else {
+        anyhow::bail!("event execution requires an event trigger");
+    };
+    Ok(execution_generation(
+        &crate::runtime::agent::document_view::resolved_task_from(task),
+        event_source_id,
+        trigger.session_id_template.as_deref(),
+        trigger.concurrency.unwrap_or_default(),
+        ids,
+    ))
+}
+
+pub(crate) fn resolved_event_execution_generation(trigger: &ResolvedEventTrigger) -> Value {
+    execution_generation(
+        &trigger.task,
+        &trigger.event_source_id,
+        trigger.session_id_template.as_deref(),
+        trigger.concurrency,
+        &EventConfigDocIds {
+            trigger: &trigger.trigger_doc_id,
+            source: &trigger.event_source_doc_id,
+            task: &trigger.task_doc_id,
+        },
+    )
+}
+
+pub(crate) fn event_admission_generation(
+    source: &EventSource,
+    trigger: &crate::documents::Trigger,
+    task: &crate::documents::Task,
+    ids: &EventConfigDocIds<'_>,
+) -> Result<Value> {
+    Ok(json!({"source":event_source_generation(source)?,
+        "execution":event_execution_generation(trigger, task, ids)?}))
+}
+
+pub(crate) fn resolved_event_admission_generation(trigger: &ResolvedEventTrigger) -> Value {
+    json!({"source":resolved_event_source_generation(trigger),
+        "execution":resolved_event_execution_generation(trigger)})
+}
+
+#[cfg(test)]
+#[path = "event_delivery/ownership_tests.rs"]
+mod ownership_tests;
 pub(crate) mod source_scan;
 
 #[derive(Clone, Copy)]
@@ -25,6 +132,17 @@ pub(crate) enum Delivery<'a> {
     },
 }
 impl Delivery<'_> {
+    pub(super) fn actor(&self) -> Result<Option<identity::Did>> {
+        match self {
+            Self::Trigger { trigger, .. } => {
+                Ok(Some(identity::Did::new(trigger.task.agent_did.clone())?))
+            }
+            Self::Callback { binding, .. } => {
+                Ok(Some(identity::Did::new(binding.agent_did.clone())?))
+            }
+        }
+    }
+
     pub(crate) fn owner(&self) -> &str {
         match self {
             Self::Trigger { node_did, .. } => node_did,
@@ -211,19 +329,25 @@ pub(crate) fn selection_filter(
 }
 
 pub(crate) async fn probe_document(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::Node>,
     collection: &str,
     id: &str,
     filter: Option<&str>,
+    actor: Option<identity::Did>,
 ) -> Result<Option<String>> {
     crate::store::graphql::validate_collection_identifier(collection)?;
     let filter = selection_filter(filter, Some(("_docID", id)))?;
-    let response = graphql_with_transaction_retry(
+    let query = format!(
+        "{{{collection}(filter:{filter},limit:1){{_docID _version{{cid height fieldName}}}}}}"
+    );
+    let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
-        &format!(
-            "{{{collection}(filter:{filter},limit:1){{_docID _version{{cid height fieldName}}}}}}"
-        ),
-        "event selection probe",
+        actor,
+        "event.selection_probe",
+        |txn| {
+            let query = &query;
+            Box::pin(async move { txn.execute_local_response(query).await })
+        },
     )
     .await?;
     let rows = crate::store::graphql::rows::<Value>(&response, collection)?;
@@ -234,6 +358,38 @@ pub(crate) async fn probe_document(
                 .map(|v| v.cid)
         })
         .transpose()
+}
+
+/// Callback result creation and its ACP1 parent grant are separate commits.
+/// Missing and unlinked rows remain pending until the agent can observe the
+/// marked revision; a permanently hidden or deleted row blocks that cursor.
+pub(crate) async fn callback_result_ready(
+    node: &std::sync::Arc<defra_node::Node>,
+    collection: &str,
+    doc_id: &str,
+    actor: &str,
+) -> Result<bool> {
+    if collection != "CallbackResult" {
+        return Ok(true);
+    }
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(actor)?,
+    );
+    let response = access
+        .execute(&format!(
+            "{{ CallbackResult(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{parent_linked}} }}",
+            escape_graphql_string(doc_id),
+        ))
+        .await?;
+    let rows = response["data"]["CallbackResult"]
+        .as_array()
+        .context("callback result readiness omitted its rows")?;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "callback result readiness returned duplicate rows"
+    );
+    Ok(rows.first().and_then(|row| row["parent_linked"].as_bool()) == Some(true))
 }
 
 pub(crate) struct GroupRecord {
@@ -278,7 +434,7 @@ fn group_query(delivery: Delivery<'_>, correlation: &str) -> String {
 }
 
 pub(crate) async fn load_or_create_group(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    access: &crate::ConfigAccess,
     delivery: Delivery<'_>,
     correlation: &str,
 ) -> Result<GroupRecord> {
@@ -287,24 +443,35 @@ pub(crate) async fn load_or_create_group(
         !correlation.trim().is_empty(),
         "group correlation is missing"
     );
-    crate::store::config_client::ConfigAccess::transact_local_write(node,None,"event.group_clock",|txn| Box::pin(async move {
+    anyhow::ensure!(
+        access.actor_did().as_deref() == delivery.actor()?.as_ref().map(identity::Did::as_str),
+        "event group actor mismatch"
+    );
+    access.transact_write("event.group_clock",|txn| Box::pin(async move {
         let query=group_query(delivery,correlation);
         if let Some(row)=decode_group(&txn.execute(&query).await?,delivery,correlation)? {return Ok(row);}
+        let actor = delivery.actor()?.context("event group Agent is missing")?;
+        anyhow::ensure!(txn.actor_did() == Some(actor.as_str()), "event group actor mismatch");
+        let (parent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+            txn, crate::Collection::Agent, delivery.owner(), actor.as_str(),
+        ).await?.context("event group Agent is unavailable")?;
         let state=EventGroupState {group_key:delivery.group_key(correlation),node_did:delivery.owner().into(),consumer:delivery.consumer(),correlation:correlation.into(),consumer_config_key:delivery.config_key(),first_seen_at:Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true),quiesced_at:None,quiesced_reason:None};
-        txn.execute_with_variables("mutation($input:EventGroupStateMutationInputArg!){create_EventGroupState(input:$input){_docID}}",&json!({"input":state})).await?;
+        let created = txn.execute_with_variables("mutation($input:EventGroupStateMutationInputArg!){create_EventGroupState(input:$input){_docID}}",&json!({"input":state})).await?;
+        let doc = crate::store::graphql::created_doc_id(&created, "EventGroupState")?;
+        txn.add_resource_relationship("EventGroupState", &doc, "parent", "agents", &parent).await?;
         decode_group(&txn.execute(&query).await?,delivery,correlation)?.context("created event group disappeared")
     })).await
 }
 
 pub(crate) async fn quiesce_group(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    access: &crate::ConfigAccess,
     record: &GroupRecord,
     reason: &str,
 ) -> Result<()> {
     if record.state.quiesced_at.is_some() {
         return Ok(());
     }
-    Ok(crate::store::config_client::ConfigAccess::write_local(node,"event.quiesce_group",&format!("mutation{{update_EventGroupState(filter:{{_docID:{{_eq:\"{}\"}},node_did:{{_eq:\"{}\"}}}},input:{{quiesced_at:\"{}\",quiesced_reason:\"{}\"}}){{_docID}}}}",escape_graphql_string(&record.doc_id),escape_graphql_string(&record.state.node_did),escape_graphql_string(&Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true)),escape_graphql_string(reason))).await.map(|_| ())?)
+    Ok(access.transact_write("event.quiesce_group", |txn| Box::pin(async move { txn.execute(&format!("mutation{{update_EventGroupState(filter:{{_docID:{{_eq:\"{}\"}},node_did:{{_eq:\"{}\"}}}},input:{{quiesced_at:\"{}\",quiesced_reason:\"{}\"}}){{_docID}}}}",escape_graphql_string(&record.doc_id),escape_graphql_string(&record.state.node_did),escape_graphql_string(&Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true)),escape_graphql_string(reason))).await.map(|_| ()) })).await?)
 }
 
 pub(crate) enum GroupOutcome {
@@ -323,8 +490,9 @@ pub(crate) enum GroupOutcome {
 }
 
 pub(crate) async fn evaluate_group(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     cache: &SourceSchemaCache,
+    access: &crate::ConfigAccess,
     delivery: Delivery<'_>,
     correlation: &str,
 ) -> Result<GroupOutcome> {
@@ -346,12 +514,21 @@ pub(crate) async fn evaluate_group(
         MAX_EVENT_TRIGGER_GROUP_DOCS + 1,
         fields.join(" ")
     );
-    let response = graphql_with_transaction_retry(node, &query, "group membership query").await?;
+    anyhow::ensure!(
+        access.actor_did().as_deref() == delivery.actor()?.as_ref().map(identity::Did::as_str),
+        "event group actor mismatch"
+    );
+    let response = access
+        .transact_readonly("event.group_membership_query", |txn| {
+            let query = &query;
+            Box::pin(async move { txn.execute_local_response(query).await })
+        })
+        .await?;
     let docs = crate::store::graphql::rows::<Value>(&response, delivery.collection())?;
     if docs.is_empty() {
         return Ok(GroupOutcome::Empty);
     }
-    let record = load_or_create_group(node, delivery, correlation).await?;
+    let record = load_or_create_group(access, delivery, correlation).await?;
     if record.state.quiesced_at.is_some() {
         return Ok(GroupOutcome::Quiesced);
     }
@@ -367,14 +544,14 @@ pub(crate) async fn evaluate_group(
         _ => None,
     };
     if let Some(reason) = reason {
-        quiesce_group(node, &record, &reason).await?;
+        quiesce_group(access, &record, &reason).await?;
         return Ok(GroupOutcome::Quiesced);
     }
     let expected = expected?;
     let minimum = delivery.minimum_count()?;
     if expected.is_some_and(|n| minimum > n) {
         quiesce_group(
-            node,
+            access,
             &record,
             "minimum count exceeds dynamic expected count",
         )
@@ -438,7 +615,7 @@ pub(crate) fn expected_group_count(
 }
 
 pub(crate) async fn group_correlation_page(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     delivery: Delivery<'_>,
     cursor: Option<&str>,
 ) -> Result<(Vec<String>, Option<String>, bool)> {
@@ -514,7 +691,7 @@ mod tests {
     use super::*;
 
     fn config(owner: &str) -> (CallbackBinding, EventSource) {
-        let binding = serde_json::from_value(json!({"node_did":owner,"binding_id":"same-id","callback_id":"callback","event_source_id":"source","input_fields":["value"]})).unwrap();
+        let binding = serde_json::from_value(json!({"node_did":owner,"binding_id":"same-id","agent_did":"did:key:zFixture","callback_id":"callback","event_source_id":"source","input_fields":["value"]})).unwrap();
         let source = serde_json::from_value(json!({"node_did":owner,"event_source_id":"source","source_collection":"GroupMember","correlation_field":"batch","group":{"expected_count":{"source_field":"expected"},"timeout_secs":1}})).unwrap();
         (binding, source)
     }
@@ -556,6 +733,9 @@ mod tests {
             .group_key("batch-a")
         );
         let trigger = crate::runtime::snapshot::ResolvedEventTrigger {
+            event_source_id: "source".into(),
+            event_source_doc_id: "source-doc".into(),
+            task_doc_id: "task-doc".into(),
             session_id_template: None,
             trigger_doc_id: "physical".into(),
             trigger_id: binding.binding_id.clone(),
@@ -564,7 +744,7 @@ mod tests {
                 emit_outcome: false,
                 task_id: "task".into(),
                 name: None,
-                agent_id: "behavior".into(),
+                agent_did: "behavior".into(),
                 prompt_template: String::new(),
                 goal_objective_template: None,
                 goal_token_budget: None,
@@ -618,7 +798,67 @@ mod tests {
 
     #[tokio::test]
     async fn shared_clock_survives_restart_and_quiescence_is_owner_scoped() {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        use crate::store::identity::NodeIdentity as _;
+        let home = tempfile::tempdir().unwrap();
+        let root =
+            crate::store::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)
+                .unwrap();
+        let binding_identity = crate::store::identity::provision_agent_identity(&root).unwrap();
+        let agent =
+            crate::store::identity::resolve_agent_identity(&root, &binding_identity).unwrap();
+        let other_binding = crate::store::identity::provision_agent_identity(&root).unwrap();
+        let other_agent =
+            crate::store::identity::resolve_agent_identity(&root, &other_binding).unwrap();
+        let node = std::sync::Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(root.did())
+                .build()
+                .await
+                .unwrap(),
+        );
+        let access = crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            agent.did().parse().unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        let owner_access =
+            crate::ConfigAccess::local_as(node.clone(), identity::Did::new(root.did()).unwrap());
+        let other_access = crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(other_agent.did()).unwrap(),
+            other_agent.as_ref(),
+        )
+        .unwrap();
+        let context =
+            defra_core::RequestContext::default().with_identity(Some(root.did().to_owned()));
+        node.add_dac_policy_with_counter_as(
+            &context,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
+        .await
+        .unwrap();
+        owner_access
+            .add_collection(gents_protocol::schemas::AGENT)
+            .await
+            .unwrap();
+        for (owner, identity, nonce) in [
+            (root.did(), agent.did(), &binding_identity.creation_nonce),
+            ("owner-b", other_agent.did(), &other_binding.creation_nonce),
+        ] {
+            let created = owner_access.write("test.event_group.agent", &format!("mutation {{create_Agent(input:{{node_did:\"{}\",agent_did:\"{}\",creation_nonce:\"{}\"}}){{_docID}}}}", escape_graphql_string(owner), escape_graphql_string(identity), escape_graphql_string(nonce))).await.unwrap();
+            let doc = crate::store::graphql::created_doc_id(&created, "Agent").unwrap();
+            owner_access
+                .add_actor_relationship(
+                    "Agent",
+                    &doc,
+                    "executor",
+                    &identity::Did::new(identity).unwrap(),
+                )
+                .await
+                .unwrap();
+        }
         node.add_collection(gents_protocol::schemas::EVENT_GROUP_STATE)
             .await
             .unwrap();
@@ -627,40 +867,60 @@ mod tests {
             .unwrap();
         let response=node.execute("mutation {create_GroupMember(input:{batch:\"one\",expected:2,value:\"first\"}){_docID}}").await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        let (binding, mut source) = config("owner-a");
+        let (mut binding, mut source) = config(root.did());
+        binding.agent_did = agent.did().to_owned();
         source.group.as_mut().unwrap().timeout_secs = Some(3600);
         let delivery = Delivery::Callback {
             binding: &binding,
             source: &source,
         };
-        let first = load_or_create_group(&node, delivery, "one").await.unwrap();
-        let restarted = load_or_create_group(&node, delivery, "one").await.unwrap();
+        let first = load_or_create_group(&access, delivery, "one")
+            .await
+            .unwrap();
+        let restarted = load_or_create_group(&access, delivery, "one")
+            .await
+            .unwrap();
         assert_eq!(first.doc_id, restarted.doc_id);
         assert_eq!(first.state.first_seen_at, restarted.state.first_seen_at);
         assert!(matches!(
-            evaluate_group(&node, &SourceSchemaCache::default(), delivery, "one")
-                .await
-                .unwrap(),
+            evaluate_group(
+                &node,
+                &SourceSchemaCache::default(),
+                &access,
+                delivery,
+                "one"
+            )
+            .await
+            .unwrap(),
             GroupOutcome::Pending { .. }
         ));
         let response=node.execute("mutation {create_GroupMember(input:{batch:\"one\",expected:3,value:\"inconsistent\"}){_docID}}").await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         assert!(matches!(
-            evaluate_group(&node, &SourceSchemaCache::default(), delivery, "one")
-                .await
-                .unwrap(),
+            evaluate_group(
+                &node,
+                &SourceSchemaCache::default(),
+                &access,
+                delivery,
+                "one"
+            )
+            .await
+            .unwrap(),
             GroupOutcome::Quiesced
         ));
-        let stored = load_or_create_group(&node, delivery, "one").await.unwrap();
+        let stored = load_or_create_group(&access, delivery, "one")
+            .await
+            .unwrap();
         assert!(stored
             .state
             .quiesced_reason
             .as_deref()
             .unwrap()
             .contains("disagree"));
-        let (other, other_source) = config("owner-b");
+        let (mut other, other_source) = config("owner-b");
+        other.agent_did = other_agent.did().to_owned();
         let independent = load_or_create_group(
-            &node,
+            &other_access,
             Delivery::Callback {
                 binding: &other,
                 source: &other_source,
@@ -671,6 +931,6 @@ mod tests {
         .unwrap();
         assert_ne!(stored.doc_id, independent.doc_id);
         assert!(independent.state.quiesced_at.is_none());
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

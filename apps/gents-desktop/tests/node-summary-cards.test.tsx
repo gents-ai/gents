@@ -36,7 +36,7 @@ describe("the node page's summary cards", () => {
     const agent = deployment.agents[0]!;
     const agents = Array.from({ length: 6 }, (_, i) => ({
       ...agent,
-      agentId: `agent-${i}`,
+      agentDid: `agent-${i}`,
       displayName: `Agent ${i}`,
     }));
     card({ ...deployment, agents });

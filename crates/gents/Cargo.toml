@@ -14,7 +14,6 @@ default = [
     "defra-node/p2p",
     "defra-node/wasmtime-runtime",
 ]
-agent-memory = []
 typescript = ["dep:ts-rs", "gents-loop/typescript", "gents-protocol/typescript"]
 # Gates the optional live-inference collection out of default builds.
 live-e2e = []
@@ -28,8 +27,10 @@ path = "tests/e2e_live.rs"
 required-features = ["live-e2e"]
 
 [dependencies]
+acp.workspace = true
 schema.workspace = true
 storage.workspace = true
+db.workspace = true
 rapidhash = { workspace = true }
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 anyhow.workspace = true
@@ -47,6 +48,7 @@ chrono-tz.workspace = true
 crypto.workspace = true
 cursor.workspace = true
 defra-core.workspace = true
+defra-http.workspace = true
 defra-p2p-adapter.workspace = true
 gents-fs-runner = { path = "../gents-fs-runner" }
 gents-claude = { workspace = true, features = ["transport"] }
@@ -57,6 +59,7 @@ defra-node.workspace = true
 dirs.workspace = true
 events.workspace = true
 futures = "0.3"
+eventsource-stream = "0.2.3"
 # File captures in the eval runner (src/eval/runner/embedded/executor.rs)
 # match a case's declared glob under the trial workspace.
 glob = "0.3"
@@ -81,15 +84,18 @@ schemars = "1"
 jsonschema = { version = "0.46.5", default-features = false }
 sha2.workspace = true
 hmac.workspace = true
+hkdf.workspace = true
+zeroize.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 toml.workspace = true
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
+tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
 uuid.workspace = true
 rig-core.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
 rmcp = { version = "1.2.0", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
 tokio-util = "0.7"
 tempfile = "3"
@@ -143,7 +149,6 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
-acp.workspace = true
 proc-macro2 = { version = "1", features = ["span-locations"] }
 oxc_allocator = "=0.127.0"
 oxc_ast = "=0.127.0"
@@ -151,7 +156,6 @@ oxc_ast_visit = "=0.127.0"
 oxc_parser = "=0.127.0"
 oxc_span = "=0.127.0"
 axum = "0.8"
-db.workspace = true
 defra-node.workspace = true
 document.workspace = true
 proptest = "1"

@@ -7,7 +7,7 @@ use crate::inference::llm::message::Message;
 use crate::inference::llm::tool::ToolDyn;
 use crate::inference::llm::{HookAction, ToolCallHookAction};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio::sync::{watch, Mutex};
 use tokio_util::sync::CancellationToken;
 
@@ -957,8 +957,9 @@ impl BackgroundExecutionRegistry {
         let won = match attempt {
             Ok(won) => won,
             Err(error) => {
-                let fresh = ToolCallLifecycle::load_by_doc_id(
+                let fresh = ToolCallLifecycle::load_by_doc_id_as(
                     lifecycle.node().clone(),
+                    lifecycle.actor().clone(),
                     &doc,
                     lifecycle.node_did(),
                     lifecycle.session_id(),
@@ -966,7 +967,8 @@ impl BackgroundExecutionRegistry {
                 )
                 .await?;
                 match fresh {
-                    Some(fresh) if fresh.is_terminal() => {
+                    Some(mut fresh) if fresh.is_terminal() => {
+                        fresh.inherit_signer(lifecycle)?;
                         *lifecycle = fresh;
                         false
                     }
@@ -1009,6 +1011,7 @@ impl BackgroundExecutionRegistry {
                     };
                     crate::tools::background::completion::append_background_tool_completion(
                         lifecycle.node(),
+                        &lifecycle.access()?,
                         lifecycle.session_id(),
                         &calling_request_id,
                         &doc,
@@ -1259,6 +1262,8 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 #[derive(Clone)]
 pub struct DefraSessionHook {
     node: Arc<EmbeddedNode>,
+    actor: Option<identity::Did>,
+    agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
     node_did: String,
     truncation_limits: TruncationLimits,
     failure_policy: FailurePolicy,
@@ -1300,6 +1305,31 @@ enum PolicyDecision {
 }
 
 impl DefraSessionHook {
+    fn actor_access(&self) -> anyhow::Result<crate::ConfigAccess> {
+        let actor = self
+            .actor
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("hook has no selected agent identity"))?;
+        Ok(crate::ConfigAccess::local_with_optional_agent_signer(
+            self.node.clone(),
+            actor,
+            self.agent_signer.clone(),
+        )?)
+    }
+
+    pub(crate) fn with_managed_identity(
+        mut self,
+        identity: &dyn crate::store::identity::NodeIdentity,
+    ) -> anyhow::Result<Self> {
+        let actor = self
+            .actor
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("hook has no selected agent identity"))?;
+        crate::ConfigAccess::local_managed_agent(self.node.clone(), actor, identity)?;
+        self.agent_signer = identity.managed_agent_signer();
+        Ok(self)
+    }
+
     pub(crate) fn with_inference_observation(
         mut self,
         observation: Option<Arc<crate::observe::inference_observation::InferenceObservationGuard>>,
@@ -1433,6 +1463,8 @@ impl DefraSessionHook {
         let background_live_outputs = background_executions.live_outputs.clone();
         Self {
             node,
+            actor: None,
+            agent_signer: None,
             node_did: node_did.to_string(),
             truncation_limits: TruncationLimits::default(),
             failure_policy,
@@ -1470,6 +1502,26 @@ impl DefraSessionHook {
         }
     }
 
+    pub async fn resume_with_actor_policy(
+        node: Arc<EmbeddedNode>,
+        session_id: &str,
+        node_did: &str,
+        requester_did: Option<&str>,
+        actor: ::identity::Did,
+        failure_policy: FailurePolicy,
+    ) -> anyhow::Result<Self> {
+        Self::resume_with_optional_actor(
+            node,
+            session_id,
+            node_did,
+            requester_did,
+            Some(actor),
+            failure_policy,
+        )
+        .await
+    }
+
+    #[cfg(test)]
     pub async fn resume_with_identity_policy(
         node: Arc<EmbeddedNode>,
         session_id: &str,
@@ -1477,13 +1529,36 @@ impl DefraSessionHook {
         requester_did: Option<&str>,
         failure_policy: FailurePolicy,
     ) -> anyhow::Result<Self> {
-        session::require_session(&node, node_did, session_id, requester_did).await?;
-        let max_seq = session::max_sequence(&node, session_id, node_did, requester_did).await?;
+        Self::resume_with_optional_actor(
+            node,
+            session_id,
+            node_did,
+            requester_did,
+            None,
+            failure_policy,
+        )
+        .await
+    }
+
+    async fn resume_with_optional_actor(
+        node: Arc<EmbeddedNode>,
+        session_id: &str,
+        node_did: &str,
+        requester_did: Option<&str>,
+        actor: Option<::identity::Did>,
+        failure_policy: FailurePolicy,
+    ) -> anyhow::Result<Self> {
+        session::require_session(&node, actor.clone(), node_did, session_id, requester_did).await?;
+        let max_seq =
+            session::max_sequence_as(&node, session_id, node_did, requester_did, actor.clone())
+                .await?;
         let background_executions = BackgroundExecutionRegistry::default();
         let background_live_outputs = background_executions.live_outputs.clone();
 
         Ok(Self {
             node,
+            actor,
+            agent_signer: None,
             node_did: node_did.to_string(),
             truncation_limits: TruncationLimits::default(),
             failure_policy,
@@ -1971,8 +2046,8 @@ impl DefraSessionHook {
     pub async fn close(&self) -> anyhow::Result<()> {
         let session_id = self.state.lock().await.session_id.clone();
         if let Some(id) = session_id {
-            session::close_session(
-                &self.node,
+            session::close_session_with_access(
+                &self.actor_access()?,
                 &self.node_did,
                 &id,
                 self.active_requester_did().await.as_deref(),
@@ -2119,8 +2194,9 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         };
         self.effect_tool_calls.lock().await.remove(internal_id);
         let result: anyhow::Result<()> = async {
-            let mut current = ToolCallLifecycle::load_by_doc_id(
+            let mut current = ToolCallLifecycle::load_by_doc_id_as(
                 self.node.clone(),
+                binding.actor().clone(),
                 binding
                     .doc_id()
                     .ok_or_else(|| anyhow::anyhow!("plugin child has no physical identity"))?,
@@ -2132,13 +2208,14 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
             .ok_or_else(|| {
                 anyhow::anyhow!("plugin child disappeared before interruption settlement")
             })?;
+            current.inherit_signer(&binding)?;
             let Some(outcome) = interruption else {
                 anyhow::ensure!(
                     current.is_terminal(),
                     "plugin child did not durably terminalize"
                 );
                 crate::tools::call::lifecycle::query::load_tool_call_result(
-                    &crate::store::config_client::ConfigAccess::local(self.node.clone()),
+                    &current.access()?,
                     current.doc_id().expect("loaded physical child"),
                     current.node_did(),
                     current.session_id(),

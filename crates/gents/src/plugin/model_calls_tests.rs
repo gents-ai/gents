@@ -10,6 +10,7 @@ use crate::plugin::rounds::{drive, HostCalls, Round, MAX_ROUNDS};
 use crate::plugin::store::{self, InstalledPlugin};
 use crate::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
 use crate::plugin::{PluginBudget, PluginOutcome, PluginVerdict};
+use crate::store::identity::NodeIdentity;
 
 const KEY: &str = "sekret-key-0123";
 
@@ -136,6 +137,7 @@ impl Fake {
             connect_timeout: Duration::from_secs(2),
             request_timeout: Duration::from_secs(30),
             max_output_tokens: None,
+            profile_visibility: None,
         }
     }
 
@@ -147,7 +149,11 @@ impl Fake {
 struct Fixed(Arc<Fake>, usize, Duration);
 
 impl ModelResolver for Fixed {
-    fn resolve<'a>(&'a self, _: &'a ModelBinding) -> BoxFuture<'a, Result<ModelEndpoint>> {
+    fn resolve<'a>(
+        &'a self,
+        _: &'a ModelBinding,
+        _: Option<&'a identity::Did>,
+    ) -> BoxFuture<'a, Result<ModelEndpoint>> {
         Box::pin(async move {
             let mut endpoint = self.0.endpoint(self.1);
             endpoint.request_timeout = self.2;
@@ -159,7 +165,11 @@ impl ModelResolver for Fixed {
 struct Never;
 
 impl ModelResolver for Never {
-    fn resolve<'a>(&'a self, _: &'a ModelBinding) -> BoxFuture<'a, Result<ModelEndpoint>> {
+    fn resolve<'a>(
+        &'a self,
+        _: &'a ModelBinding,
+        _: Option<&'a identity::Did>,
+    ) -> BoxFuture<'a, Result<ModelEndpoint>> {
         panic!("an unbound slot must not resolve an endpoint")
     }
 }
@@ -442,22 +452,235 @@ async fn a_profile_resolves_to_its_chat_completions_endpoint() {
     let owner = "did:key:model-owner";
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_agent(&node, owner, "chandra").await;
+    let agent = crate::test_support::install_test_agent(&node, owner, "chandra").await;
     let models = AccessModels(ConfigAccess::local(node.clone()));
     let binding = |profile: &str| ModelBinding {
         node_did: owner.to_owned(),
         profile_id: profile.to_owned(),
     };
-    let endpoint = models.resolve(&binding("chandra:inference")).await.unwrap();
+    let actor = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
+    let endpoint = models
+        .resolve(
+            &binding(&format!("{}:inference", agent.agent_did)),
+            Some(&actor),
+        )
+        .await
+        .unwrap();
     assert_eq!(endpoint.url, "http://127.0.0.1:1/v1/chat/completions");
     assert_eq!(endpoint.model, "test-model");
     assert_eq!(endpoint.max_concurrent, 1);
     assert!(endpoint.api_key.is_none());
-    let error = models.resolve(&binding("gone")).await.unwrap_err();
-    assert!(
-        format!("{error:#}").contains("no longer exists"),
-        "{error:#}"
+    let error = models
+        .resolve(&binding("gone"), Some(&actor))
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("unavailable"), "{error:#}");
+}
+
+#[tokio::test]
+async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request() -> Result<()> {
+    let case = crate::lean_vocab_test::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .expect("configuration model");
+    let dir = tempfile::tempdir()?;
+    let key_dir = dir.path().to_owned();
+    let (owner, runtime, agent, sibling) = tokio::task::spawn_blocking(move || -> Result<_> {
+        Ok((
+            crate::KeyIdentity::load_or_create(key_dir.join("node"), None)?,
+            crate::KeyIdentity::load_or_create(key_dir.join("runtime"), None)?,
+            crate::KeyIdentity::load_or_create(key_dir.join("agent"), None)?,
+            crate::KeyIdentity::load_or_create(key_dir.join("sibling"), None)?,
+        ))
+    })
+    .await??;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await?
+        .into_std()?;
+    let address = listener.local_addr()?;
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .enable_signing()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_owner(owner.did().to_owned())
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await?,
     );
+    let ctx = defra_core::RequestContext::default().with_identity(Some(owner.did().to_owned()));
+    let policy = node
+        .add_dac_policy_with_counter_as(&ctx, &case.policy_yaml, 0)
+        .await?;
+    for actor in [agent.did(), sibling.did(), runtime.did()] {
+        for permission in [
+            acp::nac::NodePermission::DocumentRead,
+            acp::nac::NodePermission::CollectionGet,
+        ] {
+            node.add_nac_actor_relationship_as(&ctx, permission.as_str(), actor)
+                .await?;
+        }
+    }
+    assert!(gents_protocol::schemas::INFERENCE_PROFILE
+        .contains(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID));
+    let profile_schema = gents_protocol::schemas::INFERENCE_PROFILE
+        .replace(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID, &policy);
+    node.add_collection_as(&ctx, &profile_schema).await?;
+    let backend_schema = gents_protocol::schemas::INFERENCE_BACKEND_METADATA
+        .replace(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID, &policy);
+    node.add_collection_as(&ctx, &backend_schema).await?;
+    let credential_schema = gents_protocol::schemas::BACKEND_CREDENTIAL
+        .replace(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID, &policy);
+    node.add_collection_as(&ctx, &credential_schema).await?;
+    let access = ConfigAccess::Graphql(
+        crate::store::config_client::GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"),
+            owner.did(),
+        )
+        .with_client_signing_capability(owner.client_signing_capability()?)?
+        .with_client_signed_agent_creates(),
+    );
+    let agent_did = identity::Did::new(agent.did())?;
+    let fake = Fake::start(Reply::Text, Duration::ZERO).await;
+    let credential_input = json!({"credential_id":"credential", "node_did":runtime.did(),
+        "provider_kind":"OpenAiCompatible", "endpoint":fake.url.trim_end_matches("/chat/completions"),
+        "version":"rotation", "secret":{"kind":"api_key","key":KEY}});
+    let credential_response = access.transact_write("test.plugin.credential", |txn| {
+        let input = &credential_input;
+        let schema = &credential_schema;
+        Box::pin(async move { txn.execute_client_signed_create(
+            "mutation($input: BackendCredentialMutationInputArg!) { create_BackendCredential(input:$input) {_docID} }",
+            &json!({"input":input}), schema).await })
+    }).await?;
+    let credential_doc =
+        crate::store::graphql::created_doc_id(&credential_response, "BackendCredential")?;
+    let runtime_did = identity::Did::new(runtime.did())?;
+    access
+        .add_actor_relationship(
+            "BackendCredential",
+            &credential_doc,
+            "runtime_writer",
+            &runtime_did,
+        )
+        .await?;
+    let backend_input = json!({"node_did":runtime.did(), "backend_id":"backend", "name":"test",
+        "provider_kind":"OpenAiCompatible", "endpoint":fake.url.trim_end_matches("/chat/completions"),
+        "auth_kind":"credential", "credential_id":"credential", "credential_version":"rotation", "enabled":true});
+    let backend_response = access.transact_write("test.plugin.backend", |txn| {
+        let input = &backend_input;
+        let schema = &backend_schema;
+        Box::pin(async move { txn.execute_client_signed_create(
+            "mutation($input: InferenceBackendMetadataMutationInputArg!) { create_InferenceBackendMetadata(input:$input) {_docID} }",
+            &json!({"input":input}), schema).await })
+    }).await?;
+    let backend_doc =
+        crate::store::graphql::created_doc_id(&backend_response, "InferenceBackendMetadata")?;
+    let profile_input = json!({"node_did":runtime.did(), "profile_id":"profile", "backend_id":"backend", "model_name":"model"});
+    let profile = access.transact_write("test.plugin.profile", |txn| {
+        let input = &profile_input;
+        let schema = &profile_schema;
+        Box::pin(async move { txn.execute_client_signed_create(
+            "mutation($input: InferenceProfileMutationInputArg!) { create_InferenceProfile(input:$input) {_docID} }",
+            &json!({"input":input}), schema).await })
+    }).await?;
+    let profile_doc = crate::store::graphql::created_doc_id(&profile, "InferenceProfile")?;
+    access
+        .add_actor_relationship("InferenceProfile", &profile_doc, "reader", &agent_did)
+        .await?;
+    access
+        .add_actor_relationship(
+            "InferenceBackendMetadata",
+            &backend_doc,
+            "reader",
+            &agent_did,
+        )
+        .await?;
+    let models = AccessModels(ConfigAccess::local(node.clone()));
+    let binding = ModelBinding {
+        node_did: runtime.did().to_owned(),
+        profile_id: "profile".into(),
+    };
+    let sibling_did = identity::Did::new(sibling.did())?;
+    assert!(!case.configuration_plugin_backend_cases.is_empty());
+    for item in &case.configuration_plugin_backend_cases {
+        let revoked = item["revoked"].as_str().unwrap();
+        let target = match revoked {
+            "profile" => Some(("InferenceProfile", &profile_doc)),
+            "backend" => Some(("InferenceBackendMetadata", &backend_doc)),
+            "" => None,
+            _ => anyhow::bail!("unknown modeled revocation"),
+        };
+        if let Some((collection, doc)) = target {
+            access
+                .delete_actor_relationship(collection, doc, "reader", &agent_did)
+                .await?;
+        }
+        let actor = match item["actor"].as_str() {
+            Some("agent") => Some(&agent_did),
+            Some("sibling") => Some(&sibling_did),
+            None => None,
+            _ => anyhow::bail!("unknown modeled actor"),
+        };
+        assert_eq!(
+            models.resolve(&binding, actor).await.is_ok(),
+            item["expected"].as_bool().unwrap(),
+            "modeled {}",
+            item["name"]
+        );
+        if let Some((collection, doc)) = target {
+            access
+                .add_actor_relationship(collection, doc, "reader", &agent_did)
+                .await?;
+        }
+    }
+    let endpoint = models.resolve(&binding, Some(&agent_did)).await?;
+    let mut session = Session::new(endpoint)?;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let first = session.serve(requests(&["first"]), deadline).await;
+    assert!(first["first"]["text"].is_string());
+    assert!(!first.to_string().contains(KEY));
+    assert_eq!(fake.requests(), 1);
+    assert_eq!(
+        fake.seen.lock().unwrap()[0].authorization.as_deref(),
+        Some(&format!("Bearer {KEY}")[..])
+    );
+    let agent_access = ConfigAccess::local_as(node.clone(), agent_did.clone());
+    let hidden = agent_access
+        .execute("{ BackendCredential { secret } }")
+        .await?;
+    assert!(
+        gents_protocol::graphql::graphql_rows_from_response(&hidden, "BackendCredential")
+            .is_empty()
+    );
+    access
+        .delete_actor_relationship(
+            "BackendCredential",
+            &credential_doc,
+            "runtime_writer",
+            &runtime_did,
+        )
+        .await?;
+    assert!(session.serve(requests(&["revoked"]), deadline).await["revoked"]["error"].is_string());
+    assert_eq!(fake.requests(), 1);
+    access
+        .add_actor_relationship(
+            "BackendCredential",
+            &credential_doc,
+            "runtime_writer",
+            &runtime_did,
+        )
+        .await?;
+    access
+        .delete_actor_relationship(
+            "InferenceBackendMetadata",
+            &backend_doc,
+            "reader",
+            &agent_did,
+        )
+        .await?;
+    assert!(session.serve(requests(&["next"]), deadline).await["next"]["error"].is_string());
+    assert_eq!(fake.requests(), 1);
+    node.shutdown().await?;
+    Ok(())
 }
 
 fn backend(patch: Value) -> InferenceBackend {
@@ -469,6 +692,15 @@ fn backend(patch: Value) -> InferenceBackend {
         .unwrap()
         .extend(patch.as_object().unwrap().clone());
     serde_json::from_value(backend).unwrap()
+}
+
+#[test]
+fn credential_reference_cannot_create_an_unauthenticated_endpoint() {
+    let backend = backend(json!({"auth": {"kind":"credential", "id":"id", "version":"v1"}}));
+    let profile: InferenceProfile = serde_json::from_value(json!({
+        "node_did": backend.node_did.clone(), "profile_id": "p", "backend_id": "b", "model_name": "model"
+    })).unwrap();
+    assert!(endpoint_for(&profile, &backend).is_err());
 }
 
 fn profile() -> InferenceProfile {
@@ -575,10 +807,88 @@ async fn a_model_tool_gets_its_model_answers_through_the_same_path() {
     assert_eq!(fake.requests(), 1);
 }
 
+#[tokio::test]
+async fn model_tool_without_data_grant_passes_its_selected_agent() -> Result<()> {
+    use crate::documents::PluginToolRef;
+    use crate::inference::llm::tool::ToolDyn;
+    use crate::plugin::tool::PluginTool;
+    struct Recording {
+        fake: Arc<Fake>,
+        seen: Arc<Mutex<Vec<Option<String>>>>,
+    }
+    impl ModelResolver for Recording {
+        fn resolve<'a>(
+            &'a self,
+            _: &'a ModelBinding,
+            actor: Option<&'a identity::Did>,
+        ) -> BoxFuture<'a, Result<ModelEndpoint>> {
+            self.seen
+                .lock()
+                .unwrap()
+                .push(actor.map(ToString::to_string));
+            Box::pin(async move { Ok(self.fake.endpoint(1)) })
+        }
+    }
+    let dir = tempfile::tempdir()?;
+    let root = crate::KeyIdentity::load_or_create(dir.path().join("node"), None)?;
+    let selected = crate::KeyIdentity::load_or_create(dir.path().join("agent"), None)?;
+    let client = crate::KeyIdentity::load_or_create(dir.path().join("client"), None)?;
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(root.did())
+            .build()
+            .await?,
+    );
+    let fake = Arc::new(Fake::start(Reply::Text, Duration::ZERO).await);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (home, record) = installed(&asking(vec![request("a")]), false, true);
+    assert!(record.data_grant().is_none());
+    let executor = Arc::new(executor(
+        &home,
+        Recording {
+            fake,
+            seen: seen.clone(),
+        },
+    ));
+    let tool = PluginTool::resolve(
+        executor.clone(),
+        &PluginToolRef {
+            tool_calls: false,
+            plugin: "team/plugin".into(),
+            digest: Some(record.digest.clone()),
+            input_fields: Vec::new(),
+            job: None,
+        },
+        None,
+    )?
+    .with_agent_data(node.clone(), root.did(), Some(selected.did()))?;
+    tool.call("{}".to_owned())
+        .await
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let caller = crate::plugin::data::DataCaller::operator(
+        ConfigAccess::local_as(node.clone(), identity::Did::new(client.did())?),
+        root.did(),
+    )?;
+    executor.call_with_data(&record, json!({}), caller).await?;
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![
+            Some(selected.did().to_owned()),
+            Some(client.did().to_owned())
+        ]
+    );
+    node.shutdown().await?;
+    Ok(())
+}
+
 struct Stale;
 
 impl ModelResolver for Stale {
-    fn resolve<'a>(&'a self, _: &'a ModelBinding) -> BoxFuture<'a, Result<ModelEndpoint>> {
+    fn resolve<'a>(
+        &'a self,
+        _: &'a ModelBinding,
+        _: Option<&'a identity::Did>,
+    ) -> BoxFuture<'a, Result<ModelEndpoint>> {
         Box::pin(async { anyhow::bail!("the inference profile \"chandra\" no longer exists") })
     }
 }

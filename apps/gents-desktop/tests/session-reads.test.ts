@@ -21,7 +21,7 @@ function session(
     liveCursor: "cursor",
     sessionId: "session-1",
     nodeDid: "did:key:test",
-    agentId: "agent-1",
+    agentDid: "agent-1",
     title: "Test",
     previewText: null,
     status: "active",
@@ -238,7 +238,7 @@ describe("createSessionReads", () => {
     const reads = readsFor(
       {
         fetchSessionSnapshot: vi.fn().mockResolvedValue(tip),
-        retrySessionHydration: () =>
+        reloadSession: () =>
           new Promise<void>((_, reject) => {
             failHydration = reject;
           }),
@@ -247,7 +247,7 @@ describe("createSessionReads", () => {
       setError,
     );
     await reads.refreshSession("session-1");
-    const hydration = reads.retrySessionHydration("session-1");
+    const hydration = reads.reloadSession("session-1");
     await reads.refreshSession("session-1");
     failHydration(new Error("hydration failed"));
     expect(await hydration).toBeNull();
@@ -272,7 +272,7 @@ describe("createSessionReads", () => {
         new Promise<SessionRowsView>((resolve) => {
           finishRows = resolve;
         }),
-      retrySessionHydration: () =>
+      reloadSession: () =>
         new Promise<void>((resolve) => {
           finishHydration = resolve;
         }),
@@ -282,7 +282,7 @@ describe("createSessionReads", () => {
     reads.invalidateSessionReads();
     finishRows(rowsRead("session-1"));
     expect(await rows).toBeNull();
-    const hydration = reads.retrySessionHydration("session-1");
+    const hydration = reads.reloadSession("session-1");
     reads.invalidateSessionReads();
     finishHydration();
     expect(await hydration).toBeNull();

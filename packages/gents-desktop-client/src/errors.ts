@@ -15,6 +15,7 @@ const BRIDGE_ERROR_CODES: Record<BridgeErrorCode, true> = {
   sessionNotConnected: true,
   sessionAccepted: true,
   goalControlRejected: true,
+  permissionDenied: true,
   invalidArgument: true,
   unsupported: true,
   endpointUnreachable: true,

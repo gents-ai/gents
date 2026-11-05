@@ -4,8 +4,8 @@ use anyhow::{bail, Context, Result};
 use p2p::iroh::parse_public_peer_addr;
 
 use super::templates::{
-    combine_filters, equality_filter, scope_filter, PairingFilters, Scope, ScopeTemplate,
-    CLIENT_COLLECTIONS, CLIENT_TO_RUNTIME_COLLECTIONS,
+    equality_filter, scope_filter, PairingFilters, Scope, ScopeTemplate, CLIENT_COLLECTIONS,
+    CLIENT_TO_RUNTIME_COLLECTIONS,
 };
 use super::{PairingApplied, PairingDesired};
 
@@ -201,144 +201,12 @@ fn client_route_filters(
     requester_did: &str,
     owner_node_did: &str,
 ) -> PairingFilters {
-    let mut filters = PairingFilters::new();
-    for collection in [
-        "AgentRequest",
-        "AgentMessage",
-        "AgentToolCall",
-        "AgentOutputSegment",
-        "AgentSession",
-        "CompactionEntry",
-        "MailboxItem",
-    ] {
-        filters.insert(
-            collection.to_string(),
-            combine_filters(
-                equality_filter("requester_did", requester_did),
-                equality_filter("node_did", owner_node_did),
-            ),
-        );
-    }
     let endpoint_did = match direction {
         PairingDirection::ClientToRuntime => requester_did,
         PairingDirection::RuntimeToClient => owner_node_did,
     };
-    filters.insert(
-        "PeerEndpoint".to_string(),
-        equality_filter("did", endpoint_did),
-    );
-    filters.insert(
-        "SessionHydrationRequest".to_string(),
-        combine_filters(
-            equality_filter("requester_did", requester_did),
-            equality_filter("node_did", owner_node_did),
-        ),
-    );
-    for collection in [
-        "FileImageHydrationRequest",
-        "FileInventoryImageRequest",
-        "FileInventoryRequest",
-        "AgentSessionInputEdit",
-        "AgentSessionGoalControl",
-    ] {
-        filters.insert(
-            collection.to_owned(),
-            combine_filters(
-                equality_filter("requester_did", requester_did),
-                equality_filter("node_did", owner_node_did),
-            ),
-        );
-    }
-    if direction == PairingDirection::RuntimeToClient {
-        filters.insert(
-            "GoalObservation".to_owned(),
-            combine_filters(
-                equality_filter("requester_did", requester_did),
-                equality_filter("node_did", owner_node_did),
-            ),
-        );
-        filters.insert(
-            "NodeReadiness".to_string(),
-            equality_filter("node_did", owner_node_did),
-        );
-    }
-    // Mutable owner fields cannot legally participate in DefraDB replication
-    // filters, so runtime-owned configuration is unfiltered on the return leg.
-    debug_assert!(filters
-        .keys()
-        .all(|name| CLIENT_COLLECTIONS.contains(&name.as_str())));
-    filters
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::runtime::agent::p2p_reconcile::templates::{resolve_template, CLIENT_TEMPLATE};
-
-    #[test]
-    fn client_route_contains_exact_bounded_control_plane() {
-        let template = resolve_template(CLIENT_TEMPLATE).unwrap();
-        for collection in [
-            "Agent",
-            "AgentContext",
-            "CompactionConfig",
-            "Tools",
-            "AgentTarget",
-            "InferenceProfile",
-            "InferenceSampling",
-            "InferenceExecution",
-            "InferenceRetryPolicy",
-            "ToolServiceRegistry",
-            "Skill",
-            "DatastoreToolSurface",
-            "Task",
-            "Schedule",
-            "Trigger",
-            "EventSource",
-        ] {
-            assert!(
-                template.collections.contains(&collection),
-                "missing {collection}"
-            );
-        }
-        assert!(!template.collections.contains(&"PeerPairingDesired"));
-        assert!(!template.collections.contains(&"DataPlanePairingDesired"));
-        assert!(!client_route_collections(PairingDirection::ClientToRuntime).contains(&"Agent"));
-        assert!(client_route_collections(PairingDirection::RuntimeToClient).contains(&"Agent"));
-        assert!(
-            !client_route_collections(PairingDirection::RuntimeToClient)
-                .contains(&"InferenceBackend"),
-            "raw inference credentials must never replicate to clients"
-        );
-    }
-
-    #[test]
-    fn client_route_carries_session_hydration_requests() {
-        let template = resolve_template(CLIENT_TEMPLATE).unwrap();
-        let outbound = resolve_template_filters(
-            template,
-            PairingDirection::ClientToRuntime,
-            "did:key:phone",
-            "did:key:mandrake",
-        );
-        let returning = resolve_template_filters(
-            template,
-            PairingDirection::RuntimeToClient,
-            "did:key:phone",
-            "did:key:mandrake",
-        );
-        assert!(client_route_collections(PairingDirection::ClientToRuntime)
-            .contains(&"SessionHydrationRequest"));
-        assert!(template.collections.contains(&"SessionHydrationRequest"));
-        let encoded = serde_json::to_string(outbound.get("SessionHydrationRequest").unwrap())
-            .expect("encode hydration filter");
-        assert!(encoded.contains("requester_did"));
-        assert!(encoded.contains("did:key:phone"));
-        assert!(encoded.contains("node_did"));
-        assert!(encoded.contains("did:key:mandrake"));
-        assert_eq!(
-            outbound.get("SessionHydrationRequest"),
-            returning.get("SessionHydrationRequest")
-        );
-    }
+    PairingFilters::from([(
+        "PeerRegistry".to_string(),
+        equality_filter("node_did", endpoint_did),
+    )])
 }

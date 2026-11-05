@@ -44,7 +44,7 @@ async fn spawned_prober_observes_a_new_backend_before_the_next_periodic_tick() {
         .await
         .expect("the prober did not cancel")
         .unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -119,7 +119,7 @@ async fn scheduled_cycles_preserve_health_across_observations_and_unrelated_edit
         &health.get("failing").await.unwrap(),
         "probeFail",
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -182,7 +182,7 @@ async fn disabled_and_removed_backends_are_probed_again_when_observed_enabled() 
         &health.get(&value.backend_id).await.unwrap(),
         "probeFail",
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -534,7 +534,7 @@ async fn probe_shutdown_cancels_pending_backend_without_pruning_or_failure() {
     assert!(health.get("later").await.is_none());
     server.abort();
     assert!(server.await.unwrap_err().is_cancelled());
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -563,5 +563,5 @@ async fn probe_shutdown_prevents_new_backend_probes_and_pruning() {
     assert!(outcome.flipped.is_empty() && outcome.promotable.is_empty());
     assert!(health.get("pending").await.is_none());
     assert!(health.get("unobserved").await.is_some());
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

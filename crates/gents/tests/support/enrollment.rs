@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::runtime::agent::p2p_reconcile::GraphqlEnrollmentStore;
 use gents::store::graphql::escape_graphql_string;
 use gents::NodeIdentity;
@@ -138,7 +138,7 @@ pub async fn signed_enrollment_offer(
         admin_did: admin_identity.did().to_string(),
         server_peer,
         server_ticket,
-        owner_agent: admin_identity.did().to_string(),
+        owner_node_did: admin_identity.did().to_string(),
         profile: "client".to_string(),
         schema_fingerprint: enrollment_schema_fingerprint(),
         issued_at: now.clone(),
@@ -235,7 +235,7 @@ pub async fn authorize_enrollment_generation(
         candidate_did: member_identity.did().to_string(),
         candidate_peer: member_peer.to_string(),
         candidate_ticket: member_address.to_string(),
-        owner_agent: offer.owner_agent.clone(),
+        owner_node_did: offer.owner_node_did.clone(),
         profile: offer.profile.clone(),
         client_nonce,
         issued_at: offer.issued_at.clone(),
@@ -259,7 +259,7 @@ pub async fn authorize_enrollment_generation(
             offer_id: "{}", offer_token: "{}", challenge: "{}",
             network_id: "{}", admin_did: "{}", server_peer: "{}",
             candidate_did: "{}", candidate_peer: "{}", candidate_ticket: "{}",
-            owner_agent: "{}", profile: "{}", client_nonce: "{}",
+            owner_node_did: "{}", profile: "{}", client_nonce: "{}",
             issued_at: "{}", expires_at: "{}", candidate_sig: "{}"
         }}) {{ _docID }} }}"#,
         request.protocol_version,
@@ -274,7 +274,7 @@ pub async fn authorize_enrollment_generation(
         field(&request.candidate_did),
         field(&request.candidate_peer),
         field(&request.candidate_ticket),
-        field(&request.owner_agent),
+        field(&request.owner_node_did),
         field(&request.profile),
         field(&request.client_nonce),
         field(&request.issued_at),

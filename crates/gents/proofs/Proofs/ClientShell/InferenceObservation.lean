@@ -29,6 +29,19 @@ structure State where
   observation : Option Observation
   deriving DecidableEq, Repr
 
+/-- A direct authenticated database read supplies the documents visible to the
+caller. Hidden and missing rows are indistinguishable; enrollment and requester
+labels do not grant or restrict visibility beyond native ACP. Both the session
+and active request must be uniquely visible for live activity to be exposed. -/
+def sourceVisible (sessions requests : Nat) (active : Bool) : Bool :=
+  sessions == 1 && requests == 1 && active
+
+theorem invisible_session_hides_activity (requests : Nat) (active : Bool) :
+    sourceVisible 0 requests active = false := by rfl
+
+theorem inactive_request_hides_activity (sessions requests : Nat) :
+    sourceVisible sessions requests false = false := by simp [sourceVisible]
+
 /-- Epochs fence asynchronous reads across selection and reconnect. The target
 is supplied by the authorized session and request owner; an activity update is
 never evidence that a request remains active. Sequence numbers belong to one

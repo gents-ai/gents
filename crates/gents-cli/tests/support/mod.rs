@@ -55,7 +55,7 @@ pub async fn initialized_node(
     cwd: &std::path::Path,
     node_home: &std::path::Path,
     node_name: &str,
-) -> anyhow::Result<gents::defra_node::EmbeddedNode> {
+) -> anyhow::Result<gents::defra_node::Node> {
     use anyhow::Context as _;
 
     let home = node_home.to_str().context("node home utf8")?;
@@ -75,7 +75,7 @@ pub async fn initialized_node(
     gents::store::local::store_key::open_home_store_key(node_home, &data)
         .await?
         .encrypt(
-            gents::defra_node::EmbeddedNode::builder()
+            gents::defra_node::Node::builder()
                 .data_path(&data)
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith),
         )
@@ -95,6 +95,14 @@ pub fn node_did_from_init(init: &serde_json::Value) -> anyhow::Result<String> {
         "init returned a name-derived DID placeholder: {node_did}"
     );
     Ok(node_did.to_string())
+}
+
+pub fn agent_did_from_init(init: &serde_json::Value) -> anyhow::Result<String> {
+    init.pointer("/init/default_agent_did")
+        .and_then(serde_json::Value::as_str)
+        .filter(|did| did.starts_with("did:key:"))
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("init output missing provisioned agent DID: {init}"))
 }
 
 pub fn identity_from_init(init: &serde_json::Value) -> anyhow::Result<gents::KeyIdentity> {

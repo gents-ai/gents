@@ -212,7 +212,7 @@ async fn plugin_store_record_error_releases_the_owned_offline_store() {
     let records = reopened
         .execute("{ PackInstallation(limit: 1) { coordinate } }")
         .await;
-    reopened.local_node().unwrap().shutdown().await;
+    reopened.local_node().unwrap().shutdown().await.expect("node shutdown");
     assert_eq!(
         records.unwrap()["data"]["PackInstallation"],
         serde_json::json!([])
@@ -299,7 +299,7 @@ async fn documents_command_closes_its_owned_store_on_success_and_failure() {
         let (reopened, _) = crate::resolve_config_access(Some(home.path()), None)
             .await
             .expect("command shutdown and handle release must allow immediate store reopen");
-        reopened.local_node().unwrap().shutdown().await;
+        reopened.local_node().unwrap().shutdown().await.expect("node shutdown");
         drop(reopened);
     }
 }
@@ -362,7 +362,7 @@ async fn documents_install_rolls_back_its_record_on_failure() {
                 )
                 .await
                 .unwrap();
-        access.local_node().unwrap().shutdown().await;
+        access.local_node().unwrap().shutdown().await.expect("node shutdown");
     }
 
     let second = documents_pack_dir("1.1.0");

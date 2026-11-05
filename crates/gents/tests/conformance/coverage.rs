@@ -239,7 +239,7 @@ async fn agent_tool_call_carries_only_generic_background_fields() {
     for field in [
         "child_request_id",
         "spawn_target_did",
-        "spawn_agent_id",
+        "spawn_agent_did",
         "delegated_input",
         "delegated_workspace",
         "cancel_policy",
@@ -476,6 +476,63 @@ fn lean_feature_matrix_covers_every_declared_required_surface() {
 fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     let snapshot = lean_contract_snapshot();
     let mut emitted = BTreeSet::new();
+    assert!(!snapshot.identity_private_journal_policy.checks.is_empty());
+    if snapshot.mailbox_runtime_notice_case.is_object() {
+        emitted.insert((
+            "mailbox_runtime_notice_case".into(),
+            "MailboxRuntimeNoticeCase".into(),
+        ));
+    }
+    for (present, key, class) in [
+        (!snapshot.node_file_request_access_cases.is_empty(), "node_file_request_access_cases", "NodeFileRequestAccessCases"),
+        (
+            !snapshot.mailbox_sweep_actor_cases.is_empty(),
+            "mailbox_sweep_actor_cases",
+            "MailboxSweepActorCases",
+        ),
+        (
+            !snapshot.mailbox_claimed_recipient_cases.is_empty(),
+            "mailbox_claimed_recipient_cases",
+            "MailboxClaimedRecipientCases",
+        ),
+    ] {
+        if present {
+            emitted.insert((key.into(), class.into()));
+        }
+    }
+    if snapshot.mailbox_native_policy["checks"]
+        .as_array()
+        .is_some_and(|cases| !cases.is_empty())
+    {
+        emitted.insert(("mailbox_native_policy".into(), "MailboxNativePolicyCases".into()));
+    }
+    emitted.insert((
+        "identity_private_journal_policy".into(),
+        "PrivateJournalPolicy".into(),
+    ));
+    assert!(!snapshot
+        .identity_private_journal_policy
+        .signer_checks
+        .is_empty());
+    emitted.insert((
+        "identity_private_journal_policy".into(),
+        "PrivateJournalSigner".into(),
+    ));
+    assert!(!snapshot.client_submission_cleanup_cases.is_empty());
+    emitted.insert((
+        "client_submission_cleanup_cases".into(),
+        "ClientSubmissionCleanupCases".into(),
+    ));
+    assert!(!snapshot.client_submission_rejection_cases.is_empty());
+    emitted.insert((
+        "client_submission_rejection_cases".into(),
+        "ClientSubmissionRejectionCases".into(),
+    ));
+    assert!(!snapshot.client_submission_uncertain_error_cases.is_empty());
+    emitted.insert((
+        "client_submission_uncertain_error_cases".into(),
+        "ClientSubmissionUncertainErrorCases".into(),
+    ));
     assert!(!snapshot.goal_client_delivery_cases.is_empty());
     emitted.insert((
         "goal_client_delivery_cases".into(),
@@ -787,54 +844,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.file_inventory_order_entry_cases,
         ),
         (
-            "file_inventory_refusal_cases",
-            "FileInventoryRefusalCases",
-            &snapshot.file_inventory_refusal_cases,
-        ),
-        (
-            "file_inventory_reply_journal_cases",
-            "FileInventoryReplyJournalCases",
-            &snapshot.file_inventory_reply_journal_cases,
-        ),
-        (
-            "file_inventory_operator_owner_cases",
-            "FileInventoryOperatorOwnerCases",
-            &snapshot.file_inventory_operator_owner_cases,
-        ),
-        (
-            "file_inventory_client_scope_cases",
-            "FileInventoryClientScopeCases",
-            &snapshot.file_inventory_client_scope_cases,
-        ),
-        (
-            "file_inventory_client_progress_cases",
-            "FileInventoryClientProgressCases",
-            &snapshot.file_inventory_client_progress_cases,
-        ),
-        (
-            "file_inventory_preparation_cases",
-            "FileInventoryPreparationCases",
-            &snapshot.file_inventory_preparation_cases,
-        ),
-        (
-            "file_inventory_completion_cases",
-            "FileInventoryCompletionCases",
-            &snapshot.file_inventory_completion_cases,
-        ),
-        (
-            "file_inventory_page_grant_cases",
-            "FileInventoryPageGrantCases",
-            &snapshot.file_inventory_page_grant_cases,
-        ),
-        (
-            "file_inventory_demand_cases",
-            "FileInventoryDemandCases",
-            &snapshot.file_inventory_demand_cases,
-        ),
-        (
-            "file_inventory_issuance_cases",
-            "FileInventoryIssuanceCases",
-            &snapshot.file_inventory_issuance_cases,
+            "file_inventory_direct_reader_cases",
+            "FileInventoryDirectReaderCases",
+            &snapshot.file_inventory_direct_reader_cases,
         ),
         (
             "file_inventory_fork_cases",
@@ -855,11 +867,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "file_inventory_source_projection_cases",
             "FileInventorySourceProjectionCases",
             &snapshot.file_inventory_source_projection_cases,
-        ),
-        (
-            "file_inventory_receiver_cases",
-            "FileInventoryReceiverCases",
-            &snapshot.file_inventory_receiver_cases,
         ),
         (
             "file_image_hydration_cases",
@@ -1369,11 +1376,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "client_telemetry_cases".into(),
         "ClientTelemetryCases".into(),
     ));
-    assert!(!snapshot.client_observation_admission_cases.is_empty());
-    emitted.insert((
-        "client_observation_admission_cases".into(),
-        "ClientObservationAdmission".into(),
-    ));
     emitted.insert((
         "client_observation_scope_cases".into(),
         "ClientObservationScopeCases".into(),
@@ -1382,6 +1384,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     emitted.insert((
         "inference_observation_cases".into(),
         "InferenceObservationCases".into(),
+    ));
+    assert!(!snapshot.inference_visibility_cases.is_empty());
+    emitted.insert((
+        "inference_visibility_cases".into(),
+        "InferenceVisibilityCases".into(),
     ));
     assert!(snapshot.client_data_publication_cases["notice_delivery"].is_object());
     for field in ["publications", "reuse"] {
@@ -1975,6 +1982,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "IdentityPermissionCases".to_string(),
         ));
     }
+    if !snapshot.identity_household_cases.is_empty() {
+        emitted.insert((
+            "identity_household_cases".to_string(),
+            "IdentityHouseholdCases".to_string(),
+        ));
+    }
+    if !snapshot.identity_derivation_cases.is_empty() {
+        emitted.insert((
+            "identity_derivation_cases".to_string(),
+            "IdentityDerivationCases".to_string(),
+        ));
+    }
     if !snapshot.identity_contracts.is_empty() {
         emitted.insert((
             "identity_contracts".to_string(),
@@ -2313,12 +2332,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "EnrollmentDurableProjectionCases".into(),
         ));
     }
-    if !snapshot.enrollment_hydration_route_cases.is_empty() {
-        emitted.insert((
-            "enrollment_hydration_route_cases".into(),
-            "EnrollmentHydrationRoutes".into(),
-        ));
-    }
     if !snapshot.enrollment_pending_request_cases.is_empty() {
         emitted.insert((
             "enrollment_pending_request_cases".into(),
@@ -2503,6 +2516,13 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         assert!(present, "{category} must emit rows");
         emitted.insert((category.into(), domain.into()));
     }
+    assert!(!snapshot.pack_identity_reference_cases.is_empty());
+    emitted.insert((
+        "pack_identity_reference_cases".into(),
+        "PackIdentityReferenceCases".into(),
+    ));
+    assert!(!snapshot.pack_identity_cases.is_empty());
+    emitted.insert(("pack_identity_cases".into(), "PackIdentityCases".into()));
     assert!(!snapshot.initial_inference_cases.is_empty());
     emitted.insert((
         "initial_inference_cases".into(),

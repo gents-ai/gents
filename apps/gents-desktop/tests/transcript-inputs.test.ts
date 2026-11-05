@@ -107,18 +107,18 @@ describe("naming a background result", () => {
     });
     const reached = {
       request: { sessionId: "session-worker" },
-      summary: { title: "slow worker (engineer)", agentId: "engineer" },
+      summary: { title: "slow worker (engineer)", agentDid: "engineer" },
       worker: null,
     } as unknown as Reached;
     expect(backgroundName(completion("completed"), worker, reached)).toEqual({
       subject: "slow worker (engineer)",
       outcome: "finished",
-      worker: { sessionId: "session-worker", agentId: "engineer" },
+      worker: { sessionId: "session-worker", agentDid: "engineer" },
     });
     expect(backgroundName(completion("failed"), worker)).toEqual({
       subject: "engineer",
       outcome: "failed",
-      worker: { sessionId: "session-from-call", agentId: null },
+      worker: { sessionId: "session-from-call", agentDid: null },
     });
   });
 

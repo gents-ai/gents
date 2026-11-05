@@ -49,10 +49,18 @@ impl OperatorIdentityInteraction {
     pub(crate) fn endpoint(
         self,
         record: &crate::client::PeerRecord,
+        capability: &gents::store::config_client::ClientSigningCapability,
+    ) -> Option<gents::store::config_client::GraphqlEndpoint> {
+        operator_endpoint(record, capability)
+    }
+
+    pub(crate) fn runtime_endpoint(
+        self,
+        record: &crate::client::PeerRecord,
     ) -> Option<gents::store::config_client::GraphqlEndpoint> {
         match self {
-            Self::Allow => operator_endpoint(record),
-            Self::Prevent => cached_operator_endpoint(record),
+            Self::Allow => runtime_operator_endpoint(record),
+            Self::Prevent => cached_runtime_operator_endpoint(record),
         }
     }
 }
@@ -122,20 +130,36 @@ struct StoredInitConfig {
     secure_enclave_label: Option<String>,
 }
 
-/// The operator GraphQL endpoint of a co-hosted runtime, acting as that
-/// runtime's node identity.
+/// Document reads and edits preserve the already-loaded client principal. This
+/// endpoint never opens the co-hosted runtime key or substitutes its authority.
+pub fn operator_endpoint(
+    record: &crate::client::PeerRecord,
+    capability: &gents::store::config_client::ClientSigningCapability,
+) -> Option<gents::store::config_client::GraphqlEndpoint> {
+    let url = record.operator_graphql()?;
+    gents::store::config_client::GraphqlEndpoint::as_principal(url, capability.did())
+        .with_client_signing_capability(capability.clone())
+        .ok()
+}
+
+/// The operational HTTP endpoint of a co-hosted runtime, acting as that
+/// runtime's node identity. Document configuration uses `operator_endpoint`.
 ///
-/// The runtime's node access control admits operator writes only from its own
-/// node DID. The desktop is that node's same-user host, so it loads the key
+/// Operational routes admit the runtime node DID. The desktop is that node's
+/// same-user host, so this operational adapter loads the key
 /// from the recorded runtime home. When the key cannot be loaded the endpoint
 /// is anonymous: DefraDB applies its configured read policy, and operator
-/// writes fail with the node's authorization error.
-pub fn operator_endpoint(
+/// calls fail with the node's authorization error.
+pub fn runtime_operator_endpoint(
     record: &crate::client::PeerRecord,
 ) -> Option<gents::store::config_client::GraphqlEndpoint> {
     let url = record.operator_graphql()?;
     Some(match load_operator_node_identity(record) {
-        Ok(()) => gents::store::config_client::GraphqlEndpoint::as_principal(url, &record.node_did),
+        Ok(capability) => {
+            gents::store::config_client::GraphqlEndpoint::as_principal(url, &record.node_did)
+                .with_client_signing_capability(capability)
+                .ok()?
+        }
         Err(error) => {
             tracing::warn!(
                 node_did = %record.node_did,
@@ -147,39 +171,24 @@ pub fn operator_endpoint(
     })
 }
 
-/// Background observation must not unlock a runtime identity. Cached authority
-/// remains bound to the endpoint served by that identity's recorded home;
-/// otherwise DefraDB receives an anonymous request and enforces its read policy.
-pub fn cached_operator_endpoint(
+/// Background observation does not unlock or reconstruct a runtime identity.
+pub fn cached_runtime_operator_endpoint(
     record: &crate::client::PeerRecord,
 ) -> Option<gents::store::config_client::GraphqlEndpoint> {
     let url = record.operator_graphql()?;
-    Some(
-        if gents::store::identity::can_mint_defradb_bearer(&record.node_did)
-            && hosted_runtime_home(record).is_ok()
-        {
-            gents::store::config_client::GraphqlEndpoint::as_principal(url, &record.node_did)
-        } else {
-            gents::store::config_client::GraphqlEndpoint::anonymous(url)
-        },
-    )
+    Some(gents::store::config_client::GraphqlEndpoint::anonymous(url))
+}
+
+fn load_operator_node_identity(
+    record: &crate::client::PeerRecord,
+) -> Result<gents::store::config_client::ClientSigningCapability> {
+    let identity = runtime_operator_signer(record)?;
+    Ok(identity.client_signing_capability()?)
 }
 
 /// Only a record for a runtime this desktop hosts qualifies, and only when
 /// its home's live `runtime.json` names both the record's endpoint and node,
 /// so a bearer is never sent to a remote or re-pointed endpoint.
-fn load_operator_node_identity(record: &crate::client::PeerRecord) -> Result<()> {
-    if gents::store::identity::can_mint_defradb_bearer(&record.node_did) {
-        return hosted_runtime_home(record).map(drop);
-    }
-    let identity = operator_signer(record)?;
-    anyhow::ensure!(
-        gents::store::identity::can_mint_defradb_bearer(identity.did()),
-        "runtime identity {} has no exportable signing key",
-        identity.did()
-    );
-    Ok(())
-}
 
 pub fn hosted_runtime_home(record: &crate::client::PeerRecord) -> Result<&Path> {
     let endpoint = record
@@ -204,7 +213,7 @@ pub fn hosted_runtime_home(record: &crate::client::PeerRecord) -> Result<&Path> 
 }
 
 /// Signs the operator commands the co-hosted runtime's HTTP routes take.
-pub fn operator_signer(
+pub fn runtime_operator_signer(
     record: &crate::client::PeerRecord,
 ) -> Result<Arc<dyn gents::store::identity::NodeIdentity>> {
     let identity = load_standard_runtime_identity(hosted_runtime_home(record)?)?;
@@ -317,7 +326,9 @@ pub fn runtime_status_url(server_address: &str) -> Result<String> {
     let mut url = reqwest::Url::parse(&with_scheme)
         .map_err(|error| anyhow::anyhow!("server_address is not a valid URL: {error}"))?;
     let path = url.path().trim_end_matches('/');
-    if path.is_empty() || path == "/" || path == "/api/v0" || path == "/api/v0/graphql" {
+    if let Some(prefix) = path.strip_suffix("/api/v0/graphql") {
+        url.set_path(&format!("{prefix}/status"));
+    } else if path.is_empty() || path == "/" || path == "/api/v0" {
         url.set_path("/status");
     } else if !path.ends_with("/status") {
         url.set_path(&format!("{path}/status"));
@@ -398,11 +409,32 @@ pub async fn fetch_hosted_runtime_status(
     record: &crate::client::PeerRecord,
     interaction: OperatorIdentityInteraction,
 ) -> Result<Option<Value>> {
+    let node_did = record.node_did.clone();
     let record = record.clone();
-    let endpoint = tokio::task::spawn_blocking(move || interaction.endpoint(&record)).await?;
-    let Some(endpoint) = endpoint.filter(|endpoint| !endpoint.is_anonymous()) else {
+    let endpoint =
+        tokio::task::spawn_blocking(move || interaction.runtime_endpoint(&record)).await?;
+    let Some(endpoint) = endpoint else {
         return Ok(None);
     };
+    if endpoint.is_anonymous() {
+        return Err(gents::store::config_client::ConfigClientError::ClientAgentSignerRequired)
+            .context("runtime status is unavailable without a held signing capability");
+    }
+    fetch_runtime_status_for_node(&endpoint, &node_did)
+        .await
+        .map(Some)
+}
+
+/// Observe the selected runtime using the caller's existing HTTP identity.
+/// A response from another node cannot establish liveness for this target.
+pub async fn fetch_runtime_status_for_node(
+    endpoint: &gents::store::config_client::GraphqlEndpoint,
+    node_did: &str,
+) -> Result<Value> {
+    anyhow::ensure!(
+        !endpoint.is_anonymous(),
+        "runtime status requires an authenticated caller"
+    );
     let status_url = runtime_status_url(endpoint.url())?;
     let client = runtime_http_client().await?;
     let response = endpoint
@@ -421,16 +453,20 @@ pub async fn fetch_hosted_runtime_status(
         "runtime status returned HTTP {}",
         response.status(),
     );
-    let payload = response.json().await.map_err(|error| {
+    let payload: Value = response.json().await.map_err(|error| {
         crate::error::BridgeError::runtime_http_error(
             error,
             "decoding authenticated runtime status".to_owned(),
         )
     })?;
-    Ok(Some(augment_peer_status_payload_for_desktop(
+    anyhow::ensure!(
+        payload.get("node_did").and_then(Value::as_str) == Some(node_did),
+        "runtime status belongs to a different node"
+    );
+    Ok(augment_peer_status_payload_for_desktop(
         payload,
         &status_url,
-    )))
+    ))
 }
 
 pub async fn fetch_runtime_connection_payload(endpoint: &str) -> Result<Value> {

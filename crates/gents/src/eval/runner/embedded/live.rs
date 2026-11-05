@@ -4,14 +4,13 @@ use std::time::Instant;
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node as EmbeddedNode;
 use crate::eval::runner::embedded::executor::capture::documents_capture_query;
 use crate::eval::runner::embedded::executor::evidence::usage_of;
 use crate::eval::runner::embedded::observe::request_evidence_from_query_data;
 use crate::eval::runner::executor::{Capture, StageSpec};
 use crate::eval::runner::progress::{LastToolCall, LiveSnapshot, ToolTally};
 use crate::store::config_client::ConfigAccess;
-use crate::store::graphql::graphql_with_transaction_retry;
 use crate::Collection;
 
 const CONFIGURATION: [Collection; 11] = [
@@ -30,6 +29,7 @@ const CONFIGURATION: [Collection; 11] = [
 
 pub(super) struct LiveObserver<'a> {
     node: &'a std::sync::Arc<EmbeddedNode>,
+    access: &'a ConfigAccess,
     trial_did: &'a str,
     installed: BTreeSet<String>,
     started: Instant,
@@ -39,6 +39,7 @@ pub(super) struct LiveObserver<'a> {
 impl<'a> LiveObserver<'a> {
     pub(super) async fn new(
         node: &'a std::sync::Arc<EmbeddedNode>,
+        access: &'a ConfigAccess,
         trial_did: &'a str,
         stages: &'a [StageSpec],
     ) -> Self {
@@ -58,6 +59,7 @@ impl<'a> LiveObserver<'a> {
         }
         Self {
             node,
+            access,
             trial_did,
             installed,
             started: Instant::now(),
@@ -68,7 +70,7 @@ impl<'a> LiveObserver<'a> {
     pub(super) async fn snapshot(&self) -> Result<LiveSnapshot> {
         let registered = collection_names(self.node).await?;
         let schemas: Vec<String> = registered.difference(&self.installed).cloned().collect();
-        let mut snapshot = activity(self.node).await?;
+        let mut snapshot = activity(self.access).await?;
         snapshot.observed_at =
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         snapshot.elapsed_secs = self.started.elapsed().as_secs();
@@ -82,7 +84,7 @@ impl<'a> LiveObserver<'a> {
             .collect();
         for collection in counted {
             let query = format!("{{ {collection} {{ _docID }} }}");
-            if let Some(rows) = count(self.node, &query, collection).await {
+            if let Some(rows) = count(self.access, &query, collection).await {
                 snapshot.documents.insert(collection.to_owned(), rows);
             }
         }
@@ -93,7 +95,7 @@ impl<'a> LiveObserver<'a> {
             let Ok(query) = documents_capture_query(collection, filter, &[], self.trial_did) else {
                 continue;
             };
-            if let Some(rows) = count(self.node, &query, collection).await {
+            if let Some(rows) = count(self.access, &query, collection).await {
                 snapshot.captures.insert((*name).to_owned(), rows);
             }
         }
@@ -106,7 +108,7 @@ async fn collection_names(node: &std::sync::Arc<EmbeddedNode>) -> Result<BTreeSe
     Ok(ConfigAccess::local(node.clone()).collection_names().await?)
 }
 
-async fn activity(node: &std::sync::Arc<EmbeddedNode>) -> Result<LiveSnapshot> {
+pub(super) async fn activity(access: &ConfigAccess) -> Result<LiveSnapshot> {
     let requests = crate::session::public_request_filter("");
     let query = format!(
         r#"{{
@@ -117,10 +119,10 @@ async fn activity(node: &std::sync::Arc<EmbeddedNode>) -> Result<LiveSnapshot> {
             ProviderContextReduction {{ node_did session_id requester_did }}
         }}"#
     );
-    let response = graphql_with_transaction_retry(node, &query, "eval trial live snapshot").await?;
-    let data = response.data.unwrap_or(Value::Null);
+    let response = access.execute(&query).await?;
+    let data = response.get("data").cloned().unwrap_or(Value::Null);
     let evidence = request_evidence_from_query_data(&data);
-    let last_tool = last_tool_call(node).await;
+    let last_tool = last_tool_call(access).await;
     let usage = usage_of(&evidence.inference_calls);
     let mut tools: BTreeMap<String, ToolTally> = BTreeMap::new();
     let mut failed_tool_calls = 0;
@@ -164,24 +166,23 @@ async fn activity(node: &std::sync::Arc<EmbeddedNode>) -> Result<LiveSnapshot> {
     })
 }
 
-async fn last_tool_call(node: &std::sync::Arc<EmbeddedNode>) -> Option<LastToolCall> {
+async fn last_tool_call(access: &ConfigAccess) -> Option<LastToolCall> {
     let query = r#"{ AgentToolCall(order: { started_at: DESC }, limit: 1) { _docID node_did session_id requester_did tool_name lifecycle_state } }"#;
-    let response = graphql_with_transaction_retry(node, query, "eval trial last tool call")
+    let response = access.execute(query)
         .await
         .map_err(|error| {
             tracing::debug!(error = %format!("{error:#}"), "eval trial last tool call was not read");
         })
         .ok()?;
     let row = response
-        .data
-        .as_ref()?
+        .get("data")?
         .get("AgentToolCall")?
         .as_array()?
         .first()?
         .clone();
     let text = |key: &str| row.get(key).and_then(Value::as_str).map(str::to_owned);
     let result = crate::tools::call::lifecycle::query::load_tool_call_presentation(
-        &ConfigAccess::local(node.clone()),
+        access,
         row.get("_docID")?.as_str()?,
         row.get("node_did")?.as_str()?,
         row.get("session_id")?.as_str()?,
@@ -208,12 +209,11 @@ fn one_line(text: &str, max: usize) -> String {
     }
 }
 
-async fn count(node: &EmbeddedNode, query: &str, collection: &str) -> Option<u64> {
-    match graphql_with_transaction_retry(node, query, "eval trial live count").await {
+async fn count(access: &ConfigAccess, query: &str, collection: &str) -> Option<u64> {
+    match access.execute(query).await {
         Ok(response) => Some(
             response
-                .data
-                .as_ref()
+                .get("data")
                 .and_then(|data| data.get(collection))
                 .and_then(Value::as_array)
                 .map_or(0, |rows| rows.len() as u64),
@@ -246,18 +246,22 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let live = activity(&home.node).await.unwrap();
+        let live = activity(&ConfigAccess::local(home.node.clone()))
+            .await
+            .unwrap();
         assert_eq!(live.input_tokens, None);
         assert_eq!(live.output_tokens, None);
         assert_eq!(live.reported_input_tokens, Some(112));
         assert_eq!(live.reported_output_tokens, Some(20));
         ConfigAccess::write_local(&home.node, "eval.test.live_usage_complete", r#"mutation { update_InferenceCall(filter: {call_id: {_eq: "pending"}}, input: {call_state: "completed", prompt_tokens: 8, completion_tokens: 3}) { _docID } }"#).await.unwrap();
-        let live = activity(&home.node).await.unwrap();
+        let live = activity(&ConfigAccess::local(home.node.clone()))
+            .await
+            .unwrap();
         assert_eq!(live.input_tokens, Some(120));
         assert_eq!(live.output_tokens, Some(23));
         assert_eq!(live.reported_input_tokens, live.input_tokens);
         assert_eq!(live.reported_output_tokens, live.output_tokens);
-        home.node.shutdown().await;
+        home.node.shutdown().await.expect("shutdown node");
     }
 
     #[tokio::test]
@@ -267,14 +271,18 @@ mod tests {
                 "eval-last-tool",
             )
             .await;
-        let running = last_tool_call(&node).await.expect("running tool");
+        let running = last_tool_call(&ConfigAccess::local(node.clone()))
+            .await
+            .expect("running tool");
         assert_eq!(running.state.as_deref(), Some("running"));
         assert_eq!(running.result, None);
         tool.complete("saved\n  the record").await.unwrap();
-        let finished = last_tool_call(&node).await.expect("completed tool");
+        let finished = last_tool_call(&ConfigAccess::local(node.clone()))
+            .await
+            .expect("completed tool");
         assert_eq!(finished.state.as_deref(), Some("completed"));
         assert_eq!(finished.result.as_deref(), Some("saved the record"));
-        node.shutdown().await;
+        node.shutdown().await.expect("shutdown node");
         std::fs::remove_dir_all(path).unwrap();
     }
 }

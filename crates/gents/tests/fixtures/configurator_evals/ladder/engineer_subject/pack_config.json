@@ -2,7 +2,7 @@
   "node": {},
   "agents": [
     {
-      "agent_id": "engineer",
+      "agent_slot": "engineer",
       "display_name": "The Engineer",
       "description": "Configures this node through the native config tool.",
       "context_id": "engineer-context",

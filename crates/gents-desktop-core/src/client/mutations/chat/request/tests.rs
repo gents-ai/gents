@@ -22,7 +22,7 @@ use super::lean_vocab_test::{
     assert_lean_transition_is_legal, lean_contract_snapshot, LeanSessionRecoveryCase,
 };
 
-const RECOVERY_AGENT_ID: &str = "amy-code";
+const RECOVERY_AGENT_DID: &str = "amy-code";
 const FAILED_CLAIM_BACKEND: &str = "old-claim-backend";
 
 #[derive(Debug)]
@@ -86,7 +86,7 @@ async fn retry_preserves_attachment_only_input_and_its_signed_snapshot() -> Resu
             &request_id,
             core.node_identity().did(),
             core.node_identity().did(),
-            RECOVERY_AGENT_ID,
+            RECOVERY_AGENT_DID,
             &pre.session_id,
             captured["authored_text"].as_str().unwrap(),
             &recovery.pre_origin,
@@ -114,7 +114,10 @@ async fn retry_preserves_attachment_only_input_and_its_signed_snapshot() -> Resu
         gents::verify_request_receipt_signature(&parent)?;
         let snapshot = core.store().snapshot();
         let retry = retry_request(
-            &core.node_arc(),
+            &gents::store::config_client::ConfigAccess::local_as(
+                core.node_arc(),
+                core.node_identity().did().parse()?,
+            ),
             snapshot.as_ref(),
             &parent,
             core.node_identity().did(),
@@ -144,7 +147,7 @@ async fn retry_preserves_attachment_only_input_and_its_signed_snapshot() -> Resu
 
 #[tokio::test]
 async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
-    let node = crate::test_support::node_builder().build().await?;
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     gents::ensure_runtime_schemas(&node).await?;
     let response = node
         .execute(
@@ -161,7 +164,7 @@ async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
                     source_id: "wait-submit",
                     session_id: "session-one",
                     target_node_did: "did:test:node",
-                    target_agent_id: "operator",
+                    target_agent_did: "operator",
                     created_at: "2026-08-25T00:00:00Z",
                     updated_at: "2026-08-25T00:00:00Z"
                 }) { _docID }
@@ -190,7 +193,7 @@ async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
         .context("mailbox item id")?;
 
     validate_mailbox_submission_cause(
-        &node,
+        &gents::store::config_client::ConfigAccess::local(node.clone()),
         item_id,
         "did:test:owner",
         "did:test:node",
@@ -199,7 +202,7 @@ async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
     )
     .await?;
     assert!(validate_mailbox_submission_cause(
-        &node,
+        &gents::store::config_client::ConfigAccess::local(node.clone()),
         item_id,
         "did:test:other",
         "did:test:node",
@@ -211,7 +214,7 @@ async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
     .to_string()
     .contains("another requester"));
     assert!(validate_mailbox_submission_cause(
-        &node,
+        &gents::store::config_client::ConfigAccess::local(node.clone()),
         item_id,
         "did:test:owner",
         "did:test:node",
@@ -223,7 +226,7 @@ async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
     .to_string()
     .contains("target agent"));
     assert!(validate_mailbox_submission_cause(
-        &node,
+        &gents::store::config_client::ConfigAccess::local(node.clone()),
         item_id,
         "did:test:owner",
         "did:test:node",
@@ -234,7 +237,7 @@ async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
     .unwrap_err()
     .to_string()
     .contains("target session"));
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     Ok(())
 }
 
@@ -391,7 +394,7 @@ async fn seed_session_recovery_pre_state(
         session_id: session_id.clone(),
         node_did: core.node_identity().did().to_owned(),
         requester_did: Some(core.node_identity().did().to_owned()),
-        agent_id: RECOVERY_AGENT_ID.to_owned(),
+        agent_did: RECOVERY_AGENT_DID.to_owned(),
         created_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         closed_at: None,
         archived_at: None,
@@ -539,7 +542,7 @@ async fn submit_recovery_seed_request(
         request_id.clone(),
         core.node_identity().did(),
         core.node_identity().did(),
-        RECOVERY_AGENT_ID,
+        RECOVERY_AGENT_DID,
         session_id,
         format!("{role} request for {}", case.name),
         case.pre_origin.clone(),
@@ -564,7 +567,7 @@ async fn submit_recovery_seed_request(
         request_id,
         session_id: session_id.to_string(),
         node_did: core.node_identity().did().to_string(),
-        agent_id: Some(RECOVERY_AGENT_ID.to_string()),
+        agent_did: Some(RECOVERY_AGENT_DID.to_string()),
     })
 }
 
@@ -579,7 +582,7 @@ fn synthetic_missing_retry_parent(
         node_did: Some(node_did.to_string()),
         requester_did: Some(node_did.to_owned()),
         input: None,
-        agent_id: Some(RECOVERY_AGENT_ID.to_string()),
+        agent_did: Some(RECOVERY_AGENT_DID.to_string()),
         session_id: Some(session_id.to_string()),
         retry_parent_request: Some(String::new()),
         retry_root_request: Some(request_id.to_string()),
@@ -685,7 +688,7 @@ async fn assert_legal_session_recovery_post_state(
         new_request.node_did.as_deref(),
         Some(core.node_identity().did())
     );
-    assert_eq!(new_request.agent_id.as_deref(), Some(RECOVERY_AGENT_ID));
+    assert_eq!(new_request.agent_did.as_deref(), Some(RECOVERY_AGENT_DID));
     assert_eq!(
         new_request.content.as_deref(),
         pre.parent.content.as_deref()
@@ -819,7 +822,10 @@ async fn retry_request_with_id_injection_for_test(
 ) -> Result<SubmittedRequest> {
     let snapshot = core.store().snapshot();
     let submitted = retry_request_with_request_id(
-        &core.node_arc(),
+        &gents::store::config_client::ConfigAccess::local_as(
+            core.node_arc(),
+            core.node_identity().did().parse()?,
+        ),
         snapshot.as_ref(),
         parent,
         core.node_identity().did(),
@@ -961,7 +967,7 @@ async fn latest_request_id_for_session_for_test(
                         order: [{{ created_at: DESC }}, {{ request_id: DESC }}],
                         limit: 1
                     ) {{
-                        _docID request_id node_did agent_id session_id content
+                        _docID request_id node_did agent_did session_id content
                         input max_total_tokens
                         lifecycle_state backend_id execution_origin retry_root_request
                         retry_parent_request retry_parent_request_doc_id retry_count max_retries
@@ -1114,7 +1120,7 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
             "2030-01-01T00:00:00Z",
         ),
         "requester route regression",
-        Some(RECOVERY_AGENT_ID),
+        Some(RECOVERY_AGENT_DID),
         SubmitRequestOptions {
             trigger_lineage: TriggerLineage {
                 trigger_kind: Some("manual".to_string()),
@@ -1212,7 +1218,6 @@ async fn goal_backed_desktop_submission_commits_goal_claim_and_signed_request_to
     let snapshot = core.store().snapshot();
     let access = ConfigAccess::local(core.node_arc());
     let submitted = super::submit_goal_backed_request(
-        core.node(),
         snapshot.as_ref(),
         &access,
         &session_id,
@@ -1221,7 +1226,7 @@ async fn goal_backed_desktop_submission_commits_goal_claim_and_signed_request_to
         core.node_identity(),
         test_local_admission(&core),
         "finish the task",
-        Some(RECOVERY_AGENT_ID),
+        Some(RECOVERY_AGENT_DID),
         SubmitRequestOptions::default(),
         "prove the desktop goal path",
         Some(2_000),
@@ -1311,7 +1316,7 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
             &session_id,
             core.node_identity().did(),
             "first attempt",
-            Some(RECOVERY_AGENT_ID),
+            Some(RECOVERY_AGENT_DID),
         )
         .await?;
     let mut parent = core
@@ -1351,7 +1356,10 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
 
     let snapshot = core.store().snapshot();
     let err = retry_request_with_request_id(
-        &core.node_arc(),
+        &gents::store::config_client::ConfigAccess::local_as(
+            core.node_arc(),
+            core.node_identity().did().parse()?,
+        ),
         snapshot.as_ref(),
         &parent,
         core.node_identity().did(),
@@ -1403,7 +1411,7 @@ async fn generated_reissued_inputs_preserve_retry_goal_opening_request() -> Resu
                 &request_id,
                 core.node_identity().did(),
                 core.node_identity().did(),
-                RECOVERY_AGENT_ID,
+                RECOVERY_AGENT_DID,
                 &session_id,
                 case["authored_text"].as_str().unwrap(),
                 "interactive",
@@ -1437,7 +1445,10 @@ async fn generated_reissued_inputs_preserve_retry_goal_opening_request() -> Resu
             }
             let snapshot = core.store().snapshot();
             let submitted = retry_request(
-                &core.node_arc(),
+                &gents::store::config_client::ConfigAccess::local_as(
+                    core.node_arc(),
+                    core.node_identity().did().parse()?,
+                ),
                 snapshot.as_ref(),
                 &parent,
                 core.node_identity().did(),
@@ -1493,7 +1504,7 @@ async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() ->
         &request_id,
         core.node_identity().did(),
         core.node_identity().did(),
-        RECOVERY_AGENT_ID,
+        RECOVERY_AGENT_DID,
         &session_id,
         "retry preserves its exact parent",
         "interactive",
@@ -1512,7 +1523,7 @@ async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() ->
         request_id,
         session_id: session_id.clone(),
         node_did: core.node_identity().did().to_owned(),
-        agent_id: Some(RECOVERY_AGENT_ID.to_owned()),
+        agent_did: Some(RECOVERY_AGENT_DID.to_owned()),
     };
     // The desktop snapshot holds live requests and session heads; this
     // claim-free fixture has no session, so only the pending row is projected.
@@ -1582,7 +1593,7 @@ async fn concurrent_retry_claims_return_one_durable_successor() -> Result<()> {
             &session_id,
             core.node_identity().did(),
             "retry exactly once",
-            Some(RECOVERY_AGENT_ID),
+            Some(RECOVERY_AGENT_DID),
         )
         .await?;
     let deadline = Utc::now() + chrono::Duration::minutes(5);
@@ -1649,7 +1660,7 @@ async fn seed_duplicate_request_id_for_test(
     request_id: &str,
     session_id: &str,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<()> {
     let created_at = Utc::now().to_rfc3339();
     let request_field = build_add_agent_request_field(
@@ -1657,7 +1668,7 @@ async fn seed_duplicate_request_id_for_test(
         request_id,
         node_did,
         "did:test:desktop",
-        agent_id,
+        agent_did,
         session_id,
         "",
         None,
@@ -1705,7 +1716,7 @@ async fn interactive_retry_ignores_newer_foreign_requester_row() -> Result<()> {
         &format!(
             r#"mutation {{ create_AgentRequest(input: {{
         request_id: "{request_id}", node_did: "{node}", requester_did: "did:test:other-requester",
-        session_id: "{session}", agent_id: "amy-code", content: "other requester",
+        session_id: "{session}", agent_did: "amy-code", content: "other requester",
         lifecycle_state: "processing", execution_origin: "interactive",
         created_at: "2099-01-01T00:00:00Z"
     }}) {{ _docID }} }}"#

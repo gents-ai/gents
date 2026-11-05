@@ -190,11 +190,11 @@ function useEntries(): SearchEntry[] {
         .filter((n) => !hidden.node(n.nodeDid))
         .flatMap((n) =>
           n.agents
-            .filter((a) => !hidden.agent(n.nodeDid, a.agentId))
+            .filter((a) => !hidden.agent(n.nodeDid, a.agentDid))
             .map((a) => ({
-              agentId: a.agentId,
+              agentDid: a.agentDid,
               nodeDid: n.nodeDid,
-              name: a.displayName ?? a.agentId,
+              name: a.displayName ?? a.agentDid,
               node: nodeName(n.nodeDid),
               pack: packOrigin(a.tags),
             })),
@@ -206,7 +206,7 @@ function useEntries(): SearchEntry[] {
         place: isLocalNode(n, homeDid) ? "Local" : "Remote",
         offline: !n.dialSucceeded,
       })),
-      agentName: (s) => agentName(s.agentId, fleet.nodes[s.nodeDid] ?? null),
+      agentName: (s) => agentName(s.agentDid, fleet.nodes[s.nodeDid] ?? null),
       nodeName,
       places: [
         ...(nodeDid
@@ -485,7 +485,7 @@ function Row({
       {e.kind === "session" && (
         <NodeAgentStack
           nodeDid={e.session.nodeDid}
-          agentId={e.session.agentId}
+          agentDid={e.session.agentDid}
           size="sm"
         />
       )}

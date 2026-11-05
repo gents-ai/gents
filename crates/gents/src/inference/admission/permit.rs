@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use futures::future::BoxFuture;
 use gents_loop::rig_compat::CachedInputTokensObservation;
 use tokio_util::sync::CancellationToken;

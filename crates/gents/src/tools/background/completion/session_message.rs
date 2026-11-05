@@ -21,24 +21,21 @@ fn running_session_message_filter(local_did: &str) -> String {
     )
 }
 
-pub(crate) async fn settle_running_session_message_rows(
+pub(crate) async fn settle_running_session_message_rows_with_access(
     node: &Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     local_did: &str,
 ) -> Result<usize> {
     let query = format!(
         r#"{{ AgentToolCall(filter: {{ {} }}) {{ {SESSION_MESSAGE_ROW_FIELDS} }} }}"#,
         running_session_message_filter(local_did)
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node.as_ref(),
-        &query,
-        "load running session-message rows",
-    )
-    .await?;
-    let rows = crate::store::graphql::rows::<SessionMessageRow>(&response, "AgentToolCall")?;
+    let response = access.execute(&query).await?;
+    let rows: Vec<SessionMessageRow> =
+        serde_json::from_value(response["data"]["AgentToolCall"].clone())?;
     let mut settled = 0;
     for row in rows {
-        match settle_row(node, &row).await {
+        match settle_row(node, access, &row).await {
             Ok(true) => settled += 1,
             Ok(false) => {}
             Err(error) => tracing::warn!(
@@ -53,6 +50,7 @@ pub(crate) async fn settle_running_session_message_rows(
 
 pub(super) async fn settle_rows_after_request_update(
     node: &Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     local_did: &str,
     request_doc_id: &str,
 ) -> Result<usize> {
@@ -62,15 +60,10 @@ pub(super) async fn settle_rows_after_request_update(
         }} }}"#,
         escape_graphql_string(request_doc_id)
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node.as_ref(),
-        &query,
-        "load updated request for session-message settlement",
-    )
-    .await?;
-    let Some(request) =
-        crate::store::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
-    else {
+    let response = access.execute(&query).await?;
+    let mut requests: Vec<AgentRequestRow> =
+        serde_json::from_value(response["data"]["AgentRequest"].clone())?;
+    let Some(request) = requests.pop() else {
         return Ok(0);
     };
     if !request
@@ -87,28 +80,45 @@ pub(super) async fn settle_rows_after_request_update(
         escape_graphql_string(&tool_doc_id),
         running_session_message_filter(local_did)
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node.as_ref(),
-        &query,
-        "load the session-message row a terminal request names",
-    )
-    .await?;
+    let response = access.execute(&query).await?;
+    let rows: Vec<SessionMessageRow> =
+        serde_json::from_value(response["data"]["AgentToolCall"].clone())?;
     let mut settled = 0;
-    for row in crate::store::graphql::rows::<SessionMessageRow>(&response, "AgentToolCall")? {
-        settled += usize::from(settle_row(node, &row).await?);
+    for row in rows {
+        settled += usize::from(settle_row(node, access, &row).await?);
     }
     Ok(settled)
 }
 
-async fn settle_row(node: &Arc<EmbeddedNode>, row: &SessionMessageRow) -> Result<bool> {
-    let Some(mut lifecycle) = ToolCallLifecycle::load_by_doc_id(
-        node.clone(),
-        &row.doc_id,
-        &row.node_did,
-        &row.session_id,
-        row.requester_did.as_deref(),
-    )
-    .await?
+async fn settle_row(
+    node: &Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
+    row: &SessionMessageRow,
+) -> Result<bool> {
+    let Some(mut lifecycle) = access
+        .transact_readonly("background.load_session_message", |txn| {
+            let node = node.clone();
+            Box::pin(async move {
+                let Some(mut lifecycle) = ToolCallLifecycle::load_by_doc_id_in_txn(
+                    txn,
+                    node,
+                    &row.doc_id,
+                    &row.node_did,
+                    &row.session_id,
+                    row.requester_did.as_deref(),
+                )
+                .await?
+                else {
+                    return Ok::<_, anyhow::Error>(None);
+                };
+                if txn.actor_did() != Some(lifecycle.actor().as_str()) {
+                    return Ok(None);
+                }
+                lifecycle.bind_agent_signer(txn.managed_agent_signer())?;
+                Ok(Some(lifecycle))
+            })
+        })
+        .await?
     else {
         return Ok(false);
     };
@@ -177,7 +187,7 @@ fn assignment_status_reason(status: crate::goal::GoalStatus) -> &'static str {
 }
 
 pub(crate) async fn turn_assignment_handoff(
-    node: &Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     caused: &AgentRequestRow,
     terminal: &crate::tools::call::lifecycle::CausedRequestTerminal,
 ) -> TurnAssignmentHandoff {
@@ -195,7 +205,7 @@ pub(crate) async fn turn_assignment_handoff(
             (Some(node_did), Some(session_id))
                 if !node_did.trim().is_empty() && !session_id.trim().is_empty() =>
             {
-                match crate::goal::load_request_assignment(node, caused).await {
+                match crate::goal::load_request_assignment(access, caused).await {
                     Ok(crate::goal::RequestAssignmentObservation::Assigned(goal)) => goal
                         .parsed_status()
                         .map(AssignmentObservation::Assigned)
@@ -259,6 +269,7 @@ pub(crate) async fn settle_session_message_row(
             }
             append_background_tool_completion(
                 node,
+                &lifecycle.access()?,
                 lifecycle.session_id(),
                 &calling_request_id,
                 &doc_id,
@@ -276,9 +287,11 @@ pub(crate) async fn settle_session_message_row(
         .doc_id
         .as_deref()
         .context("caused request lacks physical identity")?;
-    let Some(terminal) =
-        crate::tools::background::status::load_session_message_terminal(node, caused_doc_id)
-            .await?
+    let Some(terminal) = crate::tools::background::status::load_session_message_terminal(
+        &lifecycle.access()?,
+        caused_doc_id,
+    )
+    .await?
     else {
         return Ok(false);
     };
@@ -288,7 +301,7 @@ pub(crate) async fn settle_session_message_row(
     // non-complete handoff. Computing it first lets the reason persist as
     // part of the row's `completionPending:<reason>` settlement record, so
     // the completion redrive can re-render the same evidence.
-    let handoff = turn_assignment_handoff(node, &caused, &terminal).await;
+    let handoff = turn_assignment_handoff(&lifecycle.access()?, &caused, &terminal).await;
     let handoff_reason = handoff.reason();
     if !lifecycle
         .settle_session_message(&terminal, handoff_reason)
@@ -298,6 +311,7 @@ pub(crate) async fn settle_session_message_row(
     }
     append_background_tool_completion(
         node,
+        &lifecycle.access()?,
         lifecycle.session_id(),
         &calling_request_id,
         &doc_id,
@@ -349,6 +363,19 @@ mod turn_assignment_tests {
     use super::*;
     use crate::tools::call::lifecycle::admission_fixture::PublishedSessionMessage;
     use crate::tools::call::lifecycle::AwaitMode;
+
+    fn recovery_identities(
+        admission: &crate::tools::call::lifecycle::admission_fixture::PublishedAdmission,
+    ) -> Vec<Arc<dyn crate::store::identity::NodeIdentity>> {
+        vec![Arc::new(
+            admission
+                .tool
+                .access()
+                .unwrap()
+                .managed_agent_signer()
+                .unwrap(),
+        )]
+    }
 
     fn handoff(
         turn_completed: bool,
@@ -487,7 +514,7 @@ mod turn_assignment_tests {
         let create = format!(
             r#"mutation {{ create_AgentRequest(input: {{
             request_id: "{}", purpose: "normal", node_did: "{}", requester_did: "{}",
-            agent_id: "general", session_id: "{}", content: "head", lifecycle_state: "pending",
+            agent_did: "general", session_id: "{}", content: "head", lifecycle_state: "pending",
             execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
         }}) {{ _docID }} }}"#,
             escape_graphql_string(&head_id),
@@ -546,16 +573,20 @@ mod turn_assignment_tests {
             })
             .unwrap();
         let foreign_accepted = crate::tools::background::status::load_session_message_terminal(
-            node,
+            &crate::ConfigAccess::local(node.clone()),
             &caused_request_doc_id,
         )
         .await
         .is_ok();
         assert_eq!(foreign_accepted, foreign_model.expected);
         assert_eq!(
-            settle_running_session_message_rows(node, did)
-                .await
-                .unwrap(),
+            settle_running_session_message_rows_with_access(
+                node,
+                &admission.tool.access().unwrap(),
+                did
+            )
+            .await
+            .unwrap(),
             0
         );
         assert!(
@@ -568,7 +599,7 @@ mod turn_assignment_tests {
                 &format!("request_id: \"{}\"", head_id),
                 "request_id: \"foreign-agent-head\"",
             )
-            .replace("agent_id: \"general\"", "agent_id: \"foreign-agent\"");
+            .replace("agent_did: \"general\"", "agent_did: \"foreign-agent\"");
         let foreign_agent = crate::store::config_client::ConfigAccess::write_local(
             node,
             "test.foreign_agent_head",
@@ -604,16 +635,20 @@ mod turn_assignment_tests {
             .unwrap();
         let foreign_agent_accepted =
             crate::tools::background::status::load_session_message_terminal(
-                node,
+                &crate::ConfigAccess::local(node.clone()),
                 &caused_request_doc_id,
             )
             .await
             .is_ok();
         assert_eq!(foreign_agent_accepted, foreign_agent_model.expected);
         assert_eq!(
-            settle_running_session_message_rows(node, did)
-                .await
-                .unwrap(),
+            settle_running_session_message_rows_with_access(
+                node,
+                &admission.tool.access().unwrap(),
+                did
+            )
+            .await
+            .unwrap(),
             0
         );
         let mismatched_fold = format!(
@@ -639,7 +674,7 @@ mod turn_assignment_tests {
             })
             .unwrap();
         let mismatch_accepted = crate::tools::background::status::load_session_message_terminal(
-            node,
+            &crate::ConfigAccess::local(node.clone()),
             &caused_request_doc_id,
         )
         .await
@@ -667,16 +702,20 @@ mod turn_assignment_tests {
             })
             .unwrap();
         let matching_accepted = crate::tools::background::status::load_session_message_terminal(
-            node,
+            &crate::ConfigAccess::local(node.clone()),
             &caused_request_doc_id,
         )
         .await
         .is_ok();
         assert_eq!(matching_accepted, matching_model.expected);
         assert_eq!(
-            settle_running_session_message_rows(node, did)
-                .await
-                .unwrap(),
+            settle_running_session_message_rows_with_access(
+                node,
+                &admission.tool.access().unwrap(),
+                did
+            )
+            .await
+            .unwrap(),
             0
         );
         assert!(
@@ -684,17 +723,27 @@ mod turn_assignment_tests {
                 .await
                 .is_empty()
         );
-        crate::tools::call::lifecycle::admission_fixture::complete_child(
+        crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
             node,
             &head_id,
             did,
             "head answer",
+            &admission
+                .tool
+                .access()
+                .unwrap()
+                .managed_agent_signer()
+                .unwrap(),
         )
         .await;
         assert_eq!(
-            settle_running_session_message_rows(node, did)
-                .await
-                .unwrap(),
+            settle_running_session_message_rows_with_access(
+                node,
+                &admission.tool.access().unwrap(),
+                did
+            )
+            .await
+            .unwrap(),
             1
         );
         let notifications =
@@ -702,16 +751,20 @@ mod turn_assignment_tests {
         assert_eq!(notifications.len(), 1);
         assert!(notifications[0].contains("head answer"));
         assert!(!notifications[0].contains("request_superseded"));
-        settle_running_session_message_rows(node, did)
-            .await
-            .unwrap();
-        crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(node, did)
+        settle_running_session_message_rows_with_access(
+            node,
+            &admission.tool.access().unwrap(),
+            did,
+        )
+        .await
+        .unwrap();
+        crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(node, did, &recovery_identities(&admission))
             .await.unwrap();
         assert_eq!(
             session_message_notifications(node, did, admission.tool.session_id()).await,
             notifications
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(&admission.path).unwrap();
     }
 
@@ -738,28 +791,45 @@ mod turn_assignment_tests {
         crate::test_support::install_test_agent(node, did, "general").await;
         // The caused session carries an active Goal: a finished turn with a
         // live assignment is not assignment success.
-        crate::goal::set_goal(
-            node,
+        crate::goal::set_goal_from_access(
+            &admission.tool.access().unwrap(),
             did,
             &caused_session_id(node, &caused_request_doc_id).await,
             Some("hold"),
             Some(crate::goal::GoalStatus::Active),
             None,
+            None,
         )
         .await
         .expect("persist an active Goal in the caused session");
-        bind_caused_assignment(node, did, &caused_request_doc_id).await;
-        crate::tools::call::lifecycle::admission_fixture::complete_child(
+        bind_caused_assignment(
+            node,
+            &admission.tool.access().unwrap(),
+            did,
+            &caused_request_doc_id,
+        )
+        .await;
+        crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
             node,
             &caused_request_id,
             did,
             "child done",
+            &admission
+                .tool
+                .access()
+                .unwrap()
+                .managed_agent_signer()
+                .unwrap(),
         )
         .await;
 
-        let settled = settle_running_session_message_rows(node, did)
-            .await
-            .unwrap();
+        let settled = settle_running_session_message_rows_with_access(
+            node,
+            &admission.tool.access().unwrap(),
+            did,
+        )
+        .await
+        .unwrap();
         assert_eq!(settled, 1, "the caused terminal settles the row");
         // One settle call persists the suffix, publishes the notice and
         // advances the row: the converged form is `completed` with the
@@ -782,7 +852,7 @@ mod turn_assignment_tests {
         // nothing and the notice stays byte-identical.
         let redrive =
             crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
-                node, did,
+                node, did, &recovery_identities(&admission),
             )
             .await
             .unwrap();
@@ -790,7 +860,11 @@ mod turn_assignment_tests {
             redrive.side_effects_converged, 0,
             "side effects already converged; the replay republishes nothing"
         );
-        admission.node.shutdown().await;
+        admission
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
         std::fs::remove_dir_all(&admission.path).expect("remove fixture");
     }
 
@@ -816,17 +890,27 @@ mod turn_assignment_tests {
         let did = &admission.node_did;
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
         crate::test_support::install_test_agent(node, did, "general").await;
-        crate::tools::call::lifecycle::admission_fixture::complete_child(
+        crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
             node,
             &caused_request_id,
             did,
             "child done",
+            &admission
+                .tool
+                .access()
+                .unwrap()
+                .managed_agent_signer()
+                .unwrap(),
         )
         .await;
 
-        let settled = settle_running_session_message_rows(node, did)
-            .await
-            .unwrap();
+        let settled = settle_running_session_message_rows_with_access(
+            node,
+            &admission.tool.access().unwrap(),
+            did,
+        )
+        .await
+        .unwrap();
         assert_eq!(settled, 1);
         // One settle call persists the suffix, publishes the notice and
         // advances the row; the notice is where the absent-assignment
@@ -841,7 +925,11 @@ mod turn_assignment_tests {
             "first notice names the absent assignment: {}",
             notifications[0]
         );
-        admission.node.shutdown().await;
+        admission
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
         std::fs::remove_dir_all(&admission.path).expect("remove fixture");
     }
 
@@ -866,28 +954,45 @@ mod turn_assignment_tests {
         let did = &admission.node_did;
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
         crate::test_support::install_test_agent(node, did, "general").await;
-        crate::goal::set_goal(
-            node,
+        crate::goal::set_goal_from_access(
+            &admission.tool.access().unwrap(),
             did,
             &caused_session_id(node, &caused_request_doc_id).await,
             Some("done"),
             Some(crate::goal::GoalStatus::Complete),
             None,
+            None,
         )
         .await
         .expect("persist a complete Goal in the caused session");
-        bind_caused_assignment(node, did, &caused_request_doc_id).await;
-        crate::tools::call::lifecycle::admission_fixture::complete_child(
+        bind_caused_assignment(
+            node,
+            &admission.tool.access().unwrap(),
+            did,
+            &caused_request_doc_id,
+        )
+        .await;
+        crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
             node,
             &caused_request_id,
             did,
             "child done",
+            &admission
+                .tool
+                .access()
+                .unwrap()
+                .managed_agent_signer()
+                .unwrap(),
         )
         .await;
 
-        let settled = settle_running_session_message_rows(node, did)
-            .await
-            .unwrap();
+        let settled = settle_running_session_message_rows_with_access(
+            node,
+            &admission.tool.access().unwrap(),
+            did,
+        )
+        .await
+        .unwrap();
         assert_eq!(settled, 1);
         let row = tool_call_row(node, &tool_doc_id).await;
         assert_eq!(row["status"], "completed");
@@ -899,7 +1004,11 @@ mod turn_assignment_tests {
             "a complete assignment stays reasonless: {}",
             notifications[0]
         );
-        admission.node.shutdown().await;
+        admission
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
         std::fs::remove_dir_all(&admission.path).expect("remove fixture");
     }
 
@@ -932,22 +1041,35 @@ mod turn_assignment_tests {
         let session_id = admission.tool.session_id().to_owned();
         crate::test_support::install_test_agent(node, did, "general").await;
         let goal_session_id = caused_session_id(node, &caused_request_doc_id).await;
-        crate::goal::set_goal(
-            node,
+        crate::goal::set_goal_from_access(
+            &admission.tool.access().unwrap(),
             did,
             &goal_session_id,
             Some("hold"),
             Some(crate::goal::GoalStatus::Active),
             None,
+            None,
         )
         .await
         .expect("persist an active Goal in the caused session");
-        bind_caused_assignment(node, did, &caused_request_doc_id).await;
-        crate::tools::call::lifecycle::admission_fixture::complete_child(
+        bind_caused_assignment(
+            node,
+            &admission.tool.access().unwrap(),
+            did,
+            &caused_request_doc_id,
+        )
+        .await;
+        crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
             node,
             &caused_request_id,
             did,
             "child done",
+            &admission
+                .tool
+                .access()
+                .unwrap()
+                .managed_agent_signer()
+                .unwrap(),
         )
         .await;
 
@@ -983,7 +1105,12 @@ mod turn_assignment_tests {
         else {
             panic!("the completed child is a terminal observation");
         };
-        let handoff = turn_assignment_handoff(node, &caused, &terminal).await;
+        let handoff = turn_assignment_handoff(
+            &crate::ConfigAccess::local_as(node.clone(), lifecycle.actor().clone()),
+            &caused,
+            &terminal,
+        )
+        .await;
         let handoff_reason = handoff.reason();
         assert_eq!(handoff_reason, Some("assignment_active"));
         assert!(lifecycle
@@ -1005,12 +1132,13 @@ mod turn_assignment_tests {
         // The assignment changes under the replay (the Goal completes), but
         // the redrive must re-render the persisted suffix, never re-observe
         // live state.
-        crate::goal::set_goal(
-            node,
+        crate::goal::set_goal_from_access(
+            &admission.tool.access().unwrap(),
             did,
             &goal_session_id,
             Some("hold"),
             Some(crate::goal::GoalStatus::Complete),
+            None,
             None,
         )
         .await
@@ -1019,7 +1147,7 @@ mod turn_assignment_tests {
         // The redrive re-renders from the row's persisted suffix.
         let report =
             crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
-                node, did,
+                node, did, &recovery_identities(&admission),
             )
             .await
             .unwrap();
@@ -1033,7 +1161,11 @@ mod turn_assignment_tests {
         );
         let row = tool_call_row(node, &tool_doc_id).await;
         assert_eq!(row["status"], "completed", "side effects converged");
-        admission.node.shutdown().await;
+        admission
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
         std::fs::remove_dir_all(&admission.path).expect("remove fixture");
     }
 
@@ -1100,13 +1232,21 @@ mod turn_assignment_tests {
         notifications
     }
 
-    async fn bind_caused_assignment(node: &Arc<EmbeddedNode>, did: &str, request_doc: &str) {
+    async fn bind_caused_assignment(
+        node: &Arc<EmbeddedNode>,
+        access: &crate::ConfigAccess,
+        did: &str,
+        request_doc: &str,
+    ) {
         let session = caused_session_id(node, request_doc).await;
-        let goal = crate::goal::load_canonical_goal(node, did, &session)
+        let goal = access
+            .transact_readonly("test.load_caused_goal", |txn| {
+                Box::pin(crate::goal::load_canonical_goal_in_txn(txn, did, &session))
+            })
             .await
             .unwrap()
             .unwrap();
-        crate::store::config_client::ConfigAccess::local(node.clone()).write("test.bind_caused_assignment",
+        access.write("test.bind_caused_assignment",
             &format!("mutation {{update_Goal(docID: \"{}\", input: {{assignment_root_request_doc_id: \"{}\"}}) {{_docID}}}}",
                 escape_graphql_string(&goal.doc_id), escape_graphql_string(request_doc))).await.unwrap();
     }

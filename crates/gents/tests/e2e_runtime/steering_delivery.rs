@@ -71,7 +71,10 @@ async fn steering_case(hold_tool: bool, promote: bool) {
     let name = name.as_str();
     let db = test_db(name).await;
     let did = db.node_identity.did();
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let first_response = if hold_tool {
         StreamResponse::streams(
             name,
@@ -115,7 +118,7 @@ async fn steering_case(hold_tool: bool, promote: bool) {
     let runtime = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
-        .default_agent_id(AGENT)
+        .default_agent_did(AGENT)
         .tool_ceiling(gents::ToolCeiling::meta_only())
         .agent(AGENT)
         .backend_id(BACKEND)
@@ -179,7 +182,7 @@ async fn steering_case(hold_tool: bool, promote: bool) {
     let mut replacement = submit_pending_user_edit(
         &access,
         db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::local_self(did),
+        AgentRequestAdmissionRecord::client(did),
         None,
         did,
         name,
@@ -199,7 +202,7 @@ async fn steering_case(hold_tool: bool, promote: bool) {
     submit_pending_user_edit(
         &access,
         db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::local_self(did),
+        AgentRequestAdmissionRecord::client(did),
         None,
         did,
         name,
@@ -240,7 +243,7 @@ async fn steering_case(hold_tool: bool, promote: bool) {
         replacement = submit_pending_user_steer(
             &access,
             db.node_identity.as_ref(),
-            AgentRequestAdmissionRecord::local_self(did),
+            AgentRequestAdmissionRecord::client(did),
             None,
             did,
             name,
@@ -364,7 +367,7 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
         "forged content must not execute",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::local_self(did),
+        AgentRequestAdmissionRecord::client(did),
     );
     forged.input.queue = Some(RequestQueue {
         source: QueueSource::User,
@@ -420,7 +423,16 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
         .observed_completion_bodies()
         .iter()
         .all(|body| !body.to_string().contains("forged content must not execute")));
-    let captures = ConfigAccess::local(db.node.clone()).execute(&format!(r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#, escape_graphql_string("forged-slot"))).await.unwrap();
+    let captures = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    )
+    .execute(&format!(
+        r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#,
+        escape_graphql_string("forged-slot")
+    ))
+    .await
+    .unwrap();
     assert!(captures["data"]["RenderedRequest"]
         .as_array()
         .unwrap()
@@ -472,7 +484,7 @@ async fn signed_agent_steer_passes_a_queued_turn_after_a_held_tool() {
         name,
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::local_self(did),
+        AgentRequestAdmissionRecord::client(did),
     );
     head.request_hop = 1;
     head.caused_by_parent_request_id = Some("origin-request".into());
@@ -487,7 +499,7 @@ async fn signed_agent_steer_passes_a_queued_turn_after_a_held_tool() {
     let runtime = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
-        .default_agent_id(AGENT)
+        .default_agent_did(AGENT)
         .tool_ceiling(gents::ToolCeiling::meta_only())
         .agent(AGENT)
         .backend_id(BACKEND)
@@ -533,7 +545,7 @@ async fn signed_agent_steer_passes_a_queued_turn_after_a_held_tool() {
         "steer at tool boundary",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::local_self(did),
+        AgentRequestAdmissionRecord::client(did),
     );
     steer.request_hop = 2;
     steer.caused_by_parent_request_id = Some("priority-head".into());
@@ -570,7 +582,7 @@ async fn signed_agent_steer_passes_a_queued_turn_after_a_held_tool() {
     let restarted = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
-        .default_agent_id(AGENT)
+        .default_agent_did(AGENT)
         .tool_ceiling(gents::ToolCeiling::meta_only())
         .agent(AGENT)
         .backend_id(BACKEND)

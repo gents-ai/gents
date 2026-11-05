@@ -1,7 +1,7 @@
 use super::*;
 use crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 use crate::inference::auth::credential::{preset_account_backend, store_sign_in};
-use crate::request::admission::verify_runtime_local_control_receipt;
+use crate::request::admission::verify_request_receipt_signature;
 use crate::store::config_client::{
     apply_desired_state_plan, write_inference_backend_document, ConfigAccess,
     DesiredStateApplyDocument, DesiredStateApplyPlan,
@@ -27,6 +27,10 @@ pub(crate) struct ClaudeAccounts {
 pub(crate) struct Fixture {
     pub node: Arc<EmbeddedNode>,
     pub identity: Arc<KeyIdentity>,
+    pub user: Arc<KeyIdentity>,
+    pub agent: Arc<dyn NodeIdentity>,
+    pub session_doc_id: String,
+    pub agent_doc_id: String,
     pub goal: GoalDocument,
     pub parent: crate::request::watcher::AgentRequest,
     _temp: tempfile::TempDir,
@@ -48,6 +52,8 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let identity =
             Arc::new(KeyIdentity::load_or_create(temp.path().join("target.key"), None).unwrap());
+        let user =
+            Arc::new(KeyIdentity::load_or_create(temp.path().join("user.key"), None).unwrap());
         let node = Arc::new(
             EmbeddedNode::builder()
                 .with_node_identity_did(identity.did())
@@ -58,14 +64,123 @@ impl Fixture {
         crate::store::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
-        crate::test_support::install_test_agent(&node, identity.did(), "contract-behavior").await;
-        let goal = set_goal(
+        let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+        let agent =
+            crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
+        let user_access =
+            ConfigAccess::local_as(node.clone(), ::identity::Did::new(user.did()).unwrap());
+        let doc = user_access
+            .transact_write("test.goal_fixture.node", |txn| {
+                Box::pin(async {
+                    let created = txn.execute_with_variables(
+                "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                &json!({"input": {"node_did": identity.did()}}),
+            ).await?;
+                    let doc = crate::store::graphql::created_doc_id(&created, "Node")?;
+                    Ok::<_, anyhow::Error>(doc)
+                })
+            })
+            .await
+            .unwrap();
+        user_access
+            .add_actor_relationship(
+                "Node",
+                &doc,
+                "runtime_reader",
+                &::identity::Did::new(identity.did()).unwrap(),
+            )
+            .await
+            .unwrap();
+        let context = format!("{}:context", binding.agent_did);
+        let tools = format!("{}:tools", binding.agent_did);
+        let profile = format!("{}:inference", binding.agent_did);
+        let backend = format!("{}:backend", binding.agent_did);
+        let documents = [
+            (Collection::Agent, json!({"node_did":identity.did(),"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"display_name":"contract-behavior","context_id":context,"inference_profile_id":profile})),
+            (Collection::AgentContext, json!({"node_did":identity.did(),"context_id":context,"tools_id":tools})),
+            (Collection::Tools, json!({"node_did":identity.did(),"tools_id":tools})),
+            (Collection::InferenceProfile, json!({"node_did":identity.did(),"profile_id":profile,"backend_id":backend,"model_name":"test-model"})),
+            (Collection::InferenceBackend, json!({"node_did":identity.did(),"backend_id":backend,"name":"Test inference","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
+        ].into_iter().map(|(collection, value)| DesiredStateApplyDocument {
+            collection, add: value.clone(), update: value,
+        }).collect();
+        let plan = DesiredStateApplyPlan::new(documents).unwrap();
+        user_access
+            .transact_write("test.goal_fixture.agent", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            })
+            .await
+            .unwrap();
+        crate::inference::backends::registry::set_backend_probe_status(
             &node,
+            identity.did(),
+            &backend,
+            "healthy",
+        )
+        .await
+        .unwrap();
+        user_access
+            .transact_write("test.goal_fixture.session", |txn| {
+                let binding = &binding;
+                let identity = &identity;
+                let user = &user;
+                Box::pin(async move {
+                    crate::session::ensure_session_in_txn(
+                        txn,
+                        SESSION,
+                        identity.did(),
+                        &binding.agent_did,
+                        Some(user.did()),
+                        None,
+                        None,
+                        "2026-01-01T00:00:00Z",
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+        let session_doc_id = user_access
+            .transact_readonly("test.goal_fixture.session_document", |txn| {
+                Box::pin(async {
+                    crate::session::load_agent_session_owner_in_txn(txn, identity.did(), SESSION)
+                        .await
+                })
+            })
+            .await
+            .unwrap()
+            .unwrap()
+            .doc_id;
+        let agent_doc_id = crate::goal::client_control::agent_document_for_test(
+            &user_access,
+            identity.did(),
+            &binding.agent_did,
+        )
+        .await;
+        crate::session::grant_created_session_relationships(
+            &user_access,
+            &session_doc_id,
+            &agent_doc_id,
+            &binding.agent_did,
+        )
+        .await
+        .unwrap();
+        let agent_access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            ::identity::Did::new(&binding.agent_did).unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        let goal = set_goal_from_access(
+            &agent_access,
             identity.did(),
             SESSION,
             Some("Finish the original work"),
             Some(GoalStatus::parse(before["status"].as_str().unwrap()).unwrap()),
             Some(Some(1000)),
+            None,
         )
         .await
         .unwrap();
@@ -74,42 +189,50 @@ impl Fixture {
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 request_id,
                 identity.did(),
-                identity.did(),
-                "contract-behavior",
+                user.did(),
+                &binding.agent_did,
                 SESSION,
                 "Earlier work",
                 "interactive",
                 "2010-01-01T00:00:00Z",
-                AgentRequestAdmissionRecord::local_self(identity.did()),
+                AgentRequestAdmissionRecord::client(user.did()),
             );
-            crate::sign_agent_request_create(identity.as_ref(), &mut request)
+            request.session_doc_id = Some(session_doc_id.clone());
+            request.agent_doc_id = Some(agent_doc_id.clone());
+            crate::sign_agent_request_create(user.as_ref(), &mut request)
                 .await
                 .unwrap();
-            execute(&node, &request.graphql_mutation().unwrap()).await;
+            crate::request::lifecycle::submit_client_request(&user_access, &request)
+                .await
+                .unwrap();
         }
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             PARENT,
             identity.did(),
-            identity.did(),
-            "contract-behavior",
+            user.did(),
+            &binding.agent_did,
             SESSION,
             "Original context",
             "interactive",
             "2020-01-01T00:00:00Z",
-            AgentRequestAdmissionRecord::local_self(identity.did()),
+            AgentRequestAdmissionRecord::client(user.did()),
         );
+        create.session_doc_id = Some(session_doc_id.clone());
+        create.agent_doc_id = Some(agent_doc_id.clone());
         create.caused_by_correlation = Some("graph-correlation".into());
         create.caused_by_source_doc_id = Some("source".into());
         create.caused_by_trigger_context = Some(r#"{"contract":"context"}"#.into());
-        crate::sign_agent_request_create(identity.as_ref(), &mut create)
+        crate::sign_agent_request_create(user.as_ref(), &mut create)
             .await
             .unwrap();
-        execute(&node, &create.graphql_mutation().unwrap()).await;
+        crate::request::lifecycle::submit_client_request(&user_access, &create)
+            .await
+            .unwrap();
         if terminal_parent {
-            execute(&node, &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{PARENT}" }} }}, input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#)).await;
+            agent_access.write("test.goal_fixture.terminal", &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{PARENT}" }} }}, input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#)).await.unwrap();
         }
-        let rows = request_rows(&node).await;
+        let rows = request_rows(&user_access).await;
         let parent = crate::request::watcher::AgentRequest::try_from(
             rows.into_iter().find(|r| r.request_id == PARENT).unwrap(),
         )
@@ -117,6 +240,10 @@ impl Fixture {
         let f = Self {
             node,
             identity,
+            user,
+            agent,
+            session_doc_id,
+            agent_doc_id,
             goal,
             parent,
             _temp: temp,
@@ -124,6 +251,22 @@ impl Fixture {
         f.seed_goal_snapshot(before).await;
         f
     }
+    pub fn agent_access(&self) -> ConfigAccess {
+        ConfigAccess::local_managed_agent(
+            self.node.clone(),
+            ::identity::Did::new(self.agent.did()).unwrap(),
+            self.agent.as_ref(),
+        )
+        .unwrap()
+    }
+
+    pub fn user_access(&self) -> ConfigAccess {
+        ConfigAccess::local_as(
+            self.node.clone(),
+            ::identity::Did::new(self.user.did()).unwrap(),
+        )
+    }
+
     pub async fn seed_goal_snapshot(&self, before: &Value) {
         let last = if before["last_continued_from"].is_null() {
             "null".to_owned()
@@ -135,7 +278,7 @@ impl Fixture {
             };
             format!("\"{request}\"")
         };
-        execute(&self.node, &format!(r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{
+        execute(&self.agent_access(), &format!(r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{
             continuation_sequence: {}, last_continued_from_request_id: {last}, consecutive_blocked_audits: {},
             wrapup_requested: {}, wrapup_completed: {}, tokens_used: {}, token_budget: {}
         }}) {{ _docID }} }}"#, escape_graphql_string(&self.goal.doc_id), before["sequence"], before["blocked_audits"],
@@ -144,7 +287,7 @@ impl Fixture {
     pub async fn seed_child(&self, conflicting: bool) {
         let mut create = prepare_goal_continuation(
             &self.parent,
-            "contract-behavior".into(),
+            self.parent.agent_did.clone(),
             &self.goal.goal_id,
             "Original signed continuation",
             1,
@@ -158,16 +301,51 @@ impl Fixture {
         if conflicting {
             create.input.queue.as_mut().unwrap().key = Some("goal:foreign".into());
         }
-        sign_request(&mut create, RequestSigner::Identity(self.identity.as_ref()))
+        sign_request(&mut create, RequestSigner::Identity(self.agent.as_ref()))
             .await
             .unwrap();
-        execute(&self.node, &create.graphql_mutation().unwrap()).await;
-        let child = request_rows(&self.node)
+        let agent_access = self.agent_access();
+        agent_access
+            .write("test.goal.seed_child", &create.graphql_mutation().unwrap())
+            .await
+            .unwrap();
+        let child = request_rows(&agent_access)
             .await
             .into_iter()
             .find(|row| row.request_id == create.request_id)
             .unwrap();
-        ConfigAccess::local(self.node.clone())
+        let child_doc = child.doc_id.as_deref().unwrap();
+        agent_access
+            .add_resource_relationship(
+                "AgentRequest",
+                child_doc,
+                "parent",
+                "agents",
+                &self.agent_doc_id,
+            )
+            .await
+            .unwrap();
+        agent_access
+            .add_resource_relationship(
+                "AgentRequest",
+                child_doc,
+                "session",
+                "sessions",
+                &self.session_doc_id,
+            )
+            .await
+            .unwrap();
+        agent_access
+            .add_actor_relationship(
+                "AgentRequest",
+                child_doc,
+                "working_agent",
+                &::identity::Did::new(self.agent.did()).unwrap(),
+            )
+            .await
+            .unwrap();
+        agent_access.write("test.goal.seed_child_grants", &format!(r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ relationships_pending: false }}) {{ _docID }} }}"#, escape_graphql_string(child_doc))).await.unwrap();
+        agent_access
             .transact_write("test.goal.seed_child_binding", |txn| {
                 let create = &create;
                 let child = &child;
@@ -183,30 +361,39 @@ impl Fixture {
             })
             .await
             .unwrap();
-        execute(&self.node, &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "completed", deadline: "2021-01-01T00:00:01Z" }}) {{ _docID }} }}"#, create.request_id)).await;
+        agent_access.write("test.goal.seed_child_terminal", &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "completed", deadline: "2021-01-01T00:00:01Z" }}) {{ _docID }} }}"#, escape_graphql_string(&create.request_id))).await.unwrap();
     }
     pub async fn other_request(&self, id: &str, date: &str, state: &str) {
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             id,
             self.identity.did(),
-            self.identity.did(),
-            "contract-behavior",
+            self.user.did(),
+            &self.parent.agent_did,
             SESSION,
             "Other work",
             "interactive",
             date,
-            AgentRequestAdmissionRecord::local_self(self.identity.did()),
+            AgentRequestAdmissionRecord::client(self.user.did()),
         );
-        crate::sign_agent_request_create(self.identity.as_ref(), &mut create)
+        create.session_doc_id = Some(self.session_doc_id.clone());
+        create.agent_doc_id = Some(self.agent_doc_id.clone());
+        crate::sign_agent_request_create(self.user.as_ref(), &mut create)
             .await
             .unwrap();
-        execute(&self.node, &create.graphql_mutation().unwrap()).await;
-        execute(&self.node, &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{id}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#)).await;
+        let access = ConfigAccess::local_as(
+            self.node.clone(),
+            ::identity::Did::new(self.user.did()).unwrap(),
+        );
+        crate::request::lifecycle::submit_client_request(&access, &create)
+            .await
+            .unwrap();
+        ConfigAccess::local_as(self.node.clone(), ::identity::Did::new(&self.parent.agent_did).unwrap())
+            .write("test.goal.other_request_state", &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{}" }}) {{ _docID }} }}"#, escape_graphql_string(id), escape_graphql_string(state))).await.unwrap();
     }
     pub async fn claude_accounts(&self) -> ClaudeAccounts {
         let did = self.identity.did().to_owned();
-        let access = ConfigAccess::local(self.node.clone());
+        let access = self.user_access();
         let preset =
             preset_account_backend(&did, CLAUDE_OAUTH_PROVIDER, None, "Claude".into()).unwrap();
         write_inference_backend_document(&access, &preset)
@@ -241,11 +428,24 @@ impl Fixture {
         }
         let [(a, a_credential), (b, b_credential)] = <[_; 2]>::try_from(accounts).unwrap();
         let profile = json!({"node_did": did, "profile_id": PROFILE, "backend_id": a, "model_name": "test-model"});
-        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-            collection: Collection::InferenceProfile,
-            add: profile.clone(),
-            update: profile,
-        }])
+        let mut agent = crate::load_agent(&self.node, &self.parent.agent_did)
+            .await
+            .unwrap()
+            .unwrap();
+        agent.inference_profile_id = PROFILE.to_owned();
+        let agent = serde_json::to_value(agent).unwrap();
+        let plan = DesiredStateApplyPlan::new(vec![
+            DesiredStateApplyDocument {
+                collection: Collection::InferenceProfile,
+                add: profile.clone(),
+                update: profile,
+            },
+            DesiredStateApplyDocument {
+                collection: Collection::Agent,
+                add: agent.clone(),
+                update: agent,
+            },
+        ])
         .unwrap();
         access
             .transact_write("test.claude_accounts.profile", |txn| {
@@ -276,7 +476,7 @@ impl Fixture {
             ),
             (
                 Collection::AgentContext,
-                json!({"node_did": did, "context_id": "contract-behavior:context", "tools_id": "contract-behavior:tools", "compaction_id": "compaction-c"}),
+                json!({"node_did": did, "context_id": format!("{}:context", self.parent.agent_did), "tools_id": format!("{}:tools", self.parent.agent_did), "compaction_id": "compaction-c"}),
             ),
         ];
         let plan = DesiredStateApplyPlan::new(
@@ -299,16 +499,26 @@ impl Fixture {
             .unwrap();
     }
 
-    pub async fn goal_status(&self) -> String {
-        load_canonical_goal(&self.node, self.identity.did(), SESSION)
+    pub async fn current_goal(&self) -> GoalDocument {
+        self.agent_access()
+            .transact_readonly("test.goal.current", |txn| {
+                Box::pin(load_canonical_goal_in_txn(
+                    txn,
+                    self.identity.did(),
+                    SESSION,
+                ))
+            })
             .await
             .unwrap()
             .unwrap()
-            .status
+    }
+
+    pub async fn goal_status(&self) -> String {
+        self.current_goal().await.status
     }
 
     pub async fn children(&self) -> Vec<String> {
-        request_rows(&self.node)
+        request_rows(&self.agent_access())
             .await
             .into_iter()
             .filter(|row| {
@@ -330,8 +540,9 @@ impl Fixture {
     ) {
         let did = self.identity.did();
         let failure = escape_graphql_string(failure);
+        let agent_did = escape_graphql_string(&self.parent.agent_did);
         execute(
-            &self.node,
+            &self.agent_access(),
             &format!(
                 r#"mutation {{
                     update_AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, input: {{
@@ -339,7 +550,7 @@ impl Fixture {
                     }}) {{ _docID }}
                     create_InferenceCall(input: {{
                         call_id: "call-{request_id}" request_id: "{request_id}" call_seq: 1
-                        backend_id: "{backend}" agent_id: "contract-behavior" node_did: "{did}"
+                        backend_id: "{backend}" agent_did: "{agent_did}" node_did: "{did}"
                         call_kind: "{kind}" attempt: 1 call_state: "failed"
                         failure_reason: "{failure}"
                         queued_at: "{at}" started_at: "{at}" ended_at: "{at}"
@@ -351,31 +562,46 @@ impl Fixture {
     }
 
     pub async fn observe(&self) -> Value {
-        let g = load_canonical_goal(&self.node, self.identity.did(), SESSION)
+        let g = self
+            .agent_access()
+            .transact_readonly("test.goal.observe", |txn| {
+                Box::pin(load_canonical_goal_in_txn(
+                    txn,
+                    self.identity.did(),
+                    SESSION,
+                ))
+            })
             .await
             .unwrap()
             .unwrap();
-        let rows = request_rows(&self.node).await;
+        let rows = request_rows(&self.agent_access()).await;
         let mut children = Vec::new();
         for child in rows.iter().filter(|r| {
             r.retry_key
                 .as_deref()
                 .is_some_and(|k| k.starts_with("goal-continuation:"))
         }) {
-            verify_runtime_local_control_receipt(
-                child,
-                self.identity.did(),
-                PARENT,
-                self.identity.did(),
-            )
-            .unwrap();
+            verify_request_receipt_signature(child).unwrap();
+            match child.admission_kind.as_deref() {
+                Some("runtime-internal") => assert_eq!(
+                    child.admission_signer_did.as_deref(),
+                    Some(self.agent.did())
+                ),
+                Some("client") => {
+                    assert_eq!(child.admission_signer_did.as_deref(), Some(self.user.did()))
+                }
+                other => panic!("unexpected continuation admission kind {other:?}"),
+            }
             let input = child.input.as_ref().unwrap();
             let queue = input.queue.as_ref().unwrap();
             let continuation = input.goal_continuation.as_ref().unwrap();
             assert_eq!(child.node_did.as_deref(), Some(self.identity.did()));
-            assert_eq!(child.requester_did.as_deref(), Some(self.identity.did()));
+            assert_eq!(child.requester_did.as_deref(), Some(self.user.did()));
             assert_eq!(child.session_id.as_deref(), Some(SESSION));
-            assert_eq!(child.agent_id.as_deref(), Some("contract-behavior"));
+            assert_eq!(
+                child.agent_did.as_deref(),
+                Some(self.parent.agent_did.as_str())
+            );
             assert_eq!(child.execution_origin.as_deref(), Some("scheduled"));
             assert_eq!(child.caused_by_parent_request_id.as_deref(), Some(PARENT));
             assert_eq!(
@@ -425,7 +651,7 @@ impl Fixture {
 
             let mut expected = prepare_goal_continuation(
                 &self.parent,
-                "contract-behavior".into(),
+                self.parent.agent_did.clone(),
                 &g.goal_id,
                 child.content.as_deref().unwrap(),
                 seq,
@@ -436,6 +662,11 @@ impl Fixture {
             .unwrap();
             expected.input.goal_assignment =
                 Some(continuation_assignment(&g, &self.parent, child.doc_id.as_deref()).unwrap());
+            if child.admission_kind.as_deref() == Some("client") {
+                expected.admission = AgentRequestAdmissionRecord::client(self.user.did());
+                expected.session_doc_id = child.session_doc_id.clone();
+                expected.agent_doc_id = child.agent_doc_id.clone();
+            }
             let actual: GoalBackedRequestFingerprint =
                 serde_json::from_value(serde_json::to_value(child).unwrap()).unwrap();
             let mut comparison = expected.clone();
@@ -477,12 +708,10 @@ impl Fixture {
             "children":children,"tokens_used":g.tokens_used.unwrap_or(0),"token_budget":g.token_budget})
     }
 }
-pub(crate) async fn execute(node: &EmbeddedNode, query: &str) {
-    let response = node.execute(query).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+pub(crate) async fn execute(access: &ConfigAccess, query: &str) {
+    access.write("test.goal.fixture", query).await.unwrap();
 }
-pub(crate) async fn request_rows(node: &EmbeddedNode) -> Vec<AgentRequestRow> {
-    let response=node.execute(&format!("{{ AgentRequest(order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}")).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    crate::store::graphql::rows(&response, "AgentRequest").unwrap()
+pub(crate) async fn request_rows(access: &ConfigAccess) -> Vec<AgentRequestRow> {
+    let response = access.execute(&format!("{{ AgentRequest(order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}")).await.unwrap();
+    serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap()
 }

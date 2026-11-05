@@ -487,21 +487,24 @@ async fn read_peer_pairing_applied_row(
     peer: &str,
 ) -> Result<Option<AppliedRow>> {
     let peer = escape_graphql_string(peer);
+    let runtime = escape_graphql_string(node.db.node_identity.did());
     let query = format!(
         r#"{{
-            PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer}" }} }}) {{
+            PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer}" }}, node_did: {{_eq: "{runtime}"}} }}) {{
                 _docID
                 collections
                 replicator_addresses
             }}
         }}"#
     );
-    let resp = node.db.node.execute(&query).await;
-    if resp.has_errors() {
-        bail!("read PeerPairingApplied failed: {:?}", resp.errors);
-    }
+    let access = gents::ConfigAccess::local_as(
+        node.db.node.clone(),
+        identity::Did::new(node.db.node_identity.did())?,
+    );
+    let response = access.execute(&query).await?;
+    let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "PeerPairingApplied");
     Ok(
-        gents::store::graphql::rows::<AppliedRow>(&resp, "PeerPairingApplied")?
+        serde_json::from_value::<Vec<AppliedRow>>(serde_json::Value::Array(rows))?
             .into_iter()
             .min_by(|left, right| left.doc_id.cmp(&right.doc_id)),
     )
@@ -513,11 +516,12 @@ async fn write_peer_pairing_applied(
     applied: &PairingApplied,
 ) -> Result<()> {
     let escaped_peer = escape_graphql_string(peer);
+    let runtime = escape_graphql_string(node.db.node_identity.did());
     let mutation = if applied.is_empty() {
         format!(
             r#"mutation {{
                 delete_PeerPairingApplied(
-                    filter: {{ peer_id: {{ _eq: "{escaped_peer}" }} }}
+                    filter: {{ peer_id: {{ _eq: "{escaped_peer}" }}, node_did: {{_eq: "{runtime}"}} }}
                 ) {{ _docID }}
             }}"#
         )
@@ -547,6 +551,7 @@ async fn write_peer_pairing_applied(
                 r#"mutation {{
                     create_PeerPairingApplied(input: {{
                         peer_id: "{escaped_peer}",
+                        node_did: "{runtime}", parent_linked: false,
                         collections: {collections},
                         replicator_addresses: {replicator_addresses},
                         created_at: "{now}",
@@ -556,10 +561,31 @@ async fn write_peer_pairing_applied(
             ),
         }
     };
-    let resp = node.db.node.execute(&mutation).await;
-    if resp.has_errors() {
-        bail!("write PeerPairingApplied failed: {:?}", resp.errors);
-    }
+    let actor = identity::Did::new(node.db.node_identity.did())?;
+    let access = gents::ConfigAccess::local_as(node.db.node.clone(), actor.clone());
+    access
+        .transact_write("test.pairing_conformance.apply", |txn| {
+            let mutation = &mutation;
+            let actor = &actor;
+            Box::pin(async move {
+                let response = txn.execute(mutation).await?;
+                if !applied.is_empty() {
+                    let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                        &response,
+                        "PeerPairingApplied",
+                    )?;
+                    gents::store::config_client::maybe_link_deferred_operation_in_txn(
+                        txn,
+                        "PeerPairingApplied",
+                        &doc,
+                        actor,
+                    )
+                    .await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await?;
     Ok(())
 }
 

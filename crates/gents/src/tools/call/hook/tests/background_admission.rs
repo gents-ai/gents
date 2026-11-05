@@ -24,13 +24,10 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
         .hook
         .with_background_execution_registry(executions.clone());
     let root = harness.root.path().canonicalize().unwrap();
-    let key = workspace::WorkspaceKey::canonical(
-        &harness.hook.node_did,
-        &harness.hook.node_did,
-        "general",
-        &root,
-    )
-    .unwrap();
+    let agent = hook_managed_identity(&harness.hook, &harness.request_id).await;
+    let key =
+        workspace::WorkspaceKey::canonical(&harness.hook.node_did, agent.did(), agent.did(), &root)
+            .unwrap();
     let selection = workspace::ReviewTaskSelection {
         task_id: "review-cancel".into(),
         policy_digest: "fixture-policy".into(),
@@ -49,7 +46,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
         Some(harness._dir.path()),
         &key.node_did,
         Some(&key.requester_did),
-        &key.agent_id,
+        &key.agent_did,
         Some(&root),
     )
     .unwrap()
@@ -108,6 +105,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
     crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
         &harness.node,
         &key.node_did,
+        &[agent.clone()],
         &executions,
     )
     .await
@@ -123,7 +121,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
             &harness.hook,
             &harness.request_id,
         ));
-    harness.node.shutdown().await;
+    harness.node.shutdown().await.expect("shut down test node");
 }
 
 #[cfg(unix)]
@@ -194,10 +192,11 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
             .hook
             .with_background_execution_registry(executions.clone());
         let root = harness.root.path().canonicalize().unwrap();
+        let agent = hook_managed_identity(&harness.hook, &harness.request_id).await;
         let key = workspace::WorkspaceKey::canonical(
             &harness.hook.node_did,
-            &harness.hook.node_did,
-            "general",
+            agent.did(),
+            agent.did(),
             &root,
         )
         .unwrap();
@@ -217,7 +216,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
             Some(harness._dir.path()),
             &key.node_did,
             Some(&key.requester_did),
-            &key.agent_id,
+            &key.agent_did,
             Some(&root),
         )
         .unwrap()
@@ -305,7 +304,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
                 &harness.hook,
                 &harness.request_id,
             ));
-        harness.node.shutdown().await;
+        harness.node.shutdown().await.expect("shut down test node");
     }
 }
 
@@ -380,6 +379,8 @@ impl DeniedTarget {
             Self::McpAllowlist => BackgroundToolRegistry::from_tools(
                 vec![Box::new(crate::tools::mcp::meta::CallToolTool::new(
                     crate::tools::mcp::meta::MetaToolContext {
+                        configuration: crate::inference::resolved::ResolvedConfiguration::Static,
+                        actor: identity::Did::new("did:test:actor").unwrap(),
                         node: node.clone(),
                         mcp_pool: crate::tools::mcp::pool::McpPool::new()
                             .for_agent("did:test:test"),
@@ -427,23 +428,17 @@ async fn admission_harness(
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
     let root = tempfile::tempdir().unwrap();
-    let hook =
+    let mut hook =
         DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_background_tool_registry(registry(&node, root.path()));
     hook.on_completion_call(&user_text_message("run in the background"), &[])
         .await;
-    let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_id(&node, &session, identity.did(), "general")
-        .await
-        .unwrap();
     let request_id = format!("admission-{}", uuid::Uuid::new_v4());
-    bind_interruptible_request(
-        &node,
-        &hook,
+    bind_managed_hook_request(
+        &mut hook,
         &request_id,
-        &session,
+        &identity,
         Utc::now() + chrono::Duration::minutes(5),
     )
     .await;
@@ -542,7 +537,7 @@ async fn spawned_target_rejection_case(
         case.name,
         target.target()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -617,6 +612,6 @@ async fn spawn_process_rejects_unadvertised_arguments_before_spawned_admission()
             .lock()
             .await
             .remove(&hook_execution_fixture_key(&hook, &request_id));
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 }

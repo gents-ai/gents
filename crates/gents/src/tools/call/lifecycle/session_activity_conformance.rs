@@ -161,7 +161,7 @@ async fn tool_publications_follow_lean_session_activity() {
             assert_eq!(after, expected_session, "{name} turn {turn}");
         }
         drop(owner);
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(admission.path).unwrap();
     }
 }

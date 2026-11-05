@@ -33,14 +33,18 @@ pub(super) fn validate_task_goal_declarations(manifest: &ScenarioManifest) -> Re
             }
         }
 
-        let agent = config
-            .agents
-            .iter()
-            .find(|agent| agent.agent_id == task.agent_id)
+        let agent = manifest
+            .config
+            .as_ref()
+            .context("scenario configuration missing")?
+            .agent(
+                task.agent_did
+                    .strip_prefix("gents:agent-slot:")
+                    .context("scenario task needs an authored agent slot")?,
+            )
             .with_context(|| format!("Task {} references a missing agent", task.task_id))?;
-        let context = agent
-            .context_id
-            .as_deref()
+        let context = agent["context_id"]
+            .as_str()
             .and_then(|id| {
                 config
                     .contexts
@@ -103,22 +107,26 @@ pub(super) fn validate_prompt_tool_contracts(
             .iter()
             .find(|task| task.task_id == contract.task_id)
             .with_context(|| format!("missing Task {}", contract.task_id))?;
-        let agent_id = task.agent_id.as_str();
-        let agent = config
-            .agents
-            .iter()
-            .find(|agent| agent.agent_id == agent_id)
-            .with_context(|| format!("missing Agent {agent_id}"))?;
-        let context = agent
-            .context_id
-            .as_deref()
+        let agent_did = task.agent_did.as_str();
+        let agent = manifest
+            .config
+            .as_ref()
+            .context("scenario configuration missing")?
+            .agent(
+                agent_did
+                    .strip_prefix("gents:agent-slot:")
+                    .context("scenario task needs an authored agent slot")?,
+            )
+            .with_context(|| format!("missing Agent {agent_did}"))?;
+        let context = agent["context_id"]
+            .as_str()
             .and_then(|id| {
                 config
                     .contexts
                     .iter()
                     .find(|context| context.context_id == id)
             })
-            .with_context(|| format!("Agent {agent_id} has no context"))?;
+            .with_context(|| format!("Agent {agent_did} has no context"))?;
         let tools = context
             .tools_id
             .as_deref()
@@ -225,7 +233,7 @@ pub(super) fn validate_prompt_tool_contracts(
         for tool_name in &contract.required_tool_names {
             if !advertised.contains(tool_name) {
                 bail!(
-                    "task {} requires tool {tool_name}, but agent {agent_id} does not advertise it",
+                    "task {} requires tool {tool_name}, but agent {agent_did} does not advertise it",
                     contract.task_id
                 );
             }
@@ -239,7 +247,7 @@ pub(super) fn validate_prompt_tool_contracts(
         for collection in &contract.required_query_collections {
             if !query_collections.contains(collection.as_str()) {
                 bail!(
-                    "task {} asks defra_query for {collection}, but agent {agent_id} cannot query it",
+                    "task {} asks defra_query for {collection}, but agent {agent_did} cannot query it",
                     contract.task_id
                 );
             }

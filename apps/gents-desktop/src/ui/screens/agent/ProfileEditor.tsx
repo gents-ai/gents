@@ -478,9 +478,9 @@ export function ProfileEditor({
           {usedBy.length ? (
             <NameLinks
               items={usedBy.map((b) => ({
-                key: b.agentId,
+                key: b.agentDid,
                 name: b.displayName,
-                href: href({ ...base, section: "agents", item: b.agentId }),
+                href: href({ ...base, section: "agents", item: b.agentDid }),
               }))}
             />
           ) : (

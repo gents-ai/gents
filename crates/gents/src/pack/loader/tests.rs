@@ -31,8 +31,8 @@ fn document_loading_applies_scope_defaults_and_literal_sidecars() {
     let value = json!({
         "node":{"created_by":"did:key:creator"},
         "contexts":[{"context_id":"work","system_prompt":"./prompt.md"}],
-        "tasks":[{"task_id":"review","agent_id":"reviewer","prompt_template":"./prompt.md"}],
-        "agent_targets":[{"target_id":"remote","name":"remote","target_node_did":"did:key:foreign","agent_id":"worker"}],
+        "tasks":[{"task_id":"review","agent_did":"reviewer","prompt_template":"./prompt.md"}],
+        "agent_targets":[{"target_id":"remote","name":"remote","target_node_did":"did:key:foreign","agent_did":"worker"}],
         "tools":null
     });
     let document = load(value).unwrap();
@@ -56,7 +56,7 @@ fn document_loading_applies_scope_defaults_and_literal_sidecars() {
 #[test]
 fn interpolation_cannot_change_json_structure_and_preserves_task_braces() {
     let config = load(json!({"node":{},"tasks":[{
-        "task_id":"review","agent_id":"reviewer",
+        "task_id":"review","agent_did":"reviewer",
         "prompt_template":"${TEXT} {{ task.input }} $${LITERAL} ${MISSING:-fallback}"
     }]}))
     .unwrap();
@@ -304,7 +304,7 @@ fn skill_instructions_load_from_a_literal_sidecar() {
 
 #[test]
 fn a_pack_that_selects_the_default_agent_is_refused() {
-    let error = load(json!({"node":{"default_agent_id":"worker"}})).unwrap_err();
+    let error = load(json!({"node":{"default_agent_did":"worker"}})).unwrap_err();
     let message = format!("{error:#}");
     assert!(
         message.contains("must not choose the default agent") && message.contains("worker"),

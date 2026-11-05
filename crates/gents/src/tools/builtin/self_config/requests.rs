@@ -21,7 +21,7 @@ pub(super) fn agent_request(
     core: &SelfConfigCore,
     patch: SelfConfigPatch,
 ) -> ApplyRequest<'static> {
-    let id = core.agent_id().to_owned();
+    let id = core.agent_did().to_owned();
     let mut request = ApplyRequest::new(SelfConfigTarget::Agent, patch);
     request.resolve_unique = Box::new(move |_| Ok(id.clone()));
     request.guard = Box::new(|_, stored, merged| guard_agent_keeps_reach(stored, merged));
@@ -391,7 +391,7 @@ pub(super) fn automation_request(
     patch: SelfConfigPatch,
 ) -> ApplyRequest<'static> {
     let owner = core.node_did().to_owned();
-    let agent = core.agent_id().to_owned();
+    let agent = core.agent_did().to_owned();
     let mut request = ApplyRequest::new(target, patch);
     request.allow_create = true;
     request.resolve_unique = Box::new(move |_| Ok(id.clone()));
@@ -399,7 +399,7 @@ pub(super) fn automation_request(
         merged.insert(target.unique_field().into(), json!(id));
         merged.insert("node_did".into(), json!(owner));
         if target == SelfConfigTarget::Task {
-            merged.insert("agent_id".into(), json!(agent));
+            merged.insert("agent_did".into(), json!(agent));
         }
         Ok(())
     });
@@ -411,10 +411,10 @@ pub(super) fn automation_request(
         Box::pin(async move {
             if target == SelfConfigTarget::Task {
                 anyhow::ensure!(
-                    merged.get("agent_id").and_then(Value::as_str) == Some(core.agent_id()),
+                    merged.get("agent_did").and_then(Value::as_str) == Some(core.agent_did()),
                     "task belongs to agent {:?}, not {:?}; retry with options.agent set to its owner; to run a different agent, create a separate task",
-                    merged.get("agent_id").and_then(Value::as_str),
-                    core.agent_id()
+                    merged.get("agent_did").and_then(Value::as_str),
+                    core.agent_did()
                 );
             }
             // Packs may publish an event source before installing its schema;
@@ -436,7 +436,7 @@ pub(super) fn automation_request(
                     anyhow::ensure!(
                         core.task_owned(txn, anchor, task).await?,
                         "Trigger.task_id {task:?} must reference a Task owned by selected agent {:?}. Inspect it with {{\"argv\":[\"task\",\"get\"],\"target_id\":{task:?}}}. Create a missing Task first with options.agent set to that owner. An existing Trigger cannot switch task owners; create a separate Trigger for a different owner and preserve the current workflow until its replacement is valid",
-                        core.agent_id()
+                        core.agent_did()
                     );
                 }
             }

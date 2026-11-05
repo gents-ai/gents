@@ -74,13 +74,13 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
           if (
             current.nodeDid !== target.nodeDid ||
             current.sessionId !== target.sessionId ||
-            current.agentId !== target.agentId
+            current.agentDid !== target.agentDid
           ) {
             throw new Error(
               "ctx.send: the selected chat changed; request the message again",
             );
           }
-          await app.actions.sendMessage(content, target.agentId);
+          await app.actions.sendMessage(content, target.agentDid);
         } finally {
           confirmingMessage = false;
         }

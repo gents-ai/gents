@@ -1,4 +1,4 @@
-type WorkspaceReceipt @branchable {
+type WorkspaceReceipt {
     receipt_id: String @index(unique: true) @immutable
     workspace_id: String @index @immutable
     produced_by_request_id: String @index @immutable

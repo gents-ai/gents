@@ -260,7 +260,7 @@ fn generated_scoped_replacement_case_matches_client_store_ownership() {
                         "session_id": row["key"],
                         "node_did": did(owner),
                         "requester_did": null,
-                        "agent_id": "agent",
+                        "agent_did": "agent",
                         "created_at": "2026-01-01T00:00:00Z",
                         "title": {"text": row["value"], "source": "user"}
                     }))
@@ -483,7 +483,7 @@ async fn generated_scoped_publications_preserve_independent_nodes_during_a_block
                     serde_json::from_value(serde_json::json!({
                         "node_did": did(row["owner"].as_u64().unwrap()),
                         "session_id": row["key"],
-                        "agent_id": "agent",
+                        "agent_did": "agent",
                         "created_at": "2026-01-01T00:00:00Z",
                         "title": {"text": row["value"], "source": "user"}
                     }))

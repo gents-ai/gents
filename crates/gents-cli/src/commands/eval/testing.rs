@@ -12,7 +12,7 @@ use gents::eval::runner::{
 use gents::store::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::{Collection, ConfigAccess};
+use gents::{Collection, ConfigAccess, NodeIdentity};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -48,19 +48,30 @@ pub(crate) fn test_runtime_handle() -> tokio::runtime::Handle {
 
 impl Fixture {
     pub(crate) async fn new() -> Self {
-        let home = EmbeddedHome::create_temp("cli-eval").await.unwrap();
+        let mut home = EmbeddedHome::create_temp("cli-eval").await.unwrap();
         let owner = home.did().to_string();
-        gents::ensure_node(&home.node, &owner).await.unwrap();
         let dirs = tempfile::tempdir().unwrap();
+        let evaluator = std::sync::Arc::new(
+            gents::KeyIdentity::load_or_create(dirs.path().join("evaluator.key"), None).unwrap(),
+        );
+        let client_signing = evaluator.client_signing_capability().unwrap();
+        home.set_evaluator(evaluator.clone(), client_signing.clone());
+        let access = home.client_access(evaluator.did()).unwrap();
         let pack = dirs.path().join("subject");
         write_pack(&pack);
         let ctx = EvalContext {
-            access: ConfigAccess::local(home.node.clone()),
+            access,
             home_dir: dirs.path().join("home"),
             owner: owner.clone(),
             runtime: test_runtime_handle(),
+            evaluator,
+            client_signing,
         };
-        install(&ctx.access, documents(&owner)).await;
+        let binding =
+            gents::store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
+        let mut initial = vec![(Collection::Node, json!({"node_did": &owner}))];
+        initial.extend(documents(&owner, &binding));
+        install(&ctx.access, initial).await;
         Self {
             ctx,
             pack,
@@ -77,7 +88,7 @@ impl Fixture {
         RunRequest {
             run_id: run_id.into(),
             owner: self.ctx.owner.clone(),
-            evaluator_did: self.ctx.owner.clone(),
+            evaluator_did: self.ctx.access.actor_did().expect("held evaluator"),
             definition_id: DEFINITION.into(),
             split: EvalSplit::Validation,
             case_ids: None,
@@ -87,7 +98,7 @@ impl Fixture {
                     cell_id: cell_id.into(),
                     label: cell_id.into(),
                     source: CellSource::Directory(self.pack.clone()),
-                    agent_id: "monitor".into(),
+                    agent_slot: "monitor".into(),
                     inference_profile_id: "local".into(),
                 })
                 .collect(),
@@ -209,7 +220,10 @@ pub(crate) fn row<'a>(output: &'a str, first: &str, width: usize) -> Vec<&'a str
         .unwrap_or_else(|| panic!("no {width}-column row for {first} in\n{output}"))
 }
 
-fn documents(owner: &str) -> Vec<(Collection, Value)> {
+fn documents(
+    owner: &str,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+) -> Vec<(Collection, Value)> {
     let case = |case_id: &str, split: &str| {
         json!({
             "case_id": case_id,
@@ -289,7 +303,8 @@ fn documents(owner: &str) -> Vec<(Collection, Value)> {
         (
             Collection::Agent,
             json!({
-                "agent_id": "monitor",
+                "agent_did": binding.agent_did,
+                "creation_nonce": binding.creation_nonce,
                 "node_did": owner,
                 "display_name": "Monitor",
                 "context_id": "monitor-context",
@@ -355,7 +370,7 @@ fn write_pack(root: &Path) {
     let config = json!({
         "node": {},
         "agents": [{
-            "agent_id": "monitor",
+            "agent_slot": "monitor",
             "display_name": "Monitor",
             "context_id": "monitor-context",
             "inference_profile_id": "gents:inference-slot:primary",

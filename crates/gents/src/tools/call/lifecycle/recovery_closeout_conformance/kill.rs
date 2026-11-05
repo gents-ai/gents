@@ -1,5 +1,5 @@
 use crate::tools::call::lifecycle::admission_fixture::{
-    complete_child, published_admission, published_session_message, PublishedAdmission,
+    complete_child_managed, published_admission, published_session_message, PublishedAdmission,
     PublishedAdmissionOptions,
 };
 use crate::tools::call::lifecycle::AwaitMode;
@@ -38,11 +38,18 @@ async fn kill_fixture(observation: &str) -> (PublishedAdmission, Option<String>)
         "causedLiveLocal" | "causedTerminal" => {
             let message = published_session_message(options(false)).await.unwrap();
             if observation == "causedTerminal" {
-                complete_child(
+                complete_child_managed(
                     &message.admission.node,
                     &message.caused_request_id,
                     &message.admission.node_did,
                     "finished before the kill",
+                    &message
+                        .admission
+                        .tool
+                        .access()
+                        .unwrap()
+                        .managed_agent_signer()
+                        .unwrap(),
                 )
                 .await;
             }
@@ -67,7 +74,8 @@ async fn generated_kill_cases_drive_the_session_message_kill() {
         let outcome = crate::session::message::kill(&node, &mut tool)
             .await
             .unwrap();
-        let (notifications, _) = completion_obligations(&node, &session_id, &did).await;
+        let (notifications, _) =
+            completion_obligations(&node, &session_id, &did, tool.requester_did()).await;
         match case.action.as_str() {
             "settle" => {
                 assert_eq!(outcome, KillOutcome::Settled, "{case:?}");
@@ -94,7 +102,7 @@ async fn generated_kill_cases_drive_the_session_message_kill() {
             }
             other => panic!("unknown Lean kill action {other}"),
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(admission.path).unwrap();
     }
 }

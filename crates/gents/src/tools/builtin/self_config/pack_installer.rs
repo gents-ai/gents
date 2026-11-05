@@ -7,6 +7,7 @@ use super::*;
 pub(super) struct PackInstaller {
     pub(super) core: SelfConfigCore,
     pub(super) node: Arc<EmbeddedNode>,
+    pub(super) actor: Option<Arc<dyn NodeIdentity>>,
     /// `None` resolves from the registry in memory and installs no plugins.
     pub(super) home: Option<std::path::PathBuf>,
 }
@@ -191,7 +192,7 @@ impl PackInstaller {
             }
             _ => coordinate.to_owned(),
         };
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
+        let access = self.core.access()?;
         let installed = crate::pack::installed_packs(
             self.home.as_deref(),
             Some((&access, self.core.node_did())),
@@ -236,7 +237,7 @@ impl PackInstaller {
                 .transpose()
                 .map_err(Into::into);
         }
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
+        let access = self.core.access()?;
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
         crate::pack::read_installed_pack(&access, self.core.node_did(), &coordinate)
             .await?
@@ -284,11 +285,9 @@ impl PackInstaller {
         bindings: &crate::pack::PackInferenceBindings,
     ) -> anyhow::Result<()> {
         let owner = self.core.node_did();
-        crate::store::config_client::ConfigAccess::transact_local_write(
-            &self.node,
-            Some(self.core.identity()?),
-            "self_config.pack_profile_choice",
-            |txn| {
+        self.core
+            .access()?
+            .transact_write("self_config.pack_profile_choice", |txn| {
                 Box::pin(async move {
                     for profile in bindings.values() {
                         let backend = ops::profile_backend_id(txn, owner, profile).await?;
@@ -296,9 +295,8 @@ impl PackInstaller {
                     }
                     Ok(())
                 })
-            },
-        )
-        .await
+            })
+            .await
     }
 
     pub(super) async fn preview(

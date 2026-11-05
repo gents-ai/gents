@@ -15,7 +15,7 @@ fn output_envelope(output: CliOutputObservation) -> RequestOutputEnvelope {
             request_id: "request".into(),
             node_did: "did:key:agent".into(),
             requester_did: Some("did:key:requester".into()),
-            agent_id: Some("agent".into()),
+            agent_did: Some("agent".into()),
             session_id: "session".into(),
             lifecycle_state: RequestLifecycleState::Completed,
             failure_reason: None,
@@ -157,7 +157,7 @@ fn request_show_json_retains_typed_input_and_aggregate_budget() {
     let request = json!({
         "request_id": "request-one",
         "node_did": "did:key:agent",
-        "agent_id": "default",
+        "agent_did": "default",
         "session_id": "session-one",
         "lifecycle_state": "pending",
         "input": {"selected_skill_ids":["review"]},
@@ -175,7 +175,7 @@ fn request_show_json_retains_null_aggregate_budget_key() {
     let request = json!({
         "request_id": "request-one",
         "node_did": "did:key:agent",
-        "agent_id": "default",
+        "agent_did": "default",
         "session_id": "session-one",
         "lifecycle_state": "pending",
     });

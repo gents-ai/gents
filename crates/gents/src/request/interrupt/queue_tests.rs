@@ -101,7 +101,7 @@ async fn fixture_with_http(
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::test_support::install_test_agent(&node, &did, BEHAVIOR).await;
     let session = case.session_id.to_string();
-    crate::session::ensure_session_with_agent_id_and_requester_did(
+    crate::session::ensure_session_with_agent_did_and_requester_did(
         &node,
         &session,
         &did,
@@ -150,7 +150,7 @@ async fn fixture_with_http(
         request_id: active,
         node_did: did.clone(),
         requester_did: Some(did),
-        agent_id: BEHAVIOR.into(),
+        agent_did: BEHAVIOR.into(),
         session_id: session,
         content: "active".into(),
         max_total_tokens: None,
@@ -254,7 +254,7 @@ async fn insert_generated_pending(
         node,
         json!({"request_id":entry.request_id.to_string(),"node_did":parent.node_did,
             "requester_did":parent.requester_did,"session_id":parent.session_id,
-            "agent_id":BEHAVIOR,"content":"generated pending fixture",
+            "agent_did":BEHAVIOR,"content":"generated pending fixture",
             "lifecycle_state":"pending","execution_origin":origin.as_str(),
             "input":input,"created_at":created_at}),
     )
@@ -486,7 +486,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                 "{}: notification facts",
                 case.name
             );
-            node.shutdown().await;
+            node.shutdown().await.expect("shut down test node");
         }
     }
     assert_eq!(
@@ -759,7 +759,7 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             "{}: notification facts",
             case.name
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 }
 
@@ -815,5 +815,5 @@ async fn interrupted_queue_drain_rolls_back_with_latch() {
         .unwrap();
     assert!(parent_row["interrupt_requested_at"].is_null());
     assert_eq!(wake_row["lifecycle_state"], "pending");
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

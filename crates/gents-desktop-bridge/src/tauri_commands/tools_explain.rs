@@ -5,12 +5,12 @@ use gents::AgentToolSurfaceConfig;
 use rapidhash::RapidHashSet;
 use tauri::State;
 
-use crate::state::{current_core, require_node_home, DesktopAppState};
+use crate::state::{current_core, DesktopAppState};
 
 #[tauri::command]
 pub async fn desktop_tool_surface_explain(
     node_did: String,
-    agent_id: String,
+    agent_did: String,
     state: State<'_, DesktopAppState>,
 ) -> Result<ToolSurfaceExplanationView, BridgeError> {
     let Some(core) = current_core(&state) else {
@@ -22,25 +22,39 @@ pub async fn desktop_tool_surface_explain(
     let agent = snapshot
         .agents
         .iter()
-        .find(|row| row.agent_id == agent_id && row.node_did == node_did)
-        .ok_or_else(|| format!("agent {agent_id} not found for {node_did}"))?;
+        .find(|row| row.agent_did == agent_did && row.node_did == node_did)
+        .ok_or_else(|| format!("agent {agent_did} not found for {node_did}"))?;
 
-    let node_home = require_node_home(&state)?;
-    let (ceiling, ceiling_source) = crate::snapshot::resolve_node_home_tool_ceiling(&node_home)
-        .map_err(BridgeError::untyped)?;
+    let node_home = core
+        .peer_records()
+        .await
+        .into_iter()
+        .find(|peer| peer.node_did == node_did)
+        .and_then(|peer| peer.local_node_home)
+        .ok_or_else(|| {
+            BridgeError::untyped("The remote runtime has not exposed its host tool ceiling.")
+        })?;
+    let (ceiling, ceiling_source) = tokio::task::spawn_blocking(move || {
+        crate::snapshot::resolve_node_home_tool_ceiling(std::path::Path::new(&node_home))
+    })
+    .await
+    .map_err(|error| BridgeError::untyped(error.to_string()))?
+    .map_err(BridgeError::untyped)?;
     let mcp_services_online = load_mcp_services_with_health_for_node(core.as_ref(), &node_did)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?
         .iter()
         .any(|row| matches!(row.status.as_deref(), Some("healthy" | "stale")));
-    let active_agent_ids = snapshot
+    let active_agent_dids = snapshot
         .agents
         .iter()
         .filter(|row| row.node_did == node_did && row.enabled)
-        .map(|row| row.agent_id.clone())
+        .map(|row| row.agent_did.clone())
         .collect::<RapidHashSet<_>>();
     let datastore_tool_surfaces = gents::list_datastore_tool_surfaces(
-        &gents::ConfigAccess::local(core.node_arc()),
+        &core
+            .operator_access(&node_did)
+            .map_err(|error| BridgeError::untyped(error.to_string()))?,
         &node_did,
     )
     .await
@@ -79,7 +93,7 @@ pub async fn desktop_tool_surface_explain(
                 .find(|row| row.tools_id == tools_id && row.node_did == node_did)
                 .ok_or_else(|| format!("referenced Tools {tools_id} is missing"))?;
             let config = AgentToolSurfaceConfig::from_tools_document_with_surfaces(
-                &agent.agent_id,
+                &agent.agent_did,
                 document,
                 &datastore_tool_surfaces,
                 &ceiling,
@@ -95,9 +109,9 @@ pub async fn desktop_tool_surface_explain(
     };
 
     let explanation =
-        config.explain_with_runtime(mcp_services_online, &node_did, &active_agent_ids);
+        config.explain_with_runtime(mcp_services_online, &node_did, &active_agent_dids);
     Ok(ToolSurfaceExplanationView {
-        agent_id: agent.agent_id.clone(),
+        agent_did: agent.agent_did.clone(),
         enabled: agent.enabled,
         context_id,
         tools_id,

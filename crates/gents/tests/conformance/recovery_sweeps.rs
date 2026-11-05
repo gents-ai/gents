@@ -269,16 +269,11 @@ async fn drive_recovery_sweep_case(case: &lean_vocab_test::LeanRecoverySweepCase
 
 pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
     let db = test_db("startup-recovery-order-1001").await;
+    let agent = support::managed_agent(&db).await;
     let request_id = "startup-order-1001-request";
     let session_id = "startup-order-1001-session";
-    let request_doc_id = create_request(
-        &db.node,
-        request_id,
-        session_id,
-        "pending",
-        RECOVERY_CREATED_AT,
-    )
-    .await;
+    let request_doc_id =
+        seed_scoped_request(&db, agent.as_ref(), request_id, session_id, "pending").await;
     support::create_session_document(
         &db.node,
         &gents_protocol::session::AgentSession {
@@ -297,13 +292,20 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
                         gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
                 }),
             }),
-            ..support::session_document(session_id, AGENT_NAME, RECOVERY_CREATED_AT)
+            requester_did: Some(agent.did().to_owned()),
+            ..support::session_document_in_scope(
+                db.node_identity.did(),
+                session_id,
+                agent.did(),
+                RECOVERY_CREATED_AT,
+            )
         },
     )
     .await;
     let _owner = own_child_fixture(
         &db.node,
-        NODE_DID,
+        db.node_identity.did(),
+        agent.as_ref(),
         &request_doc_id,
         request_id,
         session_id,
@@ -311,9 +313,22 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
     )
     .await;
     seed_expired_execution_tuple(&db.node, &request_doc_id).await;
-    insert_inference_call(&db.node, request_id, "running").await;
+    insert_scoped_inference_call(
+        &db.node,
+        db.node_identity.did(),
+        agent.did(),
+        &request_doc_id,
+        request_id,
+        "running",
+    )
+    .await;
 
-    let outcome = gents::runtime::startup_recovery::run_startup_recovery(&db.node, NODE_DID).await;
+    let outcome = gents::runtime::startup_recovery::run_startup_recovery_with_identities(
+        &db.node,
+        db.node_identity.did(),
+        &[agent.clone()],
+    )
+    .await;
     let requests = outcome.requests.expect("startup request recovery");
     assert!(
         requests.requests_recovered >= 1,
@@ -345,7 +360,12 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
         "post-recovery rows must reconstruct zero held slots"
     );
 
-    let second = gents::runtime::startup_recovery::run_startup_recovery(&db.node, NODE_DID).await;
+    let second = gents::runtime::startup_recovery::run_startup_recovery_with_identities(
+        &db.node,
+        db.node_identity.did(),
+        &[agent.clone()],
+    )
+    .await;
     assert_eq!(
         second
             .inference_calls
@@ -362,17 +382,24 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
         [("running", "failed"), ("queued", "cancelled")]
     {
         let db = test_db(&format!("deferred-inference-{initial_call_state}")).await;
+        let agent = support::managed_agent(&db).await;
         let request_id = format!("deferred-inference-{initial_call_state}");
         let session_id = format!("deferred-inference-{initial_call_state}-session");
-        let doc_id = create_request(
+        let doc_id =
+            seed_scoped_request(&db, agent.as_ref(), &request_id, &session_id, "pending").await;
+        support::create_session_document(
             &db.node,
-            &request_id,
-            &session_id,
-            "pending",
-            RECOVERY_CREATED_AT,
+            &gents_protocol::session::AgentSession {
+                requester_did: Some(agent.did().to_owned()),
+                ..support::session_document_in_scope(
+                    db.node_identity.did(),
+                    &session_id,
+                    agent.did(),
+                    RECOVERY_CREATED_AT,
+                )
+            },
         )
         .await;
-        create_agent_session(&db.node, &session_id, AGENT_NAME, RECOVERY_CREATED_AT).await;
         support::seed_session_observation(
             &db.node,
             &session_id,
@@ -389,11 +416,31 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             },
         )
         .await;
-        let _owner =
-            own_child_fixture(&db.node, NODE_DID, &doc_id, &request_id, &session_id, true).await;
-        insert_inference_call(&db.node, &request_id, initial_call_state).await;
-        let startup =
-            gents::runtime::startup_recovery::run_startup_recovery(&db.node, NODE_DID).await;
+        let _owner = own_child_fixture(
+            &db.node,
+            db.node_identity.did(),
+            agent.as_ref(),
+            &doc_id,
+            &request_id,
+            &session_id,
+            true,
+        )
+        .await;
+        insert_scoped_inference_call(
+            &db.node,
+            db.node_identity.did(),
+            agent.did(),
+            &doc_id,
+            &request_id,
+            initial_call_state,
+        )
+        .await;
+        let startup = gents::runtime::startup_recovery::run_startup_recovery_with_identities(
+            &db.node,
+            db.node_identity.did(),
+            &[agent.clone()],
+        )
+        .await;
         startup.tool_calls.expect("startup tool recovery");
         assert_eq!(
             startup
@@ -410,8 +457,11 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             0
         );
         let registry = gents::BackgroundExecutionRegistry::default();
-        let live = gents::runtime::periodic_recovery::run_periodic_recovery_sweeps(
-            &db.node, NODE_DID, &registry,
+        let live = gents::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+            &db.node,
+            db.node_identity.did(),
+            &[agent.clone()],
+            &registry,
         )
         .await
         .expect("live periodic recovery");
@@ -442,11 +492,15 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             "expire fixture lease: {:?}",
             expired.errors
         );
-        let repaired = gents::runtime::periodic_recovery::run_periodic_recovery_sweeps(
-            &db.node, NODE_DID, &registry,
-        )
-        .await
-        .expect("expired periodic recovery");
+        let repaired =
+            gents::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+                &db.node,
+                db.node_identity.did(),
+                &[agent.clone()],
+                &registry,
+            )
+            .await
+            .expect("expired periodic recovery");
         assert!(
             repaired.iter().any(|run| !run.is_noop()),
             "expired pair requires recovery"
@@ -464,11 +518,15 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             "periodic registry must recover the inference row after its parent"
         );
         assert!(!gents::call_state_holds_backend_slot(&call.call_state));
-        let second = gents::runtime::periodic_recovery::run_periodic_recovery_sweeps(
-            &db.node, NODE_DID, &registry,
-        )
-        .await
-        .expect("second periodic recovery");
+        let second =
+            gents::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+                &db.node,
+                db.node_identity.did(),
+                &[agent.clone()],
+                &registry,
+            )
+            .await
+            .expect("second periodic recovery");
         assert!(
             second.iter().all(|run| run.is_noop()),
             "recovery must be idempotent: {second:?}"
@@ -478,16 +536,11 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
 
 async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
     let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
+    let agent = support::managed_agent(&db).await;
     let request_id = format!("{}-request", case.name);
     let session_id = format!("{}-session", case.name);
-    let doc_id = create_request(
-        &db.node,
-        &request_id,
-        &session_id,
-        "processing",
-        RECOVERY_CREATED_AT,
-    )
-    .await;
+    let doc_id =
+        seed_scoped_request(&db, agent.as_ref(), &request_id, &session_id, "processing").await;
     seed_expired_execution_tuple(&db.node, &doc_id).await;
     support::create_session_document(
         &db.node,
@@ -507,7 +560,13 @@ async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCa
                         gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
                 }),
             }),
-            ..support::session_document(&session_id, AGENT_NAME, RECOVERY_CREATED_AT)
+            requester_did: Some(agent.did().to_owned()),
+            ..support::session_document_in_scope(
+                db.node_identity.did(),
+                &session_id,
+                agent.did(),
+                RECOVERY_CREATED_AT,
+            )
         },
     )
     .await;
@@ -516,9 +575,10 @@ async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCa
         set_interrupt_requested_at(&db.node, &doc_id, "2026-07-09T00:00:00Z").await;
     }
 
-    let report = RequestLifecycle::recover_all(&db.node, NODE_DID)
-        .await
-        .unwrap();
+    let report =
+        RequestLifecycle::recover_all_with_identities(&db.node, db.node_identity.did(), &[agent])
+            .await
+            .unwrap();
     assert_eq!(
         report.requests_recovered, 1,
         "request recovery case {} should recover one request",
@@ -536,16 +596,11 @@ async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCa
 
 async fn drive_inference_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
     let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
+    let agent = support::managed_agent(&db).await;
     let request_id = format!("{}-request", case.name);
     let session_id = format!("{}-session", case.name);
-    let parent_doc_id = create_request(
-        &db.node,
-        &request_id,
-        &session_id,
-        "processing",
-        RECOVERY_CREATED_AT,
-    )
-    .await;
+    let parent_doc_id =
+        seed_scoped_request(&db, agent.as_ref(), &request_id, &session_id, "processing").await;
     match case.name.as_str() {
         "inference_interrupted_parent_to_cancelled" => {
             set_request_lifecycle_state(&db.node, &parent_doc_id, "interrupted").await;
@@ -555,11 +610,20 @@ async fn drive_inference_call_recovery_case(case: &lean_vocab_test::LeanRecovery
         }
         other => panic!("unhandled inference recovery case {other}"),
     }
-    insert_inference_call(&db.node, &request_id, case.pre_state.as_str()).await;
+    insert_scoped_inference_call(
+        &db.node,
+        db.node_identity.did(),
+        agent.did(),
+        &parent_doc_id,
+        &request_id,
+        case.pre_state.as_str(),
+    )
+    .await;
 
-    let report = InferenceCall::recover_all(&db.node, NODE_DID)
-        .await
-        .unwrap();
+    let report =
+        InferenceCall::recover_all_with_identities(&db.node, db.node_identity.did(), &[agent])
+            .await
+            .unwrap();
     assert_eq!(
         report.calls_recovered, 1,
         "inference recovery case {} should recover one call",
@@ -583,40 +647,78 @@ async fn drive_inference_call_recovery_case(case: &lean_vocab_test::LeanRecovery
     );
 }
 
-async fn insert_inference_call(node: &EmbeddedNode, request_id: &str, call_state: &str) {
-    let call_id = format!("{request_id}-call");
-    let now = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            add_InferenceCall(input: {{
-                call_id: "{call_id}",
-                runtime_instance_id: "runtime-recovery-test",
-                request_id: "{request_id}",
-                call_seq: 1,
-                backend_id: "{BACKEND_ID}",
-                agent_id: "{AGENT_NAME}",
-                node_did: "{NODE_DID}",
-                call_kind: "inference",
-                attempt: 1,
-                call_state: "{call_state}",
-                queued_at: "{now}",
-                started_at: "{now}",
-                priority: 0,
-                queue_depth_at_enqueue: 0,
-                controller_generation: 0,
-                backend_config_fingerprint: "test"
-            }}) {{ _docID }}
-        }}"#,
-        call_id = escape_graphql_string(&call_id),
-        request_id = escape_graphql_string(request_id),
-        call_state = escape_graphql_string(call_state),
-        now = escape_graphql_string(&now),
+async fn seed_scoped_request(
+    db: &support::TestDb,
+    agent: &dyn gents::NodeIdentity,
+    request_id: &str,
+    session_id: &str,
+    state: &str,
+) -> String {
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        request_id,
+        db.node_identity.did(),
+        agent.did(),
+        agent.did(),
+        session_id,
+        "hello",
+        "interactive",
+        RECOVERY_CREATED_AT,
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent.did()),
     );
-    let resp = node.execute(&mutation).await;
+    gents::sign_agent_request_create(agent, &mut create)
+        .await
+        .unwrap();
+    let access = gents::ConfigAccess::local(db.node.clone());
+    let response = access
+        .write(
+            "test.inference_recovery.request",
+            &create.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
+    let doc_id = gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    if state != "pending" {
+        set_request_lifecycle_state(&db.node, &doc_id, state).await;
+    }
+    doc_id
+}
+
+async fn insert_scoped_inference_call(
+    node: &EmbeddedNode,
+    node_did: &str,
+    agent_did: &str,
+    request_doc_id: &str,
+    request_id: &str,
+    call_state: &str,
+) {
+    let now = chrono::Utc::now().to_rfc3339();
+    let call_id = format!("{request_id}-call");
+    let mutation = format!(
+        r#"mutation {{ add_InferenceCall(input: {{
+            call_id: "{}", runtime_instance_id: "runtime-recovery-test",
+            request_id: "{}", request_doc_id: "{}", call_seq: 1,
+            backend_id: "{}", agent_did: "{}", node_did: "{}",
+            call_kind: "inference", attempt: 1, call_state: "{}",
+            queued_at: "{}", started_at: "{}", priority: 0,
+            queue_depth_at_enqueue: 0, controller_generation: 0,
+            backend_config_fingerprint: "test"
+        }}) {{ _docID }} }}"#,
+        escape_graphql_string(&call_id),
+        escape_graphql_string(request_id),
+        escape_graphql_string(request_doc_id),
+        escape_graphql_string(BACKEND_ID),
+        escape_graphql_string(agent_did),
+        escape_graphql_string(node_did),
+        escape_graphql_string(call_state),
+        escape_graphql_string(&now),
+        escape_graphql_string(&now),
+    );
+    let response = node.execute(&mutation).await;
     assert!(
-        !resp.has_errors(),
+        !response.has_errors(),
         "insert inference call failed: {:?}",
-        resp.errors
+        response.errors
     );
 }
 
@@ -671,8 +773,9 @@ async fn fetch_inference_recovery_row(
 }
 
 async fn own_child_fixture(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
+    agent: &dyn gents::NodeIdentity,
     doc_id: &str,
     request_id: &str,
     session_id: &str,
@@ -685,18 +788,22 @@ async fn own_child_fixture(
         RECOVERY_CREATED_AT.to_owned(),
     );
     request.node_did = node_did.to_owned();
+    request.agent_did = agent.did().to_owned();
+    request.requester_did = Some(agent.did().to_owned());
     let mut owner = RequestLifecycle::new_with_node_did(
         node.clone(),
-        AGENT_NAME,
+        agent.did(),
         node_did,
         request,
         DEADLINE_SECS,
     );
+    owner.bind_managed_agent(agent).unwrap();
     assert_eq!(owner.claim().await.unwrap(), ClaimOutcome::Claimed);
     if processing {
-        crate::support::begin_owned_execution(&mut owner, node)
-            .await
-            .unwrap();
+        let writer =
+            gents::DefraStreamWriter::new_managed(node.clone(), agent, std::time::Duration::ZERO)
+                .unwrap();
+        owner.begin_owned_execution(&writer).await.unwrap();
     }
     owner
 }
@@ -721,16 +828,11 @@ async fn seed_expired_execution_tuple(node: &EmbeddedNode, request_doc_id: &str)
 #[tokio::test]
 async fn request_recovery_before_output_persists_canonical_terminal_selection() {
     let db = test_db("recovery-no-response-failed").await;
+    let agent = support::managed_agent(&db).await;
     let request_id = "recovery-no-response-request";
     let session_id = "recovery-no-response-session";
-    let doc_id = create_request(
-        &db.node,
-        request_id,
-        session_id,
-        "processing",
-        RECOVERY_CREATED_AT,
-    )
-    .await;
+    let doc_id =
+        seed_scoped_request(&db, agent.as_ref(), request_id, session_id, "processing").await;
     seed_expired_execution_tuple(&db.node, &doc_id).await;
     support::create_session_document(
         &db.node,
@@ -750,14 +852,24 @@ async fn request_recovery_before_output_persists_canonical_terminal_selection() 
                         gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
                 }),
             }),
-            ..support::session_document(session_id, AGENT_NAME, RECOVERY_CREATED_AT)
+            requester_did: Some(agent.did().to_owned()),
+            ..support::session_document_in_scope(
+                db.node_identity.did(),
+                session_id,
+                agent.did(),
+                RECOVERY_CREATED_AT,
+            )
         },
     )
     .await;
 
-    let report = RequestLifecycle::recover_all(&db.node, NODE_DID)
-        .await
-        .unwrap();
+    let report = RequestLifecycle::recover_all_with_identities(
+        &db.node,
+        db.node_identity.did(),
+        &[agent.clone()],
+    )
+    .await
+    .unwrap();
     assert_eq!(
         report.requests_recovered, 1,
         "an expired request without published output must still terminalize"
@@ -781,25 +893,24 @@ async fn request_recovery_before_output_persists_canonical_terminal_selection() 
     );
     assert!(row.terminalized_at.is_some());
 
-    let second = RequestLifecycle::recover_all(&db.node, NODE_DID)
-        .await
-        .unwrap();
+    let second = RequestLifecycle::recover_all_with_identities(
+        &db.node,
+        db.node_identity.did(),
+        &[agent.clone()],
+    )
+    .await
+    .unwrap();
     assert_eq!(
         second.requests_recovered, 0,
         "a repaired terminal request must leave the active-recovery scope"
     );
 
     let db = test_db("recovery-no-response-interrupted").await;
+    let agent = support::managed_agent(&db).await;
     let request_id = "recovery-no-response-interrupted-request";
     let session_id = "recovery-no-response-interrupted-session";
-    let doc_id = create_request(
-        &db.node,
-        request_id,
-        session_id,
-        "processing",
-        RECOVERY_CREATED_AT,
-    )
-    .await;
+    let doc_id =
+        seed_scoped_request(&db, agent.as_ref(), request_id, session_id, "processing").await;
     seed_expired_execution_tuple(&db.node, &doc_id).await;
     set_interrupt_requested_at(&db.node, &doc_id, "2026-03-23T00:00:30Z").await;
     support::create_session_document(
@@ -820,14 +931,24 @@ async fn request_recovery_before_output_persists_canonical_terminal_selection() 
                         gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
                 }),
             }),
-            ..support::session_document(session_id, AGENT_NAME, RECOVERY_CREATED_AT)
+            requester_did: Some(agent.did().to_owned()),
+            ..support::session_document_in_scope(
+                db.node_identity.did(),
+                session_id,
+                agent.did(),
+                RECOVERY_CREATED_AT,
+            )
         },
     )
     .await;
 
-    let report = RequestLifecycle::recover_all(&db.node, NODE_DID)
-        .await
-        .unwrap();
+    let report = RequestLifecycle::recover_all_with_identities(
+        &db.node,
+        db.node_identity.did(),
+        &[agent.clone()],
+    )
+    .await
+    .unwrap();
     assert_eq!(
         report.requests_recovered, 1,
         "a latched response-less interrupt must terminalize as interrupted"

@@ -46,7 +46,7 @@ async fn setup(label: &str, categories: &[&str]) -> (Arc<EmbeddedNode>, String, 
 }
 
 #[tokio::test]
-async fn agent_ids_resolve_from_their_node_local_slug() {
+async fn agent_dids_resolve_from_their_node_local_slug() {
     let (node, owner, tools) = setup("slug", &["node", "tools", "profile"]).await;
     let worker = format!("{owner}:worker-a");
     crate::test_support::install_test_agent(&node, &owner, &worker).await;
@@ -65,7 +65,7 @@ async fn agent_ids_resolve_from_their_node_local_slug() {
         json!({"argv":["profile","preview"],"options":{"agent":"worker-a"},"set":{"display_name":"Worker"}}),
     )
     .await;
-    assert_eq!(receipt["agent_id"], worker);
+    assert_eq!(receipt["agent_did"], worker);
     assert_eq!(receipt["target_id"], format!("{worker}:inference"));
 
     let error = refused(
@@ -80,7 +80,7 @@ async fn agent_ids_resolve_from_their_node_local_slug() {
 
     ok(
         &tools,
-        json!({"argv":["agent-target","create"],"target_id":"worker","set":{"name":"worker","target_node_did":owner,"agent_id":"worker-a"}}),
+        json!({"argv":["agent-target","create"],"target_id":"worker","set":{"name":"worker","target_node_did":owner,"agent_did":"worker-a"}}),
     )
     .await;
     let target = ok(
@@ -88,7 +88,7 @@ async fn agent_ids_resolve_from_their_node_local_slug() {
         json!({"argv":["agent-target","get"],"target_id":"worker"}),
     )
     .await;
-    assert_eq!(target["document"]["agent_id"], worker);
+    assert_eq!(target["document"]["agent_did"], worker);
 
     crate::test_support::install_test_agent(&node, &owner, "worker-b").await;
     crate::test_support::install_test_agent(&node, &owner, &format!("{owner}:worker-b")).await;
@@ -125,7 +125,7 @@ async fn profile_receipts_name_the_default_target_and_preview_edit_means_preview
         json!({"argv":["profile","preview"],"set":{"display_name":"Mine"}}),
     )
     .await;
-    assert_eq!(receipt["agent_id"], "beh-test");
+    assert_eq!(receipt["agent_did"], "beh-test");
     assert_eq!(receipt["target_id"], "beh-test:inference");
     let aliased = ok(
         &tools,
@@ -215,7 +215,7 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
         crate::test_support::install_test_agent(&node, &owner, agent).await;
     }
     let mut grants = config(&["node", "tools"]);
-    grants.agent_id = "setup".into();
+    grants.agent_did = "setup".into();
     grants.preview = true;
     grants.no_lockout = true;
     let mut unguarded = grants.clone();
@@ -490,7 +490,7 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
     crate::test_support::install_test_agent(&node, &owner, "setup").await;
     crate::test_support::install_test_agent(&node, &owner, &format!("{owner}:worker")).await;
     let mut grants = config(&["node", "tools", "profile", "automation"]);
-    grants.agent_id = "setup".into();
+    grants.agent_did = "setup".into();
     grants.preview = true;
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
@@ -539,7 +539,7 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
         let text = call
             .to_string()
             .replace("<BACKEND_ID>", "setup:backend")
-            .replace("<AGENT_ID>", "setup")
+            .replace("<AGENT_DID>", "setup")
             .replace("<MODEL>", "test-model")
             .replace("<PROMPT>", "Lead the work.")
             .replace("<DID>", &owner);
@@ -615,7 +615,7 @@ async fn results_put_the_answer_first_and_execution_metadata_last() {
             "committed",
             "collection",
             "target_id",
-            "agent_id",
+            "agent_did",
             "changed",
             "effect",
             "config_execution",
@@ -665,7 +665,7 @@ async fn target_id_fills_a_positional_id() {
         json!({"argv":["agent","get","beh-test"],"target_id":"beh-test"}),
     ] {
         let read = ok(&tools, args.clone()).await;
-        assert_eq!(read["agent_id"], "beh-test", "{args}");
+        assert_eq!(read["agent_did"], "beh-test", "{args}");
     }
     let conflict = refused(
         &tools,
@@ -967,7 +967,7 @@ async fn crud_automation_keeps_strict_creation_and_selected_task_owner() {
             json!({"argv":[resource,"update",id],"set":{"tags":["inferred-owner"]}}),
         )
         .await;
-        assert_eq!(changed["agent_id"], worker);
+        assert_eq!(changed["agent_did"], worker);
     }
     assert!(refused(
         &tools,
@@ -1069,7 +1069,7 @@ async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledge
     .await;
     assert_eq!(receipt["committed"], true);
     assert_eq!(
-        receipt["agent_id"], "beh-test",
+        receipt["agent_did"], "beh-test",
         "the invoking referrer owns the edit"
     );
     let agents = receipt["shared"]["agents"]
@@ -1448,30 +1448,30 @@ async fn local_target_creation_defaults_identity_but_updates_preserve_remote_des
     let (node, owner, tools) = setup("target-default", &["node", "tools"]).await;
     let helper = format!("{owner}:helper");
     crate::test_support::install_test_agent(&node, &owner, &helper).await;
-    let receipt = ok(&tools, json!({"argv":["agent-target","create"],"target_id":"local","set":{"name":"helper","agent_id":"helper"}})).await;
+    let receipt = ok(&tools, json!({"argv":["agent-target","create"],"target_id":"local","set":{"name":"helper","agent_did":"helper"}})).await;
     assert_eq!(receipt["connection"]["kind"], "local");
     assert_eq!(receipt["connection"]["target_node_did"], owner);
-    assert_eq!(receipt["connection"]["agent_id"], helper);
+    assert_eq!(receipt["connection"]["agent_did"], helper);
     assert_eq!(receipt["connection"]["runtime_verified"], false);
     let local = ok(&tools, json!({"argv":["agent-target","get","local"]})).await;
     assert_eq!(local["document"]["target_node_did"], owner);
-    assert_eq!(local["document"]["agent_id"], helper);
+    assert_eq!(local["document"]["agent_did"], helper);
 
-    assert!(call(&tools, json!({"argv":["agent-target","create"],"target_id":"missing","set":{"name":"missing","agent_id":"does-not-exist"}})).await.is_err());
+    assert!(call(&tools, json!({"argv":["agent-target","create"],"target_id":"missing","set":{"name":"missing","agent_did":"does-not-exist"}})).await.is_err());
     assert!(
         call(&tools, json!({"argv":["agent-target","get","missing"]}))
             .await
             .is_err()
     );
     let remote = node_identity("remote-target-owner").did().to_string();
-    ok(&tools, json!({"argv":["agent-target","create"],"target_id":"remote","set":{"name":"remote","target_node_did":remote,"agent_id":"helper"}})).await;
+    ok(&tools, json!({"argv":["agent-target","create"],"target_id":"remote","set":{"name":"remote","target_node_did":remote,"agent_did":"helper"}})).await;
     let changed = ok(&tools, json!({"argv":["agent-target","update"],"target_id":"remote","set":{"description":"Remote helper"}})).await;
     assert_eq!(changed["connection"]["kind"], "remote");
     assert_eq!(changed["connection"]["target_node_did"], remote);
-    assert_eq!(changed["connection"]["agent_id"], "helper");
-    let changed = ok(&tools, json!({"argv":["agent-target","update"],"target_id":"remote","set":{"agent_id":"helper-2"}})).await;
+    assert_eq!(changed["connection"]["agent_did"], "helper");
+    let changed = ok(&tools, json!({"argv":["agent-target","update"],"target_id":"remote","set":{"agent_did":"helper-2"}})).await;
     assert_eq!(changed["connection"]["target_node_did"], remote);
-    assert_eq!(changed["connection"]["agent_id"], "helper-2");
+    assert_eq!(changed["connection"]["agent_did"], "helper-2");
     assert!(call(
         &tools,
         json!({"argv":["agent-target","update"],"target_id":"remote","clear":["target_node_did"]})
@@ -1491,7 +1491,7 @@ async fn profile_receipt_selects_current_agent_without_changing_original_profile
     )
     .await;
     let receipt = ok(&tools, json!({"argv":["profile","create"],"target_id":"research","set":{"backend_id":"beh-test:backend","model_name":"test-model"}})).await;
-    assert_eq!(receipt["connection"]["agent_id"], "beh-test");
+    assert_eq!(receipt["connection"]["agent_did"], "beh-test");
     assert_eq!(
         receipt["connection"]["selected_profile_id"],
         "beh-test:inference"

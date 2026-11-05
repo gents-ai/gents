@@ -9,7 +9,7 @@ async fn request(
     let input = gents_protocol::graphql::graphql_input_literal(&json!({
             "purpose": "normal", "request_id": "shared-logical-id", "node_did": "did:test:accounting",
             "requester_did": requester, "session_id": session, "created_at": created,
-            "lifecycle_state": "pending", "agent_id": "default", "backend_id": "backend", "content": "test",
+            "lifecycle_state": "pending", "agent_did": "default", "backend_id": "backend", "content": "test",
         })).unwrap();
     let data = access
         .write(
@@ -74,7 +74,7 @@ async fn inference_order_and_physical_scope_survive_index_hints() {
         "purpose": "normal", "request_id": "shared-logical-id", "node_did": "did:test:other-node",
         "requester_did": "did:test:reader", "session_id": "session",
         "created_at": "2026-10-03T00:00:00Z", "lifecycle_state": "pending",
-        "agent_id": "default", "backend_id": "backend", "content": "other node",
+        "agent_did": "default", "backend_id": "backend", "content": "other node",
     }))
     .unwrap();
     let other = access

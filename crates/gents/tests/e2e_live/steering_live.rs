@@ -77,10 +77,13 @@ async fn enqueue(db: &TestDb, id: &str, content: &str) -> Result<String> {
         content,
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::local_self(did),
+        AgentRequestAdmissionRecord::client(did),
     );
     create.input = gents::request::lifecycle::prepare_user_message_input(
-        &ConfigAccess::local(db.node.clone()),
+        &ConfigAccess::local_as(
+            db.node.clone(),
+            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+        ),
         did,
         SESSION,
         create.input,
@@ -88,12 +91,15 @@ async fn enqueue(db: &TestDb, id: &str, content: &str) -> Result<String> {
     )
     .await?;
     gents::sign_agent_request_create(db.node_identity.as_ref(), &mut create).await?;
-    let result = ConfigAccess::local(db.node.clone())
-        .write(
-            "test.live_steering.enqueue",
-            &create.graphql_mutation().map_err(anyhow::Error::msg)?,
-        )
-        .await?;
+    let result = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    )
+    .write(
+        "test.live_steering.enqueue",
+        &create.graphql_mutation().map_err(anyhow::Error::msg)?,
+    )
+    .await?;
     Ok(gents::store::graphql::created_doc_id(
         &result,
         "AgentRequest",
@@ -110,7 +116,10 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
     let target = live_target();
     let db = test_db("live-steering").await;
     let did = db.node_identity.did();
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     bind_agent_backend(
         &db.node,
         did,
@@ -142,7 +151,7 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let _release_on_failure = Release(release.clone());
-    let runtime = Gents::builder().node(db.node.clone()).identity(db.node_identity.clone()).default_agent_id(AGENT)
+    let runtime = Gents::builder().node(db.node.clone()).identity(db.node_identity.clone()).default_agent_did(AGENT)
         .tool_ceiling(ToolCeiling::meta_only()).agent(AGENT).backend_id(target.backend_id()).model_name(target.model())
         .system_prompt("Call held_probe exactly once before answering. After it returns, use the latest user messages, then give a concise answer. Do not call other tools.")
         .sampling(SamplingConfig { reasoning_effort: Some(ReasoningEffort::High), temperature: Some(1.0), top_p: Some(0.95), ..Default::default() })
@@ -167,7 +176,7 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
     let receipt = submit_pending_user_edit(
         &access,
         db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::local_self(did),
+        AgentRequestAdmissionRecord::client(did),
         None,
         did,
         SESSION,
@@ -197,7 +206,7 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
     submit_pending_user_edit(
         &access,
         db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::local_self(did),
+        AgentRequestAdmissionRecord::client(did),
         None,
         did,
         SESSION,

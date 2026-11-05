@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 use tokio::sync::{oneshot, Mutex};
 
@@ -122,8 +122,8 @@ impl RequestUpdateTiming {
 pub(super) struct TurnManagerConfig {
     pub actor: identity::Did,
     pub node_did: String,
-    pub agent_id: String,
-    pub graphql: String,
+    pub agent_did: String,
+    pub graphql: gents::store::config_client::GraphqlEndpoint,
 }
 
 #[derive(Debug, Default)]
@@ -246,6 +246,9 @@ struct TestGate {
 }
 
 impl TurnManager {
+    pub(super) fn actor(&self) -> &identity::Did {
+        &self.config.actor
+    }
     pub(super) fn new(node: Arc<EmbeddedNode>, config: TurnManagerConfig) -> Self {
         TurnManager {
             node,

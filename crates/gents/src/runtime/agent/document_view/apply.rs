@@ -7,10 +7,11 @@ use anyhow::Result;
 /// writes or deletes only this record, and the plugin-store change it carries
 /// reaches change detection through the resolved plugin identities on the
 /// tool surface, so it must still wake the reconciler.
-const OBSERVED_NON_CONFIG_COLLECTIONS: [&str; 3] = [
+const OBSERVED_NON_CONFIG_COLLECTIONS: [&str; 4] = [
     "OAuthCredential",
     "ToolServiceHealthState",
     "PackInstallation",
+    gents_protocol::schemas::INFERENCE_BACKEND_OBSERVATION_NAME,
 ];
 
 /// Every collection whose change can alter the runtime control snapshot.

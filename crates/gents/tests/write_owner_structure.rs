@@ -403,6 +403,15 @@ fn parse_production(root: &Path, sources: Vec<PathBuf>) -> Vec<(String, syn::Fil
 fn mentions_embedded_node(ty: &syn::Type) -> bool {
     struct Finder(bool);
     impl<'ast> Visit<'ast> for Finder {
+        fn visit_path(&mut self, path: &'ast syn::Path) {
+            self.0 |= path
+                .segments
+                .iter()
+                .zip(path.segments.iter().skip(1))
+                .any(|(module, ty)| module.ident == "defra_node" && ty.ident == "Node");
+            visit::visit_path(self, path);
+        }
+
         fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
             self.0 |= segment.ident == "EmbeddedNode";
             visit::visit_path_segment(self, segment);
@@ -577,9 +586,10 @@ impl<'ast> Visit<'ast> for ReadVisitor<'_> {
         if let Some(name) = path_name(call) {
             let mut segments = name.rsplit("::");
             let method = segments.next().unwrap_or_default();
-            if segments.next() == Some("EmbeddedNode")
-                && (method == "execute" || NODE_ONLY_METHODS.contains(&method))
-            {
+            let ty = segments.next();
+            let is_node = ty == Some("EmbeddedNode")
+                || (ty == Some("Node") && segments.next() == Some("defra_node"));
+            if is_node && (method == "execute" || NODE_ONLY_METHODS.contains(&method)) {
                 self.sites += 1;
             }
         }
@@ -682,13 +692,14 @@ fn read_fence_counts_direct_node_execution() {
     for source in [
         "fn f(node: &EmbeddedNode, q: &str) { node.execute(q); }",
         "fn f(db: &EmbeddedNode, q: &str) { db.execute(q); }",
-        "fn f(db: Arc<defra_node::EmbeddedNode>, q: &str) { db.as_ref().execute(q); }",
+        "fn f(db: Arc<defra_node::Node>, q: &str) { db.as_ref().execute(q); }",
         "impl S { fn f(&self, q: &str) { self.node.execute(q); } }",
         "struct S { store: Arc<EmbeddedNode> } impl S { fn f(&self, q: &str) { self.store.execute(q); } }",
         "fn f(node: &EmbeddedNode, q: &str) { node.clone().execute(q); }",
         "fn f(node: &EmbeddedNode, q: &str) { (&*node).execute(q); }",
         "fn f(core: &Core, q: &str) { core.node().execute(q); }",
         "fn f(node: &EmbeddedNode, q: &str) { EmbeddedNode::execute(&node, q); }",
+        "fn f(db: &defra_node::Node, q: &str) { defra_node::Node::execute(db, q); }",
         "fn f(node: &EmbeddedNode, q: &str) { let db = node.clone(); db.execute(q); }",
         "fn f(node: Arc<EmbeddedNode>, q: &str) { let db = Arc::clone(&node); db.execute(q); }",
         "impl S { fn f(&self, q: &str) { let db = &self.node; db.execute(q); } }",
@@ -705,6 +716,7 @@ fn read_fence_counts_direct_node_execution() {
 fn read_fence_ignores_owner_wrappers_and_tests() {
     for source in [
         "fn f(executor: &Executor, q: &str) { executor.execute(q); }",
+        "fn f(db: &domain::Node, q: &str) { db.execute(q); domain::Node::execute(db, q); }",
         "fn f(access: &ConfigAccess, q: &str) { access.execute(q); }",
         "fn f(access: &ConfigAccess, q: &str) { ConfigAccess::execute(access, q); }",
         "fn f(txn: &ConfigApplyTxn, q: &str) { txn.execute(q); }",

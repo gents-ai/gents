@@ -1,3 +1,4 @@
+export type { AgentIdentityBinding } from "./generated/AgentIdentityBinding.js";
 export type {
   BootstrapSummary,
   EnrollmentRequestView,
@@ -116,7 +117,6 @@ export type {
   ChatSubmissionQuery,
   CommandDenialView,
   DesktopSessionSnapshot,
-  SessionHydrationView,
   SessionContextDetails,
   SessionContextDetailsRequest,
   SessionLiveDeltaView,

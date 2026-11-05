@@ -1,6 +1,6 @@
 use crate::inference::llm::ToolChoice;
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use crate::inference::admission::{AdmissionRegistry, AdmittedCompletionModel};
@@ -71,6 +71,7 @@ where
                     && crate::inference::backends::setup::is_xai_api_endpoint(
                         &agent_config.backend_endpoint,
                     ))),
+        agent_config.agent_identity.managed_agent_signer(),
     )
 }
 
@@ -137,6 +138,9 @@ pub(crate) fn loop_config(
         ),
         structured_output: None,
         tool_choice: (tool_count > 0).then_some(ToolChoice::Auto),
+        configuration_guard: crate::turn::provider_input::configuration::configuration_guard(
+            &agent_config.configuration,
+        ),
         on_rendered_request: Some(
             crate::inference::rendered_request::scope::ambient_arming_sink(capture_scope),
         ),
@@ -230,7 +234,7 @@ pub(crate) fn parse_aggregate_token_limit(
 /// rehydrated from its signed physical scope and authenticated auxiliary
 /// children so crash redrive cannot mint another allowance.
 pub(crate) async fn aggregate_token_budget_for_request(
-    node: &EmbeddedNode,
+    access: &crate::store::config_client::ConfigAccess,
     request: &AgentRequest,
 ) -> anyhow::Result<Option<AggregateTokenBudget>> {
     use gents_protocol::request_admission::RequestPurpose;
@@ -244,9 +248,9 @@ pub(crate) async fn aggregate_token_budget_for_request(
     };
     let used = match request.purpose {
         RequestPurpose::Normal => {
-            crate::tools::native::load_parent_inclusive_budget_usage(node, request).await?
+            crate::tools::native::load_parent_inclusive_budget_usage(access, request).await?
         }
-        RequestPurpose::TitleAudit => load_prior_charged_tokens(node, &request.doc_id).await?,
+        RequestPurpose::TitleAudit => load_prior_charged_tokens(access, &request.doc_id).await?,
         RequestPurpose::AccessReview => unreachable!("review cannot mint a ledger"),
     };
     if used == 0 {
@@ -269,7 +273,7 @@ struct PriorUsageRow {
 }
 
 async fn load_prior_charged_tokens(
-    node: &EmbeddedNode,
+    access: &crate::store::config_client::ConfigAccess,
     request_doc_id: &str,
 ) -> anyhow::Result<u64> {
     anyhow::ensure!(
@@ -287,20 +291,14 @@ async fn load_prior_charged_tokens(
         }}"#,
         escape_graphql_string(request_doc_id)
     );
-    let resp = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "load_prior_charged_tokens",
-    )
-    .await?;
-    let rows = prior_usage_rows_from_response(
-        resp.data
-            .as_ref()
-            .and_then(|data| data.get("InferenceCall")),
-    )
-    .map_err(|error| {
-        anyhow::anyhow!("decoding InferenceCall usage for request_doc_id={request_doc_id}: {error}")
-    })?;
+    let resp = access.execute(&query).await?;
+    let rows =
+        prior_usage_rows_from_response(resp.get("data").and_then(|data| data.get("InferenceCall")))
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "decoding InferenceCall usage for request_doc_id={request_doc_id}: {error}"
+                )
+            })?;
     provider_usage::sum_charged_from_persisted_parts(
         rows.into_iter()
             .map(|row| (row.prompt_tokens, row.completion_tokens)),
@@ -339,7 +337,7 @@ const CALIBRATION_CALL_SCAN: usize =
 /// Calibration only raises estimates, so an unreadable history keeps the
 /// prior rather than failing the request.
 pub(crate) async fn context_calibration_for_session(
-    node: &EmbeddedNode,
+    access: &crate::store::config_client::ConfigAccess,
     agent_config: &ResolvedAgent,
     node_did: &str,
     session_id: &str,
@@ -349,9 +347,9 @@ pub(crate) async fn context_calibration_for_session(
         agent_config.openai_wire_api,
     );
     match load_session_calibration_rows(
-        node,
+        access,
         node_did,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         session_id,
         &agent_config.model_name,
     )
@@ -389,9 +387,9 @@ pub(crate) async fn context_calibration_for_session(
 /// another agent's calls describe another preamble and tool set, so they
 /// neither observe nor anchor this one.
 async fn load_session_calibration_rows(
-    node: &EmbeddedNode,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     session_id: &str,
     model_name: &str,
 ) -> anyhow::Result<Vec<CalibrationCallRow>> {
@@ -400,7 +398,7 @@ async fn load_session_calibration_rows(
             InferenceCall(
                 filter: {{ _and: [
                     {{ node_did: {{ _eq: "{}" }} }},
-                    {{ agent_id: {{ _eq: "{}" }} }},
+                    {{ agent_did: {{ _eq: "{}" }} }},
                     {{ session_id: {{ _eq: "{}" }} }},
                     {{ model_name: {{ _eq: "{}" }} }},
                     {{ call_kind: {{ _eq: "inference" }} }}
@@ -417,19 +415,13 @@ async fn load_session_calibration_rows(
             }}
         }}"#,
         escape_graphql_string(node_did),
-        escape_graphql_string(agent_id),
+        escape_graphql_string(agent_did),
         escape_graphql_string(session_id),
         escape_graphql_string(model_name),
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "load_session_calibration_rows",
-    )
-    .await?;
+    let response = access.execute(&query).await?;
     match response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("InferenceCall"))
     {
         None | Some(serde_json::Value::Null) => Ok(Vec::new()),
@@ -767,7 +759,11 @@ pub(crate) async fn build_compaction_engine(
     summary.sampling = inference.sampling_config()?;
     summary.max_turns = 0;
     summary.compaction_inference = None;
-    let api_key = if summary.backend_auth.uses_node_oauth() {
+    let api_key = if summary.backend_auth.uses_node_oauth()
+        || matches!(
+            &summary.backend_auth,
+            crate::documents::BackendAuth::Credential { .. }
+        ) {
         "no-key".to_owned()
     } else {
         summary.completion_client_api_key()?

@@ -72,7 +72,7 @@ it("saves the full authored input and caller identity before the first effect", 
   selection.openMailboxRoute(f.stores.selection, {
     itemId: "source",
     nodeDid: "node",
-    agentId: "agent",
+    agentDid: "agent",
     sessionId: "session",
   });
   const actions = f.actions();
@@ -83,7 +83,7 @@ it("saves the full authored input and caller identity before the first effect", 
       clientDid: "client",
       requestId: expect.any(String),
       sessionId: "session",
-      agentId: "agent",
+      agentDid: "agent",
       content: "Original message",
       cwd: "/original",
       delivery: "steer",
@@ -186,7 +186,7 @@ it.each(["node", "request", "session", "Agent", "receipt", "signature"])(
     if (field === "node") reply.result.nodeDid = "other";
     if (field === "request") reply.result.requestId = "other";
     if (field === "session") reply.result.sessionId = "other";
-    if (field === "Agent") reply.result.agentId = "other";
+    if (field === "Agent") reply.result.agentDid = "other";
     if (field === "receipt") reply.result.submissionReceipt = null;
     if (field === "signature") {
       f.read.mockResolvedValueOnce(prepared(request, "deliveryUnknown"));
@@ -323,7 +323,7 @@ it("resolves an already retained request without allocating a replacement identi
     nodeDid: "node",
     sessionId: "session",
     requestId: "earlier",
-    agentId: "agent",
+    agentDid: "agent",
   });
   await f.actions().sendMessage("Original message");
   expect(f.send).toHaveBeenCalledWith(
@@ -334,4 +334,51 @@ it("resolves an already retained request without allocating a replacement identi
   f.send.mockImplementationOnce(async (request) => acceptedChat(request));
   await f.actions().sendMessage("Original message");
   expect(f.send.mock.calls[1][0].requestId).toEqual(expect.any(String));
+});
+
+it("keeps a delivered request identity while showing a cleanup denial", async () => {
+  const f = fixture("session");
+  rememberUnresolvedSubmission({
+    nodeDid: "node",
+    sessionId: "session",
+    selectedSessionId: "session",
+    requestId: "earlier",
+    contentKey: contentKey("Original message"),
+  });
+  f.send.mockResolvedValueOnce({
+    nodeDid: "node",
+    sessionId: "session",
+    requestId: "earlier",
+    agentDid: "agent",
+    deliveryError: {
+      code: "permissionDenied",
+      message: "Access denied",
+      retryable: false,
+      endpoint: null,
+    },
+  });
+  const result = await f.actions().sendMessage("Original message");
+  expect(result?.requestId).toBe("earlier");
+  expect(f.send).toHaveBeenCalledTimes(1);
+  expect(f.report).toHaveBeenCalledWith(
+    "Your message was delivered, but its saved-message cleanup failed: Access denied",
+  );
+});
+
+it("shows a native rejection while preserving the earlier request identity", async () => {
+  const f = fixture("session");
+  rememberUnresolvedSubmission({
+    nodeDid: "node", sessionId: "session", selectedSessionId: "session",
+    requestId: "earlier", contentKey: contentKey("Original message"),
+  });
+  f.send.mockResolvedValueOnce({
+    nodeDid: "node", sessionId: "session", requestId: "earlier", agentDid: "agent",
+    outcome: "notDelivered",
+    deliveryError: { code: "permissionDenied", message: "Access denied", retryable: false, endpoint: null },
+  });
+  await f.actions().sendMessage("Original message");
+  expect(f.send).toHaveBeenCalledTimes(1);
+  expect(f.send.mock.calls[0][0].resolveRequestId).toBe("earlier");
+  expect(f.report).toHaveBeenCalledWith(expect.stringContaining("Access denied"));
+  expect(f.report.mock.calls[0][0]).not.toContain("cleanup failed");
 });

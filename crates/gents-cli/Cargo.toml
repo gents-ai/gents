@@ -139,6 +139,8 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 [dev-dependencies]
 acp.workspace = true
 crypto.workspace = true
+db.workspace = true
+defra-core.workspace = true
 futures = "0.3"
 gents-lean-contract.workspace = true
 tokio-tungstenite = "0.26.2"

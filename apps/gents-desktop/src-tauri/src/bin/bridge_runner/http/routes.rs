@@ -485,7 +485,7 @@ pub(super) async fn handle_request(
             .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&delta)?))
         }
-        ("POST", "/desktop/session/hydration/retry") => {
+        ("POST", "/desktop/session/reload") => {
             let request = serde_json::from_str::<SessionSnapshotRequest>(&request.body)
                 .context("decoding session hydration retry request")?;
             let node_did = request.node_did.or_else(|| {
@@ -500,10 +500,10 @@ pub(super) async fn handle_request(
             });
             let node_did = node_did
                 .as_deref()
-                .ok_or_else(|| anyhow!("session hydration retry requires a node"))?;
+                .ok_or_else(|| anyhow!("session reload requires a node"))?;
             fixture
                 .desktop_core()
-                .retry_session_hydration(&request.session_id, node_did)
+                .reload_session(&request.session_id, node_did)
                 .await?;
             Ok(HttpResponse::json_ok("null".to_string()))
         }
@@ -681,7 +681,7 @@ pub(super) async fn handle_request(
             }
             let req =
                 decode::<AgentSaveRequest>(&request.body, "decoding remote agent save request")?;
-            tracing::info!(agent_id = %req.document.agent_id, "remote-save-agent: writing to remote core");
+            tracing::info!(agent_did = %req.document.agent_did, "remote-save-agent: writing to remote core");
             save_agent_config(fixture.remote_core().as_ref(), req).await?;
             Ok(HttpResponse::json_ok(
                 serde_json::json!({ "ok": true }).to_string(),

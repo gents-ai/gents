@@ -55,7 +55,7 @@ pub(in crate::tools::background::job) async fn step_context_for(
     let (_, tools, targets) = crate::request::admission::load_request_context_in_txn(
         txn,
         &caller.node_did,
-        &caller.agent_id,
+        &caller.agent_did,
     )
     .await?;
     let settings = tools
@@ -71,7 +71,7 @@ pub(in crate::tools::background::job) async fn step_context_for(
     let policy = settings.as_ref().map(|settings| &settings.policy);
     let cwd = Path::new(&facts.cwd);
     let key = |target: &crate::documents::AgentTargetDocument| {
-        (target.target_node_did.clone(), target.agent_id.clone())
+        (target.target_node_did.clone(), target.agent_did.clone())
     };
     let job_ids = settings
         .as_ref()

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::documents::PackConfig;
 use gents::store::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyPlan,
@@ -19,7 +19,7 @@ fn test_plugins() -> Arc<gents::plugin::executor::PluginExecutor> {
 }
 
 const NODE_DID: &str = "did:key:zSelfConfigE2E";
-const AGENT_ID: &str = "self-config-behavior";
+const AGENT_DID: &str = "self-config-behavior";
 const CONTEXT_ID: &str = "self-config-context";
 const TOOLS_ID: &str = "self-config-tools";
 const PROFILE_ID: &str = "self-config-profile";
@@ -28,8 +28,8 @@ const SECRET: &str = "sk-secret-should-never-leak";
 
 async fn seed_config(node: &Arc<EmbeddedNode>) {
     let config: PackConfig = serde_json::from_value(json!({
-        "node":{"node_did":NODE_DID,"default_agent_id":AGENT_ID},
-        "agents":[{"node_did":NODE_DID,"agent_id":AGENT_ID,"context_id":CONTEXT_ID,"inference_profile_id":PROFILE_ID}],
+        "node":{"node_did":NODE_DID,"default_agent_did":AGENT_DID},
+        "agents":[{"node_did":NODE_DID,"agent_did":AGENT_DID,"context_id":CONTEXT_ID,"inference_profile_id":PROFILE_ID}],
         "contexts":[{"node_did":NODE_DID,"context_id":CONTEXT_ID,"system_prompt":"original prompt","tools_id":TOOLS_ID}],
         "tools":[{"node_did":NODE_DID,"tools_id":TOOLS_ID,"self_config":{"enable_self_config":true}}],
         "inference_profiles":[{"node_did":NODE_DID,"profile_id":PROFILE_ID,"backend_id":BACKEND_ID,"model_name":"model-small","sampling_id":"sampling","execution_id":"execution"}],
@@ -68,7 +68,7 @@ async fn read(node: &Arc<EmbeddedNode>, collection: Collection, id: &str) -> Val
 fn tool_config(categories: &[&str], no_lockout: bool, preview: bool) -> SelfConfigToolConfig {
     SelfConfigToolConfig {
         enabled: true,
-        agent_id: AGENT_ID.into(),
+        agent_did: AGENT_DID.into(),
         categories: categories.iter().map(|s| s.to_string()).collect(),
         no_lockout,
         preview,
@@ -196,7 +196,7 @@ async fn configure_context_and_profile_preserve_identity_and_reject_partial_comm
         );
     }
     assert_eq!(
-        read(&db.node, Collection::Agent, AGENT_ID).await["node_did"],
+        read(&db.node, Collection::Agent, AGENT_DID).await["node_did"],
         NODE_DID
     );
 }
@@ -278,7 +278,7 @@ async fn get_my_config_redacts_secrets_and_preview_does_not_write() {
     );
     let output = call_tool(&tools, "get_my_config", json!({})).await.unwrap();
     let config: Value = serde_json::from_str(&output).unwrap();
-    assert_eq!(config["agent"]["agent_id"], AGENT_ID);
+    assert_eq!(config["agent"]["agent_did"], AGENT_DID);
     assert_eq!(config["context"]["context_id"], CONTEXT_ID);
     assert_eq!(config["inference_profile"]["profile_id"], PROFILE_ID);
     assert_eq!(config["documents"]["Tools"]["tools_id"], TOOLS_ID);
@@ -372,7 +372,7 @@ async fn configure_event_source_rejects_filter_and_collection_injection() {
         ),
         json!("{ a: 1 } # "),
         json!("{ a: 1 }) { x } ("),
-        json!({r#"x: 1 }) { _docID } create_Agent(input: { agent_id: "evil-injected" }) { _docID } #"#:1}),
+        json!({r#"x: 1 }) { _docID } create_Agent(input: { agent_did: "evil-injected" }) { _docID } #"#:1}),
     ] {
         call_tool(&tools,"configure_automation",json!({"kind":"event_source","id":"source","patch":{"source_collection":"CustomerSignup","filter":filter}})).await.expect_err("invalid filter rejected before publication");
     }
@@ -392,7 +392,7 @@ async fn configure_event_source_rejects_filter_and_collection_injection() {
         .expect_err("collection identifiers cannot contain GraphQL syntax");
     }
     let rows = ConfigAccess::local(db.node.clone())
-        .execute("{ EventSource { _docID } Agent { agent_id } }")
+        .execute("{ EventSource { _docID } Agent { agent_did } }")
         .await
         .unwrap();
     assert!(rows["data"]["EventSource"].as_array().unwrap().is_empty());
@@ -460,13 +460,13 @@ async fn configure_automation_creates_one_chain_and_preserves_runtime_ownership(
     call_tool(
         &tools,
         "configure_automation",
-        json!({"kind":"task","id":"nightly","patch":{"agent_id":"someone-else"}}),
+        json!({"kind":"task","id":"nightly","patch":{"agent_did":"someone-else"}}),
     )
     .await
     .expect_err("task agent is protected");
     assert_eq!(
-        read(&db.node, Collection::Task, "nightly").await["agent_id"],
-        AGENT_ID
+        read(&db.node, Collection::Task, "nightly").await["agent_did"],
+        AGENT_DID
     );
 }
 
@@ -476,7 +476,7 @@ async fn self_only_boundaries_reject_foreign_references_and_corrupted_bindings()
     seed_config(&db.node).await;
     for query in [
         r#"mutation { create_Tools(input:{node_did:"did:key:zVictim", tools_id:"victim-tools"}) {_docID} }"#,
-        r#"mutation { create_Task(input:{node_did:"did:key:zVictim", task_id:"victim-task", agent_id:"victim", prompt_template:"Victim"}) {_docID} }"#,
+        r#"mutation { create_Task(input:{node_did:"did:key:zVictim", task_id:"victim-task", agent_did:"victim", prompt_template:"Victim"}) {_docID} }"#,
     ] {
         let response = db.node.execute(query).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
@@ -505,10 +505,10 @@ async fn self_only_boundaries_reject_foreign_references_and_corrupted_bindings()
     );
     for query in [
         format!(
-            r#"mutation {{ create_Agent(input:{{node_did:"{NODE_DID}", agent_id:"sibling", context_id:"{CONTEXT_ID}", inference_profile_id:"{PROFILE_ID}"}}) {{_docID}} }}"#
+            r#"mutation {{ create_Agent(input:{{node_did:"{NODE_DID}", agent_did:"sibling", context_id:"{CONTEXT_ID}", inference_profile_id:"{PROFILE_ID}"}}) {{_docID}} }}"#
         ),
         format!(
-            r#"mutation {{ create_Task(input:{{node_did:"{NODE_DID}", task_id:"sibling-task", agent_id:"sibling", prompt_template:"Sibling work"}}) {{_docID}} }}"#
+            r#"mutation {{ create_Task(input:{{node_did:"{NODE_DID}", task_id:"sibling-task", agent_did:"sibling", prompt_template:"Sibling work"}}) {{_docID}} }}"#
         ),
         format!(
             r#"mutation {{ create_Trigger(input:{{node_did:"{NODE_DID}", trigger_id:"sibling-trigger", task_id:"sibling-task", source:{{kind:"schedule",schedule_id:"cadence"}}}}) {{_docID}} }}"#

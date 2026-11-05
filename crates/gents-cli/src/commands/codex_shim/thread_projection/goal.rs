@@ -13,6 +13,7 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_goal(
     state: &ShimState,
     params: &codex::ThreadGoalSetParams,
 ) -> Result<Option<codex::ThreadGoal>> {
+    let actor = client_actor(state)?;
     if super::storage::load_scoped_session(state, &params.thread_id)
         .await?
         .is_none()
@@ -29,13 +30,14 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_goal(
         params.token_budget,
     )
     .await?;
-    enrich(state, goal).await
+    enrich(state, &actor, goal).await
 }
 
 pub(in crate::commands::codex_shim) async fn get_codex_thread_goal(
     state: &ShimState,
     thread_id: &str,
 ) -> Result<Option<codex::ThreadGoal>> {
+    let actor = client_actor(state)?;
     if super::storage::load_scoped_session(state, thread_id)
         .await?
         .is_none()
@@ -46,13 +48,14 @@ pub(in crate::commands::codex_shim) async fn get_codex_thread_goal(
     else {
         return Ok(None);
     };
-    enrich(state, goal).await
+    enrich(state, &actor, goal).await
 }
 
 pub(in crate::commands::codex_shim) async fn clear_codex_thread_goal(
     state: &ShimState,
     thread_id: &str,
 ) -> Result<bool> {
+    client_actor(state)?;
     if super::storage::load_scoped_session(state, thread_id)
         .await?
         .is_none()
@@ -62,8 +65,23 @@ pub(in crate::commands::codex_shim) async fn clear_codex_thread_goal(
     Ok(delete_goals_for_session(&state.node, state.node_did.as_ref(), thread_id).await? > 0)
 }
 
-async fn enrich(state: &ShimState, mut goal: GoalDocument) -> Result<Option<codex::ThreadGoal>> {
-    refresh_goal_usage(&state.node, &goal).await?;
+fn client_actor(state: &ShimState) -> Result<identity::Did> {
+    let actor = gents::ConfigAccess::Graphql(state.graphql.clone())
+        .actor_did()
+        .context("Codex goal access requires an authenticated client identity")?;
+    anyhow::ensure!(
+        actor != state.node_did.as_ref(),
+        "Codex goal access requires a client identity, not the node identity"
+    );
+    identity::Did::new(actor).context("invalid Codex client identity")
+}
+
+async fn enrich(
+    state: &ShimState,
+    actor: &identity::Did,
+    mut goal: GoalDocument,
+) -> Result<Option<codex::ThreadGoal>> {
+    refresh_goal_usage(&state.node, actor, &goal).await?;
     goal = load_canonical_goal(&state.node, state.node_did.as_ref(), &goal.session_id)
         .await?
         .unwrap_or(goal);

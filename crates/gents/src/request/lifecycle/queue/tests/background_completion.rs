@@ -41,7 +41,7 @@ async fn background_wakes_and_goal_continuations_keep_the_project_directory() {
     assert_eq!(wake.input.cwd.as_deref(), Some(cwd.as_str()));
     let goal = prepare_goal_continuation(
         &wake,
-        TEST_AGENT_ID.into(),
+        db.agent_did().into(),
         "goal",
         "continue",
         1,
@@ -73,7 +73,7 @@ async fn desktop_owned_session(
         "desktop-parent",
         db.node_did(),
         desktop.did(),
-        TEST_AGENT_ID,
+        db.agent_did(),
         session_id,
         "run work",
         "interactive",
@@ -98,12 +98,12 @@ async fn desktop_owned_session(
         .unwrap();
     let writer = crate::request::streaming::DefraStreamWriter::new(
         db.node.clone(),
-        db.node_did(),
+        db.agent_did(),
         std::time::Duration::ZERO,
     );
     let mut parent_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
-        TEST_AGENT_ID,
+        db.agent_did(),
         db.node_did(),
         parent.clone(),
         60,
@@ -126,11 +126,11 @@ async fn desktop_owned_session(
         )
         .await
         .unwrap();
-    session::ensure_session_with_agent_id_and_requester_did(
+    session::ensure_session_with_agent_did_and_requester_did(
         &db.node,
         session_id,
         db.node_did(),
-        TEST_AGENT_ID,
+        db.agent_did(),
         Some(desktop.did()),
     )
     .await
@@ -153,7 +153,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         let mutation = if source == QueueSource::Goal {
             let mut continuation = prepare_goal_continuation(
                 &parent,
-                TEST_AGENT_ID.into(),
+                db.agent_did().into(),
                 "goal",
                 "continue",
                 1,
@@ -162,7 +162,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
                 parent.request_hop,
             )
             .unwrap();
-            crate::sign_agent_request_create(db.identity.as_ref(), &mut continuation)
+            crate::sign_agent_request_create(db.agent_identity.as_ref(), &mut continuation)
                 .await
                 .unwrap();
             continuation.graphql_mutation().unwrap()
@@ -170,7 +170,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             session_request_create_mutation(
                 &parent,
                 SessionRequestFields {
-                    agent_id: TEST_AGENT_ID,
+                    agent_did: db.agent_did(),
                     content: "continue",
                     execution_origin: ExecutionOrigin::Scheduled,
                     input: RequestInput {
@@ -201,7 +201,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         assert_eq!(request.requester_did.as_deref(), Some(desktop.did()));
         let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
             db.node.clone(),
-            TEST_AGENT_ID,
+            db.agent_did(),
             db.node_did(),
             request.clone(),
             60,
@@ -232,7 +232,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         let next = session_request_create_mutation(
             &request,
             SessionRequestFields {
-                agent_id: TEST_AGENT_ID,
+                agent_did: db.agent_did(),
                 content: "second-hop",
                 execution_origin: ExecutionOrigin::Scheduled,
                 input: wake_queue_input(hints(QueueSource::Steering, QueuePolicy::Append)),
@@ -251,7 +251,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             .unwrap();
         let mut second_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
             db.node.clone(),
-            TEST_AGENT_ID,
+            db.agent_did(),
             db.node_did(),
             second,
             60,
@@ -282,7 +282,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         let forged = session_request_create_mutation(
             &request,
             SessionRequestFields {
-                agent_id: TEST_AGENT_ID,
+                agent_did: db.agent_did(),
                 content: "signed-original",
                 execution_origin: ExecutionOrigin::Scheduled,
                 input: wake_queue_input(hints(QueueSource::Steering, QueuePolicy::Append)),
@@ -301,13 +301,13 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             .unwrap()
             .unwrap();
         let error = admission_verifier(&db)
-            .verify_fresh(&forged, TEST_AGENT_ID)
+            .verify_fresh(&forged, db.agent_did())
             .await
             .unwrap_err();
         assert!(error.is_denied(), "{error:#}");
         let mut forged_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
             db.node.clone(),
-            TEST_AGENT_ID,
+            db.agent_did(),
             db.node_did(),
             forged,
             60,
@@ -344,7 +344,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             .unwrap();
         let mut followup_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
             db.node.clone(),
-            TEST_AGENT_ID,
+            db.agent_did(),
             db.node_did(),
             followup,
             60,
@@ -368,7 +368,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         let bad = session_request_create_mutation(
             &foreign_parent,
             SessionRequestFields {
-                agent_id: TEST_AGENT_ID,
+                agent_did: db.agent_did(),
                 content: "bad",
                 execution_origin: ExecutionOrigin::Scheduled,
                 input: wake_queue_input(hints(QueueSource::Steering, QueuePolicy::Append)),
@@ -381,11 +381,11 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         .unwrap();
         let response = db.node.execute(&bad).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        session::ensure_session_with_agent_id_and_requester_did(
+        session::ensure_session_with_agent_did_and_requester_did(
             &db.node,
             "other-session",
             db.node_did(),
-            TEST_AGENT_ID,
+            db.agent_did(),
             Some(desktop.did()),
         )
         .await
@@ -395,7 +395,7 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
             .unwrap()
             .unwrap();
         let error = admission_verifier(&db)
-            .verify_fresh(&bad, TEST_AGENT_ID)
+            .verify_fresh(&bad, db.agent_did())
             .await
             .unwrap_err();
         assert!(error.is_denied(), "{error:#}");
@@ -440,12 +440,12 @@ async fn a_returned_result_is_admitted_into_a_paired_client_session() {
     assert_eq!(wake.requester_did.as_deref(), Some(desktop.did()));
     assert_eq!(wake.request_hop, parent.request_hop);
     let verified = admission_verifier(&db)
-        .verify_fresh(&wake, TEST_AGENT_ID)
+        .verify_fresh(&wake, db.agent_did())
         .await
         .unwrap();
     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
-        TEST_AGENT_ID,
+        db.agent_did(),
         db.node_did(),
         verified.clone(),
         60,
@@ -486,13 +486,13 @@ async fn root_parent(db: &TestDb, session_id: &str) -> AgentRequest {
         .unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
-        TEST_AGENT_ID,
+        db.agent_did(),
         db.node_did(),
         request,
         60,
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
+    let writer = DefraStreamWriter::new(db.node.clone(), db.agent_did(), Duration::ZERO);
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     lifecycle
         .terminalize_owned(
@@ -531,7 +531,7 @@ fn wake_agent_request(
         request_id: request_id.to_string(),
         node_did: parent.node_did.clone(),
         requester_did: Some(parent.node_did.clone()),
-        agent_id: parent.agent_id.clone(),
+        agent_did: parent.agent_did.clone(),
         session_id: parent.session_id.clone(),
         content: "review notifications".to_string(),
         max_total_tokens: None,
@@ -772,9 +772,13 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
     .await
     .unwrap();
 
-    let recovery = crate::RequestLifecycle::recover_all(&node, db.node_did())
-        .await
-        .unwrap();
+    let recovery = crate::RequestLifecycle::recover_all_with_identities(
+        &node,
+        db.node_did(),
+        &[db.agent_identity.clone()],
+    )
+    .await
+    .unwrap();
     assert_eq!(recovery.background_wakes_redriven, 0);
     let before = crate::load_background_completion_diagnostics(
         &crate::store::config_client::ConfigAccess::local(node.clone()),
@@ -794,7 +798,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
     );
     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        TEST_AGENT_ID,
+        db.agent_did(),
         db.node_did(),
         request,
         60,
@@ -807,7 +811,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
     );
     let writer = crate::request::streaming::DefraStreamWriter::new(
         node.clone(),
-        db.node_did(),
+        db.agent_did(),
         std::time::Duration::ZERO,
     );
     lifecycle.begin_owned_execution(&writer).await.unwrap();
@@ -856,7 +860,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     );
     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        TEST_AGENT_ID,
+        db.agent_did(),
         db.node_did(),
         request,
         60,
@@ -869,7 +873,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     );
     let writer = crate::request::streaming::DefraStreamWriter::new(
         node.clone(),
-        db.node_did(),
+        db.agent_did(),
         std::time::Duration::ZERO,
     );
     lifecycle.begin_owned_execution(&writer).await.unwrap();
@@ -929,9 +933,13 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .unwrap()
     );
 
-    let first_repair = crate::RequestLifecycle::repair_terminal_requests(&node, db.node_did())
-        .await
-        .unwrap();
+    let first_repair = crate::RequestLifecycle::repair_terminal_requests_with_identities(
+        &node,
+        db.node_did(),
+        &[db.agent_identity.clone()],
+    )
+    .await
+    .unwrap();
     assert_eq!(first_repair.repaired, 0);
     let first = crate::load_background_completion_diagnostics(
         &crate::store::config_client::ConfigAccess::local(node.clone()),
@@ -943,9 +951,13 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     assert_eq!(first.acknowledged_notifications, 1);
     assert_eq!(first.epochs[0].state, "acknowledged");
 
-    let second_repair = crate::RequestLifecycle::repair_terminal_requests(&node, db.node_did())
-        .await
-        .unwrap();
+    let second_repair = crate::RequestLifecycle::repair_terminal_requests_with_identities(
+        &node,
+        db.node_did(),
+        &[db.agent_identity.clone()],
+    )
+    .await
+    .unwrap();
     assert_eq!(second_repair.repaired, 0);
     let second = crate::load_background_completion_diagnostics(
         &crate::store::config_client::ConfigAccess::local(node),
@@ -962,32 +974,41 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
 #[tokio::test]
 async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     use crate::request::watcher::{DefraWatcher, Watcher};
-    use crate::tools::call::lifecycle::admission_fixture::complete_child;
+    use crate::tools::call::lifecycle::admission_fixture::complete_child_managed;
     let (selected, successor_child) = crate::tools::call::lifecycle::completion_owner_conformance::selected_background_wake_with_successor(true).await;
     let admission = selected.admission;
     let node = admission.node.clone();
     let did = admission.node_did.clone();
+    let agent_signer = admission
+        .tool
+        .access()
+        .unwrap()
+        .managed_agent_signer()
+        .unwrap();
     let first_request = selected.wake;
+    let agent_did = first_request.agent_did.clone();
     let first_id = first_request.request_id.clone();
     let session_id = first_request.session_id.clone();
     let mut first_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        TEST_AGENT_ID,
+        &agent_did,
         &did,
         first_request,
         60,
         ExecutionOrigin::Scheduled,
         "backend-test",
     );
+    first_lifecycle.bind_managed_agent(&agent_signer).unwrap();
     assert_eq!(
         first_lifecycle.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        &did,
+        &agent_signer,
         std::time::Duration::ZERO,
-    );
+    )
+    .unwrap();
     first_lifecycle
         .begin_owned_execution(&writer)
         .await
@@ -1000,17 +1021,22 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         )
         .await
         .unwrap();
-    complete_child(
+    complete_child_managed(
         &node,
         &successor_child.unwrap(),
         &did,
         "second notification",
+        &agent_signer,
     )
     .await;
     assert_eq!(
-        crate::tools::background::completion::settle_running_session_message_rows(&node, &did)
-            .await
-            .unwrap(),
+        crate::tools::background::completion::settle_running_session_message_rows_with_access(
+            &node,
+            &admission.tool.access().unwrap(),
+            &did
+        )
+        .await
+        .unwrap(),
         1
     );
     first_lifecycle
@@ -1045,12 +1071,13 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         retry_keys[1].rsplit_once(':').unwrap().0,
         "unrelated transcript writes must not advance the queue-local generation"
     );
-    let mut watcher = DefraWatcher::new(node.clone(), &did).expect("request watcher");
+    let mut watcher = DefraWatcher::new_legacy(node.clone(), &did).expect("request watcher");
     let second_request = watcher.next_request().await.unwrap().unwrap();
     assert_ne!(second_request.request_id, first_id);
+    assert_eq!(second_request.agent_did, agent_did);
     let mut second_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        TEST_AGENT_ID,
+        &agent_did,
         &did,
         second_request,
         60,
@@ -1094,7 +1121,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     drop(watcher);
     drop(first_lifecycle);
     drop(second_lifecycle);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -1321,7 +1348,7 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         &db.node,
         db.node_did(),
         None,
-        Some(TEST_AGENT_ID),
+        Some(db.agent_did()),
         true,
         Some(8),
     )

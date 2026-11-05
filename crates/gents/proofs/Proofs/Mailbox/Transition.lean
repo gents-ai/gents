@@ -22,13 +22,16 @@ def stepStatus? (status : Status) : ResolutionAction → Option Status
   | .dismiss _ => if status = .open then some .dismissed else none
   | .expire due => if status = .open ∧ due then some .expired else none
 
+/-- The actor is authenticated by the native database transaction. Session
+requester is creation provenance, never a dismissal grant; document ACP owns
+that decision. The policy relationships remain follow-up #3485. -/
 def applyResolution? (item : Item) : ResolutionAction → Option Item
   | .act resolvedDocId =>
       if item.status = .open ∧ resolvedDocId ≠ "" then
         some { item with status := .acted, resolvedDocId := resolvedDocId }
       else none
-  | .dismiss principalDid =>
-      if item.status = .open ∧ principalDid = item.identity.requesterDid then
+  | .dismiss _ =>
+      if item.status = .open then
         some { item with status := .dismissed, resolvedDocId := "" }
       else none
   | .expire due =>

@@ -78,7 +78,7 @@ enum Lineage {
 }
 
 struct Harness {
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     agent_config: Arc<ResolvedAgent>,
     calls: Arc<AtomicUsize>,
     marks: tempfile::TempDir,
@@ -92,19 +92,20 @@ impl Harness {
 
     async fn with_deadline(deadline: Duration) -> Self {
         let data = tempfile::tempdir().expect("node data directory");
+        let agent_config = super::inference::tests::test_agent_with_deadline(deadline);
         let node = Arc::new(
-            crate::test_support::node_builder()
+            defra_node::Node::builder()
+                .with_node_identity_did(agent_config.node_did())
                 .data_path(data.path())
                 .build()
                 .await
                 .expect("embedded node"),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let agent_config = super::inference::tests::test_agent_with_deadline(deadline);
         crate::test_support::install_test_agent(
             &node,
             agent_config.node_did(),
-            &agent_config.agent_id,
+            &agent_config.agent_did,
         )
         .await;
         Self {
@@ -166,7 +167,7 @@ impl Harness {
                 json!({
                     "node_did": owner,
                     "task_id": TASK_ID,
-                    "agent_id": self.agent_config.agent_id,
+                    "agent_did": self.agent_config.agent_did,
                     "prompt_template": "run the gate",
                     "hooks": hooks,
                 }),
@@ -252,7 +253,7 @@ impl Harness {
             request_id,
             &owner,
             &owner,
-            &self.agent_config.agent_id,
+            &self.agent_config.agent_did,
             session_id,
             "run the gate",
             origin,
@@ -323,7 +324,7 @@ impl Harness {
     ) -> AgentDaemon<ScriptedModel> {
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &self.agent_config.system_prompt,
-            &self.agent_config.agent_id,
+            &self.agent_config.agent_did,
             &[],
             false,
             &[],
@@ -880,9 +881,10 @@ impl Harness {
         let registry =
             BackgroundExecutionRegistry::default().with_task_hook_records(records.to_path_buf());
         for _ in 0..40 {
-            let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
+            let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
                 &self.node,
                 self.owner(),
+                &[self.agent_config.agent_identity.clone()],
                 &registry,
             )
             .await;
@@ -898,12 +900,14 @@ impl Harness {
             "request recovery must decide the abandoned request: {row}"
         );
         assert!(registry.task_hook_records().list().is_empty());
-        let again = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
-            &self.node,
-            self.owner(),
-            &registry,
-        )
-        .await;
+        let again =
+            crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
+                &self.node,
+                self.owner(),
+                &[self.agent_config.agent_identity.clone()],
+                &registry,
+            )
+            .await;
         assert!(again.task_hooks.expect("second pass") == 0);
     }
 
@@ -1054,12 +1058,14 @@ async fn shutdown_before_any_hook_launches_leaves_no_record_to_recover() {
         "an execution that never started leaves nothing for recovery"
     );
     let restarted = BackgroundExecutionRegistry::default().with_task_hook_records(records);
-    let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
-        &harness.node,
-        harness.owner(),
-        &restarted,
-    )
-    .await;
+    let outcome =
+        crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
+            &harness.node,
+            harness.owner(),
+            &[harness.agent_config.agent_identity.clone()],
+            &restarted,
+        )
+        .await;
     assert!(outcome.task_hooks.unwrap() == 0);
 }
 
@@ -1074,7 +1080,7 @@ async fn a_request_bound_to_a_disabled_hookless_task_fails_closed() {
             json!({
                 "node_did": harness.owner(),
                 "task_id": TASK_ID,
-                "agent_id": harness.agent_config.agent_id,
+                "agent_did": harness.agent_config.agent_did,
                 "prompt_template": "run the gate",
                 "enabled": false,
             }),

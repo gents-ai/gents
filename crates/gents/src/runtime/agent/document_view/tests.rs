@@ -7,7 +7,7 @@ use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use crate::tools::surface::ToolCeiling;
 
-async fn test_node() -> Arc<defra_node::EmbeddedNode> {
+async fn test_node() -> Arc<defra_node::Node> {
     Arc::new(crate::test_support::node_builder().build().await.unwrap())
 }
 
@@ -29,19 +29,85 @@ fn test_identity(name: &str) -> KeyIdentity {
     KeyIdentity::load_or_create(path, None).unwrap()
 }
 
-async fn bind_default_agent_backend(
-    node: &Arc<defra_node::EmbeddedNode>,
-    node_did: &str,
-    agent_id: &str,
-) {
-    crate::test_support::install_test_agent(node, node_did, agent_id).await;
-    crate::upsert_node(node, node_did, None, Some(agent_id), true, None)
+#[tokio::test]
+async fn runtime_view_uses_reader_grant_and_hides_unlinked_agents() -> anyhow::Result<()> {
+    use crate::store::config_client::ConfigAccess;
+
+    let runtime = test_identity("runtime-view-reader");
+    let user = test_identity("runtime-view-owner");
+    let agent = test_identity("runtime-view-agent");
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(runtime.did())
+            .build()
+            .await?,
+    );
+    ensure_runtime_schemas(node.as_ref()).await?;
+    let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did())?);
+    let runtime_did = identity::Did::new(runtime.did())?;
+    let created = owner
+        .transact_write("test.runtime_view.seed_owned_documents", |txn| {
+            let runtime = &runtime;
+            let agent = &agent;
+            Box::pin(async move {
+                let node_response = txn.execute_with_variables(
+                    "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                    &serde_json::json!({"input": {"node_did": runtime.did()}}),
+                ).await?;
+                let agent_response = txn.execute_with_variables(
+                    "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                    &serde_json::json!({"input": {"node_did": runtime.did(),
+                        "agent_did": agent.did(), "creation_nonce": "nonce",
+                        "inference_profile_id": "profile"}}),
+                ).await?;
+                Ok::<_, anyhow::Error>((
+                    crate::store::graphql::created_doc_id(&node_response, "Node")?,
+                    crate::store::graphql::created_doc_id(&agent_response, "Agent")?,
+                ))
+            })
+        })
+        .await?;
+    let (node_doc, agent_doc) = created;
+
+    assert!(
+        load_document_runtime_view_as(&node, runtime.did(), runtime.did())
+            .await
+            .is_err()
+    );
+    owner
+        .add_actor_relationship("Node", &node_doc, "runtime_reader", &runtime_did)
+        .await?;
+    let unlinked = load_document_runtime_view_as(&node, runtime.did(), runtime.did()).await?;
+    assert!(unlinked.agents.is_empty());
+    owner
+        .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
+        .await?;
+    let linked = load_document_runtime_view_as(&node, runtime.did(), runtime.did()).await?;
+    assert!(linked.agents.contains_key(agent.did()));
+    owner
+        .delete_actor_relationship("Node", &node_doc, "runtime_reader", &runtime_did)
+        .await?;
+    assert!(
+        load_document_runtime_view_as(&node, runtime.did(), runtime.did())
+            .await
+            .is_err()
+    );
+    node.shutdown().await?;
+    Ok(())
+}
+
+async fn bind_default_agent_backend(node: &Arc<defra_node::Node>, node_did: &str, agent_did: &str) {
+    assert!(
+        crate::load_agent(node, agent_did).await.unwrap().is_some(),
+        "fixture agent must be provisioned before binding its backend"
+    );
+    crate::upsert_node(node, node_did, None, Some(agent_did), true, None)
         .await
         .unwrap();
     crate::inference::backends::registry::set_backend_probe_status(
         node,
         node_did,
-        &format!("{agent_id}:backend"),
+        &format!("{agent_did}:backend"),
         "healthy",
     )
     .await
@@ -85,7 +151,7 @@ async fn existing_document_runtime_view_does_not_wait_for_mutation_gate() {
         Some("Runtime skill")
     );
     held.discard().await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -93,8 +159,10 @@ async fn load_document_runtime_view_includes_referenced_documents() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-load"));
-    let default_agent_id = crate::default_agent_id_for_node(identity.did());
-    bind_default_agent_backend(&node, identity.did(), &default_agent_id).await;
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, identity.did())
+        .await
+        .agent_did;
+    bind_default_agent_backend(&node, identity.did(), &default_agent_did).await;
 
     let view = load_document_runtime_view(&node, identity.did())
         .await
@@ -102,11 +170,11 @@ async fn load_document_runtime_view_includes_referenced_documents() {
 
     assert_eq!(view.node.value.node_did, identity.did());
     assert_eq!(
-        view.node.value.default_agent_id.as_deref(),
-        Some(default_agent_id.as_str())
+        view.node.value.default_agent_did.as_deref(),
+        Some(default_agent_did.as_str())
     );
-    assert!(view.agents.contains_key(&default_agent_id));
-    let agent_config = &view.agents[&default_agent_id].value;
+    assert!(view.agents.contains_key(&default_agent_did));
+    let agent_config = &view.agents[&default_agent_did].value;
     let context_id = agent_config
         .context_id
         .as_deref()
@@ -116,19 +184,49 @@ async fn load_document_runtime_view_includes_referenced_documents() {
     let tools_id = context.tools_id.as_deref().expect("tools reference");
     assert!(view.tools.contains_key(tools_id));
     let profile = &view.inference_profiles[&agent_config.inference_profile_id].value;
-    assert_eq!(profile.backend_id, format!("{default_agent_id}:backend"));
+    assert_eq!(profile.backend_id, format!("{default_agent_did}:backend"));
     assert!(view
         .backends
-        .contains_key(&format!("{default_agent_id}:backend")));
+        .contains_key(&format!("{default_agent_did}:backend")));
 }
 
 #[tokio::test]
 async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-update"));
-    let default_agent_id = crate::default_agent_id_for_node(identity.did());
-    bind_default_agent_backend(&node, identity.did(), &default_agent_id).await;
+    let user = test_identity("document-view-update-user");
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(identity.did())
+            .with_node_acp_enabled()
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let user_access =
+        crate::test_support::bootstrap_test_node(&node, identity.as_ref(), &user).await;
+    let default_agent_did = crate::test_support::install_test_agent_as(
+        &node,
+        identity.as_ref(),
+        &user,
+        "Default fixture agent",
+    )
+    .await
+    .agent_did;
+    crate::test_support::set_test_default_agent_as(
+        &user_access,
+        identity.did(),
+        &default_agent_did,
+    )
+    .await;
+    crate::inference::backends::registry::set_backend_probe_status(
+        &node,
+        identity.did(),
+        &format!("{default_agent_did}:backend"),
+        "healthy",
+    )
+    .await
+    .unwrap();
 
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
@@ -139,21 +237,18 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
         .await
         .expect("initial document view");
 
-    let tools_id = format!("{default_agent_id}:tools");
+    let tools_id = format!("{default_agent_did}:tools");
     let tools_doc_id = view.tools[&tools_id].doc_id.clone();
     let mut tools_doc = view.tools[&tools_id].value.clone();
     tools_doc.host.get_or_insert_with(Default::default).files = Some(crate::documents::FileTools {
         mode: crate::tools::surface::FileToolMode::ReadOnly,
         ..Default::default()
     });
-    crate::store::config_client::write_tools_document(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        &tools_doc,
-    )
-    .await
-    .expect("write read-only Tools patch");
+    crate::store::config_client::write_tools_document(&user_access, &tools_doc)
+        .await
+        .expect("write read-only Tools patch");
 
-    let behavior_doc_id = crate::documents::load_agent_record(node.as_ref(), &default_agent_id)
+    let behavior_doc_id = crate::documents::load_agent_record(node.as_ref(), &default_agent_did)
         .await
         .unwrap()
         .expect("agent record")
@@ -188,9 +283,51 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
         .await
         .expect("snapshot from updated document view");
+    let resolved = snapshot
+        .agents
+        .get(&default_agent_did)
+        .expect("resolved agent");
+    let crate::inference::resolved::ResolvedConfiguration::Documents(selected) =
+        &resolved.configuration
+    else {
+        panic!("managed agents require document-bound configuration");
+    };
+    let context_id = view.agents[&default_agent_did]
+        .value
+        .context_id
+        .as_ref()
+        .expect("selected context");
+    let expected = [
+        &view.agents[&default_agent_did].doc_id,
+        &view.inference_profiles[&view.agents[&default_agent_did].value.inference_profile_id]
+            .doc_id,
+        &view.contexts[context_id].doc_id,
+        &view.tools[&tools_id].doc_id,
+    ];
+    assert_eq!(selected.actor.as_str(), default_agent_did);
+    assert_eq!(
+        selected
+            .documents
+            .iter()
+            .map(|doc| &doc.doc_id)
+            .collect::<Vec<_>>(),
+        expected
+    );
+    for scope in [
+        gents_loop::rendered_request::CaptureScopeKind::Inference,
+        gents_loop::rendered_request::CaptureScopeKind::Title,
+        gents_loop::rendered_request::CaptureScopeKind::AccessReview,
+        gents_loop::rendered_request::CaptureScopeKind::Compaction,
+    ] {
+        assert!(
+            crate::turn::completion_factory::loop_config(resolved, String::new(), 0, scope)
+                .configuration_guard
+                .is_some()
+        );
+    }
     let tool_surface = snapshot
         .tool_surfaces
-        .get(&default_agent_id)
+        .get(&default_agent_did)
         .expect("tool surface for default agent");
     let tool_names = tool_surface.tool_names();
     assert!(tool_names.contains(&"read_file".to_string()));
@@ -205,8 +342,10 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-skill"));
-    let default_agent_id = crate::default_agent_id_for_node(identity.did());
-    bind_default_agent_backend(&node, identity.did(), &default_agent_id).await;
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, identity.did())
+        .await
+        .agent_did;
+    bind_default_agent_backend(&node, identity.did(), &default_agent_did).await;
 
     let create_skill = format!(
         r#"mutation {{ create_Skill(input: {{
@@ -223,7 +362,7 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     let resp = node.execute(&create_skill).await;
     assert!(!resp.has_errors(), "create_Skill failed: {:?}", resp.errors);
 
-    let context_id = escape_graphql_string(&format!("{default_agent_id}:context"));
+    let context_id = escape_graphql_string(&format!("{default_agent_did}:context"));
     let did = escape_graphql_string(identity.did());
     let select = format!(
         r#"mutation {{ update_AgentContext(filter: {{context_id: {{_eq: "{context_id}"}}, node_did: {{_eq: "{did}"}}}}, input: {{skill_ids: ["skill-research"]}}) {{_docID}} }}"#
@@ -249,7 +388,7 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
 
     let agent_config = snapshot
         .agents
-        .get(&default_agent_id)
+        .get(&default_agent_did)
         .expect("resolved default agent");
     assert_eq!(
         agent_config.skills.len(),
@@ -260,7 +399,7 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
 
     let tool_surface = snapshot
         .tool_surfaces
-        .get(&default_agent_id)
+        .get(&default_agent_did)
         .expect("tool surface");
     let preamble = LayeredPromptBuilder::new(agent_config.as_ref(), tool_surface.as_ref(), &[])
         .preamble()
@@ -356,8 +495,10 @@ async fn apply_control_update_hot_reloads_skill() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-skill-reload"));
-    let default_agent_id = crate::default_agent_id_for_node(identity.did());
-    bind_default_agent_backend(&node, identity.did(), &default_agent_id).await;
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, identity.did())
+        .await
+        .agent_did;
+    bind_default_agent_backend(&node, identity.did(), &default_agent_did).await;
 
     let mut view = load_document_runtime_view(&node, identity.did())
         .await
@@ -413,7 +554,7 @@ async fn apply_control_update_hot_reloads_skill() {
 }
 
 async fn seed_raw_tools(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
     tools_id: &str,
     agent_target_ids: &[&str],
@@ -444,10 +585,12 @@ async fn resolve_quarantines_behavior_with_empty_agent_target_id() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-invalid-tool-selection"));
     let node_did = identity.did();
-    let default_agent_id = crate::default_agent_id_for_node(node_did);
-    bind_default_agent_backend(&node, node_did, &default_agent_id).await;
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, node_did)
+        .await
+        .agent_did;
+    bind_default_agent_backend(&node, node_did, &default_agent_did).await;
 
-    let tools_id = format!("{default_agent_id}:tools");
+    let tools_id = format!("{default_agent_did}:tools");
     seed_raw_tools(node.as_ref(), node_did, &tools_id, &[""]).await;
 
     let resolve_context = DocumentResolveContext::for_tests(
@@ -463,12 +606,12 @@ async fn resolve_quarantines_behavior_with_empty_agent_target_id() {
         .expect("snapshot resolves; quarantine is per-agent");
 
     assert!(
-        !snapshot.agents.contains_key(&default_agent_id),
+        !snapshot.agents.contains_key(&default_agent_did),
         "agent with a blank agent target id must not be active"
     );
     let reason = snapshot
         .unavailable_agents
-        .get(&default_agent_id)
+        .get(&default_agent_did)
         .expect("agent should be quarantined");
     assert!(
         reason.diagnostic.contains("target_ids"),
@@ -483,10 +626,12 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-missing-agent-target"));
     let node_did = identity.did();
-    let default_agent_id = crate::default_agent_id_for_node(node_did);
-    bind_default_agent_backend(&node, node_did, &default_agent_id).await;
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, node_did)
+        .await
+        .agent_did;
+    bind_default_agent_backend(&node, node_did, &default_agent_did).await;
 
-    let tools_id = format!("{default_agent_id}:tools");
+    let tools_id = format!("{default_agent_did}:tools");
     seed_raw_tools(
         node.as_ref(),
         node_did,
@@ -497,7 +642,7 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
     let target_mutation = format!(
         r#"mutation {{ create_AgentTarget(input: {{
             target_id: "target-missing-agent", node_did: "{node_did}",
-            target_node_did: "{node_did}", agent_id: "missing-agent",
+            target_node_did: "{node_did}", agent_did: "missing-agent",
             name: "missing"
         }}) {{ _docID }} }}"#,
         node_did = escape_graphql_string(node_did),
@@ -522,12 +667,12 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
         .expect("snapshot resolves; quarantine is per-agent");
 
     assert!(
-        !snapshot.agents.contains_key(&default_agent_id),
+        !snapshot.agents.contains_key(&default_agent_did),
         "agent with a missing local agent target must not be active"
     );
     let reason = snapshot
         .unavailable_agents
-        .get(&default_agent_id)
+        .get(&default_agent_did)
         .expect("agent should be quarantined");
     assert!(
         reason.diagnostic.contains("missing-agent") && reason.diagnostic.contains("agents"),
@@ -537,7 +682,7 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
 }
 
 async fn seed_automation(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     documents: Vec<(crate::Collection, serde_json::Value)>,
 ) {
     crate::store::config_client::ConfigAccess::transact_local_write(node, None, "test.replicated_automation", |txn| {
@@ -556,10 +701,10 @@ async fn seed_automation(
 }
 
 async fn create_task_bound(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     task_id: &str,
-    agent_id: &str,
+    agent_did: &str,
     prompt_template: &str,
     enabled: bool,
 ) {
@@ -570,7 +715,7 @@ async fn create_task_bound(
             serde_json::json!({
                 "node_did": node_did,
                 "task_id": task_id,
-                "agent_id": agent_id,
+                "agent_did": agent_did,
                 "prompt_template": prompt_template,
                 "enabled": enabled,
             }),
@@ -580,7 +725,7 @@ async fn create_task_bound(
 }
 
 async fn create_schedule_with_concurrency(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     trigger_id: &str,
     task_id: &str,
@@ -616,7 +761,7 @@ async fn create_schedule_with_concurrency(
 }
 
 async fn create_event_trigger(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     trigger_id: &str,
     task_id: &str,
@@ -668,7 +813,14 @@ async fn retired_reserved_ids_are_never_visible() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-retired-ids"));
     let node_did = identity.did();
-    bind_default_agent_backend(&node, node_did, &crate::default_agent_id_for_node(node_did)).await;
+    bind_default_agent_backend(
+        &node,
+        node_did,
+        &crate::test_support::ensure_test_default_agent(&node, node_did)
+            .await
+            .agent_did,
+    )
+    .await;
 
     let graph_trigger = format!("graph-trigger-{}-{}", "a".repeat(64), "b".repeat(16));
     let mut documents = Vec::new();
@@ -717,7 +869,7 @@ async fn retired_reserved_ids_are_never_visible() {
     assert_eq!(ids(&view.triggers), ["ordinary"]);
     assert_eq!(ids(&view.event_sources), ["ordinary"]);
 
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -728,7 +880,9 @@ async fn usage_collection_write_never_reloads_the_runtime_view() {
     bind_default_agent_backend(
         &node,
         identity.did(),
-        &crate::default_agent_id_for_node(identity.did()),
+        &crate::test_support::ensure_test_default_agent(&node, identity.did())
+            .await
+            .agent_did,
     )
     .await;
     let mut view = load_document_runtime_view(&node, identity.did())
@@ -745,7 +899,7 @@ async fn usage_collection_write_never_reloads_the_runtime_view() {
     .unwrap();
     assert_eq!(outcome, ControlUpdateOutcome::Irrelevant);
 
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -754,7 +908,14 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-tasks-schedules"));
     let node_did = identity.did();
-    bind_default_agent_backend(&node, node_did, &crate::default_agent_id_for_node(node_did)).await;
+    bind_default_agent_backend(
+        &node,
+        node_did,
+        &crate::test_support::ensure_test_default_agent(&node, node_did)
+            .await
+            .agent_did,
+    )
+    .await;
 
     create_task_bound(
         &node,
@@ -830,7 +991,14 @@ async fn load_document_runtime_view_populates_event_triggers() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-event-triggers"));
     let node_did = identity.did();
-    bind_default_agent_backend(&node, node_did, &crate::default_agent_id_for_node(node_did)).await;
+    bind_default_agent_backend(
+        &node,
+        node_did,
+        &crate::test_support::ensure_test_default_agent(&node, node_did)
+            .await
+            .agent_did,
+    )
+    .await;
 
     create_task_bound(
         &node,
@@ -884,14 +1052,16 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-resolve-schedule-active"));
     let node_did = identity.did();
-    let default_agent_id = crate::default_agent_id_for_node(node_did);
-    bind_default_agent_backend(&node, node_did, &default_agent_id).await;
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, node_did)
+        .await
+        .agent_did;
+    bind_default_agent_backend(&node, node_did, &default_agent_did).await;
 
     create_task_bound(
         &node,
         node_did,
         "task-resolve-active",
-        &default_agent_id,
+        &default_agent_did,
         "do the thing",
         true,
     )
@@ -936,7 +1106,7 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
         .expect("trigger-resolve-active present in active_schedules");
     assert_eq!(resolved.schedule_id, "schedule-resolve-active");
     assert_eq!(resolved.task_id, "task-resolve-active");
-    assert_eq!(resolved.task.agent_id, default_agent_id);
+    assert_eq!(resolved.task.agent_did, default_agent_did);
     assert_eq!(resolved.task.prompt_template, "do the thing");
     assert_eq!(
         resolved.cadence,
@@ -954,14 +1124,16 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-resolve-trigger-active"));
     let node_did = identity.did();
-    let default_agent_id = crate::default_agent_id_for_node(node_did);
-    bind_default_agent_backend(&node, node_did, &default_agent_id).await;
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, node_did)
+        .await
+        .agent_did;
+    bind_default_agent_backend(&node, node_did, &default_agent_did).await;
 
     create_task_bound(
         &node,
         node_did,
         "task-trigger-active",
-        &default_agent_id,
+        &default_agent_did,
         "do the thing on event",
         true,
     )
@@ -1006,7 +1178,7 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
         .expect("trigger-active present in active_event_triggers");
     assert_eq!(resolved.trigger_id, "trigger-active");
     assert_eq!(resolved.task_id, "task-trigger-active");
-    assert_eq!(resolved.task.agent_id, default_agent_id);
+    assert_eq!(resolved.task.agent_did, default_agent_did);
     assert_eq!(resolved.task.prompt_template, "do the thing on event");
     assert_eq!(resolved.source_collection, "CustomerSignup");
     assert_eq!(resolved.event_kind, "created");
@@ -1022,9 +1194,11 @@ async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger()
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-required-source-fill"));
     let owner = identity.did();
-    let agent_id = crate::default_agent_id_for_node(owner);
-    bind_default_agent_backend(&node, owner, &agent_id).await;
-    create_task_bound(&node, owner, "fill-task", &agent_id, "process event", true).await;
+    let agent_did = crate::test_support::ensure_test_default_agent(&node, owner)
+        .await
+        .agent_did;
+    bind_default_agent_backend(&node, owner, &agent_did).await;
+    create_task_bound(&node, owner, "fill-task", &agent_did, "process event", true).await;
     create_event_trigger(
         &node,
         owner,
@@ -1061,7 +1235,7 @@ async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger()
     )
     .await;
 
-    let tools_id = format!("{agent_id}:tools");
+    let tools_id = format!("{agent_did}:tools");
     crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
@@ -1094,7 +1268,7 @@ async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger()
     let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
         .await
         .unwrap();
-    let unavailable = snapshot.unavailable_agents.get(&agent_id).unwrap();
+    let unavailable = snapshot.unavailable_agents.get(&agent_did).unwrap();
     assert!(unavailable
         .diagnostic
         .contains("runtime-filled and cannot be required"));
@@ -1124,7 +1298,7 @@ async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger()
     let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
         .await
         .unwrap();
-    assert!(snapshot.agents.contains_key(&agent_id));
+    assert!(snapshot.agents.contains_key(&agent_did));
     assert!(snapshot.active_event_triggers.contains_key("fill-trigger"));
     assert!(!snapshot.unavailable_event_triggers.contains("fill-trigger"));
 }
@@ -1135,14 +1309,16 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-resolve-trigger-unavailable"));
     let node_did = identity.did();
-    let default_agent_id = crate::default_agent_id_for_node(node_did);
-    bind_default_agent_backend(&node, node_did, &default_agent_id).await;
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, node_did)
+        .await
+        .agent_did;
+    bind_default_agent_backend(&node, node_did, &default_agent_did).await;
 
     create_task_bound(
         &node,
         node_did,
         "task-trigger-disabled",
-        &default_agent_id,
+        &default_agent_did,
         "disabled task",
         false,
     )
@@ -1214,14 +1390,16 @@ async fn resolve_quarantines_event_trigger_with_invalid_source_collection() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-resolve-trigger-injection"));
     let node_did = identity.did();
-    let default_agent_id = crate::default_agent_id_for_node(node_did);
-    bind_default_agent_backend(&node, node_did, &default_agent_id).await;
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, node_did)
+        .await
+        .agent_did;
+    bind_default_agent_backend(&node, node_did, &default_agent_did).await;
 
     create_task_bound(
         &node,
         node_did,
         "task-trigger-injection",
-        &default_agent_id,
+        &default_agent_did,
         "enabled task",
         true,
     )
@@ -1280,14 +1458,16 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-resolve-schedule-unavailable"));
     let node_did = identity.did();
-    let default_agent_id = crate::default_agent_id_for_node(node_did);
-    bind_default_agent_backend(&node, node_did, &default_agent_id).await;
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, node_did)
+        .await
+        .agent_did;
+    bind_default_agent_backend(&node, node_did, &default_agent_did).await;
 
     create_task_bound(
         &node,
         node_did,
         "task-resolve-disabled",
-        &default_agent_id,
+        &default_agent_did,
         "disabled task",
         false,
     )
@@ -1353,14 +1533,16 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-resolve-active-tasks"));
     let node_did = identity.did();
-    let default_agent_id = crate::default_agent_id_for_node(node_did);
-    bind_default_agent_backend(&node, node_did, &default_agent_id).await;
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, node_did)
+        .await
+        .agent_did;
+    bind_default_agent_backend(&node, node_did, &default_agent_did).await;
 
     create_task_bound(
         &node,
         node_did,
         "task-active",
-        &default_agent_id,
+        &default_agent_did,
         "hello",
         true,
     )
@@ -1369,7 +1551,7 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
         &node,
         node_did,
         "task-disabled",
-        &default_agent_id,
+        &default_agent_did,
         "disabled",
         false,
     )
@@ -1422,15 +1604,15 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
         .get("task-active")
         .expect("task-active present");
     assert_eq!(resolved.task_id, "task-active");
-    assert_eq!(resolved.agent_id, default_agent_id);
+    assert_eq!(resolved.agent_did, default_agent_did);
     assert_eq!(resolved.prompt_template, "hello");
     assert!(resolved.output_schema_ref.is_none());
 }
 
 async fn bind_subscription_backend(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     provider: &str,
     endpoint: &str,
     model: &str,
@@ -1439,14 +1621,17 @@ async fn bind_subscription_backend(
         apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
         DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    crate::test_support::install_test_agent(node, node_did, agent_id).await;
-    crate::upsert_node(node, node_did, None, Some(agent_id), true, None)
+    assert!(
+        crate::load_agent(node, agent_did).await.unwrap().is_some(),
+        "fixture agent must be provisioned before binding its backend"
+    );
+    crate::upsert_node(node, node_did, None, Some(agent_did), true, None)
         .await
         .unwrap();
     crate::inference::backends::registry::set_backend_probe_status(
         node,
         node_did,
-        &format!("{agent_id}:backend"),
+        &format!("{agent_did}:backend"),
         "healthy",
     )
     .await
@@ -1455,8 +1640,8 @@ async fn bind_subscription_backend(
         Box::pin(async move {
             let mut documents = Vec::new();
             for (collection, id, patch) in [
-                (crate::Collection::InferenceBackend, format!("{agent_id}:backend"), serde_json::json!({"provider_kind":provider, "endpoint":endpoint, "auth":{"kind":"node_oauth"}})),
-                (crate::Collection::InferenceProfile, format!("{agent_id}:inference"), serde_json::json!({"model_name":model})),
+                (crate::Collection::InferenceBackend, format!("{agent_did}:backend"), serde_json::json!({"provider_kind":provider, "endpoint":endpoint, "auth":{"kind":"node_oauth"}})),
+                (crate::Collection::InferenceProfile, format!("{agent_did}:inference"), serde_json::json!({"model_name":model})),
             ] {
                 let (_, mut value) = read_desired_state_record_in_txn(txn, collection, node_did, &id).await?.expect("installed canonical component");
                 value.as_object_mut().unwrap().extend(patch.as_object().unwrap().clone());
@@ -1468,14 +1653,14 @@ async fn bind_subscription_backend(
 }
 
 async fn bind_default_agent_chatgpt_backend(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) {
     bind_subscription_backend(
         node,
         node_did,
-        agent_id,
+        agent_did,
         "ChatGptCodex",
         "https://chatgpt.com/backend-api/codex",
         "gpt-5.2",
@@ -1483,7 +1668,7 @@ async fn bind_default_agent_chatgpt_backend(
     .await;
 }
 
-async fn insert_enabled_oauth_credential(node: &defra_node::EmbeddedNode, node_did: &str) {
+async fn insert_enabled_oauth_credential(node: &Arc<defra_node::Node>, node_did: &str) {
     let credential = crate::inference::auth::credential::OAuthCredential {
         doc_id: None,
         credential_id: crate::inference::auth::credential::oauth_credential_id(
@@ -1506,14 +1691,9 @@ async fn insert_enabled_oauth_credential(node: &defra_node::EmbeddedNode, node_d
         provider_account_key: None,
         label: None,
     };
-    let mutation =
-        crate::inference::auth::credential::oauth_credential_upsert_mutation(&credential);
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "upsert OAuthCredential failed: {:?}",
-        response.errors
-    );
+    crate::inference::auth::credential::upsert_oauth_credential(node, &credential)
+        .await
+        .expect("publish OAuthCredential");
 }
 
 #[tokio::test]
@@ -1524,10 +1704,14 @@ async fn chatgpt_codex_behavior_without_credential_is_unavailable() {
     bind_default_agent_chatgpt_backend(
         &node,
         identity.did(),
-        &crate::default_agent_id_for_node(identity.did()),
+        &crate::test_support::ensure_test_default_agent(&node, identity.did())
+            .await
+            .agent_did,
     )
     .await;
-    let default_agent_id = crate::default_agent_id_for_node(identity.did());
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, identity.did())
+        .await
+        .agent_did;
 
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
@@ -1542,13 +1726,13 @@ async fn chatgpt_codex_behavior_without_credential_is_unavailable() {
         .expect("snapshot");
 
     assert!(
-        !snapshot.agents.contains_key(&default_agent_id),
+        !snapshot.agents.contains_key(&default_agent_did),
         "a ChatGptCodex agent_config without an OAuthCredential must not be runnable (it would hang \
          startup readiness building the client)"
     );
     let reason = snapshot
         .unavailable_agents
-        .get(&default_agent_id)
+        .get(&default_agent_did)
         .expect("agent_config should be reported unavailable");
     assert!(
         reason
@@ -1565,11 +1749,12 @@ async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-unknown-kind"));
     let did = identity.did();
-    bind_default_agent_backend(&node, did, "known").await;
+    let known = crate::test_support::ensure_test_default_agent(&node, did).await;
+    bind_default_agent_backend(&node, did, &known.agent_did).await;
     crate::test_support::install_test_agent(&node, did, "future").await;
     let response = node
         .execute(&format!(
-            r#"mutation {{ update_InferenceBackend(filter: {{node_did: {{_eq: "{}"}}, backend_id: {{_eq: "future:backend"}}}}, input: {{provider_kind: "FutureProviderKind"}}) {{ _docID }} }}"#,
+            r#"mutation {{ update_InferenceBackendMetadata(filter: {{node_did: {{_eq: "{}"}}, backend_id: {{_eq: "future:backend"}}}}, input: {{provider_kind: "FutureProviderKind"}}) {{ _docID }} }}"#,
             escape_graphql_string(did)
         ))
         .await;
@@ -1619,11 +1804,15 @@ async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
     bind_default_agent_chatgpt_backend(
         &node,
         identity.did(),
-        &crate::default_agent_id_for_node(identity.did()),
+        &crate::test_support::ensure_test_default_agent(&node, identity.did())
+            .await
+            .agent_did,
     )
     .await;
-    insert_enabled_oauth_credential(node.as_ref(), identity.did()).await;
-    let default_agent_id = crate::default_agent_id_for_node(identity.did());
+    insert_enabled_oauth_credential(&node, identity.did()).await;
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, identity.did())
+        .await
+        .agent_did;
 
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
@@ -1638,7 +1827,7 @@ async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
         .expect("snapshot");
 
     assert!(
-        snapshot.agents.contains_key(&default_agent_id),
+        snapshot.agents.contains_key(&default_agent_did),
         "a ChatGptCodex agent_config with an enabled OAuthCredential must be runnable; unavailable: {:?}",
         snapshot.unavailable_agents
     );
@@ -1649,9 +1838,11 @@ async fn readiness_follows_the_backend_account_reference() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-account-ref"));
-    let default_agent_id = crate::default_agent_id_for_node(identity.did());
-    bind_default_agent_chatgpt_backend(&node, identity.did(), &default_agent_id).await;
-    insert_enabled_oauth_credential(node.as_ref(), identity.did()).await;
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, identity.did())
+        .await
+        .agent_did;
+    bind_default_agent_chatgpt_backend(&node, identity.did(), &default_agent_did).await;
+    insert_enabled_oauth_credential(&node, identity.did()).await;
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
@@ -1668,13 +1859,13 @@ async fn readiness_follows_the_backend_account_reference() {
     let ready = |view: DocumentRuntimeView| {
         let node = node.clone();
         let resolve_context = &resolve_context;
-        let default_agent_id = default_agent_id.clone();
+        let default_agent_did = default_agent_did.clone();
         async move {
             let snapshot =
                 resolve_document_runtime_snapshot_from_view(&node, resolve_context, &view)
                     .await
                     .expect("snapshot");
-            match snapshot.unavailable_agents.get(&default_agent_id) {
+            match snapshot.unavailable_agents.get(&default_agent_did) {
                 None => true,
                 Some(reason) => {
                     assert_eq!(
@@ -1719,8 +1910,10 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-account-lifecycle"));
     let did = identity.did().to_string();
-    let default_agent_id = crate::default_agent_id_for_node(&did);
-    bind_default_agent_claude_backend(&node, &did, &default_agent_id).await;
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, &did)
+        .await
+        .agent_did;
+    bind_default_agent_claude_backend(&node, &did, &default_agent_did).await;
     let access = ConfigAccess::local(node.clone());
     let sign_in = |who: &str| {
         crate::inference::auth::claude::credential_from_login_tokens(
@@ -1750,7 +1943,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
         let node = node.clone();
         let did = did.clone();
         let resolve_context = &resolve_context;
-        let default_agent_id = default_agent_id.clone();
+        let default_agent_did = default_agent_did.clone();
         async move {
             let mut view = load_document_runtime_view(&node, &did)
                 .await
@@ -1764,7 +1957,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
                 resolve_document_runtime_snapshot_from_view(&node, resolve_context, &view)
                     .await
                     .expect("snapshot");
-            !snapshot.unavailable_agents.contains_key(&default_agent_id)
+            !snapshot.unavailable_agents.contains_key(&default_agent_did)
         }
     };
     assert!(ready_on(None).await && ready_on(Some(b_ref.clone())).await);
@@ -1801,8 +1994,10 @@ async fn an_account_pool_agent_follows_its_enabled_accounts() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-account-pool"));
     let did = identity.did().to_string();
-    let default_agent_id = crate::default_agent_id_for_node(&did);
-    bind_default_agent_claude_backend(&node, &did, &default_agent_id).await;
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, &did)
+        .await
+        .agent_did;
+    bind_default_agent_claude_backend(&node, &did, &default_agent_did).await;
     let access = ConfigAccess::local(node.clone());
     let sign_in = |who: &str| {
         crate::inference::auth::claude::credential_from_login_tokens(
@@ -1829,7 +2024,7 @@ async fn an_account_pool_agent_follows_its_enabled_accounts() {
         let node = node.clone();
         let did = did.clone();
         let resolve_context = &resolve_context;
-        let default_agent_id = default_agent_id.clone();
+        let default_agent_did = default_agent_did.clone();
         async move {
             let mut view = load_document_runtime_view(&node, &did)
                 .await
@@ -1843,7 +2038,7 @@ async fn an_account_pool_agent_follows_its_enabled_accounts() {
                     .expect("snapshot");
             let agent = snapshot
                 .agents
-                .get(&default_agent_id)
+                .get(&default_agent_did)
                 .unwrap_or_else(|| panic!("agent runs: {:?}", snapshot.unavailable_agents));
             agent.oauth_pool.clone()
         }
@@ -1887,7 +2082,9 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-account-rejection"));
     let did = identity.did().to_string();
-    let x = crate::default_agent_id_for_node(&did);
+    let x = crate::test_support::ensure_test_default_agent(&node, &did)
+        .await
+        .agent_did;
     bind_default_agent_claude_backend(&node, &did, &x).await;
     let access = ConfigAccess::local(node.clone());
     let sign_in = |who: &str| {
@@ -1949,7 +2146,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
             b_profile.value.backend_id = b_backend;
             view.inference_profiles.insert(on_b.clone(), b_profile);
             let mut y_record = view.agents[&x].clone();
-            y_record.value.agent_id = y.clone();
+            y_record.value.agent_did = y.clone();
             view.agents.insert(y.clone(), y_record);
             let x_record = view.agents.get_mut(&x).unwrap();
             if compaction_on_b {
@@ -2019,14 +2216,14 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
 }
 
 async fn bind_default_agent_claude_backend(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) {
     bind_subscription_backend(
         node,
         node_did,
-        agent_id,
+        agent_did,
         "ClaudeCliSubscription",
         crate::inference::clients::claude_subscription::default_backend_endpoint(),
         "default",
@@ -2042,10 +2239,14 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
     bind_default_agent_claude_backend(
         &node,
         identity.did(),
-        &crate::default_agent_id_for_node(identity.did()),
+        &crate::test_support::ensure_test_default_agent(&node, identity.did())
+            .await
+            .agent_did,
     )
     .await;
-    let default_agent_id = crate::default_agent_id_for_node(identity.did());
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, identity.did())
+        .await
+        .agent_did;
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
@@ -2059,12 +2260,12 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
         .await
         .expect("snapshot");
     assert!(
-        !snapshot.agents.contains_key(&default_agent_id),
+        !snapshot.agents.contains_key(&default_agent_did),
         "a ClaudeCliSubscription agent_config without an OAuthCredential must not be runnable"
     );
     let reason = snapshot
         .unavailable_agents
-        .get(&default_agent_id)
+        .get(&default_agent_did)
         .expect("agent_config should be reported unavailable");
     assert_eq!(
         reason.public_reason,
@@ -2103,7 +2304,7 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
         .await
         .expect("snapshot");
     assert!(
-        snapshot.agents.contains_key(&default_agent_id),
+        snapshot.agents.contains_key(&default_agent_did),
         "a ClaudeCliSubscription agent_config with an enabled OAuthCredential must be runnable; unavailable: {:?}",
         snapshot.unavailable_agents
     );
@@ -2127,12 +2328,12 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
         assert_eq!(
             snapshot
                 .unavailable_agents
-                .get(&default_agent_id)
+                .get(&default_agent_did)
                 .map(|agent| agent.public_reason),
             expected
         );
         assert_eq!(
-            snapshot.agents.contains_key(&default_agent_id),
+            snapshot.agents.contains_key(&default_agent_did),
             expected.is_none()
         );
     }
@@ -2146,10 +2347,14 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
     bind_default_agent_chatgpt_backend(
         &node,
         identity.did(),
-        &crate::default_agent_id_for_node(identity.did()),
+        &crate::test_support::ensure_test_default_agent(&node, identity.did())
+            .await
+            .agent_did,
     )
     .await;
-    let default_agent_id = crate::default_agent_id_for_node(identity.did());
+    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, identity.did())
+        .await
+        .agent_did;
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
@@ -2163,7 +2368,7 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
         .await
         .expect("snapshot");
     assert!(
-        !before.agents.contains_key(&default_agent_id),
+        !before.agents.contains_key(&default_agent_did),
         "agent_config must start unavailable without a credential"
     );
 
@@ -2209,7 +2414,7 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
         .await
         .expect("snapshot");
     assert!(
-        after.agents.contains_key(&default_agent_id),
+        after.agents.contains_key(&default_agent_did),
         "agent_config must become runnable once the credential exists; unavailable: {:?}",
         after.unavailable_agents
     );
@@ -2252,7 +2457,14 @@ async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-surface-revoke"));
     let node_did = identity.did();
-    bind_default_agent_backend(&node, node_did, &crate::default_agent_id_for_node(node_did)).await;
+    bind_default_agent_backend(
+        &node,
+        node_did,
+        &crate::test_support::ensure_test_default_agent(&node, node_did)
+            .await
+            .agent_did,
+    )
+    .await;
 
     let mut view = load_document_runtime_view(&node, node_did)
         .await
@@ -2312,4 +2524,47 @@ async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
         view.datastore_tool_surfaces.is_empty(),
         "surface must be evicted once it is owned by another node"
     );
+}
+
+#[tokio::test]
+async fn unavailable_agent_scan_identity_follows_lean_candidates() {
+    let node = test_node().await;
+    ensure_runtime_schemas(&node).await.unwrap();
+    let root = Arc::new(test_identity("unavailable-scan-root"));
+    let did = crate::test_support::ensure_test_default_agent(&node, root.did())
+        .await
+        .agent_did;
+    let context = DocumentResolveContext::for_tests(
+        root.clone(),
+        ToolCeiling::readonly(),
+        crate::inference::backends::health::BackendHealthMap::new(),
+    );
+    let original = load_document_runtime_view(&node, root.did()).await.unwrap();
+    for case in &crate::lean_vocab_test::lean_contract_snapshot().watcher_actor_cases {
+        let name = case["name"].as_str().unwrap();
+        if !matches!(name, "disabled-resolved" | "disabled-unresolved") {
+            continue;
+        }
+        let mut view = original.clone();
+        let agent = &mut view.agents.get_mut(&did).unwrap().value;
+        agent.enabled = false;
+        if name == "disabled-unresolved" {
+            agent.creation_nonce = "invalid".into();
+        }
+        let snapshot = resolve_document_runtime_snapshot_from_view(&node, &context, &view)
+            .await
+            .unwrap();
+        assert_eq!(
+            snapshot.unavailable_agents[&did].public_reason,
+            gents_protocol::node_readiness::AgentReadinessUnavailableReason::AgentDisabled
+        );
+        let active = snapshot.activate(1, Default::default());
+        let selected = active.watcher_identities().unwrap();
+        let expected = case["expected"].as_array().unwrap();
+        assert_eq!(selected.len(), expected.len(), "{name}");
+        if !expected.is_empty() {
+            assert_eq!(selected[0].did(), did);
+        }
+    }
+    node.shutdown().await.unwrap();
 }

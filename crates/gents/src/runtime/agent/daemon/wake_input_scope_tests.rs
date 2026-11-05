@@ -215,7 +215,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let access = ConfigAccess::local(node.clone());
         let session = format!("wake-scope-{name}");
-        crate::session::ensure_session_with_agent_id_and_requester_did(
+        crate::session::ensure_session_with_agent_did_and_requester_did(
             &node,
             &session,
             identity.did(),
@@ -307,11 +307,12 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                 .iter()
                 .all(|notice| notice["scope"]["kind"] == "referenced")
         {
-            assert!(
-                crate::goal::load_request_assignment(&node, sources.values().next().unwrap())
-                    .await
-                    .is_err()
-            );
+            assert!(crate::goal::load_request_assignment(
+                &crate::ConfigAccess::local(node.clone()),
+                sources.values().next().unwrap()
+            )
+            .await
+            .is_err());
         }
         let mut appended = 0;
         let mut retry_parent = None;
@@ -469,7 +470,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             "{name}: provider input or exact acknowledgement changed"
         );
         drop(lifecycle);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
     assert!(conflicting_history_cases > 0);
 }

@@ -39,13 +39,25 @@ pub async fn inspect_pack_inference_bindings(
     node_did: &str,
     requested: &PackInferenceBindings,
 ) -> Result<PackInferenceBindingPreview> {
+    inspect_pack_inference_bindings_with_node_binding(access, manifest, node_did, requested, None)
+        .await
+}
+
+pub(crate) async fn inspect_pack_inference_bindings_with_node_binding(
+    access: &ConfigAccess,
+    manifest: &PackManifest,
+    node_did: &str,
+    requested: &PackInferenceBindings,
+    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+) -> Result<PackInferenceBindingPreview> {
     super::validate_pack_manifest(manifest)?;
     anyhow::ensure!(
         !node_did.trim().is_empty(),
         "pack owner DID must not be blank"
     );
 
-    let options = inference_profile_options(access, node_did).await?;
+    let options =
+        inference_profile_options_with_node_binding(access, node_did, node_binding).await?;
 
     let slots = manifest.metadata.inference_slots.clone();
     let slot_names = slots
@@ -90,16 +102,33 @@ pub async fn inference_profile_options(
     access: &ConfigAccess,
     node_did: &str,
 ) -> Result<Vec<PackInferenceProfileOption>> {
+    inference_profile_options_with_node_binding(access, node_did, None).await
+}
+
+async fn inference_profile_options_with_node_binding(
+    access: &ConfigAccess,
+    node_did: &str,
+    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+) -> Result<Vec<PackInferenceProfileOption>> {
     let (node_enabled, profiles, backends) = access
         .transact_readonly("pack.inference_binding_preview", |txn| {
             Box::pin(async move {
                 let refs = crate::ConfigReferences::load_in_txn(txn, node_did).await?;
-                let node_enabled = refs
-                    .documents()
-                    .find(|((collection, _), _)| *collection == Collection::Node)
-                    .and_then(|(_, value)| value.get("enabled"))
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false);
+                let node_enabled = if let Some(binding) = node_binding {
+                    crate::store::config_client::configuration_node_doc(
+                        txn,
+                        node_did,
+                        Some(binding),
+                    )
+                    .await?;
+                    binding.enabled
+                } else {
+                    refs.documents()
+                        .find(|((collection, _), _)| *collection == Collection::Node)
+                        .and_then(|(_, value)| value.get("enabled"))
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                };
                 let profiles = refs
                     .documents()
                     .filter(|((collection, _), _)| *collection == Collection::InferenceProfile)
@@ -158,8 +187,25 @@ pub async fn preview_pack_inference_bindings(
     node_did: &str,
     requested: &PackInferenceBindings,
 ) -> Result<PackInferenceBindingPreview> {
-    let mut preview =
-        inspect_pack_inference_bindings(access, manifest, node_did, requested).await?;
+    preview_pack_inference_bindings_with_node_binding(access, manifest, node_did, requested, None)
+        .await
+}
+
+pub(crate) async fn preview_pack_inference_bindings_with_node_binding(
+    access: &ConfigAccess,
+    manifest: &PackManifest,
+    node_did: &str,
+    requested: &PackInferenceBindings,
+    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+) -> Result<PackInferenceBindingPreview> {
+    let mut preview = inspect_pack_inference_bindings_with_node_binding(
+        access,
+        manifest,
+        node_did,
+        requested,
+        node_binding,
+    )
+    .await?;
     use crate::plugin::model_calls::{AccessModels, ModelBinding, ModelResolver};
     let models = AccessModels(access);
     for slot in manifest
@@ -170,10 +216,13 @@ pub async fn preview_pack_inference_bindings(
     {
         if let Some(profile_id) = requested.get(slot) {
             models
-                .resolve(&ModelBinding {
-                    node_did: node_did.to_owned(),
-                    profile_id: profile_id.clone(),
-                })
+                .resolve(
+                    &ModelBinding {
+                        node_did: node_did.to_owned(),
+                        profile_id: profile_id.clone(),
+                    },
+                    None,
+                )
                 .await
                 .with_context(|| {
                     format!("profile {profile_id:?} cannot serve plugin slot {slot:?}")
@@ -296,7 +345,7 @@ pub(super) fn validate_pack_inference_authoring(
         .flat_map(|slot| {
             slot.agents
                 .iter()
-                .map(move |agent_id| (agent_id.as_str(), slot.name.as_str()))
+                .map(move |agent_did| (agent_did.as_str(), slot.name.as_str()))
         })
         .collect::<BTreeMap<_, _>>();
     anyhow::ensure!(
@@ -305,13 +354,16 @@ pub(super) fn validate_pack_inference_authoring(
         manifest.name
     );
     for agent in &config.agents {
-        let slot = declared.get(agent.agent_id.as_str()).with_context(|| {
-            format!("agent {:?} is missing from inference slots", agent.agent_id)
+        let slot = declared.get(agent.agent_did.as_str()).with_context(|| {
+            format!(
+                "agent {:?} is missing from inference slots",
+                agent.agent_did
+            )
         })?;
         anyhow::ensure!(
             agent.inference_profile_id == inference_slot_reference(slot),
             "agent {:?} must reference inference slot {:?}",
-            agent.agent_id,
+            agent.agent_did,
             slot
         );
     }
@@ -412,7 +464,7 @@ mod tests {
         );
         let disabled = node
             .execute(
-                r#"mutation { update_InferenceBackend(filter: {
+                r#"mutation { update_InferenceBackendMetadata(filter: {
                     node_did: {_eq: "did:key:binding-owner"},
                     backend_id: {_eq: "glm:backend"}
                 }, input: {enabled: false}) {_docID} }"#,

@@ -7,8 +7,11 @@ use serde_json::Value;
 
 pub use gents::store::graphql::escape_graphql_string;
 
-fn served_principals() -> &'static Mutex<RapidHashMap<u16, String>> {
-    static PRINCIPALS: OnceLock<Mutex<RapidHashMap<u16, String>>> = OnceLock::new();
+fn served_principals(
+) -> &'static Mutex<RapidHashMap<u16, gents::store::config_client::ClientSigningCapability>> {
+    static PRINCIPALS: OnceLock<
+        Mutex<RapidHashMap<u16, gents::store::config_client::ClientSigningCapability>>,
+    > = OnceLock::new();
     PRINCIPALS.get_or_init(Default::default)
 }
 
@@ -24,7 +27,7 @@ pub fn register_served_home(home: &Path, port: u16) -> Result<()> {
     served_principals()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .insert(port, gents::NodeIdentity::did(&identity).to_string());
+        .insert(port, identity.client_signing_capability()?);
     Ok(())
 }
 
@@ -40,7 +43,11 @@ pub fn served_endpoint(graphql: &str) -> gents::store::config_client::GraphqlEnd
                 .cloned()
         });
     match principal {
-        Some(did) => gents::store::config_client::GraphqlEndpoint::as_principal(graphql, did),
+        Some(capability) => {
+            gents::store::config_client::GraphqlEndpoint::as_principal(graphql, capability.did())
+                .with_client_signing_capability(capability)
+                .expect("served endpoint uses the capability's own DID")
+        }
         None => gents::store::config_client::GraphqlEndpoint::anonymous(graphql),
     }
 }
@@ -104,7 +111,7 @@ pub async fn doc_id_for_tools(graphql: &str, tools_id: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("Tools row missing _docID for {tools_id}"))
 }
 
-pub async fn exec(node: &gents::defra_node::EmbeddedNode, query: &str) -> Result<()> {
+pub async fn exec(node: &gents::defra_node::Node, query: &str) -> Result<()> {
     let response = node.execute(query).await;
     if response.has_errors() {
         bail!("GraphQL mutation failed: {:?}", response.errors);

@@ -1,5 +1,58 @@
 use super::*;
 
+fn agent_tool_runtime(node: std::sync::Arc<defra_node::Node>) -> ToolRuntimeContext {
+    let node_did = node.node_identity_did().unwrap().to_owned();
+    let identity =
+        crate::store::identity::RegisteredIdentity::from_registered_did(&node_did, None).unwrap();
+    let mut runtime = ToolRuntimeContext::oneshot_with_node_did(node, node_did);
+    let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+    runtime.agent_identity =
+        Some(crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap());
+    runtime
+}
+
+async fn selected_surface_runtime() -> (std::sync::Arc<defra_node::Node>, ToolRuntimeContext) {
+    use crate::store::identity::NodeIdentity as _;
+    let home = tempfile::tempdir().unwrap();
+    let root = crate::store::identity::KeyIdentity::load_or_create(home.path().join("root"), None)
+        .unwrap();
+    let node_did = root.did().to_owned();
+    let node = std::sync::Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(&node_did)
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
+    let agent = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
+    let mut runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), node_did);
+    runtime.agent_identity = Some(agent);
+    (node, runtime)
+}
+
+fn config_for_selected_surface(
+    node_did: &str,
+    entries: Vec<crate::documents::SurfaceToolDecl>,
+) -> AgentToolSurfaceConfig {
+    let tools = tools_document(serde_json::json!({"node_did":node_did,
+        "datastore":{"datastore_tool_surface_ids":["test-surface"]}}));
+    let surface: crate::documents::DatastoreToolSurfaceDocument =
+        serde_json::from_value(serde_json::json!({
+            "surface_id":"test-surface", "node_did":node_did, "entries":entries,
+        }))
+        .unwrap();
+    AgentToolSurfaceConfig::from_tools_document_with_surfaces(
+        "ops",
+        &tools,
+        &[surface],
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+}
+
 #[test]
 fn empty_mcp_tool_selection_explains_why_no_tools_are_attached() {
     for style in [
@@ -118,7 +171,6 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -203,7 +255,6 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -271,7 +322,6 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -329,7 +379,6 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -386,7 +435,6 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -442,7 +490,6 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -499,7 +546,6 @@ fn containing_selection_root_clamps_to_operator_root() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -568,7 +614,6 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -622,7 +667,6 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -677,7 +721,6 @@ fn selection_without_root_inherits_operator_root() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -742,7 +785,6 @@ fn selection_cli_tools_require_ceiling_entries() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -804,7 +846,6 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -869,7 +910,6 @@ fn selection_mcp_service_allowlist_is_deduped() {
             ],
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -905,23 +945,11 @@ fn selection_mcp_service_allowlist_is_deduped() {
 
 #[tokio::test]
 async fn required_mcp_service_needs_agent_scoped_measured_availability() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let node_did = "did:key:required-mcp-test";
-    let registry = r#"mutation {
-        create_ToolServiceRegistry(input: {
-            service_id: "research"
-            node_did: "did:key:required-mcp-test"
-            hostname: null
-            tailscale_ip: null
-            lan_ip: "127.0.0.1"
-            mcp_port: 9213
-            mcp_path: "/mcp"
-            enabled: true
-        }) { _docID }
-    }"#;
-    let response = node.execute(registry).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    let (node, _runtime) = crate::tools::mcp::meta::tests::test_node().await;
+    crate::tools::mcp::meta::tests::seed_registry_service(&node, "research", "127.0.0.1", 9213)
+        .await;
+    let node_did = node.node_identity_did().unwrap();
+    let access = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(node_did).unwrap());
 
     let config = AgentToolSurfaceConfig::from_selection(
         "investigator",
@@ -952,19 +980,31 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
         .expect_err("missing health measurement must quarantine the agent");
     assert!(error.to_string().contains("not measured available"));
 
+    let escaped = crate::store::graphql::escape_graphql_string(node_did);
     let health = format!(
-        r#"mutation {{
-            create_ToolServiceHealthState(input: {{
-                service_id: "research"
-                node_did: "{node_did}"
-                endpoint: "http://127.0.0.1:9213/mcp"
-                status: "healthy"
-                tool_count: 2
-            }}) {{ _docID }}
-        }}"#
+        r#"mutation {{ create_ToolServiceHealthState(input: {{ service_id: "research", node_did: "{escaped}", endpoint: "http://127.0.0.1:9213/mcp", status: "healthy", tool_count: 2 }}) {{ _docID }} }}"#
     );
-    let response = node.execute(&health).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    access
+        .transact_write("test.mcp.health", |txn| {
+            let health = &health;
+            Box::pin(async move {
+                let response = txn.execute(health).await?;
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                    &response,
+                    "ToolServiceHealthState",
+                )?;
+                crate::store::config_client::publish_node_child_in_txn(
+                    txn,
+                    "ToolServiceHealthState",
+                    &doc,
+                    node_did,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
     let surface = config
         .resolve_with_available_agent_targets(&node, node_did, &active, &Default::default())
         .await
@@ -972,14 +1012,7 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
     assert!(surface.includes_meta_tools());
     assert_eq!(surface.allowed_mcp_service_ids(), &["research".to_string()]);
 
-    let changed_endpoint = r#"mutation {
-        update_ToolServiceRegistry(
-            filter: { service_id: { _eq: "research" }, node_did: { _eq: "did:key:required-mcp-test" } }
-            input: { mcp_port: 9214 }
-        ) { _docID }
-    }"#;
-    let response = node.execute(changed_endpoint).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    access.write("test.mcp.change_endpoint", r#"mutation { update_ToolServiceRegistry(filter: { service_id: { _eq: "research" } }, input: { mcp_port: 9214 }) { _docID } }"#).await.unwrap();
     let error = config
         .resolve_with_available_agent_targets(&node, node_did, &active, &Default::default())
         .await
@@ -1009,7 +1042,6 @@ fn background_tool_allowlist_registers_r6_tools() {
                 "bash_unrestricted".to_string(),
                 "bash_unrestricted".to_string(),
             ],
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -1062,7 +1094,6 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: vec!["read_file".to_string()],
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -1123,7 +1154,6 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -1172,7 +1202,11 @@ async fn defra_query_tool_gated_by_selection() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(
+        &node,
+        node.node_identity_did().unwrap(),
+        &Default::default(),
+    )
     .await
     .unwrap();
     assert!(enabled.tool_names().contains(&"query".to_string()));
@@ -1187,7 +1221,11 @@ async fn defra_query_tool_gated_by_selection() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(
+        &node,
+        node.node_identity_did().unwrap(),
+        &Default::default(),
+    )
     .await
     .unwrap();
     assert!(!disabled.tool_names().contains(&"query".to_string()));
@@ -1208,7 +1246,11 @@ async fn context_budget_tool_gated_by_selection() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(
+        &node,
+        node.node_identity_did().unwrap(),
+        &Default::default(),
+    )
     .await
     .unwrap();
     assert!(enabled.tool_names().contains(&"context_budget".to_string()));
@@ -1223,14 +1265,18 @@ async fn context_budget_tool_gated_by_selection() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(
+        &node,
+        node.node_identity_did().unwrap(),
+        &Default::default(),
+    )
     .await
     .unwrap();
     assert!(!disabled
         .tool_names()
         .contains(&"context_budget".to_string()));
 
-    let runtime = ToolRuntimeContext::oneshot(node);
+    let runtime = agent_tool_runtime(node);
     let built = disabled.build_tools(&runtime).await.unwrap();
     assert!(!built.iter().any(|tool| tool.name() == "context_budget"));
 }
@@ -1239,35 +1285,27 @@ async fn context_budget_tool_gated_by_selection() {
 async fn write_tools_register_under_declared_names() {
     use crate::documents::{WriteToolDecl, WriteToolField};
 
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (node, runtime) = selected_surface_runtime().await;
     node.add_collection("type ActionRequest { summary: String }")
         .await
         .unwrap();
 
-    let surface = AgentToolSurfaceConfig::from_selection(
-        "ops",
-        ResolvedToolSelection {
-            enable_defra_query: false,
-            write_tools: vec![WriteToolDecl {
-                notification: None,
-                tool_name: "request_action".to_string(),
-                collection: "ActionRequest".to_string(),
-                description: "Request an action".to_string(),
-                fields: vec![WriteToolField {
-                    name: "summary".to_string(),
-                    required: true,
-                    fill: None,
-                }],
-                output_obligation: None,
+    let surface = config_for_selected_surface(
+        &runtime.node_did,
+        vec![crate::documents::SurfaceToolDecl::Create(WriteToolDecl {
+            notification: None,
+            tool_name: "request_action".to_string(),
+            collection: "ActionRequest".to_string(),
+            description: "Request an action".to_string(),
+            fields: vec![WriteToolField {
+                name: "summary".to_string(),
+                required: true,
+                fill: None,
             }],
-            ..Default::default()
-        },
-        &ToolCeiling::meta_only(),
-        Vec::new(),
+            output_obligation: None,
+        })],
     )
-    .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(&node, &runtime.node_did, &Default::default())
     .await
     .unwrap();
 
@@ -1277,7 +1315,6 @@ async fn write_tools_register_under_declared_names() {
         "declared write tool should be advertised under its tool_name; got {names:?}"
     );
 
-    let runtime = ToolRuntimeContext::oneshot(node);
     let built = surface.build_tools(&runtime).await.unwrap();
     assert!(
         built.iter().any(|tool| tool.name() == "request_action"),
@@ -1285,54 +1322,44 @@ async fn write_tools_register_under_declared_names() {
     );
 }
 
+
 #[tokio::test]
 async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registration() {
     use crate::documents::{
         WriteToolDecl, WriteToolField, WriteToolOutputObligation, WriteToolOutputObligationScope,
     };
 
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (node, runtime) = selected_surface_runtime().await;
     node.add_collection(
         "type TallyOwner { label: String tallies: [Tally] } type Tally { label: String owner: TallyOwner @primary }",
     )
         .await
         .unwrap();
 
-    let surface = AgentToolSurfaceConfig::from_selection(
-        "ops",
-        ResolvedToolSelection {
-            enable_defra_query: false,
-            write_tools: vec![WriteToolDecl {
-                notification: None,
-                tool_name: "record_tally".to_string(),
-                collection: "Tally".to_string(),
-                description: "Record one tally".to_string(),
-                fields: vec![WriteToolField {
-                    name: "owner".to_string(),
-                    required: true,
-                    fill: None,
-                }],
-                output_obligation: Some(WriteToolOutputObligation {
-                    scope: WriteToolOutputObligationScope::Request,
-                    minimum_writes: 1,
-                    expected_count_field: Some("owner".to_string()),
-                }),
+    let surface = config_for_selected_surface(
+        &runtime.node_did,
+        vec![crate::documents::SurfaceToolDecl::Create(WriteToolDecl {
+            notification: None,
+            tool_name: "record_tally".to_string(),
+            collection: "Tally".to_string(),
+            description: "Record one tally".to_string(),
+            fields: vec![WriteToolField {
+                name: "owner".to_string(),
+                required: true,
+                fill: None,
             }],
-            ..Default::default()
-        },
-        &ToolCeiling::meta_only(),
-        Vec::new(),
+            output_obligation: Some(WriteToolOutputObligation {
+                scope: WriteToolOutputObligationScope::Request,
+                minimum_writes: 1,
+                expected_count_field: Some("owner".to_string()),
+            }),
+        })],
     )
-    .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(&node, &runtime.node_did, &Default::default())
     .await
     .unwrap();
 
-    let error = match surface
-        .build_tools(&ToolRuntimeContext::oneshot(node))
-        .await
-    {
+    let error = match surface.build_tools(&runtime).await {
         Ok(_) => panic!("a relation-typed count field must not reach a registered tool"),
         Err(error) => error,
     };
@@ -1341,6 +1368,7 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
         "{error:#}"
     );
 }
+
 
 #[tokio::test]
 async fn plugin_only_bindings_are_captured_for_trigger_execution() {
@@ -1380,7 +1408,11 @@ async fn plugin_only_bindings_are_captured_for_trigger_execution() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(
+        &node,
+        node.node_identity_did().unwrap(),
+        &Default::default(),
+    )
     .await
     .unwrap();
     assert_eq!(
@@ -1393,42 +1425,42 @@ async fn plugin_only_bindings_are_captured_for_trigger_execution() {
 
 #[tokio::test]
 async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (node, runtime) = selected_surface_runtime().await;
 
-    let granted = AgentToolSurfaceConfig::from_selection(
-        "ops",
-        ResolvedToolSelection {
-            enable_defra_query: false,
-            write_tools: vec![crate::session::mailbox::canonical_mailbox_write_decl()],
-            ..Default::default()
-        },
-        &ToolCeiling::meta_only(),
-        Vec::new(),
+    let granted = config_for_selected_surface(
+        &runtime.node_did,
+        vec![crate::documents::SurfaceToolDecl::Create(
+            crate::session::mailbox::canonical_mailbox_write_decl(),
+        )],
     )
-    .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(&node, &runtime.node_did, &Default::default())
     .await
     .unwrap();
-    assert!(granted
-        .tool_names()
-        .contains(&crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
+    assert!(
+        granted
+            .tool_names()
+            .contains(&crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string())
+    );
     assert!(granted.source_fill_fields().contains("requester_did"));
-    let runtime = ToolRuntimeContext::oneshot_with_node_did(node, "did:key:z-test-agent");
     let built = granted.build_tools(&runtime).await.unwrap();
-    assert!(built
-        .iter()
-        .any(|tool| tool.name() == crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME));
+    assert!(
+        built
+            .iter()
+            .any(|tool| tool.name() == crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME)
+    );
 
     let without_grant = AgentToolSurfaceConfig::meta_only()
         .resolve(&runtime.node, &runtime.node_did, &Default::default())
         .await
         .unwrap();
-    assert!(!without_grant
-        .tool_names()
-        .contains(&crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
+    assert!(
+        !without_grant
+            .tool_names()
+            .contains(&crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string())
+    );
     assert!(!without_grant.source_fill_fields().contains("requester_did"));
 }
+
 
 #[tokio::test]
 async fn query_tool_is_advertised_and_registered() {
@@ -1441,7 +1473,7 @@ async fn query_tool_is_advertised_and_registered() {
     );
     let node_did = crate::store::identity::NodeIdentity::did(&*identity).to_owned();
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&node_did)
             .build()
             .await
@@ -1449,27 +1481,20 @@ async fn query_tool_is_advertised_and_registered() {
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let surface = AgentToolSurfaceConfig::from_selection(
-        "ops",
-        ResolvedToolSelection {
-            enable_defra_query: false,
-            query_tools: vec![QueryToolDecl {
-                tool_name: "query_candidate_finding".to_string(),
-                collection: "CandidateFinding".to_string(),
-                description: "Load candidates".to_string(),
-                fields: vec!["finding_id".to_string()],
-                filter_fields: vec![WriteToolField {
-                    name: "run_id".to_string(),
-                    required: false,
-                    fill: Some(WriteToolFieldFill::Correlation),
-                }],
+    let surface = config_for_selected_surface(
+        &node_did,
+        vec![crate::documents::SurfaceToolDecl::Query(QueryToolDecl {
+            tool_name: "query_candidate_finding".to_string(),
+            collection: "CandidateFinding".to_string(),
+            description: "Load candidates".to_string(),
+            fields: vec!["finding_id".to_string()],
+            filter_fields: vec![WriteToolField {
+                name: "run_id".to_string(),
+                required: false,
+                fill: Some(WriteToolFieldFill::Correlation),
             }],
-            ..Default::default()
-        },
-        &ToolCeiling::meta_only(),
-        Vec::new(),
+        })],
     )
-    .unwrap()
     .resolve(&node, &node_did, &Default::default())
     .await
     .unwrap();
@@ -1486,16 +1511,31 @@ async fn query_tool_is_advertised_and_registered() {
 
     let mut runtime = ToolRuntimeContext::oneshot_with_node_did(node, node_did);
     let error = match surface.build_tools(&runtime).await {
-        Ok(_) => panic!("query requires its node identity"),
+        Ok(_) => panic!("query requires its selected agent identity"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("node identity"));
-    runtime.identity = Some(identity);
+    assert!(error.to_string().contains("selected agent identity"));
+    runtime.agent_identity = Some(identity.clone());
+    let error = match surface.build_tools(&runtime).await {
+        Ok(_) => panic!("node identity cannot substitute for selected agent identity"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("cannot use the runtime node identity")
+    );
+    let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+    runtime.agent_identity =
+        Some(crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap());
     let built = surface.build_tools(&runtime).await.unwrap();
-    assert!(built
-        .iter()
-        .any(|tool| tool.name() == "query_candidate_finding"));
+    assert!(
+        built
+            .iter()
+            .any(|tool| tool.name() == "query_candidate_finding")
+    );
 }
+
 
 #[test]
 fn document_tool_config_expands_linked_datastore_surfaces() {
@@ -1605,8 +1645,7 @@ fn write_tool_colliding_with_builtin_is_rejected_during_configuration() {
 }
 
 #[test]
-fn memory_tool_defaults_disabled() {
-    assert!(!ResolvedToolSelection::default().enable_memory);
+fn default_surface_enables_session_reads_and_disables_goal_creation() {
     assert!(ResolvedToolSelection::default().enable_session_history_tool);
     assert!(!AgentToolSurfaceConfig::meta_only().goal_creation_requested());
     assert!(!AgentToolSurfaceConfig::meta_only()
@@ -1631,7 +1670,11 @@ async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(
+        &node,
+        node.node_identity_did().unwrap(),
+        &Default::default(),
+    )
     .await
     .unwrap();
 
@@ -1639,7 +1682,7 @@ async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
     assert!(!names.contains(&crate::goal::GET_GOAL_TOOL_NAME.to_string()));
     assert!(!names.contains(&crate::goal::UPDATE_GOAL_TOOL_NAME.to_string()));
 
-    let runtime = ToolRuntimeContext::oneshot(node);
+    let runtime = agent_tool_runtime(node);
     let built_names = surface
         .build_tools(&runtime)
         .await
@@ -1668,7 +1711,11 @@ async fn goal_tools_are_independent_from_generic_meta_tools() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(
+        &node,
+        node.node_identity_did().unwrap(),
+        &Default::default(),
+    )
     .await
     .unwrap();
 
@@ -1695,7 +1742,11 @@ async fn goal_creation_requires_its_separate_capability() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(
+        &node,
+        node.node_identity_did().unwrap(),
+        &Default::default(),
+    )
     .await
     .unwrap();
     assert!(!without_create
@@ -1713,14 +1764,18 @@ async fn goal_creation_requires_its_separate_capability() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(
+        &node,
+        node.node_identity_did().unwrap(),
+        &Default::default(),
+    )
     .await
     .unwrap();
     assert!(with_create
         .tool_names()
         .contains(&crate::goal::CREATE_GOAL_TOOL_NAME.to_string()));
     let built_names = with_create
-        .build_tools(&ToolRuntimeContext::oneshot(node))
+        .build_tools(&agent_tool_runtime(node))
         .await
         .unwrap()
         .into_iter()
@@ -1747,7 +1802,11 @@ async fn operator_ceiling_can_deny_goal_creation_only() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(
+        &node,
+        node.node_identity_did().unwrap(),
+        &Default::default(),
+    )
     .await
     .unwrap();
 
@@ -1776,7 +1835,11 @@ async fn operator_ceiling_denies_all_goal_mutation_when_base_capability_is_off()
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(
+        &node,
+        node.node_identity_did().unwrap(),
+        &Default::default(),
+    )
     .await
     .unwrap();
 
@@ -1975,7 +2038,11 @@ async fn session_history_tool_follows_selection() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(
+        &node,
+        node.node_identity_did().unwrap(),
+        &Default::default(),
+    )
     .await
     .unwrap();
     assert!(!disabled
@@ -1992,7 +2059,11 @@ async fn session_history_tool_follows_selection() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(
+        &node,
+        node.node_identity_did().unwrap(),
+        &Default::default(),
+    )
     .await
     .unwrap();
     assert!(enabled
@@ -2056,7 +2127,7 @@ async fn tool_construction_rechecks_current_workspace_root_policy() {
         .resolve(&node, "did:test:test", &Default::default())
         .await
         .unwrap();
-    let runtime = ToolRuntimeContext::oneshot(node.clone());
+    let runtime = agent_tool_runtime(node.clone());
     surface
         .build_tools(&runtime)
         .await
@@ -2108,10 +2179,7 @@ async fn normal_load_rejects_active_blank_root_under_explicit_policy_without_cei
         .resolve(&node, "did:test:test", &Default::default())
         .await
         .unwrap();
-    let error = match surface
-        .build_tools(&ToolRuntimeContext::oneshot(node))
-        .await
-    {
+    let error = match surface.build_tools(&agent_tool_runtime(node)).await {
         Ok(_) => panic!("active legacy Tools must not bypass explicit WorkspaceRoot policy"),
         Err(error) => error,
     };
@@ -2290,7 +2358,7 @@ fn explain_complex_document_combination_filters_agents_and_groups_surface() {
             {"mcp_service_id":"registry","tool_names":["read"]},
             {"mcp_service_id":"observability","tool_names":["query"]}]},
         "agents":{"target_ids":["worker","inactive","remote"],"enabled":true},
-        "built_ins":{"enable_memory":true,"enable_context_budget":true},
+        "built_ins":{"enable_context_budget":true},
         "datastore":{"enable_defra_query":true,"defra_query_collections":["AgentRequest","AgentResponse"]}
     }));
     let targets: Vec<crate::documents::AgentTargetDocument> = [
@@ -2312,7 +2380,7 @@ fn explain_complex_document_combination_filters_agents_and_groups_surface() {
     .map(|(name, destination, agent, description)| {
         serde_json::from_value(serde_json::json!({
             "target_id":name,"node_did":own_node_did,"target_node_did":destination,
-            "agent_id":agent,"name":name,"description":description
+            "agent_did":agent,"name":name,"description":description
         }))
         .unwrap()
     })
@@ -2335,11 +2403,11 @@ fn explain_complex_document_combination_filters_agents_and_groups_surface() {
         &["observability".to_string(), "registry".to_string()]
     );
 
-    let active_agent_ids = rapidhash::RapidHashSet::from_iter(["worker".to_string()]);
+    let active_agent_dids = rapidhash::RapidHashSet::from_iter(["worker".to_string()]);
     let surface = config.resolve_with_available_agent_targets_for_mcp_presence(
         true,
         own_node_did,
-        &active_agent_ids,
+        &active_agent_dids,
     );
     assert_eq!(
         resolve_agent_target_descriptions(&surface),
@@ -2388,25 +2456,6 @@ fn explain_complex_document_combination_filters_agents_and_groups_surface() {
         "meta_mcp",
         "call_tool"
     ));
-
-    #[cfg(feature = "agent-memory")]
-    assert!(explanation_category_contains(
-        &explanation.included,
-        "built_in_memory",
-        "memory"
-    ));
-    #[cfg(not(feature = "agent-memory"))]
-    {
-        assert!(explanation_category_contains(
-            &explanation.unavailable,
-            "built_in_memory",
-            "memory"
-        ));
-        assert!(explanation_has_warning(
-            &explanation,
-            "memory_requested_compiled_out"
-        ));
-    }
 }
 
 #[test]
@@ -2508,47 +2557,6 @@ fn explain_mcp_empty_allowlist_denies_all_services_when_online() {
         .is_some_and(|names| names.contains(&"call_tool".to_string())));
 }
 
-#[cfg(feature = "agent-memory")]
-#[tokio::test]
-async fn memory_tool_requires_selection_opt_in() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-
-    let disabled = AgentToolSurfaceConfig::from_selection(
-        "ops",
-        ResolvedToolSelection {
-            enable_memory: false,
-            ..Default::default()
-        },
-        &ToolCeiling::meta_only(),
-        Vec::new(),
-    )
-    .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
-    .await
-    .unwrap();
-    assert!(!disabled
-        .tool_names()
-        .contains(&crate::tools::native::MEMORY_TOOL_NAME.to_string()));
-
-    let enabled = AgentToolSurfaceConfig::from_selection(
-        "ops",
-        ResolvedToolSelection {
-            enable_memory: true,
-            ..Default::default()
-        },
-        &ToolCeiling::meta_only(),
-        Vec::new(),
-    )
-    .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
-    .await
-    .unwrap();
-    assert!(enabled
-        .tool_names()
-        .contains(&crate::tools::native::MEMORY_TOOL_NAME.to_string()));
-}
-
 #[tokio::test]
 async fn defra_query_is_off_by_default() {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
@@ -2561,7 +2569,11 @@ async fn defra_query_is_off_by_default() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(
+        &node,
+        node.node_identity_did().unwrap(),
+        &Default::default(),
+    )
     .await
     .unwrap();
     assert!(
@@ -2578,7 +2590,11 @@ async fn defra_query_is_off_by_default() {
     );
 
     let meta_only = AgentToolSurfaceConfig::meta_only()
-        .resolve(&node, "did:key:z-test-agent", &Default::default())
+        .resolve(
+            &node,
+            node.node_identity_did().unwrap(),
+            &Default::default(),
+        )
         .await
         .unwrap();
     assert!(
@@ -2604,7 +2620,11 @@ async fn agent_config_alias_expands_to_config_scope() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
+    .resolve(
+        &node,
+        node.node_identity_did().unwrap(),
+        &Default::default(),
+    )
     .await
     .unwrap();
 

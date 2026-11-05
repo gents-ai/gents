@@ -30,7 +30,7 @@ const item = (kind: string, extra: Partial<MailboxItemView> = {}): MailboxItemVi
   requestId: null,
   causeDocId: null,
   targetNodeDid: "did:node",
-  targetAgentId: "b1",
+  targetAgentDid: "b1",
   expectedCollection: null,
   parentItemId: null,
   deadlineAt: null,

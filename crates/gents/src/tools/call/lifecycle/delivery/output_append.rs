@@ -1,5 +1,5 @@
 use crate::session::canonical_rows::{
-    output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    output_segment_bound_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use crate::store::config_client::{ConfigAccess, IdempotentTransactionRetry};
 use crate::store::graphql::{created_doc_id, escape_graphql_string};
@@ -13,7 +13,9 @@ use gents_protocol::output::{
 
 #[derive(Clone)]
 pub(crate) struct ToolOutputBinding {
-    pub(crate) node: std::sync::Arc<defra_node::EmbeddedNode>,
+    pub(crate) actor: identity::Did,
+    pub(crate) agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
+    pub(crate) node: std::sync::Arc<defra_node::Node>,
     pub(crate) tool_call_doc_id: String,
     pub(crate) request_doc_id: String,
     pub(crate) session_id: String,
@@ -63,6 +65,8 @@ impl ToolCallLifecycle {
             "raw tool output requires a running admitted lifecycle"
         );
         Ok(ToolOutputBinding {
+            actor: self.actor.clone(),
+            agent_signer: self.agent_signer.clone(),
             node: self.node.clone(),
             tool_call_doc_id: self
                 .doc_id
@@ -138,155 +142,170 @@ async fn append_tool_output_with_time(
     let payload = bytes.to_owned();
     let binding = binding.clone();
     let node = binding.node.clone();
-    ConfigAccess::transact_local_idempotent(
-        &node,
-        None,
-        IdempotentTransactionRetry::Standard,
-        "tool_call.append_output_segment",
-        move |txn| {
-            let created_at = created_at.clone();
-            let payload = payload.clone();
-            let binding = binding.clone();
-            Box::pin(async move {
-                let now = fixture_now.unwrap_or_else(Utc::now);
-                let tool = escape_graphql_string(&binding.tool_call_doc_id);
-                let request = escape_graphql_string(&binding.request_doc_id);
-                let agent = escape_graphql_string(&binding.node_did);
-                let session = escape_graphql_string(&binding.session_id);
-                let requester_filter = binding
-                    .requester_did
-                    .as_deref()
-                    .map(|value| {
-                        format!(
-                            r#"requester_did: {{ _eq: "{}" }}"#,
-                            escape_graphql_string(value)
-                        )
-                    })
-                    .unwrap_or_else(|| "requester_did: { _eq: null }".to_owned());
-                let row = txn
-                    .execute(&format!(
-                        r#"{{ AgentToolCall(filter: {{
+    let repair_actor = binding.actor.clone();
+    let repair_node_did = binding.node_did.clone();
+    let repair_session_id = binding.session_id.clone();
+    let access = ConfigAccess::local_with_optional_agent_signer(
+        node.clone(),
+        binding.actor.clone(),
+        binding.agent_signer.clone(),
+    )?;
+    let result = access
+        .transact_idempotent(
+            IdempotentTransactionRetry::Standard,
+            "tool_call.append_output_segment",
+            move |txn| {
+                let created_at = created_at.clone();
+                let payload = payload.clone();
+                let binding = binding.clone();
+                Box::pin(async move {
+                    let now = fixture_now.unwrap_or_else(Utc::now);
+                    let tool = escape_graphql_string(&binding.tool_call_doc_id);
+                    let request = escape_graphql_string(&binding.request_doc_id);
+                    let agent = escape_graphql_string(&binding.node_did);
+                    let session = escape_graphql_string(&binding.session_id);
+                    let requester_filter = binding
+                        .requester_did
+                        .as_deref()
+                        .map(|value| {
+                            format!(
+                                r#"requester_did: {{ _eq: "{}" }}"#,
+                                escape_graphql_string(value)
+                            )
+                        })
+                        .unwrap_or_else(|| "requester_did: { _eq: null }".to_owned());
+                    let row = txn
+                        .execute(&format!(
+                            r#"{{ AgentToolCall(filter: {{
                 _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }},
                 node_did: {{ _eq: "{agent}" }}, session_id: {{ _eq: "{session}" }},
                 {requester_filter}
             }}, limit: 2) {{ _docID lifecycle_state deadline_at }} }}"#
-                    ))
-                    .await?;
-                let tools = row["data"]["AgentToolCall"]
-                    .as_array()
-                    .context("tool output append query omitted physical rows")?;
-                anyhow::ensure!(
-                    tools.len() == 1,
-                    "tool output append has no unique physical binding"
-                );
-                let state = tools[0]["lifecycle_state"]
-                    .as_str()
-                    .and_then(ToolCallState::from_persisted)
-                    .context("tool output append has malformed lifecycle state")?;
-                if state != ToolCallState::Running {
-                    return Err(ToolOutputAppendRejection::NotRunning.into());
-                }
-                let source = OutputSource::ToolCall {
-                    tool_call_doc_id: binding.tool_call_doc_id.clone(),
-                };
-                let writer = OutputWriter::ToolExecution {
-                    tool_call_doc_id: binding.tool_call_doc_id.clone(),
-                };
-                let rows = crate::session::load_source_rows_in_txn(
-                    txn,
-                    &binding.request_doc_id,
-                    &source,
-                    &binding.node_did,
-                    &binding.session_id,
-                    binding.requester_did.as_deref(),
-                )
-                .await?;
-                let same_attempt = rows
-                    .iter()
-                    .filter(|row| row.segment.created_at == created_at)
-                    .collect::<Vec<_>>();
-                anyhow::ensure!(
-                    same_attempt.len() <= 1,
-                    "canonical tool output append has ambiguous retry identity"
-                );
-                anyhow::ensure!(
-                    rows.iter().all(|row| row.segment.close.is_none()),
-                    "cannot append raw output after tool source closure"
-                );
-                let prior = rows
-                    .iter()
-                    .filter(|row| row.segment.created_at != created_at)
-                    .map(|row| ObservedSegment {
-                        doc_id: &row.doc_id,
-                        segment: &row.segment,
-                    })
-                    .collect::<Vec<_>>();
-                let extent = gents_protocol::output::extent::inspect_open_source(
-                    &prior,
-                    &binding.request_doc_id,
-                    &source,
-                    &writer,
-                )
-                .map_err(anyhow::Error::from)?;
-                anyhow::ensure!(
-                    extent.streams.len() <= 1,
-                    "tool raw output source has unexpected multiple streams"
-                );
-                let ordinal = extent.segments;
-                let start = extent.stream_bytes.first().copied().unwrap_or(0);
-                let segment = OutputSegment {
-                    node_did: binding.node_did.clone(),
-                    requester_did: binding.requester_did.clone(),
-                    session_id: binding.session_id.clone(),
-                    request_doc_id: binding.request_doc_id.clone(),
-                    source,
-                    writer,
-                    ordinal: Some(ordinal),
-                    runs: vec![SegmentRun {
-                        stream: 0,
-                        bytes: u32::try_from(payload.len())
-                            .context("tool output chunk too large")?,
-                        declaration: (ordinal == 0).then_some(StreamDeclaration {
-                            block_index: 0,
-                            part_index: 0,
-                            payload: StreamPayload::ToolOutput,
-                        }),
-                    }],
-                    payload,
-                    close: None,
-                    created_at,
-                };
-                if let Some(existing) = same_attempt.first() {
+                        ))
+                        .await?;
+                    let tools = row["data"]["AgentToolCall"]
+                        .as_array()
+                        .context("tool output append query omitted physical rows")?;
                     anyhow::ensure!(
-                        existing.segment == segment,
-                        "canonical tool output retry conflicts with the recorded segment"
+                        tools.len() == 1,
+                        "tool output append has no unique physical binding"
                     );
-                    return Ok(ToolOutputAppendReceipt {
-                        range: start..start + segment.payload.len() as u64,
-                        segment_doc_id: existing.doc_id.clone(),
-                    });
-                }
-                let deadline = tools[0]["deadline_at"]
-                    .as_str()
-                    .context("tool output append has no accepted deadline")?;
-                let deadline = DateTime::parse_from_rfc3339(deadline)
-                    .context("tool output append has malformed accepted deadline")?
-                    .with_timezone(&Utc);
-                if now > deadline {
-                    return Err(ToolOutputAppendRejection::DeadlineExceeded.into());
-                }
-                let response = txn
-                    .execute_with_variables(
-                        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                        &output_segment_create_variables(&segment)?,
+                    let state = tools[0]["lifecycle_state"]
+                        .as_str()
+                        .and_then(ToolCallState::from_persisted)
+                        .context("tool output append has malformed lifecycle state")?;
+                    if state != ToolCallState::Running {
+                        return Err(ToolOutputAppendRejection::NotRunning.into());
+                    }
+                    let source = OutputSource::ToolCall {
+                        tool_call_doc_id: binding.tool_call_doc_id.clone(),
+                    };
+                    let writer = OutputWriter::ToolExecution {
+                        tool_call_doc_id: binding.tool_call_doc_id.clone(),
+                    };
+                    let rows = crate::session::load_source_rows_in_txn(
+                        txn,
+                        &binding.request_doc_id,
+                        &source,
+                        &binding.node_did,
+                        &binding.session_id,
+                        binding.requester_did.as_deref(),
                     )
                     .await?;
-                Ok(ToolOutputAppendReceipt {
-                    range: start..start + segment.payload.len() as u64,
-                    segment_doc_id: created_doc_id(&response, "AgentOutputSegment")?,
+                    let same_attempt = rows
+                        .iter()
+                        .filter(|row| row.segment.created_at == created_at)
+                        .collect::<Vec<_>>();
+                    anyhow::ensure!(
+                        same_attempt.len() <= 1,
+                        "canonical tool output append has ambiguous retry identity"
+                    );
+                    anyhow::ensure!(
+                        rows.iter().all(|row| row.segment.close.is_none()),
+                        "cannot append raw output after tool source closure"
+                    );
+                    let prior = rows
+                        .iter()
+                        .filter(|row| row.segment.created_at != created_at)
+                        .map(|row| ObservedSegment {
+                            doc_id: &row.doc_id,
+                            segment: &row.segment,
+                        })
+                        .collect::<Vec<_>>();
+                    let extent = gents_protocol::output::extent::inspect_open_source(
+                        &prior,
+                        &binding.request_doc_id,
+                        &source,
+                        &writer,
+                    )
+                    .map_err(anyhow::Error::from)?;
+                    anyhow::ensure!(
+                        extent.streams.len() <= 1,
+                        "tool raw output source has unexpected multiple streams"
+                    );
+                    let ordinal = extent.segments;
+                    let start = extent.stream_bytes.first().copied().unwrap_or(0);
+                    let segment = OutputSegment {
+                        node_did: binding.node_did.clone(),
+                        requester_did: binding.requester_did.clone(),
+                        session_id: binding.session_id.clone(),
+                        request_doc_id: binding.request_doc_id.clone(),
+                        source,
+                        writer,
+                        ordinal: Some(ordinal),
+                        runs: vec![SegmentRun {
+                            stream: 0,
+                            bytes: u32::try_from(payload.len())
+                                .context("tool output chunk too large")?,
+                            declaration: (ordinal == 0).then_some(StreamDeclaration {
+                                block_index: 0,
+                                part_index: 0,
+                                payload: StreamPayload::ToolOutput,
+                            }),
+                        }],
+                        payload,
+                        close: None,
+                        created_at,
+                    };
+                    if let Some(existing) = same_attempt.first() {
+                        anyhow::ensure!(
+                            existing.segment == segment,
+                            "canonical tool output retry conflicts with the recorded segment"
+                        );
+                        return Ok(ToolOutputAppendReceipt {
+                            range: start..start + segment.payload.len() as u64,
+                            segment_doc_id: existing.doc_id.clone(),
+                        });
+                    }
+                    let deadline = tools[0]["deadline_at"]
+                        .as_str()
+                        .context("tool output append has no accepted deadline")?;
+                    let deadline = DateTime::parse_from_rfc3339(deadline)
+                        .context("tool output append has malformed accepted deadline")?
+                        .with_timezone(&Utc);
+                    if now > deadline {
+                        return Err(ToolOutputAppendRejection::DeadlineExceeded.into());
+                    }
+                    let response = txn
+                        .execute_with_variables(
+                            CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                            &output_segment_bound_variables(txn, &segment).await?,
+                        )
+                        .await?;
+                    Ok(ToolOutputAppendReceipt {
+                        range: start..start + segment.payload.len() as u64,
+                        segment_doc_id: created_doc_id(&response, "AgentOutputSegment")?,
+                    })
                 })
-            })
-        },
+            },
+        )
+        .await?;
+    crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+        &access,
+        &repair_node_did,
+        &repair_actor,
+        &repair_session_id,
     )
-    .await
+    .await?;
+    Ok(result)
 }

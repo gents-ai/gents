@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 #[cfg(test)]
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 
 use crate::request::streaming::AcceptedToolCall;
@@ -166,7 +166,23 @@ impl ToolCallLifecycle {
             "accepted header does not uniquely bind this physical tool"
         );
         let (call_id, arguments) = matches[0];
+        let request_doc = escape_graphql_string(request_doc_id);
+        let owner = txn
+            .execute_local_response(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc}" }} }}, limit: 1) {{ agent_did }} }}"#
+            ))
+            .await?;
+        let agent = owner
+            .data
+            .as_ref()
+            .and_then(|data| data["AgentRequest"].as_array())
+            .and_then(|rows| rows.first())
+            .and_then(|row| row["agent_did"].as_str())
+            .context("accepted tool request is missing its agent DID")?;
+        let actor = identity::Did::new(agent.to_owned())?;
         Ok(AcceptedToolCall {
+            actor,
+            agent_signer: txn.managed_agent_signer(),
             tool_call_doc_id: tool_doc_id.to_owned(),
             request_doc_id: request_doc_id.to_owned(),
             session_id: session_id.to_owned(),

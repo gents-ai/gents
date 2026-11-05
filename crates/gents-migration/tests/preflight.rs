@@ -16,7 +16,7 @@ async fn preflight_accepts_the_same_legacy_lineage_without_mutating_it() {
     );
     ensure_migrations(node.as_ref()).await.unwrap();
     check_migration_compatibility(&node.get_all_collection_versions().await.unwrap()).unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -38,5 +38,46 @@ async fn preflight_and_startup_refuse_the_same_unknown_lineage() {
         serde_json::to_value(&before).unwrap(),
         serde_json::to_value(node.get_all_collection_versions().await.unwrap()).unwrap()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
+async fn startup_refuses_existing_unbound_provider_collections_before_changes() {
+    let directive = format!(
+        " @policy(id: \"{}\", resource: \"children\")",
+        schemas::AGENT_OWNERSHIP_POLICY_ID
+    );
+    for (name, schema) in [
+        (schemas::RENDERED_REQUEST_NAME, schemas::RENDERED_REQUEST),
+        (
+            schemas::RENDERED_REQUEST_BLOCK_NAME,
+            schemas::RENDERED_REQUEST_BLOCK,
+        ),
+        (
+            schemas::PROVIDER_CONTEXT_REDUCTION_NAME,
+            schemas::PROVIDER_CONTEXT_REDUCTION,
+        ),
+        (schemas::COMPACTION_ENTRY_NAME, schemas::COMPACTION_ENTRY),
+        (schemas::INFERENCE_CALL_NAME, schemas::INFERENCE_CALL),
+        (schemas::GOAL_OBSERVATION_NAME, schemas::GOAL_OBSERVATION),
+    ] {
+        let node = fresh_node().await;
+        assert!(
+            schema.contains(&directive),
+            "{name} must be bound in the catalog"
+        );
+        node.add_collection(&schema.replacen(&directive, "", 1))
+            .await
+            .unwrap();
+        let before = node.get_all_collection_versions().await.unwrap();
+        assert!(matches!(
+            ensure_migrations(node.as_ref()).await,
+            Err(Error::IncompatibleIdentityPolicy { collection }) if collection == name
+        ));
+        assert_eq!(
+            serde_json::to_value(&before).unwrap(),
+            serde_json::to_value(node.get_all_collection_versions().await.unwrap()).unwrap()
+        );
+        node.shutdown().await.expect("shut down test node");
+    }
 }

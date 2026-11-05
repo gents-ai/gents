@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::identity::NodeIdentity;
 use crate::tools::call::lifecycle::admission_fixture::{
     ensure_fixture_session, published_admission_with_owner, PublishedAdmissionOptions,
 };
@@ -96,7 +97,7 @@ async fn uncaptured_terminal_is_unknown_and_an_empty_closure_is_known() {
     );
     assert!(empty.entries.is_empty());
     assert_ne!(empty.binding.digest, terminal.binding.digest);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }
 
@@ -251,7 +252,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
                 "requester_did": actor(&projection["scope"]["requester"]),
                 "verified_unchanged": projection["verified_unchanged"].as_bool().filter(|value| *value),
                 "changes": if changes.is_empty() { None } else { Some(changes) } });
-            let foreign = if projection["owner"] != "node-1" {
+            let foreign = if projection["owner"] != model_tool["agent_did"] {
                 let key_path = fixture.path.join("foreign-projection.key");
                 Some(
                     tokio::task::spawn_blocking(move || {
@@ -264,9 +265,12 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
             } else {
                 None
             };
-            let identity = foreign
-                .as_ref()
-                .map(|identity| identity.did().parse().unwrap());
+            let identity = Some(
+                foreign
+                    .as_ref()
+                    .map(|identity| identity.did().parse().unwrap())
+                    .unwrap_or_else(|| tool.actor().clone()),
+            );
             let id = ConfigAccess::transact_local_write(&node, identity, "test.inventory.model_projection", |txn| {
                 let input = &input;
                 Box::pin(async move {
@@ -387,7 +391,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
             }
             other => panic!("unhandled source projection outcome {other}"),
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         tokio::fs::remove_dir_all(fixture.path).await.unwrap();
     }
 }
@@ -503,12 +507,13 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             .count();
         let child = fork(
             &node,
+            &identity::Did::new(&requester).unwrap(),
             ForkParams {
                 source_session_id: &parent,
                 boundary: ForkBoundary::UserTurn(turns as u32),
                 caller_node_did: &did,
                 caller_requester_did: Some(&requester),
-                target_agent_id: None,
+                target_agent_did: None,
             },
         )
         .await
@@ -661,12 +666,13 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             .count();
         let complete_child = fork(
             &node,
+            &identity::Did::new(&requester).unwrap(),
             ForkParams {
                 source_session_id: &parent,
                 boundary: ForkBoundary::UserTurn(turns as u32),
                 caller_node_did: &did,
                 caller_requester_did: Some(&requester),
-                target_agent_id: None,
+                target_agent_did: None,
             },
         )
         .await
@@ -736,7 +742,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
                 .binding,
             snapshot.binding
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         tokio::fs::remove_dir_all(fixture.path).await.unwrap();
     }
 }
@@ -838,6 +844,7 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
     if notify {
         crate::tools::background::completion::append_background_tool_completion(
             &node,
+            &first.access().unwrap(),
             first.session_id(),
             &request.request().request_id,
             first.doc_id().unwrap(),
@@ -921,7 +928,7 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
         .await
         .unwrap();
     assert_eq!(inventory.binding, repeated.binding);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }
 

@@ -97,7 +97,7 @@ async fn native_goal_projection_matches_full_history_with_fewer_reconstructions(
         .unwrap();
     let owner = key.did();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(owner)
             .build()
             .await
@@ -160,7 +160,7 @@ async fn native_goal_projection_matches_full_history_with_fewer_reconstructions(
             ))
         })
     }).await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     let native = facts.iter().map(ReuseFacts::can_reuse).collect::<Vec<_>>();
     assert_eq!(
         native,

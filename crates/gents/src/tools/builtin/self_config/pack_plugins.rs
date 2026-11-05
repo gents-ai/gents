@@ -30,12 +30,14 @@ impl PackInstaller {
             args.variables.is_empty(),
             "plugins-only packs do not consume document variables"
         );
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
-        let inference = crate::pack::inspect_pack_inference_bindings(
+        let access = self.core.access()?;
+        let node_binding = self.core.refresh_node_binding().await?;
+        let inference = crate::pack::inspect_pack_inference_bindings_with_node_binding(
             &access,
             manifest,
             self.core.node_did(),
             &args.inference_slots,
+            node_binding.as_ref(),
         )
         .await?;
         let missing = inference
@@ -91,17 +93,19 @@ impl PackInstaller {
             }.pretty();
         }
         anyhow::ensure!(ready, "plugin installation blocked; call [\"pack\",\"preview\",{operation:?},{:?}] and resolve its operator approval or inference blockers", distribution.pinned_spec(&args.package));
-        let inference = crate::pack::preview_pack_inference_bindings(
+        let inference = crate::pack::preview_pack_inference_bindings_with_node_binding(
             &access,
             manifest,
             self.core.node_did(),
             &args.inference_slots,
+            node_binding.as_ref(),
         )
         .await?;
         self.fence_bindings(&inference.bindings).await?;
         let notify_access = access.clone();
         let notify_node = self.core.node_did().to_owned();
         let notify_identity = self.core.identity().ok();
+        let notify_node_binding = node_binding.clone();
         let notify_home = home.to_owned();
         let (record, plugins) = crate::pack::plugin_lifecycle::install(
             home,
@@ -113,9 +117,10 @@ impl PackInstaller {
                 let access = notify_access;
                 let node_did = notify_node;
                 let identity_did = notify_identity;
+                let node_binding = notify_node_binding;
                 let home = notify_home;
                 async move {
-                    crate::pack::record_plugin_store_change_as(
+                    crate::pack::record_plugin_store_change_as_with_node_binding(
                         &access,
                         &node_did,
                         Some(identity_did.ok_or_else(|| {
@@ -126,6 +131,7 @@ impl PackInstaller {
                         &home,
                         &identity.coordinate,
                         Some(&identity),
+                        node_binding.as_ref(),
                     )
                     .await
                 }

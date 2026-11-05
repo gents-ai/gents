@@ -9,6 +9,7 @@ structure CallbackCase where
   name : String
   invocationId : String
   ownerNodeDid : String
+  agentDid : String
   state : InvocationState
   journal : List ActionJournalState
   resultEmitted : Bool
@@ -25,6 +26,7 @@ where
 def CallbackCase.invocation (c : CallbackCase) : CallbackInvocation :=
   { invocationId := c.invocationId
   , ownerNodeDid := c.ownerNodeDid
+  , agentDid := c.agentDid
   , state := c.state
   , journal := numberedJournal c.journal
   , resultEmitted := c.resultEmitted }
@@ -40,6 +42,7 @@ def mkCase
   { name := name
   , invocationId := "inv-1"
   , ownerNodeDid := "dep-1"
+  , agentDid := "did:key:agent"
   , state := state
   , journal := journal
   , resultEmitted := resultEmitted
@@ -72,6 +75,7 @@ def mkInv
     (state : InvocationState) : CallbackInvocation :=
   { invocationId := invocationId
   , ownerNodeDid := ownerNodeDid
+  , agentDid := "did:key:agent"
   , state := state
   , journal := []
   , resultEmitted := false }
@@ -93,7 +97,7 @@ structure TransitionCase where
   step : CallbackInvocation.Transition pre post
 
 def groupedInvocation (state : InvocationState) : CallbackInvocation :=
-  { invocationId := "inv-group", ownerNodeDid := "did:agent:a",
+  { invocationId := "inv-group", ownerNodeDid := "did:agent:a", agentDid := "did:key:agent",
     input := "[{\"doc\":\"b\",\"value\":2},{\"doc\":\"a\",\"value\":1}]",
     originGroupKey := some ⟨"did:agent:a", .callbackBinding "summarize", "config-1", "run-1"⟩,
     state := state, journal := [], resultEmitted := false }
@@ -158,7 +162,7 @@ def retryCases : List RetryCase :=
       [0, 1, 2, 3].flatMap fun attempts =>
         [1, 3].map fun maxAttempts =>
           let inv : CallbackInvocation :=
-            { invocationId := "inv-1", ownerNodeDid := "dep-1", state := state,
+            { invocationId := "inv-1", ownerNodeDid := "dep-1", agentDid := "did:key:agent", state := state,
               journal := numberedJournal journal, resultEmitted := false,
               attempts := attempts }
           { name := state.toDefraDB ++ ":" ++ String.intercalate ","
@@ -187,7 +191,7 @@ def recoveryCases : List RecoveryCase :=
   journals.flatMap fun journal =>
     [0, 1, 2, 3].map fun attempts =>
       let inv : CallbackInvocation :=
-        { invocationId := "inv-1", ownerNodeDid := "dep-1", state := .running,
+        { invocationId := "inv-1", ownerNodeDid := "dep-1", agentDid := "did:key:agent", state := .running,
           journal := numberedJournal journal, resultEmitted := false, attempts := attempts }
       let post := recover inv
       let denied := deny inv

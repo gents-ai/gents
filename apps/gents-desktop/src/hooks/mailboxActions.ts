@@ -47,7 +47,7 @@ export function createMailboxActions({
       selection.openMailboxRoute(store, {
         itemId: item.itemId,
         nodeDid: item.targetNodeDid,
-        agentId: item.targetAgentId,
+        agentDid: item.targetAgentDid,
         sessionId: item.sessionId ?? null,
       });
       writeSession(stores.session, null);
@@ -129,7 +129,7 @@ export function createMailboxActions({
       if (earlier) {
         const sent = await api.sendChatMessage({
           nodeDid: item.targetNodeDid,
-          agentId: item.targetAgentId,
+          agentDid: item.targetAgentDid,
           sessionId: earlier.sessionId,
           content: "",
           causedBySourceDocId: item.itemId,
@@ -147,8 +147,8 @@ export function createMailboxActions({
         if (sent.outcome) {
           reportFailure(
             sent.outcome === "notDelivered"
-              ? "Your earlier answer was not delivered. Answer again."
-              : MAILBOX_DELIVERY_UNKNOWN_HINT,
+              ? `Your earlier answer was not delivered. Answer again.${sent.deliveryError ? ` ${sent.deliveryError.message}` : ""}`
+              : `${MAILBOX_DELIVERY_UNKNOWN_HINT}${sent.deliveryError ? ` ${sent.deliveryError.message}` : ""}`,
           );
           return false;
         }
@@ -159,7 +159,9 @@ export function createMailboxActions({
         )
           selection.releaseMailboxRoute(store, item.itemId);
         reportFailure(
-          "Your earlier answer was delivered; this retry did not send a different answer.",
+          sent.deliveryError
+            ? `Your earlier answer was delivered, but its saved-answer cleanup failed: ${sent.deliveryError.message}`
+            : "Your earlier answer was delivered; this retry did not send a different answer.",
         );
         void Promise.resolve()
           .then(refreshSnapshot)
@@ -179,7 +181,7 @@ export function createMailboxActions({
         {
           clientDid,
           nodeDid: item.targetNodeDid,
-          agentId: item.targetAgentId,
+          agentDid: item.targetAgentDid,
           sessionId: item.sessionId,
           content: "",
           causedBySourceDocId: item.itemId,
@@ -188,13 +190,13 @@ export function createMailboxActions({
         item.sessionId,
         false,
         (result, draft) => applyAnswer(result, draft, intent, acceptsView),
-        { itemId: item.itemId, summary },
+        { nodeDid: item.nodeDid, itemId: item.itemId, summary },
       );
       if (sent.outcome) {
         reportFailure(
           sent.outcome === "notDelivered"
-            ? "Your answer was not delivered. You can answer again."
-            : MAILBOX_DELIVERY_UNKNOWN_HINT,
+            ? `Your answer was not delivered. You can answer again.${sent.deliveryError ? ` ${sent.deliveryError.message}` : ""}`
+            : `${MAILBOX_DELIVERY_UNKNOWN_HINT}${sent.deliveryError ? ` ${sent.deliveryError.message}` : ""}`,
         );
         return false;
       }

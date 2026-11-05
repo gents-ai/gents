@@ -117,7 +117,7 @@ export function NewAutomationDialog({
 }) {
   const { changeConfig } = useApp().actions;
   const defaultAgent =
-    defaultAgentOf(deployment)?.agentId ?? deployment.agents[0]?.agentId ?? "";
+    defaultAgentOf(deployment)?.agentDid ?? deployment.agents[0]?.agentDid ?? "";
   const [name, setName] = useState("");
   const startKind = forTask ? "manual" : (initialKind ?? "schedule");
   const [kind, setKind] = useState<"schedule" | "event" | "manual">(startKind);
@@ -133,7 +133,7 @@ export function NewAutomationDialog({
   const ids = useRef<Record<string, string>>({});
   const idFor = (key: string, prefix: string) => (ids.current[key] ??= newId(prefix));
   const [prompt, setPrompt] = useState("");
-  const [agentId, setAgentId] = useState(defaultAgent);
+  const [agentDid, setAgentDid] = useState(defaultAgent);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -152,18 +152,18 @@ export function NewAutomationDialog({
       setEventKind("created");
       setTaskId(task ?? NEW);
       setPrompt("");
-      setAgentId(defaultAgent);
+      setAgentDid(defaultAgent);
       setError(null);
     }
     onOpenChange(next);
   };
 
-  const runningAgentId =
+  const runningAgentDid =
     taskId === NEW
-      ? agentId
-      : deployment.tasks.find((t) => t.taskId === taskId)?.agentId;
-  const agent = agentOf(deployment, runningAgentId) ?? null;
-  const readiness = agent ? agentReadiness(deployment, agent.agentId) : null;
+      ? agentDid
+      : deployment.tasks.find((t) => t.taskId === taskId)?.agentDid;
+  const agent = agentOf(deployment, runningAgentDid) ?? null;
+  const readiness = agent ? agentReadiness(deployment, agent.agentDid) : null;
   const agentOff = readiness !== null && !readiness.ready;
 
   const create = async () => {
@@ -172,7 +172,7 @@ export function NewAutomationDialog({
       setError("Say what the agent should do.");
       return;
     }
-    if (taskId === NEW && !agentId) {
+    if (taskId === NEW && !agentDid) {
       setError("Choose the agent that runs it.");
       return;
     }
@@ -236,7 +236,7 @@ export function NewAutomationDialog({
           task_id,
           display_name: displayName,
           description: null,
-          agent_id: agentId,
+          agent_did: agentDid,
           prompt_template: prompt.trim(),
           emit_outcome: false,
           goal_objective_template: null,
@@ -444,18 +444,18 @@ export function NewAutomationDialog({
                 <FieldLabel htmlFor="auto-agent">Who</FieldLabel>
                 <Select
                   items={deployment.agents.map((b) => ({
-                    value: b.agentId,
+                    value: b.agentDid,
                     label: b.displayName,
                   }))}
-                  value={agentId}
-                  onValueChange={(v) => v && setAgentId(v)}
+                  value={agentDid}
+                  onValueChange={(v) => v && setAgentDid(v)}
                 >
                   <SelectTrigger id="auto-agent" className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     {deployment.agents.map((b) => (
-                      <SelectItem key={b.agentId} value={b.agentId}>
+                      <SelectItem key={b.agentDid} value={b.agentDid}>
                         {b.displayName}
                         {b.isDefault ? " (default)" : ""}
                         {b.enabled ? "" : " · off"}

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use std::sync::Arc;
 
@@ -33,6 +33,7 @@ impl Plan {
         &mut self,
         node_did: &str,
         parent: &gents_protocol::request_input::RequestInput,
+        signer: &crate::store::identity::ManagedAgentSigner,
     ) -> Result<()> {
         let create = match &mut self.write {
             PlannedWrite::Request { create, .. } | PlannedWrite::Goal { create, .. } => create,
@@ -40,9 +41,11 @@ impl Plan {
         create.input.session_creation =
             Some(gents_protocol::request_input::SessionCreationIntent::AgentNew);
         create.input.cwd = parent.agent_new_cwd(create.node_did == node_did);
-        let signer =
-            crate::store::identity::RegisteredIdentity::from_registered_did(node_did, None)?;
-        crate::sign_agent_request_create(&signer, create).await
+        anyhow::ensure!(
+            signer.did() == create.admission.signer_did,
+            "session creation signer differs from its admission actor"
+        );
+        crate::sign_agent_request_create(signer, create).await
     }
     pub(crate) fn hop(&self) -> u32 {
         self.hop
@@ -73,7 +76,7 @@ impl Plan {
     }
 }
 
-async fn target_goal_assignment(
+pub(super) async fn target_goal_assignment(
     node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
@@ -82,7 +85,7 @@ async fn target_goal_assignment(
     if target.node_did == cause.caller_node_did {
         return ConfigAccess::transact_local_readonly(
             node,
-            None,
+            Some(identity::Did::new(&cause.caller_agent_did)?),
             "session_message.target_goal",
             |txn| {
                 Box::pin(async move {
@@ -90,14 +93,14 @@ async fn target_goal_assignment(
                         txn,
                         &target.node_did,
                         &target.session_id,
-                        Some(&cause.caller_node_did),
+                        Some(&cause.caller_agent_did),
                     )
                     .await?
                     else {
                         return Ok(None);
                     };
                     anyhow::ensure!(
-                        session.session.agent_id == target.agent_id,
+                        session.session.agent_did == target.agent_did,
                         "session-message target Agent differs from its canonical session"
                     );
                     let goal = crate::goal::load_canonical_goal_in_txn(
@@ -119,15 +122,15 @@ async fn target_goal_assignment(
         .await;
     }
     let verifier = crate::store::identity::RegisteredIdentity::from_registered_did(
-        cause.caller_node_did.clone(),
+        cause.caller_agent_did.clone(),
         None,
     )?;
     let state = crate::goal::load_session_goal_observation_state(
-        &ConfigAccess::local(node.clone()),
+        &ConfigAccess::local_as(node.clone(), identity::Did::new(&cause.caller_agent_did)?),
         &verifier,
         &target.node_did,
         &target.session_id,
-        Some(&cause.caller_node_did),
+        Some(&cause.caller_agent_did),
     )
     .await?;
     match state {
@@ -155,6 +158,7 @@ pub(crate) async fn plan(
     rendered: RenderedBody,
     title: Option<&str>,
     interrupt: bool,
+    signer: &crate::store::identity::ManagedAgentSigner,
 ) -> Result<Result<Plan, String>> {
     plan_with_delivery(
         node,
@@ -167,6 +171,7 @@ pub(crate) async fn plan(
         } else {
             AgentMessageDelivery::Queue
         },
+        signer,
     )
     .await
 }
@@ -178,19 +183,21 @@ pub(crate) async fn plan_with_delivery(
     rendered: RenderedBody,
     title: Option<&str>,
     delivery: AgentMessageDelivery,
+    signer: &crate::store::identity::ManagedAgentSigner,
 ) -> Result<Result<Plan, String>> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let local = target.node_did == cause.caller_node_did;
-    if !local && delivery == AgentMessageDelivery::Steer {
+    if !local {
         return Ok(Err(
-            "steering requires a local target session; use delivery=queue".to_owned(),
+            "cross-runtime agent delivery requires the authenticated HTTP delivery path, which is not available yet".to_owned(),
         ));
     }
     if crate::session::session_is_stopped(
         node,
+        &identity::Did::new(&cause.caller_agent_did)?,
         &target.node_did,
         &target.session_id,
-        Some(&cause.caller_node_did),
+        Some(&cause.caller_agent_did),
     )
     .await?
     {
@@ -198,12 +205,13 @@ pub(crate) async fn plan_with_delivery(
             "session is stopped; use agent_resume before sending another message".to_owned(),
         ));
     }
+    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(&cause.caller_agent_did)?);
     let active = if local {
-        match crate::request::interrupt::active_session_request(
-            node,
+        match crate::request::interrupt::active_session_request_with_access(
+            &access,
             &target.session_id,
             &target.node_did,
-            Some(&cause.caller_node_did),
+            Some(&cause.caller_agent_did),
         )
         .await?
         {
@@ -213,9 +221,12 @@ pub(crate) async fn plan_with_delivery(
                     .as_deref()
                     .context("active session request lacks physical identity")?;
                 Some(
-                    crate::request::binding::load_agent_request_by_doc_id(node, active_doc_id)
-                        .await?
-                        .context("active session request disappeared")?,
+                    crate::request::binding::load_agent_request_by_doc_id_with_access(
+                        &access,
+                        active_doc_id,
+                    )
+                    .await?
+                    .context("active session request disappeared")?,
                 )
             }
             None => None,
@@ -227,12 +238,22 @@ pub(crate) async fn plan_with_delivery(
         .then(|| active.as_ref().map(|request| request.doc_id.clone()));
     let own_hop = match &active {
         Some(active) => active.request_hop.max(
-            crate::session::load_session_current_hop(node, &target.node_did, &target.session_id)
-                .await?,
+            crate::session::load_session_current_hop(
+                node,
+                &identity::Did::new(&cause.caller_agent_did)?,
+                &target.node_did,
+                &target.session_id,
+            )
+            .await?,
         ),
         None => {
-            crate::session::load_session_current_hop(node, &target.node_did, &target.session_id)
-                .await?
+            crate::session::load_session_current_hop(
+                node,
+                &identity::Did::new(&cause.caller_agent_did)?,
+                &target.node_did,
+                &target.session_id,
+            )
+            .await?
         }
     };
     let hop = crate::request::lifecycle::next_request_hop(
@@ -263,6 +284,7 @@ pub(crate) async fn plan_with_delivery(
             hop,
             None,
             None,
+            signer,
         )
         .await?;
         PlannedWrite::Goal {
@@ -303,6 +325,7 @@ pub(crate) async fn plan_with_delivery(
                         goal_assignment: target_goal_assignment(node, cause, target).await?,
                         ..Default::default()
                     },
+                    signer,
                 )
                 .await?,
             delivery: match (&steering, delivery) {

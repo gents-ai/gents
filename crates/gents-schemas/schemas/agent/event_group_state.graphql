@@ -1,4 +1,5 @@
-type EventGroupState @branchable
+type EventGroupState
+    @policy(id: "8d9e64ca014dddfb01e5a55a5018e0a56d238ea0da1df1b6b33d50b1ac23386a", resource: "agent_children")
     @index(fields: ["node_did", "group_key"], unique: true) {
     group_key: String @immutable
     node_did: String @index @immutable

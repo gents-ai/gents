@@ -2,8 +2,15 @@ use super::*;
 
 async fn fixture(name: &str) -> (TestDb, AgentRequest) {
     let db = test_db(name).await;
-    insert_signed_queue_request(&db, "parent-request", name, &RequestInput::default()).await;
-    let parent = crate::request::binding::load_agent_request(&db.node, "parent-request")
+    let doc =
+        insert_signed_queue_request(&db, "parent-request", name, &RequestInput::default()).await;
+    let access = crate::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(db.agent_did()).unwrap(),
+        db.agent_identity.as_ref(),
+    )
+    .unwrap();
+    let parent = crate::request::binding::load_agent_request_by_doc_id_with_access(&access, &doc)
         .await
         .unwrap()
         .unwrap();
@@ -69,13 +76,20 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
             )
             .await
         });
-        let goal = crate::goal::set_goal(
-            &db.node,
+        let access = crate::ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            identity::Did::new(db.agent_did()).unwrap(),
+            db.agent_identity.as_ref(),
+        )
+        .unwrap();
+        let goal = crate::goal::set_goal_from_access(
+            &access,
             db.node_did(),
             &parent.session_id,
             Some("Goal owns continuation"),
             Some(status),
             Some(Some(10)),
+            None,
         )
         .await
         .unwrap();
@@ -94,7 +108,14 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
             case.name
         );
         assert_eq!(queue_rows(&db.node, &parent.session_id).await.len(), 2);
-        let after = crate::goal::load_canonical_goal(&db.node, db.node_did(), &parent.session_id)
+        let after = access
+            .transact_readonly("test.goal_wake_after", |txn| {
+                Box::pin(crate::goal::load_canonical_goal_in_txn(
+                    txn,
+                    db.node_did(),
+                    &parent.session_id,
+                ))
+            })
             .await
             .unwrap()
             .unwrap();

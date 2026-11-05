@@ -54,12 +54,13 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
 
     let _ = fork(
         &db.node,
+        &::identity::Did::new(NODE_DID).unwrap(),
         ForkParams {
             source_session_id: &parent_session,
             boundary: gents::session::ForkBoundary::UserTurn(0),
             caller_node_did: NODE_DID,
             caller_requester_did: None,
-            target_agent_id: None,
+            target_agent_did: None,
         },
     )
     .await
@@ -565,12 +566,14 @@ fn conformance_interrupted_lifecycle_maps_to_interrupted_client_turn() {
 #[tokio::test]
 async fn manual_run_materializes_pending_request() {
     let db = test_db("manual-run-materializes-pending").await;
+    let agent = support::managed_agent(&db).await;
 
     let doc_id = write_manual_agent_request(
         &db.node,
-        ::identity::Did::new(db.node_identity.did().to_owned()).expect("fixture creator DID"),
+        ::identity::Did::new(agent.did()).expect("fixture creator DID"),
+        agent.as_ref(),
         db.node_identity.did(),
-        AGENT_NAME,
+        agent.did(),
         "task-manual-pending",
         "manual prompt body",
         serde_json::json!({}),
@@ -595,7 +598,7 @@ async fn manual_run_materializes_pending_request() {
         snap.execution_origin, "interactive",
         "manual runs inherit the interactive execution origin"
     );
-    assert_eq!(snap.agent_id, AGENT_NAME);
+    assert_eq!(snap.agent_did, agent.did());
 
     let lineage = fetch_request_lineage_snapshot(&db.node, &doc_id).await;
     assert_eq!(
@@ -611,12 +614,14 @@ async fn manual_run_materializes_pending_request() {
 #[tokio::test]
 async fn manual_run_preserves_lineage_through_claim_transition() {
     let db = test_db("manual-run-lineage-through-claim").await;
+    let agent = support::managed_agent(&db).await;
 
     let doc_id = write_manual_agent_request(
         &db.node,
-        ::identity::Did::new(db.node_identity.did().to_owned()).expect("fixture creator DID"),
+        ::identity::Did::new(agent.did()).expect("fixture creator DID"),
+        agent.as_ref(),
         db.node_identity.did(),
-        AGENT_NAME,
+        agent.did(),
         "task-manual-claim",
         "manual prompt body",
         serde_json::json!({}),
@@ -690,6 +695,7 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
         created_at,
     );
     request.node_did = db.node_identity.did().to_string();
+    request.agent_did = agent.did().to_string();
     request.requester_did = row
         .get("requester_did")
         .and_then(|value| value.as_str())
@@ -697,13 +703,14 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
 
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
-        AGENT_NAME,
+        agent.did(),
         db.node_identity.did(),
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
         BACKEND_ID,
     );
+    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
     assert_eq!(
         lifecycle.claim().await.unwrap(),
         ClaimOutcome::Claimed,
@@ -860,7 +867,7 @@ async fn create_pending_queue_row(
                 request_id: "{escaped_request_id}",
                 purpose: "normal",
                 node_did: "{escaped_node_did}",
-                agent_id: "{AGENT_NAME}",
+                agent_did: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{escaped_request_id}",

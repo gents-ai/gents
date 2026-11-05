@@ -159,8 +159,8 @@ mod filesystem_tests {
             "contexts":[{"context_id":"context","system_prompt":"  literal ${NOT_EXPANDED} {{node.did}}\n"}],
             "inference_backends":[{"backend_id":"backend","name":"backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"profile_id":"profile","backend_id":"backend","model_name":"model"}],
-            "agents":[{"agent_id":"agent","context_id":"context","inference_profile_id":"profile"}],
-            "tasks":[{"task_id":"task","agent_id":"agent","prompt_template":"  {{args.name}}\n"}]
+            "agents":[{"agent_did":"agent","context_id":"context","inference_profile_id":"profile"}],
+            "tasks":[{"task_id":"task","agent_did":"agent","prompt_template":"  {{args.name}}\n"}]
         }),None,&|name|(name=="NOT_EXPANDED").then(||"${NOT_EXPANDED}".into()),&|_,_,_|unreachable!()).unwrap()
     }
 
@@ -221,7 +221,7 @@ mod retained_reference_tests {
     #[test]
     fn offline_load_and_export_allow_references_to_retained_documents() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("pack_config.json"),r#"{"node":{"node_did":"owner"},"agents":[{"agent_id":"agent","inference_profile_id":"retained-profile"}]}"#).unwrap();
+        fs::write(dir.path().join("pack_config.json"),r#"{"node":{"node_did":"owner"},"agents":[{"agent_did":"agent","inference_profile_id":"retained-profile"}]}"#).unwrap();
         let (config, report) = load_manifest_root(dir.path());
         assert!(report.ok, "{:?}", report.errors);
         let config = config.unwrap();

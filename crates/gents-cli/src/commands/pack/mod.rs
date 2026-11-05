@@ -2,7 +2,7 @@ pub(crate) mod account;
 pub(crate) mod build;
 mod cache;
 mod check;
-mod cli_process;
+pub(crate) mod cli_process;
 mod edit;
 mod import;
 mod inspect;

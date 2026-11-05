@@ -16,10 +16,10 @@ async fn insert(node: &Arc<EmbeddedNode>, collection: &str, value: Value) -> Str
 async fn physical_interrupt_preserves_exact_scope_and_never_reaches_caused_requests() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let parent = insert(&node, "AgentRequest", json!({"request_id":"parent","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"same-session","agent_id":"configured","lifecycle_state":"processing"})).await;
-    let foreign = insert(&node, "AgentRequest", json!({"request_id":"parent","purpose":"normal","node_did":"foreign","requester_did":null,"session_id":"same-session","agent_id":"configured","lifecycle_state":"processing"})).await;
+    let parent = insert(&node, "AgentRequest", json!({"request_id":"parent","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"same-session","agent_did":"configured","lifecycle_state":"processing"})).await;
+    let foreign = insert(&node, "AgentRequest", json!({"request_id":"parent","purpose":"normal","node_did":"foreign","requester_did":null,"session_id":"same-session","agent_did":"configured","lifecycle_state":"processing"})).await;
     let bridge = insert(&node, "AgentToolCall", json!({"request_id":"parent","request_doc_id":parent,"node_did":"owner","requester_did":null,"session_id":"same-session","tool_call_id":"spawn","tool_name":"agent_new","lifecycle_state":"running","await_mode":"background"})).await;
-    let child = insert(&node, "AgentRequest", json!({"request_id":"child","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"child-session","agent_id":"configured","lifecycle_state":"processing","caused_by_parent_request_id":"parent","caused_by_parent_request_doc_id":parent,"caused_by_parent_tool_call_id":"spawn","caused_by_parent_tool_call_doc_id":bridge})).await;
+    let child = insert(&node, "AgentRequest", json!({"request_id":"child","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"child-session","agent_did":"configured","lifecycle_state":"processing","caused_by_parent_request_id":"parent","caused_by_parent_request_doc_id":parent,"caused_by_parent_tool_call_id":"spawn","caused_by_parent_tool_call_doc_id":bridge})).await;
     for (owner, requester) in [
         ("foreign", None),
         ("owner", Some("requester")),
@@ -67,7 +67,7 @@ async fn physical_interrupt_preserves_exact_scope_and_never_reaches_caused_reque
         result.data.unwrap()["AgentRequest"][0]["interrupt_requested_at"],
         first
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -77,13 +77,13 @@ async fn colliding_logical_interrupt_fetch_rejects_ambiguity_and_binds_owner_phy
     let owner = insert(
         &node,
         "AgentRequest",
-        json!({"request_id":"shared","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"s","agent_id":"configured","lifecycle_state":"processing"}),
+        json!({"request_id":"shared","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"s","agent_did":"configured","lifecycle_state":"processing"}),
     )
     .await;
     let foreign = insert(
         &node,
         "AgentRequest",
-        json!({"request_id":"shared","purpose":"normal","node_did":"foreign","requester_did":null,"session_id":"s","agent_id":"configured","lifecycle_state":"processing"}),
+        json!({"request_id":"shared","purpose":"normal","node_did":"foreign","requester_did":null,"session_id":"s","agent_did":"configured","lifecycle_state":"processing"}),
     )
     .await;
 
@@ -126,5 +126,5 @@ async fn colliding_logical_interrupt_fetch_rejects_ambiguity_and_binds_owner_phy
             .unwrap()
             .is_some()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

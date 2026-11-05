@@ -13,6 +13,7 @@ use super::*;
 struct Facts {
     root: tempfile::TempDir,
     nodes: BTreeMap<u64, KeyIdentity>,
+    clients: BTreeMap<String, u64>,
     envelopes: BTreeMap<String, u64>,
     payloads: BTreeMap<String, u64>,
 }
@@ -22,6 +23,7 @@ impl Facts {
         Ok(Self {
             root: tempfile::tempdir()?,
             nodes: BTreeMap::new(),
+            clients: BTreeMap::new(),
             envelopes: BTreeMap::new(),
             payloads: BTreeMap::new(),
         })
@@ -43,10 +45,14 @@ impl Facts {
     fn intent(&mut self, input: &Value) -> Result<Intent> {
         let envelope = number(input, "envelope")?;
         let intent = Intent::new(
-            format!("client-{}", number(&input["caller"], "requester")?),
+            format!("did:key:client-{}", number(&input["caller"], "requester")?),
             self.node(number(input, "node")?)?,
             identity(number(&input["caller"], "request")?),
             format!("authored-envelope-{envelope}").as_bytes(),
+        );
+        self.clients.insert(
+            intent.client_did.clone(),
+            number(&input["caller"], "requester")?,
         );
         self.envelopes
             .insert(intent.envelope_hash.clone(), envelope);
@@ -78,7 +84,7 @@ impl Facts {
                 request_id,
                 session_id: session,
                 node_did: node,
-                agent_id: Some("fixture-agent".into()),
+                agent_did: Some("fixture-agent".into()),
             },
         )?;
         self.payloads
@@ -110,7 +116,7 @@ impl Facts {
                 .map(|(id, _)| *id).context("known native node")?;
             Ok(json!({
                 "intent": {
-                    "caller": { "requester": record.intent.client_did.strip_prefix("client-").context("caller")?.parse::<u64>()?,
+                    "caller": { "requester": self.clients.get(&record.intent.client_did).context("caller")?,
                         "request": Uuid::parse_str(&record.intent.request_id)?.as_u128() },
                     "node":node, "envelope":self.envelopes.get(&record.intent.envelope_hash).context("known envelope")?,
                 },
@@ -205,7 +211,7 @@ async fn generated_receipt_traces_bind_the_native_signed_preparation() -> Result
                 }
                 "observe" | "acknowledge" => {
                     let caller = &input["caller"];
-                    let client = format!("client-{}", number(caller, "requester")?);
+                    let client = format!("did:key:client-{}", number(caller, "requester")?);
                     let request = identity(number(caller, "request")?);
                     let reference = facts.reference(&input["prepared"], context).await?;
                     if input["kind"] == "observe" {
@@ -246,7 +252,8 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
 
     let cases = tokio::task::spawn_blocking(model_cases).await??;
     let node = Arc::new(crate::test_support::node_builder().build().await?);
-    gents::ensure_runtime_schemas(&node).await?;
+    node.add_collection(&crate::test_support::unbound_journal_schema())
+        .await?;
     let result = async {
         let mut count = 0;
         for case in cases {
@@ -284,7 +291,7 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
                     "observe" | "acknowledge" => {
                         let mut binding = facts.intent(context)?;
                         binding.client_did =
-                            format!("client-{}", number(&input["caller"], "requester")?);
+                            format!("did:key:client-{}", number(&input["caller"], "requester")?);
                         binding.request_id = identity(number(&input["caller"], "request")?);
                         let reference = facts.reference(&input["prepared"], context).await?;
                         let observation = if input["kind"] == "observe" {
@@ -342,7 +349,9 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
                         .await?
                         .context("durable caller binding")?;
                     assert_eq!(recovered.reference, record.reference);
-                    let pending = journal::load(&node, &record.intent.request_id).await?;
+                    let pending =
+                        journal::load(&node, &record.intent.client_did, &record.intent.request_id)
+                            .await?;
                     assert_eq!(pending.is_some(), record.outcome == Outcome::Unresolved);
                     if let Some(pending) = pending {
                         assert_eq!(
@@ -350,7 +359,8 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
                             record.reference.signed_payload_hash
                         );
                     }
-                    journal::forget(&node, &record.intent.request_id).await;
+                    journal::forget(&node, &record.intent.client_did, &record.intent.request_id)
+                        .await?;
                     assert!(
                         journal::caller::recover(&node, &record.intent)
                             .await?
@@ -365,7 +375,7 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     result
 }
 
@@ -385,13 +395,13 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
     let proposal = facts.proposal(&first["intent"], &first["proposal"]).await?;
     let home = tempfile::tempdir()?;
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&proposal.intent.node_did)
             .data_path(home.path())
             .build()
             .await?,
     );
-    node.add_collection(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
+    node.add_collection(&crate::test_support::unbound_journal_schema())
         .await?;
     let (left, right) = tokio::join!(
         journal::caller::reserve(&node, &proposal),
@@ -401,11 +411,11 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
     let right = right?;
     assert_eq!(left.reference, right.reference);
     assert_eq!(facts.decision_json(left.result())?, trace[0]["output"]);
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     drop(node);
 
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&proposal.intent.node_did)
             .data_path(home.path())
             .build()
@@ -432,12 +442,12 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     drop(node);
     result?;
 
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&proposal.intent.node_did)
             .data_path(home.path())
             .build()
@@ -448,9 +458,13 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
             .await?
             .context("acknowledged receipt survived reopen")?;
         assert_eq!(facts.records_json(&[recovered])?, trace[2]["after"]);
-        assert!(journal::load(&node, &proposal.intent.request_id)
-            .await?
-            .is_none());
+        assert!(journal::load(
+            &node,
+            &proposal.intent.client_did,
+            &proposal.intent.request_id
+        )
+        .await?
+        .is_none());
         let retry = &trace.last().context("retry")?["input"];
         let replacement = facts.proposal(&retry["intent"], &retry["proposal"]).await?;
         let original = journal::caller::reserve(&node, &replacement).await?;
@@ -461,7 +475,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     result
 }
 
@@ -499,7 +513,7 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
             expected
         };
         let node = Arc::new(crate::test_support::node_builder().build().await?);
-        node.add_collection(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
+        node.add_collection(&crate::test_support::unbound_journal_schema())
             .await?;
         let server = MockServer::start().await;
         let stored = Arc::new(AtomicBool::new(false));
@@ -566,13 +580,10 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
             if expected == Outcome::Accepted {
                 assert_eq!(reply?, proposal.reference.request);
             } else {
-                assert_eq!(
-                    reply
-                        .expect_err("confirmed rejection")
-                        .downcast::<SubmissionNotDelivered>()?
-                        .request,
-                    proposal.reference.request
-                );
+                let SubmissionNotDelivered::Rejected { request, .. } = reply
+                    .expect_err("confirmed rejection")
+                    .downcast::<SubmissionNotDelivered>()?;
+                assert_eq!(request, proposal.reference.request);
             }
             let retained = journal::caller::recover(&node, &proposal.intent)
                 .await?
@@ -637,7 +648,7 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
             Ok::<(), anyhow::Error>(())
         }
         .await;
-        node.shutdown().await;
+        node.shutdown().await.unwrap();
         result?;
     }
     Ok(())
@@ -809,19 +820,28 @@ async fn first_submission_uses_the_caller_identity_and_freezes_goal_assignment()
     };
     let command = serde_json::to_vec(
         &json!({"nodeDid":intent.node_did, "requestId":intent.request_id,
-        "sessionId":session, "agentId":"fixture-agent", "content":"authored submission", "input":input}),
+        "sessionId":session, "agentDid":"fixture-agent", "content":"authored submission", "input":input}),
     )?;
     intent = Intent::new(
-        intent.client_did,
+        intent.node_did.clone(),
         intent.node_did,
         intent.request_id,
         &command,
+    );
+    facts.clients.insert(
+        intent.client_did.clone(),
+        number(&first["intent"]["caller"], "requester")?,
     );
     facts.envelopes.insert(
         intent.envelope_hash.clone(),
         number(&first["intent"], "envelope")?,
     );
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(&intent.client_did)
+            .build()
+            .await?,
+    );
     gents::ensure_runtime_schemas(&node).await?;
     let access = ConfigAccess::local(Arc::clone(&node));
     let result = async {
@@ -899,6 +919,6 @@ async fn first_submission_uses_the_caller_identity_and_freezes_goal_assignment()
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     result
 }

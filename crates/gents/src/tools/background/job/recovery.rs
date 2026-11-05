@@ -14,7 +14,7 @@ use super::input::live_job_settings;
 use super::origin::engine_guard;
 use super::records::read_progress;
 use crate::plugin::store::{parse_coordinate, read_record};
-use crate::request::binding::load_agent_request_by_doc_id;
+use crate::request::binding::load_agent_request_by_doc_id_with_access;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
 
@@ -127,9 +127,9 @@ pub fn step_invocation_allowed(row_running: bool, session_stopped: bool) -> bool
 /// left, because admission reads the terminals the step had not yet observed
 /// as news. A row whose step is already in flight is left to that step.
 /// Returns the number of rows ticked.
-pub async fn redrive_running_jobs(driver: &Arc<JobDriver>) -> Result<usize> {
+pub async fn redrive_running_jobs(driver: &Arc<JobDriver>, actor: &identity::Did) -> Result<usize> {
     let runtime = driver.runtime();
-    let access = ConfigAccess::local(runtime.node.clone());
+    let access = runtime.agent_access(actor)?;
     let local = match runtime.node.node_identity_did() {
         Some(did) => format!(r#", node_did: {{ _eq: "{}" }}"#, escape_graphql_string(did)),
         None => String::new(),
@@ -154,7 +154,7 @@ pub async fn redrive_running_jobs(driver: &Arc<JobDriver>) -> Result<usize> {
         ) else {
             continue;
         };
-        match tick(driver, &access, row_doc_id, request_doc_id, &pin).await {
+        match tick(driver, &access, actor, row_doc_id, request_doc_id, &pin).await {
             Ok(true) => ticked += 1,
             Ok(false) => {}
             Err(error) => tracing::warn!(
@@ -171,6 +171,7 @@ pub async fn redrive_running_jobs(driver: &Arc<JobDriver>) -> Result<usize> {
 async fn tick(
     driver: &Arc<JobDriver>,
     access: &ConfigAccess,
+    actor: &identity::Did,
     row_doc_id: &str,
     request_doc_id: &str,
     pin: &JobPin,
@@ -180,16 +181,16 @@ async fn tick(
     match tick_action(&facts) {
         TickAction::Untouched => Ok(false),
         TickAction::Kill(KillCause::FailClosed(Refusal::Stalled)) => {
-            kill_at_rest(driver, access, row_doc_id, request_doc_id, pin).await
+            kill_at_rest(driver, access, actor, row_doc_id, request_doc_id, pin).await
         }
         TickAction::Kill(cause) => {
             kill_row(access, row_doc_id, cause).await?;
             Ok(true)
         }
         TickAction::Step => {
-            if let Some(outcome) = driver.step_now(row_doc_id).await {
+            if let Some(outcome) = driver.step_now(row_doc_id, actor).await {
                 if outcome? == StepOutcome::Committed {
-                    kill_at_rest(driver, access, row_doc_id, request_doc_id, pin).await?;
+                    kill_at_rest(driver, access, actor, row_doc_id, request_doc_id, pin).await?;
                 }
             }
             Ok(true)
@@ -205,12 +206,13 @@ async fn tick(
 async fn kill_at_rest(
     driver: &Arc<JobDriver>,
     access: &ConfigAccess,
+    actor: &identity::Did,
     row_doc_id: &str,
     request_doc_id: &str,
     pin: &JobPin,
 ) -> Result<bool> {
     driver
-        .hold_steps(row_doc_id, async {
+        .hold_steps(row_doc_id, actor, async {
             let (_, facts) =
                 facts_of(driver, access, row_doc_id, request_doc_id, pin, false).await?;
             let TickAction::Kill(cause) = tick_action(&facts) else {
@@ -250,6 +252,7 @@ async fn facts_of(
     let lifecycle = load_lifecycle(access, row_doc_id).await?;
     let session_stopped = crate::session::session_is_stopped(
         &runtime.node,
+        lifecycle.actor(),
         lifecycle.node_did(),
         lifecycle.session_id(),
         lifecycle.requester_did(),
@@ -258,7 +261,7 @@ async fn facts_of(
     let available = if session_stopped {
         Err(Refusal::NotAvailable)
     } else {
-        let caller = load_agent_request_by_doc_id(&runtime.node, request_doc_id)
+        let caller = load_agent_request_by_doc_id_with_access(access, request_doc_id)
             .await?
             .with_context(|| {
                 format!("the caller request of job row {row_doc_id} does not exist")
@@ -304,6 +307,9 @@ pub async fn wake_jobs_after_request_update(
     driver: &JobDriver,
     request_doc_id: &str,
 ) -> Result<()> {
+    let actor = access
+        .actor_did()
+        .context("job wake requires a selected agent")?;
     let response = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state caused_by_parent_tool_call_doc_id }} }}"#,
@@ -339,7 +345,7 @@ pub async fn wake_jobs_after_request_update(
         .pointer("/data/AgentToolCall/0/job_pin")
         .is_some_and(|pin| !pin.is_null());
     if is_job {
-        driver.kick(row_doc_id);
+        driver.kick(row_doc_id, &identity::Did::new(actor)?)?;
     }
     Ok(())
 }
@@ -551,7 +557,12 @@ mod tests {
         let mut step = stepper(json!({"effects": {}})).await;
         let expired = pinned_row(&mut step, "call-2", 1, None).await;
         let driver = driver_of(&step);
-        redrive_running_jobs(&driver).await.unwrap();
+        redrive_running_jobs(
+            &driver,
+            &crate::tools::background::job::input::tests::agent_actor(),
+        )
+        .await
+        .unwrap();
         assert_eq!(step.row_json(&expired).await["lifecycle_state"], "timedOut");
         assert_eq!(step.output(&expired).await["code"], "plugin_job_timed_out");
         step.close().await;
@@ -562,7 +573,12 @@ mod tests {
         let mut step = stepper(json!({"effects": {}})).await;
         let driver = driver_of(&step);
         let changed = pinned_row(&mut step, "call-2", now_ms(), Some("sha256:other")).await;
-        redrive_running_jobs(&driver).await.unwrap();
+        redrive_running_jobs(
+            &driver,
+            &crate::tools::background::job::input::tests::agent_actor(),
+        )
+        .await
+        .unwrap();
         assert_eq!(step.row_json(&changed).await["lifecycle_state"], "failed");
         assert_eq!(
             step.output(&changed).await["code"],
@@ -570,7 +586,12 @@ mod tests {
         );
         let vanished = pinned_row(&mut step, "call-3", now_ms(), None).await;
         write_step_tools(&step.job, None).await;
-        redrive_running_jobs(&driver).await.unwrap();
+        redrive_running_jobs(
+            &driver,
+            &crate::tools::background::job::input::tests::agent_actor(),
+        )
+        .await
+        .unwrap();
         assert_eq!(step.row_json(&vanished).await["lifecycle_state"], "failed");
         assert_eq!(
             step.output(&vanished).await["code"],
@@ -586,7 +607,15 @@ mod tests {
         terminal_child(&step, &step.row, "child-1").await;
         fresh_spawn(&step, &step.row, "live-1").await;
         let driver = driver_of(&step);
-        assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 1);
+        assert_eq!(
+            redrive_running_jobs(
+                &driver,
+                &crate::tools::background::job::input::tests::agent_actor()
+            )
+            .await
+            .unwrap(),
+            1
+        );
         let progress = step.progress(&step.row).await;
         assert_eq!(
             (progress.revision, progress.observed_terminal_children),
@@ -600,11 +629,20 @@ mod tests {
         let step = stepper(json!({"effects": {}})).await;
         child(&step, &step.row, "child-1", "processing", None).await;
         let driver = driver_of(&step);
-        assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 0);
+        assert_eq!(
+            redrive_running_jobs(
+                &driver,
+                &crate::tools::background::job::input::tests::agent_actor()
+            )
+            .await
+            .unwrap(),
+            0
+        );
         let registry = crate::tools::call::hook::BackgroundExecutionRegistry::default();
-        crate::runtime::periodic_recovery::run_periodic_recovery_sweeps(
+        crate::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
             &step.job.node,
             node_did(),
+            &[crate::tools::background::job::input::tests::managed_agent().clone()],
             &registry,
         )
         .await
@@ -619,7 +657,15 @@ mod tests {
     async fn at_rest_row_with_nothing_live_or_unobserved_fails_closed_stalled() {
         let step = stepper(json!({"effects": {}})).await;
         let driver = driver_of(&step);
-        assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 1);
+        assert_eq!(
+            redrive_running_jobs(
+                &driver,
+                &crate::tools::background::job::input::tests::agent_actor()
+            )
+            .await
+            .unwrap(),
+            1
+        );
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
         assert_eq!(step.output(&step.row).await["code"], "plugin_job_stalled");
         let progress = step.progress(&step.row).await;
@@ -637,7 +683,15 @@ mod tests {
         let step = stepper(json!({"effects": {}})).await;
         terminal_child(&step, &step.row, "child-1").await;
         let driver = driver_of(&step);
-        assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 1);
+        assert_eq!(
+            redrive_running_jobs(
+                &driver,
+                &crate::tools::background::job::input::tests::agent_actor()
+            )
+            .await
+            .unwrap(),
+            1
+        );
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
         assert_eq!(step.output(&step.row).await["code"], "plugin_job_stalled");
         assert_eq!(step.progress(&step.row).await.revision, 3);
@@ -650,7 +704,12 @@ mod tests {
         terminal_child(&step, &step.row, "child-1").await;
         fresh_spawn(&step, &step.row, "live-1").await;
         let driver = driver_of(&step);
-        redrive_running_jobs(&driver).await.unwrap();
+        redrive_running_jobs(
+            &driver,
+            &crate::tools::background::job::input::tests::agent_actor(),
+        )
+        .await
+        .unwrap();
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
         settle_time().await;
         assert_eq!(step.progress(&step.row).await.revision, 2);
@@ -690,7 +749,12 @@ mod tests {
             stepper(json!({"suspend": {"kind": "await_user", "message": "which one?"}})).await;
         let resumed = resumed_row(&mut step).await;
         let driver = driver_of(&step);
-        redrive_running_jobs(&driver).await.unwrap();
+        redrive_running_jobs(
+            &driver,
+            &crate::tools::background::job::input::tests::agent_actor(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             step.row_json(&resumed).await["lifecycle_state"],
             "completed",
@@ -706,18 +770,40 @@ mod tests {
         let step = stepper(json!({"effects": {}})).await;
         terminal_child(&step, &step.row, "child-1").await;
         let driver = driver_of(&step);
-        let stepped = driver.step_now(&step.row).await.unwrap().unwrap();
+        let stepped = driver
+            .step_now(
+                &step.row,
+                &crate::tools::background::job::input::tests::agent_actor(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(stepped, StepOutcome::Committed);
         // The stored row reads as stalled while a step that has not yet
         // committed its effects holds it.
         let swept = driver
-            .hold_steps(&step.row, redrive_running_jobs(&driver))
+            .hold_steps(
+                &step.row,
+                &crate::tools::background::job::input::tests::agent_actor(),
+                redrive_running_jobs(
+                    &driver,
+                    &crate::tools::background::job::input::tests::agent_actor(),
+                ),
+            )
             .await
             .unwrap()
             .unwrap();
         assert_eq!(swept, 0);
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
-        assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 1);
+        assert_eq!(
+            redrive_running_jobs(
+                &driver,
+                &crate::tools::background::job::input::tests::agent_actor()
+            )
+            .await
+            .unwrap(),
+            1
+        );
         assert_eq!(step.output(&step.row).await["code"], "plugin_job_stalled");
         step.close().await;
     }
@@ -728,7 +814,14 @@ mod tests {
         let expired = pinned_row(&mut step, "call-2", 1, None).await;
         let driver = driver_of(&step);
         driver
-            .hold_steps(&expired, redrive_running_jobs(&driver))
+            .hold_steps(
+                &expired,
+                &crate::tools::background::job::input::tests::agent_actor(),
+                redrive_running_jobs(
+                    &driver,
+                    &crate::tools::background::job::input::tests::agent_actor(),
+                ),
+            )
             .await
             .unwrap()
             .unwrap();
@@ -758,9 +851,16 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        let killed = kill_at_rest(&driver, &step.job.access, &step.row, &request_doc_id, &pin)
-            .await
-            .unwrap();
+        let killed = kill_at_rest(
+            &driver,
+            &step.job.access,
+            &crate::tools::background::job::input::tests::agent_actor(),
+            &step.row,
+            &request_doc_id,
+            &pin,
+        )
+        .await
+        .unwrap();
         assert!(!killed, "the re-read shows a live child");
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
         step.close().await;
@@ -775,7 +875,15 @@ mod tests {
         terminal_child(&step, &other, "child-2").await;
         fresh_spawn(&step, &other, "live-2").await;
         let driver = driver_of(&step);
-        assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 2);
+        assert_eq!(
+            redrive_running_jobs(
+                &driver,
+                &crate::tools::background::job::input::tests::agent_actor()
+            )
+            .await
+            .unwrap(),
+            2
+        );
         settle_time().await;
         for row in [&step.row, &other] {
             assert_eq!(step.row_json(row).await["lifecycle_state"], "running");
@@ -783,7 +891,11 @@ mod tests {
         }
         let busy = pinned_row(&mut step, "call-3", now_ms(), None).await;
         fresh_spawn(&step, &busy, "live-3").await;
-        let (first, second) = tokio::join!(driver.step_now(&busy), driver.step_now(&busy));
+        let actor = crate::tools::background::job::input::tests::agent_actor();
+        let (first, second) = tokio::join!(
+            driver.step_now(&busy, &actor),
+            driver.step_now(&busy, &actor)
+        );
         assert!(matches!(first, Some(Ok(StepOutcome::Committed))));
         assert!(second.is_none());
         observed_revision(&step, &busy, 3).await;

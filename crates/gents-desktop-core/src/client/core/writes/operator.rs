@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use gents::store::config_client::ConfigAccess;
+use gents::store::identity::NodeIdentity as _;
 
 use super::super::bootstrap::normalize_required;
 use super::super::p2p_ops;
@@ -141,7 +142,22 @@ impl ClientCore {
             .records()
             .iter()
             .find(|record| record.node_did == node_did)
-            .and_then(crate::local_runtime::operator_endpoint)
+            .and_then(|record| {
+                record.operator_graphql().and_then(|url| {
+                    let capability =
+                        gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                            self.node_identity.private_key_bytes(),
+                        )
+                        .ok()?;
+                    gents::store::config_client::GraphqlEndpoint::as_principal(
+                        url,
+                        self.node_identity.did(),
+                    )
+                    .with_client_signing_capability(capability)
+                    .ok()
+                    .map(|endpoint| endpoint.with_client_signed_agent_creates())
+                })
+            })
     }
 
     pub fn operator_observation_graphql(
@@ -152,7 +168,12 @@ impl ClientCore {
             .records()
             .iter()
             .find(|record| record.node_did == node_did)
-            .and_then(|record| self.options.operator_identity_interaction.endpoint(record))
+            .and_then(|record| {
+                self.options.operator_identity_interaction.endpoint(
+                    record,
+                    &self.node_identity.client_signing_capability().ok()?,
+                )
+            })
     }
 
     pub async fn operator_observation_endpoint(
@@ -165,7 +186,8 @@ impl ClientCore {
             .into_iter()
             .find(|record| record.node_did == node_did)?;
         let interaction = self.options.operator_identity_interaction;
-        tokio::task::spawn_blocking(move || interaction.endpoint(&record))
+        let capability = self.node_identity.client_signing_capability().ok()?;
+        tokio::task::spawn_blocking(move || interaction.endpoint(&record, &capability))
             .await
             .ok()
             .flatten()
@@ -181,7 +203,26 @@ impl ClientCore {
             .into_iter()
             .find(|record| record.node_did == node_did)
             .context("no runtime record for this node")?;
-        crate::local_runtime::operator_signer(&record)
+        anyhow::ensure!(
+            record.operator_graphql().is_some(),
+            "runtime has no operator endpoint"
+        );
+        Ok(std::sync::Arc::new(self.node_identity.clone()))
+    }
+
+    /// Operational requests such as shared credential usage refresh retain the
+    /// co-hosted runtime signer. Configuration mutations use `operator_signer`.
+    pub fn runtime_operator_signer(
+        &self,
+        node_did: &str,
+    ) -> Result<std::sync::Arc<dyn gents::store::identity::NodeIdentity>> {
+        let record = self
+            .sync_state
+            .records()
+            .into_iter()
+            .find(|record| record.node_did == node_did)
+            .context("no runtime record for this node")?;
+        crate::local_runtime::runtime_operator_signer(&record)
     }
 
     pub fn operator_access(&self, node_did: &str) -> Result<ConfigAccess> {
@@ -189,18 +230,36 @@ impl ClientCore {
             .sync_state
             .records()
             .into_iter()
-            .find(|record| record.node_did == node_did);
-        match record {
-            Some(record) if record.operator_graphql().is_some() => {
-                crate::local_runtime::operator_endpoint(&record)
-                    .map(ConfigAccess::Graphql)
-                    .context("local standard runtime has no operator GraphQL endpoint")
-            }
-            Some(_) => anyhow::bail!(
-                "managed node {node_did} has no operator GraphQL endpoint; refusing a desktop-replica configuration fallback"
-            ),
-            None => Ok(ConfigAccess::local(self.node_arc())),
-        }
+            .find(|record| record.node_did == node_did)
+            .context("Connect this runtime before editing configuration.")?;
+        record
+            .operator_graphql()
+            .map(|url| -> Result<ConfigAccess> {
+                let capability =
+                    gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                        self.node_identity.private_key_bytes(),
+                    )?;
+                Ok(ConfigAccess::Graphql(
+                    gents::store::config_client::GraphqlEndpoint::as_principal(
+                        url,
+                        self.node_identity.did(),
+                    )
+                    .with_client_signing_capability(capability)?
+                    .with_client_signed_agent_creates(),
+                ))
+            })
+            .transpose()?
+            .context("Connect this runtime before editing configuration.")
+    }
+
+    pub async fn provision_agent_identity(
+        &self,
+        node_did: &str,
+    ) -> Result<gents_protocol::agent_identity::AgentIdentityBinding> {
+        let endpoint = self
+            .operator_graphql(node_did)
+            .context("Connect this runtime before creating an agent.")?;
+        crate::agent_identity::provision(&endpoint, node_did).await
     }
 
     pub fn local_home_operator_access(
@@ -210,8 +269,23 @@ impl ClientCore {
     ) -> Result<ConfigAccess> {
         let records = self.sync_state.records();
         let record = ux_local_runtime_record(&records, node_did, home)?;
-        crate::local_runtime::operator_endpoint(record)
-            .map(ConfigAccess::Graphql)
+        record
+            .operator_graphql()
+            .map(|url| -> Result<ConfigAccess> {
+                let capability =
+                    gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                        self.node_identity.private_key_bytes(),
+                    )?;
+                Ok(ConfigAccess::Graphql(
+                    gents::store::config_client::GraphqlEndpoint::as_principal(
+                        url,
+                        self.node_identity.did(),
+                    )
+                    .with_client_signing_capability(capability)?
+                    .with_client_signed_agent_creates(),
+                ))
+            })
+            .transpose()?
             .context("the local node that installed this app has no operator connection")
     }
 }

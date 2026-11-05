@@ -2,7 +2,7 @@ use super::super::session_hydration::HYDRATION_COLLECTIONS;
 use super::{selection::load_canonical_selection_in_txn, *};
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::required_rows;
-use crate::tools::call::lifecycle::ToolCallLifecycle;
+use crate::tools::call::lifecycle::query::load_tool_call_read_in_txn;
 use gents_protocol::enrollment::canonical_domain_payload;
 use gents_protocol::file_image_hydration::FileImageScope;
 use gents_protocol::file_inventory::{
@@ -18,7 +18,8 @@ use sha2::{Digest, Sha256};
 #[error("{0}")]
 struct InventoryRejection(&'static str);
 
-pub(crate) fn refusal_reason(
+#[cfg(test)]
+fn refusal_reason(
     error: &anyhow::Error,
 ) -> gents_protocol::file_inventory::FileInventoryRefusalReason {
     use gents_protocol::file_inventory::FileInventoryRefusalReason;
@@ -29,10 +30,8 @@ pub(crate) fn refusal_reason(
     }
 }
 
-/// Source-local facts, not transfer authorization. The delivery owner must
-/// still validate current enrollment and pairing before signing or transferring
-/// metadata. Construction reads membership, accepted tools, projections and
-/// authenticated owners in one transaction and never reads retained image bytes.
+/// Reads accepted tools, projections and authenticated owners in one
+/// transaction without reading retained image bytes.
 #[derive(Debug, Clone)]
 pub struct FileInventorySnapshot {
     binding: FileInventoryBinding,
@@ -171,8 +170,7 @@ impl FileInventorySnapshot {
         &self.entries
     }
 
-    /// These pages are unsigned. Enrollment and pairing authorization remain
-    /// with the delivery owner; a page never grants retained-image access.
+    /// A page never grants retained-image access.
     pub fn page(
         &self,
         cursor: Option<&FileInventoryCursor>,
@@ -206,6 +204,7 @@ impl FileInventorySnapshot {
         })
     }
 
+    #[cfg(test)]
     pub async fn load(
         node: &Arc<EmbeddedNode>,
         admission: &FileInventoryAdmission,
@@ -224,15 +223,39 @@ impl FileInventorySnapshot {
             InventoryRejection("file inventory requires an exact source-local session reference")
         );
         ConfigAccess::transact_local_readonly(node, None, "file_inventory.snapshot", |txn| {
-            Box::pin(Self::load_in_txn(txn, node, admission))
+            Box::pin(Self::load_in_txn(txn, admission, false))
         })
         .await
     }
 
+    /// Authenticated native reads carry their own actor. Session requester
+    /// fields remain provenance and never select an elevated read identity.
+    pub async fn load_on(
+        access: &ConfigAccess,
+        admission: &FileInventoryAdmission,
+    ) -> Result<Self> {
+        let actor = access
+            .actor_did()
+            .context("file inventory requires an authenticated reader")?;
+        anyhow::ensure!(
+            actor == admission.request.requester_did,
+            InventoryRejection("file inventory reader differs from the authenticated actor")
+        );
+        anyhow::ensure!(
+            !admission.session_doc_id.is_empty(),
+            InventoryRejection("file inventory requires a physical session reference")
+        );
+        access
+            .transact_readonly("file_inventory.direct_snapshot", |txn| {
+                Box::pin(Self::load_in_txn(txn, admission, true))
+            })
+            .await
+    }
+
     async fn load_in_txn(
         txn: &ConfigApplyTxn<'_>,
-        node: &Arc<EmbeddedNode>,
         admission: &FileInventoryAdmission,
+        native_reader: bool,
     ) -> Result<Self> {
         let request = &admission.request;
         let session = crate::session::load_agent_session_owner_in_txn(
@@ -247,14 +270,15 @@ impl FileInventorySnapshot {
             InventoryRejection("file inventory session identity changed")
         );
         let scope = crate::session::origin::SessionScope::from(&session.session);
-        let reader: Option<identity::Did> =
-            if scope.requester_did.as_deref() == Some(request.requester_did.as_str()) {
-                None
-            } else {
-                Some(request.requester_did.parse().map_err(|_| {
-                    InventoryRejection("file inventory reader is not an authenticated DID")
-                })?)
-            };
+        let reader: Option<identity::Did> = if native_reader
+            || scope.requester_did.as_deref() == Some(request.requester_did.as_str())
+        {
+            None
+        } else {
+            Some(request.requester_did.parse().map_err(|_| {
+                InventoryRejection("file inventory reader is not an authenticated DID")
+            })?)
+        };
         if let Some(reader) = &reader {
             require_reader_visibility(
                 txn,
@@ -291,32 +315,32 @@ impl FileInventorySnapshot {
             if document.collection != SessionHydrationCollection::AgentToolCall {
                 continue;
             }
-            let tool = ToolCallLifecycle::load_by_doc_id_in_txn(
+            let tool = load_tool_call_read_in_txn(
                 txn,
-                node.clone(),
                 &document.doc_id,
                 &document.node_did,
                 &document.session_id,
                 Some(&document.requester_did),
             )
+            .await?;
+            let request_doc_id = tool.request_doc_id.clone();
+            let source_session = crate::session::load_agent_session_owner_in_txn(
+                txn,
+                &document.node_did,
+                &document.session_id,
+            )
             .await?
-            .context("file inventory accepted tool is unavailable")?;
-            let request_doc_id =
-                tool.request_doc_id()
-                    .map(str::to_owned)
-                    .ok_or(InventoryRejection(
-                        "file inventory tool omitted its physical request",
-                    ))?;
+            .context("file inventory source session is unavailable")?;
+            anyhow::ensure!(
+                source_session.session.requester_did.as_deref()
+                    == Some(document.requester_did.as_str()),
+                InventoryRejection("file inventory source session scope changed")
+            );
+            let agent_did = source_session.session.agent_did;
             let scope = FileImageScope {
-                node_did: tool.node_did().to_owned(),
-                session_id: tool.session_id().to_owned(),
-                requester_did: tool
-                    .requester_did()
-                    .map(str::to_owned)
-                    .filter(|value| !value.is_empty())
-                    .ok_or(InventoryRejection(
-                        "file inventory tool omitted its requester",
-                    ))?,
+                node_did: document.node_did.clone(),
+                session_id: document.session_id.clone(),
+                requester_did: document.requester_did.clone(),
             };
             let query = format!(
                 r#"{{ ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{
@@ -330,7 +354,7 @@ impl FileInventorySnapshot {
                 projections.len() <= 1,
                 InventoryRejection("file inventory has ambiguous projections")
             );
-            let capture = if !tool.state().is_terminal() {
+            let capture = if !tool.lifecycle_state.is_terminal() {
                 anyhow::ensure!(
                     projections.is_empty(),
                     InventoryRejection("active tool has an uncommitted file inventory")
@@ -371,8 +395,10 @@ impl FileInventorySnapshot {
                         && owners[0]
                             .owner
                             .as_ref()
-                            .is_some_and(|owner| owner.as_str() == scope.node_did),
-                    InventoryRejection("file inventory projection is not owned by its source node")
+                            .is_some_and(|owner| owner.as_str() == agent_did),
+                    InventoryRejection(
+                        "file inventory projection is not owned by its selected agent"
+                    )
                 );
                 entries.extend(projection.changes.iter().map(|change| {
                     FileInventoryEntry {
@@ -391,7 +417,7 @@ impl FileInventorySnapshot {
                 }));
                 Capture::Observed {
                     projection: Box::new(projection),
-                    owner: scope.node_did.clone(),
+                    owner: agent_did.clone(),
                 }
             } else {
                 unknown += 1;
@@ -401,13 +427,9 @@ impl FileInventorySnapshot {
                 tool_call_doc_id: document.doc_id.clone(),
                 request_doc_id,
                 scope,
-                state: tool.state().as_str().to_owned(),
-                accepted_header_doc_id: tool.accepted_header_doc_id().map(str::to_owned).ok_or(
-                    InventoryRejection("file inventory tool omitted its accepted header"),
-                )?,
-                execution_generation: tool.execution_generation().map(str::to_owned).ok_or(
-                    InventoryRejection("file inventory tool omitted its execution generation"),
-                )?,
+                state: tool.lifecycle_state.as_str().to_owned(),
+                accepted_header_doc_id: tool.accepted_header_doc_id,
+                execution_generation: tool.execution_generation,
                 capture,
                 order: None,
             });
@@ -418,7 +440,7 @@ impl FileInventorySnapshot {
                 document: fact.tool_call_doc_id.clone(),
                 request: fact.request_doc_id.clone(),
                 scope: fact.scope.clone(),
-                state: tool.state(),
+                state: tool.lifecycle_state,
                 accepted: true,
             });
         }

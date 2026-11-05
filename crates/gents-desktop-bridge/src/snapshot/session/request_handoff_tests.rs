@@ -50,7 +50,7 @@ fn requests() -> Vec<AgentRequestRow> {
 fn store() -> ClientStore {
     ClientStore::from_rows(ClientStoreRows {
         sessions: vec![serde_json::from_value(serde_json::json!({
-            "session_id": "session-1", "node_did": "did:test:amy", "agent_id": "agent",
+            "session_id": "session-1", "node_did": "did:test:amy", "agent_did": "agent",
             "created_at": "2026-10-26T08:00:00Z"
         }))
         .unwrap()],

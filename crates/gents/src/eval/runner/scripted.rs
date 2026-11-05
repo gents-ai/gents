@@ -57,6 +57,7 @@ impl ScriptedExecutor {
         evidence(
             locator(did),
             vec![StageEvidence {
+                subject_agent: None,
                 prods: 0,
                 stage_id: stage_id.to_string(),
                 request_id: None,
@@ -84,6 +85,7 @@ impl ScriptedExecutor {
         evidence(
             locator(did),
             vec![StageEvidence {
+                subject_agent: None,
                 prods: 0,
                 stage_id: stage_id.to_string(),
                 request_id: None,

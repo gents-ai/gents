@@ -1,129 +1,85 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::documents::{DatastoreTools, SurfaceToolDecl, Tools};
-use gents::session::mailbox::{canonical_mailbox_write_decl, list_mailbox_items, MailboxStatus};
-use gents::store::graphql::escape_graphql_string;
-use gents::{Collection, DatastoreToolSurfaceDocument, NodeIdentity};
+use gents::session::mailbox::{list_mailbox_items_on, MailboxStatus};
+use gents::NodeIdentity;
 
-use crate::support::fixtures::{configure_agent_tools, test_identity};
-use crate::support::interrupt::create_runtime_request_caused_by_source;
-use crate::support::live_inference::{
-    bind_target, boot_live_agent, live_target, wait_for_request_terminal,
-};
-use crate::support::test_db;
+use crate::support::accepted_turn::boot_prepared_accepted_turn;
+use crate::support::live_inference::live_target;
+use crate::support::signed_mailbox::{prepare_signed_mailbox_turn, wait_for_request_terminal_on};
+use crate::support::test_signed_db;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "live: set GENTS_EVAL_TARGET and pass --ignored"]
 async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     let target = live_target();
-
-    let db = test_db("mailbox-real-inference").await;
-    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("mailbox-real-inference"));
-    let (node_did, agent_id) = bind_target(&db.node, identity.as_ref(), &target).await;
-    let surface_id = "mailbox-live-surface";
-    configure_agent_tools(
-        &db.node,
-        &node_did,
-        &agent_id,
-        None,
-        Tools {
-            tools_id: "mailbox-live-tools".into(),
-            node_did: node_did.clone(),
-            datastore: Some(DatastoreTools {
-                datastore_tool_surface_ids: Some(vec![surface_id.into()]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
-        vec![(
-            Collection::DatastoreToolSurface,
-            serde_json::to_value(DatastoreToolSurfaceDocument {
-                surface_id: surface_id.into(),
-                node_did: node_did.clone(),
-                display_name: Some("Mailbox live surface".into()),
-                enabled: true,
-                entries: Some(vec![
-                    SurfaceToolDecl::Create(canonical_mailbox_write_decl()),
-                ]),
-                created_at: None,
-                tags: Vec::new(),
-            })
-            .unwrap(),
-        )],
-    )
-    .await;
-
-    db.node
-        .add_collection("type MailboxLiveAgentAttention { owner: String @immutable }")
-        .await
-        .unwrap();
-    let source = db
-        .node
-        .execute(&format!(
-            r#"mutation {{ create_MailboxLiveAgentAttention(input: {{ owner: "{}" }}) {{ _docID }} }}"#,
-            escape_graphql_string(identity.did())
-        ))
-        .await;
-    assert!(!source.has_errors(), "{:?}", source.errors);
-    let source_lookup = db
-        .node
-        .execute(&format!(
-            r#"{{ MailboxLiveAgentAttention(filter: {{ owner: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
-            escape_graphql_string(identity.did())
-        ))
-        .await;
-    assert!(!source_lookup.has_errors(), "{:?}", source_lookup.errors);
-    let source_id = source_lookup.data.as_ref().unwrap()["MailboxLiveAgentAttention"]
-        .as_array()
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("_docID"))
-        .and_then(serde_json::Value::as_str)
-        .expect("created mailbox live source id")
-        .to_string();
-
-    let _agent = boot_live_agent(&db, Arc::clone(&identity))
-        .await
-        .expect("boot mailbox live agent");
+    let db = test_signed_db("mailbox-real-inference").await;
     let request_id = "request-mailbox-live";
     let session_id = "session-mailbox-live";
     let prompt = "Call file_mailbox_item exactly once with title='Mailbox live verified', then answer MAILBOX_FILED. The tool owns notification identity and handling.";
-    create_runtime_request_caused_by_source(
-        &db.node, &node_did, &agent_id, request_id, session_id, &source_id, prompt,
+    let (prepared, turn) = prepare_signed_mailbox_turn(
+        &db,
+        target.backend_id(),
+        target.model(),
+        request_id,
+        session_id,
+        prompt,
+        Vec::new(),
+        Vec::new(),
+        Some(&target),
     )
-    .await;
+    .await
+    .unwrap();
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
+    let agent = gents::Gents::from_default_agent_documents(
+        db.node.clone(),
+        identity,
+        gents::DocumentRuntimeOptions::default(),
+    )
+    .await
+    .unwrap();
+    let runtime = boot_prepared_accepted_turn(&db, prepared, agent).await;
     assert_eq!(
-        wait_for_request_terminal(&db.node, request_id, Duration::from_secs(120)).await,
+        wait_for_request_terminal_on(&turn.client, request_id, Duration::from_secs(120))
+            .await
+            .unwrap(),
         "completed"
     );
 
-    let items = list_mailbox_items(&db.node, identity.did(), Some(MailboxStatus::Open))
+    let items = list_mailbox_items_on(&turn.client, turn.user.did(), Some(MailboxStatus::Open))
         .await
         .unwrap();
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0].title, "Mailbox live verified");
-    assert_eq!(items[0].requester_did, identity.did());
-    assert_eq!(items[0].node_did, node_did);
-    assert_eq!(items[0].target_agent_id, agent_id);
-    assert_eq!(items[0].source_kind, "agent");
+    let item = &items[0];
+    assert_eq!(item.title, "Mailbox live verified");
+    assert_eq!(item.requester_did, turn.user.did());
+    assert_eq!(item.node_did, turn.node_did);
+    assert_eq!(item.target_agent_did, turn.agent.did());
+    assert_eq!(item.source_kind, "agent");
     assert_eq!(
-        items[0].source_id,
+        item.source_id,
         gents::session::mailbox::NotificationIdentity::Event
-            .source_id(&node_did, identity.did(), &agent_id, request_id)
+            .source_id(
+                &turn.node_did,
+                turn.user.did(),
+                turn.agent.did(),
+                request_id
+            )
             .unwrap()
     );
-    assert_eq!(items[0].cause_doc_id.as_deref(), Some(source_id.as_str()));
-    assert_eq!(items[0].request_id.as_deref(), Some(request_id));
-
-    let tool_calls = db.node.execute(&format!(
-        r#"{{ AgentToolCall(filter: {{ request_id: {{ _eq: "{request_id}" }}, tool_name: {{ _eq: "file_mailbox_item" }} }}) {{ lifecycle_state }} }}"#
-    )).await;
-    assert!(!tool_calls.has_errors(), "{:?}", tool_calls.errors);
+    assert_eq!(item.request_id.as_deref(), Some(request_id));
+    assert!(item.cause_doc_id.is_none());
+    let query = format!(
+        r#"{{AgentToolCall(filter: {{request_id: {{_eq: "{}"}}, tool_name: {{_eq: "file_mailbox_item"}}}}) {{lifecycle_state}}}}"#,
+        gents::store::graphql::escape_graphql_string(request_id)
+    );
+    let tool_calls = turn.agent_access.execute(&query).await.unwrap();
     assert_eq!(
-        tool_calls.data.as_ref().unwrap()["AgentToolCall"]
+        tool_calls["data"]["AgentToolCall"]
             .as_array()
             .unwrap()
             .len(),
         1
     );
+    runtime.shutdown().await;
 }

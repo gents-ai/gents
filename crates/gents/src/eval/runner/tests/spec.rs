@@ -16,6 +16,9 @@ fn fixtures_merge_the_case_after_the_definition_and_read_assets_from_the_pack() 
         documents: vec![EvalFixtureDocument {
             collection: "A".into(),
             document: json!({"id": 1}),
+            session_readers: Vec::new(),
+            session_agent_owned: false,
+            expired_client_request: false,
         }],
         files: vec![EvalFixtureFile {
             path: "inventory/edge-07.json".into(),
@@ -154,6 +157,9 @@ fn a_stage_captures_what_it_declares_and_otherwise_what_the_run_requested() {
         Some(FixtureDocument {
             collection: "Event".into(),
             document: json!({"kind": "signup"}),
+            session_readers: Vec::new(),
+            session_agent_owned: false,
+            expired_client_request: false,
         })
     );
 }

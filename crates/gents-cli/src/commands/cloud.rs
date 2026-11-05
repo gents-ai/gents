@@ -93,12 +93,8 @@ pub(crate) async fn run_cloud_login(
     eprintln!("Workspace {} is ready.", session.workspace_id);
 
     let credential = credential_from_session(node_did, provider, &session, Utc::now());
-    let mutation =
-        gents::inference::auth::credential::oauth_credential_upsert_mutation(&credential);
-    let response = access
-        .write("cli.cloud_login.credential", &mutation)
-        .await?;
-    let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
+    let doc_id =
+        gents::inference::auth::credential::upsert_oauth_credential_on(access, &credential).await?;
 
     Ok(CloudLoginOutcome {
         doc_id,

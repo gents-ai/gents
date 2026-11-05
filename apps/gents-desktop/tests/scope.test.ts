@@ -15,10 +15,10 @@ import {
 import { workingNode } from "@/lib/nodes";
 import { fleetFor } from "./shell-fixture";
 
-const session = (id: string, nodeDid: string, agentId: string, updatedAt: string) =>
-  ({ sessionId: id, nodeDid, agentId, updatedAt }) as unknown as SessionSummary;
-const item = (id: string, nodeDid: string, targetAgentId: string, status = "open") =>
-  ({ itemId: id, nodeDid, targetAgentId, status }) as unknown as MailboxItemView;
+const session = (id: string, nodeDid: string, agentDid: string, updatedAt: string) =>
+  ({ sessionId: id, nodeDid, agentDid, updatedAt }) as unknown as SessionSummary;
+const item = (id: string, nodeDid: string, targetAgentDid: string, status = "open") =>
+  ({ itemId: id, nodeDid, targetAgentDid, status }) as unknown as MailboxItemView;
 const node = (
   nodeDid: string,
   source: string,

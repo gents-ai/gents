@@ -17,8 +17,7 @@ import { healthy, SUBSCRIPTION } from "./inferenceKinds";
 import { backendAccount } from "./ProviderAccounts";
 import { isPool, poolAccounts } from "./backendRotation";
 
-/** How the provider is paid for, as the card says it, and whether that
-    needs the person: a subscription's account, or an API key. */
+/** How the provider is paid for and whether that needs the person. */
 function credentialOf(
   backend: InferenceBackendView,
   accounts: readonly ProviderAccountView[],
@@ -48,6 +47,8 @@ function credentialOf(
           problem: "Its account is disabled",
         };
   }
+  if (backend.authKind === "credential")
+    return { text: "Stored credential", tone: "good", problem: null };
   if (backend.apiKeyConfigured)
     return { text: "Stored key", tone: "good", problem: null };
   if (backend.apiKeyEnvVar)

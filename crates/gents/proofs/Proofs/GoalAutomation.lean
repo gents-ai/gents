@@ -145,16 +145,16 @@ def taskFireIdentity (nodeDid taskId fireKey : String) : TaskFireIdentity :=
 be removed without making an already-published request undiscoverable. -/
 structure TaskGoalRequestBinding where
   nodeDid : String
-  agentId : String
+  agentDid : String
   sessionId : String
   requestId : String
   retryKey : String
   deriving DecidableEq, Repr
 
-def expectedTaskGoalRequestBinding (nodeDid agentId taskId fireKey : String) :
+def expectedTaskGoalRequestBinding (nodeDid agentDid taskId fireKey : String) :
     TaskGoalRequestBinding :=
   let identity := taskFireIdentity nodeDid taskId fireKey
-  { nodeDid, agentId
+  { nodeDid, agentDid
   , sessionId := identity.sessionId
   , requestId := identity.requestId
   , retryKey := identity.retryKey }
@@ -284,8 +284,7 @@ inductive SubmissionAction where
 
 def submissionStep (state : SubmissionState) : SubmissionAction → SubmissionState
   | .stageGoal => { state with stagedGoal := true }
-  | .stageRequest =>
-      if state.stagedGoal ∨ state.durableGoal then { state with stagedRequest := true } else state
+  | .stageRequest => { state with stagedRequest := true }
   | .commit =>
       if state.stagedGoal ∧ state.stagedRequest then
         { durableGoal := true, runnableRequest := true,
@@ -307,6 +306,13 @@ theorem failure_between_writes_rolls_back (state : SubmissionState) :
     let staged := submissionStep (submissionStep state .stageGoal) .stageRequest
     (submissionStep staged .crash).durableGoal = state.durableGoal ∧
       (submissionStep staged .crash).runnableRequest = state.runnableRequest := by
+  simp [submissionStep]
+
+/-- The request can be staged first to provide the physical opening identity
+for a session before its Goal is staged. It is not runnable until both commit. -/
+theorem request_first_stays_unpublished (state : SubmissionState) :
+    (submissionStep state .stageRequest).runnableRequest = state.runnableRequest ∧
+    (submissionStep state .stageRequest).durableGoal = state.durableGoal := by
   simp [submissionStep]
 
 inductive ContinuationPhase where

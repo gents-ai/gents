@@ -15,6 +15,106 @@ use super::super::operator_resume::support::*;
 #[derive(Deserialize)]
 struct PublicationContracts {
     goal_claimed_publication_cases: Vec<PublicationCase>,
+    goal_claimed_identity_cases: Vec<IdentityCase>,
+}
+
+#[derive(Deserialize)]
+struct IdentityCase {
+    selected: String,
+    signer: String,
+    actor: String,
+    parent: String,
+    allowed: bool,
+    candidate_allowed: bool,
+}
+
+#[tokio::test]
+async fn generated_claimed_identity_cases_drive_real_transactions() {
+    let contracts: PublicationContracts = gents_lean_contract::load_contract_snapshot().unwrap();
+    let before = &contracts
+        .goal_claimed_publication_cases
+        .iter()
+        .find(|case| case.name == "claimed_active_publishes_without_reclaim")
+        .unwrap()
+        .before;
+    for case in &contracts.goal_claimed_identity_cases {
+        let fixture = Fixture::new(before).await;
+        let agent = fixture.parent.agent_did.as_str();
+        let node = fixture.identity.did();
+        let resolve = |name: &str| match name {
+            "agent" => agent,
+            "node" => node,
+            _ => panic!("unknown modeled identity"),
+        };
+        assert_eq!(resolve(&case.selected), agent);
+        let signer: &dyn NodeIdentity = if case.signer == "agent" {
+            fixture.agent.as_ref()
+        } else {
+            fixture.identity.as_ref()
+        };
+        let observed = crate::store::config_client::ConfigAccess::transact_local_readonly(
+            &fixture.node,
+            Some(identity::Did::new(agent).unwrap()),
+            "test.claimed_identity_observed_goal",
+            |txn| {
+                Box::pin(load_canonical_goal_in_txn(
+                    txn,
+                    fixture.identity.did(),
+                    SESSION,
+                ))
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let actor = identity::Did::new(resolve(&case.actor)).unwrap();
+        let txn = if case.actor == "agent" {
+            ConfigApplyTxn::begin_local_with_signer(
+                &fixture.node,
+                actor,
+                fixture.agent.managed_agent_signer().unwrap(),
+            )
+            .await
+            .unwrap()
+        } else {
+            ConfigApplyTxn::begin_local(&fixture.node, Some(actor))
+                .await
+                .unwrap()
+        };
+        assert_eq!(
+            crate::triggers::engine::goal_source::goal_candidate_in_scope(
+                resolve(&case.actor),
+                resolve(&case.selected),
+                resolve(&case.parent)
+            ),
+            case.candidate_allowed
+        );
+        if resolve(&case.parent) != fixture.parent.agent_did {
+            txn.discard().await.unwrap();
+            fixture.node.shutdown().await.expect("node shutdown");
+            continue;
+        }
+        let result = stage_claimed_continuation(
+            &txn,
+            signer,
+            &observed,
+            PARENT,
+            "Original signed continuation",
+            false,
+            &std::sync::Mutex::new(None),
+        )
+        .await;
+        assert_eq!(
+            result.is_ok(),
+            case.allowed,
+            "modeled identity case: signer={} actor={} parent={}",
+            case.signer,
+            case.actor,
+            case.parent
+        );
+        txn.discard().await.unwrap();
+        fixture.node.shutdown().await.expect("node shutdown");
+    }
 }
 
 #[derive(Deserialize)]
@@ -42,11 +142,12 @@ async fn run_generated_running_wait() {
     let fixture = Fixture::new_with_parent_state(&case.before, false).await;
     let mut request = crate::RequestLifecycle::new_with_node_did(
         fixture.node.clone(),
-        "contract-behavior",
+        &fixture.parent.agent_did,
         fixture.identity.did(),
         fixture.parent.clone(),
         60,
     );
+    request.bind_managed_agent(fixture.agent.as_ref()).unwrap();
     assert_eq!(request.claim().await.unwrap(), ClaimOutcome::Claimed);
     let mut spawn = publish_accepted_on_claimed_request(
         fixture.node.clone(),
@@ -114,12 +215,10 @@ async fn run_generated_running_wait() {
         case.before,
         "running wait prestate"
     );
-    let observed = load_canonical_goal(&fixture.node, fixture.identity.did(), SESSION)
-        .await
-        .unwrap()
-        .unwrap();
-    let result = publish_claimed_continuation(
+    let observed = fixture.current_goal().await;
+    let result = publish_claimed_continuation_with_identity(
         &fixture.node,
+        fixture.agent.as_ref(),
         &observed,
         PARENT,
         "Original signed continuation",
@@ -130,8 +229,9 @@ async fn run_generated_running_wait() {
     assert!(result.is_none(), "generated intentional wait must defer");
     assert_eq!(fixture.observe().await, case.expected);
     background.complete("finished").await.unwrap();
-    assert!(publish_claimed_continuation(
+    assert!(publish_claimed_continuation_with_identity(
         &fixture.node,
+        fixture.agent.as_ref(),
         &observed,
         PARENT,
         "Original signed continuation",
@@ -145,12 +245,14 @@ async fn run_generated_running_wait() {
         crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
             &fixture.node,
             fixture.identity.did(),
+            &[fixture.agent.clone()],
         )
         .await
         .unwrap();
     assert_eq!(report.side_effects_converged, 1);
-    assert!(publish_claimed_continuation(
+    assert!(publish_claimed_continuation_with_identity(
         &fixture.node,
+        fixture.agent.as_ref(),
         &observed,
         PARENT,
         "Original signed continuation",
@@ -159,10 +261,7 @@ async fn run_generated_running_wait() {
     .await
     .unwrap()
     .is_none());
-    let after = load_canonical_goal(&fixture.node, fixture.identity.did(), SESSION)
-        .await
-        .unwrap()
-        .unwrap();
+    let after = fixture.current_goal().await;
     assert_eq!(
         (
             after.continuation_sequence(),
@@ -174,10 +273,10 @@ async fn run_generated_running_wait() {
         ),
         "the old-parent claim publishes nothing once the wake is the latest request"
     );
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("node shutdown");
 }
 
-async fn discharge_completion_obligation(node: &crate::defra_node::EmbeddedNode, doc_id: &str) {
+async fn discharge_completion_obligation(node: &crate::defra_node::Node, doc_id: &str) {
     let response = node
         .execute(&format!(
             r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ status: "completed" }}) {{ _docID }} }}"#,
@@ -232,7 +331,7 @@ async fn run_generated_wait_observations() {
         .await;
         if case.name == "unrelated_wait_cannot_suppress" {
             let older = crate::request::watcher::AgentRequest::try_from(
-                request_rows(&fixture.node)
+                request_rows(&fixture.agent_access())
                     .await
                     .into_iter()
                     .find(|row| row.request_id == "older-wait-parent")
@@ -241,11 +340,14 @@ async fn run_generated_wait_observations() {
             .unwrap();
             let mut older_request = crate::RequestLifecycle::new_with_node_did(
                 fixture.node.clone(),
-                "contract-behavior",
+                &fixture.parent.agent_did,
                 fixture.identity.did(),
                 older,
                 60,
             );
+            older_request
+                .bind_managed_agent(fixture.agent.as_ref())
+                .unwrap();
             assert_eq!(older_request.claim().await.unwrap(), ClaimOutcome::Claimed);
             let unrelated_handle = "unrelated-background-handle";
             let mut unrelated = publish_accepted_on_claimed_request(
@@ -287,11 +389,12 @@ async fn run_generated_wait_observations() {
         }
         let mut request = crate::RequestLifecycle::new_with_node_did(
             fixture.node.clone(),
-            "contract-behavior",
+            &fixture.parent.agent_did,
             fixture.identity.did(),
             fixture.parent.clone(),
             60,
         );
+        request.bind_managed_agent(fixture.agent.as_ref()).unwrap();
         assert_eq!(
             request.claim().await.unwrap(),
             ClaimOutcome::Claimed,
@@ -555,44 +658,42 @@ async fn run_generated_wait_observations() {
         );
         if case.name == "unreadable_target_fails_closed" {
             let target_doc = target_doc.as_deref().unwrap();
-            execute(&fixture.node, &format!(
+            execute(&fixture.agent_access(), &format!(
                 r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "invalid-state" }}) {{ _docID }} }}"#,
                 escape_graphql_string(target_doc),
             )).await;
         }
         if case.name == "malformed_spawn_origin_fails_closed" {
             let target_doc = target_doc.as_deref().unwrap();
-            execute(&fixture.node, &format!(
+            execute(&fixture.agent_access(), &format!(
                 r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ tool_call_key: "wrong-key" }}) {{ _docID }} }}"#,
                 escape_graphql_string(target_doc),
             )).await;
         }
         if case.name == "foreign_session_target_cannot_suppress" {
             let target_doc = target_doc.as_deref().unwrap();
-            execute(&fixture.node, &format!(
+            execute(&fixture.agent_access(), &format!(
                 r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ session_id: "foreign-session" }}) {{ _docID }} }}"#,
                 escape_graphql_string(target_doc),
             )).await;
         }
         if case.name == "lost_waited_tool_recovers" {
-            execute(&fixture.node, &format!(
+            execute(&fixture.agent_access(), &format!(
                 r#"mutation {{ delete_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
                 escape_graphql_string(target_doc.as_deref().unwrap()),
             )).await;
         }
         if let Some(wait_doc) = renamed_wait_doc {
-            execute(&fixture.node, &format!(
+            execute(&fixture.agent_access(), &format!(
                 r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ tool_name: "bash" }}) {{ _docID }} }}"#,
                 escape_graphql_string(&wait_doc),
             )).await;
         }
-        let observed = load_canonical_goal(&fixture.node, fixture.identity.did(), SESSION)
-            .await
-            .unwrap()
-            .unwrap();
+        let observed = fixture.current_goal().await;
         let wrapup = observed.parsed_status() == Some(GoalStatus::BudgetLimited);
-        let publication = publish_claimed_continuation(
+        let publication = publish_claimed_continuation_with_identity(
             &fixture.node,
+            fixture.agent.as_ref(),
             &observed,
             PARENT,
             "Original signed continuation",
@@ -625,8 +726,9 @@ async fn run_generated_wait_observations() {
                     case.name
                 );
                 assert_eq!(fixture.observe().await, case.expected, "{}", case.name);
-                let retried = publish_claimed_continuation(
+                let retried = publish_claimed_continuation_with_identity(
                     &fixture.node,
+                    fixture.agent.as_ref(),
                     &observed,
                     PARENT,
                     "Original signed continuation",
@@ -642,10 +744,7 @@ async fn run_generated_wait_observations() {
             }
             "invalid_evidence" => {
                 assert!(result.unwrap().is_none(), "{}", case.name);
-                let stopped = load_canonical_goal(&fixture.node, fixture.identity.did(), SESSION)
-                    .await
-                    .unwrap()
-                    .unwrap();
+                let stopped = fixture.current_goal().await;
                 assert!(
                     stopped
                         .last_failure
@@ -657,8 +756,9 @@ async fn run_generated_wait_observations() {
                 );
                 if stopped.parsed_status() == Some(GoalStatus::BudgetLimited) {
                     let rescan = |wrapup| {
-                        publish_claimed_continuation(
+                        publish_claimed_continuation_with_identity(
                             &fixture.node,
+                            fixture.agent.as_ref(),
                             &observed,
                             PARENT,
                             "Original signed continuation",
@@ -674,18 +774,14 @@ async fn run_generated_wait_observations() {
                         rescan_expected,
                         "{ABANDONED_RESCAN}"
                     );
-                    let rescanned =
-                        load_canonical_goal(&fixture.node, fixture.identity.did(), SESSION)
-                            .await
-                            .unwrap()
-                            .unwrap();
+                    let rescanned = fixture.current_goal().await;
                     assert_eq!(
                         (&rescanned.updated_at, &rescanned.last_failure),
                         (&stopped.updated_at, &stopped.last_failure),
                         "{ABANDONED_RESCAN}: a rescan must not write the Goal again"
                     );
                     for wait_doc in &wait_docs {
-                        execute(&fixture.node, &format!(
+                        execute(&fixture.agent_access(), &format!(
                             r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "cancelled" }}) {{ _docID }} }}"#,
                             escape_graphql_string(wait_doc),
                         )).await;
@@ -705,7 +801,7 @@ async fn run_generated_wait_observations() {
             outcome => panic!("unmapped generated wait outcome {outcome}"),
         }
         assert_eq!(fixture.observe().await, case.expected, "{}", case.name);
-        fixture.node.shutdown().await;
+        fixture.node.shutdown().await.expect("node shutdown");
     }
     assert_eq!(
         abandoned_follow_ups, 1,
@@ -748,10 +844,7 @@ async fn run_historical_publication_cases() {
             "{} initial",
             case.name
         );
-        let mut observed = load_canonical_goal(&fixture.node, fixture.identity.did(), SESSION)
-            .await
-            .unwrap()
-            .unwrap();
+        let mut observed = fixture.current_goal().await;
         observed.status = case.request["expected_status"].as_str().unwrap().into();
         observed.continuation_sequence = case.request["expected_sequence"].as_i64();
         observed.last_continued_from_request_id =
@@ -761,12 +854,17 @@ async fn run_historical_publication_cases() {
                 value => panic!("unmapped observed watermark {value:?}"),
             };
         let wrapup = observed.parsed_status() == Some(GoalStatus::BudgetLimited);
-        let txn = ConfigApplyTxn::begin_local(&fixture.node, None)
-            .await
-            .unwrap();
+        let txn = ConfigApplyTxn::begin_local_with_signer(
+            &fixture.node,
+            identity::Did::new(&fixture.parent.agent_did).unwrap(),
+            fixture.agent.managed_agent_signer().unwrap(),
+        )
+        .await
+        .unwrap();
+        let agent_identity = fixture.agent.as_ref();
         let result = stage_claimed_continuation(
             &txn,
-            fixture.identity.as_ref(),
+            agent_identity,
             &observed,
             PARENT,
             "Original signed continuation",
@@ -850,7 +948,7 @@ async fn run_historical_publication_cases() {
             "{} durable result",
             case.name
         );
-        fixture.node.shutdown().await;
+        fixture.node.shutdown().await.expect("node shutdown");
     }
     assert_eq!(
         seen.len(),
@@ -865,15 +963,17 @@ async fn queued_claimed_publication_observes_pause_before_creating_child() {
         "wrapup_completed":false,"sequence":1,"last_continued_from":10,"latest_request":10,
         "children":[],"tokens_used":37,"token_budget":1000});
     let fixture = Fixture::new(&before).await;
-    let observed = load_canonical_goal(&fixture.node, fixture.identity.did(), SESSION)
-        .await
-        .unwrap()
-        .unwrap();
-    let txn = ConfigApplyTxn::begin_local(&fixture.node, None)
-        .await
-        .unwrap();
-    let publication = publish_claimed_continuation(
+    let observed = fixture.current_goal().await;
+    let txn = ConfigApplyTxn::begin_local_with_signer(
         &fixture.node,
+        identity::Did::new(fixture.agent.did()).unwrap(),
+        fixture.agent.managed_agent_signer().unwrap(),
+    )
+    .await
+    .unwrap();
+    let publication = publish_claimed_continuation_with_identity(
+        &fixture.node,
+        fixture.agent.as_ref(),
         &observed,
         PARENT,
         "Original signed continuation",
@@ -899,7 +999,7 @@ async fn queued_claimed_publication_observes_pause_before_creating_child() {
     let mut expected = before;
     expected["status"] = json!("paused");
     assert_eq!(fixture.observe().await, expected);
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -908,12 +1008,10 @@ async fn claimed_publication_replay_keeps_its_hop_across_a_same_second_write() {
         "wrapup_completed":false,"sequence":1,"last_continued_from":10,"latest_request":10,
         "children":[],"tokens_used":37,"token_budget":1000});
     let fixture = Fixture::new(&before).await;
-    let observed = load_canonical_goal(&fixture.node, fixture.identity.did(), SESSION)
-        .await
-        .unwrap()
-        .unwrap();
-    let first = publish_claimed_continuation(
+    let observed = fixture.current_goal().await;
+    let first = publish_claimed_continuation_with_identity(
         &fixture.node,
+        fixture.agent.as_ref(),
         &observed,
         PARENT,
         "Original signed continuation",
@@ -923,31 +1021,33 @@ async fn claimed_publication_replay_keeps_its_hop_across_a_same_second_write() {
     .unwrap()
     .expect("first publication creates the continuation");
     assert!(first.created);
-    let child = request_rows(&fixture.node)
+    let child = request_rows(&fixture.agent_access())
         .await
         .into_iter()
         .find(|row| row.request_id == first.request_id)
         .unwrap();
     execute(
-        &fixture.node,
+        &fixture.agent_access(),
         &format!(
             r#"mutation {{ create_AgentRequest(input: {{
             request_id: "background-completion-same-second", purpose: "normal",
-            node_did: "{}", requester_did: "{}", agent_id: "contract-behavior",
+            node_did: "{}", requester_did: "{}", agent_did: "{}",
             session_id: "{SESSION}", content: "later work", execution_origin: "scheduled",
             lifecycle_state: "completed", failure_reason: "", created_at: "{}",
             retry_count: 0, max_retries: 3, retry_root_request: "background-completion-same-second",
             request_hop: {}
         }}) {{ _docID }} }}"#,
             escape_graphql_string(fixture.identity.did()),
-            escape_graphql_string(fixture.identity.did()),
+            escape_graphql_string(fixture.user.did()),
+            escape_graphql_string(fixture.agent.did()),
             escape_graphql_string(child.created_at.as_deref().unwrap()),
             child.request_hop.unwrap_or(0) + 5,
         ),
     )
     .await;
-    let replay = publish_claimed_continuation(
+    let replay = publish_claimed_continuation_with_identity(
         &fixture.node,
+        fixture.agent.as_ref(),
         &observed,
         PARENT,
         "Original signed continuation",
@@ -958,5 +1058,5 @@ async fn claimed_publication_replay_keeps_its_hop_across_a_same_second_write() {
     .expect("replay recovers the published continuation");
     assert!(!replay.created);
     assert_eq!(replay.request_id, first.request_id);
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("node shutdown");
 }

@@ -41,7 +41,7 @@ pub(crate) struct FleetExpiredCounts {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct FleetAgentSlotUsage {
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
     pub(crate) node_did: String,
     pub(crate) backend_id: String,
     pub(crate) configured: bool,
@@ -76,7 +76,7 @@ struct FleetSlotQueryEnvelope {
     agents: Vec<AgentRow>,
     #[serde(rename = "InferenceProfile", default)]
     profiles: Vec<InferenceProfileRow>,
-    #[serde(rename = "InferenceBackend", default)]
+    #[serde(rename = "InferenceBackendMetadata", default)]
     backends: Vec<BackendRow>,
     #[serde(rename = "InferenceCall", default)]
     calls: Vec<InferenceCallRow>,
@@ -89,7 +89,7 @@ struct FleetSlotQueryEnvelope {
 #[derive(Debug, Clone, Deserialize)]
 struct AgentRow {
     #[serde(default)]
-    agent_id: String,
+    agent_did: String,
     #[serde(default)]
     node_did: String,
     #[serde(default)]
@@ -99,8 +99,8 @@ struct AgentRow {
 }
 
 impl AgentRow {
-    fn normalized_agent_id(&self) -> String {
-        clean_string(&self.agent_id)
+    fn normalized_agent_did(&self) -> String {
+        clean_string(&self.agent_did)
     }
 
     fn is_enabled(&self) -> bool {
@@ -179,7 +179,7 @@ struct InferenceCallRow {
     #[serde(default)]
     backend_id: Option<String>,
     #[serde(default)]
-    agent_id: Option<String>,
+    agent_did: Option<String>,
     #[serde(default)]
     node_did: Option<String>,
     #[serde(default)]
@@ -203,20 +203,67 @@ pub(crate) async fn load_fleet_slot_snapshot(
 }
 
 fn decode_fleet_slot_query_response(response: Value) -> Result<FleetSlotQueryEnvelope> {
-    let data = response
+    let mut data = response
         .get("data")
         .filter(|data| data.is_object())
         .cloned()
         .with_context(|| {
             format!("fleet slot snapshot query response missing object data: {response}")
         })?;
+    attach_backend_observations(&mut data);
     serde_json::from_value(data).context("decoding fleet slot snapshot query response")
+}
+
+/// Only a unique observation for the same Node and backend supplies status.
+pub(super) fn attach_backend_observations(data: &mut Value) {
+    let observations = data
+        .get("InferenceBackendObservation")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let Some(backends) = data
+        .get_mut("InferenceBackendMetadata")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for backend in backends {
+        if let Some(object) = backend.as_object_mut() {
+            object.insert("probe_status".to_owned(), Value::Null);
+            object.insert("last_probe".to_owned(), Value::Null);
+        }
+        let (Some(node), Some(id), Some(doc)) = (
+            backend["node_did"].as_str(),
+            backend["backend_id"].as_str(),
+            backend["_docID"].as_str(),
+        ) else {
+            continue;
+        };
+        let matches = observations
+            .iter()
+            .filter(|row| {
+                row["node_did"].as_str() == Some(node)
+                    && row["backend_id"].as_str() == Some(id)
+                    && row["metadata_doc_id"].as_str() == Some(doc)
+            })
+            .collect::<Vec<_>>();
+        if let Some(object) = backend.as_object_mut() {
+            let [observation] = matches.as_slice() else {
+                continue;
+            };
+            for field in ["probe_status", "last_probe"] {
+                if let Some(value) = observation.get(field) {
+                    object.insert(field.to_owned(), value.clone());
+                }
+            }
+        }
+    }
 }
 
 fn fleet_slot_snapshot_query() -> &'static str {
     r#"{
-        Agent(order: { agent_id: ASC }) {
-            agent_id
+        Agent(order: { agent_did: ASC }) {
+            agent_did
             node_did
             inference_profile_id
             enabled
@@ -226,17 +273,18 @@ fn fleet_slot_snapshot_query() -> &'static str {
             node_did
             backend_id
         }
-        InferenceBackend(order: { backend_id: ASC }) {
+        InferenceBackendMetadata(order: { backend_id: ASC }) {
+            _docID
             backend_id
             node_did
             enabled
             max_concurrent
             max_queue_depth
-            probe_status
         }
+        InferenceBackendObservation { node_did backend_id metadata_doc_id probe_status }
         InferenceCall(filter: { call_state: { _in: ["queued", "running"] } }) {
             backend_id
-            agent_id
+            agent_did
             node_did
             call_state
         }
@@ -245,7 +293,7 @@ fn fleet_slot_snapshot_query() -> &'static str {
         }) {
             request_id
             node_did
-            agent_id
+            agent_did
             deadline
         }
         NodeReadiness(order: { node_did: ASC }) {
@@ -293,8 +341,8 @@ fn build_fleet_slot_snapshot(
         .into_iter()
         .filter_map(|agent_config| {
             let node_did = clean_string(&agent_config.node_did);
-            let agent_id = agent_config.normalized_agent_id();
-            if node_did.is_empty() || agent_id.is_empty() {
+            let agent_did = agent_config.normalized_agent_did();
+            if node_did.is_empty() || agent_did.is_empty() {
                 return None;
             }
             let profile_id = clean_optional_string(agent_config.inference_profile_id.as_deref());
@@ -303,7 +351,7 @@ fn build_fleet_slot_snapshot(
                 .cloned()
                 .unwrap_or_default();
             Some((
-                (node_did, agent_id),
+                (node_did, agent_did),
                 ResolvedAgentRow {
                     agent_config,
                     backend_id,
@@ -327,7 +375,7 @@ fn build_fleet_slot_snapshot(
 
     for call in calls {
         let backend_id = clean_optional_string(call.backend_id.as_deref());
-        let agent_id = clean_optional_string(call.agent_id.as_deref());
+        let agent_did = clean_optional_string(call.agent_did.as_deref());
         let node_did = clean_optional_string(call.node_did.as_deref());
 
         if !node_did.is_empty() && !backend_id.is_empty() {
@@ -336,8 +384,8 @@ fn build_fleet_slot_snapshot(
             let counts = backend_counts.entry(backend_key).or_default();
             apply_call_state(&call.call_state, counts);
         }
-        if !node_did.is_empty() && !agent_id.is_empty() {
-            let agent_key = (node_did, agent_id);
+        if !node_did.is_empty() && !agent_did.is_empty() {
+            let agent_key = (node_did, agent_did);
             let counts = agent_counts.entry(agent_key.clone()).or_default();
             apply_call_state(&call.call_state, counts);
             active_agent_backends.entry(agent_key).or_insert(backend_id);
@@ -349,10 +397,10 @@ fn build_fleet_slot_snapshot(
         if deadline_is_expired(generated_at, request.deadline.as_deref()) {
             expired.processing_requests += 1;
             let node_did = clean_optional_string(request.node_did.as_deref());
-            let agent_id = clean_optional_string(request.agent_id.as_deref());
-            if !node_did.is_empty() && !agent_id.is_empty() {
+            let agent_did = clean_optional_string(request.agent_did.as_deref());
+            if !node_did.is_empty() && !agent_did.is_empty() {
                 agent_counts
-                    .entry((node_did, agent_id))
+                    .entry((node_did, agent_did))
                     .or_default()
                     .expired_processing += 1;
             }
@@ -399,11 +447,11 @@ fn build_fleet_slot_snapshot(
         });
     }
 
-    let mut agent_ids = agents.keys().cloned().collect::<BTreeSet<_>>();
-    agent_ids.extend(active_agent_backends.keys().cloned());
+    let mut agent_dids = agents.keys().cloned().collect::<BTreeSet<_>>();
+    agent_dids.extend(active_agent_backends.keys().cloned());
     let mut agent_snapshots = Vec::new();
-    for (node_did, agent_id) in agent_ids {
-        let agent_key = (node_did.clone(), agent_id.clone());
+    for (node_did, agent_did) in agent_dids {
+        let agent_key = (node_did.clone(), agent_did.clone());
         let configured = agents.get(&agent_key);
         let active_backend_id = active_agent_backends.get(&agent_key);
         let backend_id = configured
@@ -426,7 +474,7 @@ fn build_fleet_slot_snapshot(
             .map(|counts| counts.assigned)
             .unwrap_or_default();
         agent_snapshots.push(FleetAgentSlotUsage {
-            agent_id: agent_id.clone(),
+            agent_did: agent_did.clone(),
             node_did,
             backend_id,
             configured: configured.is_some(),
@@ -479,7 +527,7 @@ fn backend_admission_from_readiness(
     _observed_at: DateTime<Utc>,
 ) -> BTreeMap<(String, String), bool> {
     let mut accepting = BTreeMap::<(String, String), bool>::new();
-    for ((node_did, agent_id), agent_config) in agents {
+    for ((node_did, agent_did), agent_config) in agents {
         let backend_id = agent_config.normalized_backend_id();
         if backend_id.is_empty() {
             continue;
@@ -490,7 +538,7 @@ fn backend_admission_from_readiness(
             &projected,
             ProjectedNodeReadinessSummary::Observed(summary)
                 if summary.snapshot.agents.iter().any(|entry| {
-                    &entry.agent_id == agent_id
+                    &entry.agent_did == agent_did
                         && entry.state == AgentReadinessState::Ready
                 })
         );
@@ -521,6 +569,42 @@ fn clean_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observation_status_is_scoped_to_one_physical_backend_owner() {
+        let mut data = serde_json::json!({
+            "InferenceBackendMetadata": [
+                {"_docID":"a1", "node_did":"a", "backend_id":"shared"},
+                {"_docID":"b1", "node_did":"b", "backend_id":"shared"}],
+            "InferenceBackendObservation": [
+                {"node_did":"a", "backend_id":"shared", "metadata_doc_id":"a1", "probe_status":"healthy"},
+                {"node_did":"b", "backend_id":"shared", "metadata_doc_id":"b1", "probe_status":"unhealthy"}]
+        });
+        attach_backend_observations(&mut data);
+        assert_eq!(
+            data["InferenceBackendMetadata"][0]["probe_status"],
+            "healthy"
+        );
+        assert_eq!(
+            data["InferenceBackendMetadata"][1]["probe_status"],
+            "unhealthy"
+        );
+        data["InferenceBackendMetadata"][0]["_docID"] = "a2".into();
+        attach_backend_observations(&mut data);
+        assert!(data["InferenceBackendMetadata"][0]["probe_status"].is_null());
+        data["InferenceBackendObservation"]
+            .as_array_mut()
+            .unwrap()
+            .push(
+                serde_json::json!({"node_did":"a", "backend_id":"shared", "metadata_doc_id":"a1", "probe_status":"other"}),
+            );
+        attach_backend_observations(&mut data);
+        assert!(data["InferenceBackendMetadata"][0]["probe_status"].is_null());
+        assert_eq!(
+            data["InferenceBackendMetadata"][1]["probe_status"],
+            "unhealthy"
+        );
+    }
     use gents_protocol::row::{
         AgentReadinessEntry, NodeReadinessProcessState, NodeReadinessSnapshot,
         NODE_READINESS_FORMAT_VERSION,
@@ -533,8 +617,8 @@ mod tests {
 
     fn readiness_row(
         node_did: &str,
-        default_agent_id: &str,
-        ready_agent_ids: &[&str],
+        default_agent_did: &str,
+        ready_agent_dids: &[&str],
         updated_at: &str,
     ) -> NodeReadinessRow {
         NodeReadinessRow {
@@ -544,11 +628,11 @@ mod tests {
                 process_state: NodeReadinessProcessState::Ready,
                 active_generation: 1,
                 router_generation: 1,
-                default_agent_id: default_agent_id.to_string(),
-                agents: ready_agent_ids
+                default_agent_did: default_agent_did.to_string(),
+                agents: ready_agent_dids
                     .iter()
-                    .map(|agent_id| AgentReadinessEntry {
-                        agent_id: agent_id.to_string(),
+                    .map(|agent_did| AgentReadinessEntry {
+                        agent_did: agent_did.to_string(),
                         state: AgentReadinessState::Ready,
                         reason: None,
                     })
@@ -574,13 +658,13 @@ mod tests {
     fn find_agent<'a>(
         snapshot: &'a FleetSlotSnapshot,
         node_did: &str,
-        agent_id: &str,
+        agent_did: &str,
     ) -> &'a FleetAgentSlotUsage {
         snapshot
             .agents
             .iter()
             .find(|agent_config| {
-                agent_config.node_did == node_did && agent_config.agent_id == agent_id
+                agent_config.node_did == node_did && agent_config.agent_did == agent_did
             })
             .unwrap()
     }
@@ -591,7 +675,7 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let agent_config = |node_did: &str| AgentRow {
-            agent_id: "shared-agent".to_string(),
+            agent_did: "shared-agent".to_string(),
             node_did: node_did.to_string(),
             inference_profile_id: Some("shared-profile".to_string()),
             enabled: Some(true),
@@ -611,7 +695,7 @@ mod tests {
         };
         let call = |node_did: &str, call_state: &str| InferenceCallRow {
             backend_id: Some("shared-backend".to_string()),
-            agent_id: Some("shared-agent".to_string()),
+            agent_did: Some("shared-agent".to_string()),
             node_did: Some(node_did.to_string()),
             call_state: call_state.to_string(),
         };
@@ -626,13 +710,13 @@ mod tests {
                 requests: vec![
                     AgentRequestRow {
                         node_did: Some("did:test:a".to_string()),
-                        agent_id: Some("shared-agent".to_string()),
+                        agent_did: Some("shared-agent".to_string()),
                         deadline: Some("2026-05-20T11:59:00Z".to_string()),
                         ..empty_request_row()
                     },
                     AgentRequestRow {
                         node_did: Some("did:test:b".to_string()),
-                        agent_id: Some("shared-agent".to_string()),
+                        agent_did: Some("shared-agent".to_string()),
                         deadline: Some("2026-05-20T12:01:00Z".to_string()),
                         ..empty_request_row()
                     },

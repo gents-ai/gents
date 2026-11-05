@@ -112,5 +112,5 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     assert_eq!(git(&fx.repo, &["rev-parse", "HEAD"]), before_head);
     assert_eq!(git(&fx.repo, &["write-tree"]), before_index);
     drop(access);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

@@ -60,7 +60,7 @@ async fn atomic_background_completion_coalesces_keyed_agent_wakeups() {
     let row = &rows[0];
     assert_eq!(row.doc_id, first.doc_id);
     assert_eq!(row.session_id, session_id);
-    assert_eq!(row.agent_id, TEST_AGENT_ID);
+    assert_eq!(row.agent_did, db.agent_did());
     assert_eq!(
         row.content,
         "Process pending agent completion notifications in this session."
@@ -119,8 +119,7 @@ async fn atomic_background_completion_ignores_append_row_with_same_source_and_ke
         background_completion_wake_version: None,
     };
     insert_raw_queue_request(
-        &db.node,
-        db.node_did(),
+        &db,
         "req-existing-append-same-key",
         session_id,
         &wake_queue_input(append_hints.clone()),
@@ -199,7 +198,7 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
     let duplicate = session_request_create_mutation(
         &parent,
         SessionRequestFields {
-            agent_id: TEST_AGENT_ID,
+            agent_did: db.agent_did(),
             content: "raw duplicate",
             execution_origin: ExecutionOrigin::Scheduled,
             input: wake_queue_input(hints.clone()),
@@ -221,6 +220,7 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
 
     let reconciled = reconcile_coalesced_pending_request(
         &db.node,
+        db.agent_did(),
         session_id,
         db.node_did(),
         QueueSource::BackgroundCompletion,

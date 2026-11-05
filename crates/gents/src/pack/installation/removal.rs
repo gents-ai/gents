@@ -28,7 +28,7 @@ where
             reference.plugin, agent, tools, reference.plugin, agent
         );
     }
-    Ok(())
+    Err(super::PackRemovalError::ReferenceInventoryUnavailable.into())
 }
 
 pub(crate) async fn ensure_replaced_plugins_match<R>(
@@ -66,7 +66,7 @@ where
 {
     let owner = escape_graphql_string(owner);
     let response = access.execute_read(&format!(r#"{{
-        Agent(filter: {{node_did: {{_eq: "{owner}"}}}}) {{agent_id node_did context_id inference_profile_id}}
+        Agent(filter: {{node_did: {{_eq: "{owner}"}}}}) {{agent_did creation_nonce node_did context_id inference_profile_id}}
         AgentContext(filter: {{node_did: {{_eq: "{owner}"}}}}) {{context_id node_did tools_id}}
         Tools(filter: {{node_did: {{_eq: "{owner}"}}}}) {{tools_id node_did integrations}}
     }}"#)).await?;
@@ -98,7 +98,7 @@ where
             continue;
         };
         let context = contexts.get(context_id).with_context(|| format!(
-            "cannot verify plugin removal: agent {:?} references missing context {context_id:?}", agent.agent_id
+            "cannot verify plugin removal: agent {:?} references missing context {context_id:?}", agent.agent_did
         ))?;
         let Some(tools_id) = context.tools_id.as_ref() else {
             continue;
@@ -113,7 +113,7 @@ where
             .unwrap_or_default()
         {
             references.push((
-                agent.agent_id.clone(),
+                agent.agent_did.clone(),
                 tools.tools_id.clone(),
                 reference.clone(),
             ));

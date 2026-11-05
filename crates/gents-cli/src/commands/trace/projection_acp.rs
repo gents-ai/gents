@@ -43,7 +43,7 @@ pub(super) struct ProjectionAcpBindingRow {
     #[serde(default)]
     node_did: Option<String>,
     #[serde(default)]
-    agent_id: Option<String>,
+    agent_did: Option<String>,
     #[serde(default)]
     projection_id: Option<String>,
     #[serde(default)]
@@ -117,7 +117,7 @@ pub(super) async fn discover_projection_acp_binding(
             ) {{
                 binding_id
                 node_did
-                agent_id
+                agent_did
                 projection_id
                 policy_id
                 staged_policy_id
@@ -193,8 +193,8 @@ pub(super) fn projection_binding_scope_mask(
         }
         scope_mask |= PROJECTION_ACP_BINDING_PROJECTION_SCOPE;
     }
-    if let Some(row_agent_id) = normalize_projection_binding_field(row.agent_id.as_deref()) {
-        if request.agent_id.as_deref() != Some(row_agent_id) {
+    if let Some(row_agent_did) = normalize_projection_binding_field(row.agent_did.as_deref()) {
+        if request.agent_did.as_deref() != Some(row_agent_did) {
             return None;
         }
         scope_mask |= PROJECTION_ACP_BINDING_BEHAVIOR_SCOPE;
@@ -546,13 +546,13 @@ pub(super) fn required_doc_id<'a>(
 #[derive(Debug, Default)]
 pub(super) struct ProjectionDocumentScope {
     pub(super) node_did: Option<String>,
-    pub(super) agent_id: Option<String>,
+    pub(super) agent_did: Option<String>,
     pub(super) session_id: Option<String>,
 }
 
 impl ProjectionDocumentScope {
     fn has_filters(&self) -> bool {
-        self.node_did.is_some() || self.agent_id.is_some() || self.session_id.is_some()
+        self.node_did.is_some() || self.agent_did.is_some() || self.session_id.is_some()
     }
 
     fn description(&self) -> String {
@@ -560,8 +560,8 @@ impl ProjectionDocumentScope {
         if let Some(node_did) = self.node_did.as_deref() {
             parts.push(format!("node_did={node_did}"));
         }
-        if let Some(agent_id) = self.agent_id.as_deref() {
-            parts.push(format!("agent_id={agent_id}"));
+        if let Some(agent_did) = self.agent_did.as_deref() {
+            parts.push(format!("agent_did={agent_did}"));
         }
         if let Some(session_id) = self.session_id.as_deref() {
             parts.push(format!("session_id={session_id}"));
@@ -604,10 +604,10 @@ pub(super) fn timeline_root_matches_scope(
             timeline.node_did.as_deref(),
         ],
     ) && scope_value_matches(
-        scope.agent_id.as_deref(),
+        scope.agent_did.as_deref(),
         [
-            timeline.request.agent_id.as_deref(),
-            timeline.agent_id.as_deref(),
+            timeline.request.agent_did.as_deref(),
+            timeline.agent_did.as_deref(),
         ],
     ) && scope_value_matches(
         scope.session_id.as_deref(),
@@ -638,7 +638,7 @@ pub(super) fn request_event_matches_scope(
     scope: &ProjectionDocumentScope,
 ) -> bool {
     scope_value_matches(scope.node_did.as_deref(), [request.node_did.as_deref()])
-        && scope_value_matches(scope.agent_id.as_deref(), [request.agent_id.as_deref()])
+        && scope_value_matches(scope.agent_did.as_deref(), [request.agent_did.as_deref()])
         && scope_value_matches(scope.session_id.as_deref(), [request.session_id.as_deref()])
 }
 
@@ -713,7 +713,7 @@ pub(super) fn scoped_request_id_allowed(
         .map(|request_id| allowed_request_ids.contains(request_id))
         .unwrap_or_else(|| {
             scope.node_did.is_none()
-                && scope.agent_id.is_none()
+                && scope.agent_did.is_none()
                 && scope_value_matches(scope.session_id.as_deref(), [session_id])
         })
 }
@@ -801,7 +801,7 @@ mod tests {
         let request = TimelineRequestRow {
             request_id: "req-1".to_string(),
             node_did: Some("did:test:amy".to_string()),
-            agent_id: Some("amy:default".to_string()),
+            agent_did: Some("amy:default".to_string()),
             ..TimelineRequestRow::default()
         };
         let selected = select_projection_acp_binding(
@@ -860,7 +860,7 @@ mod tests {
         let request = TimelineRequestRow {
             request_id: "req-1".to_string(),
             node_did: Some("did:test:amy".to_string()),
-            agent_id: Some("amy:default".to_string()),
+            agent_did: Some("amy:default".to_string()),
             ..TimelineRequestRow::default()
         };
         let error = select_projection_acp_binding(
@@ -1066,7 +1066,7 @@ mod tests {
                     session_id: "session-acp".to_string(),
                     node_did: "did:test:agent".to_string(),
                     requester_did: None,
-                    agent_id: "general".to_string(),
+                    agent_did: "general".to_string(),
                     created_at: "2026-01-01T00:00:00Z".to_string(),
                     closed_at: None,
                     archived_at: None,
@@ -1242,13 +1242,13 @@ mod tests {
     fn projection_binding(
         binding_id: &str,
         node_did: Option<&str>,
-        agent_id: Option<&str>,
+        agent_did: Option<&str>,
         projection_id: Option<&str>,
     ) -> ProjectionAcpBindingRow {
         ProjectionAcpBindingRow {
             binding_id: binding_id.to_string(),
             node_did: node_did.map(ToOwned::to_owned),
-            agent_id: agent_id.map(ToOwned::to_owned),
+            agent_did: agent_did.map(ToOwned::to_owned),
             projection_id: projection_id.map(ToOwned::to_owned),
             policy_id: "projection-policy".to_string(),
             staged_policy_id: None,

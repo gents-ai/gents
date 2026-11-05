@@ -116,7 +116,7 @@ fn assert_attempts(case: &str, phase: &str, actual: &[HookAttempt], expected: &[
 
 struct RevokingExec<'a> {
     managed: ManagedTaskHookExec,
-    node: &'a Arc<defra_node::EmbeddedNode>,
+    node: &'a Arc<defra_node::Node>,
     request_doc_id: &'a str,
     revoked: &'a [String],
 }
@@ -189,6 +189,7 @@ async fn generated_task_hook_run_cases_drive_real_host_commands() {
                     lifecycle.request().doc_id.clone(),
                     crate::request::lifecycle::RequestExecutionLease::new(
                         lifecycle.execution_generation().unwrap().to_owned(),
+                        lifecycle.actor_did().unwrap(),
                     ),
                 ),
             node: &fixture.node,

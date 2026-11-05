@@ -291,7 +291,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             &|p| Ok(std::fs::read(subject.join(p))?),
             &|_| None,
         )?;
-        config.node.default_agent_id = Some(config.agents[0].agent_id.clone());
+        config.node.default_agent_did = Some(config.agents[0].agent_did.clone());
         config.agents[0].inference_profile_id =
             gents::default_inference_profile_id_for_agent(&target_ids.1);
         let mut profile = target.profile(&did);
@@ -387,7 +387,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             );
         }
         if case.expectation == "offline_diagnosis" {
-            remote.node.shutdown().await;
+            remote.node.shutdown().await.expect("node shutdown");
         }
         let before = rows(
             &local,
@@ -424,7 +424,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
         let behavior = ready_agent
             .agents()
             .iter()
-            .find(|b| b.agent_id == "engineer")
+            .find(|b| b.agent_did == "engineer")
             .ok_or_else(|| anyhow::anyhow!("ready runtime did not resolve the Engineer Agent"))?;
         let surface = behavior
             .tools
@@ -439,7 +439,9 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             &did,
             Some(local.node_identity.clone()),
         );
-        let tools = surface.build_tools(&tool_context).await?;
+        let tools = surface
+            .build_tools(&tool_context.for_agent(behavior))
+            .await?;
         let mut definitions = Vec::new();
         for tool in tools {
             definitions.push(tool.definition(String::new()).await);
@@ -619,8 +621,8 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             serde_json::to_vec_pretty(&reports)?,
         )?;
         runtime.shutdown().await;
-        local.node.shutdown().await;
-        remote.node.shutdown().await;
+        local.node.shutdown().await.expect("node shutdown");
+        remote.node.shutdown().await.expect("node shutdown");
     }
     Ok(())
 }

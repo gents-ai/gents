@@ -1,4 +1,4 @@
-use super::query_helpers::required_rows;
+use super::query_helpers::query_rows;
 use super::*;
 use crate::session::load_canonical_message;
 use crate::session::{
@@ -197,7 +197,7 @@ async fn load_message_header_ids(
             }}
         }}"#,
     );
-    required_rows(access, "AgentMessage", &query)
+    query_rows(access, "AgentMessage", &query)
         .await?
         .into_iter()
         .map(|row| {
@@ -344,7 +344,7 @@ async fn load_spawned_tool_output(
         OutputSource, PayloadRef, StreamPayload,
     };
     let query = crate::session::canonical_rows::request_output_segments_query(request_doc_id);
-    let values = required_rows(access, "AgentOutputSegment", &query).await?;
+    let values = query_rows(access, "AgentOutputSegment", &query).await?;
     let source = OutputSource::ToolCall {
         tool_call_doc_id: tool_doc_id.to_owned(),
     };
@@ -573,7 +573,7 @@ pub(super) async fn load_timeline_inference_calls_for_requests(
                 started_at
                 ended_at
                 backend_id
-                agent_id
+                agent_did
                 node_did
                 call_kind
                 priority

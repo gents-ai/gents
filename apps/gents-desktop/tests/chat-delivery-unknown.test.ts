@@ -13,7 +13,7 @@ beforeEach(() => vi.stubGlobal("localStorage", goalDeliveryStorage()));
 afterEach(() => vi.unstubAllGlobals());
 const unknownOutcome = {
   nodeDid: "agent",
-  agentId: "setup",
+  agentDid: "setup",
   sessionId: "session-1",
   requestId: "request-unknown",
   outcome: "deliveryUnknown",
@@ -33,7 +33,7 @@ it("preserves exact resolution of an already saved uncertain mailbox answer", as
   });
   const stores = shellStores({
     deployments: [],
-    selection: { nodeDid: "agent", agentId: "setup", sessionId: "session-1" },
+    selection: { nodeDid: "agent", agentDid: "setup", sessionId: "session-1" },
   });
   const reportFailure = vi.fn();
   const mailbox = createMailboxActions({
@@ -44,8 +44,9 @@ it("preserves exact resolution of an already saved uncertain mailbox answer", as
   } as never);
   const item = {
     itemId: "question-1",
+    nodeDid: "agent",
     targetNodeDid: "agent",
-    targetAgentId: "setup",
+    targetAgentDid: "setup",
     sessionId: "session-1",
   } as never;
 
@@ -59,5 +60,80 @@ it("preserves exact resolution of an already saved uncertain mailbox answer", as
   expect(loadUnresolvedSubmissions()).toEqual([]);
   expect(reportFailure).toHaveBeenLastCalledWith(
     "Your earlier answer was delivered; this retry did not send a different answer.",
+  );
+});
+
+it("shows a receipt access denial while keeping delivery unresolved", async () => {
+  const sendChatMessage = vi.fn().mockResolvedValue({
+    ...unknownOutcome,
+    deliveryError: { code: "permissionDenied", message: "Access denied", retryable: false, endpoint: null },
+  });
+  rememberUnresolvedSubmission({
+    nodeDid: "agent", sessionId: "session-1", selectedSessionId: "session-1",
+    requestId: "request-unknown", contentKey: contentKey("mailbox-answer:question-1"),
+  });
+  const stores = shellStores({
+    deployments: [],
+    selection: { nodeDid: "agent", agentDid: "setup", sessionId: "session-1" },
+  });
+  const reportFailure = vi.fn();
+  const mailbox = createMailboxActions({
+    api: { sendChatMessage } as unknown as DesktopApiAdapter,
+    stores, refreshSnapshot: async () => {}, reportFailure,
+  } as never);
+  const item = {
+    itemId: "question-1", nodeDid: "agent", targetNodeDid: "agent",
+    targetAgentDid: "setup", sessionId: "session-1",
+  } as never;
+  await mailbox.answerMailboxQuestion(item, { choice: "yes" } as never);
+  expect(sendChatMessage).toHaveBeenCalledTimes(1);
+  expect(sendChatMessage).toHaveBeenCalledWith(expect.objectContaining({ resolveRequestId: "request-unknown" }));
+  expect(loadUnresolvedSubmissions()[0].requestId).toBe("request-unknown");
+  expect(reportFailure).toHaveBeenCalledWith(expect.stringContaining("Access denied"));
+});
+
+it("reports cleanup denial after an earlier answer was delivered", async () => {
+  const sendChatMessage = vi.fn().mockResolvedValue({
+    ...unknownOutcome,
+    outcome: null,
+    deliveryError: {
+      code: "permissionDenied",
+      message: "Access denied",
+      retryable: false,
+      endpoint: null,
+    },
+  });
+  rememberUnresolvedSubmission({
+    nodeDid: "agent",
+    sessionId: "session-1",
+    selectedSessionId: "session-1",
+    requestId: "request-unknown",
+    contentKey: contentKey("mailbox-answer:question-1"),
+  });
+  const stores = shellStores({
+    deployments: [],
+    selection: { nodeDid: "agent", agentDid: "setup", sessionId: "session-1" },
+  });
+  const reportFailure = vi.fn();
+  const mailbox = createMailboxActions({
+    api: { sendChatMessage } as unknown as DesktopApiAdapter,
+    stores,
+    refreshSnapshot: async () => {},
+    reportFailure,
+  } as never);
+  const item = {
+    itemId: "question-1",
+    nodeDid: "agent",
+    targetNodeDid: "agent",
+    targetAgentDid: "setup",
+    sessionId: "session-1",
+  } as never;
+  expect(await mailbox.answerMailboxQuestion(item, { choice: "yes" } as never)).toBe(
+    true,
+  );
+  expect(sendChatMessage).toHaveBeenCalledTimes(1);
+  expect(loadUnresolvedSubmissions()).toEqual([]);
+  expect(reportFailure).toHaveBeenLastCalledWith(
+    "Your earlier answer was delivered, but its saved-answer cleanup failed: Access denied",
   );
 });

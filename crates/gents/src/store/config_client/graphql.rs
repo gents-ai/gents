@@ -26,6 +26,12 @@ pub(super) async fn http_client() -> Result<&'static reqwest::Client> {
 }
 
 pub(super) async fn auto_commit(endpoint: &GraphqlEndpoint, mutation: &str) -> Result<Value> {
+    if !super::client_signed_agent::ordinary_mutation_allowed(
+        endpoint.client_signed_agent_creates,
+        true,
+    ) {
+        return Err(ConfigClientError::ClientUnsignedMutationUnsupported);
+    }
     let response = endpoint
         .authorize(http_client().await?.post(endpoint.url()))?
         .json(&serde_json::json!({"query": mutation}))
@@ -149,6 +155,10 @@ pub(super) async fn txn_execute(
                 endpoint: endpoint.to_string(),
                 source,
             })?;
+    validate_txn_response(value)
+}
+
+pub(super) fn validate_txn_response(value: Value) -> Result<Value> {
     if retry::graphql_value_is_transaction_conflict(&value) {
         return Err(retry::transaction_conflict(ConflictSource::StructuredCode));
     }
@@ -265,7 +275,7 @@ pub(super) fn affected_documents(response: &Value) -> u64 {
         .unwrap_or_default()
 }
 
-fn graphql_response_has_errors(response: &Value) -> bool {
+pub(super) fn graphql_response_has_errors(response: &Value) -> bool {
     match response.get("errors") {
         None => false,
         Some(Value::Array(errors)) => !errors.is_empty(),

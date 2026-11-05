@@ -385,9 +385,6 @@ pub struct BuiltInTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_goal_creation: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub enable_memory: Option<bool>,
     /// The `sessions` read tool. Unset is enabled: compaction stubs name its
     /// `output` read as the way to recover a trimmed tool result.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -966,9 +963,9 @@ impl Tools {
 pub async fn load_agent_tools_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> anyhow::Result<Option<Tools>> {
-    Ok(load_agent_context_and_tools_in_txn(txn, owner, agent_id)
+    Ok(load_agent_context_and_tools_in_txn(txn, owner, agent_did)
         .await?
         .1)
 }
@@ -979,15 +976,15 @@ pub async fn load_agent_tools_in_txn(
 pub async fn load_agent_context_and_tools_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> anyhow::Result<(Option<super::AgentContext>, Option<Tools>)> {
     use crate::store::collection::Collection;
     use crate::store::config_client::read_desired_state_document_in_txn as read;
     use anyhow::Context as _;
     let agent: super::Agent = serde_json::from_value(
-        read(txn, Collection::Agent, owner, agent_id)
+        read(txn, Collection::Agent, owner, agent_did)
             .await?
-            .with_context(|| format!("Agent {agent_id} not found for {owner}"))?,
+            .with_context(|| format!("Agent {agent_did} not found for {owner}"))?,
     )?;
     let Some(context_id) = agent.context_id else {
         return Ok((None, None));

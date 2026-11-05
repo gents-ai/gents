@@ -43,7 +43,7 @@ pub(crate) fn goal_continuation_identity(
 )]
 pub(crate) fn prepare_goal_continuation(
     parent: &AgentRequest,
-    agent_id: String,
+    agent_did: String,
     goal_id: &str,
     content: &str,
     continuation_sequence: i64,
@@ -72,14 +72,14 @@ pub(crate) fn prepare_goal_continuation(
     );
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
-            &parent.node_did,
+            &agent_did,
             &parent.request_id,
         );
     let identity = RequestIdentity {
         requester_did: parent.requester_did.clone(),
         request_id: continuation.request_id,
         node_did: parent.node_did.clone(),
-        agent_id,
+        agent_did,
         session_id: parent.session_id.clone(),
         content: content.to_string(),
         execution_origin: ExecutionOrigin::Scheduled,
@@ -120,5 +120,5 @@ pub(crate) async fn goal_continuation_agent(
     _txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     parent: &AgentRequest,
 ) -> Result<String> {
-    parent_agent_id(parent)
+    parent_agent_did(parent)
 }

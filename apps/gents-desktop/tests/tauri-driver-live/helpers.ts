@@ -47,7 +47,7 @@ export function expectCompletedSession(label: string, session: DesktopSessionSna
 
 export async function waitForAgentConfig(
   runner: LiveBridgeRunner,
-  agentId: string,
+  agentDid: string,
   expectedDisplayName: string,
   expectedSystemPrompt: string,
   previousGeneration: number,
@@ -57,7 +57,7 @@ export async function waitForAgentConfig(
       const snapshot = await runner.fetchSnapshot();
       const deployment = snapshot.client?.deployments[0];
       const agent = deployment?.agents.find(
-        (candidate) => candidate.agentId === agentId,
+        (candidate) => candidate.agentDid === agentDid,
       );
       expect(agent?.displayName).toBe(expectedDisplayName);
       const context = deployment?.contexts.find(
@@ -81,7 +81,7 @@ export async function waitForConfigFlowDocuments(
     profileId: string;
     toolServiceId: string;
     toolsId: string;
-    agentId: string;
+    agentDid: string;
     taskId: string;
     scheduleId: string;
     eventSourceId: string;
@@ -115,13 +115,13 @@ export async function waitForConfigFlowDocuments(
       );
       expect(context?.context_id).toBeDefined();
       const agent = deployment?.agents.find(
-        (candidate) => candidate.agentId === expected.agentId,
+        (candidate) => candidate.agentDid === expected.agentDid,
       );
       expect(agent?.inferenceProfileId).toBe(expected.profileId);
       const task = deployment?.tasks.find(
         (candidate) => candidate.taskId === expected.taskId,
       );
-      expect(task?.agentId).toBe(expected.agentId);
+      expect(task?.agentDid).toBe(expected.agentDid);
       const schedule = deployment?.schedules.find(
         (candidate) => candidate.schedule_id === expected.scheduleId,
       );

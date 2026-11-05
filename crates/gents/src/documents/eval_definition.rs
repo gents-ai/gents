@@ -65,6 +65,18 @@ pub struct EvalFixtureDocument {
     /// strings stay literal.
     #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
     pub document: serde_json::Value,
+    /// Agent slots granted native read access to this session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    pub session_readers: Vec<String>,
+    /// Create this session as its selected Agent instead of the evaluator.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    pub session_agent_owned: bool,
+    /// Publish this request as its client, then expire it before trial execution.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    pub expired_client_request: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

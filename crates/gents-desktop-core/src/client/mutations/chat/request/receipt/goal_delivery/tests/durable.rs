@@ -4,7 +4,7 @@ use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::graphql_with_transaction_retry;
 use std::sync::Arc;
 
-async fn stored(node: &defra_node::EmbeddedNode) -> Result<Vec<Record>> {
+async fn stored(node: &defra_node::Node) -> Result<Vec<Record>> {
     let response = graphql_with_transaction_retry(
         node,
         "{ PendingChatSubmission { payload } }",
@@ -29,7 +29,7 @@ async fn stored(node: &defra_node::EmbeddedNode) -> Result<Vec<Record>> {
 async fn generated_goal_delivery_histories_survive_the_existing_journal() -> Result<()> {
     let cases = tokio::task::spawn_blocking(model_cases).await??;
     let node = Arc::new(crate::test_support::node_builder().build().await?);
-    node.add_collection(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
+    node.add_collection(&crate::test_support::unbound_journal_schema())
         .await?;
     let checked = async {
         let mut count = 0;
@@ -118,6 +118,7 @@ async fn generated_goal_delivery_histories_survive_the_existing_journal() -> Res
                                 .as_ref()
                                 .map(|r| r.request_id.clone()),
                             requester_did: command.requester_did,
+                            agent_did: command.agent_did,
                         };
                         journal::goal::update(&node, &intent, &reference, None).await?;
                     }
@@ -140,10 +141,15 @@ async fn generated_goal_delivery_histories_survive_the_existing_journal() -> Res
                         facts.records_json(&[retained])?,
                         facts.records_json(std::slice::from_ref(&record))?
                     );
-                    assert!(journal::load(&node, &record.intent.command_id)
-                        .await?
-                        .is_none());
-                    journal::forget(&node, &record.intent.command_id).await;
+                    assert!(journal::load(
+                        &node,
+                        &record.intent.client_did,
+                        &record.intent.command_id
+                    )
+                    .await?
+                    .is_none());
+                    journal::forget(&node, &record.intent.client_did, &record.intent.command_id)
+                        .await?;
                     assert!(journal::goal::recover(&node, &record.intent)
                         .await?
                         .is_some());
@@ -155,7 +161,7 @@ async fn generated_goal_delivery_histories_survive_the_existing_journal() -> Res
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     checked
 }
 
@@ -178,7 +184,7 @@ async fn competing_goal_reservations_and_acknowledgement_survive_reopen() -> Res
     let home = tempfile::tempdir()?;
     let open = || async {
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(&proposal.intent.node_did)
                 .data_path(home.path())
                 .build()
@@ -187,14 +193,14 @@ async fn competing_goal_reservations_and_acknowledgement_survive_reopen() -> Res
         Ok::<_, anyhow::Error>(node)
     };
     let node = open().await?;
-    node.add_collection(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
+    node.add_collection(&crate::test_support::unbound_journal_schema())
         .await?;
     let (left, right) = tokio::join!(
         journal::goal::reserve(&node, &proposal),
         journal::goal::reserve(&node, &proposal)
     );
     assert_eq!(left?.reference, right?.reference);
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     drop(node);
     let node = open().await?;
     let record = journal::goal::recover(&node, &proposal.intent)
@@ -214,7 +220,7 @@ async fn competing_goal_reservations_and_acknowledgement_survive_reopen() -> Res
     let acknowledged =
         journal::goal::update(&node, &proposal.intent, &proposal.reference, None).await?;
     assert_eq!(facts.records_json(&[acknowledged])?, trace[2]["after"]);
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     drop(node);
     let node = open().await?;
     let record = journal::goal::recover(&node, &proposal.intent)
@@ -227,7 +233,7 @@ async fn competing_goal_reservations_and_acknowledgement_survive_reopen() -> Res
     let replay = journal::goal::reserve(&node, &proposal).await?;
     assert_eq!(replay.reference, record.reference);
     assert!(replay.prepared.is_none());
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     Ok(())
 }
 
@@ -254,7 +260,7 @@ async fn competing_distinct_signed_proposals_share_one_committed_goal_preparatio
         );
     }
     let node = Arc::new(crate::test_support::node_builder().build().await?);
-    node.add_collection(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
+    node.add_collection(&crate::test_support::unbound_journal_schema())
         .await?;
     let checked = async {
         assert_ne!(proposals[0].reference, proposals[1].reference);
@@ -283,6 +289,6 @@ async fn competing_distinct_signed_proposals_share_one_committed_goal_preparatio
         Ok::<_, anyhow::Error>(())
     }
     .await;
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     checked
 }

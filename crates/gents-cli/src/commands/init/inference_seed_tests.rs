@@ -72,16 +72,25 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
         )?);
         let owner = identity.did();
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            gents::defra_node::Node::builder()
                 .with_node_identity_did(owner.to_string())
                 .build()
                 .await?,
         );
         gents::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::local(node.clone());
-        let initialized =
-            initialize_runtime_home(&access, &args, owner, resolve_initial_tool_package(&args)?)
-                .await;
+        let user_home = tempfile::tempdir()?;
+        let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None)?;
+        let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did())?);
+        let binding = gents::store::identity::provision_agent_identity(identity.as_ref())?;
+        let initialized = initialize_runtime_home(
+            &access,
+            &node,
+            &args,
+            identity.as_ref(),
+            resolve_initial_tool_package(&args)?,
+            Some(binding),
+        )
+        .await;
         let Some(expected) = &case.expected else {
             assert!(initialized.is_err(), "{case:?}");
             assert!(
@@ -90,7 +99,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                     .is_empty()
             );
             assert!(load_node(&node, owner).await?.is_none());
-            node.shutdown().await;
+            node.shutdown().await.expect("node shutdown");
             continue;
         };
         let summary = initialized.with_context(|| format!("{case:?}"))?;
@@ -147,7 +156,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
             assert!(runtime.agents().is_empty());
             let unavailable = runtime
                 .unavailable_agents()
-                .get(&summary.default_agent_id)
+                .get(&summary.default_agent_did)
                 .expect("the unselected agent remains visible for setup");
             assert_eq!(
                 serde_json::to_value(unavailable.public_reason)?.as_str(),
@@ -161,7 +170,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                 &access,
                 owner,
                 "Incomplete selection",
-                &summary.default_agent_id,
+                &summary.default_agent_did,
                 true,
                 vec![replacement(Collection::InferenceBackend, &enabled_backend)?],
             )
@@ -175,7 +184,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
             assert!(runtime.agents().is_empty());
             let unavailable = runtime
                 .unavailable_agents()
-                .get(&summary.default_agent_id)
+                .get(&summary.default_agent_did)
                 .expect("an enabled backend still requires model selection");
             assert_eq!(
                 serde_json::to_value(unavailable.public_reason)?.as_str(),
@@ -192,7 +201,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                 "{steps:?}"
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
     Ok(())
 }
@@ -209,16 +218,25 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
     )?);
     let owner = identity.did();
     let node = Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
+        gents::defra_node::Node::builder()
             .with_node_identity_did(owner.to_string())
             .build()
             .await?,
     );
     gents::ensure_runtime_schemas(&node).await?;
-    let access = ConfigAccess::local(node.clone());
-    let summary =
-        initialize_runtime_home(&access, &args, owner, resolve_initial_tool_package(&args)?)
-            .await?;
+    let user_home = tempfile::tempdir()?;
+    let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None)?;
+    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did())?);
+    let binding = gents::store::identity::provision_agent_identity(identity.as_ref())?;
+    let summary = initialize_runtime_home(
+        &access,
+        &node,
+        &args,
+        identity.as_ref(),
+        resolve_initial_tool_package(&args)?,
+        Some(binding),
+    )
+    .await?;
     let mut backend = gents::inference::backends::registry::list_all_backends(&node)
         .await?
         .remove(0);
@@ -233,7 +251,7 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
         &access,
         owner,
         "Selected provider",
-        &summary.default_agent_id,
+        &summary.default_agent_did,
         true,
         vec![
             replacement(Collection::InferenceBackend, &backend)?,
@@ -272,7 +290,7 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
     let resolved = runtime
         .agents()
         .iter()
-        .find(|agent| agent.agent_id == summary.default_agent_id)
+        .find(|agent| agent.agent_did == summary.default_agent_did)
         .expect("explicit selection makes the configured agent available");
     assert_eq!(resolved.model_name, advertised.model_name);
     assert_eq!(
@@ -284,6 +302,6 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
         advertised.max_output_tokens.unwrap()
     );
     drop(runtime);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }

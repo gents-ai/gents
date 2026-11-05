@@ -164,6 +164,6 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
     assert_eq!(snapshot.binding(), repeated.binding());
     assert_eq!(snapshot.entries(), repeated.entries());
     assert_eq!(tokio::fs::read(&path).await.unwrap(), b"second effect\n");
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("shut down test node");
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }

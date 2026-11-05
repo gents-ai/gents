@@ -15,7 +15,7 @@ async fn target_backend_probes_healthy_and_completes() {
     let db = test_db("steward-loop-live-smoke").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("steward-loop-live-smoke"));
 
-    let (node_did, agent_id) = bind_target(&db.node, identity.as_ref(), &target).await;
+    let (node_did, agent_did) = bind_target(&db.node, identity.as_ref(), &target).await;
 
     let agent = boot_live_agent(&db, identity)
         .await
@@ -27,7 +27,7 @@ async fn target_backend_probes_healthy_and_completes() {
     create_runtime_request(
         &db.node,
         &node_did,
-        &agent_id,
+        &agent_did,
         request_id,
         session_id,
         "Reply with the single word: ok",

@@ -35,13 +35,8 @@ fn call(operation: &str, input: Value, filter: Option<Value>) -> WriteParams {
         options,
     }
 }
-async fn fixture() -> (Arc<crate::defra_node::EmbeddedNode>, WriteTool) {
-    let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+async fn fixture() -> (Arc<crate::defra_node::Node>, WriteTool) {
+    let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
     node.add_collection(
         "type Parcel { reference: String status: String tags: [String] payload: JSON }",
     )
@@ -110,7 +105,7 @@ async fn preview_create_update_delete_and_fresh_reads_preserve_json() {
         access.execute("{Parcel{_docID}}").await.unwrap()["data"]["Parcel"],
         json!([])
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -178,7 +173,7 @@ async fn changed_targets_and_overbroad_selection_never_apply() {
         let error = tool.execute(&malformed).await.unwrap_err();
         assert!(format!("{error:#}").contains("unknown filter field/operator"));
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -201,17 +196,12 @@ async fn managed_credentials_scope_and_injection_are_refused() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("identifier"), "{error}");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn native_relationship_input_uses_the_target_document_id() {
-    let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
     node.add_collection(
         "type Writer { name: String books: [Volume] } type Volume { title: String author: Writer }",
     )
@@ -236,20 +226,21 @@ async fn native_relationship_input_uses_the_target_document_id() {
         .await
         .unwrap();
     assert_eq!(rows["data"]["Volume"][0]["author"]["name"], "Nora");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn a_collection_grant_cannot_bypass_native_document_acp() {
     const OWNER: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
     const READER: &str = "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR";
-    let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
-    let policy = node.add_dac_policy(OWNER, "name: Application write ACP\nresources:\n  - name: parcels\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
+    let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
+    let policy = node
+        .add_dac_policy_as(
+            &defra_core::RequestContext::default().with_identity(Some(OWNER.to_owned())),
+            "name: Application write ACP\nresources:\n  - name: parcels\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n",
+        )
+        .await
+        .unwrap();
     node.add_collection(&format!("type Parcel @policy(id: \"{}\", resource: \"parcels\") {{ reference: String status: String }}",crate::store::graphql::escape_graphql_string(&policy))).await.unwrap();
     let owner = WriteTool::new(
         ConfigAccess::local(node.clone()),
@@ -296,7 +287,7 @@ async fn a_collection_grant_cannot_bypass_native_document_acp() {
     .await
     .unwrap();
     assert_eq!(rows["data"]["Parcel"][0]["status"], "queued");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 mod plugin {
@@ -305,15 +296,10 @@ mod plugin {
     use gents_protocol::job::{DataOp, DataWrite, PluginDataDeclaration};
     use std::collections::BTreeMap;
 
-    const NODE: &str = "did:key:z6Mknode";
+    const AGENT: &str = "did:key:z6Mkagent";
 
-    async fn node() -> Arc<crate::defra_node::EmbeddedNode> {
-        let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+    async fn node() -> Arc<crate::defra_node::Node> {
+        let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
         node.add_collection(
             "type Note { owner: String body: String tags: [String] }
              type Keyed { owner: String key: String @index(unique: true) body: String created_at: String }
@@ -329,7 +315,7 @@ mod plugin {
             declaration: PluginDataDeclaration {
                 collections: collections.iter().map(|c| (*c).into()).collect(),
                 ops: vec!["insert".into(), "update".into(), "delete".into()],
-                stamped: BTreeMap::from([("owner".to_owned(), Stamp::NodeDid)]),
+                stamped: BTreeMap::from([("owner".to_owned(), Stamp::CallerDid)]),
             },
             collection_fields: collections
                 .iter()
@@ -363,7 +349,7 @@ mod plugin {
         }
     }
 
-    async fn rows(node: &Arc<crate::defra_node::EmbeddedNode>, collection: &str) -> Value {
+    async fn rows(node: &Arc<crate::defra_node::Node>, collection: &str) -> Value {
         ConfigAccess::local(node.clone())
             .execute(&format!("{{{collection}{{_docID body created_at}}}}"))
             .await
@@ -373,7 +359,7 @@ mod plugin {
 
     fn stamps() -> StampContext {
         StampContext::Callback {
-            node_did: NODE.into(),
+            caller_did: AGENT.into(),
         }
     }
 
@@ -388,18 +374,26 @@ mod plugin {
     }
 
     async fn apply_all(
-        node: &Arc<crate::defra_node::EmbeddedNode>,
+        node: &Arc<crate::defra_node::Node>,
         grant: &PluginData,
         writes: Vec<DataWrite>,
     ) -> Result<Vec<Value>> {
-        ConfigAccess::transact_local_write(node, None, "plugin_writes_test", |txn| {
-            let writes = writes.clone();
-            Box::pin(async move { apply_plugin_writes_in_txn(txn, grant, &stamps(), writes).await })
-        })
+        ConfigAccess::transact_local_write(
+            node,
+            Some(identity::Did::new(AGENT.to_owned())?),
+            "plugin_writes_test",
+            |txn| {
+                let writes = writes.clone();
+                Box::pin(async move {
+                    let actor = identity::Did::new(AGENT.to_owned())?;
+                    apply_plugin_writes_in_txn(txn, &actor, grant, &stamps(), writes).await
+                })
+            },
+        )
         .await
     }
 
-    async fn notes(node: &Arc<crate::defra_node::EmbeddedNode>) -> Value {
+    async fn notes(node: &Arc<crate::defra_node::Node>) -> Value {
         ConfigAccess::local(node.clone())
             .execute("{Note{_docID owner body tags}}")
             .await
@@ -447,13 +441,19 @@ mod plugin {
         .await
         .unwrap();
         assert_eq!(notes(&node).await, json!([]));
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
     async fn plugin_write_to_a_protected_collection_is_refused() {
         let node = node().await;
-        for collection in [gents_protocol::schemas::EVAL_RUN_NAME, "AgentRequest"] {
+        let publication = &crate::lean_vocab_test::lean_contract_snapshot()
+            .client_publication_protected_collection;
+        for collection in [
+            gents_protocol::schemas::EVAL_RUN_NAME,
+            "AgentRequest",
+            publication.as_str(),
+        ] {
             let grant = grant(&[collection]);
             let error = apply_all(
                 &node,
@@ -472,7 +472,7 @@ mod plugin {
                 "{error:#}"
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -490,7 +490,7 @@ mod plugin {
             "{error:#}"
         );
         assert_eq!(notes(&node).await, json!([]));
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -508,7 +508,7 @@ mod plugin {
         .unwrap_err();
         assert!(error.to_string().contains("missing_field"), "{error:#}");
         assert_eq!(notes(&node).await, json!([]));
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -522,7 +522,7 @@ mod plugin {
         )
         .await
         .unwrap();
-        assert_eq!(notes(&node).await[0]["owner"], NODE);
+        assert_eq!(notes(&node).await[0]["owner"], AGENT);
         let forged = apply_all(
             &node,
             &grant,
@@ -536,7 +536,7 @@ mod plugin {
         .await;
         assert!(forged.is_err());
         assert_eq!(notes(&node).await.as_array().unwrap().len(), 1);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
     #[tokio::test]
     async fn on_conflict_ignore_with_an_equal_row_is_a_no_op() {
@@ -552,7 +552,7 @@ mod plugin {
         assert_eq!(second[0]["_docID"], first[0]["_docID"]);
         assert!(second[0].get("duplicate").is_none());
         assert_eq!(rows(&node, "Keyed").await.as_array().unwrap().len(), 1);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -572,7 +572,7 @@ mod plugin {
         let stored = rows(&node, "Keyed").await;
         assert_eq!(stored.as_array().unwrap().len(), 1);
         assert_eq!(stored[0]["body"], "x");
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -594,7 +594,7 @@ mod plugin {
             .unwrap_err();
         assert!(error.to_string().contains("duplicate Keyed a"), "{error:#}");
         assert_eq!(rows(&node, "Keyed").await.as_array().unwrap().len(), 1);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -620,7 +620,7 @@ mod plugin {
             .unwrap_err();
         assert!(error.to_string().contains("key"), "{error:#}");
         assert_eq!(rows(&node, "Keyed").await, json!([]));
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -681,6 +681,6 @@ mod plugin {
             .await
             .unwrap();
         assert_eq!(other[0], json!({"duplicate": true}));
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

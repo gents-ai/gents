@@ -11,7 +11,7 @@ type NetworkEnrollmentRouteReceipt @branchable {
     member_did: String @index @immutable
     member_peer: String @index @immutable
     server_peer: String @index @immutable
-    owner_agent: String @index @immutable
+    owner_node_did: String @index @immutable
     authorization_sequence: Int @index @immutable
     authorization_expires_at: DateTime @immutable
     direction: String @index @immutable

@@ -1,8 +1,6 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use defra_node::EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::Value;
@@ -16,10 +14,11 @@ use super::{
     clean, context_calls, decode, InvestigationCallsEnvelope, RequestContextObservation,
     SessionInferenceObservation,
 };
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::config_client::ConfigRead;
+use crate::store::graphql::escape_graphql_string;
 
 pub async fn load_request_context_observation(
-    node: &EmbeddedNode,
+    access: &dyn ConfigRead,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
@@ -34,13 +33,12 @@ pub async fn load_request_context_observation(
     let requester = requester_did
         .map(|did| format!(r#""{}""#, escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
-    let response = graphql_with_transaction_retry(node, &format!(r#"{{ AgentRequest(filter: {{
+    let response = access.execute_read(&format!(r#"{{ AgentRequest(filter: {{
         purpose: {{_eq: "normal"}}, request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, node_did: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}}
-    }}, limit: 2) {{_docID request_id node_did requester_did session_id}} }}"#, escape_graphql_string(request_id), escape_graphql_string(session_id), escape_graphql_string(node_did)), "context request ownership").await?;
+    }}, limit: 2) {{_docID request_id node_did requester_did session_id}} }}"#, escape_graphql_string(request_id), escape_graphql_string(session_id), escape_graphql_string(node_did))).await?;
     let requests: Vec<AgentRequestRow> = serde_json::from_value(
         response
-            .data
-            .as_ref()
+            .get("data")
             .and_then(|v| v.get("AgentRequest"))
             .cloned()
             .context("missing context owner rows")?,
@@ -50,11 +48,11 @@ pub async fn load_request_context_observation(
         [owner] => owner,
         _ => bail!("ambiguous context request identity"),
     };
-    load_pinned_request_context_observation(node, owner).await
+    load_pinned_request_context_observation(access, owner).await
 }
 
 pub async fn load_pinned_request_context_observation(
-    node: &EmbeddedNode,
+    access: &dyn ConfigRead,
     owner: &AgentRequestRow,
 ) -> Result<Option<RequestContextObservation>> {
     let node_did = owner
@@ -77,10 +75,9 @@ pub async fn load_pinned_request_context_observation(
         owner.session_id.as_deref().unwrap(),
         owner.requester_did.as_deref(),
     );
-    let selected = graphql_with_transaction_retry(node, &format!(r#"{{ AgentRequest(filter: {{ {scope}, purpose: {{_eq: "normal"}}, _docID: {{_eq: "{}"}}, request_id: {{_eq: "{}"}} }}, limit: 2) {{_docID}} }}"#, escape_graphql_string(doc), escape_graphql_string(&owner.request_id)), "physical context request ownership").await?;
+    let selected = access.execute_read(&format!(r#"{{ AgentRequest(filter: {{ {scope}, purpose: {{_eq: "normal"}}, _docID: {{_eq: "{}"}}, request_id: {{_eq: "{}"}} }}, limit: 2) {{_docID}} }}"#, escape_graphql_string(doc), escape_graphql_string(&owner.request_id))).await?;
     let rows = selected
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("AgentRequest"))
         .and_then(Value::as_array)
         .context("missing physical context owner rows")?;
@@ -89,9 +86,8 @@ pub async fn load_pinned_request_context_observation(
         [row] if row["_docID"].as_str() == Some(doc) => {}
         _ => bail!("invalid physical context request identity"),
     }
-    let response = graphql_with_transaction_retry(
-        node,
-        &format!(
+    let response = access
+        .execute_read(&format!(
             r#"{{ InferenceCall(filter: {{
         node_did: {{_eq: "{}"}}, request_doc_id: {{_eq: "{}"}}, call_kind: {{_eq: "inference"}}
     }}, order: [{{queued_at: DESC}}, {{call_seq: DESC}}, {{call_id: DESC}}], limit: 1) {{
@@ -99,12 +95,10 @@ pub async fn load_pinned_request_context_observation(
     }} }}"#,
             escape_graphql_string(node_did),
             escape_graphql_string(doc)
-        ),
-        "live context observation",
-    )
-    .await?;
+        ))
+        .await?;
     let calls: InvestigationCallsEnvelope =
-        decode(response.data.as_ref(), "live context observation")?;
+        decode(response.get("data"), "live context observation")?;
     Ok(
         latest_context_from_detail_rows(&calls.inference_calls)?.map(|context| {
             RequestContextObservation {
@@ -123,30 +117,22 @@ pub async fn load_pinned_request_context_observation(
 /// document IDs, not logical request aliases, fence every inference read.
 /// Missing requester is an exact null identity, never a wildcard.
 pub async fn load_session_inference_observation(
-    node: &Arc<EmbeddedNode>,
+    access: &dyn ConfigRead,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
 ) -> Result<SessionInferenceObservation> {
-    let ids = load_session_request_doc_ids(
-        &crate::store::config_client::ConfigAccess::local(Arc::clone(node)),
-        node_did,
-        requester_did,
-        session_id,
-    )
-    .await?
-    .into_keys()
-    .collect::<Vec<_>>();
+    let ids = load_session_request_doc_ids(access, node_did, requester_did, session_id)
+        .await?
+        .into_keys()
+        .collect::<Vec<_>>();
     let mut rows = Vec::new();
     for batch in ids.chunks(128) {
-        let response = graphql_with_transaction_retry(
-            node,
-            &session_investigation_calls_query(node_did, batch),
-            "session inference observations",
-        )
-        .await?;
+        let response = access
+            .execute_read(&session_investigation_calls_query(node_did, batch))
+            .await?;
         let calls: InvestigationCallsEnvelope =
-            decode(response.data.as_ref(), "session inference observations")?;
+            decode(response.get("data"), "session inference observations")?;
         rows.extend(calls.inference_calls);
     }
     let latest_context = latest_context_from_detail_rows(&rows)?;
@@ -165,7 +151,7 @@ pub async fn load_session_inference_observation(
 }
 
 pub async fn load_session_request_doc_ids(
-    access: &crate::store::config_client::ConfigAccess,
+    access: &dyn ConfigRead,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,

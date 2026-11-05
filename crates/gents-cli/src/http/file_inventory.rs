@@ -5,16 +5,16 @@ use axum::{
     Json,
 };
 use defra_http::ExtractIdentity;
-use gents_protocol::file_inventory::FileInventoryPageDemand;
+use gents_protocol::file_inventory::DirectFileInventoryRequest;
 
 use super::router::RuntimeHttpState;
 
 pub(crate) async fn operator_inventory_handler(
     State(state): State<RuntimeHttpState>,
     identity: ExtractIdentity,
-    Json(demand): Json<FileInventoryPageDemand>,
+    Json(request): Json<DirectFileInventoryRequest>,
 ) -> Response {
-    let mut response = operator_inventory(state, identity, demand).await;
+    let mut response = operator_inventory(state, identity, request).await;
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         header::HeaderValue::from_static("no-store"),
@@ -25,7 +25,7 @@ pub(crate) async fn operator_inventory_handler(
 async fn operator_inventory(
     state: RuntimeHttpState,
     identity: ExtractIdentity,
-    demand: FileInventoryPageDemand,
+    request: DirectFileInventoryRequest,
 ) -> Response {
     let Some(actor) = identity.did() else {
         return failure(
@@ -33,12 +33,6 @@ async fn operator_inventory(
             "Runtime operator authorization is required.",
         );
     };
-    if actor.as_ref() != state.node_did {
-        return failure(
-            StatusCode::FORBIDDEN,
-            "This identity is not the runtime operator.",
-        );
-    }
     let Some(runtime) = state.activation_runtime.get() else {
         return failure(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -51,21 +45,14 @@ async fn operator_inventory(
             "The runtime identity is unavailable.",
         );
     }
-    if demand.validate_reference().is_err() {
+    if request.node_did != state.node_did {
         return failure(
             StatusCode::BAD_REQUEST,
-            "The file inventory reference is invalid.",
+            "The requested runtime is not served here.",
         );
     }
-    match runtime
-        .operator_file_inventory(actor.as_ref(), &demand)
-        .await
-    {
+    match runtime.read_file_inventory(actor.as_ref(), &request).await {
         Ok(reply) => Json(reply).into_response(),
-        Err(error) if error.is::<gents::file_inventory::OperatorInventoryDenied>() => failure(
-            StatusCode::FORBIDDEN,
-            "This file inventory belongs to another runtime.",
-        ),
         Err(error) => {
             tracing::warn!(%error, "operator file inventory is unavailable");
             failure(

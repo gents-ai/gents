@@ -2,6 +2,22 @@ use super::*;
 
 pub async fn update_goal_fields_if_status(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: &identity::Did,
+    goal: &GoalDocument,
+    expected_status: GoalStatus,
+    fields: &str,
+) -> Result<bool> {
+    update_goal_fields_if_status_from_access(
+        &crate::ConfigAccess::local_as(node.clone(), actor.clone()),
+        goal,
+        expected_status,
+        fields,
+    )
+    .await
+}
+
+pub(crate) async fn update_goal_fields_if_status_from_access(
+    access: &crate::ConfigAccess,
     goal: &GoalDocument,
     expected_status: GoalStatus,
     fields: &str,
@@ -23,11 +39,8 @@ pub async fn update_goal_fields_if_status(
             ) {{ _docID }}
         }}"#
     );
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "goal.update_controller_fields",
-        |txn| {
+    access
+        .transact_write("goal.update_controller_fields", |txn| {
             Box::pin(async {
                 let current =
                     load_canonical_goal_in_txn(txn, &goal.node_did, &goal.session_id).await?;
@@ -59,13 +72,26 @@ pub async fn update_goal_fields_if_status(
                 }
                 Ok(won)
             })
-        },
-    )
-    .await
+        })
+        .await
 }
 
 pub async fn claim_continuation(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: &identity::Did,
+    goal: &GoalDocument,
+    parent_request_id: &str,
+) -> Result<bool> {
+    claim_continuation_from_access(
+        &crate::ConfigAccess::local_as(node.clone(), actor.clone()),
+        goal,
+        parent_request_id,
+    )
+    .await
+}
+
+pub(crate) async fn claim_continuation_from_access(
+    access: &crate::ConfigAccess,
     goal: &GoalDocument,
     parent_request_id: &str,
 ) -> Result<bool> {
@@ -95,12 +121,8 @@ pub async fn claim_continuation(
             ) {{ _docID }}
         }}"#
     );
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "goal.claim_continuation",
-        &mutation,
-    )
-    .await?;
+    let response = access.write("goal.claim_continuation", &mutation).await?;
+    let response: defra_node::QueryResponse = serde_json::from_value(response)?;
     Ok(response
         .data
         .as_ref()
@@ -110,6 +132,24 @@ pub async fn claim_continuation(
 
 pub async fn claim_retry_continuation(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: &identity::Did,
+    goal: &GoalDocument,
+    parent_request_id: &str,
+    retry_count: i64,
+    failure: &str,
+) -> Result<bool> {
+    claim_retry_continuation_from_access(
+        &crate::ConfigAccess::local_as(node.clone(), actor.clone()),
+        goal,
+        parent_request_id,
+        retry_count,
+        failure,
+    )
+    .await
+}
+
+pub(crate) async fn claim_retry_continuation_from_access(
+    access: &crate::ConfigAccess,
     goal: &GoalDocument,
     parent_request_id: &str,
     retry_count: i64,
@@ -144,12 +184,10 @@ pub async fn claim_retry_continuation(
             ) {{ _docID }}
         }}"#
     );
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "goal.claim_retry_continuation",
-        &mutation,
-    )
-    .await?;
+    let response = access
+        .write("goal.claim_retry_continuation", &mutation)
+        .await?;
+    let response: defra_node::QueryResponse = serde_json::from_value(response)?;
     Ok(response
         .data
         .as_ref()

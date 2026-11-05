@@ -205,23 +205,39 @@ macro_rules! baseline_entry {
 }
 
 pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
-    // `InferenceBackend` and `Node` changed after v1.0.0-rc0, so their baseline is the rc0 root
-    // (`upgrades::CANONICAL_ROOTS`): a fresh store registers it and takes the same patches an
-    // upgraded rc0 store takes, so every store converges on one version.
-    baseline_entry!(
-        gents_protocol::schemas::INFERENCE_BACKEND_NAME,
-        crate::upgrades::BACKEND_RC0_SDL,
-        "bafyreige56taagffni2nkys46sezgidvf3wf3jbov6jmqsfsaae3f6oike"
-    ),
+    BaselineCollection {
+        name: gents_protocol::schemas::INFERENCE_BACKEND_NAME,
+        sdl: gents_protocol::schemas::INFERENCE_BACKEND,
+        expected_version: None,
+        expected_state: CollectionExpectation::dag_only(),
+    },
+    BaselineCollection {
+        name: gents_protocol::schemas::INFERENCE_BACKEND_METADATA_NAME,
+        sdl: gents_protocol::schemas::INFERENCE_BACKEND_METADATA,
+        expected_version: None,
+        expected_state: CollectionExpectation::dag_only(),
+    },
+    BaselineCollection {
+        name: gents_protocol::schemas::INFERENCE_BACKEND_OBSERVATION_NAME,
+        sdl: gents_protocol::schemas::INFERENCE_BACKEND_OBSERVATION,
+        expected_version: None,
+        expected_state: CollectionExpectation::dag_only(),
+    },
+    BaselineCollection {
+        name: gents_protocol::schemas::BACKEND_CREDENTIAL_NAME,
+        sdl: gents_protocol::schemas::BACKEND_CREDENTIAL,
+        expected_version: None,
+        expected_state: CollectionExpectation::dag_only(),
+    },
     baseline_entry!(
         gents_protocol::schemas::NODE_NAME,
-        crate::upgrades::NODE_RC0_SDL,
-        "bafyreiebppz3w6ri6lg6ft2jy3il7gk6bexfy3wjqizbcct4pzx3puppby"
+        gents_protocol::schemas::NODE,
+        "bafyreigbr2zy7awxue5szey4uic2cj4yjiak73equdlovg5hreneojbkae"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_NAME,
         gents_protocol::schemas::AGENT,
-        "bafyreiawuyih6xqeqoriami7aj7alpvuqzo22qh7k5vbfm3kyrelyooi6a"
+        "bafyreihy55y7dycjquzn2zv3y2idmorr42w2qhkpgyfjjgat42oowj2q34"
     ),
     baseline_entry!(
         gents_protocol::schemas::COMPACTION_CONFIG_NAME,
@@ -236,7 +252,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_TARGET_NAME,
         gents_protocol::schemas::AGENT_TARGET,
-        "bafyreige3ypigxsb6qslngqeriy3jqaijcaqes7qw6p7kaubju4z6gaaoa"
+        "bafyreifwgkcyevp2whmcumgnpwsihc5g3hn62bm6idnfynj6t23b3ahdye"
     ),
     baseline_entry!(
         gents_protocol::schemas::NODE_RUNTIME_NAME,
@@ -246,17 +262,12 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::NODE_READINESS_NAME,
         gents_protocol::schemas::NODE_READINESS,
-        "bafyreihnrcbuikvai4cit2aq7fpbjavoixq3qj3bwbllslq4np545fxmmu"
+        "bafyreiebc2rek6mqwwmdaglonxkk5qqpsfvv7frbocxb6oufqezvjkct2a"
     ),
     baseline_entry!(
         gents_protocol::schemas::NODE_DIRECTORY_ENTRY_NAME,
         gents_protocol::schemas::NODE_DIRECTORY_ENTRY,
-        "bafyreia2wluxobv4to5niaxnhelmvemi6ga3t5lk3m3alefupwk7c6abve"
-    ),
-    baseline_entry!(
-        gents_protocol::schemas::NODE_MEMORY_NAME,
-        gents_protocol::schemas::NODE_MEMORY,
-        "bafyreich7rj5lgj3ce5mfndp7xy4awh2khblveen7c7ihf6djm5j2dpo5m"
+        "bafyreig5c5e56nzpihh44ouahzyhnu76qihzwmde6z77yahlk4cyurqppu"
     ),
     baseline_entry!(
         gents_protocol::schemas::TOOLS_NAME,
@@ -346,17 +357,17 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::CALLBACK_BINDING_NAME,
         gents_protocol::schemas::CALLBACK_BINDING,
-        "bafyreihy6g5xb4ygljpve7g2g7fiwixiyaiyndw4ua5h57zha5b5mpmljq"
+        "bafyreifelknkrxmguojv547qxpqn2y62s5h23wrqbfupugmocfhrxgowma"
     ),
     baseline_entry!(
         gents_protocol::schemas::CALLBACK_INVOCATION_NAME,
         gents_protocol::schemas::CALLBACK_INVOCATION,
-        "bafyreickkoqhejwyeosqantqkiaf4zrokdcmovya3ps63vxpznzqzcquja"
+        "bafyreifc4guq64whykqkw3qk4bvvkrvwin7g2swpvzppyudtc62btboryq"
     ),
     baseline_entry!(
         gents_protocol::schemas::CALLBACK_RESULT_NAME,
         gents_protocol::schemas::CALLBACK_RESULT,
-        "bafyreid4tt2p2fv6zgizqsaitlysxouqszy6pipzy6rtzq3ra253ijgri4"
+        "bafyreiay7i7erfmg4o56oqrzbbwrohw253x7yme4plut46t4tgpzujdcq4"
     ),
     baseline_entry!(
         gents_protocol::schemas::OAUTH_CREDENTIAL_NAME,
@@ -386,47 +397,47 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_CALL_NAME,
         gents_protocol::schemas::INFERENCE_CALL,
-        "bafyreiepqe7xbkj6gc5ph2y2brga6wroy4sfry3htyxzqbs54zwsgyedoq"
+        "bafyreid5bt6u5a25rdvwpaaz53nvqaqnjx2h53iqli5v627ov2vbvuopo4"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_REQUEST_NAME,
         gents_protocol::schemas::AGENT_REQUEST,
-        "bafyreigcdauzj7thudljoqahk77xhlbf7dd2y76nedlt2dknjnqkmwtzdu"
+        "bafyreiffadcnnzmv6ebbqx6aw3kweylg4d6n5ci6eloyepflysyqbur4ze"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
         gents_protocol::schemas::AGENT_OUTPUT_SEGMENT,
-        "bafyreih6n2g2ofyqw7i23ur3jikelitjlgwaet57hozuxpge3hoibiffzi"
+        "bafyreid5flveud445po2hzcpiyluq3mjh5plyz5qxg7aj5r6mkgaqqwaci"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_SESSION_NAME,
         gents_protocol::schemas::AGENT_SESSION,
-        "bafyreibdqs7gugr4se3wvsu5yjd73yyrnrglixlk454erepqvpnhihpwhu"
+        "bafyreifmtywrh7eccrsayybrec6guazd2s4v7dfxrrf6xsva66cz3mt5ze"
     ),
     baseline_entry!(
         gents_protocol::schemas::GOAL_NAME,
         gents_protocol::schemas::GOAL,
-        "bafyreids226gvgylkkfgv6ft6qbug4xz3qsrrmhqr6py6uidphk7kkrqtq"
+        "bafyreihfzjt7jgymk2mgdgienxz3b4qimhv4iwv3zhk6e3n2mzutxjd53e"
     ),
     baseline_entry!(
         gents_protocol::schemas::GOAL_CREATION_CLAIM_NAME,
         gents_protocol::schemas::GOAL_CREATION_CLAIM,
-        "bafyreifr7fntfbkueuclpi5zxk6zbmrkmzekacogqwx3zsvs3kqo577i3m"
+        "bafyreibspclsdz7xbbhexxxqjydom4azb2zkytvekwxfz2jwz7dhrwgr6q"
     ),
     baseline_entry!(
         gents_protocol::schemas::MAILBOX_ITEM_NAME,
         gents_protocol::schemas::MAILBOX_ITEM,
-        "bafyreifsmnmr74fhl2otyeapkuddraoq5z5nrqg4xdr7jb37ey7is77esu"
+        "bafyreidcjjvuogdcjerncm3cjbeuh2iiai75b2ylq2lwtoggdkh3ytquzm"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_MESSAGE_NAME,
         gents_protocol::schemas::AGENT_MESSAGE,
-        "bafyreibpbyfmfgfookleozyqvuwse6qtfnjf7ipxjq6ryypovs226ziw6a"
+        "bafyreidgfzxcgne524l6c5d4vpflff3nzichjuucvuwqqw37neqcabmd7m"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
         gents_protocol::schemas::AGENT_TOOL_CALL,
-        "bafyreid3r2a6orllakh4ta4w65cvsxcwbq3gp476u7cz7nhcqcr65t7xly"
+        "bafyreibf2m33rcw2zqsknyp2jut7bzeyv7tudb2gj6yjrctgnxvid4i2te"
     ),
     baseline_entry!(
         gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
@@ -451,27 +462,27 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::RENDERED_REQUEST_NAME,
         gents_protocol::schemas::RENDERED_REQUEST,
-        "bafyreifnqpcrodl272dxd6cefewcug4gtkt3nvmlx3nhyqmiefdfayhodi"
+        "bafyreigittjfc7aawco37kkfwz5lirou5slz5zqvqsknosaltpuvn5jucm"
     ),
     baseline_entry!(
         gents_protocol::schemas::RENDERED_REQUEST_BLOCK_NAME,
         gents_protocol::schemas::RENDERED_REQUEST_BLOCK,
-        "bafyreicl23h6anxhpfmdmomvgpegd42apgmvddtjtcqlteabtcog3d7h5i"
+        "bafyreicl3b2r4ealg4l5dwfwdefsgtv4su7obbibgnmmu3iomaieeshaa4"
     ),
     baseline_entry!(
         gents_protocol::schemas::PROVIDER_CONTEXT_REDUCTION_NAME,
         gents_protocol::schemas::PROVIDER_CONTEXT_REDUCTION,
-        "bafyreifxbsldqfvxupmg54bimohgnurlnkw4iwghm7jpqarunmiw4dgvdi"
+        "bafyreidzlfqy2l2l7puqzlswpi7ychcgukdaaii6qq4r7i5y46fs2loi2q"
     ),
     baseline_entry!(
         gents_protocol::schemas::PROJECTION_ACP_BINDING_NAME,
         gents_protocol::schemas::PROJECTION_ACP_BINDING,
-        "bafyreihnwe664snzwwcnxyy4x6r3d3y4xy27ch5dpxnxu6hfqdjhxds7de"
+        "bafyreigykdnbn4ouyvgkvfzvsir5d6l3gwgng46wvhnwrws3rhfo32ug6a"
     ),
     baseline_entry!(
         gents_protocol::schemas::TASK_NAME,
         gents_protocol::schemas::TASK,
-        "bafyreibxt5wt6v4skfdsmwlcnao3y6nktlsyprtn7xhngrk77qvuz2gxii"
+        "bafyreieh67b32auhf33bkdltep2gh6gmrb5wgs2sd7vxexmqxno45jnmdm"
     ),
     baseline_entry!(
         gents_protocol::schemas::SCHEDULE_NAME,
@@ -511,7 +522,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::PEER_REGISTRY_NAME,
         gents_protocol::schemas::PEER_REGISTRY,
-        "bafyreiai3zeedy2yf2zt5e3izybimqlk73fqx5exxxe5k6sbvffhquguf4"
+        "bafyreihnmzcnyf7lj7lbt4ptxfljxnpxojpp576a45nzdlm4fzrdcyv6du"
     ),
     baseline_entry!(
         gents_protocol::schemas::NETWORK_NAME,
@@ -519,39 +530,34 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreighwrxb6enx4wppybg6qycvrikw3ph3zelexnzcnyujgpykpkl6pi"
     ),
     baseline_entry!(
-        gents_protocol::schemas::PEER_ENDPOINT_NAME,
-        gents_protocol::schemas::PEER_ENDPOINT,
-        "bafyreidubdiopvxh3zm447ttse6fbs7jzyagiyt7ipw4toib2z3svr4neq"
-    ),
-    baseline_entry!(
         gents_protocol::schemas::NETWORK_ADMIN_PIN_NAME,
         gents_protocol::schemas::NETWORK_ADMIN_PIN,
-        "bafyreihqlke25nkquhgf3jiokj26dz2gc4do62o3odhw3iwcfbsofy5iki"
+        "bafyreiaxqabtzqdh4j5yfplti7wezxmw5qrwl2ap6abbci2mfh7qk5evxm"
     ),
     baseline_entry!(
         gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST_NAME,
         gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST,
-        "bafyreih7u36s37itjkab6z33vayo6ig2sybwq2sn2bdvw3cnbjtjxks6aa"
+        "bafyreifqpuwotuu6x7j7zdqlhnsnf6llylk3fo47dl6bopwz2tslz7hwci"
     ),
     baseline_entry!(
         gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION_NAME,
         gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION,
-        "bafyreiekqlaylsyoty5d7wehjitd4xt3z2oxduj6wnkova4yfevxqd7kwu"
+        "bafyreihf3frxgpimoon66spsdvpt27uqnyqs3gnsmaq7rwdvtuslvabpxa"
     ),
     baseline_entry!(
         gents_protocol::schemas::NETWORK_AUTHORIZATION_REVISION_NAME,
         gents_protocol::schemas::NETWORK_AUTHORIZATION_REVISION,
-        "bafyreiezjnue5b7alot7eynlqss3l4nm7ppbttpthkzqcc3n7crela4grm"
+        "bafyreifn25bep4sol5de3f7immtnekl7fyhkgeo7dxi4433ncj53bukgvu"
     ),
     baseline_entry!(
         gents_protocol::schemas::NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
         gents_protocol::schemas::NETWORK_ENROLLMENT_ROUTE_RECEIPT,
-        "bafyreictae7jrd6dsljzwmhemsp47byzajy4psiiz6ubujbhdzyqluat4y"
+        "bafyreied4f7ouk7ymrud44xrdl3mlaqnga3z4p5rhlu5ibdzozwsufy54i"
     ),
     baseline_entry!(
         gents_protocol::schemas::ENROLLMENT_OPERATOR_NONCE_NAME,
         gents_protocol::schemas::ENROLLMENT_OPERATOR_NONCE,
-        "bafyreihqgfh2e6gc73zftjp6d2qlyba7hxsc3ab6mhgfb7jn4yydvdihaq"
+        "bafyreig5e5jtcjqueufwwrcfzkuii2qhvltajvhoz6zfc3d3acudjx6i3m"
     ),
     baseline_entry!(
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,
@@ -601,12 +607,27 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL_NAME,
         gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL,
-        "bafyreiaqwfpcxiyk5zjvejnd25kb2hml75oislo5xkyhxeae2d5xlvz33a"
+        "bafyreid4zq25mkxrp4p4ttkfmrhcgaviey5fjgtou2dpqvt6la4zs5wm3q"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::AGENT_SESSION_GOAL_RECEIPT_NAME,
+        gents_protocol::schemas::AGENT_SESSION_GOAL_RECEIPT,
+        "bafyreibbuxtqsh3tbkneq5satxfcadwrquwfaufgo2y5vqax32sdu4lkjq"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::AGENT_TOOL_CONTROL_NAME,
+        gents_protocol::schemas::AGENT_TOOL_CONTROL,
+        "bafyreihmzxo4teggqcgqznmbnvdrobtwhl3smv3mcd477zs4q3d3ge6tou"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::AGENT_TOOL_CONTROL_CLAIM_NAME,
+        gents_protocol::schemas::AGENT_TOOL_CONTROL_CLAIM,
+        "bafyreig3ogmqcnykgwz5czfhfxwcb6vfw7ufuga2zc3q66wt23ns3uan5u"
     ),
     baseline_entry!(
         gents_protocol::schemas::GOAL_OBSERVATION_NAME,
         gents_protocol::schemas::GOAL_OBSERVATION,
-        "bafyreidurb7yltvd4xkvcna5gcljytu7yp42oqphjlpymtyscqchpdtzzq"
+        "bafyreie7hlgybltivigtqmufnmuuvnhdl5ohtwd52qi7fcsqyd6ftutk5q"
     ),
     baseline_entry!(
         gents_protocol::schemas::EVAL_DEFINITION_NAME,
@@ -636,7 +657,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::PACK_INSTALLATION_NAME,
         gents_protocol::schemas::PACK_INSTALLATION,
-        "bafyreid74trtjvnquhtehlqi2on37cdd7q77jvpwxadbudn6t3k2bx7ety"
+        "bafyreia5f6iex3vrzfjzzlpm7jqkqehmnis3vqnbcdyuno2jlafyyrx3vu"
     ),
 ];
 
@@ -950,13 +971,13 @@ pub fn fixture_lens_wasm() -> &'static [u8] {
 }
 
 pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
+    gents_protocol::schemas::PEER_REGISTRY_NAME,
     gents_protocol::schemas::AGENT_REQUEST_NAME,
     gents_protocol::schemas::AGENT_MESSAGE_NAME,
     gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
     gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
     gents_protocol::schemas::AGENT_SESSION_NAME,
     gents_protocol::schemas::COMPACTION_ENTRY_NAME,
-    gents_protocol::schemas::PEER_ENDPOINT_NAME,
     gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST_NAME,
     gents_protocol::schemas::NETWORK_ENROLLMENT_DECISION_NAME,
     gents_protocol::schemas::NETWORK_AUTHORIZATION_REVISION_NAME,
@@ -967,6 +988,8 @@ pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::FILE_INVENTORY_REQUEST_NAME,
     gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT_NAME,
     gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL_NAME,
+    gents_protocol::schemas::AGENT_SESSION_GOAL_RECEIPT_NAME,
+    gents_protocol::schemas::AGENT_TOOL_CONTROL_NAME,
     gents_protocol::schemas::NODE_DIRECTORY_ENTRY_NAME,
     gents_protocol::schemas::MAILBOX_ITEM_NAME,
 ];

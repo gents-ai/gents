@@ -61,6 +61,7 @@ async fn each_accounts_backend_keeps_its_own_models() {
         let did = did("Models", product);
         let spec = preset(product);
         let original = crate::InferenceBackend {
+            physical_doc_id: None,
             node_did: did.clone(),
             backend_id: format!("{}-original", product.provider()),
             name: "Original".into(),

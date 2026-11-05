@@ -6,7 +6,7 @@ async fn prompt_gated_before_insertion_is_rejected_after_disconnect() {
     let graphql = spawn_mock_graphql(node.clone()).await;
     let manager = Arc::new(TurnManager::new(
         node.clone(),
-        test_config(graphql, &node_did),
+        test_config(graphql, &node_did, &node).await,
     ));
     let engine = test_engine(node.clone());
     let (_buffer, sender) = buffer_sender();
@@ -108,7 +108,7 @@ async fn disconnect_drains_an_already_pending_entry_and_duplicate_disconnect_is_
     .await;
     let manager = Arc::new(TurnManager::new(
         node.clone(),
-        test_config(graphql, &node_did),
+        test_config(graphql, &node_did, &node).await,
     ));
     let engine = test_engine(node.clone());
     let (_buffer, sender) = buffer_sender();
@@ -174,7 +174,7 @@ async fn disconnect_drains_an_already_pending_entry_and_duplicate_disconnect_is_
 async fn send_failure_after_submission_interrupts_the_request() {
     let (_tempdir, node, node_did) = test_node().await;
     let graphql = spawn_mock_graphql(node.clone()).await;
-    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did));
+    let manager = TurnManager::new(node.clone(), test_config(graphql, &node_did, &node).await);
     let engine = test_engine(node.clone());
     let (frames_tx, frames_rx) = tokio::sync::mpsc::unbounded_channel::<
         crate::commands::grok_shim::protocol::ServerEnvelope,
@@ -231,7 +231,7 @@ async fn second_prompt_for_live_session_is_rejected() {
     let graphql = spawn_mock_graphql(node.clone()).await;
     let manager = Arc::new(TurnManager::new(
         node.clone(),
-        test_config(graphql, &node_did),
+        test_config(graphql, &node_did, &node).await,
     ));
     let projections = test_engine(node.clone());
     let (buffer, sender) = buffer_sender();

@@ -11,7 +11,7 @@ pub(super) fn cause(
 ) -> SessionMessageCause {
     SessionMessageCause {
         caller_node_did: message.admission.node_did.clone(),
-        caller_agent_id: "caller-agent".to_owned(),
+        caller_agent_did: message.admission.tool.actor().to_string(),
         caller_session_id: "caller-session".to_owned(),
         caller_requester_did: None,
         caller_request_id: "caller-request".to_owned(),
@@ -21,6 +21,18 @@ pub(super) fn cause(
         tool_call_doc_id: "hop-tool-doc".to_owned(),
         correlation: None,
     }
+}
+
+pub(super) fn signer(
+    message: &crate::tools::call::lifecycle::admission_fixture::PublishedSessionMessage,
+) -> crate::store::identity::ManagedAgentSigner {
+    message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .managed_agent_signer()
+        .unwrap()
 }
 
 #[tokio::test]
@@ -43,7 +55,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
     .unwrap();
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
-        agent_id: caused.agent_id.clone(),
+        agent_did: caused.agent_did.clone(),
         session_id: caused.session_id.clone(),
     };
     let cases = &crate::lean_vocab_test::lean_contract_snapshot()
@@ -82,6 +94,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
             } else {
                 AgentMessageDelivery::Queue
             },
+            &signer(&message),
         )
         .await
         .unwrap()
@@ -113,7 +126,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
             "{name}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -139,7 +152,7 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
     .unwrap();
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
-        agent_id: caused.agent_id.clone(),
+        agent_did: caused.agent_did.clone(),
         session_id: caused.session_id.clone(),
     };
     let cause = cause(&message, 0);
@@ -147,7 +160,7 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
         content: "staged".to_owned(),
         goal: None,
     };
-    let planned = plan(&node, &cause, &target, body, None, false)
+    let planned = plan(&node, &cause, &target, body, None, false, &signer(&message))
         .await
         .unwrap()
         .unwrap();
@@ -162,7 +175,7 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
     };
     let before = load_tool().await.unwrap().unwrap();
     let receipt_before = load_receipt(
-        &node,
+        &crate::store::config_client::ConfigAccess::local_as(node.clone(), tool.actor().clone()),
         &tool_doc_id,
         tool.node_did(),
         tool.session_id(),
@@ -171,14 +184,16 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
     .await
     .unwrap();
     let (cause, planned) = (&cause, &planned);
-    let enqueued = crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "session_message.test_stage",
-        move |txn| Box::pin(async move { stage_planned_write_in_txn(txn, cause, planned).await }),
-    )
-    .await
-    .unwrap();
+    let enqueued = message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .transact_write("session_message.test_stage", move |txn| {
+            Box::pin(async move { stage_planned_write_in_txn(txn, cause, planned).await })
+        })
+        .await
+        .unwrap();
     let staged = crate::request::binding::load_agent_request_by_doc_id(&node, &enqueued.doc_id)
         .await
         .unwrap()
@@ -189,7 +204,7 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
     assert_eq!(after.state(), before.state());
     assert_eq!(after.is_running(), before.is_running());
     let receipt_after = load_receipt(
-        &node,
+        &crate::store::config_client::ConfigAccess::local_as(node.clone(), tool.actor().clone()),
         &tool_doc_id,
         tool.node_did(),
         tool.session_id(),
@@ -201,7 +216,7 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
         serde_json::to_value(&receipt_after).unwrap(),
         serde_json::to_value(&receipt_before).unwrap()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -225,7 +240,7 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
     .unwrap();
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
-        agent_id: caused.agent_id.clone(),
+        agent_did: caused.agent_did.clone(),
         session_id: caused.session_id.clone(),
     };
     let stale_cause = cause(&message, 0);
@@ -233,10 +248,18 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
         content: "stale".to_owned(),
         goal: None,
     };
-    let planned = plan(&node, &stale_cause, &target, body, None, false)
-        .await
-        .unwrap()
-        .unwrap();
+    let planned = plan(
+        &node,
+        &stale_cause,
+        &target,
+        body,
+        None,
+        false,
+        &signer(&message),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let ahead_cause = cause(&message, 10);
     let ahead = plan(
         &node,
@@ -248,33 +271,34 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
         },
         None,
         false,
+        &signer(&message),
     )
     .await
     .unwrap()
     .unwrap();
     assert!(ahead.hop() > planned.hop());
     let (ahead_cause, ahead) = (&ahead_cause, &ahead);
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "session_message.test_ahead_stage",
-        move |txn| {
+    message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .transact_write("session_message.test_ahead_stage", move |txn| {
             Box::pin(async move { stage_planned_write_in_txn(txn, ahead_cause, ahead).await })
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .await
+        .unwrap();
     let (stale_cause, planned) = (&stale_cause, &planned);
-    let error = crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "session_message.test_stale_stage",
-        move |txn| {
+    let error = message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .transact_write("session_message.test_stale_stage", move |txn| {
             Box::pin(async move { stage_planned_write_in_txn(txn, stale_cause, planned).await })
-        },
-    )
-    .await
-    .unwrap_err();
+        })
+        .await
+        .unwrap_err();
     assert!(
         error.to_string().contains("moved to hop"),
         "unexpected error: {error:#}"
@@ -291,7 +315,7 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
     assert!(!response.has_errors(), "{:?}", response.errors);
     let data = response.data.unwrap();
     assert!(data["AgentRequest"].as_array().unwrap().is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -317,7 +341,7 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
             } else {
                 "did:key:remote".into()
             },
-            agent_id: "worker".into(),
+            agent_did: "worker".into(),
             session_id: uuid::Uuid::new_v4().to_string(),
         };
         let create = crate::request::lifecycle::build_session_message_request(
@@ -330,6 +354,7 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
             1,
             None,
             None,
+            &signer(&message),
         )
         .await
         .unwrap();
@@ -352,7 +377,7 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
             interrupt_before_publish: false,
             write,
         };
-        plan.sign_agent_creation(&cause.caller_node_did, &parent)
+        plan.sign_agent_creation(&cause.caller_node_did, &parent, &signer(&message))
             .await
             .unwrap();
         let create = match &plan.write {
@@ -383,6 +408,11 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
             Ok(true)
         ));
     }
-    message.admission.node.shutdown().await;
+    message
+        .admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }

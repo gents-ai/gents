@@ -103,7 +103,7 @@ async fn admission_rejection_persists_despite_an_undecodable_session_row_under_i
         .node
         .execute(&format!(
             r#"mutation {{ create_AgentSession(input: {{
-                session_id: "{}", node_did: "{}", agent_id: "{}",
+                session_id: "{}", node_did: "{}", agent_did: "{}",
                 created_at: "not-an-rfc3339-timestamp"
             }}) {{ _docID }} }}"#,
             escape_graphql_string(&session_id),
@@ -312,7 +312,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             .node
             .execute(&format!(
                 r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "{}", purpose: "normal", node_did: "{}", agent_id: "{}",
+                request_id: "{}", purpose: "normal", node_did: "{}", agent_did: "{}",
                 session_id: "{}", lifecycle_state: "workspaceBindingPending",
                 content: "hello", created_at: "{}", request_hop: 0,
                 retry_count: 0, max_retries: 0, caused_by_trigger_id: "conformance-trigger"
@@ -350,7 +350,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
 
     match action {
         "bindWorkspace" => {
-            gents::__test_internals::activate_workspace_bound_request(&db.node, &doc_id)
+            activate_workspace_fixture(&db, &doc_id)
                 .await
                 .expect("bindWorkspace CAS mutation failed");
         }
@@ -398,6 +398,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
                 .await;
                 gents::__test_internals::reconcile_coalesced_pending_request(
                     &db.node,
+                    AGENT_NAME,
                     &session_id,
                     NODE_DID,
                     gents::__test_internals::QueueSource::User,
@@ -647,6 +648,69 @@ async fn force_persisted_lifecycle_state(node: &EmbeddedNode, doc_id: &str, life
     );
 }
 
+async fn scoped_matrix_request(
+    db: &support::TestDb,
+    agent: &dyn gents::NodeIdentity,
+    request_id: &str,
+    session_id: &str,
+    created_at: &str,
+    valid_until: Option<&str>,
+    input: Option<&str>,
+) -> String {
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        request_id,
+        db.node_identity.did(),
+        agent.did(),
+        agent.did(),
+        session_id,
+        "hello",
+        "interactive",
+        created_at,
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent.did()),
+    );
+    create.valid_until = valid_until.map(str::to_owned);
+    if let Some(input) = input {
+        create.input = serde_json::from_str(input).unwrap();
+    }
+    gents::sign_agent_request_create(agent, &mut create)
+        .await
+        .unwrap();
+    let result = gents::ConfigAccess::local(db.node.clone())
+        .write(
+            "test.scoped_matrix_request",
+            &create.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
+    gents::store::graphql::created_doc_id(&result, "AgentRequest").unwrap()
+}
+
+fn scoped_matrix_lifecycle(
+    db: &support::TestDb,
+    agent: &dyn gents::NodeIdentity,
+    doc_id: String,
+    request_id: String,
+    session_id: String,
+    created_at: String,
+) -> RequestLifecycle {
+    let mut request = build_request(doc_id, request_id, session_id, created_at);
+    request.node_did = db.node_identity.did().to_owned();
+    request.agent_did = agent.did().to_owned();
+    request.requester_did = Some(agent.did().to_owned());
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        agent.did(),
+        db.node_identity.did(),
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+    lifecycle.bind_managed_agent(agent).unwrap();
+    lifecycle
+}
+
 #[tokio::test]
 async fn production_request_writers_only_reach_contracted_edges() {
     const START_STATES: [&str; 9] = [
@@ -678,6 +742,13 @@ async fn production_request_writers_only_reach_contracted_edges() {
 
     for start in START_STATES {
         let db = test_db(&format!("production-edges-{}", start.to_lowercase())).await;
+        let agent = support::managed_agent(&db).await;
+        let access = gents::ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            ::identity::Did::new(agent.did()).unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
 
         for writer in WRITERS {
             let request_id = uuid::Uuid::new_v4().to_string();
@@ -687,20 +758,19 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 .then(|| (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
             let coalesce =
                 (writer == "coalesce_pending").then(|| coalesce_input("conformance-key"));
-            let doc_id = create_request_with_signed_fields(
-                &db.node,
+            let doc_id = scoped_matrix_request(
+                &db,
+                agent.as_ref(),
                 &request_id,
                 &session_id,
-                "pending",
                 &created_at,
                 valid_until.as_deref(),
                 coalesce.as_deref(),
-                None,
-                None,
             )
             .await;
-            let mut lifecycle = request_lifecycle_for_case(
+            let mut lifecycle = scoped_matrix_lifecycle(
                 &db,
+                agent.as_ref(),
                 doc_id.clone(),
                 request_id.clone(),
                 session_id.clone(),
@@ -720,9 +790,13 @@ async fn production_request_writers_only_reach_contracted_edges() {
             }
 
             if start == "processing" && matches!(writer, "complete" | "fail" | "interrupt") {
-                crate::support::begin_owned_execution(&mut lifecycle, &db.node)
-                    .await
-                    .unwrap();
+                let writer = gents::DefraStreamWriter::new_managed(
+                    db.node.clone(),
+                    agent.as_ref(),
+                    Duration::ZERO,
+                )
+                .unwrap();
+                lifecycle.begin_owned_execution(&writer).await.unwrap();
             }
             if writer == "claim_after_interrupt" {
                 set_interrupt_requested_at(&db.node, &doc_id, &chrono::Utc::now().to_rfc3339())
@@ -742,16 +816,14 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 let survivor_created_at =
                     (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
                 let survivor_input = coalesce_input("conformance-key");
-                let survivor_doc_id = create_request_with_signed_fields(
-                    &db.node,
+                let survivor_doc_id = scoped_matrix_request(
+                    &db,
+                    agent.as_ref(),
                     &survivor_id,
                     &session_id,
-                    "pending",
                     &survivor_created_at,
                     None,
                     Some(&survivor_input),
-                    None,
-                    None,
                 )
                 .await;
                 let _ = survivor_doc_id;
@@ -779,7 +851,13 @@ async fn production_request_writers_only_reach_contracted_edges() {
                     let _ = lifecycle.claim().await;
                 }
                 "begin_execution" => {
-                    let _ = crate::support::begin_owned_execution(&mut lifecycle, &db.node).await;
+                    let writer = gents::DefraStreamWriter::new_managed(
+                        db.node.clone(),
+                        agent.as_ref(),
+                        Duration::ZERO,
+                    )
+                    .unwrap();
+                    let _ = lifecycle.begin_owned_execution(&writer).await;
                 }
                 "complete" => {
                     let _ = lifecycle
@@ -809,23 +887,29 @@ async fn production_request_writers_only_reach_contracted_edges() {
                         .await;
                 }
                 "repair_terminal_requests" => {
-                    let _ = RequestLifecycle::repair_terminal_requests(&db.node, NODE_DID).await;
+                    let _ = RequestLifecycle::repair_terminal_requests_with_identities(
+                        &db.node,
+                        db.node_identity.did(),
+                        &[agent.clone()],
+                    )
+                    .await;
                 }
                 "coalesce_pending" => {
-                    let _ = gents::__test_internals::reconcile_coalesced_pending_request(
-                        &db.node,
-                        &session_id,
-                        NODE_DID,
-                        gents::__test_internals::QueueSource::User,
-                        "conformance-key",
+                    let _ = gents::__test_internals::reconcile_coalesced_pending_request_for_with_access(
+                        &db.node, &access, agent.did(), &session_id, db.node_identity.did(),
+                        gents::__test_internals::QueueSource::User, "conformance-key", None,
                     )
                     .await;
                 }
                 "bind_workspace" => {
-                    let _ = gents::__test_internals::activate_workspace_bound_request(
-                        &db.node, &doc_id,
-                    )
-                    .await;
+                    let _ =
+                        gents::__test_internals::activate_workspace_bound_request_with_identity(
+                            &db.node,
+                            &doc_id,
+                            ::identity::Did::new(agent.did()).unwrap(),
+                            Some(agent.as_ref()),
+                        )
+                        .await;
                 }
                 other => panic!("unhandled writer {other}"),
             }
@@ -892,15 +976,25 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
 
     for terminal in TERMINAL_STATES {
         let db = test_db(&format!("terminal-irreversibility-{terminal}")).await;
+        let agent = support::managed_agent(&db).await;
 
         for writer in WRITERS {
             let request_id = uuid::Uuid::new_v4().to_string();
             let session_id = uuid::Uuid::new_v4().to_string();
             let created_at = chrono::Utc::now().to_rfc3339();
-            let doc_id =
-                create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-            let mut lifecycle = request_lifecycle_for_case(
+            let doc_id = scoped_matrix_request(
                 &db,
+                agent.as_ref(),
+                &request_id,
+                &session_id,
+                &created_at,
+                None,
+                None,
+            )
+            .await;
+            let mut lifecycle = scoped_matrix_lifecycle(
+                &db,
+                agent.as_ref(),
                 doc_id.clone(),
                 request_id.clone(),
                 session_id.clone(),
@@ -928,7 +1022,13 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
                     let _ = lifecycle.reject_admission("projection rejected").await;
                 }
                 "begin_execution" => {
-                    let _ = crate::support::begin_owned_execution(&mut lifecycle, &db.node).await;
+                    let writer = gents::DefraStreamWriter::new_managed(
+                        db.node.clone(),
+                        agent.as_ref(),
+                        Duration::ZERO,
+                    )
+                    .unwrap();
+                    let _ = lifecycle.begin_owned_execution(&writer).await;
                 }
                 "complete" => {
                     let _ = lifecycle
@@ -958,9 +1058,13 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
                         .await;
                 }
                 "repair_terminal_requests" => {
-                    let report = RequestLifecycle::repair_terminal_requests(&db.node, NODE_DID)
-                        .await
-                        .expect("terminal repair sweep must succeed");
+                    let report = RequestLifecycle::repair_terminal_requests_with_identities(
+                        &db.node,
+                        db.node_identity.did(),
+                        &[agent.clone()],
+                    )
+                    .await
+                    .expect("terminal repair sweep must succeed");
                     assert_eq!(
                         report.repaired, 0,
                         "terminal repair moved a persisted {terminal} request: {report:?}"
@@ -1011,7 +1115,7 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
         fetch_request_snapshot(&db.node, &doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Claimed,
-            agent_id: AGENT_NAME.into(),
+            agent_did: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
             retry_parent_request: "".into(),
@@ -1096,7 +1200,7 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
         fetch_request_snapshot(&db.node, &doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Processing,
-            agent_id: AGENT_NAME.into(),
+            agent_did: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
             retry_parent_request: "".into(),
@@ -1158,7 +1262,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
         fetch_request_snapshot(&db.node, &doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Failed,
-            agent_id: AGENT_NAME.into(),
+            agent_did: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
             retry_parent_request: "".into(),
@@ -1183,19 +1287,12 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
 #[tokio::test]
 async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
     let db = test_db("scheduled-materialize").await;
-    crate::support::fixtures::configure_child_agent(
-        &db.node,
-        NODE_DID,
-        AGENT_NAME,
-        "scheduled-materialize-tools",
-        Vec::new(),
-        false,
-    )
-    .await;
+    let agent = crate::support::managed_agent(&db).await;
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
-        AGENT_NAME,
-        materialization_identity(),
+        agent.did(),
+        db.node_identity.clone(),
+        agent.clone(),
         "scheduled prompt body",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -1209,7 +1306,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
         fetch_request_snapshot(&db.node, &lifecycle.request().doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Claimed,
-            agent_id: AGENT_NAME.into(),
+            agent_did: agent.did().into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "scheduled".into(),
             retry_parent_request: "".into(),
@@ -1223,11 +1320,14 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
         }
     );
 
-    assert_session_observes_request(
+    assert_session_observes_request_in_scope(
         &db.node,
         &lifecycle.request().session_id,
         &(lifecycle.request().request_id.clone()),
         RequestLifecycleState::Claimed,
+        RequestLifecycleState::Claimed,
+        db.node_identity.did(),
+        agent.did(),
     )
     .await;
 }
@@ -1235,15 +1335,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
 #[tokio::test]
 async fn scheduled_materialization_persists_trigger_lineage() {
     let db = test_db("scheduled-materialize-lineage").await;
-    crate::support::fixtures::configure_child_agent(
-        &db.node,
-        NODE_DID,
-        AGENT_NAME,
-        "scheduled-materialize-lineage-tools",
-        Vec::new(),
-        false,
-    )
-    .await;
+    let agent = crate::support::managed_agent(&db).await;
     let lineage = TriggerLineage {
         trigger_id: Some("sched-1".into()),
         trigger_kind: Some("schedule".into()),
@@ -1254,8 +1346,9 @@ async fn scheduled_materialization_persists_trigger_lineage() {
 
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
-        AGENT_NAME,
-        materialization_identity(),
+        agent.did(),
+        db.node_identity.clone(),
+        agent.clone(),
         "scheduled prompt body with lineage",
         DEADLINE_SECS,
         ExecutionOrigin::Scheduled,
@@ -1291,7 +1384,7 @@ async fn scheduled_materialization_persists_trigger_lineage() {
     assert!(!response.has_errors(), "{:?}", response.errors);
     let row = &response.data.as_ref().unwrap()["AgentRequest"][0];
     assert_eq!(row["admission_kind"], "local-self");
-    assert_eq!(row["admission_signer_did"], NODE_DID);
+    assert_eq!(row["admission_signer_did"], agent.did());
     assert!(row["admission_signature"]
         .as_str()
         .is_some_and(|signature| !signature.is_empty()));
@@ -1846,7 +1939,7 @@ async fn create_queue_request(
                 request_id: "{escaped_request_id}",
                 purpose: "normal",
                 node_did: "{node_did}",
-                agent_id: "{AGENT_NAME}",
+                agent_did: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{escaped_request_id}",
@@ -1919,83 +2012,100 @@ async fn fetch_deadline_runtime_row(node: &EmbeddedNode, request_id: usize) -> D
     support::first_row::<DeadlineRuntimeRow>(&node.execute(&query).await, "AgentRequest")
 }
 
-async fn create_scoped_claim(db: &support::TestDb, node_did: &str) -> (String, String, String) {
+async fn create_scoped_claim(
+    db: &support::TestDb,
+    agent: &dyn gents::NodeIdentity,
+) -> (
+    String,
+    gents_protocol::request_admission::AgentRequestCreate,
+) {
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = support::create_request_for_agent_with_signed_fields(
-        &db.node,
-        node_did,
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         &request_id,
+        db.node_identity.did(),
+        agent.did(),
+        agent.did(),
         &session_id,
-        "pending",
+        "hello",
+        "interactive",
         &created_at,
-        None,
-        None,
-        None,
-        None,
-    )
-    .await;
-    let mut request = build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent.did()),
     );
-    request.node_did = node_did.to_string();
+    gents::sign_agent_request_create(agent, &mut create)
+        .await
+        .unwrap();
+    let access = gents::ConfigAccess::local(db.node.clone());
+    let response = access
+        .write("test.scoped_claim", &create.graphql_mutation().unwrap())
+        .await
+        .unwrap();
+    let doc_id = gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    let mut request = build_request(doc_id.clone(), request_id, session_id, created_at);
+    request.node_did = db.node_identity.did().to_owned();
+    request.agent_did = agent.did().to_owned();
+    request.requester_did = Some(agent.did().to_owned());
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
-        AGENT_NAME,
-        node_did,
+        agent.did(),
+        db.node_identity.did(),
         request,
         DEADLINE_SECS,
     );
+    lifecycle.bind_managed_agent(agent).unwrap();
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    (request_id, doc_id, session_id)
+    (doc_id, create)
 }
 
 #[tokio::test]
 async fn terminal_repair_sweep_ignores_foreign_did_claims() {
     let db = test_db("terminal-repair-scope-foreign").await;
-    let mut claims = Vec::new();
-    let expired =
-        escape_graphql_string(&(chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
-    for node_did in [NODE_DID, "did:test:foreign-scope-owner"] {
-        let (_request_id, doc_id, _session_id) = create_scoped_claim(&db, node_did).await;
-        let escaped_doc = escape_graphql_string(&doc_id);
-        let mutation = format!(
-            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc}" }} }}, input: {{ execution_lease_expires_at: "{expired}" }}) {{ _docID }} }}"#,
-        );
-        gents::ConfigAccess::transact_local_write(
-            &db.node,
-            None,
-            "test.expire_terminal_repair_fixture",
-            |txn| {
-                let mutation = mutation.clone();
-                Box::pin(async move {
-                    txn.execute(&mutation).await?;
-                    Ok::<_, anyhow::Error>(())
-                })
-            },
+    let agent = support::managed_agent(&db).await;
+    let foreign_db = test_db("terminal-repair-scope-foreign-owner").await;
+    let foreign_agent = support::managed_agent(&foreign_db).await;
+    let (own_doc, _) = create_scoped_claim(&db, agent.as_ref()).await;
+    let (_, foreign_create) = create_scoped_claim(&foreign_db, foreign_agent.as_ref()).await;
+    let access = gents::ConfigAccess::local(db.node.clone());
+    let response = access
+        .write(
+            "test.foreign_claim_replica",
+            &foreign_create.graphql_mutation().unwrap(),
         )
         .await
         .unwrap();
-
-        claims.push(doc_id);
+    let foreign_doc = gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    set_request_lifecycle_state(&db.node, &foreign_doc, "claimed").await;
+    let expired =
+        escape_graphql_string(&(chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
+    for doc_id in [&own_doc, &foreign_doc] {
+        let escaped_doc = escape_graphql_string(doc_id);
+        let mutation = format!(
+            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc}" }} }}, input: {{ execution_lease_expires_at: "{expired}" }}) {{ _docID }} }}"#,
+        );
+        access
+            .write("test.expire_terminal_repair_fixture", &mutation)
+            .await
+            .unwrap();
     }
-    let foreign_before = fetch_request_snapshot(&db.node, &claims[1]).await;
-    let report = RequestLifecycle::repair_terminal_requests(&db.node, NODE_DID)
-        .await
-        .unwrap();
+    let foreign_before = fetch_request_snapshot(&db.node, &foreign_doc).await;
+    let report = RequestLifecycle::repair_terminal_requests_with_identities(
+        &db.node,
+        db.node_identity.did(),
+        &[agent],
+    )
+    .await
+    .unwrap();
     assert_eq!(report.repaired, 1);
     assert_eq!(
-        fetch_request_snapshot(&db.node, &claims[0])
+        fetch_request_snapshot(&db.node, &own_doc)
             .await
             .lifecycle_state,
         RequestLifecycleState::Failed,
     );
     assert_eq!(
-        fetch_request_snapshot(&db.node, &claims[1]).await,
+        fetch_request_snapshot(&db.node, &foreign_doc).await,
         foreign_before
     );
 }
@@ -2019,12 +2129,33 @@ async fn assert_session_observes_request_with_authoritative_state(
     expected_observation: RequestLifecycleState,
     expected_authoritative: RequestLifecycleState,
 ) {
+    assert_session_observes_request_in_scope(
+        node,
+        session_id,
+        request_id,
+        expected_observation,
+        expected_authoritative,
+        NODE_DID,
+        AGENT_NAME,
+    )
+    .await;
+}
+
+async fn assert_session_observes_request_in_scope(
+    node: &EmbeddedNode,
+    session_id: &str,
+    request_id: &str,
+    expected_observation: RequestLifecycleState,
+    expected_authoritative: RequestLifecycleState,
+    node_did: &str,
+    agent_did: &str,
+) {
     let session = fetch_session_snapshot(node, session_id)
         .await
         .expect("canonical session");
     assert_eq!(session.session_id, session_id);
-    assert_eq!(session.node_did, NODE_DID);
-    assert_eq!(session.agent_id, AGENT_NAME);
+    assert_eq!(session.node_did, node_did);
+    assert_eq!(session.agent_did, agent_did);
     assert!(
         session.closed_at.is_none(),
         "request terminality does not close the session"
@@ -2042,7 +2173,7 @@ async fn assert_session_observes_request_with_authoritative_state(
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{
         request_id: {{_eq: "{request_id}"}}, session_id: {{_eq: "{session_id}"}}
-    }}) {{ _docID node_did requester_did agent_id lifecycle_state }} }}"#
+    }}) {{ _docID node_did requester_did agent_did lifecycle_state }} }}"#
         ))
         .await;
     assert!(
@@ -2076,7 +2207,13 @@ async fn assert_session_observes_request_with_authoritative_state(
         "absent requester scope is exact, not a wildcard"
     );
     assert_eq!(
-        rows[0]["agent_id"].as_str(),
-        Some(session.agent_id.as_str())
+        rows[0]["agent_did"].as_str(),
+        Some(session.agent_did.as_str())
     );
+}
+
+async fn activate_workspace_fixture(db: &support::TestDb, doc_id: &str) -> anyhow::Result<()> {
+    let binding = gents::store::identity::provision_agent_identity(db.node_identity.as_ref())?;
+    let actor: ::identity::Did = binding.agent_did.parse()?;
+    gents::__test_internals::activate_workspace_bound_request(&db.node, doc_id, actor).await
 }

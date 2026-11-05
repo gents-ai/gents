@@ -17,7 +17,7 @@ impl Fixture {
             gents::KeyIdentity::load_or_create(directory.path().join("identity.key"), None)
                 .unwrap();
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            gents::defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .build()
                 .await
@@ -74,7 +74,7 @@ impl Fixture {
             .await
             .unwrap();
         for name in ["engineer", "reviewer"] {
-            let agent = serde_json::from_value(json!({"node_did":identity.did(), "agent_id":name, "inference_profile_id":"profile-a"})).unwrap();
+            let agent = serde_json::from_value(json!({"node_did":identity.did(), "agent_did":name, "inference_profile_id":"profile-a"})).unwrap();
             gents::store::config_client::write_agent_document(&access, &agent)
                 .await
                 .unwrap();
@@ -113,10 +113,10 @@ impl Fixture {
         access.write("test.recovery.failed_request", &format!(r#"mutation {{
             update_AgentRequest(filter: {{request_id: {{_eq: "stopped"}}}}, input: {{lifecycle_state: "failed"}}) {{_docID}}
             own_call: create_InferenceCall(input: {{call_id: "failed-call", request_id: "stopped", node_did: "{did}",
-                agent_id: "engineer", backend_id: "main", call_kind: "inference", call_state: "failed",
+                agent_did: "engineer", backend_id: "main", call_kind: "inference", call_state: "failed",
                 attempt: 1, failure_reason: "{reason}", ended_at: "2026-10-23T12:00:00Z"}}) {{_docID}}
             foreign_call: create_InferenceCall(input: {{call_id: "foreign-call", request_id: "stopped", node_did: "did:key:foreign",
-                agent_id: "engineer", backend_id: "foreign", call_kind: "inference", call_state: "failed",
+                agent_did: "engineer", backend_id: "foreign", call_kind: "inference", call_state: "failed",
                 attempt: 2, failure_reason: "unrelated failure", ended_at: "2099-10-23T12:00:00Z"}}) {{_docID}}
         }}"#)).await.unwrap();
         gents::goal::set_goal_from_access(

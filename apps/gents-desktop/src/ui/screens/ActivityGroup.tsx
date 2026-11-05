@@ -148,14 +148,14 @@ function WorkerRunStep({
   const failed = tools.some(
     (t) => t.statusKind === "error" || t.statusKind === "failed",
   );
-  const agentId = reached?.summary?.agentId ?? null;
+  const agentDid = reached?.summary?.agentDid ?? null;
   return (
     <ToolStep
       label={name}
       icon={
-        agentId ? (
+        agentDid ? (
           <AgentInitials
-            name={agentName(agentId, deployment)}
+            name={agentName(agentDid, deployment)}
             className="size-4 text-[8px]"
           />
         ) : (

@@ -1,14 +1,12 @@
 use anyhow::{anyhow, bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::documents::{
     Agent, AgentContext, AgentTargetDocument, CompactionConfig, DatastoreToolSurfaceDocument,
     EventSource, InferenceBackend, InferenceBackendObservation, InferenceExecution,
     InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation, SkillDocument, Task,
     ToolServiceRegistry, Tools, Trigger, TriggerObservation,
 };
-use gents_protocol::client_protocol::{
-    AttemptView, RequestSnapshot, SessionRowObservation, SubmittedAttempt,
-};
+use gents_protocol::client_protocol::SessionRowObservation;
 use gents_protocol::graphql::escape_graphql_string;
 use gents_protocol::output::reconstruction::DependencyDenial;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -19,9 +17,9 @@ use gents_protocol::row::{
 use gents_protocol::schemas::{
     AGENT_MESSAGE_NAME, AGENT_NAME, AGENT_OUTPUT_SEGMENT_NAME, AGENT_REQUEST_NAME,
     AGENT_SESSION_NAME, AGENT_TARGET_NAME, AGENT_TOOL_CALL_NAME, COMPACTION_ENTRY_NAME, GOAL_NAME,
-    INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, MAILBOX_ITEM_NAME, NODE_NAME,
-    NODE_READINESS_NAME, NODE_RUNTIME_NAME, SCHEDULE_NAME, SKILL_NAME, TASK_NAME, TOOLS_NAME,
-    TOOL_SERVICE_REGISTRY_NAME, TRIGGER_NAME,
+    INFERENCE_BACKEND_METADATA_NAME as INFERENCE_BACKEND_NAME, INFERENCE_BACKEND_OBSERVATION_NAME,
+    INFERENCE_PROFILE_NAME, MAILBOX_ITEM_NAME, NODE_NAME, NODE_READINESS_NAME, NODE_RUNTIME_NAME,
+    SCHEDULE_NAME, SKILL_NAME, TASK_NAME, TOOLS_NAME, TOOL_SERVICE_REGISTRY_NAME, TRIGGER_NAME,
 };
 use gents_protocol::session::AgentSession;
 use serde::de::DeserializeOwned;
@@ -32,6 +30,11 @@ use std::pin::Pin;
 
 use super::peer_directory::PeerRecord;
 use super::store::{ClientStore, ClientStoreRows};
+
+fn is_permission_denied(error: &anyhow::Error) -> bool {
+    gents::store::config_client::TransactionFailure::config_client_error(error)
+        .is_some_and(gents::store::config_client::ConfigClientError::is_permission_denied)
+}
 
 mod agent_scope;
 mod document_patches;
@@ -44,19 +47,21 @@ pub use session_tip::{
     RequestPromptFact, RequestPromptOwnership,
 };
 mod snapshot_loaders;
+pub(crate) use snapshot_loaders::load_node_snapshot_on;
 
 pub use agent_scope::load_node_scoped_snapshot;
+#[cfg(test)]
 pub use document_patches::fetch_doc_patch;
-pub(crate) use document_patches::{
-    is_transcript_content_collection, supports_doc_patch_collection,
-};
+#[cfg(test)]
+pub(crate) use document_patches::supports_doc_patch_collection;
+pub(crate) use document_patches::{is_transcript_content_collection, OBSERVED_COLLECTIONS};
 pub(crate) use request_closure::{close_request_rows, close_request_rows_on};
 pub use session_transcript::{
     load_session_compaction_entries, load_session_compaction_entries_on,
     load_session_context_store, load_session_context_store_on, load_session_diagnostics_store,
-    load_session_transcript_page, load_session_transcript_page_on, load_session_transcript_window,
-    load_session_transcript_window_on, session_transcript_requester_scope,
-    session_unreadable_reason, session_unsendable_reason, TranscriptWindow,
+    load_session_diagnostics_store_on, load_session_transcript_page,
+    load_session_transcript_page_on, load_session_transcript_window,
+    load_session_transcript_window_on, session_transcript_requester_scope, TranscriptWindow,
 };
 pub(crate) use snapshot_loaders::*;
 
@@ -113,16 +118,16 @@ pub(super) struct TranscriptCursorRow {
 }
 
 pub(super) const NODE_FIELDS: &str =
-    "node_did display_name avatar default_agent_id enabled created_at created_by max_request_hop tags";
-pub(super) const AGENT_FIELDS: &str = "agent_id node_did display_name description context_id inference_profile_id enabled tags created_at";
+    "node_did display_name avatar default_agent_did enabled created_at created_by max_request_hop tags";
+pub(super) const AGENT_FIELDS: &str = "agent_did creation_nonce node_did display_name description context_id inference_profile_id enabled tags created_at";
 pub(super) const NODE_RUNTIME_FIELDS: &str = "node_did reconcile_phase agent_executor_capacity agent_executor_queue_depth agent_executor_status_json last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
 pub(super) const NODE_READINESS_FIELDS: &str = "node_did snapshot_json updated_at";
-pub(super) const AGENT_REQUEST_FIELDS: &str = "_docID request_id purpose node_did requester_did agent_id session_id retry_parent_request retry_parent_request_doc_id retry_root_request superseded_by_request superseded_by_request_doc_id content max_total_tokens input lifecycle_state backend_id execution_origin execution_generation execution_lease_secs execution_lease_expires_at caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id failure_reason terminalized_at terminal_output stopped_before_running terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until request_hop workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash retry_key caused_by_trigger_doc_id admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind";
-pub(super) const AGENT_SESSION_FIELDS: &str = "session_id node_did requester_did agent_id created_at closed_at stopped_at archived_at archive_revision title tags provenance observation";
+pub(super) const AGENT_REQUEST_FIELDS: &str = "_docID request_id purpose node_did requester_did agent_did session_id retry_parent_request retry_parent_request_doc_id retry_root_request superseded_by_request superseded_by_request_doc_id content max_total_tokens input lifecycle_state backend_id execution_origin execution_generation execution_lease_secs execution_lease_expires_at caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id failure_reason terminalized_at terminal_output stopped_before_running terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until request_hop workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash retry_key caused_by_trigger_doc_id admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind";
+pub(super) const AGENT_SESSION_FIELDS: &str = "session_id node_did requester_did agent_did created_at closed_at stopped_at archived_at archive_revision title tags provenance observation";
 pub(super) const GOAL_FIELDS: &str = "goal_id session_id node_did creation_key objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence created_at updated_at";
 pub(super) const AGENT_TOOL_CALL_FIELDS: &str = "_docID tool_call_key node_did session_id request_id request_doc_id requester_did message_sequence tool_name tool_call_id status lifecycle_state await_mode deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms job_pin job_progress spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id terminal_output";
 pub(super) const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id requester_did sequence summary files_read files_modified messages_compacted compacted_through_sequence original_tokens compacted_tokens created_at";
-pub(super) const TASK_FIELDS: &str = "task_id node_did display_name description agent_id prompt_template emit_outcome goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
+pub(super) const TASK_FIELDS: &str = "task_id node_did display_name description agent_did prompt_template emit_outcome goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
 pub(super) const SKILL_FIELDS: &str = "skill_id node_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
 pub(super) const SCHEDULE_FIELDS: &str =
     "schedule_id node_did display_name cadence created_at updated_at tags";
@@ -133,28 +138,27 @@ pub(super) const TRIGGER_OBSERVATION_FIELDS: &str =
 pub(super) const TOOLS_FIELDS: &str = "tools_id node_did display_name host remote agents built_ins datastore integrations self_config tags";
 pub(super) const AGENT_CONTEXT_FIELDS: &str = "context_id node_did display_name description system_prompt tools_id compaction_id skill_ids tags";
 pub(super) const COMPACTION_CONFIG_FIELDS: &str = "compaction_id node_did display_name strategy threshold keep_recent_tokens tool_result_max_chars summary_max_output_tokens summary_file_list_max inference_profile_id tags";
-pub(super) const INFERENCE_BACKEND_FIELDS: &str = "backend_id node_did name provider_kind openai_wire_api endpoint auth claude_platform connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
+pub(super) const INFERENCE_BACKEND_FIELDS: &str = "_docID backend_id node_did name provider_kind openai_wire_api endpoint auth_kind credential_id credential_version environment_variable oauth_account_ref oauth_allow_overage claude_platform connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
 pub(super) const INFERENCE_BACKEND_OBSERVATION_FIELDS: &str =
-    "backend_id catalogs catalog_freshness last_probe probe_status";
+    "metadata_doc_id backend_id catalogs catalog_freshness last_probe probe_status";
 pub(super) const INFERENCE_PROFILE_FIELDS: &str = "profile_id node_did display_name description backend_id model_name reasoning_effort service_tier context_window max_output_tokens sampling_id execution_id tags";
 pub(super) const INFERENCE_SAMPLING_FIELDS: &str = "sampling_id node_did display_name temperature top_p top_k seed min_p frequency_penalty presence_penalty repetition_penalty tags";
 pub(super) const INFERENCE_EXECUTION_FIELDS: &str = "execution_id node_did display_name max_turns max_total_tokens stream_batch_ms stream_liveness_timeout_secs provider_idle_timeout_secs deadline_duration_secs retry_policy_id tags";
 pub(super) const TOOL_SERVICE_REGISTRY_FIELDS: &str = "service_id node_did display_name description hostname tailscale_ip lan_ip mcp_port mcp_path send_node_did enabled tags";
 pub(super) const EVENT_SOURCE_FIELDS: &str = "event_source_id node_did display_name source_collection event_kind filter correlation_field group workspace_authority created_at updated_at tags";
 pub(super) const AGENT_TARGET_FIELDS: &str =
-    "target_id node_did target_node_did agent_id name description tags";
+    "target_id node_did target_node_did agent_did name description tags";
 pub(super) const DATASTORE_TOOL_SURFACE_FIELDS: &str =
     "surface_id node_did display_name enabled entries created_at tags";
-pub(super) const MAILBOX_ITEM_FIELDS: &str = "_docID item_key requester_did node_did status kind action title summary payload source_kind source_id session_id request_id cause_doc_id target_node_did target_agent_id expected_collection parent_item_id deadline_at created_at updated_at resolved_at resolved_doc_id";
+pub(super) const MAILBOX_ITEM_FIELDS: &str = "_docID item_key requester_did node_did status kind action title summary payload source_kind source_id session_id request_id cause_doc_id target_node_did target_agent_did expected_collection parent_item_id deadline_at created_at updated_at resolved_at resolved_doc_id";
 
 /// What a selected-session read found in one read transaction.
 #[derive(Debug)]
 pub enum SelectedSessionRead {
     /// The node's canonical session row and the requests it selects.
     Visible(Box<ClientStore>),
-    /// No canonical row yet: the request this database holds for the
-    /// session, which the delivery classification reads beside the pairing.
-    Absent(Option<SubmittedAttempt>),
+    /// The runtime returned no visible session for this scope.
+    Absent,
 }
 
 pub async fn load_chat_patch(
@@ -219,11 +223,7 @@ async fn load_chat_patch_with<'a>(
     let session_query = selected_session_query(node_did, session_id);
     let session_data = execute(session_query, "selected session owner").await?;
     let Some(session) = selected_session_from_data(&session_data, node_did, session_id)? else {
-        let query =
-            submitted_request_query(node_did, session_id, request_id.or(fallback_request_id));
-        let data = execute(query, "selected session submitted request").await?;
-        return submitted_attempt_from_data(&data, node_did, session_id)
-            .map(SelectedSessionRead::Absent);
+        return Ok(SelectedSessionRead::Absent);
     };
     let requester_did = session.requester_did.clone();
     let lookup = selected_request_lookup(
@@ -422,9 +422,8 @@ fn selected_session_query(node_did: &str, session_id: &str) -> String {
     )
 }
 
-/// The node creates the canonical row when it claims the request, so an
-/// absent row is `None`. Duplicate or out-of-scope rows are integrity faults
-/// whatever the other delivery signals say (`integrity_fault_is_an_error`).
+/// An empty authorized read may mean absent or hidden. Duplicate or
+/// out-of-scope rows are integrity faults.
 fn selected_session_from_data(
     data: &Value,
     node_did: &str,
@@ -449,49 +448,6 @@ fn selected_session_from_data(
             bail!("selected session refresh returned a row outside its exact node/session scope")
         }
     }
-}
-
-/// The session's newest normal request, or the one the reader tracks.
-fn submitted_request_query(node_did: &str, session_id: &str, request_id: Option<&str>) -> String {
-    let node = escape_graphql_string(node_did);
-    let session = escape_graphql_string(session_id);
-    let request = request_id
-        .map(|id| format!(", request_id: {{ _eq: \"{}\" }}", escape_graphql_string(id)))
-        .unwrap_or_default();
-    format!(
-        "query DesktopSelectedSessionSubmission {{ {AGENT_REQUEST_NAME}(filter: {{ node_did: {{ _eq: \"{node}\" }}, session_id: {{ _eq: \"{session}\" }}, purpose: {{ _eq: \"normal\" }}{request} }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}, {{ _docID: DESC }}], limit: 1) {{ {AGENT_REQUEST_FIELDS} }} }}"
-    )
-}
-
-/// A request is written `pending`; a row without a lifecycle has not been
-/// advanced by the node either.
-fn submitted_attempt_from_data(
-    data: &Value,
-    node_did: &str,
-    session_id: &str,
-) -> Result<Option<SubmittedAttempt>> {
-    let rows = snapshot_loaders::complete_request_rows(data, AGENT_REQUEST_NAME)?;
-    anyhow::ensure!(
-        rows.iter().all(|row| {
-            row.node_did.as_deref() == Some(node_did)
-                && row.session_id.as_deref() == Some(session_id)
-        }),
-        "selected session submission query returned a row outside its exact node/session scope"
-    );
-    let non_empty = |value: Option<&str>| value.is_some_and(|value| !value.trim().is_empty());
-    Ok(rows.into_iter().next().map(|row| SubmittedAttempt {
-        claimed: non_empty(row.claimed_at.as_deref()),
-        attempt: AttemptView {
-            request: RequestSnapshot {
-                is_superseded: non_empty(row.superseded_by_request.as_deref()),
-                lifecycle_state: row
-                    .lifecycle_state
-                    .unwrap_or(RequestLifecycleState::Pending),
-                retry_parent_request: row.retry_parent_request,
-                request_id: row.request_id,
-            },
-        },
-    }))
 }
 
 fn session_request_seed_query(
@@ -643,20 +599,6 @@ pub(super) async fn execute_local_graphql_query(
     response
         .data
         .with_context(|| format!("{operation} returned no data"))
-}
-
-pub(super) async fn load_rows<T>(node: &EmbeddedNode, root: &str, query: &str) -> Result<Vec<T>>
-where
-    T: DeserializeOwned,
-{
-    let operation = format!("query for {root}");
-    let response =
-        gents::store::graphql::graphql_with_transaction_retry(node, query, &operation).await?;
-
-    let data = response
-        .data
-        .with_context(|| format!("query for {root} returned no data"))?;
-    parse_query_rows(&data, root)
 }
 
 pub(super) async fn execute_access_graphql_query(

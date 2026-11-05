@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 
 use crate::documents::template::{render_template, task_node_ctx, TemplateScope};
@@ -11,8 +11,9 @@ use crate::request::lifecycle::{
 pub async fn write_manual_agent_request(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
+    identity: &dyn crate::store::identity::NodeIdentity,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     task_id: &str,
     prompt_template: &str,
     args: Value,
@@ -20,9 +21,10 @@ pub async fn write_manual_agent_request(
     write_manual_agent_request_with_conversation_title(
         node,
         actor,
+        identity,
         ManualRequestTarget {
             node_did,
-            agent_id,
+            agent_did,
             task_id,
         },
         prompt_template,
@@ -34,13 +36,14 @@ pub async fn write_manual_agent_request(
 
 pub struct ManualRequestTarget<'a> {
     pub node_did: &'a str,
-    pub agent_id: &'a str,
+    pub agent_did: &'a str,
     pub task_id: &'a str,
 }
 
 pub async fn write_manual_agent_request_with_conversation_title(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
+    identity: &dyn crate::store::identity::NodeIdentity,
     target: ManualRequestTarget<'_>,
     prompt_template: &str,
     args: Value,
@@ -48,11 +51,11 @@ pub async fn write_manual_agent_request_with_conversation_title(
 ) -> Result<String> {
     let ManualRequestTarget {
         node_did,
-        agent_id,
+        agent_did,
         task_id,
     } = target;
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let (node_scope, ctx_scope) = task_node_ctx(node_did, agent_id, &now);
+    let (node_scope, ctx_scope) = task_node_ctx(node_did, agent_did, &now);
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let scope = TemplateScope {
@@ -76,7 +79,7 @@ pub async fn write_manual_agent_request_with_conversation_title(
         node,
         actor,
         node_did,
-        agent_id,
+        agent_did,
         &content,
         ExecutionOrigin::Interactive,
         TriggerLineage {
@@ -92,6 +95,7 @@ pub async fn write_manual_agent_request_with_conversation_title(
         None,
         None,
         Some(&session_id),
+        identity,
     )
     .await
     .map_err(|e| anyhow!("create manual AgentRequest for task {task_id}: {e}"))?;
@@ -110,7 +114,7 @@ pub async fn write_manual_agent_request_with_conversation_title(
 mod tests {
     use std::sync::Arc;
 
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use serde_json::Value;
 
     use super::{
@@ -120,7 +124,7 @@ mod tests {
     use crate::store::identity::{KeyIdentity, NodeIdentity};
     use crate::store::schema::ensure_runtime_schemas;
 
-    async fn test_node() -> (Arc<EmbeddedNode>, String) {
+    async fn test_node() -> (Arc<EmbeddedNode>, String, Arc<dyn NodeIdentity>) {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap();
         let did = identity.did().to_string();
@@ -132,19 +136,24 @@ mod tests {
                 .unwrap(),
         );
         ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        (node, did)
+        let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+        crate::test_support::install_test_agent_binding(&node, &did, "manual fixture", &binding)
+            .await;
+        let agent = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
+        (node, did, agent)
     }
 
     #[tokio::test]
     async fn writes_manual_request_with_rendered_template_and_manual_lineage() {
-        let (node, node_did) = test_node().await;
-        let actor = ::identity::Did::new(node_did.clone()).unwrap();
+        let (node, node_did, agent) = test_node().await;
+        let actor = ::identity::Did::new(agent.did()).unwrap();
 
         let doc_id = write_manual_agent_request(
             &node,
             actor,
+            agent.as_ref(),
             &node_did,
-            "behavior-1",
+            agent.did(),
             "task-1",
             "hello {{ args.name }}",
             serde_json::json!({"name": "Amy"}),
@@ -197,15 +206,16 @@ mod tests {
 
     #[tokio::test]
     async fn manual_task_template_gets_node_and_ctx_scope() {
-        let (node, node_did) = test_node().await;
-        let actor = ::identity::Did::new(node_did.clone()).unwrap();
+        let (node, node_did, agent) = test_node().await;
+        let actor = ::identity::Did::new(agent.did()).unwrap();
         let doc_id = write_manual_agent_request(
             &node,
             actor,
+            agent.as_ref(),
             &node_did,
-            "behavior-1",
+            agent.did(),
             "task-1",
-            "tick {{ ctx.now }} on {{ node.node_did }} / {{ node.agent_id }}",
+            "tick {{ ctx.now }} on {{ node.node_did }} / {{ node.agent_did }}",
             serde_json::json!({}),
         )
         .await
@@ -236,19 +246,23 @@ mod tests {
 
         assert!(content.starts_with("tick "));
         assert!(content.contains(&node_did), "content={content:?}");
-        assert!(content.ends_with(" / behavior-1"), "content={content:?}");
+        assert!(
+            content.ends_with(&format!(" / {}", agent.did())),
+            "content={content:?}"
+        );
     }
 
     #[tokio::test]
     async fn writes_manual_request_with_slash_selected_skill_input() {
-        let (node, node_did) = test_node().await;
-        let actor = ::identity::Did::new(node_did.clone()).unwrap();
+        let (node, node_did, agent) = test_node().await;
+        let actor = ::identity::Did::new(agent.did()).unwrap();
 
         let doc_id = write_manual_agent_request(
             &node,
             actor,
+            agent.as_ref(),
             &node_did,
-            "behavior-1",
+            agent.did(),
             "task-1",
             "/vuln-scan\nReview /work",
             serde_json::json!({}),
@@ -284,15 +298,16 @@ mod tests {
 
     #[tokio::test]
     async fn writes_manual_request_with_deferred_conversation_title() {
-        let (node, node_did) = test_node().await;
-        let actor = ::identity::Did::new(node_did.clone()).unwrap();
+        let (node, node_did, agent) = test_node().await;
+        let actor = ::identity::Did::new(agent.did()).unwrap();
 
         let doc_id = write_manual_agent_request_with_conversation_title(
             &node,
             actor,
+            agent.as_ref(),
             ManualRequestTarget {
                 node_did: &node_did,
-                agent_id: "behavior-1",
+                agent_did: agent.did(),
                 task_id: "task-1",
             },
             "hello {{ args.name }}",
@@ -365,13 +380,14 @@ mod tests {
 
     #[tokio::test]
     async fn surfaces_template_render_errors() {
-        let (node, node_did) = test_node().await;
-        let actor = ::identity::Did::new(node_did).unwrap();
+        let (node, node_did, agent) = test_node().await;
+        let actor = ::identity::Did::new(agent.did()).unwrap();
         let err = write_manual_agent_request(
             &node,
             actor,
-            "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
-            "behavior-1",
+            agent.as_ref(),
+            &node_did,
+            agent.did(),
             "task-err",
             "hello {{ args.missing }}",
             serde_json::json!({}),

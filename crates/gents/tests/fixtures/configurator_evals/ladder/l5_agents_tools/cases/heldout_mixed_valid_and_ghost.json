@@ -39,12 +39,19 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "delegates": {
                     "targets": "targets",
                     "agents": [
                       "available-helper"
                     ]
+                  }
+                },
+                {
+                  "agent_did": "available-helper",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^available[ -]helper$"
                   }
                 }
               ]
@@ -65,7 +72,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",
@@ -118,7 +125,7 @@
             "node_did",
             "name",
             "target_node_did",
-            "agent_id"
+            "agent_did"
           ]
         }
       ]
@@ -179,8 +186,6 @@
             "links": [
               {
                 "capture": "ho-request",
-                "key": "agent_id",
-                "id": "available-helper",
                 "field": "caused_by_parent_tool_call_doc_id",
                 "target_capture": "delegation_calls",
                 "target_key": "_docID",
@@ -193,7 +198,23 @@
                     "field": "completion_notification_delivered_at",
                     "matches": "^[0-9]{4}-"
                   }
-                ]
+                ],
+                "source_match": {
+                  "field": "content",
+                  "contains": "HO-999"
+                },
+                "exact": true
+              },
+              {
+                "capture": "ho-request",
+                "source_match": {
+                  "field": "content",
+                  "contains": "HO-999"
+                },
+                "field": "session_id",
+                "target_capture": "ho-session",
+                "target_key": "session_id",
+                "exact": true
               }
             ]
           },
@@ -214,19 +235,42 @@
       "capture": [
         {
           "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
           "name": "ho-session",
           "collection": "AgentSession",
           "filter": {
             "node_did": {
               "_eq": "$trial"
             },
-            "agent_id": {
-              "_like": "%:available-helper"
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^available[ -]helper$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             }
           },
           "fields": [
             "session_id",
-            "agent_id",
+            "agent_did",
             "node_did"
           ]
         },
@@ -238,8 +282,17 @@
             "node_did": {
               "_eq": "$trial"
             },
-            "agent_id": {
-              "_like": "%:available-helper"
+            "agent_did": {
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^available[ -]helper$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             },
             "purpose": {
               "_eq": "normal"
@@ -247,7 +300,7 @@
           },
           "fields": [
             "request_id",
-            "agent_id",
+            "agent_did",
             "session_id",
             "content",
             "lifecycle_state",
@@ -268,6 +321,9 @@
                 "agent_new",
                 "agent_message"
               ]
+            },
+            "request_id": {
+              "_eq": "$request"
             }
           },
           "fields": [

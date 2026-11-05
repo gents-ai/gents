@@ -41,7 +41,7 @@ permissions = [
 [[set]]
 identifier = "session-control"
 description = "Explicit selected-session hydration retry"
-permissions = ["allow-desktop-session-hydration-retry"]
+permissions = ["allow-desktop-session-reload"]
 
 [[set]]
 identifier = "trace-read"

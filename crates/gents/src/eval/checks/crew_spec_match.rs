@@ -23,7 +23,7 @@ impl Check for CrewSpecMatch {
     }
 
     fn version(&self) -> &'static str {
-        "8"
+        "10"
     }
 
     fn describe(&self) -> CheckDescription {
@@ -69,6 +69,7 @@ impl Check for CrewSpecMatch {
                             "id": {"type": "string"}, "field": {"type": "string"},
                             "source_match": expectation,
                             "target_capture": {"type": "string"}, "target_key": {"type": "string"},
+                            "exact": {"type": "boolean"},
                             "category": category, "expect": expectations,
                             "reported_fields": strings,
                             "via": {"type":"array", "items": {
@@ -92,7 +93,7 @@ impl Check for CrewSpecMatch {
                             "expect": {"type": "array", "items": {
                                 "type": "object",
                                 "properties": {
-                                    "agent_id": {"type": "string"}, "category": category,
+                                    "agent_did": {"type": "string"}, "category": category,
                                     "source_match": expectation,
                                     "agent": expectations, "context": expectations,
                                     "tools": expectations,
@@ -103,7 +104,7 @@ impl Check for CrewSpecMatch {
                                         "targets":{"type":"string"}, "agents":strings
                                     }, "required":["targets","agents"], "additionalProperties":false}
                                 },
-                                "required": ["agent_id"], "additionalProperties": false
+                                "required": ["agent_did"], "additionalProperties": false
                             }}
                         },
                         "required": ["agents", "contexts", "tools", "expect"],
@@ -218,12 +219,14 @@ impl Check for CrewSpecMatch {
             };
             let reference = source.map(|row| lookup(row, &spec.field));
             let mut target = reference.as_ref().and_then(Value::as_str).and_then(|id| {
-                rows(&spec.target_capture).and_then(|rows| find(rows, &spec.target_key, id))
+                rows(&spec.target_capture)
+                    .and_then(|rows| find_link(rows, &spec.target_key, id, spec.exact))
             });
             for hop in &spec.via {
                 let reference = target.map(|row| lookup(row, &hop.field));
                 target = reference.as_ref().and_then(Value::as_str).and_then(|id| {
-                    rows(&hop.target_capture).and_then(|rows| find(rows, &hop.target_key, id))
+                    rows(&hop.target_capture)
+                        .and_then(|rows| find_link(rows, &hop.target_key, id, spec.exact))
                 });
             }
             let (destination, destination_key) = spec
@@ -295,14 +298,14 @@ impl Check for CrewSpecMatch {
                         None
                     };
                     let id = unique
-                        .and_then(|row| row.get("agent_id"))
+                        .and_then(|row| row.get("agent_did"))
                         .and_then(Value::as_str);
-                    if roles.insert(spec.agent_id.clone(), id).is_some() {
+                    if roles.insert(spec.agent_did.clone(), id).is_some() {
                         return grader("bad_params", "duplicate named agent role");
                     }
                     unique
                 } else {
-                    find(agents, "agent_id", &spec.agent_id)
+                    find(agents, "agent_did", &spec.agent_did)
                 };
                 selected.push((spec, agent));
             }
@@ -316,7 +319,8 @@ impl Check for CrewSpecMatch {
                 }
             }
             for (spec, agent) in selected {
-                let agent = agent.filter(|_| roles.get(&spec.agent_id).is_none_or(Option::is_some));
+                let agent =
+                    agent.filter(|_| roles.get(&spec.agent_did).is_none_or(Option::is_some));
                 let category = spec.category.as_deref();
                 let (agent_tests, context_tests, tools_tests) =
                     match (tests(spec.agent), tests(spec.context), tests(spec.tools)) {
@@ -337,7 +341,7 @@ impl Check for CrewSpecMatch {
                             .filter(|row| row.get("tools_id").is_some_and(Value::is_null))
                             .map(|_| &no_tools)
                     });
-                let id = &spec.agent_id;
+                let id = &spec.agent_did;
                 tally.record(category, agent.is_some(), || format!("agent {id} absent"));
                 tally.expectations(category, &format!("agent {id}"), agent, &agent_tests);
                 tally.expectations(category, &format!("{id} context"), context, &context_tests);
@@ -477,7 +481,7 @@ impl Check for CrewSpecMatch {
                                     && t.get("target_node_did") == t.get("node_did")
                             });
                             if let Some(agent) = target
-                                .and_then(|t| t.get("agent_id"))
+                                .and_then(|t| t.get("agent_did"))
                                 .and_then(Value::as_str)
                             {
                                 if let Some(name) =
@@ -605,6 +609,15 @@ impl Check for CrewSpecMatch {
             "prods": stage.prods,
         });
         verdict
+    }
+}
+
+fn find_link<'a>(rows: &'a [Value], key: &str, id: &str, exact: bool) -> Option<&'a Value> {
+    if exact {
+        rows.iter()
+            .find(|row| lookup(row, key).as_str() == Some(id))
+    } else {
+        find(rows, key, id)
     }
 }
 

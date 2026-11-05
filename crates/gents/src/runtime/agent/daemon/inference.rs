@@ -124,7 +124,7 @@ fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Res
 }
 
 pub(super) fn render_request_context_message(
-    _node: &defra_node::EmbeddedNode,
+    _node: &defra_node::Node,
     agent_config: &ResolvedAgent,
     request: &AgentRequest,
     frozen_instruction_manifest: Option<&str>,
@@ -223,7 +223,7 @@ where
         let attempt_index = 1_i64;
         let request_id = request.request_id.clone();
         let session_id = request.session_id.clone();
-        let agent_id = self.agent_config.agent_id.clone();
+        let agent_did = self.agent_config.agent_did.clone();
         let reviewer = self.workspace_reviewer(
             request,
             aggregate_token_budget.clone(),
@@ -234,7 +234,7 @@ where
             self.approval_home.as_deref(),
             &request.node_did,
             request.requester_did.as_deref(),
-            &agent_id,
+            &agent_did,
             workspace.workspace_cwd.as_deref(),
         )?
         .map(|context| context.with_reviewer(reviewer.callback.clone()));
@@ -250,18 +250,20 @@ where
             })
             .map(Arc::new);
         let inference = Box::pin(async {
-                let prepared = async {
+                let prepared = Box::pin(async {
                     let output_obligation_gate = crate::runtime::agent::output_obligation::OutputObligationGate::for_request(
                         self.node.clone(), request, self.output_obligations.as_ref(),
                     ).await?;
-                    let hook = DefraSessionHook::resume_with_identity_policy(
+                    let hook = DefraSessionHook::resume_with_actor_policy(
                         self.node.clone(),
                         &request.session_id,
                         self.agent_config.node_did(),
                         request.requester_did.as_deref(),
+                        ::identity::Did::new(request.agent_did.clone())?,
                         self.hook_failure_policy,
                     )
                     .await?
+                    .with_managed_identity(self.agent_config.agent_identity.as_ref())?
                     .with_inference_observation(inference_observation.clone())
                     .with_background_tool_registry(self.background_tool_registry.clone())
                     .with_background_execution_registry(self.background_execution_registry.clone())
@@ -301,7 +303,9 @@ where
                         self.account_hops,
                     )?;
                     let claude_context = crate::claude_request_context::for_request(
-                        &crate::store::config_client::ConfigAccess::local(self.node.clone()),
+                        &crate::store::config_client::ConfigAccess::local_managed_agent(
+                            self.node.clone(), identity::Did::new(request.agent_did.clone())?, self.agent_config.agent_identity.as_ref(),
+                        )?,
                         &self.agent_config,
                         request,
                         gents_claude::origin::Kind::Turn,
@@ -330,6 +334,9 @@ where
                             .transpose()?,
                     );
                     let turn_node = self.node.clone();
+                    let turn_agent_did = self.agent_config.agent_did.clone();
+                    let turn_agent_signer = self.agent_config.agent_identity.managed_agent_signer()
+                        .context("provider reduction requires a managed Agent signer")?;
                     let turn_request = request.clone();
                     let turn_request_commit_cid = lifecycle
                         .request_commit_cid()
@@ -350,6 +357,8 @@ where
                         let compactor = turn_compactor.clone();
                         let mut options: ReductionOptions = turn_compaction_options.clone();
                         let node = turn_node.clone();
+                        let agent_did = turn_agent_did.clone();
+                        let signer = turn_agent_signer.clone();
                         let request = turn_request.clone();
                         let request_commit_cid = turn_request_commit_cid.clone();
                         Box::pin(async move {
@@ -378,7 +387,11 @@ where
                             // safe_to_reduce gate belongs to session compaction.
                             let source_boundary =
                                 crate::turn::provider_context_reduction::capture_source_boundary(
-                                    node.as_ref(),
+                                    &crate::ConfigAccess::local_with_agent_signer(
+                                        node.clone(),
+                                        identity::Did::new(agent_did.clone()).map_err(compactor_failure)?,
+                                        signer.clone(),
+                                    ).map_err(compactor_failure)?,
                                     &request.session_id,
                                     &request.node_did,
                                     request.requester_did.as_deref(),
@@ -456,6 +469,7 @@ where
                             let reduction_index = compaction_request.prior_reduction_keys.len() + 1;
                             crate::turn::provider_context_reduction::stage_exact(
                                 crate::turn::provider_context_reduction::NewExactProviderContextReduction {
+                                    agent_did: &agent_did,
                                     node_did: &request.node_did,
                                     requester_did: request.requester_did.as_deref(),
                                     session_id: &request.session_id,
@@ -476,7 +490,7 @@ where
                                 },
                                 exact,
                             )
-                            .and_then(|staged| staged.into_turn_outcome(node))
+                            .and_then(|staged| staged.into_turn_outcome(node, signer))
                             .map_err(compactor_failure)
                         })
                     };
@@ -494,8 +508,11 @@ where
                         }
                     };
                     loop_config.authored_input = Some(authored_input(folded_prompts.clone()));
+                    let reduction_access = crate::store::config_client::ConfigAccess::local_managed_agent(
+                        self.node.clone(), identity::Did::new(request.agent_did.clone())?, self.agent_config.agent_identity.as_ref(),
+                    )?;
                     let restored = crate::turn::provider_context_reduction::load_unconsumed_for_request(
-                        self.node.as_ref(),
+                        &reduction_access,
                         &request.doc_id,
                     )
                     .await?;
@@ -524,7 +541,8 @@ where
                         };
                         replay.required = row.replay_associations()?.required;
                         crate::session::validate_canonical_replay_boundary(
-                            self.node.as_ref(), replay_scope, &boundary,
+                            &reduction_access,
+                            replay_scope, &boundary,
                         ).await?;
                         loop_config.context_message = None;
                         // The checkpoint's provider view already holds every
@@ -546,7 +564,7 @@ where
                     } else {
                         loop_config.reduction_chain_keys =
                             crate::turn::provider_context_reduction::load_for_request(
-                                self.node.as_ref(),
+                                &reduction_access,
                                 &request.doc_id,
                             )
                             .await?
@@ -575,7 +593,7 @@ where
                         loop_prompt,
                         max_turns_provenance,
                     ))
-                };
+                });
                 let Some(prepared) =
                     super::request::prepare_unless_interrupted(interrupt_rx, prepared).await
                 else {
@@ -591,7 +609,10 @@ where
                     loop_prompt,
                     max_turns_provenance,
                 ) = prepared?;
-                let loop_tools = self.loop_tools.clone();
+                let loop_tools = crate::inference::llm::tool::bind_request_tools(
+                    self.loop_tools.clone(),
+                    lifecycle.claimed_tool_context()?,
+                );
                 let inference_token = request_token.child_token();
                 let inference_token_for_start = inference_token.clone();
                 let terminal_failure_reason = admission::terminal_failure_reason_observer();
@@ -639,7 +660,7 @@ where
                     attempt_index,
                     inference_token.clone(),
                     terminal_failure_reason.clone(),
-                    async {
+                    Box::pin(async {
                         let mut processor = crate::runtime::agent::stream_processor::StreamProcessor::new(
                             &persistence_hook,
                             stream_writer,
@@ -950,7 +971,7 @@ where
                             return Err(error);
                         }
                         Ok(HandleRequestOutcome::Completed)
-                    },
+                    }),
                 )
                 .await
             }
@@ -959,7 +980,7 @@ where
                 request_id = %request_id,
                 session_id = %session_id,
                 node_did = %request.node_did,
-                agent_id = %agent_id,
+                agent_did = %agent_did,
                 backend_id = %backend_id,
                 model_name = %model_name,
                 deadline_at = %deadline_at,
@@ -973,7 +994,7 @@ where
         let outcome = crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
             request.requester_did.clone(),
             Some(request.node_did.clone()),
-            Some(agent_id.to_string()),
+            Some(agent_did.to_string()),
             Some(request.request_id.clone()),
             crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
                 request_deadline,
@@ -1102,7 +1123,12 @@ pub(super) mod tests {
         provider_inputs: Arc<std::sync::Mutex<Vec<String>>>,
         title_calls: Arc<AtomicUsize>,
         title_shape_mismatches: Arc<AtomicUsize>,
-        successor: Option<(Arc<defra_node::EmbeddedNode>, String, String)>,
+        successor: Option<(
+            Arc<defra_node::Node>,
+            String,
+            String,
+            crate::store::identity::ManagedAgentSigner,
+        )>,
     }
 
     #[allow(refining_impl_trait)]
@@ -1152,17 +1178,18 @@ pub(super) mod tests {
                         inputs.len() == 1
                     };
                     if first {
-                        if let Some((node, request_id, did)) = &self.successor {
-                            crate::tools::call::lifecycle::admission_fixture::complete_child(
+                        if let Some((node, request_id, did, signer)) = &self.successor {
+                            crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
                                 node,
                                 request_id,
                                 did,
                                 "successor native output",
+                                signer,
                             )
                             .await;
                             assert_eq!(
-                                crate::tools::background::completion::settle_running_session_message_rows(
-                                    node, did
+                                crate::tools::background::completion::settle_running_session_message_rows_with_access(
+                                    node, &crate::ConfigAccess::local_with_agent_signer(node.clone(), identity::Did::new(signer.did()).unwrap(), signer.clone()).unwrap(), did
                                 )
                                 .await
                                 .unwrap(),
@@ -1201,7 +1228,7 @@ pub(super) mod tests {
     }
 
     async fn persisted_request_by_doc_id(
-        node: &defra_node::EmbeddedNode,
+        node: &defra_node::Node,
         doc_id: &str,
     ) -> serde_json::Value {
         let response = node
@@ -1223,7 +1250,7 @@ pub(super) mod tests {
     }
 
     async fn persisted_request_state(
-        node: &defra_node::EmbeddedNode,
+        node: &defra_node::Node,
         doc_id: &str,
     ) -> gents_protocol::request_lifecycle::RequestLifecycleState {
         let row = persisted_request_by_doc_id(node, doc_id).await;
@@ -1287,14 +1314,22 @@ pub(super) mod tests {
         let principal = Arc::new(RuntimeNode {
             node_did: identity.did().to_string(),
             identity,
-            default_agent_id: "general".to_string(),
+            default_agent_did: "general".to_string(),
             display_name: None,
             enabled: true,
         });
 
+        let binding =
+            crate::store::identity::provision_agent_identity(principal.identity.as_ref()).unwrap();
+        let agent_identity =
+            crate::store::identity::resolve_agent_identity(principal.identity.as_ref(), &binding)
+                .unwrap();
+        let agent_did = binding.agent_did;
         Arc::new(ResolvedAgent {
+            configuration: crate::inference::resolved::ResolvedConfiguration::Static,
             profile_id: None,
-            agent_id: "general".to_string(),
+            agent_did,
+            agent_identity,
             node: principal,
             backend_id: Some("backend-general".to_string()),
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
@@ -1328,14 +1363,14 @@ pub(super) mod tests {
     }
 
     async fn create_routed_request(
-        node: &std::sync::Arc<defra_node::EmbeddedNode>,
+        node: &std::sync::Arc<defra_node::Node>,
         agent_config: &ResolvedAgent,
         requester_did: &str,
     ) -> AgentRequest {
         crate::test_support::install_test_agent(
             node,
             agent_config.node_did(),
-            &agent_config.agent_id,
+            &agent_config.agent_did,
         )
         .await;
         let request_id = uuid::Uuid::new_v4().to_string();
@@ -1346,7 +1381,7 @@ pub(super) mod tests {
             request_id,
             agent_config.node_did(),
             requester_did,
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             session_id,
             "route this reply",
             "interactive",
@@ -1383,7 +1418,7 @@ pub(super) mod tests {
     }
 
     async fn create_enrollment_daemon_request(
-        node: &std::sync::Arc<defra_node::EmbeddedNode>,
+        node: &std::sync::Arc<defra_node::Node>,
         agent_config: &ResolvedAgent,
         member: &dyn NodeIdentity,
         fence: &crate::runtime::agent::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence,
@@ -1392,7 +1427,7 @@ pub(super) mod tests {
         crate::test_support::install_test_agent(
             node,
             agent_config.node_did(),
-            &agent_config.agent_id,
+            &agent_config.agent_did,
         )
         .await;
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
@@ -1400,7 +1435,7 @@ pub(super) mod tests {
             format!("request-{suffix}"),
             agent_config.node_did(),
             member.did(),
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             format!("session-{suffix}"),
             "run enrolled request",
             "interactive",
@@ -1627,7 +1662,7 @@ pub(super) mod tests {
         let request = create_routed_request(&node, &agent_config, &requester_did).await;
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             &[],
             false,
             &[],
@@ -1764,7 +1799,7 @@ pub(super) mod tests {
             )).await
         );
 
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         let _ = std::fs::remove_dir_all(data_path);
     }
 
@@ -1788,7 +1823,16 @@ pub(super) mod tests {
             KeyIdentity::load_or_create(admission.path.join("test-agent.key"), None)
                 .expect("load the signed fixture's original identity"),
         );
-        let agent_config = test_agent_with_identity(identity);
+        let signer = admission
+            .tool
+            .access()
+            .unwrap()
+            .managed_agent_signer()
+            .unwrap();
+        let mut agent_config = test_agent_with_identity(identity);
+        let resolved = Arc::get_mut(&mut agent_config).unwrap();
+        resolved.agent_did = signer.did().to_owned();
+        resolved.agent_identity = Arc::new(signer.clone());
         assert_eq!(agent_config.node_did(), admission.node_did);
         assert_eq!(wake.node_did, admission.node_did);
         assert_eq!(
@@ -1809,7 +1853,7 @@ pub(super) mod tests {
 
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             &[],
             false,
             &[],
@@ -1827,8 +1871,14 @@ pub(super) mod tests {
                 provider_inputs: provider_inputs.clone(),
                 title_calls: title_calls.clone(),
                 title_shape_mismatches: title_shape_mismatches.clone(),
-                successor: successor
-                    .map(|request| (node.clone(), request, admission.node_did.clone())),
+                successor: successor.map(|request| {
+                    (
+                        node.clone(),
+                        request,
+                        admission.node_did.clone(),
+                        signer.clone(),
+                    )
+                }),
             }),
             preamble,
             loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
@@ -1932,7 +1982,7 @@ pub(super) mod tests {
         );
 
         let mut watcher =
-            crate::request::watcher::DefraWatcher::new(node.clone(), &admission.node_did)
+            crate::request::watcher::DefraWatcher::new_legacy(node.clone(), &admission.node_did)
                 .expect("request watcher");
         let successor = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
@@ -2043,7 +2093,7 @@ pub(super) mod tests {
         drop(watcher);
 
         drop(daemon);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         std::fs::remove_dir_all(admission.path).unwrap();
     }
 
@@ -2086,7 +2136,7 @@ pub(super) mod tests {
         let first = create_routed_request(&node, &agent_config, &requester_did).await;
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             &[],
             false,
             &[],
@@ -2124,7 +2174,7 @@ pub(super) mod tests {
         })
         .unwrap()
         .with_root_execution_guard(Some(crate::tools::surface::RootExecutionGuard {
-            agent_id: agent_config.agent_id.clone(),
+            agent_did: agent_config.agent_did.clone(),
             selected_root: Some(selected.clone()),
             ceiling_root: Some(selected.clone()),
         }));
@@ -2206,7 +2256,7 @@ pub(super) mod tests {
             "a later failed request must not inherit the earlier reply"
         );
 
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         let _ = std::fs::remove_dir_all(data_path);
     }
 
@@ -2260,7 +2310,7 @@ pub(super) mod tests {
 
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             &[],
             false,
             &[],
@@ -2340,7 +2390,7 @@ pub(super) mod tests {
             "exact replacement did not reach provider"
         );
 
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         let _ = std::fs::remove_dir_all(data_path);
     }
     include!("pre_inference_interrupt_tests.rs");

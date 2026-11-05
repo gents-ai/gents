@@ -94,8 +94,27 @@ fn config_from_case(backend_id: &str, desired: &Desired) -> Result<BackendAdmiss
     )
 }
 
+async fn acquire_with_signer(
+    registry: &AdmissionRegistry,
+    request_id: &str,
+    backend_id: &str,
+    signer: &crate::store::identity::ManagedAgentSigner,
+    connection: &str,
+) -> Result<AdmissionPermit, AdmissionError> {
+    let mut request = super::super::tests::request(request_id);
+    request.node_did = signer.node_did().to_owned();
+    request.agent_did = signer.did().to_owned();
+    let context = AdmissionCallContext::for_request(&request, signer.did(), backend_id);
+    scope_request(
+        context,
+        registry.acquire_current_call_with_signer(connection, None, None, Some(signer.clone())),
+    )
+    .await
+}
+
 struct Harness {
     registry: AdmissionRegistry,
+    signer: crate::store::identity::ManagedAgentSigner,
     backend_id: String,
     calls: Vec<JoinHandle<Result<AdmissionPermit, AdmissionError>>>,
     held: VecDeque<AdmissionPermit>,
@@ -109,19 +128,11 @@ impl Harness {
         self.slots.insert(connection.clone(), slot);
         let registry = self.registry.clone();
         let backend_id = self.backend_id.clone();
+        let signer = self.signer.clone();
         let request_id = format!("{}-{}", self.backend_id, self.started);
         self.started += 1;
         self.calls.push(tokio::spawn(async move {
-            registry
-                .acquire_with_connection_for_test(
-                    request_id,
-                    backend_id,
-                    "default",
-                    "did:test:registry",
-                    CallKind::Inference,
-                    &connection,
-                )
-                .await
+            acquire_with_signer(&registry, &request_id, &backend_id, &signer, &connection).await
         }));
     }
 
@@ -203,8 +214,10 @@ async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
         "missing step expectations"
     );
     let backend_id = format!("registry-{}", case.name);
+    let signer = super::super::tests::managed_signer(&node);
     let mut harness = Harness {
         registry: AdmissionRegistry::new(node),
+        signer,
         backend_id: backend_id.clone(),
         calls: Vec::new(),
         held: VecDeque::new(),
@@ -261,10 +274,7 @@ async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
 async fn generated_inference_registry_cases_drive_real_permits() {
     let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
     assert_eq!(snapshot.inference_registry_cases.len(), 11);
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::store::schema::ensure_runtime_schemas(node.as_ref())
-        .await
-        .unwrap();
+    let node = super::super::tests::test_node().await;
     let mut failures = Vec::new();
     for case in &snapshot.inference_registry_cases {
         if let Err(error) = run_case(node.clone(), case).await {
@@ -276,10 +286,8 @@ async fn generated_inference_registry_cases_drive_real_permits() {
 
 #[tokio::test]
 async fn rollback_reuses_epoch_with_distinct_controller_on_shared_pool() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::store::schema::ensure_runtime_schemas(node.as_ref())
-        .await
-        .unwrap();
+    let node = super::super::tests::test_node().await;
+    let signer = super::super::tests::managed_signer(&node);
     let registry = AdmissionRegistry::new(node);
     let backend_id = "registry-rollback-epoch";
     let config = |generation, capacity| {
@@ -298,12 +306,12 @@ async fn rollback_reuses_epoch_with_distinct_controller_on_shared_pool() {
         .unwrap()
     };
     let acquire = |request_id: &'static str| {
-        registry.acquire_for_test(
+        acquire_with_signer(
+            &registry,
             request_id,
             backend_id,
-            "default",
-            "did:test:registry",
-            CallKind::Inference,
+            &signer,
+            TEST_SLOT_CONNECTION,
         )
     };
     registry.reconcile(

@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use super::session_hydration::{
-    decide_hydration, decide_inventory_hydration, HydrationCatalog, HydrationVerdict,
-};
+#[cfg(test)]
+use super::session_hydration::decide_inventory_hydration;
+use super::session_hydration::{decide_hydration, HydrationCatalog, HydrationVerdict};
+#[cfg(test)]
 use gents_protocol::file_inventory::{
     FileInventoryAdmission, FileInventoryEntry, FileInventoryPageReceipt,
     FILE_INVENTORY_RECEIPT_VERSION,
@@ -123,6 +124,7 @@ pub fn select_file_images(
 
 /// The source's existing signature and document-owner readers establish these
 /// facts. They are not decoded from the client's image demand.
+#[cfg(test)]
 pub(crate) struct InventoryImagePageObservation {
     pub receipt: FileInventoryPageReceipt,
     pub owner: String,
@@ -131,6 +133,7 @@ pub(crate) struct InventoryImagePageObservation {
 
 /// Native ACP observes the reviewing DID at the exact physical source root.
 /// A readable metadata projection does not establish image visibility.
+#[cfg(test)]
 pub(crate) struct InventoryImageReadObservation {
     pub admission: FileInventoryAdmission,
     pub projection_doc_id: String,
@@ -141,6 +144,7 @@ pub(crate) struct InventoryImageReadObservation {
     pub image_owner: String,
 }
 
+#[cfg(test)]
 pub(crate) fn inventory_image_entry<'a>(
     demand: &FileImageDemand,
     page: &'a InventoryImagePageObservation,
@@ -168,6 +172,7 @@ pub(crate) fn inventory_image_entry<'a>(
         .get(usize::from(reference.entry_index))
 }
 
+#[cfg(test)]
 pub(crate) fn authorize_inventory_image_read<'a>(
     demand: &FileImageDemand,
     catalog: &HydrationCatalog,
@@ -203,6 +208,7 @@ pub(crate) fn authorize_inventory_image_read<'a>(
     Some(entry)
 }
 
+#[cfg(test)]
 pub(crate) fn select_inventory_file_images(
     demand: &FileImageDemand,
     catalog: &HydrationCatalog,

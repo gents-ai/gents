@@ -293,7 +293,8 @@ pub(crate) async fn check(home: Option<PathBuf>) -> Result<()> {
     .await??;
     execute::endpoint(&state.graphql, &settings)?;
     let access = gents::store::config_client::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(state.graphql, identity.did()),
+        gents::store::config_client::GraphqlEndpoint::as_principal(state.graphql, identity.did())
+            .with_client_signing_capability(identity.client_signing_capability()?)?,
     );
     let versions = access
         .collection_versions()

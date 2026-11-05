@@ -52,7 +52,7 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
             trigger_config_document_binding_current: case.trigger_config_document_binding_current,
             source_document_binding_current: case.source_document_binding_current,
             target_policy_allows: case.target_policy_allows,
-            peer_authority_allows: case.peer_authority_allows,
+            native_create_authorized: case.native_create_authorized,
             hop_within_bound: case.hop_within_bound,
         };
         let actual = gents::final_claim_admission_disposition(true, observation)
@@ -74,6 +74,7 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
     }
     for kind in [
         AgentRequestAdmissionKind::Enrollment,
+        AgentRequestAdmissionKind::Client,
         AgentRequestAdmissionKind::LocalSelf,
         AgentRequestAdmissionKind::RuntimeInternal,
         AgentRequestAdmissionKind::Peer,
@@ -85,6 +86,7 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
         );
     }
     for kind in [
+        AgentRequestAdmissionKind::Client,
         AgentRequestAdmissionKind::LocalSelf,
         AgentRequestAdmissionKind::Peer,
     ] {

@@ -1,94 +1,26 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::documents::{DatastoreTools, SurfaceToolDecl, Tools};
-use gents::session::mailbox::{canonical_mailbox_write_decl, list_mailbox_items, MailboxStatus};
-use gents::{Collection, DatastoreToolSurfaceDocument, NodeIdentity};
+use gents::session::mailbox::MailboxStatus;
+use gents::NodeIdentity;
 
-use crate::support::accepted_turn::{
-    boot_prepared_accepted_turn, prepare_accepted_turn, AcceptedTurnSpec,
-};
-use crate::support::fixtures::configure_agent_tools;
-use crate::support::live_inference::wait_for_request_terminal;
+use crate::support::accepted_turn::boot_prepared_accepted_turn;
 use crate::support::streaming_backend::{StreamChunk, StreamPlan, StreamResponse};
-use crate::support::test_db;
-
-const AGENT: &str = "mailbox-turn-engineer";
-const SURFACE: &str = "engineer-mailbox";
+use crate::support::test_signed_db;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
-    let db = test_db("mailbox-tool-turn").await;
+    let db = test_signed_db("mailbox-tool-turn").await;
     let did = db.node_identity.did().to_string();
     let request_id = "mailbox-tool-turn-request";
     let prompt = "mailbox-tool-turn-prompt";
-    let prepared = prepare_accepted_turn(
-        &db,
-        AcceptedTurnSpec {
-            backend_id: "mailbox-tool-turn-backend",
-            model: "mailbox-tool-turn-model",
-            parent_agent_id: AGENT,
-            configured_agent_ids: &[AGENT],
-            request_id,
-            session_id: "mailbox-tool-turn-session",
-            prompt,
-            accepted_chunks: vec![StreamChunk::tool_call(
-                "mailbox-tool-turn-call",
-                gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
-                serde_json::json!({
-                    "title": "Crew ready",
-                    "summary": "Two agents configured.\n\n- builder\n- reviewer",
-                })
-                .to_string(),
-            )],
-            child_plans: Vec::new(),
-            valid_until: None,
-            request_hop: None,
-            request_setup: None,
-        },
-    )
-    .await;
-    configure_agent_tools(
-        &db.node,
-        &did,
-        AGENT,
-        None,
-        Tools {
-            tools_id: format!("{AGENT}:tools"),
-            node_did: did.clone(),
-            datastore: Some(DatastoreTools {
-                enable_defra_query: Some(true),
-                datastore_tool_surface_ids: Some(vec![SURFACE.into()]),
-                ..Default::default()
-            }),
-            agents: Some(gents::documents::AgentTools {
-                target_ids: Vec::new(),
-                enabled: Some(true),
-            }),
-            built_ins: Some(gents::documents::BuiltInTools {
-                enable_session_history_tool: Some(true),
-                ..Default::default()
-            }),
-            self_config: Some(gents::tools::builtin::self_config::engineer_self_config()),
-            ..Default::default()
-        },
-        vec![(
-            Collection::DatastoreToolSurface,
-            serde_json::to_value(DatastoreToolSurfaceDocument {
-                surface_id: SURFACE.into(),
-                node_did: did.clone(),
-                display_name: Some("Engineer escalations".into()),
-                enabled: true,
-                entries: Some(vec![
-                    SurfaceToolDecl::Create(canonical_mailbox_write_decl()),
-                ]),
-                created_at: None,
-                tags: Vec::new(),
-            })
-            .unwrap(),
-        )],
-    )
-    .await;
+    let (prepared, turn) = crate::support::signed_mailbox::prepare_signed_mailbox_turn(
+        &db, "mailbox-tool-turn-backend", "mailbox-tool-turn-model", request_id,
+        "mailbox-tool-turn-session", prompt,
+        vec![StreamChunk::tool_call("mailbox-tool-turn-call", gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
+            serde_json::json!({"title":"Crew ready", "summary":"Two agents configured.\n\n- builder\n- reviewer"}).to_string())],
+        Vec::new(), None,
+    ).await.unwrap();
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
@@ -99,28 +31,71 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
     .unwrap();
     let runtime = boot_prepared_accepted_turn(&db, prepared, agent).await;
 
-    let state =
-        wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(60)).await;
-    let failure = db
-        .node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ lifecycle_state failure_reason }} }}"#
-        ))
-        .await;
-    let tool_calls = db
-        .node
-        .execute(r#"{ AgentToolCall { tool_name lifecycle_state status tool_failure_class } }"#)
-        .await;
-    assert_eq!(
-        state, "completed",
-        "request: {:?}; tool calls: {:?} {:?}",
-        failure.data, tool_calls.data, tool_calls.errors
-    );
-    let items = list_mailbox_items(db.node.as_ref(), &did, Some(MailboxStatus::Open))
-        .await
-        .unwrap();
+    let state = crate::support::signed_mailbox::wait_for_request_terminal_on(
+        &turn.client,
+        request_id,
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    assert_eq!(state, "completed");
+    let items = gents::session::mailbox::list_mailbox_items_on(
+        &turn.client,
+        turn.user.did(),
+        Some(MailboxStatus::Open),
+    )
+    .await
+    .unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].title, "Crew ready");
+    assert_eq!(items[0].requester_did, turn.user.did());
+    let commits = turn
+        .agent_access
+        .execute(&format!(
+            r#"query {{_commits(docID: "{}") {{height fieldName signature {{identity type}}}}}}"#,
+            gents::store::graphql::escape_graphql_string(&items[0].doc_id)
+        ))
+        .await
+        .unwrap();
+    let genesis = commits["data"]["_commits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["fieldName"] == "_C")
+        .min_by_key(|row| row["height"].as_i64())
+        .unwrap();
+    let expected_signer =
+        gents::store::identity::commit_signer_identity_for_did(turn.agent.did()).unwrap();
+    assert_eq!(genesis["signature"]["identity"], expected_signer);
+    let outsider =
+        gents::KeyIdentity::load_or_create(db.data_path().join("mailbox-outsider.key"), None)
+            .unwrap();
+    let admin = gents::ConfigAccess::local_as(db.node.clone(), did.parse().unwrap());
+    for permission in [
+        gents::store::config_client::NodePermission::DocumentRead,
+        gents::store::config_client::NodePermission::CollectionGet,
+    ] {
+        admin
+            .grant_node_permission(&outsider.did().parse().unwrap(), permission)
+            .await
+            .unwrap();
+    }
+    let outsider_access = gents::ConfigAccess::Graphql(
+        gents::store::config_client::GraphqlEndpoint::as_principal(
+            db.client_endpoint(),
+            outsider.did(),
+        )
+        .with_client_signing_capability(outsider.client_signing_capability().unwrap())
+        .unwrap(),
+    );
+    let hidden = outsider_access
+        .execute(&format!(
+            r#"{{MailboxItem(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID}}}}"#,
+            gents::store::graphql::escape_graphql_string(&items[0].doc_id)
+        ))
+        .await
+        .unwrap();
+    assert!(hidden["data"]["MailboxItem"].as_array().unwrap().is_empty());
     let outcome = serde_json::to_value(
         gents::session::mailbox::NotificationIdentity::Event.write_outcome(false, false),
     )
@@ -142,18 +117,16 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
     assert_eq!(receipt["item"]["_docID"], items[0].doc_id);
     assert_eq!(receipt["item"]["title"], items[0].title);
     assert_eq!(receipt["item"]["request_id"], request_id);
-    gents::ConfigAccess::transact_local_readonly(
-        &db.node,
-        None,
-        "test.session.observed_reply",
-        |txn| {
+    turn.client
+        .transact_readonly("test.session.observed_reply", |txn| {
             let did = did.clone();
+            let user = turn.user.did().to_owned();
             Box::pin(async move {
                 let session = gents::session::load_agent_session_row_in_txn(
                     txn,
                     &did,
                     "mailbox-tool-turn-session",
-                    Some(&did),
+                    Some(&user),
                 )
                 .await?
                 .unwrap()
@@ -167,45 +140,10 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
                 assert_eq!(observation.latest_request.unwrap().request_id, request_id);
                 Ok::<_, anyhow::Error>(())
             })
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .await
+        .unwrap();
     runtime.shutdown().await;
-}
-
-pub(super) async fn configure_engineer_mailbox(db: &crate::support::TestDb, did: &str) {
-    configure_agent_tools(
-        &db.node,
-        did,
-        AGENT,
-        None,
-        Tools {
-            tools_id: format!("{AGENT}:tools"),
-            node_did: did.to_string(),
-            datastore: Some(DatastoreTools {
-                datastore_tool_surface_ids: Some(vec![SURFACE.into()]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
-        vec![(
-            Collection::DatastoreToolSurface,
-            serde_json::to_value(DatastoreToolSurfaceDocument {
-                surface_id: SURFACE.into(),
-                node_did: did.to_string(),
-                display_name: Some("Engineer escalations".into()),
-                enabled: true,
-                entries: Some(vec![
-                    SurfaceToolDecl::Create(canonical_mailbox_write_decl()),
-                ]),
-                created_at: None,
-                tags: Vec::new(),
-            })
-            .unwrap(),
-        )],
-    )
-    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -213,8 +151,7 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
     use gents_protocol::mailbox_question::{
         MailboxQuestion, MailboxQuestionAnswer, MailboxQuestionOption, MAILBOX_QUESTION_VERSION,
     };
-    let db = test_db("mailbox-question-turn").await;
-    let did = db.node_identity.did().to_string();
+    let db = test_signed_db("mailbox-question-turn").await;
     let session_id = "mailbox-question-session";
     let question = MailboxQuestion {
         version: MAILBOX_QUESTION_VERSION,
@@ -237,32 +174,26 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
         ..Default::default()
     };
     let reply = question.reply_content("Release", &answer).unwrap();
-    let prepared = prepare_accepted_turn(
+    let (prepared, turn) = crate::support::signed_mailbox::prepare_signed_mailbox_turn(
         &db,
-        AcceptedTurnSpec {
-            backend_id: "mailbox-question-backend",
-            model: "mailbox-question-model",
-            parent_agent_id: AGENT,
-            configured_agent_ids: &[AGENT],
-            request_id: "mailbox-question-request",
-            session_id,
-            prompt: "mailbox-question-prompt",
-            accepted_chunks: vec![StreamChunk::tool_call(
-                "mailbox-question-call",
-                gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
-                serde_json::json!({"title": "Release", "question": question}).to_string(),
-            )],
-            child_plans: vec![StreamPlan::new(
-                reply.clone(),
-                vec![StreamResponse::completes(reply.clone(), ["noted"])],
-            )],
-            valid_until: None,
-            request_hop: None,
-            request_setup: None,
-        },
+        "mailbox-question-backend",
+        "mailbox-question-model",
+        "mailbox-question-request",
+        session_id,
+        "mailbox-question-prompt",
+        vec![StreamChunk::tool_call(
+            "mailbox-question-call",
+            gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
+            serde_json::json!({"title":"Release", "question":question}).to_string(),
+        )],
+        vec![StreamPlan::new(
+            reply.clone(),
+            vec![StreamResponse::completes(reply.clone(), ["noted"])],
+        )],
+        None,
     )
-    .await;
-    configure_engineer_mailbox(&db, &did).await;
+    .await
+    .unwrap();
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
@@ -273,18 +204,22 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
     .unwrap();
     let runtime = boot_prepared_accepted_turn(&db, prepared, agent).await;
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
+        crate::support::signed_mailbox::wait_for_request_terminal_on(
+            &turn.client,
             "mailbox-question-request",
             Duration::from_secs(60)
         )
-        .await,
-        "completed",
-        "filing a question must not suspend or fail the asking turn"
-    );
-    let items = list_mailbox_items(db.node.as_ref(), &did, Some(MailboxStatus::Open))
         .await
-        .unwrap();
+        .unwrap(),
+        "completed"
+    );
+    let items = gents::session::mailbox::list_mailbox_items_on(
+        &turn.client,
+        turn.user.did(),
+        Some(MailboxStatus::Open),
+    )
+    .await
+    .unwrap();
     assert_eq!(items.len(), 1);
     let item = &items[0];
     assert_eq!(
@@ -297,18 +232,7 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
         question
     );
 
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        "mailbox-question-reply",
-        &did,
-        &did,
-        AGENT,
-        session_id,
-        &reply,
-        "interactive",
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
-    );
+    let mut create = turn.request("mailbox-question-reply", session_id, &reply);
     create.caused_by_source_doc_id = Some(item.doc_id.clone());
     answer.question_hash = Some(
         gents_protocol::mailbox_question::question_source_hash(
@@ -330,35 +254,22 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
         )
         .unwrap(),
     );
-    gents::sign_agent_request_create_as_registered_target(&mut create)
-        .await
-        .unwrap();
-    let response = gents::ConfigAccess::write_local(
-        &db.node,
-        "test.optional_question.reply",
-        &create.graphql_mutation().unwrap(),
-    )
-    .await
-    .unwrap();
-    let reply_doc = gents::store::graphql::mutation_documents(&response, "create_AgentRequest")
-        .unwrap()
-        .unwrap()[0]["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let reply_doc = turn.submit(create).await.unwrap();
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
+        crate::support::signed_mailbox::wait_for_request_terminal_on(
+            &turn.client,
             "mailbox-question-reply",
             Duration::from_secs(60)
         )
-        .await,
+        .await
+        .unwrap(),
         "completed"
     );
-    let answered = gents::session::mailbox::load_mailbox_item(db.node.as_ref(), &item.doc_id)
-        .await
-        .unwrap()
-        .unwrap();
+    let answered =
+        gents::session::mailbox::load_mailbox_item_with_access(&turn.client, &item.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
     assert_eq!(answered.status, "acted");
     assert_eq!(
         answered.resolved_doc_id.as_deref(),
@@ -373,30 +284,12 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
     runtime.shutdown().await;
 }
 
-pub(super) async fn request_state(
-    node: &gents::defra_node::EmbeddedNode,
-    request_id: &str,
-) -> Option<String> {
-    let response = node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ lifecycle_state }} }}"#
-        ))
-        .await;
-    response.data.as_ref()?["AgentRequest"]
-        .as_array()?
-        .first()?
-        .get("lifecycle_state")?
-        .as_str()
-        .map(str::to_owned)
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn() {
     use gents_protocol::mailbox_question::{
         MailboxQuestion, MailboxQuestionAnswer, MailboxQuestionOption,
     };
-    let db = test_db("mailbox-question-busy").await;
-    let did = db.node_identity.did().to_string();
+    let db = test_signed_db("mailbox-question-busy").await;
     let session_id = "mailbox-question-busy-session";
     let asking = "mailbox-question-busy-request";
     let prompt = "mailbox-question-busy-prompt";
@@ -427,33 +320,27 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
             },
         )
         .unwrap();
-    let prepared = prepare_accepted_turn(
+    let (prepared, turn) = crate::support::signed_mailbox::prepare_signed_mailbox_turn(
         &db,
-        AcceptedTurnSpec {
-            backend_id: "mailbox-question-busy-backend",
-            model: "mailbox-question-busy-model",
-            parent_agent_id: AGENT,
-            configured_agent_ids: &[AGENT],
-            request_id: asking,
-            session_id,
-            prompt,
-            accepted_chunks: vec![StreamChunk::tool_call(
-                "mailbox-question-busy-call",
-                gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
-                serde_json::json!({"title": "Continue", "question": question}).to_string(),
-            )],
-            child_plans: vec![StreamPlan::new(
-                reply.clone(),
-                vec![StreamResponse::completes(reply.clone(), ["noted"])],
-            )],
-            valid_until: None,
-            request_hop: None,
-            request_setup: None,
-        },
+        "mailbox-question-busy-backend",
+        "mailbox-question-busy-model",
+        asking,
+        session_id,
+        prompt,
+        vec![StreamChunk::tool_call(
+            "mailbox-question-busy-call",
+            gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
+            serde_json::json!({"title":"Continue", "question":question}).to_string(),
+        )],
+        vec![StreamPlan::new(
+            reply.clone(),
+            vec![StreamResponse::completes(reply.clone(), ["noted"])],
+        )],
+        None,
     )
-    .await;
+    .await
+    .unwrap();
     prepared.backend.enable_dynamic_followups(prompt);
-    configure_engineer_mailbox(&db, &did).await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
@@ -465,9 +352,13 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
     let runtime = boot_prepared_accepted_turn(&db, prepared, agent).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     let item = loop {
-        let open = list_mailbox_items(db.node.as_ref(), &did, Some(MailboxStatus::Open))
-            .await
-            .unwrap();
+        let open = gents::session::mailbox::list_mailbox_items_on(
+            &turn.client,
+            turn.user.did(),
+            Some(MailboxStatus::Open),
+        )
+        .await
+        .unwrap();
         if let Some(item) = open.into_iter().next() {
             break item;
         }
@@ -479,22 +370,14 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
     };
     assert!(
         !gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
-            request_state(db.node.as_ref(), asking).await.as_deref()
+            crate::support::signed_mailbox::request_state_on(&turn.client, asking)
+                .await
+                .unwrap()
+                .as_deref()
         )
     );
 
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        "mailbox-question-busy-reply",
-        &did,
-        &did,
-        AGENT,
-        session_id,
-        &reply,
-        "interactive",
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
-    );
+    let mut create = turn.request("mailbox-question-busy-reply", session_id, &reply);
     create.caused_by_source_doc_id = Some(item.doc_id.clone());
     create.input.queue = Some(gents_protocol::request_input::RequestQueue {
         delivery: Default::default(),
@@ -506,42 +389,74 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
         interrupted_request_id: None,
         background_completion_wake_version: None,
     });
-    gents::sign_agent_request_create_as_registered_target(&mut create)
-        .await
-        .unwrap();
-    let created = db.node.execute(&create.graphql_mutation().unwrap()).await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
-    let reply_doc =
-        crate::support::exact_request_doc_id(db.node.as_ref(), "mailbox-question-busy-reply").await;
+    create.input.question_reply = Some(
+        gents_protocol::mailbox_question::MailboxQuestionReply::new(
+            &item.doc_id,
+            &item.title,
+            item.summary.as_deref(),
+            item.payload.as_deref().unwrap(),
+            item.request_id.as_deref(),
+            MailboxQuestionAnswer {
+                option_ids: vec!["yes".into()],
+                free_text: None,
+                skip: None,
+                question_hash: Some(
+                    gents_protocol::mailbox_question::question_source_hash(
+                        &item.title,
+                        item.summary.as_deref(),
+                        item.payload.as_deref().unwrap(),
+                        item.request_id.as_deref(),
+                    )
+                    .unwrap(),
+                ),
+            },
+        )
+        .unwrap(),
+    );
+    let reply_doc = turn.submit(create).await.unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(
-        request_state(db.node.as_ref(), "mailbox-question-busy-reply")
-            .await
-            .as_deref(),
+        crate::support::signed_mailbox::request_state_on(
+            &turn.client,
+            "mailbox-question-busy-reply"
+        )
+        .await
+        .unwrap()
+        .as_deref(),
         Some("pending")
     );
     assert!(
         !gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
-            request_state(db.node.as_ref(), asking).await.as_deref()
+            crate::support::signed_mailbox::request_state_on(&turn.client, asking)
+                .await
+                .unwrap()
+                .as_deref()
         )
     );
     runtime
         .backend
         .enqueue_response(prompt, StreamResponse::completes(prompt, ["asking done"]));
-    let asking_final =
-        wait_for_request_terminal(db.node.as_ref(), asking, Duration::from_secs(60)).await;
-    let reply_final = wait_for_request_terminal(
-        db.node.as_ref(),
+    let asking_final = crate::support::signed_mailbox::wait_for_request_terminal_on(
+        &turn.client,
+        asking,
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    let reply_final = crate::support::signed_mailbox::wait_for_request_terminal_on(
+        &turn.client,
         "mailbox-question-busy-reply",
         Duration::from_secs(60),
     )
-    .await;
+    .await
+    .unwrap();
     assert_eq!(asking_final, "completed");
     assert_eq!(reply_final, "completed");
-    let answered = gents::session::mailbox::load_mailbox_item(db.node.as_ref(), &item.doc_id)
-        .await
-        .unwrap()
-        .unwrap();
+    let answered =
+        gents::session::mailbox::load_mailbox_item_with_access(&turn.client, &item.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
     assert_eq!(answered.status, "acted");
     assert_eq!(
         answered.resolved_doc_id.as_deref(),

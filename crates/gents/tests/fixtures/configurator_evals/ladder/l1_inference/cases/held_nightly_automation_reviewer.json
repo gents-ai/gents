@@ -22,7 +22,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "inference_profile_id"
@@ -102,8 +102,8 @@
             "links": [
               {
                 "capture": "agents",
-                "key": "agent_id",
-                "id": "engineer",
+                "key": "agent_did",
+                "id": "gents:agent-slot:engineer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -148,7 +148,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "inference_profile_id"
@@ -227,7 +227,7 @@
             "links": [
               {
                 "capture": "agents",
-                "key": "agent_id",
+                "key": "agent_did",
                 "id": "nightly-reviewer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
@@ -241,7 +241,7 @@
               },
               {
                 "capture": "agents",
-                "key": "agent_id",
+                "key": "agent_did",
                 "id": "nightly-reviewer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
@@ -270,7 +270,7 @@
               },
               {
                 "capture": "agents",
-                "key": "agent_id",
+                "key": "agent_did",
                 "id": "nightly-reviewer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
@@ -336,7 +336,7 @@
             "node_did": {
               "_eq": "$trial"
             },
-            "agent_id": {
+            "agent_did": {
               "_like": "%:nightly-reviewer"
             },
             "content": {
@@ -351,7 +351,7 @@
           },
           "fields": [
             "request_id",
-            "agent_id",
+            "agent_did",
             "content",
             "lifecycle_state"
           ]

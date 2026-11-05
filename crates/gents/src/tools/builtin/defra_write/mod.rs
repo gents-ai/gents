@@ -1,6 +1,6 @@
 use crate::inference::llm::tool::ToolDefinition;
-use anyhow::{anyhow, bail, Context, Result};
-use serde_json::{json, Map, Value};
+use anyhow::{Context, Result, anyhow, bail};
+use serde_json::{Map, Value, json};
 
 use crate::documents::WriteToolDecl;
 use crate::store::config_client::ConfigAccess;
@@ -47,6 +47,8 @@ pub struct BoundedWriteTool {
     access: ConfigAccess,
     decl: WriteToolDecl,
     surface_id: Option<String>,
+    surface_scope: Option<crate::documents::DatastoreSurfaceScope>,
+    client_schema: Option<String>,
 }
 
 impl BoundedWriteTool {
@@ -58,11 +60,32 @@ impl BoundedWriteTool {
             access,
             decl,
             surface_id: None,
+            surface_scope: None,
+            client_schema: None,
         }
     }
 
     pub fn declared_by(mut self, surface_id: Option<String>) -> Self {
         self.surface_id = surface_id;
+        self
+    }
+
+    pub(crate) fn with_surface_owner(mut self, owner: String) -> Self {
+        self.surface_scope = Some(crate::documents::DatastoreSurfaceScope::SelectedAgent(
+            owner,
+        ));
+        self
+    }
+
+    pub(crate) fn with_visible_surface_owner(mut self, owner: String) -> Self {
+        self.surface_scope = Some(crate::documents::DatastoreSurfaceScope::VisibleCaller(
+            owner,
+        ));
+        self
+    }
+
+    pub(crate) fn with_ux_client_schema(mut self, schema: String) -> Self {
+        self.client_schema = Some(schema);
         self
     }
 
@@ -300,23 +323,73 @@ impl crate::inference::llm::tool::Tool for BoundedWriteTool {
         self.ensure_declaration()?;
         let types = self.resolved_field_types().await?;
         let mutation = self.build_mutation(&args.0, &types)?;
+        let signed_mutation = self.client_schema.as_ref().map(|_| {
+            format!(
+                "mutation($input: {}MutationInputArg!) {{ add_{}(input: $input) {{ _docID {} }} }}",
+                self.decl.collection,
+                self.decl.collection,
+                self.decl
+                    .fields
+                    .iter()
+                    .map(|field| field.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            )
+        });
+        if self.client_schema.is_some() {
+            if !matches!(self.access, ConfigAccess::Graphql(_)) || self.surface_scope.is_none() {
+                return Err(anyhow!("UX client signing requires a scoped remote transaction").into());
+            }
+            if self.decl.fields.iter().any(|field| field.fill.is_some()) {
+                return Err(anyhow!("UX client writes cannot use runtime-filled fields").into());
+            }
+        }
+        let variables = json!({"input": &args.0});
 
-        let resp = self
-            .access
-            .write("tool.defra_write", &mutation)
-            .await
+        let resp = if let Some(scope) = &self.surface_scope {
+            let surface = self
+                .surface_id
+                .as_deref()
+                .context("datastore source missing")?;
+            self.access
+                .transact_write("tool.defra_write", |txn| {
+                    let mutation = &mutation;
+                    let signed_mutation = &signed_mutation;
+                    let variables = &variables;
+                    Box::pin(async move {
+                        scope
+                            .revalidate(
+                                txn,
+                                surface,
+                                &crate::documents::SurfaceToolDecl::Create(self.decl.clone()),
+                            )
+                            .await?;
+                        let response = match (&self.client_schema, signed_mutation) {
+                            (Some(schema), Some(document)) => {
+                                txn.execute_client_signed_create(document, variables, schema)
+                                    .await?
+                            }
+                            _ => txn.execute(mutation).await?,
+                        };
+                        crate::store::graphql::created_doc_id(&response, &self.decl.collection)?;
+                        Ok::<_, anyhow::Error>(response)
+                    })
+                })
+                .await?
+        } else {
+            self.access
+                .write("tool.defra_write", &mutation)
+                .await
+                .map_err(anyhow::Error::from)?
+        };
+
+        let doc_id = crate::store::graphql::created_doc_id(&resp, &self.decl.collection)
             .map_err(anyhow::Error::from)?;
-
-        let document = resp
-            .get("data")
-            .and_then(|data| data.get(format!("add_{}", self.decl.collection)))
-            .and_then(Value::as_array)
+        let field = format!("add_{}", self.decl.collection);
+        let document = crate::store::graphql::mutation_documents(&resp, &field)
+            .map_err(anyhow::Error::from)?
             .and_then(|rows| rows.first())
-            .ok_or_else(|| anyhow!("write returned no canonical document"))?;
-        let doc_id = document
-            .get("_docID")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("write to {:?} returned no _docID", self.decl.collection))?;
+            .context("write returned no canonical document")?;
         Ok(crate::tools::output::render(
             &json!({"collection":self.decl.collection, "document_id":doc_id,
                 "document":document}),

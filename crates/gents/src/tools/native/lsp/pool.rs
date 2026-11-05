@@ -21,7 +21,7 @@ pub(crate) const INIT_BACKOFF: Duration = Duration::from_secs(180);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PoolKey {
     pub session_id: String,
-    pub agent_id: String,
+    pub agent_did: String,
     pub workspace_root: std::path::PathBuf,
     pub server_name: String,
     pub config_digest: String,
@@ -544,13 +544,13 @@ impl LspPool {
         let session_count = map
             .keys()
             .filter(|key| {
-                key.session_id == incoming.session_id && key.agent_id == incoming.agent_id
+                key.session_id == incoming.session_id && key.agent_did == incoming.agent_did
             })
             .count();
         let mut victims = Vec::new();
         if session_count >= MAX_PER_SESSION {
             let victim = lru_idle_ready(map, |key| {
-                key.session_id == incoming.session_id && key.agent_id == incoming.agent_id
+                key.session_id == incoming.session_id && key.agent_did == incoming.agent_did
             })
             .await?;
             victims.push(map.remove(&victim)?);
@@ -565,7 +565,7 @@ impl LspPool {
     pub async fn reload_snapshot(
         &self,
         session_id: &str,
-        agent_id: &str,
+        agent_did: &str,
         workspace: &std::path::Path,
         digest: &str,
     ) -> usize {
@@ -574,7 +574,7 @@ impl LspPool {
             map.keys()
                 .filter(|key| {
                     key.session_id == session_id
-                        && key.agent_id == agent_id
+                        && key.agent_did == agent_did
                         && key.workspace_root == workspace
                         && key.config_digest == digest
                 })
@@ -667,7 +667,7 @@ impl LspPool {
     pub(crate) async fn inspect_session(
         &self,
         session_id: &str,
-        agent_id: &str,
+        agent_did: &str,
         workspace: &std::path::Path,
         digest: &str,
     ) -> Result<RapidHashMap<String, PoolServerState>, String> {
@@ -687,7 +687,7 @@ impl LspPool {
         let mut states = RapidHashMap::new();
         for (key, slot) in map.iter() {
             if key.session_id == session_id
-                && key.agent_id == agent_id
+                && key.agent_did == agent_did
                 && key.workspace_root == workspace
                 && key.config_digest == digest
                 && key.operator_guard_home == operator_guard_home
@@ -723,7 +723,7 @@ impl LspPool {
         let failed = self.failed.lock().await;
         for (key, (error, at)) in failed.iter() {
             if key.session_id == session_id
-                && key.agent_id == agent_id
+                && key.agent_did == agent_did
                 && key.workspace_root == workspace
                 && key.config_digest == digest
                 && key.operator_guard_home == operator_guard_home

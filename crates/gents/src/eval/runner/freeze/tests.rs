@@ -1,10 +1,12 @@
+use crate::NodeIdentity;
 use anyhow::Context;
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tempfile::TempDir;
 
 use super::snapshot::DEFINITION_FILE;
 use super::*;
-use crate::documents::{ensure_node, EvalSplit};
+use crate::documents::EvalSplit;
 use crate::eval::invalidate_run;
 use crate::eval::runner::embedded::EmbeddedHome;
 use crate::eval::scoring::PILOT_PURPOSE;
@@ -12,8 +14,6 @@ use crate::store::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };
-
-pub(crate) const OWNER: &str = "did:key:eval-owner";
 
 pub(crate) struct Launching {
     home: EmbeddedHome,
@@ -23,20 +23,28 @@ pub(crate) struct Launching {
 
 impl Launching {
     pub(crate) async fn new() -> Self {
-        let home = EmbeddedHome::create_temp("freeze").await.unwrap();
-        let access = ConfigAccess::local(home.node.clone());
-        ensure_node(&home.node, OWNER).await.unwrap();
-        let launching = Self {
-            home,
-            access,
-            dirs: tempfile::tempdir().unwrap(),
-        };
+        let mut home = EmbeddedHome::create_temp("freeze").await.unwrap();
+        let dirs = tempfile::tempdir().unwrap();
+        let evaluator = Arc::new(
+            crate::store::identity::KeyIdentity::load_or_create(
+                dirs.path().join("evaluator.key"),
+                None,
+            )
+            .unwrap(),
+        );
+        let evaluator_did = evaluator.did().to_owned();
+        let capability = evaluator.client_signing_capability().unwrap();
+        home.set_evaluator(evaluator, capability);
+        let access = home.client_access(&evaluator_did).unwrap();
+        let launching = Self { home, access, dirs };
         launching
             .install(vec![
-                (Collection::EvalDefinition, definition()),
+                (Collection::Node, json!({"node_did": launching.owner()})),
+                (Collection::EvalDefinition, definition(launching.owner())),
                 (
                     Collection::InferenceBackend,
                     backend(
+                        launching.owner(),
                         "backend",
                         "OpenAiCompatible",
                         json!({"kind": "unauthenticated"}),
@@ -44,11 +52,11 @@ impl Launching {
                 ),
                 (
                     Collection::InferenceSampling,
-                    json!({"node_did": OWNER, "sampling_id": "sampling", "temperature": 0.0}),
+                    json!({"node_did": launching.owner(), "sampling_id": "sampling", "temperature": 0.0}),
                 ),
                 (
                     Collection::InferenceProfile,
-                    profile("local", "backend", Some("sampling")),
+                    profile(launching.owner(), "local", "backend", Some("sampling")),
                 ),
             ])
             .await;
@@ -81,7 +89,7 @@ impl Launching {
             .transact_write("freeze.test_delete", |txn| {
                 Box::pin(async move {
                     let (doc_id, _) =
-                        read_desired_state_record_in_txn(txn, collection, OWNER, id)
+                        read_desired_state_record_in_txn(txn, collection, self.owner(), id)
                             .await?
                             .context("document to delete")?;
                     txn.execute(&format!(
@@ -98,12 +106,20 @@ impl Launching {
             .unwrap();
     }
 
+    pub(crate) fn owner(&self) -> &str {
+        self.home.did()
+    }
+
     pub(crate) fn runs_dir(&self) -> PathBuf {
         self.dirs.path().join("eval/runs")
     }
 
     pub(crate) fn evaluator_did(&self) -> String {
-        self.home.did().to_string()
+        self.access.actor_did().unwrap()
+    }
+
+    pub(crate) fn provision_agent(&self) -> gents_protocol::agent_identity::AgentIdentityBinding {
+        crate::store::identity::provision_agent_identity(self.home.identity.as_ref()).unwrap()
     }
 
     pub(crate) fn pack(&self, name: &str, bash_mode: &str) -> PathBuf {
@@ -115,7 +131,7 @@ impl Launching {
     fn request(&self, run_id: &str, pack: &Path) -> RunRequest {
         RunRequest {
             run_id: run_id.into(),
-            owner: OWNER.into(),
+            owner: self.owner().into(),
             evaluator_did: self.evaluator_did(),
             definition_id: "monitor-findings".into(),
             split: EvalSplit::Validation,
@@ -124,7 +140,7 @@ impl Launching {
                 cell_id: "baseline".into(),
                 label: "baseline".into(),
                 source: CellSource::Directory(pack.to_path_buf()),
-                agent_id: "monitor".into(),
+                agent_slot: "monitor".into(),
                 inference_profile_id: "local".into(),
             }],
             trials_per_case: 2,
@@ -142,10 +158,10 @@ impl Launching {
     }
 }
 
-fn definition() -> Value {
+fn definition(owner: &str) -> Value {
     json!({
         "definition_id": "monitor-findings",
-        "node_did": OWNER,
+        "node_did": owner,
         "comparability_version": 1,
         "subject": {"kind": "agent", "inference_slots": ["primary"]},
         "cases": [
@@ -162,7 +178,8 @@ fn frozen_files_preserve_complete_snapshots_for_existing_readers() {
         breaker_threshold: 5,
         captures: Vec::new(),
     };
-    let original: EvalDefinition = serde_json::from_value(definition()).unwrap();
+    let runtime = crate::KeyIdentity::load_or_create(dir.path().join("runtime.key"), None).unwrap();
+    let original: EvalDefinition = serde_json::from_value(definition(runtime.did())).unwrap();
     write_sidecar(dir.path(), &before).unwrap();
     write_frozen_definition(dir.path(), &original).unwrap();
     let sidecar_reader = std::fs::File::open(sidecar_path(dir.path())).unwrap();
@@ -205,9 +222,9 @@ fn case(case_id: &str, split: &str) -> Value {
     })
 }
 
-fn backend(backend_id: &str, provider_kind: &str, auth: Value) -> Value {
+fn backend(owner: &str, backend_id: &str, provider_kind: &str, auth: Value) -> Value {
     json!({
-        "node_did": OWNER,
+        "node_did": owner,
         "backend_id": backend_id,
         "name": "Workstation",
         "provider_kind": provider_kind,
@@ -216,9 +233,9 @@ fn backend(backend_id: &str, provider_kind: &str, auth: Value) -> Value {
     })
 }
 
-fn profile(profile_id: &str, backend_id: &str, sampling_id: Option<&str>) -> Value {
+fn profile(owner: &str, profile_id: &str, backend_id: &str, sampling_id: Option<&str>) -> Value {
     json!({
-        "node_did": OWNER,
+        "node_did": owner,
         "profile_id": profile_id,
         "backend_id": backend_id,
         "model_name": "test-model",
@@ -259,7 +276,7 @@ pub(crate) fn write_fixture_pack(root: &Path, bash_mode: &str) {
     let config = json!({
         "node": {},
         "agents": [{
-            "agent_id": "monitor",
+            "agent_slot": "monitor",
             "display_name": "Monitor",
             "context_id": "monitor-context",
             "inference_profile_id": "gents:inference-slot:primary",
@@ -316,7 +333,7 @@ async fn freeze_writes_the_run_materializes_the_pack_and_is_idempotent() {
     assert_eq!(frozen.definition.definition_id, "monitor-findings");
 
     let cell = &frozen.cells[0];
-    assert_eq!(cell.spec.subject.agent_id, "monitor");
+    assert_eq!(cell.spec.subject.agent_slot, "monitor");
     assert!(cell.spec.subject.pack_digest.starts_with("sha256:"));
     assert_eq!(
         frozen.record.origin.cells[0].subject.pack_digest,
@@ -358,7 +375,7 @@ async fn freeze_records_the_requested_evaluator_and_refuses_an_empty_one() {
         frozen.record.evaluator_did, frozen.record.owner,
         "the launching home is not the owning principal in this fixture"
     );
-    let stored = load_run(&launching.access, OWNER, "run-1")
+    let stored = load_run(&launching.access, launching.owner(), "run-1")
         .await
         .unwrap()
         .expect("the frozen run");
@@ -583,6 +600,7 @@ async fn freeze_refuses_an_oauth_backend() {
             (
                 Collection::InferenceBackend,
                 backend(
+                    launching.owner(),
                     "subscription",
                     "ClaudeCliSubscription",
                     json!({"kind": "node_oauth"}),
@@ -590,7 +608,7 @@ async fn freeze_refuses_an_oauth_backend() {
             ),
             (
                 Collection::InferenceProfile,
-                profile("borrowed", "subscription", None),
+                profile(launching.owner(), "borrowed", "subscription", None),
             ),
         ])
         .await;
@@ -611,11 +629,11 @@ async fn freeze_refuses_a_profile_whose_sampling_document_is_missing() {
         .install(vec![
             (
                 Collection::InferenceSampling,
-                json!({"node_did": OWNER, "sampling_id": "spare", "temperature": 1.0}),
+                json!({"node_did": launching.owner(), "sampling_id": "spare", "temperature": 1.0}),
             ),
             (
                 Collection::InferenceProfile,
-                profile("dangling", "backend", Some("spare")),
+                profile(launching.owner(), "dangling", "backend", Some("spare")),
             ),
         ])
         .await;
@@ -659,12 +677,24 @@ async fn freeze_refuses_an_invalidated_run() {
         purpose: "eval".into(),
         breaker_threshold: 5,
     };
-    create_run(&launching.access, "run-1", OWNER, OWNER, &origin)
-        .await
-        .unwrap();
-    invalidate_run(&launching.access, OWNER, "run-1", OWNER, "grader bug")
-        .await
-        .unwrap();
+    create_run(
+        &launching.access,
+        "run-1",
+        launching.owner(),
+        &launching.evaluator_did(),
+        &origin,
+    )
+    .await
+    .unwrap();
+    invalidate_run(
+        &launching.access,
+        launching.owner(),
+        "run-1",
+        &launching.evaluator_did(),
+        "grader bug",
+    )
+    .await
+    .unwrap();
 
     let error = freeze(&launching.access, &request, Isolation::Embedded)
         .await
@@ -753,7 +783,7 @@ async fn freeze_writes_the_definition_it_froze_and_resume_reads_it_back() {
         .await;
     let thawed = thaw(
         &launching.access,
-        OWNER,
+        launching.owner(),
         "run-def",
         &launching.runs_dir(),
         Isolation::Embedded,
@@ -770,7 +800,7 @@ async fn freeze_writes_the_definition_it_froze_and_resume_reads_it_back() {
     assert!(refusal(&error).contains("no longer digests"), "{error:#}");
     let error = thaw(
         &launching.access,
-        OWNER,
+        launching.owner(),
         "run-def",
         &launching.runs_dir(),
         Isolation::Embedded,
@@ -798,7 +828,7 @@ async fn a_run_frozen_without_the_file_falls_back_to_the_live_definition() {
     );
     let thawed = thaw(
         &launching.access,
-        OWNER,
+        launching.owner(),
         "run-old",
         &launching.runs_dir(),
         Isolation::Embedded,

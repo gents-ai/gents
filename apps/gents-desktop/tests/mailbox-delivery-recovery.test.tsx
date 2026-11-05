@@ -47,7 +47,7 @@ function item(id = "question"): MailboxItemView {
     requestId: null,
     causeDocId: null,
     targetNodeDid: NODE,
-    targetAgentId: "engineer",
+    targetAgentDid: "engineer",
     expectedCollection: null,
     parentItemId: null,
     deadlineAt: null,
@@ -103,6 +103,7 @@ it("freezes the structured answer, question and caller identity before dispatch"
     const draft = loadChatDrafts().chatDrafts[0];
     expect(JSON.parse(draft.requestJson)).toEqual(request);
     expect(draft.mailbox).toEqual({
+      nodeDid: NODE,
       itemId: "question",
       summary: "This computer\nKeep the workspace local",
     });
@@ -111,7 +112,7 @@ it("freezes the structured answer, question and caller identity before dispatch"
       requestId: expect.any(String),
       nodeDid: NODE,
       sessionId: "session",
-      agentId: "engineer",
+      agentDid: "engineer",
       causedBySourceDocId: "question",
       content: "",
       answer: original,
@@ -319,7 +320,7 @@ it("does not let a late answer release a replacement compose route", async () =>
   selection.openMailboxRoute(f.app.stores.selection, {
     itemId: "another-question",
     nodeDid: NODE,
-    agentId: "engineer",
+    agentDid: "engineer",
     sessionId: "session",
   });
   reply.resolve(acceptedChat(request));

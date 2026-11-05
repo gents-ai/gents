@@ -13,61 +13,68 @@ use crate::store::identity::NodeIdentity;
 
 pub(crate) const SOURCES: [&str; 3] = ["Goal", "AgentSession", "GoalObservation"];
 
-pub(crate) async fn reconcile_goal_observations(
+pub(crate) async fn reconcile_goal_observations_with_identities(
     node: &Arc<EmbeddedNode>,
     identity: &Arc<dyn NodeIdentity>,
+    agent_identities: &[Arc<dyn NodeIdentity>],
     full: bool,
     changed: &[(&'static str, String)],
 ) -> Result<()> {
-    let scopes = ConfigAccess::local(node.clone()).transact_readonly("goal.observation_sources", |txn| Box::pin(async move {
-        let owner = escape_graphql_string(identity.did());
-        let mut sessions = std::collections::BTreeSet::new();
-        let mut full = full;
-        for (collection, doc_id) in changed {
-            anyhow::ensure!(SOURCES.contains(collection), "unknown goal observation source");
-            let response = txn.execute(&format!(r#"{{ {collection}(filter: {{
-                _docID: {{ _eq: "{}" }}, node_did: {{ _eq: "{owner}" }}
-            }}) {{ session_id }} }}"#, escape_graphql_string(doc_id))).await?;
-            let rows = response["data"][collection].as_array().context("goal observation source omitted rows")?;
-            if rows.is_empty() { full = true; }
-            for row in rows {
-                if let Some(session) = row["session_id"].as_str().filter(|session| !session.trim().is_empty()) {
-                    sessions.insert(session.to_owned());
-                } else {
-                    full = true;
-                    tracing::warn!(collection, "goal observation source has no session identity");
-                }
-            }
-        }
-        let mut scopes = Vec::new();
-        if full {
-            let response = txn.execute(&format!(r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{owner}" }} }}) {{ session_id requester_did }} }}"#)).await?;
-            let rows = response["data"]["AgentSession"].as_array().context("goal session sweep omitted rows")?;
-            for row in rows {
-                if let Some(session) = row["session_id"].as_str().filter(|session| !session.trim().is_empty()) {
-                    scopes.push((session.to_owned(), row["requester_did"].as_str().map(str::to_owned)));
-                } else {
-                    tracing::warn!("ignoring a session without an identity in goal observation sweep");
-                }
-            }
-        } else {
-            for session_id in sessions {
-                if let Some(session) = crate::session::load_agent_session_owner_in_txn(txn, identity.did(), &session_id).await? {
-                    scopes.push((session.session.session_id, session.session.requester_did));
-                }
-            }
-        }
-        scopes.sort();
-        scopes.dedup();
-        Ok(scopes)
-    })).await?;
+    anyhow::ensure!(
+        node.node_identity_did() == Some(identity.did()),
+        "goal observation runtime identity differs from node"
+    );
     let mut failed = false;
-    for (session, requester) in scopes {
-        if let Err(error) =
-            project_session_goal(node, identity, &session, requester.as_deref()).await
-        {
-            failed = true;
-            tracing::warn!(session_id = session, %error, "session goal observation could not be projected");
+    for agent in agent_identities {
+        let access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(agent.did())?,
+            agent.as_ref(),
+        )?;
+        let scopes = access.transact_readonly("goal.observation_sources", |txn| Box::pin(async move {
+            let owner = escape_graphql_string(identity.did());
+            let agent_did = escape_graphql_string(agent.did());
+            let mut sessions = std::collections::BTreeSet::new();
+            let mut full = full;
+            for (collection, doc_id) in changed {
+                anyhow::ensure!(SOURCES.contains(collection), "unknown goal observation source");
+                let response = txn.execute(&format!(r#"{{ {collection}(filter: {{ _docID: {{ _eq: "{}" }}, node_did: {{ _eq: "{owner}" }}, agent_did: {{ _eq: "{agent_did}" }} }}) {{ session_id }} }}"#, escape_graphql_string(doc_id))).await?;
+                let rows = response["data"][collection].as_array().context("goal observation source omitted rows")?;
+                if rows.is_empty() { full = true; }
+                for row in rows {
+                    if let Some(session) = row["session_id"].as_str().filter(|session| !session.trim().is_empty()) {
+                        sessions.insert(session.to_owned());
+                    } else { full = true; }
+                }
+            }
+            let mut scopes = Vec::new();
+            if full {
+                let response = txn.execute(&format!(r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{owner}" }}, agent_did: {{ _eq: "{agent_did}" }} }}) {{ session_id requester_did }} }}"#)).await?;
+                let rows = response["data"]["AgentSession"].as_array().context("goal session sweep omitted rows")?;
+                for row in rows {
+                    if let Some(session) = row["session_id"].as_str().filter(|session| !session.trim().is_empty()) {
+                        scopes.push((session.to_owned(), row["requester_did"].as_str().map(str::to_owned)));
+                    }
+                }
+            } else {
+                for session_id in sessions {
+                    if let Some(session) = crate::session::load_agent_session_owner_in_txn(txn, identity.did(), &session_id).await? {
+                        if session.session.agent_did == agent.did() {
+                            scopes.push((session.session.session_id, session.session.requester_did));
+                        }
+                    }
+                }
+            }
+            scopes.sort(); scopes.dedup();
+            Ok::<_, anyhow::Error>(scopes)
+        })).await?;
+        for (session, requester) in scopes {
+            if let Err(error) =
+                project_session_goal(node, identity, agent, &session, requester.as_deref()).await
+            {
+                failed = true;
+                tracing::warn!(session_id = session, agent_did = agent.did(), %error, "session goal observation could not be projected");
+            }
         }
     }
     anyhow::ensure!(
@@ -138,6 +145,7 @@ async fn verified(
     if observation
         .validate_scope(
             &session.session.node_did,
+            &session.session.agent_did,
             &session.session.session_id,
             &session.doc_id,
             session.session.requester_did.as_deref(),
@@ -148,7 +156,7 @@ async fn verified(
     }
     if !identity
         .verify(
-            &observation.node_did,
+            &session.session.agent_did,
             &observation.signing_payload()?,
             &observation.signature,
         )
@@ -247,12 +255,12 @@ pub async fn prepare_goal_input(
 }
 
 /// Canonical reads require a locally owned destination. Remote destination
-/// capture uses its runtime-signed observation through the same transaction.
+/// capture uses its agent-signed observation through the same transaction.
 pub async fn prepare_goal_input_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
-    agent_id: &str,
+    agent_did: &str,
     requester_did: Option<&str>,
     input: gents_protocol::request_input::RequestInput,
 ) -> Result<gents_protocol::request_input::RequestInput> {
@@ -266,7 +274,7 @@ pub async fn prepare_goal_input_in_txn(
         return Ok(input);
     };
     anyhow::ensure!(
-        session.session.agent_id == agent_id,
+        session.session.agent_did == agent_did,
         "Goal input target Agent differs from its canonical session"
     );
     let reference = load_canonical_goal_in_txn(txn, node_did, session_id)
@@ -327,16 +335,29 @@ pub async fn load_session_goal_observation_state_in_txn(
 pub(crate) async fn project_session_goal(
     node: &Arc<EmbeddedNode>,
     identity: &Arc<dyn NodeIdentity>,
+    signer: &Arc<dyn NodeIdentity>,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<()> {
-    ConfigAccess::transact_local_write(node, None, "goal.project_observation", |txn| Box::pin(async move {
+    anyhow::ensure!(
+        node.node_identity_did() == Some(identity.did()),
+        "goal observation runtime identity differs from node"
+    );
+    let access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(signer.did())?,
+        signer.as_ref(),
+    )?;
+    access.transact_write("goal.project_observation", |txn| {
+        let signer = &signer;
+        Box::pin(async move {
         crate::store::graphql::fence_arrivals(txn, "AgentSession").await?;
         crate::store::graphql::fence_arrivals(txn, "Goal").await?;
         crate::store::graphql::fence_arrivals(txn, "GoalObservation").await?;
         let Some(session) = crate::session::load_agent_session_row_in_txn(
             txn, identity.did(), session_id, requester_did,
         ).await? else { return Ok(()); };
+        anyhow::ensure!(session.session.agent_did == signer.did(), "goal observation signer differs from session Agent");
         let goal = load_canonical_goal_in_txn(txn, identity.did(), session_id).await?;
         let goal = match goal {
             Some(goal) => {
@@ -366,14 +387,15 @@ pub(crate) async fn project_session_goal(
         }
         let mut observation = SessionGoalObservation {
             version: SESSION_GOAL_CONTROL_VERSION,
-            node_did: session.session.node_did.clone(), session_id: session.session.session_id.clone(),
+            node_did: session.session.node_did.clone(), agent_did: session.session.agent_did.clone(), session_id: session.session.session_id.clone(),
             session_doc_id: session.doc_id.clone(), requester_did: session.session.requester_did.clone(),
             observed_at: Utc::now().to_rfc3339(), goal, signature: Vec::new(),
         };
-        observation.signature = identity.sign(&observation.signing_payload()?).await?;
+        observation.signature = signer.sign(&observation.signing_payload()?).await?;
         let input = serde_json::json!({
             "node_did": observation.node_did, "session_id": observation.session_id,
             "session_doc_id": observation.session_doc_id, "requester_did": observation.requester_did,
+            "agent_did": observation.agent_did,
             "observation_json": serde_json::to_string(&observation)?,
         });
         let (document, variables, field) = match rows.first() {
@@ -390,8 +412,12 @@ pub(crate) async fn project_session_goal(
         };
         let response = txn.execute_with_variables(document, &variables).await?;
         let response = defra_node::QueryResponse::success(response["data"].clone());
-        crate::store::graphql::single_mutation_document(&response, field)?
+        let written = crate::store::graphql::single_mutation_document(&response, field)?
             .context("goal observation write omitted its document")?;
+        if rows.is_empty() {
+            let doc_id = written["_docID"].as_str().context("goal observation lacks document identity")?;
+            txn.add_resource_relationship("GoalObservation", doc_id, "parent", "sessions", &session.doc_id).await?;
+        }
         Ok(())
-    })).await
+    })}).await
 }

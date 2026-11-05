@@ -3,7 +3,6 @@ use std::sync::Arc;
 use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents_protocol::job::JobProgress;
-use gents_protocol::row::AgentRequestRow;
 use tempfile::TempDir;
 
 /// A test's `#[tokio::test]` runtime is its entry point; code under test takes
@@ -23,7 +22,7 @@ pub fn node_builder() -> gents::defra_node::NodeBuilder {
     let directory = tempfile::tempdir().unwrap();
     let identity =
         gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
-    gents::defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
+    gents::defra_node::Node::builder().with_node_identity_did(identity.did())
 }
 
 pub async fn boot_core() -> (Arc<ClientCore>, TempDir) {
@@ -35,31 +34,43 @@ pub async fn boot_core() -> (Arc<ClientCore>, TempDir) {
     (Arc::new(core), tempdir)
 }
 
-pub async fn seed_standalone_fixture() -> (Arc<ClientCore>, TempDir) {
-    let (core, tmp) = boot_core().await;
-
-    let mutation = r#"mutation {
-        create_AgentRequest(input: { purpose: "normal",
-            request_id: "req_solo",
-            node_did: "did:test:operator",
-            agent_id: "test-agent",
-            session_id: "sess_solo",
-            content: "standalone fixture",
-            lifecycle_state: "processing",
-            backend_id: "",
-            created_at: "2026-05-20T00:00:00Z",
-            retry_count: 0
-        }) { _docID }
-    }"#;
-
-    let response = core.node().execute(mutation).await;
-    assert!(
-        !response.has_errors(),
-        "seed standalone AgentRequest failed: {:?}",
-        response.errors
+pub async fn runtime_core() -> (
+    Arc<ClientCore>,
+    Arc<gents::defra_node::Node>,
+    TempDir,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(directory.path()),
+            ClientCoreOptions::local_simulated_route(),
+        )
+        .await
+        .unwrap(),
     );
-
-    (core, tmp)
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+    let runtime = Arc::new(
+        node_builder()
+            .with_http(
+                gents::defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap(),
+            )
+            .build()
+            .await
+            .unwrap(),
+    );
+    gents::ensure_runtime_schemas(&runtime).await.unwrap();
+    let did = runtime.node_identity_did().unwrap();
+    core.add_managed_enrollment_peer_for_test(
+        did,
+        &endpoint,
+        directory.path().to_str().unwrap(),
+        1,
+    )
+    .await
+    .unwrap();
+    core.set_selected_node_did(Some(did.to_owned()));
+    (core, runtime, directory)
 }
 
 /// The DIDs of [`fixture_signer`]`(7)` and `(9)`; the sessions they start
@@ -120,7 +131,7 @@ pub async fn create_started_session(
         session_id: session.session_id.clone(),
         session_doc_id: doc_id,
         requester_did: session.requester_did.clone(),
-        agent_id: session.agent_id.clone(),
+        agent_did: session.agent_did.clone(),
         opening_request_doc_id: opening.into(),
         cause: SessionCreationCause::AgentNew,
         cause_binding: "fixture-call".into(),
@@ -162,7 +173,7 @@ pub fn fixture_session(node_did: &str, session_id: &str) -> gents_protocol::sess
         session_id: session_id.into(),
         node_did: node_did.into(),
         requester_did: Some(OPERATOR.into()),
-        agent_id: "worker".into(),
+        agent_did: "worker".into(),
         created_at: "2026-05-20T00:00:00Z".into(),
         closed_at: None,
         archived_at: None,
@@ -374,7 +385,7 @@ pub async fn create_request(
     created_doc_id(
         core,
         &format!(
-            r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "{node_did}", requester_did: "{OPERATOR}", agent_id: "worker", session_id: "{session_id}", {caused} content: "work", lifecycle_state: "{lifecycle_state}", backend_id: "", created_at: "{created_at}", retry_count: 0 }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "{node_did}", requester_did: "{OPERATOR}", agent_did: "worker", session_id: "{session_id}", {caused} content: "work", lifecycle_state: "{lifecycle_state}", backend_id: "", created_at: "{created_at}", retry_count: 0 }}) {{ _docID }} }}"#
         ),
         "AgentRequest",
     )
@@ -391,7 +402,7 @@ pub async fn create_session(
         session_id: session_id.into(),
         node_did: node_did.into(),
         requester_did: Some(OPERATOR.into()),
-        agent_id: "worker".into(),
+        agent_did: "worker".into(),
         created_at: "2026-05-20T00:00:00Z".into(),
         closed_at: None,
         archived_at: None,
@@ -592,36 +603,4 @@ pub async fn seed_job_row_for_node(
             .expect("seed job output");
     }
     row_doc_id
-}
-
-pub async fn fetch_request_row(core: &Arc<ClientCore>, request_id: &str) -> AgentRequestRow {
-    let escaped = escape_graphql_string(request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped}" }} }},
-                limit: 1
-            ) {{
-                request_id
-                interrupt_requested_at
-            }}
-        }}"#
-    );
-
-    let response = core.node().execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "fetch_request_row query failed for {request_id}: {:?}",
-        response.errors
-    );
-
-    let data = response.data.unwrap_or(serde_json::Value::Null);
-    let row = data
-        .get("AgentRequest")
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .cloned()
-        .unwrap_or_else(|| panic!("fetch_request_row: request {request_id} not found"));
-    serde_json::from_value(row)
-        .unwrap_or_else(|error| panic!("fetch_request_row: invalid request {request_id}: {error}"))
 }

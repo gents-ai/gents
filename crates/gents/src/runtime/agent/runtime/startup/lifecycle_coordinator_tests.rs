@@ -79,7 +79,7 @@ async fn admission_gate_waits_for_durable_ready_retry_ack() {
     coordinator.begin_shutdown().await.unwrap();
     coordinator.finish_shutdown().await.unwrap();
     status_owner.close().await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -126,5 +126,5 @@ async fn shutdown_wins_over_a_late_startup_barrier_release() {
         vec![ProcessLifecycleState::ShuttingDown],
         "Ready must never become observable after shutdown begins"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

@@ -87,7 +87,7 @@ pub struct ProjectionAcpBinding {
     pub node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub projection_id: Option<String>,

@@ -36,6 +36,33 @@ def documentJson (d : AgentSession.Document) : Json := Json.mkObj
        ("latest", o.latest.map (fun r => Json.mkObj
          [("doc_id", toJson r.docId), ("request_id", toJson r.requestId),
           ("state", toJson r.state.toDefraDB)]) |>.getD Json.null)]) |>.getD Json.null)]
+
+private def admissionReceiptJson (receipt : AgentSession.CreationReceipt) : Json := Json.mkObj
+  [("scope", scopeJson receipt.scope), ("session_doc", toJson receipt.sessionDoc),
+   ("agent", toJson receipt.agent), ("opening_request_doc", toJson receipt.openingRequestDoc),
+   ("causal_kind", toJson receipt.causalKind), ("cause_binding", toJson receipt.causeBinding),
+   ("starter", receipt.starter.map (fun starter => Json.mkObj
+      [("source", scopeJson starter.source), ("parent_request_doc", toJson starter.parentRequestDoc)])
+      |>.getD Json.null)]
+
+private def admissionStateJson (state : AgentSession.AdmissionState) : Json := Json.mkObj
+  [("session", state.session.map documentJson |>.getD Json.null),
+   ("session_owner", toJson state.sessionOwner), ("session_doc", toJson state.sessionDoc),
+   ("session_parent", toJson state.sessionParent), ("session_worker", toJson state.sessionWorker),
+   ("receipt", state.receipt.map admissionReceiptJson |>.getD Json.null),
+   ("request_doc", toJson state.requestDoc), ("request_owner", toJson state.requestOwner),
+   ("request_parent", toJson state.requestParent), ("request_worker", toJson state.requestWorker)]
+
+private def admissionJson (name : String) (before : AgentSession.AdmissionState)
+    (input : AgentSession.AdmissionInput) : Json := Json.mkObj
+  [("name", toJson name), ("operation", toJson "atomic_admission"),
+   ("before", admissionStateJson before), ("requested", documentJson input.requested),
+   ("actor", toJson input.actor), ("session_doc", toJson input.sessionDoc),
+   ("agent_doc", toJson input.agentDoc), ("request_doc", toJson input.requestDoc),
+   ("receipt", input.receipt.map admissionReceiptJson |>.getD Json.null),
+   ("authorized", toJson input.authorized), ("commit", toJson input.commit),
+   ("after", admissionStateJson (AgentSession.admitRequest before input))]
+
 private def advanceJson (name : String) (r : AgentSession.RequestFact)
     (before : AgentSession.Document := indexed)
     (rows : List AgentSession.RequestFact := [old, newerRequest]) : Json := Json.mkObj
@@ -131,7 +158,7 @@ private def clearTitleJson : Json := Json.mkObj
    ("title", Json.null),
    ("after", documentJson (AgentSession.rename renameBefore none 4))]
 private def retryStateJson (s : SessionState) : Json := Json.mkObj
-  [("session_id", toJson s.sessionId), ("agent", toJson s.agentId),
+  [("session_id", toJson s.sessionId), ("agent", toJson s.agentDid),
    ("latest", toJson s.latest), ("requests", toJson ([1, 3].filter
      (fun id => decide (id ∈ s.requestIds)) |>.map (fun id => Json.mkObj
        [("request_id", toJson id), ("state", toJson (s.ctx id).state.toDefraDB),
@@ -291,6 +318,13 @@ private def taskOpeningCases : List Json :=
           ("task", toJson f.task), ("valid", toJson f.valid)])),
         ("task", toJson (AgentSession.taskForOpening 1 10 20 fires))]
 
+private def forkAuthorityCases : List Json :=
+  [("same_agent", "did:example:one", "did:example:one"),
+   ("other_agent", "did:example:one", "did:example:two")].map fun (name, source, target) =>
+    Json.mkObj [("name", toJson name), ("operation", toJson "fork_reference_authority"),
+      ("source_agent", toJson source), ("target_agent", toJson target),
+      ("allowed", toJson (SessionFork.mayReuseSourceFragments source target))]
+
 def sessionDocumentsJson : String := (Json.mkObj
   [("starter_verification", toJson starterVerificationCases),
    ("archive", toJson archiveCases),
@@ -300,7 +334,8 @@ def sessionDocumentsJson : String := (Json.mkObj
       retryJson "newer_authoritative_row" [old, newerRequest] 101,
       retryJson "wrong_physical_parent" [old] 999,
       retryJson "existing_candidate_missing_from_auxiliary_projection" [old, olderExistingCandidate] 101]),
-   ("projection", toJson (Conformance.TaskLineage.cases ++ taskOpeningCases ++ pendingTimelineCases ++ [renameJson, clearTitleJson,
+   ("projection", toJson (Conformance.TaskLineage.cases ++ taskOpeningCases ++ forkAuthorityCases ++ pendingTimelineCases ++
+      (admissionCases.map fun (name, before, input) => admissionJson name before input) ++ [renameJson, clearTitleJson,
       tipCoverageJson false true false 2,
       tipCoverageJson false false false,
       tipCoverageJson false true false,

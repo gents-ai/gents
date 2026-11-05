@@ -206,7 +206,7 @@ async fn run_split(
         cells: vec![CellArg {
             cell_id: PILOT_CELL.to_owned(),
             pack: init.subject_dir.display().to_string(),
-            agent: Some(init.dossier.agent_id.clone()),
+            agent: Some(init.dossier.agent_slot.clone()),
         }],
         profiles: vec![(PILOT_CELL.to_owned(), init.profile.clone())],
         split,
@@ -482,7 +482,7 @@ mod tests {
 
     fn context<'a>(fixture: &Fixture, registry: &'a CheckRegistry, out: &Path) -> InitContext<'a> {
         let mut subject = dossier();
-        subject.agent_id = "monitor".into();
+        subject.agent_slot = "monitor".into();
         InitContext {
             dossier: subject,
             registry,

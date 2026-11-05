@@ -64,6 +64,7 @@ private def projectionJson (value : Projection) : String := object
 
 private def toolJson (value : Tool) : String := object
   [("id", toString value.id), ("request", toString value.request), ("scope", scopeJson value.scope),
+   ("agent_did", jsonString value.agentDid),
    ("accepted", boolString value.accepted), ("state", jsonString value.state.toDefraDB)]
 
 private def terminalSelectionJson : CanonicalOutput.TerminalSelection → String
@@ -242,63 +243,6 @@ def sourceProjectionCasesJson : String :=
   let largeCase : SelectionCase := ⟨"one_capture_exceeds_one_page", oneLargeCapture, .selected 65 0 0 false⟩
   jsonArray ((selected ++ [largeCase]).map sourceProjectionCaseJson)
 
-private def receiptJson : VerifiedReceipt → String
-  | .transcriptV1 request documents => tagged "transcript_v1"
-      [("admission", hydrationRequestJson request),
-       ("documents", jsonArray (documents.map hydrationDocumentKeyJson))]
-  | .metadata value => tagged "metadata" [("snapshot", snapshotJson value)]
-
-private def pageResultJson : PageResult → String
-  | .rejected => tagged "rejected"
-  | .unknown => tagged "unknown"
-  | .stale => tagged "stale"
-  | .page value => tagged "page" [("page", pageJson value)]
-
-structure PageInput where
-  name : String
-  source : SourceInput := large
-  admission : Request := Examples.admission
-  receipt : VerifiedReceipt := .metadata largeSnapshot
-  cursor : Option Cursor := none
-
-def pageInputs : List PageInput :=
-  [ {name := "initial_bounded_page"}
-  , {name := "continuation_page", cursor := some ⟨largeSnapshot, 64⟩}
-  , {name := "wrong_cursor_offset", cursor := some ⟨largeSnapshot, 1⟩}
-  , {name := "cursor_wrong_scope", cursor := some ⟨{largeSnapshot with admission := forkRequest}, 64⟩}
-  , {name := "v1_is_not_metadata", receipt := .transcriptV1 admission largeSnapshot.documents}
-  , {name := "late_terminal_behind_issued_cursor", source := lateAfter,
-      receipt := .metadata lateSnapshot, cursor := some ⟨lateSnapshot, 64⟩}
-  , {name := "membership_changed", source := Examples.source 66, cursor := some ⟨largeSnapshot, 64⟩}
-  , { name := "projection_identity_changed"
-    , source := { large with
-        projections := large.projections.map (fun value => if value.tool = 1 then
-          {value with observation := some 9999} else value) }
-    , cursor := some ⟨largeSnapshot, 64⟩ }
-  , { name := "projection_content_changed"
-    , source := { large with
-        projections := large.projections.map (fun value => if value.tool = 1 then
-          {value with changes := [{(change 1).metadata with path := "other.rs"}]} else value) } }
-  , { name := "current_owner_changed"
-    , source := { large with
-        projections := large.projections.map (fun value =>
-          if value.tool = 1 then {value with owner := "foreign-node"} else value) }
-    , cursor := some ⟨largeSnapshot, 64⟩ }
-  , {name := "revoked_before_page", source := {large with catalog :=
-      {large.catalog with verifiedActiveMemberships := []}}}
-  , {name := "incomplete_read_cannot_certify", source := {large with boundary := .incomplete}}
-  , {name := "valid_empty_inventory", source := source 0, receipt := .metadata (getSnapshot (source 0))}
-  , {name := "legacy_unknown_coverage", source := {source 1 with projections := []},
-      receipt := .metadata (getSnapshot {source 1 with projections := []})}
-  , {name := "one_capture_exceeds_one_page", source := oneLargeCapture,
-      receipt := .metadata (getSnapshot oneLargeCapture)} ]
-
-private def pageInputJson (value : PageInput) : String := object
-  [("name", jsonString value.name), ("source", sourceJson value.source),
-   ("admission", hydrationRequestJson value.admission), ("receipt", receiptJson value.receipt),
-   ("cursor", optional cursorJson value.cursor),
-   ("expected", pageResultJson (page value.source.model value.admission value.receipt value.cursor))]
-
 private def bindingJson (value : PageBinding) : String := object
   [("admission", hydrationRequestJson value.admission), ("digest", jsonString value.digest),
    ("coverage", coverageJson value.coverage)]
@@ -317,33 +261,9 @@ private def envelopeJson (value : PageEnvelope) : String := object
    ("request_key", jsonString value.requestKey), ("signer", jsonString value.signer),
    ("signature_verified", boolString value.signatureVerified), ("page", wirePageJson value.page)]
 
-structure IssuanceInput where
-  name : String
-  envelope : PageEnvelope := firstEnvelope
-  before : Bool := true
-  after : Bool := true
-
-private def issuanceInputs : List IssuanceInput :=
-  [ {name := "current_authority"}
-  , {name := "revoked_before_signing", before := false}
-  , {name := "revoked_during_signing", after := false}
-  , {name := "revoked_both", before := false, after := false}
-  , {name := "foreign_signer", envelope := {firstEnvelope with signer := "node-2"}}
-  , {name := "empty_nonce", envelope := {firstEnvelope with requestKey := ""}}
-  , {name := "malformed_page", envelope := {firstEnvelope with page := {firstEnvelope.page with entries := []}}}
-  , {name := "unknown_coverage", envelope := unknownEnvelope} ]
-
-def issuanceCasesJson : String := jsonArray (issuanceInputs.map fun value => object
-  [("name", jsonString value.name), ("envelope", envelopeJson value.envelope),
-   ("before", boolString value.before), ("after", boolString value.after),
-   ("expected", boolString (mayIssue value.envelope.page value.envelope.requestKey
-     value.envelope.signer value.before value.after))])
-
 private def demandJson (value : PageDemand) : String := object
   [("admission", hydrationRequestJson value.admission), ("attempt", jsonString value.attempt),
    ("cursor", optional pageCursorJson value.cursor)]
-
-private def initialDemand : PageDemand := ⟨admission, "attempt-1", none⟩
 
 def selectedImageCasesJson : String := jsonArray (SessionHydration.ReaderExamples.imageCases.map fun value =>
   object [("name", jsonString value.name), ("catalog", catalogJson value.catalog),
@@ -379,278 +299,47 @@ def selectedImageCasesJson : String := jsonArray (SessionHydration.ReaderExample
       | .rejected => tagged "rejected"
       | .missing => tagged "missing"
       | .selected document => tagged "selected" [("document", jsonString document)])])
-private def continuingDemand : PageDemand := ⟨admission, "attempt-1", some ⟨firstEnvelope.page.binding, 64⟩⟩
+private def directSource (visible : Bool) : SourceInput :=
+  let current := Examples.source 1
+  let root := { ownedSession admission with requester := "session-creator" }
+  { current with
+    boundary := .readerBound admission.authorizationScope
+    catalog := { current.catalog with
+      appliedPairingRoutes := []
+      verifiedActiveMemberships := []
+      sessions := [root]
+      sessionReads := [⟨admission.authorizationScope, root, visible⟩] } }
 
-def demandCasesJson : String :=
-  let demands := [initialDemand, continuingDemand,
-    {initialDemand with attempt := ""},
-    {initialDemand with admission := forkRequest},
-    {continuingDemand with cursor := some ⟨firstEnvelope.page.binding, 0⟩},
-    {continuingDemand with cursor := some ⟨firstEnvelope.page.binding, 1⟩},
-    {continuingDemand with cursor := some ⟨firstEnvelope.page.binding, 128⟩},
-    {initialDemand with attempt := "attempt-2"}]
-  jsonArray (demands.zipIdx |>.map fun (value, index) => object
-    [("name", jsonString ("demand_" ++ toString index)), ("demand", demandJson value),
-     ("well_formed", boolString value.wellFormed),
-     ("same_initial", boolString (sameDemand value initialDemand)),
-     ("initial_page", wirePageJson firstEnvelope.page),
-     ("matches_initial_page", boolString (value.matchesPage firstEnvelope.page true))])
+private def directCases : List (String × String × SourceInput) :=
+  [("native_reader_of_agent_owned_projection", admission.requester, directSource true),
+   ("anonymous", "", directSource true),
+   ("actor_differs_from_bound_reader", "other-reader", directSource true),
+   ("native_session_denial", admission.requester, directSource false),
+   ("privileged_source_is_not_reader_evidence", admission.requester,
+     {directSource true with boundary := .atomicExhaustive}),
+   ("wrong_projection_agent_owner", admission.requester,
+     {directSource true with projections := [{projection 1 with owner := admission.node}]}),
+   ("missing_capture_remains_unknown", admission.requester,
+     {directSource true with projections := []})]
 
+theorem direct_reader_cases_pinned :
+    directCases.map (fun (_, actor, source) =>
+      match directSnapshot source.model actor admission with
+      | .ok _ => true
+      | .error _ => false) =
+    [true, false, false, false, false, false, true] := by native_decide
 
-private def replyJson : Reply → String
-  | .page value => object [("kind", jsonString "page"), ("page", wirePageJson value)]
-  | .refused reason => object [("kind", jsonString "refused"), ("reason", refusalReasonJson reason)]
-
-structure RefusalInput where
-  name : String
-  actual : PageDemand := initialDemand
-  version : Bool := true
-  nonceMatches : Bool := true
-  signer : String := admission.node
-  verified : Bool := true
-
-private def refusalInputs : List RefusalInput :=
-  [ {name := "valid_refusal"}
-  , {name := "wrong_attempt", actual := {initialDemand with attempt := "attempt-2"}}
-  , {name := "wrong_cursor", actual := continuingDemand}
-  , {name := "wrong_session", actual := {initialDemand with admission := forkRequest}}
-  , {name := "wrong_version", version := false}
-  , {name := "wrong_nonce", nonceMatches := false}
-  , {name := "foreign_signer", signer := "node-2"}
-  , {name := "invalid_signature", verified := false} ]
-
-def refusalCasesJson : String := jsonArray (refusalInputs.map fun value => object
-  [("name", jsonString value.name), ("expected_demand", demandJson initialDemand),
-   ("actual_demand", demandJson value.actual), ("version", boolString value.version),
-   ("nonce_matches", boolString value.nonceMatches), ("signer", jsonString value.signer),
-   ("verified", boolString value.verified),
-   ("expected", boolString (acceptsRefusal initialDemand value.actual value.version
-      value.nonceMatches value.signer value.verified))])
-
-structure ReplyJournalInput where
-  name : String
-  prior : Option Reply := none
-  candidate : Reply := .page firstEnvelope.page
-  write : TerminalWriteResult := .committed
-
-private def replyJournalInputs : List ReplyJournalInput :=
-  [ {name := "first_page"}
-  , {name := "first_stale", candidate := .refused .stale}
-  , {name := "first_rejected", candidate := .refused .rejected}
-  , {name := "first_unavailable", candidate := .refused .unavailable}
-  , {name := "rollback_page", write := .failed}
-  , {name := "rollback_refusal", candidate := .refused .stale, write := .failed}
-  , {name := "retained_page", prior := some (.page firstEnvelope.page), candidate := .refused .stale}
-  , {name := "retained_stale", prior := some (.refused .stale)}
-  , {name := "retained_rejection", prior := some (.refused .rejected)}
-  , {name := "retained_unavailable", prior := some (.refused .unavailable), write := .failed} ]
-
-def replyJournalCasesJson : String := jsonArray (replyJournalInputs.map fun value => object
-  [("name", jsonString value.name), ("demand", demandJson initialDemand),
-   ("prior", optional replyJson value.prior), ("candidate", replyJson value.candidate),
-   ("committed", boolString (value.write == .committed)),
-   ("expected", optional replyJson (recordReply value.prior value.candidate value.write))])
-
-structure PreparationInput where
-  name : String
-  prior : Option WirePage := none
-  candidate : WirePage := firstEnvelope.page
-  write : TerminalWriteResult := .committed
-  demand : PageDemand := initialDemand
-
-private def changedPreparedPage : WirePage :=
-  (makePage (getSnapshot lateAfter) 0).toWire "changed-snapshot-digest"
-
-private def preparationInputs : List PreparationInput :=
-  [ {name := "first_preparation"}
-  , {name := "rollback_preparation", write := .failed}
-  , {name := "retry_preparation", prior := some firstEnvelope.page}
-  , {name := "membership_changed_after_preparation", prior := some firstEnvelope.page,
-      candidate := changedPreparedPage}
-  , {name := "rollback_retry_preserves_preparation", prior := some firstEnvelope.page,
-      candidate := changedPreparedPage, write := .failed}
-  , {name := "new_attempt_selects_current_snapshot", candidate := changedPreparedPage,
-      demand := {initialDemand with attempt := "attempt-2"}} ]
-
-def preparationCasesJson : String := jsonArray (preparationInputs.map fun value => object
-  [("name", jsonString value.name), ("demand", demandJson value.demand),
-   ("prior", optional wirePageJson value.prior), ("candidate", wirePageJson value.candidate),
-   ("committed", boolString (value.write == .committed)),
-   ("expected", optional wirePageJson (preparePage value.prior value.candidate value.write)),
-   ("unprepared_continuation", pageResultJson (page lateAfter.model admission
-      (.metadata largeSnapshot) (some ⟨largeSnapshot, 64⟩)))])
-
-private inductive ClientAction where
-  | resume (candidate : String)
-  | restart (attempt : String)
-  | page (attempt : String) (envelope : PageEnvelope) (nonceMatches : Bool := true)
-  | refused (attempt : String) (reason : RefusalReason) (verified : Bool := true)
-
-private def clientAction (state : FileInventory.ClientProgress) : ClientAction → Option FileInventory.ClientProgress
-  | .resume candidate => some (resumeClient (some state) state.active.receiver.admission candidate)
-  | .restart attempt => restartClient state attempt
-  | .page attempt envelope nonce =>
-      let key := attempt ++ "/" ++ toString envelope.page.offset
-      clientPage state attempt key {envelope with requestKey := key} nonce
-  | .refused attempt reason verified => clientRefusal state attempt reason verified
-
-private def clientActionJson : ClientAction → String
-  | .resume candidate => tagged "resume" [("attempt", jsonString candidate)]
-  | .restart attempt => tagged "restart" [("attempt", jsonString attempt)]
-  | .page attempt envelope nonce => tagged "page"
-      [("attempt", jsonString attempt), ("page", wirePageJson envelope.page),
-       ("nonce_matches", boolString nonce)]
-  | .refused attempt reason verified => tagged "refused"
-      [("attempt", jsonString attempt), ("reason", refusalReasonJson reason),
-       ("verified", boolString verified)]
-
-def clientScopeCasesJson : String :=
-  let otherPhysical := {admission with nativeSession := admission.nativeSession + 1}
-  let otherRequester := {admission with requester := "other-requester"}
-  let cases : List (String × String × String × String × List Request) :=
-    [("missing", admission.peer, admission.node, admission.session, []),
-     ("exact", admission.peer, admission.node, admission.session, [admission]),
-     ("foreign_node", admission.peer, "other-node", admission.session, [admission]),
-     ("foreign_peer", "other-peer", admission.node, admission.session, [admission]),
-     ("foreign_session", admission.peer, admission.node, "other-session", [admission]),
-     ("ambiguous_physical", admission.peer, admission.node, admission.session, [admission, otherPhysical]),
-     ("ambiguous_requester", admission.peer, admission.node, admission.session, [admission, otherRequester]),
-     ("invalid", "", admission.node, admission.session, [admission])]
-  jsonArray (cases.map fun (name, peer, node, session, rows) =>
-    object [("name", jsonString name), ("peer", jsonString peer), ("node", jsonString node),
-      ("session", jsonString session), ("rows", jsonArray (rows.map hydrationRequestJson)),
-      ("expected", match selectRetainedScope peer node session rows with
-        | .error reason => tagged "error" [("reason", jsonString reason)]
-        | .ok none => tagged "missing"
-        | .ok (some selected) => tagged "selected" [("admission", hydrationRequestJson selected)])])
-
-private def clientSummaryJson (state : FileInventory.ClientProgress) : String := object
-  [("attempt", jsonString state.active.id),
-   ("pages", toString state.active.receiver.pages.length),
-   ("visible_entries", optional (fun page => toString page.envelope.page.entries.length)
-      state.active.receiver.pages.head?),
-   ("next_received_offset", optional (fun page => toString page.envelope.page.offset)
-      (state.active.receiver.pages.drop 1).head?),
-   ("last_page_entries", optional (fun page => toString page.envelope.page.entries.length)
-      state.active.receiver.pages.getLast?),
-   ("retired", jsonArray (state.retired.map jsonString)),
-   ("complete", boolString state.active.receiver.complete),
-   ("known", boolString (knownInventory state.active.receiver)),
-   ("refusal", optional refusalReasonJson state.active.refusal),
-   ("pending_offset", optional (fun demand => toString
-      (demand.cursor.map (·.offset) |>.getD 0)) state.active.pending),
-   ("previous_pages", optional (fun prior => toString prior.receiver.pages.length) state.previous)]
-
-private def clientStepsJson (state : FileInventory.ClientProgress) : List (ClientAction × TerminalWriteResult) → List String
-  | [] => []
-  | (action, write) :: rest =>
-      let candidate := clientAction state action
-      let next := commitClient state (candidate.getD state) write
-      object [("action", clientActionJson action), ("committed", boolString (write == .committed)),
-        ("accepted", boolString candidate.isSome), ("expected", clientSummaryJson next)] ::
-        clientStepsJson next rest
-
-def clientProgressCasesJson : String :=
-  let scripts : List (String × List (ClientAction × TerminalWriteResult)) :=
-    [("reload_retry_refresh_and_late_reply", [
-        (.resume "unused-candidate", .committed),
-        (.page "attempt-1" firstEnvelope, .committed),
-        (.page "attempt-1" firstEnvelope false, .committed),
-        (.page "attempt-1" firstEnvelope, .committed),
-        (.page "attempt-1" secondEnvelope, .committed),
-        (.page "attempt-1" secondEnvelope, .committed),
-        (.restart "attempt-2", .committed),
-        (.resume "attempt-1", .committed),
-        (.restart "attempt-2", .committed),
-        (.page "attempt-1" firstEnvelope, .committed),
-        (.refused "attempt-2" .stale, .committed),
-        (.refused "attempt-2" .stale, .committed),
-        (.restart "attempt-3", .committed),
-        (.page "attempt-3" firstEnvelope, .committed),
-        (.page "attempt-3" secondEnvelope, .failed),
-        (.page "attempt-3" secondEnvelope, .committed),
-        (.restart "attempt-1", .committed),
-        (.restart "attempt-2", .committed)]),
-     ("refusal_is_not_empty", [
-        (.refused "attempt-1" .unavailable, .committed),
-        (.page "attempt-1" firstEnvelope, .committed),
-        (.refused "attempt-1" .rejected, .committed)]),
-     ("unverified_and_wrong_nonce", [
-        (.refused "attempt-1" .rejected false, .committed),
-        (.page "attempt-1" firstEnvelope false, .committed),
-        (.page "attempt-1" secondEnvelope, .committed),
-        (.restart "", .committed),
-        (.page "attempt-1" firstEnvelope, .failed),
-        (.page "attempt-1" firstEnvelope, .committed)])]
-  jsonArray (scripts.map fun (name, steps) => object
-    [("name", jsonString name), ("admission", hydrationRequestJson admission),
-     ("attempt", jsonString "attempt-1"),
-     ("steps", jsonArray (clientStepsJson (beginClient admission "attempt-1") steps))])
-
-def operatorOwnerCasesJson : String :=
-  let inputs : List (String × String × String × String × String) :=
-    [("native_owner", "node-1", "node-1", "node-1", "node-1"),
-     ("anonymous", "node-1", "", "node-1", "node-1"),
-     ("foreign_authenticated_actor", "node-1", "node-2", "node-1", "node-1"),
-     ("different_requested_source", "node-1", "node-1", "node-1", "node-2"),
-     ("different_signing_identity", "node-1", "node-1", "node-2", "node-1")]
-  let source : SourceInput := {Examples.source 0 with catalog :=
-    {catalog [] with appliedPairingRoutes := [], verifiedActiveMemberships := []}}
-  jsonArray (inputs.map fun (name, owner, actor, signer, node) =>
-    let request := {admission with node := node}
-    let result := operatorSnapshot source.model owner actor signer request
-    object [("name", jsonString name), ("owner", jsonString owner),
-      ("actor", jsonString actor), ("signer", jsonString signer),
-      ("admission", hydrationRequestJson request), ("source", sourceJson source),
-      ("allowed", boolString (operatorAdmitted owner actor signer request)),
+def directReaderCasesJson : String :=
+  jsonArray (directCases.map fun (name, actor, source) =>
+    let result := directSnapshot source.model actor admission
+    object [("name", jsonString name), ("actor", jsonString actor),
+      ("admission", hydrationRequestJson admission), ("source", sourceJson source),
       ("expected", selectionResultJson result),
       ("page", match result with
         | .error _ => "null"
-        | .ok current => wirePageJson ((makePage current 0).toWire "operator-snapshot")),
-      ("wrong_physical_refusal", match operatorSnapshot source.model owner actor signer
-          {request with nativeSession := request.nativeSession + 1} with
-        | .error error => refusalReasonJson error.refusal
-        | .ok _ => "null")])
-
-def completionCasesJson : String :=
-  let candidates := [Reply.page firstEnvelope.page, .refused .stale,
-    .refused .rejected, .refused .unavailable]
-  jsonArray (candidates.flatMap fun candidate =>
-    [true, false].flatMap fun before => [true, false].flatMap fun after =>
-    [DeliveryResult.confirmed, .indeterminate].flatMap fun delivery =>
-    [TerminalWriteResult.committed, .failed].map fun write => object
-      [("candidate", replyJson candidate), ("before", boolString before), ("after", boolString after),
-       ("confirmed", boolString (delivery == .confirmed)), ("committed", boolString (write == .committed)),
-       ("expected", optional replyJson (completeReply candidate before after delivery write))])
-
-def pageGrantCasesJson : String := jsonArray (refusalInputs.map fun value => object
-  [("name", jsonString (if value.nonceMatches then value.name else "empty_document")), ("expected_demand", demandJson initialDemand),
-   ("actual_demand", demandJson value.actual), ("version", boolString value.version),
-   ("document", jsonString (if value.nonceMatches then "page-document" else "")),
-   ("signer", jsonString value.signer), ("verified", boolString value.verified),
-   ("expected", boolString (acceptsPageGrant initialDemand value.actual value.version
-      (if value.nonceMatches then "page-document" else "") value.signer value.verified))])
-
-private def receivedJson (value : ReceivedPage) : String := object
-  [("request_key", jsonString value.requestKey), ("envelope", envelopeJson value.envelope)]
-
-private def receiverJson (value : Receiver) : String := object
-  [("admission", hydrationRequestJson value.admission), ("pages", jsonArray (value.pages.map receivedJson))]
-
-private def receiverResultJson (value : Receiver) : String := object
-  [("state", receiverJson value), ("complete", boolString value.complete),
-   ("known_inventory", boolString (knownInventory value)),
-   ("validated", optional (fun prior => object
-      [("binding", bindingJson prior.binding), ("entries", jsonArray (prior.entries.map entryJson)),
-       ("complete", boolString prior.complete)]) value.validated)]
-
-private def receiverInputJson (value : Examples.ReceiverInput) : String := object
-  [("name", jsonString value.name), ("state", receiverJson value.state),
-   ("request_key", jsonString value.requestKey), ("envelope", envelopeJson value.envelope),
-   ("expected", optional receiverResultJson (receive value.state value.requestKey value.envelope))]
-
-def receiverCasesJson : String := jsonArray (receiverInputs.map receiverInputJson)
-
+        | .ok current => wirePageJson ((makePage current 0).toWire "direct-snapshot")),
+      ("wrong_physical_expected", selectionResultJson (directSnapshot source.model actor
+          {admission with nativeSession := admission.nativeSession + 1}))])
 
 def orderingWindowCasesJson : String := jsonArray (Order.Examples.windowCases.map
   fun (name, selected, closure, tool) => object
@@ -686,13 +375,5 @@ or malformed native IDs cannot become modeled observations; abstract hash
 labels cannot bypass the capture decoder's byte/hash checks. These are
 executable inputs/outputs, not a production wire-format proposal. -/
 def publicationCasesJson : String := jsonArray (publicationCases.map publicationCaseJson)
-
-def casesJson : String := object
-  [("selection", jsonArray ((selectionCases ++ SessionHydration.ReaderExamples.cases).map selectionCaseJson)),
-   ("publication", publicationCasesJson),
-   ("fork", object [("source", sourceJson forkSource), ("admission", hydrationRequestJson forkRequest),
-      ("expected", selectionJson forkSource forkRequest)]),
-   ("paging", jsonArray (pageInputs.map pageInputJson)),
-   ("receiver", receiverCasesJson)]
 
 end Conformance.FileInventoryContracts

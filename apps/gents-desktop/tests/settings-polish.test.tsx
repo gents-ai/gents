@@ -80,7 +80,7 @@ describe("settings polish", () => {
   it("explains agent readiness and links to the canonical settings route", async () => {
     renderIn(
       cardApp(),
-      <AgentHoverCard deployment={deployment} agentId="default">
+      <AgentHoverCard deployment={deployment} agentDid="default">
         <button type="button">Default agent</button>
       </AgentHoverCard>,
     );
@@ -106,7 +106,7 @@ describe("settings polish", () => {
     };
     renderIn(
       cardApp(),
-      <AgentHoverCard deployment={onClaude} agentId="default">
+      <AgentHoverCard deployment={onClaude} agentDid="default">
         <button type="button">Default agent</button>
       </AgentHoverCard>,
     );
@@ -120,7 +120,7 @@ describe("settings polish", () => {
   it("names no company for a bare local endpoint", async () => {
     renderIn(
       cardApp(),
-      <AgentHoverCard deployment={deployment} agentId="default">
+      <AgentHoverCard deployment={deployment} agentDid="default">
         <button type="button">Default agent</button>
       </AgentHoverCard>,
     );
@@ -145,7 +145,7 @@ describe("settings polish", () => {
     });
     renderIn(
       app,
-      <AgentHoverCard deployment={onSubscription} agentId="default">
+      <AgentHoverCard deployment={onSubscription} agentDid="default">
         <button type="button">Default agent</button>
       </AgentHoverCard>,
     );
@@ -164,7 +164,7 @@ describe("settings polish", () => {
     const readProviderUsage = vi.fn(() => new Promise(() => {}));
     renderIn(
       testApp({ api: { readProviderUsage } }),
-      <AgentHoverCard deployment={deployment} agentId="default">
+      <AgentHoverCard deployment={deployment} agentDid="default">
         <button type="button">Default agent</button>
       </AgentHoverCard>,
     );
@@ -200,7 +200,7 @@ describe("settings polish", () => {
           read: "read",
         },
       ]),
-      <AgentHoverCard deployment={onSubscription} agentId="default">
+      <AgentHoverCard deployment={onSubscription} agentDid="default">
         <button type="button">Default agent</button>
       </AgentHoverCard>,
     );

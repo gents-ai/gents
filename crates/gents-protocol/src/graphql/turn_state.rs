@@ -113,7 +113,7 @@ pub fn session_shape_query(session_id: &str) -> String {
                 lifecycle_state
                 child_request_id
                 spawn_target_did
-                spawn_agent_id
+                spawn_agent_did
                 await_mode
                 deadline_at
                 selected_service_id

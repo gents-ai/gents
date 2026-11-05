@@ -139,7 +139,7 @@ async fn cancelled_budget_wait_creates_no_attempt_and_does_not_leak_capacity() {
     cancel.cancel();
     assert!(matches!(trial.await.unwrap(), Slot::Skipped));
     assert!(recorder
-        .load_trials(OWNER, &request.run_id)
+        .load_trials(launching.owner(), &request.run_id)
         .await
         .unwrap()
         .is_empty());
@@ -209,7 +209,7 @@ async fn stopped_budget_wait_finishes_without_waiting_for_unrelated_capacity() {
         std::task::Poll::Ready(Ok(Slot::Skipped))
     ));
     assert!(recorder
-        .load_trials(OWNER, &request.run_id)
+        .load_trials(launching.owner(), &request.run_id)
         .await
         .unwrap()
         .is_empty());

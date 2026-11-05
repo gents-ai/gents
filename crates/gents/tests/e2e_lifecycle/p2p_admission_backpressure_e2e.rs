@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::store::graphql::escape_graphql_string;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -9,7 +9,7 @@ use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
 use crate::support::{test_p2p_db_with_admission, TestP2pAdmission};
 
 const OWNER_DID: &str = "did:test:admission-p2p-owner";
-const AGENT_ID: &str = "admission-p2p-behavior";
+const AGENT_DID: &str = "admission-p2p-behavior";
 
 async fn install_one_way_replicator(
     sender: &EmbeddedNode,
@@ -78,7 +78,7 @@ async fn create_request(
                 request_id: "{request_id}",
                 purpose: "normal",
                 node_did: "{node_did}",
-                agent_id: "{AGENT_ID}",
+                agent_did: "{AGENT_DID}",
                 session_id: "{session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{request_id}",

@@ -6,7 +6,7 @@ fn session(id: &str, node: &str, latest: Option<(&str, RequestLifecycleState)>) 
         session_id: id.to_string(),
         node_did: node.to_string(),
         requester_did: None,
-        agent_id: "default".to_string(),
+        agent_did: "default".to_string(),
         created_at: "2026-04-21T12:00:00Z".to_string(),
         closed_at: None,
         archived_at: None,
@@ -37,7 +37,7 @@ fn request(id: &str, session_id: &str, state: RequestLifecycleState) -> AgentReq
         doc_id: Some(id.to_string()),
         request_id: id.to_string(),
         node_did: Some("did:test:amy".to_string()),
-        agent_id: Some("default".to_string()),
+        agent_did: Some("default".to_string()),
         session_id: Some(session_id.to_string()),
         content: Some("follow up question".to_string()),
         lifecycle_state: Some(state),
@@ -93,7 +93,7 @@ fn session_snapshot_is_node_scoped_when_session_ids_match() {
 
 #[test]
 fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
-    let agent = serde_json::from_value(serde_json::json!({"agent_id":"default","node_did":"did:test:amy","inference_profile_id":"large-context","context_id":"large-context-input"})).expect("agent");
+    let agent = serde_json::from_value(serde_json::json!({"agent_did":"default","node_did":"did:test:amy","inference_profile_id":"large-context","context_id":"large-context-input"})).expect("agent");
     let profile = serde_json::from_value(serde_json::json!({"node_did":"did:test:amy","profile_id":"large-context","backend_id":"backend","model_name":"model","context_window":10000})).expect("profile");
     let context = serde_json::from_value(serde_json::json!({"node_did":"did:test:amy","context_id":"large-context-input","compaction_id":"compact"})).expect("context");
     let compaction = serde_json::from_value(serde_json::json!({"node_did":"did:test:amy","compaction_id":"compact","strategy":"StripThenSummarize","threshold":0.57})).expect("compaction");
@@ -158,7 +158,7 @@ fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
 
 #[test]
 fn session_context_window_follows_the_runtime_resolution_of_the_profile() {
-    let agent = serde_json::json!({"agent_id":"default","node_did":"did:test:amy","inference_profile_id":"profile"});
+    let agent = serde_json::json!({"agent_did":"default","node_did":"did:test:amy","inference_profile_id":"profile"});
     let backend = serde_json::json!({"node_did":"did:test:amy","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost/v1","auth":{"kind":"unauthenticated"}});
     let advertised = |default: Option<i64>, maximum: Option<i64>| serde_json::json!({"backend_id":"backend","catalogs":[{"node_did":null,"observed_at":"now","models":[{"model_name":"model","context_window":default,"max_context_window":maximum}]}]});
     let observation = advertised(Some(272_000), Some(872_000));

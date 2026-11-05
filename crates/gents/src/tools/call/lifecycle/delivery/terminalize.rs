@@ -6,7 +6,7 @@ use super::{
     plugin_writes_failed, PluginWritesFailed, RawPresentation, TerminalFields, TerminalJobProgress,
     TerminalizeOptions,
 };
-use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use crate::store::config_client::{ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle, ToolCallState, ToolRowKind};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -265,6 +265,7 @@ impl ToolCallLifecycle {
             .context("canonical tool terminalization requires accepted header binding")?;
         let started_at = self.started_at;
         let node_did = self.node_did.clone();
+        let actor_did = self.actor.to_string();
         let requester_did = self.requester_did.clone();
         let session_id = self.session_id.clone();
         let tool_call_id = self.tool_call_id.clone();
@@ -298,9 +299,7 @@ impl ToolCallLifecycle {
             .filter(|_| fields.state == ToolCallState::Completed);
 
         let file_capture = self.file_capture.clone();
-        let published = ConfigAccess::transact_local_idempotent(
-            &self.node,
-            None,
+        let published = self.access()?.transact_idempotent(
             IdempotentTransactionRetry::Standard,
             operation,
             move |txn| {
@@ -308,6 +307,7 @@ impl ToolCallLifecycle {
                 let request_doc_id = request_doc_id.clone();
                 let accepted_header = accepted_header.clone();
                 let node_did = node_did.clone();
+                let actor_did = actor_did.clone();
                 let requester_did = requester_did.clone();
                 let session_id = session_id.clone();
                 let tool_call_id = tool_call_id.clone();
@@ -364,13 +364,14 @@ impl ToolCallLifecycle {
                     // writes nothing; a failure rolls the terminal back too.
                     if let (true, Some(pending)) = (published, &plugin_writes) {
                         let stamps = crate::plugin::data::StampContext::ToolOutput {
-                            node_did: node_did.clone(),
+                            caller_did: actor_did.clone(),
                             session_id: session_id.clone(),
                             request_doc_id: request_doc_id.clone(),
                             tool_call_doc_id: doc_id.clone(),
                         };
                         crate::plugin::application_write::apply_plugin_writes_in_txn(
                             txn,
+                            &pending.actor,
                             &pending.grant,
                             &stamps,
                             pending.writes.clone(),
@@ -453,6 +454,13 @@ impl ToolCallLifecycle {
             self.failure_class = fields.failure;
             self.cancel_cause = fields.cancel;
         }
+        crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+            &self.access()?,
+            &self.node_did,
+            &self.actor,
+            &self.session_id,
+        )
+        .await?;
         Ok(published)
     }
 }

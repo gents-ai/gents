@@ -13,7 +13,9 @@ inductive Action where
 
 /-- An attached frontend may observe another node than the embedding shell.
 The shared observer must retain the full authorized scope until it detaches;
-this changes observation focus, never document authorization. -/
+this changes observation focus, never document authorization. Each runtime scope
+is observed through its authenticated endpoint, using the client DID. Missing or
+unavailable endpoints cannot be replaced by locally replicated runtime documents. -/
 def effective (state : State) : Option Nat :=
   if state.attachments = 0 then state.requested else none
 

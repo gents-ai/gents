@@ -34,7 +34,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
     );
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
-async fn execute(node: &gents::defra_node::EmbeddedNode, query: &str) -> Value {
+async fn execute(node: &gents::defra_node::Node, query: &str) -> Value {
     let out = node.execute(query).await;
     assert!(!out.has_errors(), "{query}: {:?}", out.errors);
     out.data.unwrap()
@@ -53,11 +53,11 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     let model_q = escape_graphql_string(MODEL);
     bind_default_agent_backend(&db.node, &did, "artifact-live-backend", ENDPOINT).await;
     let bootstrap = gents::ensure_node(&db.node, &did).await.unwrap();
-    let agent_id = bootstrap
-        .default_agent_id
+    let agent_did = bootstrap
+        .default_agent_did
         .clone()
         .expect("node has a default agent");
-    let mut agent = gents::load_agent(&db.node, &agent_id)
+    let mut agent = gents::load_agent(&db.node, &agent_did)
         .await
         .unwrap()
         .expect("default agent exists");
@@ -88,7 +88,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     configure_agent_tools(
         &db.node,
         &did,
-        &agent_id,
+        &agent_did,
         None,
         Tools {
             tools_id: "artifact-live-tools".into(),
@@ -211,7 +211,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     .await
     .unwrap();
     let mut session =
-        crate::support::session_document_in_scope(&did, "artifact-live-session", &agent_id, &now);
+        crate::support::session_document_in_scope(&did, "artifact-live-session", &agent_did, &now);
     session.requester_did = Some(did.clone());
     session.title = Some(gents_protocol::session::SessionTitle {
         text: "Artifact live QA".into(),
@@ -220,7 +220,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     crate::support::create_session_document(&db.node, &session).await;
     let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
-        "artifact-live-request", &did, &did, &agent_id, "artifact-live-session",
+        "artifact-live-request", &did, &did, &agent_did, "artifact-live-session",
         "Inspect Cargo.toml and src/lib.rs, then call bash exactly once with command cargo, args [\"test\",\"--locked\",\"--offline\"], raw_json true. This is a sealed read-only source with runtime-managed compiler artifacts. Do not edit source or set output directories. You must execute the test, not merely suggest it. After observing its actual result, report the test count and answer value. If the compiler fails, report the exact failure without claiming success.",
         "interactive", &now, gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did));
     request.initial_lifecycle_state =

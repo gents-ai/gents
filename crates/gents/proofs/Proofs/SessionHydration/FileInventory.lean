@@ -1,3 +1,4 @@
+import Mathlib.Data.String.Basic
 import Proofs.SessionHydration.FileImages
 import Proofs.SessionHydration.Receiver
 import Proofs.ToolExecution.Executable
@@ -81,9 +82,10 @@ structure Projection where
   verifiedUnchanged : Bool := false
   deriving DecidableEq, Repr
 
-def Observation.metadata (observation : Observation) (projectionId : DocId) : Projection :=
+def Observation.metadata (observation : Observation) (projectionId : DocId)
+    (agentDid : String) : Projection :=
   ⟨projectionId, observation.id, observation.tool, observation.request,
-    observation.scope, observation.scope.node, observation.changes.map CapturedChange.metadata,
+    observation.scope, agentDid, observation.changes.map CapturedChange.metadata,
     observation.verifiedUnchanged⟩
 
 def Observation.wellFormed (observation : Observation) : Bool :=
@@ -98,6 +100,12 @@ structure Tool where
   id : DocId
   request : DocId
   scope : FileImages.Scope
+  /-- The selected Agent DID comes from the canonical source session/accepted tool,
+  not authored capture metadata. It owns retained captures and projections. The
+  existing native reader-relation mechanism may grant the canonical session user
+  access under this agent actor; no runtime-key fallback is permitted. Generic
+  configured-user inheritance remains the #3485 policy obligation. -/
+  agentDid : String
   accepted : Bool
   state : ToolCallState
   deriving DecidableEq, Repr
@@ -112,11 +120,11 @@ def publish (pre : ToolCallContext) (action : ToolCallContext.Action)
     (projectionId : DocId) : Option Projection := do
   let post ← pre.step? action
   if won && write == .committed && decide (HasTerminal.isTerminal post.state) &&
-      actual.accepted && actual.id == pre.callId && actual.request == pre.requestId &&
+      !actual.agentDid.isEmpty && actual.accepted && actual.id == pre.callId && actual.request == pre.requestId &&
       actual.state == pre.state && observation.scope == actual.scope &&
       observation.tool == post.callId && observation.request == post.requestId &&
       observation.wellFormed then
-    some (observation.metadata projectionId)
+    some (observation.metadata projectionId actual.agentDid)
   else none
 
 theorem losing_terminal_publishes_nothing (pre : ToolCallContext)
@@ -327,7 +335,7 @@ def validScope (scope : FileImages.Scope) : Bool :=
 
 def Projection.matches (projection : Projection) (tool : Tool) : Bool :=
   projection.tool == tool.id && projection.request == tool.request &&
-    projection.scope == tool.scope && projection.owner == tool.scope.node &&
+    projection.scope == tool.scope && !tool.agentDid.isEmpty && projection.owner == tool.agentDid &&
     (if projection.verifiedUnchanged then
       projection.observation.isNone && projection.changes.isEmpty
      else projection.observation.isSome && !projection.changes.isEmpty) &&
@@ -405,34 +413,26 @@ def snapshot (source : Source) (admission : Request) : Except Error Snapshot := 
   if !decide (admits source.catalog admission) then .error .rejected else pure ()
   assembleSnapshot source admission
 
-/-- DefraDB authenticates the HTTP actor. Its native node DID owns the NAC
-policy and always admits that DID; this is not an enrollment or an authored
-owner claim. The signer and requested source must be that same native owner.
-Canonical closure selection and native document ACP still govern the read. -/
-def operatorAdmitted (owner actor signer : String) (admission : Request) : Bool :=
-  !owner.isEmpty && actor == owner && signer == owner && admission.node == owner
-
-def operatorSnapshot (source : Source) (owner actor signer : String) (admission : Request) :
+/-- Direct inventory reads use the authenticated ConfigAccess actor and native
+reader-bound observations from one database transaction. Session requester fields
+remain creation provenance; they need not equal the reader. There is no enrollment,
+node-owner preflight, runtime signature, transfer journal, or filesystem scan.
+Every selected capture still needs native visibility and its producing Agent owner. -/
+def directSnapshot (source : Source) (actor : String) (admission : Request) :
     Except Error Snapshot := do
-  if !operatorAdmitted owner actor signer admission then .error .rejected else pure ()
+  if actor.isEmpty || actor != admission.requester then .error .rejected else pure ()
+  if source.boundary != .readerBound admission.authorizationScope then .error .unknown else pure ()
   let sessions := source.catalog.sessions.filter (fun session =>
     session.node == admission.node && session.session == admission.session)
-  if sessions.card != 1 then .error .unknown
-  else if !decide (∀ session ∈ sessions, session.requester = admission.requester) then .error .unknown
-  else if !decide (ownedSession admission ∈ sessions) then .error .rejected
-  else assembleSnapshot source admission
+  if sessions.card != 1 then .error .unknown else pure ()
+  if !(source.catalog.sessionReads.any fun observation =>
+      decide (observation.source ∈ sessions) && observation.matches admission observation.source)
+  then .error .rejected else pure ()
+  assembleSnapshot source admission
 
-theorem anonymous_operator_is_denied (owner signer : String) (admission : Request) :
-    operatorAdmitted owner "" signer admission = false := by
-  by_cases h : owner = ""
-  · subst owner; rfl
-  · simp [operatorAdmitted, Ne.symm h]
-
-theorem denied_operator_cannot_select (source : Source)
-    (owner actor signer : String) (admission : Request)
-    (denied : operatorAdmitted owner actor signer admission = false) :
-    operatorSnapshot source owner actor signer admission = .error .rejected := by
-  simp [operatorSnapshot, denied, Bind.bind, Except.bind]
+theorem anonymous_direct_reader_is_denied (source : Source) (admission : Request) :
+    directSnapshot source "" admission = .error .rejected := by
+  simp [directSnapshot, String.isEmpty, Bind.bind, Except.bind]
 
 structure Coverage where
   entries : Nat
@@ -547,20 +547,29 @@ def makePage (value : Snapshot) (offset : Nat) : Page :=
   ⟨value, offset, entries,
     if following < value.entries.length then some ⟨value, following⟩ else none⟩
 
+def pageFromSnapshot (current : Snapshot) (cursor : Option Cursor) : PageResult :=
+  match cursor with
+  | none => .page (makePage current 0)
+  | some cursor =>
+      if cursor.snapshot != current then .stale
+      else if cursor.offset == 0 || cursor.offset % pageLimit != 0 ||
+          cursor.offset >= current.entries.length then .rejected
+      else .page (makePage current cursor.offset)
+
 def page (source : Source) (admission : Request) (receipt : VerifiedReceipt)
     (cursor : Option Cursor) : PageResult :=
   match snapshot source admission with
   | .error .rejected => .rejected
   | .error .unknown => .unknown
   | .ok current =>
-      if !receipt.proves current then .stale
-      else match cursor with
-      | none => .page (makePage current 0)
-      | some cursor =>
-          if cursor.snapshot != current then .stale
-          else if cursor.offset == 0 || cursor.offset % pageLimit != 0 ||
-              cursor.offset >= current.entries.length then .rejected
-          else .page (makePage current cursor.offset)
+      if !receipt.proves current then .stale else pageFromSnapshot current cursor
+
+def directPage (source : Source) (actor : String) (admission : Request)
+    (cursor : Option Cursor) : PageResult :=
+  match directSnapshot source actor admission with
+  | .error .rejected => .rejected
+  | .error .unknown => .unknown
+  | .ok current => pageFromSnapshot current cursor
 
 theorem page_is_bounded (value : Snapshot) (offset : Nat) :
     (makePage value offset).entries.length ≤ pageLimit := by
@@ -613,8 +622,6 @@ def PageDemand.wellFormed (demand : PageDemand) : Bool :=
       !cursor.binding.digest.isEmpty && cursor.offset != 0 && cursor.offset % pageLimit == 0 &&
       cursor.offset < cursor.binding.coverage.entries
 
-def sameDemand (left right : PageDemand) : Bool := left == right
-
 structure WirePage where
   binding : PageBinding
   offset : Nat
@@ -643,17 +650,6 @@ structure PageEnvelope where
   signer : String
   signatureVerified : Bool
   page : WirePage
-  deriving DecidableEq, Repr
-
-structure ReceivedPage where
-  requestKey : String
-  envelope : PageEnvelope
-  deriving DecidableEq, Repr
-
-structure Prefix where
-  binding : PageBinding
-  entries : List Entry
-  complete : Bool
   deriving DecidableEq, Repr
 
 def Entry.key (value : Entry) : DocId × String × String :=
@@ -774,18 +770,6 @@ theorem metadata_cannot_replace_image_permission (demand : ImageDemand) (catalog
     · rfl
     · simp [denied]
 
-/-- The existing admission and enrollment owners supply the two current
-observations. Issuance withholds the signed value if authorization changes
-while native signing is in flight; this adds no permission or image grant. -/
-def mayIssue (value : WirePage) (nonce signer : String) (before after : Bool) : Bool :=
-  value.wellFormed && !nonce.isEmpty && signer == value.binding.admission.node && before && after
-
-theorem revoked_after_signing_cannot_issue (value : WirePage) (nonce signer : String) (before : Bool) :
-    mayIssue value nonce signer before false = false := by simp [mayIssue]
-
-theorem revoked_before_signing_cannot_issue (value : WirePage) (nonce signer : String) (after : Bool) :
-    mayIssue value nonce signer false after = false := by simp [mayIssue]
-
 inductive RefusalReason where
   | rejected | stale | unavailable
   deriving DecidableEq, Repr
@@ -797,284 +781,5 @@ def Error.refusal : Error → RefusalReason
 theorem invalid_source_is_rejected : Error.rejected.refusal = .rejected := rfl
 
 theorem unavailable_source_is_not_empty : Error.unknown.refusal = .unavailable := rfl
-
-/-- A refusal carries only the client's exact demand and a fixed reason. It
-contains no selected membership, metadata or image grant. Native verification
-binds its disjoint versioned purpose and full demand, including the cursor. -/
-def acceptsRefusal (expected actual : PageDemand) (version nonceMatches : Bool)
-    (signer : String) (signatureVerified : Bool) : Bool :=
-  expected.wellFormed && expected == actual && version && nonceMatches &&
-    signer == expected.admission.node && signatureVerified
-
-inductive Reply where
-  | page (value : WirePage)
-  | refused (reason : RefusalReason)
-  deriving DecidableEq, Repr
-
-/-- Prior replies have been decoded, correlated and signature-verified for the
-exact demand, and their native document owner is the source. The local journal
-is not a transfer grant; delivery must still check current authorization. -/
-def recordReply (prior : Option Reply) (candidate : Reply)
-    (write : TerminalWriteResult) : Option Reply :=
-  match prior with
-  | some outcome => some outcome
-  | none => if write == .committed then some candidate else none
-
-theorem recorded_reply_is_immutable (prior candidate : Reply) (write : TerminalWriteResult) :
-    recordReply (some prior) candidate write = some prior := rfl
-
-theorem failed_reply_is_not_retained (candidate : Reply) :
-    recordReply none candidate .failed = none := rfl
-
-theorem stale_reply_is_not_upgraded (candidate : Reply) :
-    recordReply (some (.refused .stale)) candidate .committed = some (.refused .stale) := rfl
-
-/-- Preparation is an immutable source-local choice for one exact demand.
-The native owner verifies its signature, correlation and current document
-owner before observing a prior choice. A retry does not reselect from a newer
-snapshot, and preparation does not establish delivery or terminal settlement. -/
-def preparePage (prior : Option WirePage) (candidate : WirePage)
-    (write : TerminalWriteResult) : Option WirePage :=
-  (recordReply (prior.map Reply.page) (.page candidate) write).bind fun reply =>
-    match reply with
-    | .page value => some value
-    | .refused _ => none
-
-theorem prepared_page_is_immutable (prior candidate : WirePage) (write : TerminalWriteResult) :
-    preparePage (some prior) candidate write = some prior := rfl
-
-theorem preparation_rollback_retains_nothing (candidate : WirePage) :
-    preparePage none candidate .failed = none := rfl
-
-/-- A page is prepared locally before explicit delivery. Only a confirmed
-transfer with both current authority observations may settle a page; a lost
-acknowledgment keeps the attempt pending. Refusals carry no file metadata. -/
-def completeReply (candidate : Reply) (before after : Bool) (delivery : DeliveryResult)
-    (write : TerminalWriteResult) : Option Reply :=
-  if write != .committed then none
-  else match candidate with
-  | .refused reason => some (.refused reason)
-  | .page value =>
-      if !before || !after then some (.refused .rejected)
-      else if delivery == .indeterminate then none else some (.page value)
-
-theorem unacknowledged_page_stays_pending (value : WirePage) :
-    completeReply (.page value) true true .indeterminate .committed = none := rfl
-
-theorem revoked_page_cannot_settle_as_page (value : WirePage) (before : Bool)
-    (delivery : DeliveryResult) :
-    completeReply (.page value) before false delivery .committed = some (.refused .rejected) := by
-  cases before <;> rfl
-
-/-- The pointer has a separate signed purpose and contains only a demand and
-one physical page document ID. A successful native verification authorizes a
-local replica read of that exact metadata document, never any image document. -/
-def acceptsPageGrant (expected actual : PageDemand) (version : Bool)
-    (document signer : String) (signatureVerified : Bool) : Bool :=
-  expected.wellFormed && expected == actual && version && !document.isEmpty &&
-    signer == expected.admission.node && signatureVerified
-
-/-- All authorization remains with the existing source/identity owners. This
-receiver checks their signed metadata representation, not another access
-policy. Fork entries retain the attested actual scope, including origins. -/
-def advance (admission : Request) (previous : Option Prefix) (received : ReceivedPage) : Option Prefix :=
-  let envelope := received.envelope
-  let value := envelope.page
-  if !envelope.signatureVerified || envelope.purpose != .fileInventoryV2 ||
-      envelope.signer != admission.node || received.requestKey.isEmpty ||
-      envelope.requestKey != received.requestKey || value.binding.admission != admission ||
-      !value.wellFormed then none
-  else match previous with
-  | none =>
-      if value.offset != 0 then none
-      else some ⟨value.binding, value.entries,
-        value.entries.length == value.binding.coverage.entries⟩
-  | some prior =>
-      if prior.complete || prior.binding != value.binding ||
-          value.offset != prior.entries.length ||
-          !coherentEntries (prior.entries ++ value.entries) then none
-      else some ⟨value.binding, prior.entries ++ value.entries,
-        prior.entries.length + value.entries.length == value.binding.coverage.entries⟩
-
-def validatePrefix (admission : Request) :
-    Option Prefix → List ReceivedPage → Option Prefix
-  | prior, [] => prior
-  | prior, head :: tail => do
-      let next ← advance admission prior head
-      validatePrefix admission (some next) tail
-
-/-- Stored page bytes are re-verified by the native decoder before entering
-this owner. There is no full snapshot or unsigned retained entry cache here. -/
-structure Receiver where
-  admission : Request
-  pages : List ReceivedPage
-  deriving DecidableEq, Repr
-
-def Receiver.validated (state : Receiver) : Option Prefix :=
-  if !(state.pages.map (·.requestKey)).Nodup then none
-  else validatePrefix state.admission none state.pages
-
-def receive (state : Receiver) (requestKey : String) (envelope : PageEnvelope) : Option Receiver :=
-  let next := Receiver.mk state.admission (state.pages ++ [⟨requestKey, envelope⟩])
-  if next.validated.isSome then some next else none
-
-def Receiver.complete (state : Receiver) : Bool := state.validated.any (·.complete)
-
-def knownInventory (state : Receiver) : Bool :=
-  state.validated.any fun prior => prior.complete &&
-    prior.binding.coverage.pending == 0 && prior.binding.coverage.unknown == 0
-
-theorem oversized_page_cannot_advance (admission : Request) (prior : Option Prefix)
-    (received : ReceivedPage) (h : pageLimit < received.envelope.page.entries.length) :
-    advance admission prior received = none := by
-  simp [advance, WirePage.wellFormed, Nat.not_le_of_lt h]
-
-theorem malformed_page_cannot_advance (admission : Request) (prior : Option Prefix)
-    (received : ReceivedPage) (h : received.envelope.page.wellFormed = false) :
-    advance admission prior received = none := by simp [advance, h]
-
-theorem unverified_page_cannot_advance (admission : Request) (prior : Option Prefix)
-    (received : ReceivedPage) (h : received.envelope.signatureVerified = false) :
-    advance admission prior received = none := by simp [advance, h]
-
-theorem contradictory_binding_cannot_advance (admission : Request) (prior : Prefix)
-    (received : ReceivedPage) (h : prior.binding ≠ received.envelope.page.binding) :
-    advance admission (some prior) received = none := by simp [advance, h]
-
-theorem empty_history_is_not_complete (admission : Request) :
-    (Receiver.mk admission []).complete = false := by
-  simp [Receiver.complete, Receiver.validated, validatePrefix]
-
-theorem completed_advance_has_exact_count (admission : Request) (previous : Option Prefix)
-    (received : ReceivedPage) (after : Prefix)
-    (h : advance admission previous received = some after) (hc : after.complete = true) :
-    after.entries.length = after.binding.coverage.entries := by
-  cases previous with
-  | none =>
-    simp only [advance] at h
-    split at h
-    · contradiction
-    · split at h
-      · contradiction
-      · injection h with heq
-        subst after
-        simpa only [beq_iff_eq] using hc
-  | some prior =>
-    simp only [advance] at h
-    split at h
-    · contradiction
-    · split at h
-      · contradiction
-      · injection h with heq
-        subst after
-        simpa only [List.length_append, beq_iff_eq] using hc
-
-/-- A client retains signed pages for one durable attempt. The native decoder
-rechecks the complete demand and signature of every stored page or refusal.
-Neither the prior completed view nor a partially received view grants images. -/
-structure ClientAttempt where
-  id : String
-  receiver : Receiver
-  refusal : Option RefusalReason := none
-  deriving DecidableEq, Repr
-
-def ClientAttempt.pending (state : ClientAttempt) : Option PageDemand :=
-  if state.refusal.isSome || state.receiver.complete then none
-  else some ⟨state.receiver.admission, state.id,
-    state.receiver.pages.getLast?.bind (·.envelope.page.next)⟩
-
-structure ClientProgress where
-  active : ClientAttempt
-  previous : Option ClientAttempt := none
-  retired : List String := []
-  deriving DecidableEq, Repr
-
-/-- A retained scope selects previously verified local observations only. It
-does not authorize fetching metadata or images. Multiple physical sessions or
-requesters for one logical scope remain ambiguous rather than choosing a latest
-row. Native index columns must agree with the protected progress admission. -/
-def retainedScopeMatches (peer node session : String) (admission : Request) : Bool :=
-  admission.peer == peer && admission.node == node && admission.session == session
-
-def selectRetainedScope (peer node session : String) (rows : List Request) :
-    Except String (Option Request) :=
-  if peer.isEmpty || node.isEmpty || session.isEmpty then .error "invalid"
-  else match rows.filter (retainedScopeMatches peer node session) with
-    | [] => .ok none
-    | [admission] => .ok (some admission)
-    | _ => .error "ambiguous"
-
-theorem duplicate_retained_scope_is_ambiguous (peer node session : String)
-    (admission : Request) (valid : (peer.isEmpty || node.isEmpty || session.isEmpty) = false)
-    (selected : retainedScopeMatches peer node session admission = true) :
-    selectRetainedScope peer node session [admission, admission] = .error "ambiguous" := by
-  simp [selectRetainedScope, valid, selected]
-
-def beginClient (admission : Request) (attempt : String) : ClientProgress :=
-  ⟨⟨attempt, ⟨admission, []⟩, none⟩, none, []⟩
-
-/-- An ordinary read resumes the persisted attempt. The candidate identity is
-used only when the local transaction observes no prior progress. -/
-def resumeClient (prior : Option ClientProgress) (admission : Request)
-    (candidate : String) : ClientProgress :=
-  prior.getD (beginClient admission candidate)
-
-theorem resume_keeps_active_attempt (prior : ClientProgress) (admission : Request)
-    (candidate : String) : resumeClient (some prior) admission candidate = prior := rfl
-
-/-- Repeating the same explicit attempt is a retry. Starting a distinct one
-retains the last complete signed view while new enumeration remains pending. -/
-def restartClient (state : ClientProgress) (attempt : String) : Option ClientProgress :=
-  if attempt.isEmpty then none
-  else if state.active.id == attempt then some state
-  else if state.retired.contains attempt then none
-  else some ⟨⟨attempt, ⟨state.active.receiver.admission, []⟩, none⟩,
-    (if state.active.receiver.complete then some state.active else state.previous),
-    state.retired ++ [state.active.id]⟩
-
-def clientPage (state : ClientProgress) (attempt requestKey : String)
-    (envelope : PageEnvelope) (nonceMatches : Bool) : Option ClientProgress := do
-  if !nonceMatches || state.active.id != attempt then none else pure ()
-  let received := ReceivedPage.mk requestKey envelope
-  if state.active.receiver.pages.contains received then some state else do
-    let pending ← state.active.pending
-    if !pending.matchesPage envelope.page nonceMatches then none else pure ()
-    let receiver ← receive state.active.receiver requestKey envelope
-    some {state with active := {state.active with receiver := receiver}}
-
-/-- Native refusal verification supplies exact-demand correlation before this
-transition. A verified terminal refusal never extends or completes a prefix. -/
-def clientRefusal (state : ClientProgress) (attempt : String)
-    (reason : RefusalReason) (verified : Bool) : Option ClientProgress :=
-  if !verified || state.active.id != attempt then none
-  else if state.active.refusal == some reason then some state
-  else if state.active.pending.isNone then none
-  else some {state with active := {state.active with refusal := some reason}}
-
-def commitClient (prior candidate : ClientProgress) (write : TerminalWriteResult) : ClientProgress :=
-  if write == .committed then candidate else prior
-
-theorem client_rollback_preserves_attempt (prior candidate : ClientProgress) :
-    commitClient prior candidate .failed = prior := rfl
-
-theorem restarting_same_client_attempt_is_retry (state : ClientProgress)
-    (h : state.active.id.isEmpty = false) :
-    restartClient state state.active.id = some state := by
-  simp [restartClient, h]
-
-theorem retired_client_attempt_cannot_restart (state : ClientProgress) (attempt : String)
-    (h : state.active.id ≠ attempt) (retired : state.retired.contains attempt = true) :
-    restartClient state attempt = none := by
-  have mem : attempt ∈ state.retired := by simpa using retired
-  simp [restartClient, h, mem]
-
-theorem wrong_nonce_cannot_replay_client_page (state : ClientProgress)
-    (attempt key : String) (envelope : PageEnvelope) :
-    clientPage state attempt key envelope false = none := by
-  simp [clientPage]
-
-theorem refused_client_has_no_next_page (state : ClientAttempt)
-    (h : state.refusal.isSome = true) : state.pending = none := by
-  simp [ClientAttempt.pending, h]
 
 end SessionHydration.FileInventory

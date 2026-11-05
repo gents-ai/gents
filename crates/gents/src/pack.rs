@@ -2,7 +2,16 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod agent_bindings;
+pub(crate) use agent_bindings::{
+    load_pack_install_config_with_provisioner, rewrite_references as bind_agent_references,
+    AgentProvisioner,
+};
 pub mod archive;
+pub use agent_bindings::{
+    agent_slot_reference, load_pack_authoring_config, load_pack_install_config, AuthoredPackConfig,
+    BoundPackConfig, PackAgentBindings, AGENT_SLOT_REFERENCE_PREFIX,
+};
 pub mod authoring;
 pub mod home_install;
 mod inference;
@@ -32,17 +41,24 @@ pub use inference::{
     install_pack_documents, install_pack_documents_with_expectations,
     preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
 };
-pub(crate) use installation::sdl_paths;
+pub(crate) use inference::{
+    inspect_pack_inference_bindings_with_node_binding,
+    preview_pack_inference_bindings_with_node_binding,
+};
 pub use installation::{
     apply_prepared_dependency_schemas, document_pack_schema_paths, ensure_plugins_unreferenced,
     install_documents_with_plugins, install_prepared_document_graph,
     install_prepared_document_pack, installed_catalog, installed_pack_documents, installed_packs,
-    list_installed_packs, plugin_data_unique_keys, prepare_document_pack_install,
-    preview_installed_pack_scope, read_installed_pack, record_plugin_store_change,
-    record_plugin_store_change_as, referenced_pack_digests, remove_pack, DriftPolicy,
-    InstallReport, InstalledCatalogEntry, InstalledPack, InstalledPackPlugin,
-    InstalledPackScopePreview, PackIdentity, PluginStoreChangeError, PreparedDependency,
-    PreparedDocumentPackInstall, RemoveReport, Retained,
+    list_installed_packs, plugin_data_unique_keys, prepare_document_pack_archive,
+    prepare_document_pack_install, preview_installed_pack_scope, read_installed_pack,
+    record_plugin_store_change, record_plugin_store_change_as, referenced_pack_digests, remove_pack,
+    DriftPolicy, InstallReport, InstalledCatalogEntry, InstalledPack, InstalledPackPlugin,
+    InstalledPackScopePreview, PackIdentity, PackRemovalError, PluginStoreChangeError,
+    PreparedDependency, PreparedDocumentPackInstall, RemoveReport, Retained,
+};
+pub(crate) use installation::{
+    prepare_document_pack_archive_with_provisioner,
+    record_plugin_store_change_as_with_node_binding, sdl_paths,
 };
 pub use loader::{
     decode_pack_config, ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,

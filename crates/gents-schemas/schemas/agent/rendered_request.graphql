@@ -1,18 +1,15 @@
 # Durable fact record for one provider call: the exact rendered request,
 # persisted before it is sent. Proofs/RenderedCapture.lean fences the order —
 # a send is legal only after the matching (capture_key, canonical request) is
-# durable. `@branchable` is deliberate and irreversible; it is the bulk-backfill
-# and collection-scoped-ACP precondition, not the content address: integrity
-# comes from the DefraDB field commit CID for `request_json`. Capture payloads are
-# manifests of RenderedRequestBlock references; the two collections are one
-# sync unit. No `@policy` and no encryption: rows on this node remain
-# anonymously readable, so #840's participant boundary is NOT met as shipped.
-type RenderedRequest @branchable @index(fields: ["node_did", "requester_did", "session_id", "source", "capture_scope", "created_at"]) {
+# durable. Integrity comes from the DefraDB field commit CID for
+# `request_json`. Capture payloads are manifests of RenderedRequestBlock
+# references. The session parent grants native document access.
+type RenderedRequest @policy(id: "8d9e64ca014dddfb01e5a55a5018e0a56d238ea0da1df1b6b33d50b1ac23386a", resource: "children") @index(fields: ["node_did", "requester_did", "session_id", "source", "capture_scope", "created_at"]) @index(fields: ["session_doc_id", "capture_key"], unique: true) {
     # sha256 over the canonical (node_did, session_id, request_scope,
-    # turn_index, attempt) tuple. Unique: exactly one capture per provider
-    # attempt, ever; reuse with a different canonical request is an integrity
+    # turn_index, attempt) tuple. Unique within the physical session: exactly
+    # one capture per provider attempt; reuse with a different request is an integrity
     # error, never an update.
-    capture_key: String @index(unique: true) @immutable
+    capture_key: String @index @immutable
     # Exact DefraDB `_docID` of the durable AgentRequest; empty for one-shot runs.
     request_doc_id: String @index @immutable
     # Composite DefraDB commit CID current when this capture was durably
@@ -20,9 +17,10 @@ type RenderedRequest @branchable @index(fields: ["node_did", "requester_did", "s
     request_commit_cid: String @index @immutable
     request_id: String @index @immutable
     session_id: String @index @immutable
+    session_doc_id: String @index @immutable
     node_did: String @index @immutable
     requester_did: String @immutable
-    agent_id: String @immutable
+    agent_did: String @immutable
     # Which completion loop inside the request issued this provider call
     # (inference.N, compaction.N, compaction_fallback.N, title.N, oneshot.N).
     capture_scope: String @immutable

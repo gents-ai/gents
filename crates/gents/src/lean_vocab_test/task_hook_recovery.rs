@@ -14,11 +14,10 @@ use crate::request::task_hooks::{
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use crate::tools::call::hook::BackgroundExecutionRegistry;
 
-const AGENT_ID: &str = "general";
-
 pub(super) struct Fixture {
-    pub(super) node: Arc<defra_node::EmbeddedNode>,
+    pub(super) node: Arc<defra_node::Node>,
     identity: Arc<dyn NodeIdentity>,
+    agent_identity: Arc<dyn NodeIdentity>,
     _data: tempfile::TempDir,
 }
 
@@ -29,7 +28,7 @@ impl Fixture {
             KeyIdentity::load_or_create(data.path().join("agent.key"), None).expect("identity"),
         );
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
                 .data_path(data.path())
                 .build()
@@ -37,10 +36,20 @@ impl Fixture {
                 .expect("embedded node"),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        crate::test_support::install_test_agent(&node, identity.did(), AGENT_ID).await;
+        let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+        crate::test_support::install_test_agent_binding(
+            &node,
+            identity.did(),
+            "hook recovery",
+            &binding,
+        )
+        .await;
+        let agent_identity =
+            crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
         Self {
             node,
             identity,
+            agent_identity,
             _data: data,
         }
     }
@@ -52,13 +61,14 @@ impl Fixture {
     pub(super) async fn claimed(&self, lease: Duration) -> RequestLifecycle {
         let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
             self.node.clone(),
-            AGENT_ID,
+            self.agent_identity.did(),
             self.identity.clone(),
             "run the task",
             60,
             ExecutionOrigin::Interactive,
             "task-hook-recovery",
             TriggerLineage::default(),
+            Some(self.agent_identity.clone()),
         )
         .await
         .unwrap();
@@ -110,11 +120,12 @@ impl Fixture {
     async fn abandoned_request(&self, interrupt_requested: bool) -> String {
         let claim_started = std::time::Instant::now();
         let mut lifecycle = self.claimed(Duration::from_secs(60)).await;
-        let writer = crate::request::streaming::DefraStreamWriter::new(
+        let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
             self.node.clone(),
-            self.did(),
+            &lifecycle,
             Duration::ZERO,
-        );
+        )
+        .unwrap();
         if let Err(begin_error) = lifecycle.begin_owned_execution(&writer).await {
             let expected_generation = lifecycle
                 .execution_generation()
@@ -288,12 +299,14 @@ async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_reco
         }
         let restarted = BackgroundExecutionRegistry::default()
             .with_task_hook_records(dir.path().join("task-hooks"));
-        let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
-            &fixture.node,
-            fixture.did(),
-            &restarted,
-        )
-        .await;
+        let outcome =
+            crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
+                &fixture.node,
+                fixture.did(),
+                &[fixture.agent_identity.clone()],
+                &restarted,
+            )
+            .await;
         let report = outcome.task_hooks.expect("task hook recovery");
         restarted.task_hook_records().wait_for_recoveries().await;
         assert_eq!(report, usize::from(case.started));
@@ -324,12 +337,14 @@ async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_reco
             case.name
         );
 
-        let again = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
-            &fixture.node,
-            fixture.did(),
-            &restarted,
-        )
-        .await;
+        let again =
+            crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
+                &fixture.node,
+                fixture.did(),
+                &[fixture.agent_identity.clone()],
+                &restarted,
+            )
+            .await;
         assert!(again.task_hooks.expect("second pass") == 0);
         restarted.task_hook_records().wait_for_recoveries().await;
         assert_eq!(
@@ -361,9 +376,13 @@ async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
             (owner.request().doc_id.clone(), Some(owner))
         };
         if resolved {
-            RequestLifecycle::recover_all(&fixture.node, fixture.did())
-                .await
-                .unwrap();
+            RequestLifecycle::recover_all_with_identities(
+                &fixture.node,
+                fixture.did(),
+                &[fixture.agent_identity.clone()],
+            )
+            .await
+            .unwrap();
         }
         let store = TaskHookRecordStore::default();
         let handle = store
@@ -446,12 +465,14 @@ async fn recovery_stops_a_surviving_hook_command_before_cleanup() {
     assert_eq!(survivor.identity.observe(), ProcessObservation::Running);
 
     let restarted = BackgroundExecutionRegistry::default().with_task_hook_records(records);
-    let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
-        &fixture.node,
-        fixture.did(),
-        &restarted,
-    )
-    .await;
+    let outcome =
+        crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
+            &fixture.node,
+            fixture.did(),
+            &[fixture.agent_identity.clone()],
+            &restarted,
+        )
+        .await;
     assert_eq!(outcome.task_hooks.unwrap(), 1);
     restarted.task_hook_records().wait_for_recoveries().await;
     assert_ne!(survivor.identity.observe(), ProcessObservation::Running);
@@ -491,12 +512,14 @@ async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
     .await;
 
     let running = BackgroundExecutionRegistry::default().with_task_hook_records(records.clone());
-    let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions(
-        &fixture.node,
-        fixture.did(),
-        &running,
-    )
-    .await;
+    let outcome =
+        crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
+            &fixture.node,
+            fixture.did(),
+            &[fixture.agent_identity.clone()],
+            &running,
+        )
+        .await;
     assert_eq!(outcome.task_hooks.unwrap(), 1);
     tokio::time::timeout(Duration::from_secs(20), async {
         while !started.exists() {
@@ -524,9 +547,10 @@ async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
     );
 
     let restarted = BackgroundExecutionRegistry::default().with_task_hook_records(records);
-    crate::runtime::startup_recovery::run_startup_recovery_with_executions(
+    crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
         &fixture.node,
         fixture.did(),
+        &[fixture.agent_identity.clone()],
         &restarted,
     )
     .await;
@@ -547,7 +571,7 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
             "root-outside-ceiling",
             dir.path().to_path_buf(),
             Some(crate::tools::surface::RootExecutionGuard {
-                agent_id: AGENT_ID.into(),
+                agent_did: fixture.agent_identity.did().to_owned(),
                 selected_root: Some(dir.path().to_path_buf()),
                 ceiling_root: Some(ceiling.path().to_path_buf()),
             }),
@@ -577,9 +601,13 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
             },
         )
         .await;
-        RequestLifecycle::recover_all(&fixture.node, fixture.did())
-            .await
-            .unwrap();
+        RequestLifecycle::recover_all_with_identities(
+            &fixture.node,
+            fixture.did(),
+            &[fixture.agent_identity.clone()],
+        )
+        .await
+        .unwrap();
         let report = recover_task_hook_records(&fixture.node, fixture.did(), &store)
             .await
             .unwrap();

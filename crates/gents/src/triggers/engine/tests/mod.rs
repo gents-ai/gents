@@ -72,7 +72,7 @@ fn stub_principal() -> Arc<crate::store::identity::RuntimeNode> {
     Arc::new(crate::store::identity::RuntimeNode {
         node_did: identity.did().to_string(),
         identity,
-        default_agent_id: String::new(),
+        default_agent_did: String::new(),
         display_name: None,
         enabled: true,
     })
@@ -435,7 +435,7 @@ fn resolved_task(prompt_template: &str) -> ResolvedTask {
         emit_outcome: false,
         task_id: "t1".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: "general".to_string(),
         prompt_template: prompt_template.to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -448,6 +448,7 @@ fn resolved_schedule(schedule_id: &str, task: ResolvedTask) -> ResolvedSchedule 
     ResolvedSchedule {
         session_id_template: None,
         trigger_doc_id: format!("{schedule_id}-doc"),
+        schedule_doc_id: format!("{schedule_id}-schedule-doc"),
         schedule_id: schedule_id.to_string(),
         task_id: task.task_id.clone(),
         task,
@@ -465,6 +466,7 @@ fn resolved_schedule_with_concurrency(
     ResolvedSchedule {
         session_id_template: None,
         trigger_doc_id: format!("{schedule_id}-doc"),
+        schedule_doc_id: format!("{schedule_id}-schedule-doc"),
         schedule_id: schedule_id.to_string(),
         task_id: task.task_id.clone(),
         task,
@@ -480,6 +482,9 @@ fn resolved_event_trigger_with_concurrency(
     concurrency: ConcurrencyMode,
 ) -> ResolvedEventTrigger {
     ResolvedEventTrigger {
+        event_source_id: "source".into(),
+        event_source_doc_id: "source-doc".into(),
+        task_doc_id: "task-doc".into(),
         session_id_template: None,
         trigger_doc_id: format!("{trigger_id}-doc"),
         trigger_id: trigger_id.to_string(),
@@ -555,7 +560,7 @@ fn snapshot_from_trigger_contract(
     Arc::new(resolved.activate(1, RapidHashMap::new()))
 }
 
-fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
+pub(super) fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
     let identity: Arc<dyn crate::store::identity::NodeIdentity> = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("{behavior_name}-{}.key", uuid::Uuid::new_v4())),
@@ -566,15 +571,23 @@ fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
     let principal = Arc::new(RuntimeNode {
         node_did: identity.did().to_string(),
         identity,
-        default_agent_id: String::new(),
+        default_agent_did: String::new(),
         display_name: None,
         enabled: true,
     });
+    let binding =
+        crate::store::identity::provision_agent_identity(principal.identity.as_ref()).unwrap();
+    let agent_identity =
+        crate::store::identity::resolve_agent_identity(principal.identity.as_ref(), &binding)
+            .unwrap();
+    let agent_did = binding.agent_did;
     Arc::new(ResolvedAgent {
+        configuration: crate::inference::resolved::ResolvedConfiguration::Static,
         profile_id: None,
         skills: Vec::new(),
         oauth_pool: Vec::new(),
-        agent_id: behavior_name.to_string(),
+        agent_did,
+        agent_identity,
         node: principal,
         backend_id: Some("backend-it".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
@@ -610,14 +623,14 @@ fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
     })
 }
 
-fn snapshot_with_agent_and_schedules(
+pub(super) fn snapshot_with_agent_and_schedules(
     behavior: Arc<ResolvedAgent>,
     schedules: RapidHashMap<String, ResolvedSchedule>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let principal = behavior.node.clone();
     let local_did = behavior.node_did().to_string();
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-        behavior.agent_id.clone(),
+        behavior.agent_did.clone(),
         vec![behavior],
         RapidHashMap::new(),
         RapidHashMap::new(),

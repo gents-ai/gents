@@ -27,25 +27,58 @@ pub(super) fn row_matches_coalesced_source_and_key(
 
 pub async fn reconcile_coalesced_pending_request(
     node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
     session_id: &str,
     node_did: &str,
     source: QueueSource,
     key: &str,
 ) -> Result<Option<EnqueuedAgentRequest>> {
-    reconcile_coalesced_pending_request_for(node, session_id, node_did, source, key, None).await
+    reconcile_coalesced_pending_request_for(
+        node, agent_did, session_id, node_did, source, key, None,
+    )
+    .await
 }
 
 pub(super) async fn reconcile_coalesced_pending_request_for(
     node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
     session_id: &str,
     node_did: &str,
     source: QueueSource,
     key: &str,
     anchor_doc: Option<&str>,
 ) -> Result<Option<EnqueuedAgentRequest>> {
-    let matching =
-        matching_coalesced_pending_requests(node, session_id, node_did, source, key, anchor_doc)
-            .await?;
+    let access = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(agent_did)?);
+    reconcile_coalesced_pending_request_for_with_access(
+        node, &access, agent_did, session_id, node_did, source, key, anchor_doc,
+    )
+    .await
+}
+
+pub async fn reconcile_coalesced_pending_request_for_with_access(
+    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
+    agent_did: &str,
+    session_id: &str,
+    node_did: &str,
+    source: QueueSource,
+    key: &str,
+    anchor_doc: Option<&str>,
+) -> Result<Option<EnqueuedAgentRequest>> {
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(agent_did),
+        "queue actor differs from access actor"
+    );
+    anyhow::ensure!(
+        access
+            .local_node()
+            .is_some_and(|owner| std::sync::Arc::ptr_eq(owner, node)),
+        "queue access belongs to another node"
+    );
+    let matching = matching_coalesced_pending_requests(
+        node, agent_did, session_id, node_did, source, key, anchor_doc,
+    )
+    .await?;
     let Some(survivor) = matching.first().and_then(queue_row_to_enqueued_request) else {
         return Ok(None);
     };
@@ -62,53 +95,57 @@ pub(super) async fn reconcile_coalesced_pending_request_for(
             &survivor.doc_id,
             "coalesced into earlier queued request",
         );
-        crate::store::config_client::ConfigAccess::transact_local_idempotent(
-            node,
-            None,
-            crate::store::config_client::IdempotentTransactionRetry::Standard,
-            "reconcile_coalesced_pending_request",
-            |txn| {
-                let mutation = &mutation;
-                Box::pin(async move {
-                    if source == QueueSource::BackgroundCompletion {
-                        let mut assignments =
-                            crate::goal::load_request_assignment_scopes(txn, node_did, session_id)
-                                .await?;
-                        if assignments.scope(survivor_doc).await?
-                            != assignments
-                                .scope(
-                                    duplicate
-                                        .doc_id
-                                        .as_deref()
-                                        .context("duplicate wake has no physical identity")?,
-                                )
-                                .await?
-                        {
-                            return Ok::<_, anyhow::Error>(());
+        anyhow::ensure!(
+            duplicate.agent_did.as_deref() == Some(agent_did),
+            "coalesced request selects another agent"
+        );
+        access
+            .transact_idempotent(
+                crate::store::config_client::IdempotentTransactionRetry::Standard,
+                "reconcile_coalesced_pending_request",
+                |txn| {
+                    let mutation = &mutation;
+                    Box::pin(async move {
+                        if source == QueueSource::BackgroundCompletion {
+                            let mut assignments = crate::goal::load_request_assignment_scopes(
+                                txn, node_did, session_id,
+                            )
+                            .await?;
+                            if assignments.scope(survivor_doc).await?
+                                != assignments
+                                    .scope(
+                                        duplicate
+                                            .doc_id
+                                            .as_deref()
+                                            .context("duplicate wake has no physical identity")?,
+                                    )
+                                    .await?
+                            {
+                                return Ok::<_, anyhow::Error>(());
+                            }
                         }
-                    }
-                    let response = txn.execute_local_response(mutation).await?;
-                    if response
-                        .data
-                        .as_ref()
-                        .and_then(|data| data.get("update_AgentRequest"))
-                        .is_some_and(crate::store::graphql::response_has_documents)
-                    {
-                        crate::triggers::engine::durable::publish_request_outcome(
-                            txn,
-                            node_did,
-                            &duplicate.request_id,
-                            RequestLifecycleState::Superseded,
-                            "coalesced into earlier queued request",
-                            &chrono::Utc::now().to_rfc3339(),
-                        )
-                        .await?;
-                    }
-                    Ok(())
-                })
-            },
-        )
-        .await?;
+                        let response = txn.execute_local_response(mutation).await?;
+                        if response
+                            .data
+                            .as_ref()
+                            .and_then(|data| data.get("update_AgentRequest"))
+                            .is_some_and(crate::store::graphql::response_has_documents)
+                        {
+                            crate::triggers::engine::durable::publish_request_outcome(
+                                txn,
+                                node_did,
+                                &duplicate.request_id,
+                                RequestLifecycleState::Superseded,
+                                "coalesced into earlier queued request",
+                                &chrono::Utc::now().to_rfc3339(),
+                            )
+                            .await?;
+                        }
+                        Ok(())
+                    })
+                },
+            )
+            .await?;
     }
 
     Ok(Some(survivor))
@@ -154,6 +191,7 @@ pub(crate) fn supersede_pending_mutation(
 
 async fn matching_coalesced_pending_requests(
     node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
     session_id: &str,
     node_did: &str,
     source: QueueSource,
@@ -173,7 +211,7 @@ async fn matching_coalesced_pending_requests(
     );
     crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
-        None,
+        Some(identity::Did::new(agent_did)?),
         "matching_coalesced_pending_requests",
         |txn| {
             let query = &query;
@@ -234,11 +272,11 @@ pub(super) fn queue_row_to_enqueued_request(row: &AgentRequestRow) -> Option<Enq
     })
 }
 
-pub(super) fn parent_agent_id(parent: &AgentRequest) -> Result<String> {
+pub(super) fn parent_agent_did(parent: &AgentRequest) -> Result<String> {
     anyhow::ensure!(
-        !parent.agent_id.trim().is_empty(),
-        "cannot enqueue same-session request: parent {} has no agent_id",
+        !parent.agent_did.trim().is_empty(),
+        "cannot enqueue same-session request: parent {} has no agent_did",
         parent.request_id
     );
-    Ok(parent.agent_id.clone())
+    Ok(parent.agent_did.clone())
 }

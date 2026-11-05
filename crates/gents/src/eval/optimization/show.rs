@@ -106,14 +106,13 @@ mod tests {
     };
     use crate::eval::optimization::policy::{InconclusiveReason, RejectReason};
     use crate::eval::optimization::proposer::ScriptedProposer;
-    use crate::eval::runner::freeze::tests::OWNER;
     use crate::eval::runner::ScriptedExecutor;
     use crate::Collection;
 
     #[tokio::test]
     async fn every_journaled_decision_recomputes_from_its_verdicts() {
         let (harness, request) = accepting_harness("show-clean").await;
-        let view = show(harness.access(), OWNER, &request.job_id)
+        let view = show(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap();
         assert_eq!(view.state, JobState::ReadyToPromote);
@@ -134,14 +133,14 @@ mod tests {
         let (harness, request) = accepting_harness("show-invalidated").await;
         invalidate_run(
             harness.access(),
-            OWNER,
+            harness.owner(),
             "show-invalidated-r1-v0",
-            OWNER,
+            &harness.evaluator_did(),
             "a fixture in this run was broken",
         )
         .await
         .unwrap();
-        let view = show(harness.access(), OWNER, &request.job_id)
+        let view = show(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap();
         let round_one = view
@@ -172,10 +171,16 @@ mod tests {
         harness
             .install(vec![(
                 Collection::EvalDefinition,
-                definition(DEFINITION, "captured_rows_count", &["replacement-case"], 2),
+                definition(
+                    harness.owner(),
+                    DEFINITION,
+                    "captured_rows_count",
+                    &["replacement-case"],
+                    2,
+                ),
             )])
             .await;
-        let view = show(harness.access(), OWNER, &request.job_id)
+        let view = show(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap();
         assert!(view.definition_changed);
@@ -197,7 +202,7 @@ mod tests {
         let failed = frozen_job(&harness, "show-deleted-failed").await;
         harness.delete(Collection::EvalDefinition, DEFINITION).await;
 
-        let view = show(harness.access(), OWNER, &request.job_id)
+        let view = show(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap();
         assert_eq!(view.state, JobState::ReadyToPromote);
@@ -221,7 +226,9 @@ mod tests {
             reason: "definition_changed".into(),
         };
         assert_eq!(outcome.state, definition_changed);
-        let view = show(harness.access(), OWNER, &failed.job_id).await.unwrap();
+        let view = show(harness.access(), harness.owner(), &failed.job_id)
+            .await
+            .unwrap();
         assert_eq!(view.state, definition_changed);
         assert!(view.definition_changed);
         assert!(view.decisions.is_empty(), "{:#?}", view.decisions);
@@ -230,7 +237,7 @@ mod tests {
     #[tokio::test]
     async fn a_rejection_renders_its_reason_in_snake_case() {
         let (harness, request) = rejecting_harness("show-rejected").await;
-        let view = show(harness.access(), OWNER, &request.job_id)
+        let view = show(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap();
         assert_eq!(view.state, JobState::NothingToPromote);
@@ -268,7 +275,7 @@ mod tests {
             &repeating_proposer(CANDIDATE_PROMPT),
         )
         .await;
-        let view = show(harness.access(), OWNER, &request.job_id)
+        let view = show(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap();
         assert_eq!(view.state, JobState::Exhausted);
@@ -296,7 +303,7 @@ mod tests {
         let request = harness.request("show-empty", DEFINITION, budgets(1_000));
         let proposer = ScriptedProposer::new(vec![("   ".to_owned(), "nothing".to_owned()); 3]);
         settle(&harness, &request, &executor, &proposer).await;
-        let view = show(harness.access(), OWNER, &request.job_id)
+        let view = show(harness.access(), harness.owner(), &request.job_id)
             .await
             .unwrap();
         assert_eq!(view.state, JobState::NothingToPromote);

@@ -14,9 +14,10 @@ inductive Invocation where
   deriving DecidableEq, Repr
 
 /-- Host facts a manifest's `data.stamped` map may bind to a field of the
-written collection. -/
+written collection. The caller DID is the authenticated invocation actor used for
+native ACP and data ownership; the node transport identity never substitutes for it. -/
 inductive Stamp where
-  | nodeDid
+  | callerDid
   | sessionId
   | requestDocId
   | toolCallDocId
@@ -25,11 +26,11 @@ inductive Stamp where
   deriving DecidableEq, Repr
 
 /-- Whether the invocation has a value for the stamp. A callback runs outside
-any session, so it has only the node DID; a non-job tool output has no job row
+any session, so it has only its authenticated caller DID; a non-job tool output has no job row
 or chain root. -/
 def Stamp.available : Invocation → Stamp → Bool
-  | .callback, s => s == .nodeDid
-  | .ux, s => s == .nodeDid
+  | .callback, s => s == .callerDid
+  | .ux, s => s == .callerDid
   | .toolCall, .jobRowDocId => false
   | .toolCall, .chainRootDocId => false
   | .toolCall, _ => true
@@ -77,21 +78,21 @@ grant `query`. -/
 def queryAdmitted (limit : Nat) (inOwnSdl runtimeOrProtected queryGranted : Bool) : Bool :=
   inOwnSdl && !runtimeOrProtected && queryGranted && 0 < limit && limit ≤ 256
 
-/-- A filter value is a literal or the `$caller.node_did` placeholder, which
-the host resolves for own-node lookup of kept names. -/
+/-- A filter value is a literal or the `$caller.did` placeholder, which
+the host resolves for invoker-owned lookup of kept names. -/
 inductive FilterValue where
   | literal (value : String)
-  | callerNodeDid
+  | callerDid
   deriving DecidableEq, Repr
 
 abbrev Filter := List (String × FilterValue)
 
-def substituteValue (hostNodeDid : String) : FilterValue → FilterValue
-  | .callerNodeDid => .literal hostNodeDid
+def substituteValue (callerDid : String) : FilterValue → FilterValue
+  | .callerDid => .literal callerDid
   | .literal value => .literal value
 
-def substituteCallerNodeDid (filter : Filter) (hostNodeDid : String) : Filter :=
-  filter.map fun entry => (entry.1, substituteValue hostNodeDid entry.2)
+def substituteCallerDid (filter : Filter) (callerDid : String) : Filter :=
+  filter.map fun entry => (entry.1, substituteValue callerDid entry.2)
 
 /-- Notes use `ignore`; kept names use `fail`. -/
 inductive OnConflict where
@@ -180,12 +181,12 @@ theorem stamp_unavailable_refuses_write (op : ToolPolicy.ApplicationWrite.Operat
     have h_pred := List.find?_some h_find
     exact ⟨entry.2, by simpa using h_pred, by simp [refusal, h_find]⟩
 
-theorem callback_has_only_node_did (s : Stamp) :
-    s.available .callback = true ↔ s = .nodeDid := by
+theorem callback_has_only_caller_did (s : Stamp) :
+    s.available .callback = true ↔ s = .callerDid := by
   cases s <;> simp [Stamp.available]
 
-theorem ux_has_only_node_did (s : Stamp) :
-    s.available .ux = true ↔ s = .nodeDid := by
+theorem ux_has_only_caller_did (s : Stamp) :
+    s.available .ux = true ↔ s = .callerDid := by
   cases s <;> simp [Stamp.available]
 
 /-- A WfScript or WfName write is never refused for a WfNote-only job stamp. -/
@@ -195,12 +196,12 @@ theorem stamp_scoped_to_written_collection (declared : List (String × Stamp))
     (field, s) ∉ applicableStamps declared collectionFields := by
   simp [applicableStamps, h_absent]
 
-/-- Whatever filter the guest wrote, the placeholder resolves to the host node
+/-- Whatever filter the guest wrote, the placeholder resolves to the authenticated caller
 DID and no placeholder survives. -/
-theorem caller_node_did_is_host_fact (filter : Filter) (hostNodeDid field : String)
-    (h_mem : (field, FilterValue.callerNodeDid) ∈ filter) :
-    (field, FilterValue.literal hostNodeDid) ∈ substituteCallerNodeDid filter hostNodeDid ∧
-      ∀ entry ∈ substituteCallerNodeDid filter hostNodeDid, entry.2 ≠ .callerNodeDid := by
+theorem caller_did_is_authenticated_fact (filter : Filter) (callerDid field : String)
+    (h_mem : (field, FilterValue.callerDid) ∈ filter) :
+    (field, FilterValue.literal callerDid) ∈ substituteCallerDid filter callerDid ∧
+      ∀ entry ∈ substituteCallerDid filter callerDid, entry.2 ≠ .callerDid := by
   constructor
   · exact List.mem_map.mpr ⟨_, h_mem, rfl⟩
   · intro entry h_entry

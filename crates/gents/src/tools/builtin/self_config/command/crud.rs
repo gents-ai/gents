@@ -234,7 +234,7 @@ impl ConfigCommandTool {
             }
             let validate = request.validate;
             let expected_id = id.clone();
-            let invoking_agent = self.core.agent_id().to_owned();
+            let invoking_agent = self.core.agent_did().to_owned();
             request.validate = Box::new(move |txn, anchor, stored, merged| {
                 let validation = validate(txn, anchor, stored, merged);
                 let id = expected_id.clone();
@@ -350,7 +350,7 @@ impl ConfigCommandTool {
         .await?;
         let agent = task
             .as_ref()
-            .and_then(|(_, doc)| doc.get("agent_id"))
+            .and_then(|(_, doc)| doc.get("agent_did"))
             .and_then(Value::as_str);
         self.target_core(agent, "automation").await
     }
@@ -383,7 +383,7 @@ impl ConfigCommandTool {
             Some(self.core.identity()?),
             "self_config.document_agent",
             |txn| {
-                let invoking_agent = self.core.agent_id().to_owned();
+                let invoking_agent = self.core.agent_did().to_owned();
                 Box::pin(async move {
                     document_agent_in_txn(txn, target, owner, id, acknowledged, &invoking_agent)
                         .await

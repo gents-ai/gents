@@ -64,7 +64,7 @@ pub struct GoalControlRequest {
     pub session_id: Option<String>,
     pub session_doc_id: Option<String>,
     pub expected: Option<gents_protocol::goal_control::GoalRevision>,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub action: GoalControlAction,
     pub cwd: Option<String>,
     #[serde(default)]

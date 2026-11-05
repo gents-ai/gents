@@ -148,11 +148,11 @@ pub async fn set_account_label(
                     .doc_id
                     .as_deref()
                     .context("stored OAuthCredential has no _docID")?;
-                txn.execute(&format!(
-                    r#"mutation {{ update_OAuthCredential(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ {} }}) {{ _docID }} }}"#,
-                    crate::store::graphql::escape_graphql_string(doc_id),
-                    gents_protocol::graphql::nullable_string_field("label", Some(&label)),
-                ))
+                super::rows::update_credential_patch_in_txn(
+                    txn,
+                    doc_id,
+                    serde_json::json!({"label": label}),
+                )
                 .await?;
                 let old_label = effective_account_label(&row);
                 let renamed = OAuthCredential {
@@ -171,17 +171,32 @@ pub async fn set_account_enabled(
     credential_id: &str,
     enabled: bool,
 ) -> Result<()> {
-    let response = access
-        .write(
-            "oauth_credential.enabled",
-            &format!(
-                "mutation {{ update_OAuthCredential(filter: {}, input: {{ enabled: {} }}) {{ _docID }} }}",
-                account_filter(node_did, Some(credential_id)),
-                gents_protocol::graphql::graphql_bool_literal(enabled),
-            ),
-        )
-        .await?;
-    ensure_matched(&response, "update_OAuthCredential", credential_id)
+    access
+        .transact_write("oauth_credential.enabled", |txn| {
+            Box::pin(async move {
+                let response = txn
+                    .execute(&format!(
+                        "query {{ OAuthCredential(filter: {}) {{ {OAUTH_CREDENTIAL_FIELDS} }} }}",
+                        account_filter(node_did, Some(credential_id)),
+                    ))
+                    .await?;
+                let row = oauth_credentials_from_response(&response)
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| account_not_found(credential_id))??;
+                let doc_id = row
+                    .doc_id
+                    .as_deref()
+                    .context("stored OAuthCredential has no _docID")?;
+                super::rows::update_credential_patch_in_txn(
+                    txn,
+                    doc_id,
+                    serde_json::json!({"enabled": enabled}),
+                )
+                .await
+            })
+        })
+        .await
 }
 
 pub async fn remove_account_in_txn(
