@@ -676,8 +676,8 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
             .as_str()
             .to_string(),
         owner_node_did: owner.clone(),
-        writer_principal: owner.clone(),
-        integrator_principal: owner.clone(),
+        writer_principal: harness.agent_config.agent_did.clone(),
+        integrator_principal: harness.agent_config.agent_did.clone(),
         instruction_manifest: String::new(),
         seal_hash: None,
         lifecycle_state: "ready".to_string(),
@@ -731,7 +731,7 @@ async fn materialize_writer_binding(harness: &Harness, request: &AgentRequest) {
         &harness.node,
         &request.request_id,
         &request.doc_id,
-        harness.owner(),
+        harness.agent_config.agent_identity.as_ref(),
         &crate::request::lifecycle::WorkspaceLineage {
             workspace_id: request.workspace_id.clone(),
             workspace_authority: request.workspace_authority.clone(),
@@ -1130,7 +1130,7 @@ async fn workspace_seal_completes_before_the_after_phase_is_selected() {
         &harness.node,
         &request.request_id,
         &request.doc_id,
-        harness.owner(),
+        harness.agent_config.agent_identity.as_ref(),
         &crate::request::lifecycle::WorkspaceLineage {
             workspace_id: request.workspace_id.clone(),
             workspace_authority: request.workspace_authority.clone(),

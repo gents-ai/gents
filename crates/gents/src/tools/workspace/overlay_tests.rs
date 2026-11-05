@@ -605,6 +605,10 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     };
     let created = execute_create_workspace_plan(
         &emit_create_workspace_plan(CreateWorkspaceAction {
+            writer_agent_did: None,
+            writer_agent_doc_id: None,
+            integrator_agent_did: None,
+            integrator_agent_doc_id: None,
             path_capability: WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
             workspace_id: "artifact-workspace".into(),
             work_unit_id: "artifact-unit".into(),

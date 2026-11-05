@@ -115,7 +115,7 @@ pub(crate) fn require_workspace_principal(
     };
     if principal_did.trim() != required.trim() {
         bail!(
-            "node {principal_did} is not authorized for {} on workspace {}",
+            "Agent {principal_did} is not selected for {} on workspace {}",
             authority.as_str(),
             workspace.workspace_id
         );
@@ -249,7 +249,7 @@ async fn load_request_workspace_overlay(
         load_isolated_workspace_record(node, workspace_id, request_workspace_owner(request)?)
             .await?
             .ok_or_else(|| anyhow!("isolated workspace {workspace_id} not found"))?;
-    require_workspace_principal(&workspace, &request.node_did, authority)?;
+    require_workspace_principal(&workspace, &request.agent_did, authority)?;
     let node_did = request_workspace_owner(request)?;
     let placement = load_workspace_placement(node, workspace_id, node_did)
         .await?
@@ -504,6 +504,55 @@ pub(super) async fn previous_exclusive_is_stale(
     request_id: &str,
     integrate: bool,
 ) -> Result<bool> {
+    let Some(active) = previous_exclusive_binding(workspace_id, existing, request_id, integrate)?
+    else {
+        return Ok(false);
+    };
+    Ok(!request_is_live(
+        node,
+        &active.request_doc_id,
+        &active.request_id,
+        workspace_id,
+        &active.owner_node_did,
+    )
+    .await?)
+}
+
+pub(super) async fn previous_exclusive_is_stale_with_access(
+    access: &crate::ConfigAccess,
+    workspace_id: &str,
+    existing: &[WorkspaceBindingDoc],
+    request_id: &str,
+    integrate: bool,
+) -> Result<bool> {
+    let Some(active) = previous_exclusive_binding(workspace_id, existing, request_id, integrate)?
+    else {
+        return Ok(false);
+    };
+    let query = request_liveness_query(&active.request_doc_id)?;
+    let response = access.execute(&query).await?;
+    let values = response
+        .pointer("/data/AgentRequest")
+        .context("workspace request query omitted rows")?;
+    let mut rows: Vec<AgentRequestRow> = serde_json::from_value(values.clone())?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "workspace binding request is unavailable or ambiguous"
+    );
+    Ok(!validate_request_liveness(
+        rows.remove(0),
+        &active.request_id,
+        workspace_id,
+        &active.owner_node_did,
+    )?)
+}
+
+fn previous_exclusive_binding<'a>(
+    workspace_id: &str,
+    existing: &'a [WorkspaceBindingDoc],
+    request_id: &str,
+    integrate: bool,
+) -> Result<Option<&'a WorkspaceBindingDoc>> {
     let others: Vec<_> = existing
         .iter()
         .filter(|binding| {
@@ -521,17 +570,7 @@ pub(super) async fn previous_exclusive_is_stale(
             "multiple Active {label} bindings exist for workspace {workspace_id}; failing closed"
         );
     }
-    let Some(active) = others.into_iter().next() else {
-        return Ok(false);
-    };
-    Ok(!request_is_live(
-        node,
-        &active.request_doc_id,
-        &active.request_id,
-        workspace_id,
-        &active.owner_node_did,
-    )
-    .await?)
+    Ok(others.into_iter().next())
 }
 
 fn request_lifecycle_is_live(lifecycle_state: Option<RequestLifecycleState>) -> bool {
@@ -548,12 +587,22 @@ async fn request_is_live(
     workspace_id: &str,
     node_did: &str,
 ) -> Result<bool> {
+    let query = request_liveness_query(request_doc_id)?;
+    let response =
+        graphql_with_transaction_retry(node, &query, "load AgentRequest liveness").await?;
+    let Some(row) = first_row::<AgentRequestRow>(&response, "AgentRequest")? else {
+        bail!("workspace binding request is unavailable");
+    };
+    validate_request_liveness(row, request_id, workspace_id, node_did)
+}
+
+fn request_liveness_query(request_doc_id: &str) -> Result<String> {
     anyhow::ensure!(
         !request_doc_id.trim().is_empty(),
         "workspace binding lacks physical request ID"
     );
     let escaped = escape_graphql_string(request_doc_id);
-    let query = format!(
+    Ok(format!(
         r#"{{
             AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{
                 request_id
@@ -562,12 +611,15 @@ async fn request_is_live(
                 workspace_id workspace_owner_node_did
             }}
         }}"#
-    );
-    let response =
-        graphql_with_transaction_retry(node, &query, "load AgentRequest liveness").await?;
-    let Some(row) = first_row::<AgentRequestRow>(&response, "AgentRequest")? else {
-        return Ok(false);
-    };
+    ))
+}
+
+fn validate_request_liveness(
+    row: AgentRequestRow,
+    request_id: &str,
+    workspace_id: &str,
+    node_did: &str,
+) -> Result<bool> {
     anyhow::ensure!(
         row.request_id == request_id
             && row.workspace_id.as_deref() == Some(workspace_id)
@@ -577,6 +629,10 @@ async fn request_is_live(
                 .as_deref()
                 .is_some_and(|did| !did.trim().is_empty()),
         "workspace binding physical request has different logical identity or workspace owner"
+    );
+    anyhow::ensure!(
+        row.lifecycle_state.is_some(),
+        "workspace binding request has no lifecycle state"
     );
     Ok(request_lifecycle_is_live(row.lifecycle_state))
 }
@@ -657,6 +713,17 @@ pub(super) async fn persist_workspace_binding_docs(
     actor_did: &str,
     docs: &[WorkspaceBindingDoc],
 ) -> Result<()> {
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(actor_did.to_owned())?,
+    );
+    persist_workspace_binding_docs_with_access(&access, docs).await
+}
+
+pub(super) async fn persist_workspace_binding_docs_with_access(
+    access: &crate::ConfigAccess,
+    docs: &[WorkspaceBindingDoc],
+) -> Result<()> {
     if docs.is_empty() {
         return Ok(());
     }
@@ -665,21 +732,18 @@ pub(super) async fn persist_workspace_binding_docs(
     } else {
         workspace_bindings_upsert_mutation(docs)
     };
-    crate::store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(actor_did.to_owned())?,
-    )
-    .write("workspace.upsert_binding", &mutation)
-    .await
-    .with_context(|| {
-        format!(
-            "persist WorkspaceBinding {}",
-            docs.iter()
-                .map(|doc| doc.binding_id.as_str())
-                .collect::<Vec<_>>()
-                .join(",")
-        )
-    })?;
+    access
+        .write("workspace.upsert_binding", &mutation)
+        .await
+        .with_context(|| {
+            format!(
+                "persist WorkspaceBinding {}",
+                docs.iter()
+                    .map(|doc| doc.binding_id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        })?;
     Ok(())
 }
 
@@ -766,6 +830,25 @@ pub(crate) async fn load_isolated_workspace_record(
     let query = isolated_workspace_record_query(workspace_id, node_did);
     let response = graphql_with_transaction_retry(node, &query, "load IsolatedWorkspace").await?;
     let mut found = rows::<IsolatedWorkspaceRow>(&response, "IsolatedWorkspace")?;
+    anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped workspace");
+    found
+        .pop()
+        .map(decode_isolated_workspace_record)
+        .transpose()
+}
+
+pub(super) async fn load_isolated_workspace_record_with_access(
+    access: &crate::ConfigAccess,
+    workspace_id: &str,
+    node_did: &str,
+) -> Result<Option<IsolatedWorkspaceRecord>> {
+    let response = access
+        .execute(&isolated_workspace_record_query(workspace_id, node_did))
+        .await?;
+    let values = response
+        .pointer("/data/IsolatedWorkspace")
+        .context("workspace query omitted rows")?;
+    let mut found: Vec<IsolatedWorkspaceRow> = serde_json::from_value(values.clone())?;
     anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped workspace");
     found
         .pop()

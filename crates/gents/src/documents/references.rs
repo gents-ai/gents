@@ -350,8 +350,29 @@ impl ConfigReferences {
             }
             Collection::Callback => {
                 let doc: Callback = decode(value)?;
-                if let CallbackHandler::Module { module_id } = &doc.handler {
+                if let CallbackHandler::Module { module_id, .. } = &doc.handler {
                     push(Collection::CallbackModule, module_id, "handler.module_id");
+                }
+                let selection = match &doc.handler {
+                    CallbackHandler::BuiltIn {
+                        workspace_agents, ..
+                    }
+                    | CallbackHandler::Module {
+                        workspace_agents, ..
+                    } => workspace_agents.as_ref(),
+                    CallbackHandler::Plugin { .. } => None,
+                };
+                if let Some(selection) = selection {
+                    push(
+                        Collection::Agent,
+                        &selection.writer_agent_did,
+                        "handler.workspace_agents.writer_agent_did",
+                    );
+                    push(
+                        Collection::Agent,
+                        &selection.integrator_agent_did,
+                        "handler.workspace_agents.integrator_agent_did",
+                    );
                 }
             }
             Collection::CallbackBinding => {

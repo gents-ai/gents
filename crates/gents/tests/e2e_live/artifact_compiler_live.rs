@@ -155,6 +155,10 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     };
     let created = execute_create_workspace_plan(
         &emit_create_workspace_plan(CreateWorkspaceAction {
+            writer_agent_did: None,
+            writer_agent_doc_id: None,
+            integrator_agent_did: None,
+            integrator_agent_doc_id: None,
             workspace_id: "artifact-live-workspace".into(),
             work_unit_id: "artifact-live-unit".into(),
             repository_id: "artifact-live-repo".into(),

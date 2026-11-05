@@ -80,6 +80,7 @@ pub(super) fn completion_access(
 
 pub async fn stamp_workspace_lineage(
     node: &std::sync::Arc<EmbeddedNode>,
+    agent_identity: &dyn crate::store::identity::NodeIdentity,
     node_did: &str,
     lineage: &mut WorkspaceLineage,
 ) -> Result<()> {
@@ -95,9 +96,11 @@ pub async fn stamp_workspace_lineage(
         .workspace_owner_node_did
         .as_deref()
         .unwrap_or(node_did);
-    let workspace = super::overlay::load_isolated_workspace_record(node, workspace_id, owner)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
+    let access = completion_access(node, agent_identity, agent_identity.did())?;
+    let workspace =
+        super::overlay::load_isolated_workspace_record_with_access(&access, workspace_id, owner)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
     apply_workspace_lineage_stamp(lineage, &workspace)
 }
 
@@ -195,8 +198,8 @@ pub async fn seal_on_writer_success(
         .load_isolated_workspace(workspace_id)?
         .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
     anyhow::ensure!(
-        workspace.writer_principal.trim() == request.node_did.trim(),
-        "request node no longer holds the workspace writer_principal grant"
+        workspace.writer_principal.trim() == request.agent_did.trim(),
+        "selected Agent is not the workspace writer"
     );
     docs.load_placement(workspace_id)?
         .ok_or_else(|| anyhow::anyhow!("workspace placement {workspace_id} not found"))?;
@@ -258,8 +261,8 @@ pub async fn integrate_on_integrator_success(
         .load_isolated_workspace(workspace_id)?
         .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
     anyhow::ensure!(
-        workspace.integrator_principal.trim() == request.node_did.trim(),
-        "request node no longer holds the workspace integrator_principal grant"
+        workspace.integrator_principal.trim() == request.agent_did.trim(),
+        "selected Agent is not the workspace integrator"
     );
     docs.load_placement(workspace_id)?
         .ok_or_else(|| anyhow::anyhow!("workspace placement {workspace_id} not found"))?;
@@ -409,7 +412,7 @@ pub async fn materialize_workspace_binding(
     node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
     request_doc_id: &str,
-    principal_did: &str,
+    agent_identity: &dyn crate::store::identity::NodeIdentity,
     lineage: &WorkspaceLineage,
 ) -> Result<()> {
     let Some(workspace_id) = lineage
@@ -420,6 +423,8 @@ pub async fn materialize_workspace_binding(
     else {
         return Ok(());
     };
+    let principal_did = agent_identity.did();
+    let access = completion_access(node, agent_identity, principal_did)?;
     lineage.require_authority_if_workspace_id()?;
     let workspace_owner = lineage
         .workspace_owner_node_did
@@ -429,30 +434,42 @@ pub async fn materialize_workspace_binding(
         Some(value) if !value.is_empty() => WorkspaceAuthority::parse(value)?,
         _ => anyhow::bail!("workspace-bound request {workspace_id} is missing workspace_authority"),
     };
-    let response = graphql_with_transaction_retry(node, &format!(
+    let response = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{}"}}}},limit:1) {{request_id agent_did node_did workspace_id workspace_owner_node_did workspace_authority workspace_seal_hash}} }}"#,
-        escape_graphql_string(request_doc_id)), "bind exact workspace request").await?;
-    let actual = crate::store::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
-        &response,
-        "AgentRequest",
-    )?
-    .context("workspace binding request document missing")?;
+        escape_graphql_string(request_doc_id))).await?;
+    let values = response
+        .pointer("/data/AgentRequest")
+        .context("workspace binding query omitted rows")?;
+    let mut found: Vec<gents_protocol::row::AgentRequestRow> =
+        serde_json::from_value(values.clone())?;
+    anyhow::ensure!(
+        found.len() == 1,
+        "workspace binding request unavailable or ambiguous"
+    );
+    let actual = found.remove(0);
     anyhow::ensure!(
         actual.request_id == request_id
-            && actual.node_did.as_deref() == Some(principal_did)
+            && actual.agent_did.as_deref() == Some(principal_did)
+            && node
+                .node_identity_did()
+                .is_some_and(|did| actual.node_did.as_deref() == Some(did))
             && actual.workspace_id.as_deref() == Some(workspace_id)
             && actual.workspace_owner_node_did == lineage.workspace_owner_node_did
             && actual.workspace_authority.as_deref() == Some(authority.as_str())
             && actual.workspace_seal_hash == lineage.workspace_seal_hash,
-        "workspace binding must match exact physical request node and lineage"
+        "workspace binding must match the exact physical request Agent and lineage"
     );
-    let workspace =
-        super::overlay::load_isolated_workspace_record(node, workspace_id, workspace_owner)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
+    let workspace = super::overlay::load_isolated_workspace_record_with_access(
+        &access,
+        workspace_id,
+        workspace_owner,
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
     super::overlay::require_workspace_principal(&workspace, principal_did, authority)?;
     let existing =
-        super::overlay::load_workspace_bindings_for(node, workspace_id, workspace_owner).await?;
+        super::overlay::load_workspace_bindings_for_access(&access, workspace_id, workspace_owner)
+            .await?;
     let candidate = new_binding(
         workspace_id,
         request_id,
@@ -465,8 +482,8 @@ pub async fn materialize_workspace_binding(
     let release_previous = matches!(
         authority,
         WorkspaceAuthority::ReadWrite | WorkspaceAuthority::Integrate
-    ) && super::overlay::previous_exclusive_is_stale(
-        node,
+    ) && super::overlay::previous_exclusive_is_stale_with_access(
+        &access,
         workspace_id,
         &existing,
         request_id,
@@ -485,15 +502,7 @@ pub async fn materialize_workspace_binding(
         AdmitBinding::Create { binding, release } => {
             let mut docs = release;
             docs.push(binding);
-            super::overlay::persist_workspace_binding_docs(
-                node,
-                actual
-                    .agent_did
-                    .as_deref()
-                    .context("workspace request lacks selected Agent DID")?,
-                &docs,
-            )
-            .await
+            super::overlay::persist_workspace_binding_docs_with_access(&access, &docs).await
         }
     }
 }

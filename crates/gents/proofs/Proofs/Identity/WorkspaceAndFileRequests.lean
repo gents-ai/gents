@@ -64,6 +64,46 @@ theorem hidden_policy_looks_unconfigured :
 theorem complete_unconfigured_store_keeps_fallback :
     rootFallbackAllowed true false = true := by decide
 
+/-- Workspace workflow configuration chooses the writer and integrator
+Agents explicitly. Their selection is frozen into the recorded action plan;
+the node DID and planner-provided labels are not substitute principals. -/
+structure WorkspaceAgentSelection where
+  writer : String
+  integrator : String
+  deriving BEq, DecidableEq, Repr
+
+def freezeWorkspaceAgents (node : String) (configured : Option WorkspaceAgentSelection) :
+    Option WorkspaceAgentSelection := do
+  let agents ← configured
+  if agents.writer.isEmpty || agents.integrator.isEmpty || agents.writer == node || agents.integrator == node
+    then none else some agents
+
+theorem missing_selection_does_not_select_node : freezeWorkspaceAgents "node" none = none := by rfl
+theorem distinct_selected_agents_are_retained :
+    freezeWorkspaceAgents "node" (some ⟨"writer", "integrator"⟩) = some ⟨"writer", "integrator"⟩ := by decide
+
+/-- A filtered or malformed physical request is not proof that an exclusive
+workspace binding is stale. Release requires a visible terminal request. -/
+def mayReleaseExclusive (visible terminal : Bool) : Bool := visible && terminal
+
+theorem invisible_request_does_not_release_binding : mayReleaseExclusive false true = false := by rfl
+
+def workspaceLivenessCasesJson : String :=
+  (Lean.toJson ([false, true].flatMap fun visible => [false, true].map fun terminal =>
+    Lean.Json.mkObj [("visible", Lean.toJson visible), ("terminal", Lean.toJson terminal),
+      ("may_release", Lean.toJson (mayReleaseExclusive visible terminal))])).compress
+
+def workspaceAgentSelectionCasesJson : String :=
+  let cases : List (String × Option WorkspaceAgentSelection) :=
+    [("missing", none), ("separate", some ⟨"writer", "integrator"⟩),
+    ("same", some ⟨"writer", "writer"⟩), ("node", some ⟨"node", "integrator"⟩),
+    ("blank", some ⟨"", "integrator"⟩)]
+  (Lean.toJson (cases.map fun (name, configured) =>
+      let selected := freezeWorkspaceAgents "node" configured
+      Lean.Json.mkObj [("name", Lean.toJson name), ("accepted", Lean.toJson selected.isSome),
+        ("writer", Lean.toJson (selected.map (·.writer))),
+        ("integrator", Lean.toJson (selected.map (·.integrator)))] )).compress
+
 def rootCompletenessCasesJson : String :=
   (Lean.toJson ([false, true].flatMap fun complete => [false, true].map fun configured =>
     Lean.Json.mkObj [("complete", Lean.toJson complete),

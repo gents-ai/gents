@@ -43,9 +43,15 @@ pub struct Callback {
 pub enum CallbackHandler {
     BuiltIn {
         emitter: BuiltInCallback,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+        workspace_agents: Option<WorkspaceAgentSelection>,
     },
     Module {
         module_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+        workspace_agents: Option<WorkspaceAgentSelection>,
     },
     Plugin {
         // The artifact is referenced by content hash: any other installed
@@ -69,6 +75,14 @@ pub enum CallbackHandler {
         )]
         outputs: Vec<crate::documents::PortSpec>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct WorkspaceAgentSelection {
+    pub writer_agent_did: String,
+    pub integrator_agent_did: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

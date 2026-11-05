@@ -86,6 +86,10 @@ pub async fn provision_read_only_workspace(
     let workspace_id = uuid::Uuid::new_v4().to_string();
     let branch = format!("gents-review-{}", &workspace_id[..12]);
     let plan = emit_create_workspace_plan(CreateWorkspaceAction {
+        writer_agent_did: None,
+        writer_agent_doc_id: None,
+        integrator_agent_did: None,
+        integrator_agent_doc_id: None,
         path_capability: super::WorkspacePathCapability::exact_paths(Vec::new())?,
         workspace_id: workspace_id.clone(),
         work_unit_id: workspace_id.clone(),

@@ -40,7 +40,180 @@ fn binding() -> CallbackBindingDoc {
     serde_json::from_value(json!({"binding_id":"bind-1","node_did":"did:key:zWriter","agent_did":crate::triggers::callback::test_agent_did(),"event_source_id":"events","callback_id":"cb-1","input_fields":["work_unit_id","repository_id","base_sha","branch","owned_files"]})).unwrap()
 }
 fn callback() -> crate::documents::Callback {
-    serde_json::from_value(json!({"callback_id":"cb-1","node_did":"did:key:zWriter","handler":{"kind":"built_in","emitter":"create_workspace"},"capabilities":["create_workspace","observe_dirty_base","clone_artifacts"]})).unwrap()
+    serde_json::from_value(json!({"callback_id":"cb-1","node_did":"did:key:zWriter","handler":{"kind":"built_in","emitter":"create_workspace", "workspace_agents": {"writer_agent_did":crate::triggers::callback::test_agent_did(), "integrator_agent_did":crate::triggers::callback::test_agent_did()}},"capabilities":["create_workspace","observe_dirty_base","clone_artifacts"]})).unwrap()
+}
+
+fn test_workspace_agents() -> crate::documents::WorkspaceAgentSelection {
+    crate::documents::WorkspaceAgentSelection {
+        writer_agent_did: crate::triggers::callback::test_agent_did(),
+        integrator_agent_did: crate::triggers::callback::test_agent_did(),
+    }
+}
+
+#[test]
+fn workspace_agent_selection_is_configured_and_frozen() {
+    use crate::store::identity::NodeIdentity;
+    let directory = tempfile::tempdir().unwrap();
+    let node = crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+    let writer =
+        crate::KeyIdentity::load_or_create(directory.path().join("writer.key"), None).unwrap();
+    let integrator =
+        crate::KeyIdentity::load_or_create(directory.path().join("integrator.key"), None).unwrap();
+    let source = json!({"work_unit_id":"unit", "repository_id":"repo", "base_sha":"base", "branch":"topic",
+        "owned_files":["src/a.rs"], "writer_agent_did":node.did(), "integrator_agent_did":node.did()});
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().workspace_agent_selection_cases;
+    for case in cases {
+        let selection = match case["name"].as_str().unwrap() {
+            "missing" => None,
+            "separate" => Some((writer.did(), integrator.did())),
+            "same" => Some((writer.did(), writer.did())),
+            "node" => Some((node.did(), integrator.did())),
+            "blank" => Some(("", integrator.did())),
+            name => panic!("unknown modeled selection {name}"),
+        };
+        let mut configured = callback();
+        configured.node_did = node.did().into();
+        configured.handler = crate::documents::CallbackHandler::BuiltIn {
+            emitter: crate::documents::BuiltInCallback::CreateWorkspace,
+            workspace_agents: selection.map(|(writer, integrator)| {
+                crate::documents::WorkspaceAgentSelection {
+                    writer_agent_did: writer.into(),
+                    integrator_agent_did: integrator.into(),
+                }
+            }),
+        };
+        let plan = plan_from_callback(&configured, &source, None);
+        assert_eq!(plan.is_ok(), case["accepted"].as_bool().unwrap(), "{case}");
+        if let Ok(plan) = plan {
+            let HostAction::CreateWorkspace(action) = &plan.actions[0] else {
+                panic!("workspace plan")
+            };
+            let (expected_writer, expected_integrator) = selection.unwrap();
+            assert_eq!(action.writer_agent_did.as_deref(), Some(expected_writer));
+            assert_eq!(
+                action.integrator_agent_did.as_deref(),
+                Some(expected_integrator)
+            );
+            assert!(action.writer_agent_doc_id.is_none());
+            let mut invocation = CallbackInvocationDoc {
+                invocation_id: "invocation".into(),
+                agent_did: writer.did().into(),
+                owner_node_did: node.did().into(),
+                callback_id: configured.callback_id.clone(),
+                input: source.clone(),
+                origin: crate::documents::CallbackInvocationOrigin::Event {
+                    binding_id: "binding".into(),
+                    source_collection: "Work".into(),
+                    source_doc_id: "source".into(),
+                    source_version: None,
+                },
+                caused_by_correlation: None,
+                idempotency_key: "id".into(),
+                lifecycle_state: LIFECYCLE_RUNNING.into(),
+                attempts: Some(1),
+                action_plan: Some(action_plan_canonical_json(&plan).unwrap()),
+                action_journal: None,
+                error: None,
+                claimed_at: None,
+                created_at: None,
+            };
+            configured.handler = crate::documents::CallbackHandler::BuiltIn {
+                emitter: crate::documents::BuiltInCallback::CreateWorkspace,
+                workspace_agents: None,
+            };
+            assert_eq!(
+                resolve_action_plan(&invocation, &configured, &source).unwrap(),
+                plan
+            );
+            invocation.action_plan = None;
+            assert!(resolve_action_plan(&invocation, &configured, &source).is_err());
+        }
+    }
+}
+
+#[tokio::test]
+async fn workspace_agent_selection_binds_visible_physical_targets() -> anyhow::Result<()> {
+    use crate::store::identity::NodeIdentity;
+    let directory = tempfile::tempdir()?;
+    let runtime = crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
+    let creator_binding = crate::store::identity::provision_agent_identity(&runtime)?;
+    let writer_binding = crate::store::identity::provision_agent_identity(&runtime)?;
+    let integrator_binding = crate::store::identity::provision_agent_identity(&runtime)?;
+    let creator = crate::store::identity::resolve_agent_identity(&runtime, &creator_binding)?;
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .enable_signing()
+            .with_node_identity_did(runtime.did())
+            .build()
+            .await?,
+    );
+    let context =
+        defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned()));
+    node.add_dac_policy_with_counter_as(
+        &context,
+        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+        0,
+    )
+    .await?;
+    node.add_collection_as(&context, gents_protocol::schemas::AGENT)
+        .await?;
+    let admin = crate::ConfigAccess::local_as(node.clone(), runtime.did().parse()?);
+    for permission in [
+        crate::store::config_client::NodePermission::DocumentRead,
+        crate::store::config_client::NodePermission::DocumentUpdate,
+        crate::store::config_client::NodePermission::CollectionGet,
+    ] {
+        admin
+            .grant_node_permission(&creator.did().parse()?, permission)
+            .await?;
+    }
+    let mut docs = Vec::new();
+    for binding in [&writer_binding, &integrator_binding] {
+        let response = admin.write("test.workspace.target", &format!(r#"mutation {{ create_Agent(input: {{node_did: "{}", agent_did: "{}", creation_nonce: "{}", enabled: true}}) {{_docID}} }}"#,
+            runtime.did(), binding.agent_did, binding.creation_nonce)).await?;
+        docs.push(crate::store::graphql::created_doc_id(&response, "Agent")?);
+    }
+    admin
+        .add_actor_relationship("Agent", &docs[0], "reader", &creator.did().parse()?)
+        .await?;
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        creator.did().parse()?,
+        creator.as_ref(),
+    )?;
+    let mut configured = callback();
+    configured.node_did = runtime.did().into();
+    configured.handler = crate::documents::CallbackHandler::BuiltIn {
+        emitter: crate::documents::BuiltInCallback::CreateWorkspace,
+        workspace_agents: Some(crate::documents::WorkspaceAgentSelection {
+            writer_agent_did: writer_binding.agent_did.clone(),
+            integrator_agent_did: integrator_binding.agent_did.clone(),
+        }),
+    };
+    let source = json!({"work_unit_id":"unit", "repository_id":"repo", "base_sha":"base", "branch":"topic", "owned_files":["src/a.rs"]});
+    let mut plan = plan_from_callback(&configured, &source, None).unwrap();
+    assert!(
+        super::run::bind_workspace_agent_documents(&access, runtime.did(), &mut plan)
+            .await
+            .is_err()
+    );
+    admin
+        .add_actor_relationship("Agent", &docs[1], "reader", &creator.did().parse()?)
+        .await?;
+    super::run::bind_workspace_agent_documents(&access, runtime.did(), &mut plan).await?;
+    let HostAction::CreateWorkspace(action) = &plan.actions[0] else {
+        panic!("workspace plan")
+    };
+    assert_eq!(
+        action.writer_agent_doc_id.as_deref(),
+        Some(docs[0].as_str())
+    );
+    assert_eq!(
+        action.integrator_agent_doc_id.as_deref(),
+        Some(docs[1].as_str())
+    );
+    node.shutdown().await?;
+    Ok(())
 }
 
 fn lean_journal(states: &[String]) -> Vec<ActionJournalEntry> {
@@ -445,6 +618,7 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
     let mut module_binding = callback();
     module_binding.handler = crate::documents::CallbackHandler::Module {
         module_id: "mod-gone".into(),
+        workspace_agents: Some(test_workspace_agents()),
     };
     let mutated = json!({
         "owned_files": ["other.md"],
@@ -591,6 +765,10 @@ fn callback_result_only_after_workspace_docs_are_durable() {
     let fx = GitFixture::new();
     let mut docs = MemoryWorkspaceDocuments::default();
     let action = CreateWorkspaceAction {
+        writer_agent_did: None,
+        writer_agent_doc_id: None,
+        integrator_agent_did: None,
+        integrator_agent_doc_id: None,
         path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(Vec::new())
             .unwrap(),
         workspace_id: "ws-result".into(),
@@ -1121,10 +1299,17 @@ fn fixture_artifact_emits_valid_create_workspace_plan() {
     let mut module_binding = callback();
     module_binding.handler = crate::documents::CallbackHandler::Module {
         module_id: module.module_id.clone(),
+        workspace_agents: Some(test_workspace_agents()),
     };
     module_binding.capabilities = vec![CAP_CREATE_WORKSPACE.into(), CAP_OBSERVE_DIRTY_BASE.into()];
     let via_binding = plan_from_callback(&module_binding, &stripped, Some(&module)).expect("wired");
-    assert_eq!(via_binding, plan);
+    let mut expected = plan.clone();
+    if let HostAction::CreateWorkspace(action) = &mut expected.actions[0] {
+        let agents = test_workspace_agents();
+        action.writer_agent_did = Some(agents.writer_agent_did);
+        action.integrator_agent_did = Some(agents.integrator_agent_did);
+    }
+    assert_eq!(via_binding, expected);
 
     let clone_caps: BTreeSet<String> = [
         CAP_CREATE_WORKSPACE,

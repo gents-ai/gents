@@ -74,6 +74,14 @@ impl WorkspaceAdapterKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CreateWorkspaceAction {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer_agent_did: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer_agent_doc_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrator_agent_did: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrator_agent_doc_id: Option<String>,
     pub path_capability: super::WorkspacePathCapability,
     pub workspace_id: String,
     pub work_unit_id: String,

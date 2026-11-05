@@ -89,27 +89,114 @@ pub fn plan_from_callback(
 ) -> Result<ActionPlan, String> {
     use crate::documents::{BuiltInCallback, CallbackHandler};
     let source = strip_secret_fields(source.clone());
-    match &callback.handler {
+    let (mut plan, selection) = match &callback.handler {
         CallbackHandler::BuiltIn {
             emitter: BuiltInCallback::CreateWorkspace,
-        } => emit_create_workspace_from_source(&source),
-        CallbackHandler::Module { module_id } => {
+            workspace_agents,
+        } => (
+            emit_create_workspace_from_source(&source)?,
+            workspace_agents.as_ref(),
+        ),
+        CallbackHandler::Module {
+            module_id,
+            workspace_agents,
+        } => {
             let module = module.ok_or_else(|| {
                 format!("CallbackModule {module_id} was not loaded for callback planner")
             })?;
             if module.module_id != *module_id || module.node_did != callback.node_did {
                 return Err("callback module owner/reference mismatch".into());
             }
-            plan_from_module(
-                module,
-                &source,
-                &callback.capabilities.iter().cloned().collect(),
+            (
+                plan_from_module(
+                    module,
+                    &source,
+                    &callback.capabilities.iter().cloned().collect(),
+                )?,
+                workspace_agents.as_ref(),
             )
         }
-        CallbackHandler::Plugin { plugin, .. } => Err(format!(
-            "callback plugin {plugin} runs the plugin itself and has no action plan"
-        )),
+        CallbackHandler::Plugin { plugin, .. } => {
+            return Err(format!(
+                "callback plugin {plugin} runs the plugin itself and has no action plan"
+            ))
+        }
+    };
+    for action in &mut plan.actions {
+        if let HostAction::CreateWorkspace(action) = action {
+            let selected = selection
+                .ok_or("workspace callback requires configured writer and integrator Agents")?;
+            for (role, did) in [
+                ("writer", &selected.writer_agent_did),
+                ("integrator", &selected.integrator_agent_did),
+            ] {
+                if did.is_empty() || did.trim() != did || did == &callback.node_did {
+                    return Err(format!("workspace {role} must name an explicit Agent DID"));
+                }
+                identity::Did::new(did).map_err(|error| error.to_string())?;
+            }
+            if action.writer_agent_did.is_some()
+                || action.writer_agent_doc_id.is_some()
+                || action.integrator_agent_did.is_some()
+                || action.integrator_agent_doc_id.is_some()
+            {
+                return Err("workspace planner cannot select its own Agent authorities".into());
+            }
+            action.writer_agent_did = Some(selected.writer_agent_did.clone());
+            action.integrator_agent_did = Some(selected.integrator_agent_did.clone());
+        }
     }
+    Ok(plan)
+}
+
+pub(super) async fn bind_workspace_agent_documents(
+    access: &crate::ConfigAccess,
+    node_did: &str,
+    plan: &mut ActionPlan,
+) -> Result<()> {
+    use anyhow::Context as _;
+    for action in &mut plan.actions {
+        let HostAction::CreateWorkspace(action) = action else {
+            continue;
+        };
+        for (role, did, target) in [
+            (
+                "writer",
+                action.writer_agent_did.as_deref(),
+                &mut action.writer_agent_doc_id,
+            ),
+            (
+                "integrator",
+                action.integrator_agent_did.as_deref(),
+                &mut action.integrator_agent_doc_id,
+            ),
+        ] {
+            let did = did.context("workspace selection omitted an Agent DID")?;
+            let query = format!(
+                r#"{{ Agent(filter: {{node_did: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}}}, limit: 2) {{ _docID node_did agent_did enabled }} }}"#,
+                crate::store::graphql::escape_graphql_string(node_did),
+                crate::store::graphql::escape_graphql_string(did)
+            );
+            let response = access.execute(&query).await?;
+            let rows = response
+                .pointer("/data/Agent")
+                .and_then(Value::as_array)
+                .context("workspace Agent lookup omitted rows")?;
+            anyhow::ensure!(
+                matches!(rows.as_slice(), [row] if row["node_did"] == node_did
+                && row["agent_did"] == did && row["enabled"] != false),
+                "configured workspace {role} Agent is unavailable or ambiguous"
+            );
+            *target = Some(
+                rows[0]["_docID"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .context("workspace Agent lacks a physical document ID")?
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn load_planner_module(
@@ -117,7 +204,7 @@ async fn load_planner_module(
     access: &crate::ConfigAccess,
     callback: &crate::documents::Callback,
 ) -> Result<Option<(String, CallbackModuleDoc)>, String> {
-    let crate::documents::CallbackHandler::Module { module_id } = &callback.handler else {
+    let crate::documents::CallbackHandler::Module { module_id, .. } = &callback.handler else {
         return Ok(None);
     };
     let (doc_id, module) = load_callback_module_as(access, module_id, &callback.node_did)
@@ -165,6 +252,10 @@ fn emit_create_workspace_from_source(source: &Value) -> Result<ActionPlan, Strin
     });
     let path_capability = workspace_path_capability_from_source(source)?;
     Ok(emit_create_workspace_plan(CreateWorkspaceAction {
+        writer_agent_did: None,
+        writer_agent_doc_id: None,
+        integrator_agent_did: None,
+        integrator_agent_doc_id: None,
         workspace_id,
         path_capability,
         work_unit_id,
@@ -469,7 +560,8 @@ async fn execute_running_invocation(
         Ok(plan) => plan,
         Err(reason) => return deny(node, access, invocation, &reason).await,
     };
-    let plan = if let Some(plan) = stored {
+    let is_new_plan = stored.is_none();
+    let mut plan = if let Some(plan) = stored {
         plan
     } else if !journal.is_empty() {
         return deny(
@@ -497,6 +589,9 @@ async fn execute_running_invocation(
             Err(reason) => return deny(node, access, invocation, &reason).await,
         }
     };
+    if is_new_plan {
+        bind_workspace_agent_documents(access, &invocation.owner_node_did, &mut plan).await?;
+    }
     let canonical = match action_plan_canonical_json(&plan) {
         Ok(json) => json,
         Err(reason) => return deny(node, access, invocation, &reason).await,
@@ -550,6 +645,49 @@ async fn execute_running_invocation(
             .await;
         }
     };
+    let Some(writer_agent) = action
+        .writer_agent_did
+        .as_deref()
+        .filter(|did| !did.is_empty() && *did != invocation.owner_node_did.as_str())
+    else {
+        return deny(
+            node,
+            access,
+            invocation,
+            "workspace plan has no selected writer Agent",
+        )
+        .await;
+    };
+    let Some(integrator_agent) = action
+        .integrator_agent_did
+        .as_deref()
+        .filter(|did| !did.is_empty() && *did != invocation.owner_node_did.as_str())
+    else {
+        return deny(
+            node,
+            access,
+            invocation,
+            "workspace plan has no selected integrator Agent",
+        )
+        .await;
+    };
+    if action
+        .writer_agent_doc_id
+        .as_deref()
+        .is_none_or(str::is_empty)
+        || action
+            .integrator_agent_doc_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+    {
+        return deny(
+            node,
+            access,
+            invocation,
+            "workspace plan lacks physical Agent targets",
+        )
+        .await;
+    }
     if !can_start_executing(&journal, 0) {
         return deny(
             node,
@@ -611,8 +749,8 @@ async fn execute_running_invocation(
             repository,
             ceiling,
             capabilities,
-            writer_principal: callback.node_did.clone(),
-            integrator_principal: callback.node_did.clone(),
+            writer_principal: writer_agent.to_owned(),
+            integrator_principal: integrator_agent.to_owned(),
             caused_by_invocation_id: invocation.invocation_id.clone(),
             caused_by_correlation: correlation.clone(),
             documents: &mut docs,
@@ -1062,7 +1200,8 @@ mod path_capability_tests {
     #[test]
     fn builtin_requires_capability_in_frozen_projected_input() {
         let callback: crate::documents::Callback = serde_json::from_value(json!({
-            "callback_id":"path-contract", "node_did":"did:key:writer", "handler":{"kind":"built_in","emitter":"create_workspace"}
+            "callback_id":"path-contract", "node_did":"did:key:writer", "handler":{"kind":"built_in","emitter":"create_workspace",
+                "workspace_agents":{"writer_agent_did":crate::triggers::callback::test_agent_did(), "integrator_agent_did":crate::triggers::callback::test_agent_did()}}
         })).unwrap();
         let mut source = json!({"work_unit_id":"unit","repository_id":"repo","base_sha":"base","branch":"branch"});
         assert!(plan_from_callback(&callback, &source, None).is_err());

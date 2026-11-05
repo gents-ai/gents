@@ -234,8 +234,8 @@ async fn runtime_seal_case(unowned: bool) {
     action.path_capability = WorkspacePathCapability::exact_paths(vec!["patch.rs".into()]).unwrap();
     let created = {
         let mut ctx = fx.ctx(&mut memory, git_worktree_caps());
-        ctx.writer_principal = did.to_owned();
-        ctx.integrator_principal = did.to_owned();
+        ctx.writer_principal = agent.did().to_owned();
+        ctx.integrator_principal = agent.did().to_owned();
         execute_create_workspace_plan(
             &emit_create_workspace_plan(action),
             &mut Vec::new(),
@@ -302,9 +302,15 @@ async fn runtime_seal_case(unowned: bool) {
         workspace_owner_node_did: request.workspace_owner_node_did.clone(),
         workspace_seal_hash: None,
     };
-    materialize_workspace_binding(&node, &request.request_id, &request.doc_id, did, &lineage)
-        .await
-        .unwrap();
+    materialize_workspace_binding(
+        &node,
+        &request.request_id,
+        &request.doc_id,
+        agent.as_ref(),
+        &lineage,
+    )
+    .await
+    .unwrap();
     let mut owner =
         RequestLifecycle::new_with_node_did(node.clone(), agent.did(), did, request, 120);
     owner.bind_managed_agent(agent.as_ref()).unwrap();
@@ -452,4 +458,92 @@ async fn accepted_domain_verdict_cannot_override_unowned_log_and_failure_is_dura
 #[tokio::test]
 async fn owned_untracked_patch_produces_durable_runtime_writer_receipt() {
     runtime_seal_case(false).await;
+}
+
+#[tokio::test]
+async fn invisible_workspace_request_cannot_release_exclusive_binding() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let runtime = crate::KeyIdentity::load_or_create(directory.path().join("runtime.key"), None)?;
+    let first_binding = crate::store::identity::provision_agent_identity(&runtime)?;
+    let second_binding = crate::store::identity::provision_agent_identity(&runtime)?;
+    let first = crate::store::identity::resolve_agent_identity(&runtime, &first_binding)?;
+    let second = crate::store::identity::resolve_agent_identity(&runtime, &second_binding)?;
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .enable_signing()
+            .with_node_identity_did(runtime.did())
+            .build()
+            .await?,
+    );
+    let context =
+        defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned()));
+    node.add_dac_policy_with_counter_as(
+        &context,
+        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+        0,
+    )
+    .await?;
+    node.add_collection_as(&context, gents_protocol::schemas::AGENT_REQUEST)
+        .await?;
+    let admin = crate::ConfigAccess::local_as(node.clone(), runtime.did().parse()?);
+    for actor in [first.did(), second.did()] {
+        for permission in [
+            crate::store::config_client::NodePermission::DocumentRead,
+            crate::store::config_client::NodePermission::DocumentUpdate,
+            crate::store::config_client::NodePermission::CollectionGet,
+        ] {
+            admin
+                .grant_node_permission(&actor.parse()?, permission)
+                .await?;
+        }
+    }
+    let second_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        second.did().parse()?,
+        second.as_ref(),
+    )?;
+    let first_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        first.did().parse()?,
+        first.as_ref(),
+    )?;
+    for case in &crate::lean_vocab_test::lean_contract_snapshot().workspace_liveness_cases {
+        let visible = case["visible"].as_bool().unwrap();
+        let terminal = case["terminal"].as_bool().unwrap();
+        let state = if terminal { "completed" } else { "pending" };
+        let request_id = format!("old-{visible}-{terminal}");
+        let response = second_access.write("test.workspace.foreign_request", &format!(r#"mutation {{ create_AgentRequest(input: {{request_id: "{request_id}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_did: "{}", session_id: "session", content: "work", created_at: "2026-11-05T00:00:00Z", workspace_id: "workspace", workspace_owner_node_did: "{}", lifecycle_state: "{state}"}}) {{_docID}} }}"#, runtime.did(), runtime.did(), second.did(), runtime.did())).await?;
+        let doc = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+        let binding = WorkspaceBindingDoc {
+            binding_id: "binding".into(),
+            workspace_id: "workspace".into(),
+            request_id,
+            request_doc_id: doc,
+            authority: "readWrite".into(),
+            owner_node_did: runtime.did().into(),
+            seal_hash: None,
+            lifecycle_state: "active".into(),
+        };
+        let observer = if visible {
+            &second_access
+        } else {
+            &first_access
+        };
+        let result = super::super::overlay::previous_exclusive_is_stale_with_access(
+            observer,
+            "workspace",
+            &[binding],
+            "new-request",
+            false,
+        )
+        .await;
+        if visible {
+            assert_eq!(result?, case["may_release"].as_bool().unwrap(), "{case}");
+        } else {
+            assert!(result.is_err(), "{case}");
+            assert_eq!(case["may_release"], false);
+        }
+    }
+    node.shutdown().await?;
+    Ok(())
 }

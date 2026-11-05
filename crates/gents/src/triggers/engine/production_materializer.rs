@@ -126,10 +126,21 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
             .doc_id
             .as_deref()
             .context("workspace-binding-pending AgentRequest is missing _docID")?;
-        let node_did = request
-            .node_did
+        let agent_did = request
+            .agent_did
             .as_deref()
-            .context("workspace-binding-pending AgentRequest is missing node_did")?;
+            .context("workspace-binding-pending AgentRequest is missing agent_did")?;
+        let Some(agent_identity) = agent_identities
+            .iter()
+            .find(|identity| identity.did() == agent_did)
+        else {
+            tracing::warn!(
+                request_doc_id,
+                agent_did,
+                "workspace binding recovery requires the selected held Agent"
+            );
+            continue;
+        };
         let lineage = WorkspaceLineage {
             workspace_owner_node_did: Some(request.workspace_owner_node_did.clone().context(
                 "workspace-binding-pending AgentRequest is missing workspace_owner_node_did",
@@ -149,20 +160,12 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
             node,
             &request.request_id,
             request_doc_id,
-            node_did,
+            agent_identity.as_ref(),
             &lineage,
         )
         .await
         {
             Ok(()) => {
-                let agent_did = request
-                    .agent_did
-                    .as_deref()
-                    .context("staged request is missing agent DID")?;
-                let agent_identity = agent_identities
-                    .iter()
-                    .find(|identity| identity.did() == agent_did)
-                    .context("staged request agent identity is unavailable")?;
                 crate::request::lifecycle::materialize::activate_workspace_bound_request_with_identity(
                     node, request_doc_id, identity::Did::new(agent_did)?,
                     Some(agent_identity.as_ref()),
@@ -268,8 +271,13 @@ impl MaterializerHandle for ProductionMaterializer {
             crate::request::lifecycle::TriggerExecutionContext::parse(trigger_context.as_deref())?;
             let explicit = WorkspaceLineage::from_trigger_context(trigger_context.as_deref())?;
             let mut workspace = explicit;
-            crate::tools::workspace::stamp_workspace_lineage(&node, &node_did, &mut workspace)
-                .await?;
+            crate::tools::workspace::stamp_workspace_lineage(
+                &node,
+                agent_identity.as_ref(),
+                &node_did,
+                &mut workspace,
+            )
+            .await?;
             workspace.require_authority_if_workspace_id()?;
             let lineage = TriggerLineage {
                 trigger_id: trigger_id.clone(),
@@ -433,7 +441,7 @@ impl MaterializerHandle for ProductionMaterializer {
                     &node,
                     &enqueued.request_id,
                     &enqueued.doc_id,
-                    &node_did,
+                    agent_identity.as_ref(),
                     &workspace,
                 )
                 .await?;
