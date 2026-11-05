@@ -1,4 +1,6 @@
 type WorkspaceRoot {
+    node_did: String @index @immutable
+    node_doc_id: String @index @immutable
     root_path: String @index(unique: true)
     display_name: String
     enabled: Boolean

@@ -133,6 +133,7 @@ impl SelfConfigCore {
             let policy = crate::tools::surface::load_workspace_root_policy_in_txn(
                 txn,
                 process_ceiling.root.as_deref(),
+                self.node_did(),
             )
             .await?;
             if let Some(tools) = canonical_tools.as_mut() {

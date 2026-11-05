@@ -430,6 +430,7 @@ async fn agent_apply_in_txn(
                 let policy = crate::tools::surface::load_workspace_root_policy_in_txn(
                     txn,
                     ceiling.root.as_deref(),
+                    owner,
                 )
                 .await?;
                 let stored_root = if args.root.is_present() {

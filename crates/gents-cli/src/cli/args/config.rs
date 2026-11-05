@@ -336,6 +336,8 @@ pub(crate) struct ConfigShowArgs {
 pub(crate) struct WorkspaceRootUpsertArgs {
     #[arg(long)]
     pub(crate) graphql: String,
+    #[arg(long)]
+    pub(crate) node_did: String,
     #[arg(long, help = "Absolute path to register as a workspace root")]
     pub(crate) path: PathBuf,
     #[arg(long)]

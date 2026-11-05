@@ -6,6 +6,7 @@ mod output_budget;
 mod policy;
 pub mod presets;
 mod root_admission;
+mod root_publication;
 mod runtime_context;
 mod selection;
 pub mod starter_recipes;
@@ -31,6 +32,7 @@ pub use root_admission::{
     WorkspaceRootDocument, WorkspaceRootPolicy, admit_authored_root, canonicalize_tools_root,
     load_workspace_root_policy, project_workspace_root_policy, resolve_configured_tool_root,
 };
+pub use root_publication::{delete_workspace_root, set_workspace_root, WorkspaceRootWriteError};
 pub use runtime_context::ToolRuntimeContext;
 pub(crate) use selection::{AgentToolConfig, BackgroundToolConfig};
 pub use selection::{CustomToolFactory, ResolvedToolSelection, resolve_goal_capabilities};

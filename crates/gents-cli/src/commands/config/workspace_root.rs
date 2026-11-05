@@ -2,13 +2,13 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use gents::store::graphql::escape_graphql_string;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::cli::output_format::OutputFormat;
 use crate::cli::*;
 use crate::config_writes::ConfigAccess;
 use crate::request_helpers::resolve_dual_id;
-use crate::{extract_mutation_doc_id, print_json, resolve_config_access};
+use crate::{print_json, resolve_config_access};
 
 pub(super) async fn workspace_root_list(args: ConfigListArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
@@ -93,34 +93,18 @@ pub(super) async fn workspace_root_set(args: WorkspaceRootUpsertArgs) -> Result<
         })?
         .to_owned();
     let enabled = !args.disabled;
-    let updated_at = chrono::Utc::now().to_rfc3339();
-
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    let root_path_escaped = escape_graphql_string(&root_path);
-    let display_name = match args.display_name.as_deref() {
-        Some(value) => format!(r#""{}""#, escape_graphql_string(value)),
-        None => "null".to_string(),
-    };
-    let mutable = format!(
-        r#"display_name: {display_name}, enabled: {enabled}, updated_at: "{}""#,
-        escape_graphql_string(&updated_at)
+    let access = ConfigAccess::Graphql(
+        crate::resolve_graphql_endpoint(Some(&args.graphql), None)?
+            .with_client_signed_agent_creates(),
     );
-    let mutation = format!(
-        r#"mutation {{
-            upsert_WorkspaceRoot(
-                filter: {{ root_path: {{ _eq: "{root_path_escaped}" }} }},
-                add: {{
-                    root_path: "{root_path_escaped}",
-                    {mutable}
-                }},
-                update: {{ {mutable} }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = access
-        .write("cli.config.workspace_root.upsert", &mutation)
-        .await?;
-    let doc_id = extract_mutation_doc_id(&response, "WorkspaceRoot")?;
+    let doc_id = gents::tools::surface::set_workspace_root(
+        &access,
+        &args.node_did,
+        &root_path,
+        args.display_name.as_deref(),
+        enabled,
+    )
+    .await?;
     print_json(&json!({
         "doc_id": doc_id,
         "root_path": root_path,
@@ -140,22 +124,7 @@ pub(super) async fn workspace_root_rm(args: ConfigShowArgs) -> Result<()> {
     args.output
         .ensure_supported("config workspace-root rm", &[OutputFormat::Json])?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let root_path_escaped = escape_graphql_string(&root_path);
-    let mutation = format!(
-        r#"mutation {{ delete_WorkspaceRoot(filter: {{ root_path: {{ _eq: "{root_path_escaped}" }} }}) {{ _docID }} }}"#
-    );
-    let response = access
-        .write("cli.config.workspace_root.delete", &mutation)
-        .await?;
-    let deleted = response
-        .get("data")
-        .and_then(|data| data.get("delete_WorkspaceRoot"))
-        .and_then(Value::as_array)
-        .map(|rows| rows.len())
-        .unwrap_or(0);
-    if deleted == 0 {
-        anyhow::bail!("no WorkspaceRoot document with root_path {:?}", root_path);
-    }
-    print_json(&json!({ "deleted": deleted, "root_path": root_path }))?;
+    gents::tools::surface::delete_workspace_root(&access, &root_path).await?;
+    print_json(&json!({ "deleted": 1, "root_path": root_path }))?;
     Ok(())
 }

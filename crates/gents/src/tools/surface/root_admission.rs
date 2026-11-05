@@ -146,18 +146,32 @@ fn decode_workspace_root_rows(value: &serde_json::Value) -> Result<Vec<Workspace
     serde_json::from_value(rows).context("decoding WorkspaceRoot policy rows")
 }
 
+fn workspace_root_query(complete: bool, node_did: &str) -> String {
+    if complete {
+        "{ WorkspaceRoot { root_path enabled } }".to_owned()
+    } else {
+        format!(
+            "{{ WorkspaceRoot(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ root_path enabled }} }}",
+            crate::store::graphql::escape_graphql_string(node_did)
+        )
+    }
+}
+
 pub(crate) async fn load_workspace_root_policy_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     ceiling_root: Option<&Path>,
+    node_did: &str,
 ) -> Result<WorkspaceRootPolicy> {
+    let complete = txn.collection_has_no_document_policy("WorkspaceRoot");
+    let query = workspace_root_query(complete, node_did);
     let response = txn
-        .execute("{ WorkspaceRoot { root_path enabled } }")
+        .execute(&query)
         .await
         .context("querying WorkspaceRoot policy in configuration transaction")?;
     Ok(project_workspace_root_policy_with_completeness(
         decode_workspace_root_rows(&response)?,
         ceiling_root,
-        txn.collection_has_no_document_policy("WorkspaceRoot"),
+        complete,
     ))
 }
 
@@ -165,18 +179,25 @@ pub async fn load_workspace_root_policy(
     node: &defra_node::Node,
     ceiling_root: Option<&Path>,
 ) -> Result<WorkspaceRootPolicy> {
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        "{ WorkspaceRoot { root_path enabled } }",
-        "querying WorkspaceRoot policy",
-    )
-    .await?;
-    let value = serde_json::json!({"data": response.data.unwrap_or(serde_json::Value::Null)});
     let complete = node
         .get_collection("WorkspaceRoot")
         .ok()
         .flatten()
         .is_some_and(|collection| collection.policy.is_none());
+    let node_did = if complete {
+        ""
+    } else {
+        node.node_identity_did()
+            .context("WorkspaceRoot policy requires the selected Node identity")?
+    };
+    let query = workspace_root_query(complete, node_did);
+    let response = crate::store::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "querying WorkspaceRoot policy",
+    )
+    .await?;
+    let value = serde_json::json!({"data": response.data.unwrap_or(serde_json::Value::Null)});
     Ok(project_workspace_root_policy_with_completeness(
         decode_workspace_root_rows(&value)?,
         ceiling_root,
@@ -494,7 +515,7 @@ mod tests {
             defra_core::RequestContext::default().with_identity(Some(owner.did().to_owned()));
         let policy_id = node.add_dac_policy_as(&context, "name: WorkspaceRootCompleteness\nresources:\n  - name: roots\n    permissions:\n      - name: read\n      - name: update\n      - name: delete\n").await?;
         node.add_collection_as(&context, &format!(
-            "type WorkspaceRoot @policy(id: \"{policy_id}\", resource: \"roots\") {{ root_path: String enabled: Boolean }}"
+            "type WorkspaceRoot @policy(id: \"{policy_id}\", resource: \"roots\") {{ node_did: String root_path: String enabled: Boolean }}"
         )).await?;
         let owner_access = crate::ConfigAccess::local_as(node.clone(), owner.did().parse()?);
         for permission in [
@@ -516,9 +537,10 @@ mod tests {
         )?;
         let rows = access.execute("{ WorkspaceRoot { _docID } }").await?;
         assert_eq!(rows["data"]["WorkspaceRoot"].as_array().unwrap().len(), 0);
+        let owner_did = owner.did().to_owned();
         let projected = access
             .transact_readonly("test.root.filtered", |txn| {
-                Box::pin(async move { load_workspace_root_policy_in_txn(txn, None).await })
+                Box::pin(async { load_workspace_root_policy_in_txn(txn, None, &owner_did).await })
             })
             .await?;
         assert!(projected.configured);

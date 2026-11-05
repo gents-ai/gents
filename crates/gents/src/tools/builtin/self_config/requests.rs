@@ -134,13 +134,16 @@ pub(super) fn tools_request(
 ) -> ApplyRequest<'static> {
     let mut request = anchored_request(SelfConfigTarget::Tools, "tools_id", patch);
     let ceiling_root = core.process_ceiling().root.clone();
+    let node_did = core.node_did().to_owned();
     let held = core.held_grants().clone();
     request.normalize = Box::new(move |txn, _, stored, merged| {
         let ceiling_root = ceiling_root.clone();
+        let node_did = node_did.clone();
         Box::pin(async move {
             let policy = crate::tools::surface::load_workspace_root_policy_in_txn(
                 txn,
                 ceiling_root.as_deref(),
+                &node_did,
             )
             .await?;
             let stored_root = stored_host_root(stored);
