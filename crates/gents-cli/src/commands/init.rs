@@ -26,9 +26,10 @@ use crate::cli::*;
 use crate::config_writes::ConfigAccess;
 use crate::shared::*;
 use crate::{
-    clear_runtime_state, dangerously_overwrite_home, default_data_dir, default_key_path,
-    format_tool_ceiling, format_tool_package, normalize_optional_string, print_json,
-    read_init_config, resolve_home_dir, write_init_config, BackendResolutionMode,
+    clear_init_pending, clear_runtime_state, dangerously_overwrite_home, default_data_dir,
+    default_key_path, format_tool_ceiling, format_tool_package, mark_init_pending,
+    normalize_optional_string, print_json, read_init_config, resolve_home_dir, write_init_config,
+    BackendResolutionMode,
 };
 
 const STANDARD_READONLY_SYSTEM_PROMPT: &str = r#"You are a terminal-native engineering and operations agent running for the user inside a local DefraDB runtime.
@@ -285,6 +286,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
         )
         .await?;
         write_init_config(&home_dir, &stored)?;
+        clear_init_pending(&home_dir)?;
         let runtime_state_reset = if args.reset {
             clear_runtime_state(&home_dir)?
         } else {
@@ -682,6 +684,7 @@ pub(crate) async fn write_identity_only_home_metadata(
     )
     .await?;
     write_init_config(options.home, &stored)?;
+    clear_init_pending(options.home)?;
     let runtime_state_reset = if options.reset {
         clear_runtime_state(options.home)?
     } else {
@@ -727,6 +730,7 @@ async fn initialize_home_store(
         }
     };
     stored.store_encryption = Some(record.clone());
+    mark_init_pending(home)?;
     write_init_config(home, stored)?;
     Ok(record.initialize(&key_file, data_path)?)
 }

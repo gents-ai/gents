@@ -67,6 +67,34 @@ pub(crate) fn read_init_config(home_dir: &Path) -> Result<Option<StoredInitConfi
     Ok(gents::store::local::home::read_init_config(home_dir)?)
 }
 
+/// Present from when `init` records key custody until it publishes configuration. A home in
+/// that window has `init.json` but no default agent, and a service started on it exits at once
+/// and is restarted forever.
+const INIT_PENDING_FILE_NAME: &str = "init-pending";
+
+pub(crate) fn mark_init_pending(home_dir: &Path) -> Result<()> {
+    let path = home_dir.join(INIT_PENDING_FILE_NAME);
+    fs::write(&path, b"").with_context(|| format!("writing {}", path.display()))
+}
+
+pub(crate) fn clear_init_pending(home_dir: &Path) -> Result<()> {
+    let path = home_dir.join(INIT_PENDING_FILE_NAME);
+    match fs::remove_file(&path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            Err(error).with_context(|| format!("removing {}", path.display()))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// `None` also for a home `init` has not finished, which `init` can resume.
+pub(crate) fn read_finished_init_config(home_dir: &Path) -> Result<Option<StoredInitConfig>> {
+    if home_dir.join(INIT_PENDING_FILE_NAME).exists() {
+        return Ok(None);
+    }
+    read_init_config(home_dir)
+}
+
 /// Load and register the signer recorded by an initialized home; every
 /// embedded-node entry point uses this same loader so opening the data
 /// directory outside `gents server` never silently produces unsigned commits.

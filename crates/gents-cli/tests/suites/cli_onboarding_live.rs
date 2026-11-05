@@ -555,6 +555,43 @@ mod no_model {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_setup_that_stopped_midway_asks_again() -> Result<()> {
+        let live = LiveBox::new()?;
+        let held = HeldShimPort::serving(b"").await?;
+        let folder = live.folder("data");
+        // A file where the store needs a folder stops init after it records key custody.
+        let blocker = folder.join("data/wal");
+        fs::create_dir_all(blocker.parent().context("the blocker has a parent")?)?;
+        fs::write(&blocker, "")?;
+
+        let mut terminal = setup_of(&live, &folder, "midway")?;
+        terminal
+            .answer_inference_and_tools(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .await?;
+        let code = terminal.wait_exit(RUNTIME_UP).await?;
+        ensure!(code != 0, "{}", terminal.transcript());
+        ensure!(
+            terminal.transcript().contains("embedded DefraDB node for init"),
+            "this must fail after init records its key custody: {}",
+            terminal.transcript()
+        );
+        ensure!(folder.join("init.json").is_file(), "custody is recorded");
+        ensure!(!live.plist().exists(), "nothing is installed");
+        fs::remove_file(&blocker)?;
+
+        let mut rerun = setup_of(&live, &folder, "midway-rerun")?;
+        rerun
+            .answer_inference_and_tools(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
+            .await?;
+        rerun.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        rerun.expect_exit(1).await?;
+
+        held.release().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
     async fn setup_grants_write_and_unrestricted_tools_when_asked() -> Result<()> {
         let live = LiveBox::new()?;
         let held = HeldShimPort::serving(b"").await?;

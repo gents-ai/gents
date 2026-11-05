@@ -13,7 +13,7 @@ use crate::commands::codex::{
     launch_interface, open_codex, runtime_identity_at, PUBLISH_WAIT,
 };
 use crate::graphql_access::graphql_endpoint_available;
-use crate::home_state::{read_init_config, read_runtime_state, resolve_home_dir};
+use crate::home_state::{read_finished_init_config, read_runtime_state, resolve_home_dir};
 use crate::native_service::{NativeServiceConfig, NativeServiceManager, NativeServicePlatform};
 
 mod setup;
@@ -146,11 +146,11 @@ pub(crate) async fn run(
     }
     let home_given = home.map(crate::absolutize).transpose()?;
     let mut home = crate::absolutize(resolve_home_dir(home_given.as_deref()))?;
-    let config = match read_init_config(&home)? {
+    let config = match read_finished_init_config(&home)? {
         Some(config) => config,
         None => {
             home = setup::setup(home_given, store_key_custody).await?;
-            read_init_config(&home)?.context("setup left this home uninitialized")?
+            read_finished_init_config(&home)?.context("setup left this home uninitialized")?
         }
     };
     let mut endpoint = InterfaceEndpoint::for_client(ClientSettings::read(&home)?.client)?;

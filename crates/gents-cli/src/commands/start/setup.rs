@@ -11,7 +11,7 @@ use crate::cli::{Cli, Command};
 use crate::client_settings::InterfaceClient;
 use crate::commands::codex::{interface_bin, CODEX_BIN_ENV};
 use crate::commands::init::init_home;
-use crate::home_state::{read_init_config, resolve_home_dir};
+use crate::home_state::{read_finished_init_config, resolve_home_dir};
 use crate::interactive_backend::{
     confirm, prompt_line, prompt_line_default, resolve_backend_interactively,
 };
@@ -135,7 +135,7 @@ pub(super) async fn setup(
         "{} is not a folder; choose a folder for Gents' data",
         home.display()
     );
-    if folder_asked && read_init_config(&home)?.is_some() {
+    if folder_asked && read_finished_init_config(&home)?.is_some() {
         remember_home(&home)?;
         return Ok(home);
     }
