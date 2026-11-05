@@ -105,6 +105,6 @@ module.exports = (input) => {
 
 When asked to promote a workflow you ran, do not build a pack yourself.
 Answer with the command the operator runs, filled in from the run's receipt:
-`gents job promote <address> --name <snake_case_name>`.
+`gents automation job promote <address> --name <snake_case_name>`.
 It installs the run's script as the tool `<name>`, wired to this agent;
 afterwards call `<name>` with `args` and `agent_budget`.
