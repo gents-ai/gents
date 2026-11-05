@@ -63,44 +63,53 @@ const switchId = (key: string, kind: string) =>
   `settings-notify-plugin-${`${key}-${kind}`.replace(/[^A-Za-z0-9_-]/g, "-")}`;
 
 const origin = (record: UxPluginRecord) =>
-  record.pack
-    ? `From the ${record.pack} pack.`
-    : record.door === "bundled"
-      ? "Built into the app."
-      : "From a plugin in your home folder.";
+  record.pack ??
+  (record.door === "bundled" ? "Built into the app" : "From your home folder");
 
 /** Each kind of notification a plugin declares, off until the person turns
-    it on: a kind is listed once its plugin has loaded, since the module is
-    what declares it. */
+    it on, grouped under the plugin that declares it: a kind is listed once
+    its plugin has loaded, since the module is what declares it. */
 function PluginNotifications() {
   const records = useUxPluginRecords();
   const on = usePluginNotify();
   const notifying = Object.values(records)
     .filter((r) => (r.notifications?.length ?? 0) > 0)
     .sort((a, b) => a.name.localeCompare(b.name));
-  return (
-    <Group title="From packs">
-      {notifying.length === 0 ? (
+  if (notifying.length === 0)
+    return (
+      <Group title="From packs">
         <Row
           label="No pack asks to notify you"
           description="A pack's page that can tell you something lists its kinds here once it has loaded, each off until you turn it on."
         />
-      ) : (
-        notifying.flatMap((record) => {
-          const key = notifierKey(record);
-          return record.notifications!.map(({ kind, label, description }) => (
-            <SwitchRow
-              key={`${key} ${kind}`}
-              id={switchId(key, kind)}
-              label={`${record.name}: ${label}`}
-              description={[description, origin(record)].filter(Boolean).join(" ")}
-              checked={on.includes(pluginNotifySwitch(key, kind))}
-              onChange={(next) => preferences.setPluginNotify(key, kind, next)}
-            />
-          ));
-        })
-      )}
-    </Group>
+      </Group>
+    );
+  return (
+    <>
+      {notifying.map((record) => {
+        const key = notifierKey(record);
+        return (
+          <Group
+            key={key}
+            title={record.name}
+            action={
+              <span className="text-xs text-muted-foreground">{origin(record)}</span>
+            }
+          >
+            {record.notifications!.map(({ kind, label, description }) => (
+              <SwitchRow
+                key={kind}
+                id={switchId(key, kind)}
+                label={label}
+                description={description}
+                checked={on.includes(pluginNotifySwitch(key, kind))}
+                onChange={(next) => preferences.setPluginNotify(key, kind, next)}
+              />
+            ))}
+          </Group>
+        );
+      })}
+    </>
   );
 }
 

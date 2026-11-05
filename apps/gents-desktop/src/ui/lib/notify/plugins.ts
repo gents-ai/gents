@@ -1,6 +1,6 @@
 import { toast } from "sonner";
 import type { UxNotifyCaller } from "@/contrib/plugin";
-import { flag, pluginNotifyOn } from "@/preferences";
+import { flag, pluginNotifyOn, preferences } from "@/preferences";
 import { inNativeShell, windowLabel } from "../../../lib/nativeShell";
 import { isPluginSubpath, linkRoute } from "../links";
 import type { Route } from "../router";
@@ -28,6 +28,8 @@ export type PluginNotifyDeps = {
   /** in the app, while its window is in front */
   show: (notice: Notice, open: () => void) => void;
   open: (to: Route) => void;
+  /** offers to turn on a kind the plugin tried while it was off */
+  offer: (caller: UxNotifyCaller, kind: { kind: string; label: string }) => void;
 };
 
 const defaults = (): PluginNotifyDeps => {
@@ -46,6 +48,15 @@ const defaults = (): PluginNotifyDeps => {
         action: { label: "Open", onClick: open },
       }),
     open: base.open,
+    offer: (caller, { kind, label }) =>
+      void toast(`${oneLine(caller.name)} wants to notify you about “${label}”`, {
+        id: `notify-offer:${caller.key}:${kind}`,
+        description: "These are off until you turn them on.",
+        action: {
+          label: "Turn on",
+          onClick: () => preferences.setPluginNotify(caller.key, kind, true),
+        },
+      }),
   };
 };
 
@@ -70,6 +81,8 @@ const oneLine = (value: string) =>
     one-line body, each length-limited, and nothing else of the plugin's. */
 export function createPluginNotifier(deps: PluginNotifyDeps = defaults()) {
   const sent = new Map<string, number[]>();
+  /* a kind that's off is offered once while the app runs, not on every try */
+  const offered = new Set<string>();
   return async (caller: UxNotifyCaller, request: unknown): Promise<void> => {
     const refuse = (why: string): never => {
       throw new Error(`${caller.id}: ctx.notify: ${why}`);
@@ -87,10 +100,16 @@ export function createPluginNotifier(deps: PluginNotifyDeps = defaults()) {
       refuse(
         `kind ${JSON.stringify(kind)} is not declared (declared: ${caller.kinds.map((k) => k.kind).join(", ") || "none"})`,
       );
-    if (!deps.switchedOn(caller.key, declared!.kind))
+    if (!deps.switchedOn(caller.key, declared!.kind)) {
+      const once = `${caller.key} ${declared!.kind}`;
+      if (!offered.has(once)) {
+        offered.add(once);
+        deps.offer(caller, declared!);
+      }
       refuse(
-        `"${declared!.label}" is off; the person turns it on under Settings, Notifications`,
+        `"${declared!.label}" notifications are off; the app has offered to turn them on`,
       );
+    }
     const line = typeof title === "string" ? oneLine(title) : "";
     if (!line || line.length > NOTIFY_TITLE_MAX)
       refuse(`title must be text of 1 to ${NOTIFY_TITLE_MAX} characters`);
