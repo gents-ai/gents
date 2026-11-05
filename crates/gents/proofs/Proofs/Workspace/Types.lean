@@ -33,31 +33,8 @@ theorem fromDefraDB_toDefraDB (s : WorkspaceState) :
   cases s <;> rfl
 
 instance : HasTerminal WorkspaceState where
-  isTerminal s := s = .provisionFailed ∨ s = .cleaned
-  isTerminal_dec s :=
-    match s with
-    | .provisionFailed => isTrue (Or.inl rfl)
-    | .cleaned => isTrue (Or.inr rfl)
-    | .provisioning => isFalse (by
-        intro h
-        cases h with
-        | inl h => cases h
-        | inr h => cases h)
-    | .ready => isFalse (by
-        intro h
-        cases h with
-        | inl h => cases h
-        | inr h => cases h)
-    | .sealed => isFalse (by
-        intro h
-        cases h with
-        | inl h => cases h
-        | inr h => cases h)
-    | .cleaning => isFalse (by
-        intro h
-        cases h with
-        | inl h => cases h
-        | inr h => cases h)
+  isTerminal s := s = .cleaned
+  isTerminal_dec s := inferInstance
 
 def bindable : WorkspaceState → Prop
   | .ready | .sealed => True

@@ -146,7 +146,7 @@ theorem seal_requires_hash
 theorem sealed_not_terminal : ¬ isTerminal WorkspaceState.sealed := by
   decide
 
-theorem provisionFailed_terminal : isTerminal WorkspaceState.provisionFailed := by
+theorem provisionFailed_not_terminal : ¬ isTerminal WorkspaceState.provisionFailed := by
   decide
 
 theorem cleaned_terminal : isTerminal WorkspaceState.cleaned := by
