@@ -554,7 +554,7 @@ function PacksHome({
                       to={href({ name: "packs", item: packName })}
                       description={text(pack.description)}
                       adds={[]}
-                      status={text(pack.latest) ?? ""}
+                      status={text(pack.latest) ?? "No version yet"}
                       meta={
                         <PackMeta
                           keywords={keywordsOf(pack).slice(0, 2)}
@@ -587,12 +587,23 @@ function PacksHome({
                             Installed
                           </span>
                         ) : (
-                          <Hint label={blocked ?? `Install ${packName} on this node`}>
+                          <Hint
+                            label={
+                              blocked ??
+                              (text(pack.latest)
+                                ? `Install ${packName} on this node`
+                                : "Its publisher hasn't published a version yet")
+                            }
+                          >
                             <span>
                               <Button
                                 size="sm"
                                 variant="outline"
-                                disabled={blocked !== null || busy !== null}
+                                disabled={
+                                  blocked !== null ||
+                                  busy !== null ||
+                                  !text(pack.latest)
+                                }
                                 onClick={() => void install(packName)}
                               >
                                 Install
