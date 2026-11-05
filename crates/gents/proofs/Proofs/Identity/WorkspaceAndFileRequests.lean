@@ -122,10 +122,18 @@ theorem callback_reader_resolves_only_selected_agent :
     callbackSelectedAgentPermission "other" = false ∧
     Household.allowed 8 callbackSelectedAgentRevoked "creator" "agents" "target" "read" = false := by native_decide
 
+def callbackSelectionState (enabled : Bool) : Household.State :=
+  if enabled then callbackSelectedAgentFixture else callbackSelectedAgentRevoked
+
+theorem disabled_callback_does_not_grant_selected_agent :
+    Household.allowed 8 (callbackSelectionState false) "creator" "agents" "target" "read" = false := by native_decide
+
 def callbackSelectedAgentCasesJson : String :=
   (Lean.toJson (["user", "creator", "other"].map fun actor => Lean.Json.mkObj
     [("actor", Lean.toJson actor), ("before", Lean.toJson (callbackSelectedAgentPermission actor)),
-     ("after_revocation", Lean.toJson (Household.allowed 8 callbackSelectedAgentRevoked actor "agents" "target" "read"))])).compress
+     ("after_revocation", Lean.toJson (Household.allowed 8 callbackSelectedAgentRevoked actor "agents" "target" "read")),
+     ("after_disabled", Lean.toJson (Household.allowed 8 (callbackSelectionState false) actor "agents" "target" "read")),
+     ("after_reenabled", Lean.toJson (Household.allowed 8 (callbackSelectionState true) actor "agents" "target" "read"))])).compress
 
 /-- A user who creates a quickstart repository selects its creator and
 participant Agent documents. The target-to-creator executor edge is installed
