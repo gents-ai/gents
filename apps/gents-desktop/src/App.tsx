@@ -7,7 +7,7 @@ import {
   type Nav,
   type Route as ShellRoute,
 } from "@gents/shell";
-import { Toaster } from "@gents/ui/components/sonner";
+import { AppToaster } from "./ui/app/AppToaster";
 import { toast } from "sonner";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
 
@@ -183,7 +183,7 @@ function PluginWindowBody({ pluginId }: { pluginId: string }) {
       >
         <PluginPageScreen pluginId={pluginId} windowed />
       </div>
-      <Toaster closeButton />
+      <AppToaster />
     </TooltipProvider>
   );
 }
@@ -292,7 +292,7 @@ function AppBody() {
       <AppShell route={route} history={history}>
         <RouteScreen route={route} />
       </AppShell>
-      <Toaster closeButton />
+      <AppToaster />
       {hasLocalNode && <PluginAccessPrompt />}
       {hasLocalNode && <JoinRequestAlerts route={route} />}
       <Shortcuts />
