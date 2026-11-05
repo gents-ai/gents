@@ -48,7 +48,10 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             GraphqlEndpoint::as_principal(format!("http://{addr}/api/v0/graphql"), user.did())
                 .with_client_signing_capability(user.client_signing_capability()?)?;
         let access = ConfigAccess::Graphql(endpoint);
-        let (node_doc, agent_doc) = access.transact_write("test.edit.seed", |txn| Box::pin(async {
+        let (node_doc, agent_doc) = access.transact_write("test.edit.seed", |txn| {
+            let root = &root;
+            let binding = &binding;
+            Box::pin(async move {
             let node_response = txn.execute_client_signed_create(
                 "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
                 &serde_json::json!({"input":{"node_did":root.did()}}), gents_protocol::schemas::NODE,
@@ -61,7 +64,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             ).await?;
             let agent_doc = crate::store::graphql::created_doc_id(&agent_response, "Agent")?;
             Ok::<_, anyhow::Error>((node_doc, agent_doc))
-        })).await?;
+        })}).await?;
         access
             .add_actor_relationship(
                 "Node",
@@ -155,8 +158,33 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             signature: vec![],
         };
         command.signature = user.sign(&command.signing_payload()).await?;
+        let mut altered = command.replacement_evidence[0].clone();
+        let signature = altered["composite_signature"]
+            .as_array_mut()
+            .context("signature evidence missing")?;
+        let byte = signature[0].as_u64().context("signature byte missing")?;
+        signature[0] = serde_json::json!(byte ^ 1);
+        let input = crate::request::lifecycle::client_request_input(&command.replacements[0])?;
+        let tampered_accepted =
+            crate::store::config_client::verify_request_evidence(input, altered)
+                .await
+                .is_ok();
+        assert_eq!(
+            tampered_accepted,
+            case["tamperedAccepted"].as_bool().unwrap()
+        );
         let command_doc =
             crate::request::lifecycle::queue::publish_edit_command(&access, &command).await?;
+        let command_row = access.execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _version {{ cid height fieldName }} }} }}"#, escape_graphql_string(&command_doc))).await?;
+        let command_version = crate::store::graphql::document_composite_version(
+            &command_row["data"]["AgentSessionInputEdit"][0],
+            "edit command",
+        )?
+        .context("command version missing")?;
+        assert_eq!(
+            node.verified_block_signer_did(&command_version.cid).await?,
+            user.did()
+        );
         if !case["selectedAllowed"]
             .as_bool()
             .context("modeled selection missing")?
@@ -168,6 +196,28 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 )
                 .await?;
         }
+        if case["selectedAllowed"].as_bool().unwrap() {
+            let (failure, mutations) = ConfigApplyTxn::with_successful_mutation_failure_at(
+                Some(1),
+                process_command(&node, &root, &command_doc, agent.as_ref()),
+            )
+            .await;
+            assert!(failure.is_err());
+            assert_eq!(mutations, 1);
+            let after_abort = access.execute("{ AgentRequest { _docID lifecycle_state } AgentSessionInputEdit { receipt_json } }").await?;
+            let rows = after_abort["data"]["AgentRequest"]
+                .as_array()
+                .context("requests unavailable after abort")?;
+            assert_eq!(
+                rows.len() > 1,
+                case["rollbackReplacement"].as_bool().unwrap()
+            );
+            assert_eq!(rows[0]["lifecycle_state"], "pending");
+            assert_eq!(
+                !after_abort["data"]["AgentSessionInputEdit"][0]["receipt_json"].is_null(),
+                case["rollbackReceipt"].as_bool().unwrap()
+            );
+        }
         process_command(&node, &root, &command_doc, agent.as_ref()).await?;
         let response = access.execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ receipt_json }} }}"#, escape_graphql_string(&command_doc))).await?;
         let receipt: SessionInputEditReceipt = serde_json::from_str(
@@ -176,6 +226,13 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 .context("receipt missing")?,
         )?;
         receipt.validate_for(&command)?;
+        assert!(verified_receipt(
+            root.as_ref(),
+            &command,
+            response["data"]["AgentSessionInputEdit"][0]["receipt_json"].as_str()
+        )
+        .await?
+        .is_some());
         assert_eq!(
             receipt.outcome == SessionInputEditOutcome::Applied,
             case["applied"].as_bool().unwrap(),
@@ -202,7 +259,42 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 node.verified_block_signer_did(&version.cid).await?,
                 user.did()
             );
+            access
+                .delete_actor_relationship(
+                    "AgentRequest",
+                    &receipt.request_doc_ids[0],
+                    "working_agent",
+                    &::identity::Did::new(&binding.agent_did)?,
+                )
+                .await?;
             process_command(&node, &root, &command_doc, agent.as_ref()).await?;
+            let agent_access = ConfigAccess::local_managed_agent(
+                node.clone(),
+                ::identity::Did::new(&binding.agent_did)?,
+                agent.as_ref(),
+            )?;
+            let decision = agent_access
+                .transact_readonly("test.edit.revoke", |txn| {
+                    let doc = &receipt.request_doc_ids[0];
+                    let agent_did = &binding.agent_did;
+                    Box::pin(async move {
+                        let decisions = txn
+                            .observe_document_access(
+                                &::identity::Did::new(agent_did)?,
+                                "AgentRequest",
+                                std::slice::from_ref(doc),
+                                defra_node::DocumentAccessMode::Named {
+                                    permission: "update".into(),
+                                    node_permission: NodePermission::DocumentUpdate,
+                                },
+                            )
+                            .await?;
+                        Ok::<_, anyhow::Error>(decisions)
+                    })
+                })
+                .await?;
+            let no_regrant = decision.as_slice() == [defra_node::DocumentAccessDecision::Denied];
+            assert_eq!(no_regrant, case["noRegrant"].as_bool().unwrap());
         } else {
             assert_eq!(old["data"]["AgentRequest"][0]["lifecycle_state"], "pending");
             assert!(receipt.request_doc_ids.is_empty());

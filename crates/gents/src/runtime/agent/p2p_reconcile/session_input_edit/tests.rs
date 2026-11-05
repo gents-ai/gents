@@ -99,10 +99,12 @@ impl Fixture {
         let access = ConfigAccess::local_as(
             self.node.clone(),
             ::identity::Did::new(self.identity.did()).unwrap(),
-        );
+        )
+        .with_client_signing_capability(self.identity.client_signing_capability().unwrap())
+        .unwrap();
         let (session, agent) = access
             .transact_readonly("test.edit.targets", |txn| {
-                Box::pin(async {
+                Box::pin(async move {
                     let session = crate::session::load_agent_session_owner_in_txn(
                         txn,
                         self.identity.did(),
@@ -209,7 +211,9 @@ impl Fixture {
         let access = ConfigAccess::local_as(
             self.node.clone(),
             ::identity::Did::new(self.identity.did()).unwrap(),
-        );
+        )
+        .with_client_signing_capability(self.identity.client_signing_capability().unwrap())
+        .unwrap();
         let input = serde_json::json!({"command_id":command.command_id, "requester_did":command.requester_did,
             "requester_peer_id":command.requester_peer_id, "node_did":command.node_did,
             "session_id":command.session_id, "intent_json":serde_json::to_string(command).unwrap()});
@@ -448,10 +452,10 @@ impl ModeledQueue {
         let mut replacements = crate::request::lifecycle::queue::prepare_pending_user_edit(
             &ConfigAccess::local_as(
                 self.fixture.node.clone(),
-                ::identity::Did::new(requester.did().to_owned()).unwrap(),
+                ::identity::Did::new(self.fixture.identity.did().to_owned()).unwrap(),
             ),
-            requester,
-            AgentRequestAdmissionRecord::client(requester.did()),
+            self.fixture.identity.as_ref(),
+            AgentRequestAdmissionRecord::client(self.fixture.identity.did()),
             self.fixture.identity.did(),
             SESSION,
             self.fixture.identity.did(),
@@ -459,6 +463,14 @@ impl ModeledQueue {
         )
         .await
         .unwrap();
+        if requester.did() != self.fixture.identity.did() {
+            for create in &mut replacements {
+                create.admission = AgentRequestAdmissionRecord::client(requester.did());
+                crate::sign_agent_request_create(requester, create)
+                    .await
+                    .unwrap();
+            }
+        }
         edit.expected_request_doc_ids = model
             .expected
             .iter()

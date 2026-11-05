@@ -58,9 +58,9 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
     let access = ConfigAccess::local_as(
         home.node.clone(),
         ::identity::Did::new(did.to_owned()).unwrap(),
-    );
-    access.write("test.edit.session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "edit-session", node_did: "{did}", requester_did: "{did}", agent_did: "{agent}", created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,
-        did = escape_graphql_string(did), agent = escape_graphql_string(&binding.agent_did))).await.unwrap();
+    )
+    .with_client_signing_capability(home.identity.client_signing_capability().unwrap())
+    .unwrap();
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "original",
@@ -83,14 +83,48 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
         interrupted_request_id: None,
         background_completion_wake_version: None,
     });
+    create.session_doc_id = Some(
+        crate::request::lifecycle::reserve_goal_session(&access, &create)
+            .await
+            .unwrap(),
+    );
+    let agent_doc = access
+        .transact_readonly("test.edit.agent", |txn| {
+            let agent_did = &binding.agent_did;
+            Box::pin(async move {
+                let (doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Agent,
+                    did,
+                    agent_did,
+                )
+                .await?
+                .context("Agent missing")?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await
+        .unwrap();
+    create.agent_doc_id = Some(agent_doc);
     crate::sign_agent_request_create(home.identity.as_ref(), &mut create)
         .await
         .unwrap();
-    let response = access
-        .write("test.edit.request", &create.graphql_mutation().unwrap())
+    crate::request::lifecycle::submit_client_request(&access, &create)
         .await
         .unwrap();
-    let original = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    let response = access
+        .execute("{ AgentRequest { _docID request_id } }")
+        .await
+        .unwrap();
+    let original = response["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["request_id"] == "original")
+        .unwrap()["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let edit = PendingQueueEdit {
         expected_request_doc_ids: vec![original.clone()],
         selected_request_doc_ids: vec![original.clone()],
@@ -145,10 +179,30 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
     command
 }
 
-async fn submit(node: &Arc<EmbeddedNode>, command: &SessionInputEdit) -> String {
-    let response = ConfigAccess::local(node.clone()).write("test.edit.intent", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{ command_id: "{}", requester_did: "{}", node_did: "{}", session_id: "{}", intent_json: "{}" }}) {{ _docID }} }}"#,
-        escape_graphql_string(&command.command_id), escape_graphql_string(&command.requester_did), escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id), escape_graphql_string(&serde_json::to_string(command).unwrap()))).await.unwrap();
-    crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap()
+async fn submit(
+    node: &Arc<EmbeddedNode>,
+    signer: &dyn NodeIdentity,
+    command: &SessionInputEdit,
+) -> String {
+    let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(signer.did()).unwrap())
+        .with_client_signing_capability(signer.client_signing_capability().unwrap())
+        .unwrap();
+    let input = serde_json::json!({"command_id":command.command_id, "requester_did":command.requester_did,
+        "requester_peer_id":command.requester_peer_id, "node_did":command.node_did,
+        "session_id":command.session_id, "intent_json":serde_json::to_string(command).unwrap()});
+    access.transact_write("test.edit.intent", |txn| {
+        let input = &input;
+        Box::pin(async move {
+            let response = txn.execute_client_signed_create(
+                "mutation($input: AgentSessionInputEditMutationInputArg!) { create_AgentSessionInputEdit(input: $input) { _docID } }",
+                &serde_json::json!({"input":input}), gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT,
+            ).await?;
+            let doc = crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
+            txn.add_resource_relationship("AgentSessionInputEdit", &doc, "parent", "sessions", &command.session_doc_id).await?;
+            txn.add_actor_relationship("AgentSessionInputEdit", &doc, "working_agent", &::identity::Did::new(&command.agent_did)?).await?;
+            Ok::<_, anyhow::Error>(doc)
+        })
+    }).await.unwrap()
 }
 
 async fn raw_receipt(node: &Arc<EmbeddedNode>, id: &str) -> Option<String> {
@@ -167,7 +221,7 @@ async fn future_issued_command_defers_without_receipt_then_applies() {
     let home = temp_home(false).await;
     let issued_at = Utc::now() + chrono::Duration::seconds(2);
     let command = edit_command(&home, issued_at).await;
-    let id = submit(&home.node, &command).await;
+    let id = submit(&home.node, home.identity.as_ref(), &command).await;
     let before = requests(&home.node).await;
     let deferred = process_command(
         &home.node,
@@ -213,7 +267,7 @@ async fn future_issued_command_defers_without_receipt_then_applies() {
 async fn overwritten_receipt_after_apply_is_reissued_as_applied() {
     let home = temp_home(false).await;
     let command = edit_command(&home, Utc::now() - chrono::Duration::seconds(1)).await;
-    let id = submit(&home.node, &command).await;
+    let id = submit(&home.node, home.identity.as_ref(), &command).await;
     process_command(
         &home.node,
         &home.identity,
@@ -252,7 +306,7 @@ async fn late_twin_of_an_applied_command_is_left_unanswered_without_error() {
     let owner = temp_home(true).await;
     let peer = temp_home(true).await;
     let command = edit_command(&owner, Utc::now() - chrono::Duration::seconds(1)).await;
-    let prior = submit(&owner.node, &command).await;
+    let prior = submit(&owner.node, owner.identity.as_ref(), &command).await;
     process_command(
         &owner.node,
         &owner.identity,
@@ -263,7 +317,7 @@ async fn late_twin_of_an_applied_command_is_left_unanswered_without_error() {
     .unwrap();
     let receipt = raw_receipt(&owner.node, &prior).await.unwrap();
     let effects = requests(&owner.node).await;
-    let twin = submit(&peer.node, &command).await;
+    let twin = submit(&peer.node, peer.identity.as_ref(), &command).await;
     assert_ne!(twin, prior);
 
     use super::super::RemoteP2pAdmin;
@@ -371,7 +425,7 @@ async fn reconcile_until_verified(
 async fn receipt_overwritten_while_stopped_is_reissued_at_restart() {
     let home = temp_home(false).await;
     let command = edit_command(&home, Utc::now() - chrono::Duration::seconds(1)).await;
-    let id = submit(&home.node, &command).await;
+    let id = submit(&home.node, home.identity.as_ref(), &command).await;
     let applied = reconcile_until_verified(&home, &command, &id).await;
     assert_eq!(applied.outcome, SessionInputEditOutcome::Applied);
     let effects = requests(&home.node).await;
@@ -389,7 +443,7 @@ async fn future_issued_command_with_invalid_receipt_is_processed_at_its_deadline
     let home = temp_home(false).await;
     let issued_at = Utc::now() + chrono::Duration::seconds(2);
     let command = edit_command(&home, issued_at).await;
-    let id = submit(&home.node, &command).await;
+    let id = submit(&home.node, home.identity.as_ref(), &command).await;
     overwrite_receipt(&home.node, &id, "{}").await;
 
     let receipt = reconcile_until_verified(&home, &command, &id).await;

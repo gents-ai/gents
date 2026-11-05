@@ -151,6 +151,21 @@ async fn authority_rejection(
             && sessions[0]["relationships_pending"] == false,
         "edit session relationships unavailable"
     );
+    let target = escape_graphql_string(&command.agent_doc_id);
+    let response = txn.execute(&format!(r#"{{ Agent(filter: {{ _docID: {{ _eq: "{target}" }} }}, limit: 2) {{ _docID node_did agent_did enabled }} }}"#)).await?;
+    let agents = response["data"]["Agent"]
+        .as_array()
+        .context("edit Agent observation unavailable")?;
+    let [agent] = agents.as_slice() else {
+        anyhow::bail!("edit Agent observation ambiguous")
+    };
+    if agent["_docID"].as_str() != Some(command.agent_doc_id.as_str())
+        || agent["node_did"].as_str() != Some(command.node_did.as_str())
+        || agent["agent_did"].as_str() != Some(command.agent_did.as_str())
+        || agent["enabled"].as_bool() == Some(false)
+    {
+        return Ok(Some("edit is not authorized".into()));
+    }
     let subject = ::identity::Did::new(&command.requester_did)?;
     let named = |permission: &str| defra_node::DocumentAccessMode::Named {
         permission: permission.to_owned(),
@@ -332,7 +347,8 @@ pub(crate) async fn process_command(
             let owners = txn.document_owners("AgentSessionInputEdit", &[row.doc_id.clone()]).await?;
             let owner = owners.first().and_then(|entry| entry.owner.as_ref())
                 .context("edit command owner unavailable")?;
-            anyhow::ensure!(owners.len() == 1, "edit command owner ambiguous");
+            anyhow::ensure!(owners.len() == 1 && owners[0].visible && owners[0].doc_id == row.doc_id,
+                "edit command owner unavailable or ambiguous");
             let owner_matches = owner.as_str() == command.requester_did;
             let graphs = if intrinsic.is_none() && owner_matches {
                 Some(verified_graphs(&command).await?)
