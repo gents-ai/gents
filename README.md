@@ -102,7 +102,7 @@ non-null `save`, even an empty one, as a write.
 | `error` | the one-sentence reason when nothing could be drawn; the record still exists, so a run never stalls on a bad chart |
 
 A path in a callback request must be inside the server's working folder or an
-allowed folder (`gents plugin dirs add <folder>`; `--access read_write` for a
+allowed folder (`gents pack plugin dirs add <folder>`; `--access read_write` for a
 request that sets `save`): a callback node asks nobody and is refused with that
 command otherwise. Unset fields are ignored; an empty `x_label`, `y_label` or
 `y2_label` still removes that label. The record carries the full-size PNG,
@@ -112,7 +112,7 @@ not the 1568-pixel image a tool call shows.
 
 ```sh
 gents pack install gents/charts --home <home> --inference-slot chart_maker=<profile>
-gents plugin run charts --home <home> --bind-dir ./reports \
+gents pack plugin run charts --home <home> --bind-dir ./reports \
   --input '{"chart": "bar", "file": "sales.csv", "x": "month", "y": ["revenue"], "title": "Revenue"}' \
   > chart.json
 jq -r '.parts[0].data' chart.json | base64 -d > chart.png
@@ -123,7 +123,7 @@ jq -r '.response.alt' chart.json
 only when it sets `save`, which writes the full-size files into that folder:
 
 ```sh
-gents plugin run charts --home <home> --bind-dir ./reports \
+gents pack plugin run charts --home <home> --bind-dir ./reports \
   --input '{"chart": "bar", "file": "sales.csv", "x": "month", "y": ["revenue"], "save": "revenue"}'
 ls reports   # revenue.svg  revenue.png  sales.csv
 ```
@@ -151,7 +151,7 @@ headless run (see the OCR pack's Authority section for the full model).
 A call that sets `save` asks for write access and needs a folder (not a file)
 the operator allowed to be written: the working folder is read-only by
 default, so the first save asks, and a headless run is refused with
-`gents plugin dirs add <folder> --access read_write`. The host, not the plugin,
+`gents pack plugin dirs add <folder> --access read_write`. The host, not the plugin,
 decides the access from `save`. Files are named inside that folder only: `..`,
 absolute paths, backslashes and symbolic links are refused before anything is
 written, and each file is written whole under a temporary name and renamed.
@@ -264,7 +264,7 @@ same bytes (the pack's CI runs the cases on all three).
 ## Performance
 
 Not benchmarked. One sanity check was run once through the host on Linux
-x86_64: a 29 MB CSV of 2 000 000 rows drawn as a line chart (`gents plugin run
+x86_64: a 29 MB CSV of 2 000 000 rows drawn as a line chart (`gents pack plugin run
 charts --bind-dir ...`) finished in 3.2 s wall clock with a 298 MiB peak
 resident set for the whole gents process, inside the plugin's declared limits
 (1024 MiB, 300 s). The line was drawn from 1501 of those points. Everything
