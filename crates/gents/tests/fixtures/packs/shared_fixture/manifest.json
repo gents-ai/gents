@@ -1,0 +1,14 @@
+{
+  "manifest_version": 1,
+  "name": "shared_fixture",
+  "version": "1.0.0",
+  "description": "A minimal document pack for two-node synchronization tests.",
+  "namespace": "fixture",
+  "authors": ["gents"],
+  "tags": ["fixture"],
+  "kind": "documents",
+  "assets": ["pack_config.json", "schemas/shared_fixture_move.graphql"],
+  "dependencies": [],
+  "config": "pack_config.json",
+  "schemas": ["schemas/shared_fixture_move.graphql"]
+}
