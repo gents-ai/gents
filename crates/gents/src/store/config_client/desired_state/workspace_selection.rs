@@ -183,7 +183,7 @@ mod tests {
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
             collection: Collection::Callback,
             add: callback.clone(),
-            update: callback,
+            update: callback.clone(),
         }])?;
         access
             .transact_write("test.workspace_selection.callback", |txn| {
@@ -270,6 +270,41 @@ mod tests {
                 case["after_revocation"].as_bool().unwrap(),
                 "{case}"
             );
+        }
+        for (enabled, expected_key) in [(false, "after_disabled"), (true, "after_reenabled")] {
+            let mut update = callback.clone();
+            update["enabled"] = json!(enabled);
+            let changed = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                collection: Collection::Callback,
+                add: update.clone(),
+                update,
+            }])?;
+            access
+                .transact_write("test.workspace_selection.enabled", |txn| {
+                    let changed = &changed;
+                    Box::pin(async move {
+                        crate::store::config_client::apply_desired_state_plan(txn, changed).await
+                    })
+                })
+                .await?;
+            for case in cases {
+                let key: &dyn NodeIdentity = match case["actor"].as_str().unwrap() {
+                    "user" => &user,
+                    "creator" => creator.as_ref(),
+                    "other" => &other,
+                    actor => panic!("unknown actor {actor}"),
+                };
+                let response = client(&url, key)?
+                    .execute(&format!(
+                        "{{Agent(filter:{{_docID:{{_eq:\"{}\"}}}}) {{_docID}}}}",
+                        crate::store::graphql::escape_graphql_string(&target_doc)
+                    ))
+                    .await?;
+                let visible =
+                    !crate::store::graphql::rows::<serde_json::Value>(&response, "Agent")?
+                        .is_empty();
+                assert_eq!(visible, case[expected_key].as_bool().unwrap(), "{case}");
+            }
         }
         node.shutdown().await?;
         Ok(())
