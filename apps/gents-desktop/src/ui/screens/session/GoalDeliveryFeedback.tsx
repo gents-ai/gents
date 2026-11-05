@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@gents/ui/components/button";
+import { errorWords } from "../../../lib/reasonText";
+import { Notice } from "../../components/Notice";
 import { useApp } from "@/app/AppContext";
 import { workspace } from "@/app/workspace";
 import { navigate } from "@/lib/router";
@@ -123,70 +125,64 @@ function SavedGoal({
     }
   }
   return (
-    <section
+    <Notice
+      tone={draft.rejection ? "destructive" : "info"}
       role="status"
       aria-label="Saved Goal change"
-      className="mt-2 rounded-xl border border-border p-3 text-xs"
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="mr-auto text-muted-foreground">
-          {draft.rejection
-            ? "Goal change was not applied"
-            : draft.result
-              ? "Goal change saved"
-              : busy
-                ? "Checking saved Goal change…"
-                : submitting
-                  ? "Saving Goal change…"
-                  : "Goal change awaiting confirmation"}
-        </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={busy || disabled}
-          onClick={() => void recover(false)}
-        >
-          {busy ? "Checking…" : "Check Goal delivery"}
-        </Button>
-        {draft.rejection ? (
+      className="mt-2"
+      title={
+        draft.rejection
+          ? "The goal change wasn't applied"
+          : draft.result
+            ? "Goal change saved"
+            : busy
+              ? "Checking the saved goal change…"
+              : submitting
+                ? "Saving the goal change…"
+                : "Goal change awaiting confirmation"
+      }
+      details={description(draft)}
+      detailsText
+      detailsLabel="Saved change"
+      actions={
+        <>
           <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
             disabled={busy || disabled}
-            onClick={() => void dismiss()}
+            onClick={() => void recover(false)}
           >
-            Dismiss saved change
+            {busy ? "Checking…" : "Check goal delivery"}
           </Button>
-        ) : (
-          <>
-            {!draft.result && (
+          {draft.rejection ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy || disabled}
+              onClick={() => void dismiss()}
+            >
+              Dismiss saved change
+            </Button>
+          ) : (
+            !draft.result && (
               <Button
                 variant="ghost"
                 size="sm"
                 disabled={busy || disabled}
                 onClick={() => void recover(true)}
               >
-                Resume saved Goal change
+                Resume saved goal change
               </Button>
-            )}
-          </>
-        )}
-      </div>
-      <details className="mt-1 text-muted-foreground">
-        <summary>Saved change</summary>
-        <p className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">
-          {description(draft)}
-        </p>
-      </details>
+            )
+          )}
+        </>
+      }
+    >
       {(draft.rejection || error) && (
-        <p
-          role="alert"
-          tabIndex={0}
-          className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap break-words text-destructive"
-        >
-          {draft.rejection?.reason ?? error}
+        <p role="alert" tabIndex={0} className="text-destructive">
+          {errorWords(draft.rejection?.reason ?? error)}
         </p>
       )}
-    </section>
+    </Notice>
   );
 }

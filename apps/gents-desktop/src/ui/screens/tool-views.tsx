@@ -1,4 +1,4 @@
-import { lazy, Suspense, useRef } from "react";
+import { Fragment, lazy, Suspense, useRef } from "react";
 import { shortPath } from "@/lib/paths";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import type {
@@ -16,6 +16,7 @@ import { useHomeDid, useSelectedNode } from "../hooks/useClient";
 import { isWorkingNode } from "../lib/nodes";
 import { CopyButton } from "./Markdown";
 import { JobProgressCell } from "./JobProgressCell";
+import { stopSourceText } from "../../lib/reasonText";
 import {
   diffText,
   duration,
@@ -63,38 +64,87 @@ export function ToolSummary({
   );
 }
 
+/** Whether both of two outputs are there, so each needs its label to be
+    told apart; a lone output reads as itself, like a terminal's. */
+const both = (a?: string | null, b?: string | null) =>
+  Boolean(a?.trim()) && Boolean(b?.trim());
+
 function Payload({
   label,
   value,
   counted = false,
+  tone,
 }: {
-  label: string;
+  /** only where another output beside it needs telling apart */
+  label?: string | null;
   value?: string | null;
   counted?: boolean;
+  /** error output, drawn in the destructive tone */
+  tone?: "error";
 }) {
   if (!value?.trim()) return null;
   const text = pretty(value);
   const lines = counted ? lineCount(text) : 0;
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
-      <div className="flex items-center justify-between">
-        <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-          {label}
-          {lines > 1 && (
-            <span className="normal-case"> · {lines.toLocaleString()} lines</span>
-          )}
-        </span>
-        <CopyButton getText={() => text} />
-      </div>
+    <div className="group/payload relative grid grid-cols-[minmax(0,1fr)] gap-1">
+      {label ? (
+        <div className="flex items-center justify-between">
+          <span
+            className={cn(
+              "font-mono text-[10px] tracking-wide uppercase",
+              tone === "error" ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {label}
+            {lines > 1 && (
+              <span className="normal-case"> · {lines.toLocaleString()} lines</span>
+            )}
+          </span>
+          <CopyButton getText={() => text} />
+        </div>
+      ) : (
+        <CopyButton
+          getText={() => text}
+          className="absolute top-1 right-1 z-10 opacity-0 group-hover/payload:opacity-100 focus-visible:opacity-100"
+        />
+      )}
       <ScrollArea
         orientation="both"
-        className="max-h-72 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]"
+        className={cn(
+          "max-h-72 rounded-md [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]",
+          tone === "error"
+            ? "border border-destructive/30 bg-destructive/5"
+            : "bg-surface",
+        )}
       >
         <pre className="w-max min-w-full px-3 py-2 font-mono text-[12px] leading-[18px] text-foreground">
           {text}
         </pre>
       </ScrollArea>
     </div>
+  );
+}
+
+/** A step's details as compact rows; the step's own row already says what
+    happened, so these are the particulars. */
+function Facts({
+  rows,
+}: {
+  rows: readonly (readonly [string, string | null | undefined])[];
+}) {
+  const shown = rows.filter((row): row is readonly [string, string] =>
+    Boolean(row[1]?.trim()),
+  );
+  if (!shown.length) return null;
+  return (
+    <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 text-[11px]">
+      {shown.map(([label, value], i) => (
+        <Fragment key={`${label}-${i}`}>
+          <dt className="font-sans text-muted-foreground">{label}</dt>
+          <dd className="font-mono break-all text-foreground/80">{value}</dd>
+        </Fragment>
+      ))}
+    </dl>
   );
 }
 
@@ -183,27 +233,21 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
     <div className="grid gap-3">
       {(tool.jobProgress || tool.jobState) && <JobProgressCell tool={tool} />}
       {denial && (
-        <>
-          <Meta
-            items={[
-              `rule · ${denial.ruleId}`,
-              denial.deniedCommand && `command · ${denial.deniedCommand}`,
-              denial.deniedSubcommand && `subcommand · ${denial.deniedSubcommand}`,
-              denial.deniedArgument && `argument · ${denial.deniedArgument}`,
-            ]}
-          />
-          <p className="text-sm">{denial.reasonLine}</p>
-          <Payload label="diagnostic" value={denial.diagnostic} />
-        </>
+        <Facts
+          rows={[
+            ["Rule", denial.ruleId],
+            ["Command", denial.deniedCommand],
+            ["Subcommand", denial.deniedSubcommand],
+            ["Argument", denial.deniedArgument],
+            ["Diagnostic", denial.diagnostic],
+          ]}
+        />
       )}
       {tool.cancelCause && (
-        <Meta
-          items={[
-            `canceled · ${tool.cancelCause.cause}`,
-            tool.cancelCause.source,
-            tool.cancelCause.at
-              ? new Date(tool.cancelCause.at).toLocaleTimeString()
-              : null,
+        <Facts
+          rows={[
+            ["Stopped by", stopSourceText(tool.cancelCause.source)],
+            ...tool.cancelCause.evidence.map((line) => ["Evidence", line] as const),
           ]}
         />
       )}
@@ -223,15 +267,30 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
               p.networkMode && `network: ${p.networkMode}`,
             ]}
           />
-          <Payload label="stdout" value={p.stdout} counted />
-          <Payload label="stderr" value={p.stderr} counted />
-          <Payload label="output" value={p.fallbackOutput} counted />
+          <Payload value={p.stdout} counted />
+          <Payload
+            label={p.stdout?.trim() ? "Errors" : null}
+            value={p.stderr}
+            tone="error"
+            counted
+          />
+          <Payload
+            label={p.stdout?.trim() || p.stderr?.trim() ? "Output" : null}
+            value={p.fallbackOutput}
+            counted
+          />
         </>
       )}
       {p.kind === "fileRead" && (
         <>
-          <Payload label="contents" value={p.body} />
-          <Payload label="output" value={p.fallbackOutput} />
+          <Payload
+            label={both(p.body, p.fallbackOutput) ? "Contents" : null}
+            value={p.body}
+          />
+          <Payload
+            label={both(p.body, p.fallbackOutput) ? "Output" : null}
+            value={p.fallbackOutput}
+          />
         </>
       )}
       {p.kind === "fileEdit" && (
@@ -240,35 +299,56 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
           {(p.revealPath || p.path) && tool.statusKind === "success" && (
             <RevealFile path={p.revealPath || p.path!} />
           )}
-          <Payload label="output" value={p.fallbackOutput} />
+          <Payload value={p.fallbackOutput} />
         </>
       )}
       {p.kind === "agent" && (
         <>
           <Payload
-            label={p.action === "start" ? "assignment" : "message"}
+            label={
+              both(p.description, p.output)
+                ? p.action === "start"
+                  ? "Assignment"
+                  : "Message"
+                : null
+            }
             value={p.description}
           />
           {p.sessionId && <Meta items={[`session · ${p.sessionId}`]} />}
-          <Payload label="result" value={p.output} />
+          <Payload
+            label={both(p.description, p.output) ? "Result" : null}
+            value={p.output}
+          />
         </>
       )}
       {p.kind === "process" && (
         <>
-          <Payload label="arguments" value={p.description} />
-          <Payload label="result" value={p.output} />
+          <Payload
+            label={both(p.description, p.output) ? "Arguments" : null}
+            value={p.description}
+          />
+          <Payload
+            label={both(p.description, p.output) ? "Result" : null}
+            value={p.output}
+          />
         </>
       )}
       {p.kind === "mcp" && (
         <>
-          <Payload label="arguments" value={p.arguments} />
-          <Payload label="result" value={p.output} />
+          <Payload
+            label={both(p.arguments, p.output) ? "Arguments" : null}
+            value={p.arguments}
+          />
+          <Payload
+            label={both(p.arguments, p.output) ? "Result" : null}
+            value={p.output}
+          />
         </>
       )}
       {p.kind === "generic" && (
         <>
-          <Payload label="input" value={p.input} />
-          <Payload label="result" value={p.output} />
+          <Payload label={both(p.input, p.output) ? "Input" : null} value={p.input} />
+          <Payload label={both(p.input, p.output) ? "Result" : null} value={p.output} />
         </>
       )}
       {live && <LiveOutput subject={tool.itemKey} tail={live} />}

@@ -1624,6 +1624,91 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
     Ok(())
 }
 
+/// A session the node has not returned yet is a delivery state from the
+/// local request, its replicated claim and the pairing, never a read failure;
+/// the canonical row, once here, wins.
+#[tokio::test]
+async fn a_missing_session_row_reads_as_the_delivery_state_of_its_signals() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(tmp.path().to_path_buf()),
+            ClientCoreOptions::local_only(),
+        )
+        .await?,
+    );
+    let observer = core.observer.lock().await.take().expect("observer");
+    observer.shutdown().await;
+    let node = core.node_identity.did().to_owned();
+    let access = gents::ConfigAccess::local(core.node_arc());
+    let refresh_code = |session: &'static str| {
+        let core = Arc::clone(&core);
+        let node = node.clone();
+        async move {
+            let error = core
+                .refresh_local_request(&node, session, Some("req-awaiting"), None, &[])
+                .await
+                .expect_err("no canonical row yet");
+            let error = error
+                .downcast_ref::<crate::error::BridgeError>()
+                .cloned()
+                .expect("typed delivery state");
+            assert_eq!(error.endpoint.as_deref(), Some(node.as_str()));
+            error.code
+        }
+    };
+
+    assert_eq!(
+        refresh_code("awaiting").await,
+        crate::error::BridgeErrorCode::NotFound
+    );
+    let now = chrono::Utc::now().to_rfc3339();
+    let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+        "request_id":"req-awaiting","session_id":"awaiting","node_did":node,
+        "agent_id":"agent","purpose":"normal","content":"hello",
+        "lifecycle_state":"pending","created_at":now,
+    }))?;
+    access
+        .write(
+            "test.awaiting.request",
+            &format!("mutation {{ create_AgentRequest(input:{input}) {{_docID}} }}"),
+        )
+        .await?;
+    assert_eq!(
+        refresh_code("awaiting").await,
+        crate::error::BridgeErrorCode::SessionNotConnected,
+        "no pairing to the node is listed"
+    );
+    access
+        .write(
+            "test.awaiting.claim",
+            &format!(
+                "mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: \"req-awaiting\" }} }}, input: {{ claimed_at: \"{now}\" }}) {{ _docID }} }}"
+            ),
+        )
+        .await?;
+    assert_eq!(
+        refresh_code("awaiting").await,
+        crate::error::BridgeErrorCode::SessionAccepted
+    );
+    let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+        "session_id":"awaiting","node_did":node,"agent_id":"agent","created_at":now,
+    }))?;
+    access
+        .write(
+            "test.awaiting.session",
+            &format!("mutation {{ create_AgentSession(input:{input}) {{_docID}} }}"),
+        )
+        .await?;
+    core.refresh_node(&node).await?;
+    let visible = core
+        .refresh_local_request(&node, "awaiting", Some("req-awaiting"), None, &[])
+        .await?;
+    assert!(visible.is_some(), "the canonical row wins");
+    core.shutdown().await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Result<()> {
     let tmp = tempfile::tempdir()?;

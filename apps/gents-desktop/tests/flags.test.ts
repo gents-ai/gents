@@ -86,6 +86,9 @@ describe("flags read back from storage", () => {
     pinnedSessions: [],
     flags: {},
     navLayout: { order: [], shown: {} },
+    openOn: null,
+    hiddenNodes: [],
+    hiddenAgents: [],
   };
 
   it("takes the defaults from preferences saved before there were flags", () => {

@@ -58,6 +58,7 @@ pub fn workspace_write_sandbox_enforced() -> bool {
 }
 
 pub(super) fn artifact_policy_denial(message: impl Into<String>) -> ToolError {
+    crate::tools::native::command_observability::policy_denied();
     ToolError::reported_failure(FailureClass::PolicyDenied, message.into())
 }
 
@@ -152,9 +153,8 @@ pub(super) async fn prepare_command_launch(
         None
     };
     let workspace_root =
-        crate::plugin::approval::workspace::command_writable_root(source_root, policy).map_err(
-            |error| ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}")),
-        )?;
+        crate::plugin::approval::workspace::command_writable_root(source_root, policy)
+            .map_err(command_guard_error)?;
     let writable_root = artifact
         .as_ref()
         .map(|grant| grant.root())
@@ -206,6 +206,7 @@ pub(super) async fn prepare_command_launch(
 }
 
 pub(super) fn command_guard_error(error: anyhow::Error) -> ToolError {
+    crate::tools::native::command_observability::policy_denied();
     ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
 }
 

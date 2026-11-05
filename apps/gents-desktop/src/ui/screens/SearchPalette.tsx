@@ -24,6 +24,7 @@ import { Kbd } from "@gents/ui/components/kbd";
 import { cn } from "@gents/ui/lib/utils";
 import { navigate, type Route } from "@/lib/router";
 import { isLocalNode } from "@/lib/firstRun";
+import { shownNodes, useHidden } from "@/lib/hidden";
 import { switchToNode } from "@/app/NodeSwitcher";
 import { previousNode } from "../../hooks/activeNode";
 import { NodeAvatar } from "./AgentAvatar";
@@ -160,6 +161,7 @@ function useEntries(): SearchEntry[] {
   const sections = useAgentSections();
   const commands = useCommands();
   const automationsOn = useFlag("automations");
+  const hidden = useHidden();
   const fleet = useFleet(
     useShallow((s) => ({
       nodes: s.nodes,
@@ -185,18 +187,23 @@ function useEntries(): SearchEntry[] {
           (m) => m.status === "open" && m.kind !== "finished",
         ),
       ),
-      agents: nodes.flatMap((n) =>
-        n.agents.map((a) => ({
-          agentId: a.agentId,
-          nodeDid: n.nodeDid,
-          name: a.displayName ?? a.agentId,
-          node: nodeName(n.nodeDid),
-          pack: packOrigin(a.tags),
-        })),
-      ),
+      /* the hidden ones are left out, and so is a hidden node's agents */
+      agents: nodes
+        .filter((n) => !hidden.node(n.nodeDid))
+        .flatMap((n) =>
+          n.agents
+            .filter((a) => !hidden.agent(n.nodeDid, a.agentId))
+            .map((a) => ({
+              agentId: a.agentId,
+              nodeDid: n.nodeDid,
+              name: a.displayName ?? a.agentId,
+              node: nodeName(n.nodeDid),
+              pack: packOrigin(a.tags),
+            })),
+        ),
       /* the node in use, then the one used before it, then this machine's
-         and the remote ones, as the switcher has them */
-      nodes: [...nodes]
+         and the remote ones, as the switcher has them; hidden ones left out */
+      nodes: [...shownNodes(nodes, hidden, null)]
         .sort(
           (a, b) =>
             rank(a.nodeDid) - rank(b.nodeDid) ||
@@ -251,7 +258,7 @@ function useEntries(): SearchEntry[] {
           run: () => void c.run(0),
         })),
     });
-  }, [fleet, selected, sections, homeDid, commands, automationsOn]);
+  }, [fleet, selected, sections, homeDid, commands, automationsOn, hidden]);
 }
 
 function PaletteBody({

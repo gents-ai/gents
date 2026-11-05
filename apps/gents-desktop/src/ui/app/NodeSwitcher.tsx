@@ -21,6 +21,7 @@ import { currentRoute, navigate, reviewNavigation, type Route } from "@/lib/rout
 import { useAriaKeys, useKeysHint } from "@/commands/commands";
 import { Hint } from "@/screens/Hint";
 import { fleetNodes } from "@/lib/scope";
+import { shownNodes, useHidden } from "@/lib/hidden";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 import { NodeActivity } from "./NodeActivity";
 
@@ -70,7 +71,8 @@ export function NodeSwitcher({
   const aria = useAriaKeys("node.switch");
   const { actions } = useApp();
   const homeDid = useHomeDid();
-  const nodes = useFleet(useShallow(fleetNodes));
+  const hidden = useHidden();
+  const nodes = shownNodes(useFleet(useShallow(fleetNodes)), hidden, current);
   /* as the Nodes page has them: this machine's first, then the remote ones */
   const groups = [
     { label: "Local", nodes: nodes.filter((n) => isLocalNode(n, homeDid)) },
@@ -124,7 +126,10 @@ export function NodeSwitcher({
                   >
                     <span className="flex min-w-0 flex-1 items-center gap-2.5">
                       <span className="relative shrink-0">
-                        <NodeAvatar name={name} className="size-6" />
+                        <NodeAvatar
+                          name={name}
+                          className={cn("size-6", !node.dialSucceeded && "opacity-50")}
+                        />
                         <span
                           aria-hidden
                           className={cn(
@@ -137,7 +142,8 @@ export function NodeSwitcher({
                       {node.dialSucceeded ? (
                         <NodeActivity nodeDid={node.nodeDid} className="ml-auto" />
                       ) : (
-                        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                        // the item lights every child while highlighted; this stays quiet
+                        <span className="ml-auto shrink-0 text-xs text-muted-foreground!">
                           Offline
                         </span>
                       )}
