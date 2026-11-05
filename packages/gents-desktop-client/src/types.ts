@@ -20,6 +20,7 @@ export type {
   SessionProvenance,
   SessionFork,
   DeploymentView,
+  EndedAccessView,
   DesktopClientSnapshot,
   TriggerView,
   InferenceBackendView,

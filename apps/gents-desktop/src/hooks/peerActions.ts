@@ -100,7 +100,12 @@ export function createPeerActions({
     });
   }
 
+  function dismissEndedAccess(nodeDid: string) {
+    return mutateSnapshot(() => api.dismissEndedAccess(nodeDid));
+  }
+
   return {
+    dismissEndedAccess,
     fetchPeerStatus,
     requestStatusEnrollment,
     initLocalRuntime,

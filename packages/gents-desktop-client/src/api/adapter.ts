@@ -56,6 +56,8 @@ export function createDesktopApiAdapter(
         peerId,
         label,
       }),
+    dismissEndedAccess: (nodeDid) =>
+      invokeDesktop("desktop_ended_access_dismiss", { nodeDid }),
     fetchPeerStatus: (peerId) =>
       invokeDesktop("desktop_peer_status_fetch", {
         request: { peerId },

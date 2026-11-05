@@ -673,6 +673,32 @@ Denies the desktop_default_agent_set command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-ended-access-dismiss`
+
+</td>
+<td>
+
+Enables the desktop_ended_access_dismiss command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-ended-access-dismiss`
+
+</td>
+<td>
+
+Denies the desktop_ended_access_dismiss command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-event-source-delete`
 
 </td>

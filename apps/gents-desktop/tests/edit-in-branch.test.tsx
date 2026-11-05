@@ -66,7 +66,10 @@ function heldSession(over: Partial<DesktopSessionSnapshot> = {}) {
   } as unknown as DesktopSessionSnapshot;
 }
 
-function screenApp(forkSessionBeforeMessage: ReturnType<typeof vi.fn>) {
+function screenApp(
+  forkSessionBeforeMessage: ReturnType<typeof vi.fn>,
+  nodeOverrides: Record<string, unknown> = {},
+) {
   const reportFailure = vi.fn();
   const session = heldSession();
   const app = testApp({
@@ -78,7 +81,7 @@ function screenApp(forkSessionBeforeMessage: ReturnType<typeof vi.fn>) {
     },
     snapshot: {
       bootstrap: {},
-      client: { clientDid: CLIENT, deployments: [node()] },
+      client: { clientDid: CLIENT, deployments: [node(nodeOverrides)] },
     },
     session,
     reportFailure,
@@ -161,6 +164,12 @@ describe("edit an earlier message in a new branch", () => {
     expect(app.drafts.getState().drafts).toEqual({});
     expect(app.stores.selection.getState().sessionId).toBe("source");
     await waitFor(() => expect(branchButtons()[1]).toBeEnabled());
+  });
+
+  it("isn't offered on a node this app joined, whose runtime it can't write through", () => {
+    screenApp(vi.fn(), { source: "enrollment", operatorAccess: false });
+    expect(screen.getByText("second ask")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Fork" })).toBeNull();
   });
 
   it("is offered only on sent messages, not on ones still waiting", () => {
