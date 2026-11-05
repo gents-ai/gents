@@ -212,14 +212,16 @@ export function useQuery<T = unknown>(
   const refresh = useCallback(() => setTick((n) => n + 1), []);
 
   useEffect(() => {
-    return ctx.onEvent("shell-changed", () => {
+    const updateNode = () => {
       const next = currentNode();
       if (observedNode.current !== next) {
         observedNode.current = next;
         generation.current++;
         setNode(next);
       }
-    });
+    };
+    updateNode();
+    return ctx.onEvent("shell-changed", updateNode);
   }, [ctx]);
 
   useEffect(() => {
@@ -260,6 +262,11 @@ export function useQuery<T = unknown>(
     let disposed = false;
     let failed = false;
     let stop: (() => void) | undefined;
+    const cancelWatch = () => {
+      const cancel = stop;
+      stop = undefined;
+      cancel?.();
+    };
     Promise.resolve()
       .then(() =>
         ctx.data.watch(surface, tool, JSON.parse(argsKey), (event) => {
@@ -268,7 +275,7 @@ export function useQuery<T = unknown>(
           else {
             failed = true;
             setWatching(false);
-            stop?.();
+            cancelWatch();
           }
         }),
       )
@@ -284,7 +291,7 @@ export function useQuery<T = unknown>(
       });
     return () => {
       disposed = true;
-      stop?.();
+      cancelWatch();
     };
   }, [ctx, surface, tool, argsKey, enabled, live, node, refresh]);
 

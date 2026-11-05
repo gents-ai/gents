@@ -202,6 +202,7 @@ describe("useQuery live observation", () => {
     act(() => t.events.get("client-updated")?.());
     await waitFor(() => expect(hook.result.current.data?.count).toBe(5));
     hook.unmount();
+    expect(t.watches[0]!.stop).toHaveBeenCalledOnce();
   });
 });
 
