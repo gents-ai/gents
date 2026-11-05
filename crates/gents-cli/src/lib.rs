@@ -315,7 +315,7 @@ Examples:
   gents config validate --root infra/agents/default --home /path/to/home --bind-node-did home
   gents config diff --root infra/agents/default --home /path/to/home
   gents config apply --root infra/agents/default --home /path/to/home --bind-node-did home
-  gents config backend set --graphql URL --backend-id <backend-id> --name <name> --backend-preset openrouter --max-concurrent 2
+  gents config backend set --graphql URL --file backend.json
   gents config backend discover-models --backend-preset openrouter
   gents config agent set --graphql URL --node-did <NODE_DID> --context-id <context-id> --inference-profile-id <profile-id>
   gents config tools set --graphql URL --file tools.json";
@@ -799,9 +799,10 @@ fn remove_tree_except(dir: &Path, keep: &Path) -> Result<()> {
 
 pub(crate) fn server_start_failure_hint(home_dir: &Path) -> String {
     format!(
-        "Next:\n  1. For the default local backend, run `llama-server -hf {DEFAULT_INIT_MODEL_NAME}` and make sure it is listening on {DEFAULT_INIT_ENDPOINT}\n  2. Point the backend elsewhere with `gents config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id <ID> --name <NAME> --endpoint <URL> --max-concurrent 2`\n  3. Inspect the initialized home at {}\n  4. If persisted runtime state is stale, run `gents reset --home {}`",
+        "Next:\n  1. For the default local backend, run `llama-server -hf {DEFAULT_INIT_MODEL_NAME}` and make sure it is listening on {DEFAULT_INIT_ENDPOINT}\n  2. Point the backend elsewhere: save the output of `gents config backend show <ID> --home {home}` without its `_docID`, edit `endpoint`, and load it with `gents config backend set --file <backend.json> --home {home}` (`gents config backend list --home {home}` names the backend)\n  3. Inspect the initialized home at {}\n  4. If persisted runtime state is stale, run `gents reset --home {}`",
         init_config_path(home_dir).display(),
-        home_dir.display()
+        home_dir.display(),
+        home = shell_word(home_dir),
     )
 }
 

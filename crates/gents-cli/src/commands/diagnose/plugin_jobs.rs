@@ -278,7 +278,7 @@ fn inference_rows(
                     backend.backend_id, block.max_live
                 ),
                 format!(
-                    "gents config backend set --backend-id {} --max-concurrent {}",
+                    "save the output of `gents config backend show {}` without its `_docID`, set `max_concurrent` to {}, and load it with `gents config backend set --file <backend.json>`",
                     backend.backend_id, block.max_live
                 ),
             ));
@@ -620,7 +620,11 @@ mod tests {
         let next_call = report["agents"][0]["checks"][0]["next_call"]
             .as_str()
             .unwrap();
-        assert!(next_call.ends_with("--max-concurrent 2"), "{next_call}");
+        assert!(next_call.contains("`max_concurrent` to 2"), "{next_call}");
+        assert!(
+            next_call.contains("gents config backend set --file"),
+            "{next_call}"
+        );
     }
 
     #[test]
