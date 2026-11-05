@@ -66,6 +66,7 @@ function OpenInWindow({ pluginId }: { pluginId: string }) {
         <Button
           size="icon-sm"
           variant="ghost"
+          className="text-muted-foreground hover:text-foreground"
           aria-label="Open in new window"
           data-testid="plugin-page-window"
           onClick={() =>
