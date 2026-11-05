@@ -1,4 +1,4 @@
-type EventSource @branchable @index(fields: ["node_did", "event_source_id"], unique: true) {
+type EventSource @index(fields: ["node_did", "event_source_id"], unique: true) {
     event_source_id: String
     node_did: String @index
     display_name: String

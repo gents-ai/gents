@@ -1,4 +1,5 @@
 import Proofs.ConfigDefaults
+import Proofs.Configuration.PackIdentity
 import Mathlib.Data.Rat.Defs
 
 /-!
@@ -181,7 +182,7 @@ structure Backend where
   deriving DecidableEq, Repr
 
 structure Task where
-  agentId : String
+  agentDid : String
   enabled : Bool
   deriving DecidableEq, Repr
 
@@ -242,9 +243,9 @@ def resolveContext (reg : Registry) (scope : String) : Option String → Except 
       | some key => reg.contexts scope key = some ⟨scope, context⟩ := by
   cases id <;> simp [resolveContext, eq_comm]
 
-def resolveAgent (reg : Registry) (scope agentId : String) :
+def resolveAgent (reg : Registry) (scope agentDid : String) :
     Except ResolveError ResolvedSessionConfig := do
-  let agent ← lookupOwned reg.agents scope agentId .missingAgent .foreignAgent
+  let agent ← lookupOwned reg.agents scope agentDid .missingAgent .foreignAgent
   if !agent.enabled then .error .disabledAgent else do
     let context ← resolveContext reg scope agent.contextId
     let inference ← lookupOwned reg.profiles scope agent.profileId .missingProfile .foreignProfile
@@ -258,12 +259,12 @@ def resolveTask (reg : Registry) (scope taskId : String) :
     Except ResolveError ResolvedSessionConfig := do
   let task ← lookupOwned reg.tasks scope taskId .missingTask .foreignTask
   if !task.enabled then .error .disabledTask
-  else resolveAgent reg scope task.agentId
+  else resolveAgent reg scope task.agentDid
 
-theorem resolveAgent_ok_iff (reg : Registry) (scope agentId : String)
+theorem resolveAgent_ok_iff (reg : Registry) (scope agentDid : String)
     (session : ResolvedSessionConfig) :
-    resolveAgent reg scope agentId = .ok session ↔
-      ∃ agent backend, reg.agents scope agentId = some ⟨scope, agent⟩ ∧
+    resolveAgent reg scope agentDid = .ok session ↔
+      ∃ agent backend, reg.agents scope agentDid = some ⟨scope, agent⟩ ∧
         agent.enabled = true ∧
         resolveContext reg scope agent.contextId = .ok session.context ∧
         reg.profiles scope agent.profileId = some ⟨scope, session.inference⟩ ∧
@@ -278,7 +279,7 @@ theorem resolveTask_ok_iff (reg : Registry) (scope taskId : String)
     (session : ResolvedSessionConfig) :
     resolveTask reg scope taskId = .ok session ↔
       ∃ task, reg.tasks scope taskId = some ⟨scope, task⟩ ∧ task.enabled = true ∧
-        resolveAgent reg scope task.agentId = .ok session := by
+        resolveAgent reg scope task.agentDid = .ok session := by
   simp [resolveTask, bind, resolution_bind_ok_iff, ite_eq_iff]
 
 /-- Omission removes capabilities rather than inheriting another agent's
@@ -294,7 +295,7 @@ theorem omitted_agent_context_is_empty (reg : Registry) (scope id : String)
 
 theorem resolveTask_owned_delegates (reg : Registry) (scope id : String) (task : Task)
     (ht : reg.tasks scope id = some ⟨scope, task⟩) (he : task.enabled = true) :
-    resolveTask reg scope id = resolveAgent reg scope task.agentId := by
+    resolveTask reg scope id = resolveAgent reg scope task.agentDid := by
   simp [resolveTask, lookupOwned, ht, he, bind, Except.bind]
 
 theorem resolveTask_missing_rejected (reg : Registry) (scope id : String)
@@ -316,7 +317,7 @@ theorem disabled_agent_rejected (reg : Registry) (scope id : String) (agent : Ag
     resolveAgent reg scope id = .error .disabledAgent := by
   simp [resolveAgent, lookupOwned, hb, he, bind, Except.bind]
 
-/-- A node's `default_agent_id` selects the agent for requests that
+/-- A node's `default_agent_did` selects the agent for requests that
 name none, so a default must be an owned, enabled agent. A disabled default
 would leave every such request to fail with `disabledAgent`; publication
 (`ConfigReferences`) rejects the candidate instead, whichever write disables the

@@ -74,7 +74,7 @@ pub(in crate::commands::codex_shim) fn codex_thread_json_with_turns(
                         "parent_thread_id": link.parent_session_id,
                         "depth": link.depth,
                         "agent_nickname": link.nickname,
-                        "agent_role": link.agent_id
+                        "agent_role": link.agent_did
                     }
                 }
             }),
@@ -89,7 +89,7 @@ pub(in crate::commands::codex_shim) fn codex_thread_json_with_turns(
         );
         object.insert(
             "agentRole".to_string(),
-            Value::String(link.agent_id.clone()),
+            Value::String(link.agent_did.clone()),
         );
     }
     thread

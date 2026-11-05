@@ -47,7 +47,7 @@ pub(crate) fn for_request(
     home: Option<&Path>,
     node_did: &str,
     requester_did: Option<&str>,
-    agent_id: &str,
+    agent_did: &str,
     workspace: Option<&Path>,
 ) -> Result<Option<Context>> {
     let (Some(home), Some(requester), Some(workspace)) = (home, requester_did, workspace) else {
@@ -56,7 +56,7 @@ pub(crate) fn for_request(
     let home = home.canonicalize().context("resolving the approval home")?;
     Ok(Some(Context {
         home,
-        workspace: WorkspaceKey::canonical(node_did, requester, agent_id, workspace)?,
+        workspace: WorkspaceKey::canonical(node_did, requester, agent_did, workspace)?,
         review_history: Arc::default(),
         review_gate: Arc::default(),
         reviewer: None,

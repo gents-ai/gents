@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tokio_util::sync::CancellationToken;
 
@@ -391,7 +391,7 @@ impl BackendAdmissionController {
             profile_id: pending.profile_id,
             call_seq: pending.call_seq,
             backend_id: pending.backend_id,
-            agent_id: pending.agent_id,
+            agent_did: pending.agent_did,
             node_did: pending.node_did,
             call_kind: pending.call_kind,
             attempt: pending.attempt,
@@ -505,7 +505,7 @@ pub(super) struct PendingCallMetadata {
     pub(super) profile_id: Option<String>,
     pub(super) call_seq: u64,
     pub(super) backend_id: String,
-    pub(super) agent_id: String,
+    pub(super) agent_did: String,
     pub(super) node_did: String,
     pub(super) call_kind: CallKind,
     pub(super) attempt: i64,
@@ -522,7 +522,7 @@ pub(super) struct InferenceCallRecord {
     pub(super) profile_id: Option<String>,
     pub(super) call_seq: u64,
     pub(super) backend_id: String,
-    pub(super) agent_id: String,
+    pub(super) agent_did: String,
     pub(super) node_did: String,
     pub(super) call_kind: CallKind,
     pub(super) attempt: i64,
@@ -543,7 +543,7 @@ impl InferenceCallRecord {
             profile_id: pending.profile_id,
             call_seq: pending.call_seq,
             backend_id: pending.backend_id,
-            agent_id: pending.agent_id,
+            agent_did: pending.agent_did,
             node_did: pending.node_did,
             call_kind: pending.call_kind,
             attempt: pending.attempt,

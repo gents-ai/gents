@@ -1,10 +1,7 @@
 use super::{fake_llm, support::Attachment, ChatAction};
 use anyhow::{ensure, Context, Result};
 use gents::{store::graphql::escape_graphql_string, ConfigAccess, NodeIdentity};
-use gents_protocol::{
-    goal_control::{SessionGoalControl, SessionGoalControlReceipt},
-    row::AgentRequestRow,
-};
+use gents_protocol::{goal_control::SessionGoalControl, row::AgentRequestRow};
 use serde_json::{json, Value};
 use std::{
     path::Path,
@@ -178,7 +175,9 @@ pub async fn verify(
     let session_literal = escape_graphql_string(session);
     let query = format!(
         r#"{{
-        AgentSessionGoalControl(filter:{{node_did:{{_eq:"{node_literal}"}},session_id:{{_eq:"{session_literal}"}}}}){{intent_json receipt_json}}
+        AgentSessionGoalControl(filter:{{node_did:{{_eq:"{node_literal}"}},session_id:{{_eq:"{session_literal}"}}}}){{_docID intent_json}}
+        AgentSessionGoalReceipt{{command_doc_id command_id receipt_json}}
+        AgentSession(filter:{{node_did:{{_eq:"{node_literal}"}},session_id:{{_eq:"{session_literal}"}}}}){{_docID agent_did}}
         AgentRequest(filter:{{node_did:{{_eq:"{node_literal}"}},session_id:{{_eq:"{session_literal}"}},purpose:{{_eq:"normal"}}}}){{{}}}
         Goal(filter:{{node_did:{{_eq:"{node_literal}"}},session_id:{{_eq:"{session_literal}"}}}}){{{}}}
     }}"#,
@@ -193,13 +192,22 @@ pub async fn verify(
         controls.len() == 3,
         "opening, pause and explicit resume must each publish once: {value}"
     );
+    let sessions = value["data"]["AgentSession"]
+        .as_array()
+        .context("Goal sessions")?;
+    ensure!(sessions.len() == 1, "Goal session was not unique");
+    let selected_agent = sessions[0]["agent_did"]
+        .as_str()
+        .context("Goal session agent")?;
     let mut initial_request = None;
     for row in controls {
         let signed: SessionGoalControl =
             serde_json::from_str(row["intent_json"].as_str().context("signed command")?)?;
-        let receipt: SessionGoalControlReceipt =
-            serde_json::from_str(row["receipt_json"].as_str().context("signed outcome")?)?;
-        receipt.validate_for(&signed)?;
+        let receipt = super::goal_delivery::receipt_for(&value, row, &signed)?;
+        ensure!(
+            signed.agent_did == selected_agent,
+            "Goal command selected another agent"
+        );
         ensure!(
             identity
                 .verify(author, &signed.signing_payload()?, &signed.signature)
@@ -207,7 +215,11 @@ pub async fn verify(
         );
         ensure!(
             identity
-                .verify(node, &receipt.signing_payload()?, &receipt.signature)
+                .verify(
+                    &signed.agent_did,
+                    &receipt.signing_payload()?,
+                    &receipt.signature
+                )
                 .await?
         );
         if signed.command_id == opening["commandId"] {

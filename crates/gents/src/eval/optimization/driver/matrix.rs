@@ -13,9 +13,9 @@ use tokio_util::sync::CancellationToken;
 
 use self::doubles::CancellingProposer;
 use self::fixtures::{
-    base_executor, behavior, budgets, context, definition, fail, policy, repeating_proposer,
-    script, tools, BASELINE_PROMPT, CANDIDATE_PROMPT, DEFINITION, FEEDBACK_DEFINITION,
-    SMALL_DEFINITION, TRIALS_PER_CASE, VALIDATION_CASES,
+    base_executor, budgets, context, definition, fail, policy, repeating_proposer, script, tools,
+    BASELINE_PROMPT, CANDIDATE_PROMPT, DEFINITION, FEEDBACK_DEFINITION, SMALL_DEFINITION,
+    TRIALS_PER_CASE, VALIDATION_CASES,
 };
 use self::journal::runs_started;
 use crate::documents::EvalSplit;
@@ -33,6 +33,7 @@ pub(crate) struct Harness {
     launching: Launching,
     jobs_dir: PathBuf,
     pack: PathBuf,
+    binding: gents_protocol::agent_identity::AgentIdentityBinding,
 }
 
 impl Harness {
@@ -59,10 +60,38 @@ impl Harness {
                 ),
                 tools(),
                 context(BASELINE_PROMPT),
-                behavior("Monitor"),
             ])
             .await;
         let pack = launching.pack("subject", "Off");
+        let binding = launching.provision_agent();
+        let authored = crate::eval::runner::freeze::pack::load_pack(
+            &crate::eval::runner::CellSource::Directory(pack.clone()),
+            OWNER,
+        )
+        .unwrap();
+        let mut config = authored.config;
+        let mut agent = authored.authored.agent("monitor").unwrap().clone();
+        let fields = agent.as_object_mut().unwrap();
+        fields.remove("agent_slot");
+        fields.insert("agent_did".into(), json!(binding.agent_did));
+        fields.insert("creation_nonce".into(), json!(binding.creation_nonce));
+        fields.insert("node_did".into(), json!(OWNER));
+        fields.insert("inference_profile_id".into(), json!("local"));
+        config.agents.push(serde_json::from_value(agent).unwrap());
+        let mut identity =
+            crate::pack::PackIdentity::new(&authored.manifest, authored.digest, Vec::new());
+        identity
+            .agent_bindings
+            .insert("monitor".into(), binding.clone());
+        crate::pack::install_pack_documents(
+            &launching.access,
+            OWNER,
+            &identity,
+            &config,
+            crate::pack::DriftPolicy::Overwrite,
+        )
+        .await
+        .unwrap();
         let jobs_dir = launching
             .runs_dir()
             .parent()
@@ -72,6 +101,7 @@ impl Harness {
             launching,
             jobs_dir,
             pack,
+            binding,
         }
     }
 
@@ -79,7 +109,18 @@ impl Harness {
         &self.launching.access
     }
 
-    pub(crate) async fn install(&self, documents: Vec<(Collection, Value)>) {
+    pub(crate) async fn install(&self, mut documents: Vec<(Collection, Value)>) {
+        for (collection, value) in &mut documents {
+            if *collection == Collection::Agent {
+                let fields = value.as_object_mut().unwrap();
+                assert_eq!(fields.remove("agent_slot"), Some(json!("monitor")));
+                fields.insert("agent_did".into(), json!(self.binding.agent_did));
+                fields.insert("creation_nonce".into(), json!(self.binding.creation_nonce));
+            }
+            if value.get("agent_did").and_then(Value::as_str) == Some("gents:agent-slot:monitor") {
+                value["agent_did"] = json!(self.binding.agent_did);
+            }
+        }
         self.launching.install(documents).await;
     }
 
@@ -97,7 +138,7 @@ impl Harness {
             job_id: job_id.into(),
             owner: OWNER.into(),
             evaluator_did: self.launching.evaluator_did(),
-            agent_id: "monitor".into(),
+            agent_slot: "monitor".into(),
             target: JobTarget::Context,
             definition_id: definition_id.into(),
             inference_profile_id: "local".into(),
@@ -232,7 +273,7 @@ async fn task_harness() -> (Harness, PathBuf) {
                 json!({
                     "task_id": "plan",
                     "node_did": OWNER,
-                    "agent_id": "monitor",
+                    "agent_did": "gents:agent-slot:monitor",
                     "prompt_template": FIXTURE_TEMPLATE,
                 }),
             ),

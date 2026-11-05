@@ -48,6 +48,7 @@ async fn question_wait_requires_the_authenticated_current_goal_assignment() {
     let observed = SessionGoalObservation {
         version: 1,
         node_did: did.into(),
+        agent_did: did.into(),
         session_id: "chat".into(),
         session_doc_id: "session-document".into(),
         requester_did: Some(did.into()),
@@ -69,7 +70,7 @@ async fn question_wait_requires_the_authenticated_current_goal_assignment() {
     };
     let item: MailboxItemRow = serde_json::from_value(json!({
         "_docID":"question", "item_key":"question", "requester_did":did, "node_did":did,
-        "target_node_did":did, "target_agent_id":"agent", "session_id":"chat", "request_id":"request",
+        "target_node_did":did, "target_agent_did":"agent", "session_id":"chat", "request_id":"request",
         "status":"open", "kind":"ask", "action":"start_request", "title":"Next step",
         "payload":json!({"version":2,"prompt":"Next step?","options":[],"allow_free_text":true}).to_string(),
         "source_kind":"agent", "source_id":"question-source", "created_at":now.to_rfc3339(),

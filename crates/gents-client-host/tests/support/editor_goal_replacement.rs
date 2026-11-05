@@ -2,9 +2,7 @@ use super::{fake_llm, ChatAction};
 use anyhow::{ensure, Context, Result};
 use gents::{store::graphql::escape_graphql_string, ConfigAccess, NodeIdentity};
 use gents_protocol::{
-    goal_control::{
-        GoalControlOutcome, GoalOperation, SessionGoalControl, SessionGoalControlReceipt,
-    },
+    goal_control::{GoalControlOutcome, GoalOperation, SessionGoalControl},
     request_input::{CapturedContextKind, CapturedContextSource},
     request_lifecycle::RequestLifecycleState,
     row::AgentRequestRow,
@@ -172,8 +170,9 @@ pub async fn verify(
         AgentRequest(filter: {{{scope}, purpose: {{_eq: "normal"}}}}) {{{} interrupt_requested_at}}
         Goal(filter: {{{scope}}}, showDeleted: true) {{{}}}
         GoalCreationClaim(filter: {{{scope}}}) {{_docID goal_id objective token_budget}}
-        AgentSessionGoalControl(filter: {{{scope}}}) {{_docID intent_json receipt_json}}
-        AgentSession(filter: {{{scope}}}) {{_docID session_id node_did requester_did}}
+        AgentSessionGoalControl(filter: {{{scope}}}) {{_docID intent_json}}
+        AgentSessionGoalReceipt {{command_doc_id command_id receipt_json}}
+        AgentSession(filter: {{{scope}}}) {{_docID session_id node_did requester_did agent_did}}
     }}"#,
         gents::SIGNED_REQUEST_FIELDS,
         gents::goal::GOAL_FIELDS
@@ -582,6 +581,13 @@ async fn verify_controls(
     author: &str,
     identity: &dyn NodeIdentity,
 ) -> Result<Value> {
+    let sessions = value["data"]["AgentSession"]
+        .as_array()
+        .context("Goal sessions")?;
+    ensure!(sessions.len() == 1, "Goal session was not unique");
+    let selected_agent = sessions[0]["agent_did"]
+        .as_str()
+        .context("Goal session agent")?;
     let mut applied_starts = BTreeSet::new();
     let mut stops = BTreeSet::new();
     let mut busy = 0;
@@ -592,18 +598,14 @@ async fn verify_controls(
     {
         let command: SessionGoalControl =
             serde_json::from_str(row["intent_json"].as_str().context("signed Goal intent")?)?;
-        let receipt: SessionGoalControlReceipt = serde_json::from_str(
-            row["receipt_json"]
-                .as_str()
-                .context("signed Goal receipt")?,
-        )?;
+        let receipt = super::goal_delivery::receipt_for(value, row, &command)?;
         command.validate_shape()?;
-        receipt.validate_for(&command)?;
         ensure!(
             command.node_did == node
                 && command.session_id == session
                 && command.session_doc_id.as_deref() == Some(session_doc)
-                && command.requester_did == author,
+                && command.requester_did == author
+                && command.agent_did == selected_agent,
             "Goal control crossed the original AgentSession"
         );
         ensure!(
@@ -611,7 +613,11 @@ async fn verify_controls(
                 .verify(author, &command.signing_payload()?, &command.signature)
                 .await?
                 && identity
-                    .verify(node, &receipt.signing_payload()?, &receipt.signature)
+                    .verify(
+                        &command.agent_did,
+                        &receipt.signing_payload()?,
+                        &receipt.signature
+                    )
                     .await?,
             "Goal control or receipt signature was invalid"
         );

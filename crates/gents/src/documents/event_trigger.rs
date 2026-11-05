@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
 use crate::store::graphql::escape_graphql_string;

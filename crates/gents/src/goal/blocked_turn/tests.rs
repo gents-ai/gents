@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use chrono::{Duration, TimeZone};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_loop::provider_limit::{persisted_failure_reason, ProviderLimitHeaders};
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -45,15 +45,15 @@ fn profile(profile_id: &str, backend_id: &str) -> (Collection, Value) {
     )
 }
 
-fn behavior(agent_id: &str, profile: &str, compaction: Option<&str>) -> Vec<(Collection, Value)> {
+fn behavior(agent_did: &str, profile: &str, compaction: Option<&str>) -> Vec<(Collection, Value)> {
     let Some(compaction) = compaction else {
         return vec![(
             Collection::Agent,
-            json!({"node_did": DID, "agent_id": agent_id, "inference_profile_id": profile}),
+            json!({"node_did": DID, "agent_did": agent_did, "inference_profile_id": profile}),
         )];
     };
-    let context = format!("context-{agent_id}");
-    let compaction_id = format!("compaction-{agent_id}");
+    let context = format!("context-{agent_did}");
+    let compaction_id = format!("compaction-{agent_did}");
     vec![
         (
             Collection::Compaction,
@@ -65,7 +65,7 @@ fn behavior(agent_id: &str, profile: &str, compaction: Option<&str>) -> Vec<(Col
         ),
         (
             Collection::Agent,
-            json!({"node_did": DID, "agent_id": agent_id, "context_id": context, "inference_profile_id": profile}),
+            json!({"node_did": DID, "agent_did": agent_did, "context_id": context, "inference_profile_id": profile}),
         ),
     ]
 }
@@ -109,7 +109,7 @@ fn failed_request(failure_reason: &str) -> AgentRequestRow {
     AgentRequestRow {
         request_id: "request-1".into(),
         node_did: Some(DID.into()),
-        agent_id: Some("x".into()),
+        agent_did: Some("x".into()),
         lifecycle_state: Some(RequestLifecycleState::Failed),
         failure_reason: Some(failure_reason.into()),
         ..Default::default()
@@ -120,7 +120,7 @@ fn call(backend_id: &str, call_kind: &str, failure_reason: String) -> FailedCall
     let at = (now() - Duration::minutes(5)).to_rfc3339();
     FailedCall {
         backend_id: Some(backend_id.into()),
-        agent_id: Some("x".into()),
+        agent_did: Some("x".into()),
         call_kind: Some(call_kind.into()),
         failure_reason: Some(failure_reason),
         queued_at: Some(at.clone()),
@@ -273,7 +273,7 @@ fn agents_on_profile_counts_direct_and_compaction_users() {
     documents.extend(behavior("z", "summ", Some("main")));
     documents.push((
         Collection::Agent,
-        json!({"node_did": DID, "agent_id": "pack-w", "inference_profile_id": "main"}),
+        json!({"node_did": DID, "agent_did": "pack-w", "inference_profile_id": "main"}),
     ));
     let references = references(documents);
     assert_eq!(
@@ -523,13 +523,13 @@ async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
                 r#"mutation {{
                     create_AgentRequest(input: {{
                         request_id: "request-1" purpose: "normal" node_did: "{DID}"
-                        agent_id: "x" session_id: "session-1" content: "run"
+                        agent_did: "x" session_id: "session-1" content: "run"
                         lifecycle_state: "failed" failure_reason: "{request_failure}"
                         created_at: "{at}"
                     }}) {{ _docID }}
                     create_InferenceCall(input: {{
                         call_id: "call-1" request_id: "request-1" call_seq: 1
-                        backend_id: "{b_backend}" agent_id: "x" node_did: "{DID}"
+                        backend_id: "{b_backend}" agent_did: "x" node_did: "{DID}"
                         call_kind: "inference" attempt: 1 call_state: "failed"
                         failure_reason: "{request_failure}"
                         queued_at: "{at}" started_at: "{at}" ended_at: "{at}"
@@ -571,5 +571,5 @@ async fn wrappers_read_the_stored_turn() {
         Some(turn)
     );
     assert!(blocked_turn(&access, DID, "request-unknown").await.is_err());
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

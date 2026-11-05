@@ -594,7 +594,7 @@ async fn insert_inference_call(node: &EmbeddedNode, request_id: &str, call_state
                 request_id: "{request_id}",
                 call_seq: 1,
                 backend_id: "{BACKEND_ID}",
-                agent_id: "{AGENT_NAME}",
+                agent_did: "{AGENT_NAME}",
                 node_did: "{NODE_DID}",
                 call_kind: "inference",
                 attempt: 1,
@@ -671,7 +671,7 @@ async fn fetch_inference_recovery_row(
 }
 
 async fn own_child_fixture(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     doc_id: &str,
     request_id: &str,

@@ -1,7 +1,7 @@
 pub mod migration;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 #[cfg(feature = "agent-memory")]
 pub use gents_protocol::schemas::NODE_MEMORY as NODE_MEMORY_SCHEMA;

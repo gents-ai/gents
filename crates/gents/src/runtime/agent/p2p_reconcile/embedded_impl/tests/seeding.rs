@@ -16,7 +16,7 @@ async fn seed_agent_request_for_session(
     let node_did = "did:key:host";
     let requester_did_field = crate::session::requester_did_create_field(requester_did);
     let session_id = escape_graphql_string(session_id);
-    let agent_id = escape_graphql_string(&format!("{node_did}:default"));
+    let agent_did = escape_graphql_string(&format!("{node_did}:default"));
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -24,7 +24,7 @@ async fn seed_agent_request_for_session(
                 purpose: "normal",
                 node_did: "{node_did}",
                 {requester_did_field}
-                agent_id: "{agent_id}",
+                agent_did: "{agent_did}",
                 session_id: "{session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{request_id}",
@@ -81,15 +81,15 @@ pub(super) async fn seed_agent_target_return_artifacts(
     let request_id = format!("return-{suffix}-response");
     let session_id = format!("return-{suffix}-session");
     let node_did = "did:key:host";
-    let agent_id = "did:key:host:default";
+    let agent_did = "did:key:host:default";
 
     seed_agent_request_for_session(node, &request_id, &session_id, requester_did).await;
 
-    crate::session::ensure_session_with_agent_id_and_requester_did(
+    crate::session::ensure_session_with_agent_did_and_requester_did(
         node,
         &session_id,
         node_did,
-        agent_id,
+        agent_did,
         requester_did,
     )
     .await

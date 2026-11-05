@@ -6,7 +6,7 @@ use crate::request::lifecycle::materialize::{
 use crate::request::lifecycle::{TriggerLineage, WorkspaceLineage};
 
 pub(super) struct SessionRequestFields<'a> {
-    pub(super) agent_id: &'a str,
+    pub(super) agent_did: &'a str,
     pub(super) content: &'a str,
     pub(super) execution_origin: ExecutionOrigin,
     pub(super) input: RequestInput,
@@ -29,7 +29,7 @@ pub(super) async fn session_request_create_mutation_at_hop(
     fields: SessionRequestFields<'_>,
 ) -> Result<String> {
     let SessionRequestFields {
-        agent_id,
+        agent_did,
         content,
         execution_origin,
         input,
@@ -43,14 +43,14 @@ pub(super) async fn session_request_create_mutation_at_hop(
     );
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
-            &parent.node_did,
+            agent_did,
             &parent.request_id,
         );
     let identity = RequestIdentity {
         requester_did: parent.requester_did.clone(),
         request_id: request_id.to_string(),
         node_did: parent.node_did.clone(),
-        agent_id: agent_id.to_string(),
+        agent_did: agent_did.to_string(),
         session_id: parent.session_id.clone(),
         content: content.to_string(),
         execution_origin,

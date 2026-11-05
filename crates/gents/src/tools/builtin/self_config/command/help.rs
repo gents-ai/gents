@@ -215,7 +215,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "task" | "trigger" | "schedule" | "event-source" => Page {
             what: match resource { "task" => "work performed by an agent.", "trigger" => "routes an event source or schedule to a task.", "schedule" => "a timer that starts work.", _ => "watches collection changes and starts work." },
             commands: &[], notes: match resource {
-                "task" => "Create uses options.agent (default: you); agent_id is protected. Updates resolve the saved owner; agent_id cannot be changed. To run a different agent, create a separate Task and Trigger. A before hook may set skip_exit_codes to nonzero codes from 1 to 255; a match skips agent execution, runs cleanup, and completes the request if cleanup succeeds. A reply can finish a task; writing another input fires the workflow again. For stored outputs and completion records see help automation.",
+                "task" => "Create uses options.agent (default: you); agent_did is protected. Updates resolve the saved owner; agent_did cannot be changed. To run a different agent, create a separate Task and Trigger. A before hook may set skip_exit_codes to nonzero codes from 1 to 255; a match skips agent execution, runs cleanup, and completes the request if cleanup succeeds. A reply can finish a task; writing another input fires the workflow again. For stored outputs and completion records see help automation.",
                 "trigger" => "Create the source and Task first. The Task determines who handles the event. Updating a Trigger cannot change its Task’s agent; create a separate Trigger for another owner. concurrency controls overlap; session_id_template controls the destination independently. An existing destination session must use the Task’s agent. To continue a known session, set its ID as session_id_template. Omit it for a new session per fire. See help automation for the full workflow.",
                 _ => "A source alone starts no work: create a Task, then a Trigger linking it to this source. See help automation for the full workflow.",
             }, next: "get the saved document and verify its references.",
@@ -264,7 +264,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "agent-target" => Page {
             what: "a named route to an agent for agent_new (tools grant). TARGET_ID goes in target_id or argv.",
             commands: &["agent-target list", "agent-target get TARGET_ID", "agent-target [preview] create|edit TARGET_ID  set: target fields"],
-            notes: "Choose an existing agent or create a helper. A new session does not require cloning the role. name is passed to agent_new; agent_id selects the helper. Omit target_node_did on create for a local helper; set it explicitly for a remote node. Updates preserve the destination when omitted. Local slugs resolve; never copy a DID from another document ID. Dispatch acceptance does not prove the helper started or replied.",
+            notes: "Choose an existing agent or create a helper. A new session does not require cloning the role. name is passed to agent_new; agent_did selects the helper. Omit target_node_did on create for a local helper; set it explicitly for a remote node. Updates preserve the destination when omitted. Local slugs resolve; never copy a DID from another document ID. Dispatch acceptance does not prove the helper started or replied.",
             next: "read tools get, then tools update: preserve set.agents, set enabled true and add this ID to target_ids. Selecting targets alone leaves delegation disabled. Use options.agent to grant another caller; tools apply next request.",
         },
         "execution" => Page {
@@ -277,15 +277,15 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             what: "an agent role. create bundles its Context and Tools; a profile supplies inference settings. get without an ID inspects your current role.",
             commands: &[
                 "agent list  options: limit, cursor",
-                "agent get [AGENT_ID]",
+                "agent get [AGENT_DID]",
                 "agent [preview] create  options: display-name, system-prompt, preset (readonly|write), profile; readonly permits shell commands; to forbid shell set host.bash.mode Off; optional description, root; argv switch --default",
                 "agent [preview] clone  options: from, display-name; optional profile, system-prompt, root, preset",
                 "agent [preview] disable  options.id",
-                "agent [preview] default AGENT_ID",
-                "agent [preview] edit AGENT_ID  set/clear: agent fields",
+                "agent [preview] default AGENT_DID",
+                "agent [preview] edit AGENT_DID  set/clear: agent fields",
                 "agent context get|preview|edit  options.agent; set/clear: context fields",
             ],
-            notes: "Create derives agent_id <DID>:<slug of display-name> (a collision appends -2) and returns it; it takes no id. The slug alone resolves wherever an agent ID is accepted. Change the prompt through context update; set.system_prompt replaces it. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.",
+            notes: "Create derives agent_did <DID>:<slug of display-name> (a collision appends -2) and returns it; it takes no id. The slug alone resolves wherever an agent ID is accepted. Change the prompt through context update; set.system_prompt replaces it. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.",
             next: "give it tools ([\"help\",\"tools\"]) and test it in a fresh session.",
         },
         "tools" => Page {
@@ -303,7 +303,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "profile get|preview|edit [TARGET]  options.agent; TARGET is profile (default), sampling, execution, retry-policy or compaction",
             ],
             notes: "Create requires backend_id and model_name; it selects nothing. To change your future requests, update your current agent’s inference_profile_id; cloning creates another role instead. Update profiles by exact ID. Editing a shared profile affects every agent selecting it; create another profile for different settings, reusing backend and sampling. Without an ID, get/update use options.agent to select the bound profile. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.",
-            next: "select a new profile with agent update AGENT_ID and set.inference_profile_id.",
+            next: "select a new profile with agent update AGENT_DID and set.inference_profile_id.",
         },
         "backend" => Page {
             what: "an inference endpoint and its model catalog (backend grant).",
@@ -327,7 +327,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "automation" => Page {
             what: "documents that start work without a user: event-source or schedule, trigger, task (automation grant). Use it to run an agent on new documents or on a timer.",
             commands: &["task|trigger|schedule|event-source [preview] create|update|delete ID", "task|trigger|schedule|event-source list|get ID"],
-            notes: "task create uses options.agent (default: you); agent_id is protected. Triggers use their Task’s owner; updates retain it. Create Task before Trigger. A reply can finish a task; writing to its input collection fires it again.\nfilter: GraphQL object literal string with unquoted keys. Templates: doc, event, args, session, request, group. Missing values fail the fire. Render needed source data separately from instructions.\nTask.emit_outcome=true records success or failure in FireOutcome; false (default) records neither. For emit_outcome, source documents need a nonempty String handoff_id: declare it before schema installation and populate it in writers (schema tool and help datastore).\nConcurrency: parallel (default); queued_serial runs in order; serial skips while busy; latest_only supersedes. Event/schedule session_id_template targets an authorized open session with the Task agent; omit for a new session. Scheduled queued_serial needs an explicit target. emit_outcome is event-only. Schedule retries deduplicate by due occurrence.\nPipelines: writing output triggers the next collection’s event source. Fan-in: group waits for expected_count documents sharing correlation_field.",
+            notes: "task create uses options.agent (default: you); agent_did is protected. Triggers use their Task’s owner; updates retain it. Create Task before Trigger. A reply can finish a task; writing to its input collection fires it again.\nfilter: GraphQL object literal string with unquoted keys. Templates: doc, event, args, session, request, group. Missing values fail the fire. Render needed source data separately from instructions.\nTask.emit_outcome=true records success or failure in FireOutcome; false (default) records neither. For emit_outcome, source documents need a nonempty String handoff_id: declare it before schema installation and populate it in writers (schema tool and help datastore).\nConcurrency: parallel (default); queued_serial runs in order; serial skips while busy; latest_only supersedes. Event/schedule session_id_template targets an authorized open session with the Task agent; omit for a new session. Scheduled queued_serial needs an explicit target. emit_outcome is event-only. Schedule retries deduplicate by due occurrence.\nPipelines: writing output triggers the next collection’s event source. Fan-in: group waits for expected_count documents sharing correlation_field.",
             next: "create one source document, inspect the request with sessions, and query the output through its datastore tool.",
         },
         "cleanup" => Page {
@@ -409,10 +409,10 @@ pub(crate) fn recipes(resource: &str) -> Vec<(&'static str, Vec<Step>)> {
                 ),
                 (
                     json!({"argv":["agent","create"],"options":{"display-name":"Lead","system-prompt":"<PROMPT>","preset":"readonly","profile":"lead"}}),
-                    Some("the receipt's agent_id is <DID>:lead; lead also works"),
+                    Some("the receipt's agent_did is <DID>:lead; lead also works"),
                 ),
                 (
-                    json!({"argv":["agent-target","create"],"target_id":"lead","set":{"name":"lead","agent_id":"lead"}}),
+                    json!({"argv":["agent-target","create"],"target_id":"lead","set":{"name":"lead","agent_did":"lead"}}),
                     None,
                 ),
                 (
@@ -427,7 +427,7 @@ pub(crate) fn recipes(resource: &str) -> Vec<(&'static str, Vec<Step>)> {
                 (json!({"argv":["agent","get"]}), Some("copy the current agent ID and the backend/model/settings you want to preserve")),
                 (json!({"argv":["execution","create"],"target_id":"research-exec","set":{"max_turns":60,"max_total_tokens":400000,"deadline_duration_secs":1800}}), None),
                 (json!({"argv":["profile","create"],"target_id":"research-profile","set":{"backend_id":"<BACKEND_ID>","model_name":"<MODEL>","execution_id":"research-exec"}}), Some("carry over sampling and reasoning settings when requested; the receipt's select_with call selects this profile without deleting the old one")),
-                (json!({"argv":["agent","update"],"target_id":"<AGENT_ID>","set":{"inference_profile_id":"research-profile"}}), Some("agent get verifies the selected profile and effective limits; later requests use them")),
+                (json!({"argv":["agent","update"],"target_id":"<AGENT_DID>","set":{"inference_profile_id":"research-profile"}}), Some("agent get verifies the selected profile and effective limits; later requests use them")),
             ],
         )],
         "execution" => vec![(
@@ -439,7 +439,7 @@ pub(crate) fn recipes(resource: &str) -> Vec<(&'static str, Vec<Step>)> {
                 ),
                 (
                     json!({"argv":["profile","update"],"options":{"agent":"worker"},"set":{"execution_id":"worker-exec"}}),
-                    Some("the receipt's agent_id and target_id name the profile that changed"),
+                    Some("the receipt's agent_did and target_id name the profile that changed"),
                 ),
             ],
         )],

@@ -107,6 +107,7 @@ pub enum BuiltInCallback {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct CallbackBinding {
+    pub agent_did: String,
     pub binding_id: String,
     pub node_did: String,
     pub event_source_id: String,

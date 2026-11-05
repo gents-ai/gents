@@ -7,13 +7,13 @@ pub use result::{
 };
 pub(crate) use result::{
     load_tool_call_arguments_in_txn, load_tool_call_read, load_tool_call_read_in_txn,
-    load_tool_file_change_observation_in_txn, CanonicalToolCallRead,
+    CanonicalToolCallRead,
 };
 
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
@@ -86,6 +86,53 @@ impl ToolCallLifecycle {
         let escaped_session_id = escape_graphql_string(session_id);
         let escaped_tool_call_id = escape_graphql_string(tool_call_id);
         Self::load_filtered(node, format!("session_id:{{_eq:\"{escaped_session_id}\"}},tool_call_id:{{_eq:\"{escaped_tool_call_id}\"}}")).await
+    }
+
+    pub(crate) async fn load_as(
+        node: Arc<EmbeddedNode>,
+        actor: identity::Did,
+        session_id: &str,
+        tool_call_id: &str,
+    ) -> Result<Option<Self>> {
+        let session = escape_graphql_string(session_id);
+        let tool = escape_graphql_string(tool_call_id);
+        let filter = format!("session_id:{{_eq:\"{session}\"}},tool_call_id:{{_eq:\"{tool}\"}}");
+        ConfigAccess::transact_local_readonly(&node, Some(actor), "tool_call.load_as", |txn| {
+            let node = node.clone();
+            let filter = &filter;
+            Box::pin(async move { Self::load_filtered_in_txn(txn, node, filter).await })
+        })
+        .await
+    }
+
+    pub(crate) async fn load_by_doc_id_as(
+        node: Arc<EmbeddedNode>,
+        actor: identity::Did,
+        doc_id: &str,
+        node_did: &str,
+        session_id: &str,
+        requester_did: Option<&str>,
+    ) -> Result<Option<Self>> {
+        ConfigAccess::transact_local_readonly(
+            &node,
+            Some(actor),
+            "tool_call.load_by_doc_id_as",
+            |txn| {
+                let node = node.clone();
+                Box::pin(async move {
+                    Self::load_by_doc_id_in_txn(
+                        txn,
+                        node,
+                        doc_id,
+                        node_did,
+                        session_id,
+                        requester_did,
+                    )
+                    .await
+                })
+            },
+        )
+        .await
     }
 
     pub async fn load_by_doc_id(
@@ -285,6 +332,7 @@ impl ToolCallLifecycle {
         }
         let arguments = if let Some(effect) = &plugin_effect {
             let binding = super::delivery::ToolOutputBinding {
+                actor: accepted.actor.clone(),
                 node: node.clone(),
                 tool_call_doc_id: row.doc_id.clone(),
                 request_doc_id: accepted.request_doc_id.clone(),
@@ -363,6 +411,7 @@ impl ToolCallLifecycle {
             .ok_or_else(|| anyhow!("AgentToolCall is missing node_did"))?;
 
         Ok(Some(Self {
+            actor: accepted.actor.clone(),
             node,
             request_id,
             request_doc_id: row.request_doc_id.filter(|value| !value.trim().is_empty()),
@@ -418,7 +467,7 @@ mod tests {
         let session_id = crate::store::graphql::escape_graphql_string(session_id);
         let node_did = crate::store::graphql::escape_graphql_string(node_did);
         let requester_did_field = crate::session::requester_did_create_field(requester_did);
-        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "query fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0, {requester_did_field} }}) {{ _docID }} }}"#)).await;
+        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_did: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "query fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0, {requester_did_field} }}) {{ _docID }} }}"#)).await;
         assert!(!created.has_errors(), "{:#?}", created.errors);
         let row = crate::store::graphql::graphql_with_transaction_retry(node, &format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
@@ -505,7 +554,7 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(fresh.state, ToolCallState::Completed);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         tokio::fs::remove_dir_all(fixture.path).await.unwrap();
     }
 
@@ -605,7 +654,7 @@ mod tests {
         let selected = loaded.selected_tool_identity.expect("selected identity");
         assert_eq!(selected.service_id, "metrics-prod");
         assert_eq!(selected.tool_name, "query_metrics");
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(&data_path);
     }
 }

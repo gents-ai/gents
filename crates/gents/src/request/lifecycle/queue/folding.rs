@@ -126,7 +126,7 @@ fn folds_into(
         && row.node_did.as_deref() == Some(head.node_did.as_str())
         && row.session_id.as_deref() == Some(head.session_id.as_str())
         && row.requester_did == head.requester_did
-        && row.agent_id.as_deref() == Some(head.agent_id.as_str())
+        && row.agent_did.as_deref() == Some(head.agent_did.as_str())
         && input.cwd == head.input.cwd
         && input.selected_skill_ids == head.input.selected_skill_ids
         && input.initial_title.is_none()
@@ -154,7 +154,7 @@ pub(crate) async fn fold_candidates(
     }
     let rows = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
-        None,
+        Some(identity::Did::new(head.agent_did.clone())?),
         "queue.fold_candidates",
         |txn| {
             Box::pin(async move {
@@ -393,19 +393,20 @@ pub(crate) async fn load_consumed_folded_inputs(
         escape_graphql_string(FOLDED_REASON),
         superseded = RequestLifecycleState::Superseded.as_str()
     );
-    let observed = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "load the messages a claim folded",
-    )
-    .await?;
-    if crate::store::graphql::rows::<AgentRequestRow>(&observed, "AgentRequest")?.is_empty() {
+    let actor = identity::Did::new(head.agent_did.clone())?;
+    let observed = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor.clone())
+        .execute(&query)
+        .await?;
+    let rows: Vec<AgentRequestRow> =
+        serde_json::from_value(observed["data"]["AgentRequest"].clone())
+            .context("decode folded requests")?;
+    if rows.is_empty() {
         return Ok(Vec::new());
     }
     let query = &query;
     crate::store::config_client::ConfigAccess::transact_local_write(
         node,
-        None,
+        Some(actor),
         "lifecycle.load_folded_inputs",
         move |txn| {
             Box::pin(async move {

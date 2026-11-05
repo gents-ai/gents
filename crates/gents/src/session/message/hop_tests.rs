@@ -11,7 +11,7 @@ pub(super) fn cause(
 ) -> SessionMessageCause {
     SessionMessageCause {
         caller_node_did: message.admission.node_did.clone(),
-        caller_agent_id: "caller-agent".to_owned(),
+        caller_agent_did: "caller-agent".to_owned(),
         caller_session_id: "caller-session".to_owned(),
         caller_requester_did: None,
         caller_request_id: "caller-request".to_owned(),
@@ -43,7 +43,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
     .unwrap();
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
-        agent_id: caused.agent_id.clone(),
+        agent_did: caused.agent_did.clone(),
         session_id: caused.session_id.clone(),
     };
     let cases = &crate::lean_vocab_test::lean_contract_snapshot()
@@ -113,7 +113,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
             "{name}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -139,7 +139,7 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
     .unwrap();
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
-        agent_id: caused.agent_id.clone(),
+        agent_did: caused.agent_did.clone(),
         session_id: caused.session_id.clone(),
     };
     let cause = cause(&message, 0);
@@ -162,7 +162,7 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
     };
     let before = load_tool().await.unwrap().unwrap();
     let receipt_before = load_receipt(
-        &node,
+        &crate::store::config_client::ConfigAccess::local_as(node.clone(), tool.actor().clone()),
         &tool_doc_id,
         tool.node_did(),
         tool.session_id(),
@@ -189,7 +189,7 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
     assert_eq!(after.state(), before.state());
     assert_eq!(after.is_running(), before.is_running());
     let receipt_after = load_receipt(
-        &node,
+        &crate::store::config_client::ConfigAccess::local_as(node.clone(), tool.actor().clone()),
         &tool_doc_id,
         tool.node_did(),
         tool.session_id(),
@@ -201,7 +201,7 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
         serde_json::to_value(&receipt_after).unwrap(),
         serde_json::to_value(&receipt_before).unwrap()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -225,7 +225,7 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
     .unwrap();
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
-        agent_id: caused.agent_id.clone(),
+        agent_did: caused.agent_did.clone(),
         session_id: caused.session_id.clone(),
     };
     let stale_cause = cause(&message, 0);
@@ -291,7 +291,7 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
     assert!(!response.has_errors(), "{:?}", response.errors);
     let data = response.data.unwrap();
     assert!(data["AgentRequest"].as_array().unwrap().is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -317,7 +317,7 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
             } else {
                 "did:key:remote".into()
             },
-            agent_id: "worker".into(),
+            agent_did: "worker".into(),
             session_id: uuid::Uuid::new_v4().to_string(),
         };
         let create = crate::request::lifecycle::build_session_message_request(
@@ -383,6 +383,11 @@ async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
             Ok(true)
         ));
     }
-    message.admission.node.shutdown().await;
+    message
+        .admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }

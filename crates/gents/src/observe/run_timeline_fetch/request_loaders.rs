@@ -24,7 +24,7 @@ pub(super) async fn load_timeline_request_by_id(
                 request_id
                 node_did
                 requester_did
-                agent_id
+                agent_did
                 session_id
                 content
                 max_total_tokens
@@ -80,7 +80,7 @@ pub(super) async fn load_timeline_requests_for_session(
                 request_id
                 node_did
                 requester_did
-                agent_id
+                agent_did
                 session_id
                 content
                 max_total_tokens
@@ -125,7 +125,7 @@ pub(super) async fn load_timeline_child_requests(
                 request_id
                 node_did
                 requester_did
-                agent_id
+                agent_did
                 session_id
                 content
                 max_total_tokens

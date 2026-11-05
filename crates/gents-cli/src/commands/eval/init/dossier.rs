@@ -5,10 +5,9 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
-use gents::documents::{Agent, PackConfig};
 use gents::pack::{
-    declared_paths, digest_declared_assets, interpolate, load_pack_config, PackInstallOptions,
-    PackManifest,
+    declared_paths, digest_declared_assets, interpolate, load_pack_authoring_config,
+    AuthoredPackConfig, PackInstallOptions, PackManifest,
 };
 use serde_json::Value;
 
@@ -16,7 +15,7 @@ pub(crate) struct Dossier {
     pub(crate) pack_name: String,
     pub(crate) pack_version: String,
     pub(crate) pack_digest: String,
-    pub(crate) agent_id: String,
+    pub(crate) agent_slot: String,
     pub(crate) slot: String,
     pub(crate) collections: BTreeMap<String, BTreeSet<String>>,
     pub(crate) text: String,
@@ -63,7 +62,7 @@ pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
     let config_path = manifest.config.clone().unwrap_or_default();
 
     let read = RefCell::new(BTreeSet::new());
-    let config = load_pack_config(
+    let authored = load_pack_authoring_config(
         &manifest,
         &PackInstallOptions {
             node_did: "did:key:dossier".into(),
@@ -82,21 +81,25 @@ pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
     .with_context(|| format!("loading pack {}", manifest.name))?;
     let read = read.into_inner();
 
-    let chosen = choose_agent(&config, agent)?;
-    let agent_id = chosen.agent_id.clone();
+    let chosen = choose_agent(&authored, agent)?;
+    let agent_slot = chosen["agent_slot"]
+        .as_str()
+        .context("authored agent has no slot")?
+        .to_owned();
+    let config = &authored.documents;
     let slot = manifest
         .metadata
         .inference_slots
         .iter()
-        .find(|slot| slot.agents.contains(&agent_id))
+        .find(|slot| slot.agents.contains(&agent_slot))
         .map(|slot| slot.name.clone())
         .with_context(|| {
             format!(
-                "agent {agent_id:?} binds no inference slot of pack {}",
+                "agent {agent_slot:?} binds no inference slot of pack {}",
                 manifest.name
             )
         })?;
-    let context = chosen.context_id.as_deref().and_then(|id| {
+    let context = chosen["context_id"].as_str().and_then(|id| {
         config
             .contexts
             .iter()
@@ -111,8 +114,8 @@ pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
     let _ = writeln!(text, "- digest: {pack_digest}");
     let _ = writeln!(
         text,
-        "- agent: {agent_id} ({})",
-        chosen.display_name.as_deref().unwrap_or("no display name")
+        "- agent: {agent_slot} ({})",
+        chosen["display_name"].as_str().unwrap_or("no display name")
     );
     let _ = writeln!(text, "- inference slot: {slot}");
 
@@ -182,7 +185,7 @@ pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
     let tasks: Vec<_> = config
         .tasks
         .iter()
-        .filter(|task| task.agent_id == agent_id)
+        .filter(|task| task.agent_did == format!("gents:agent-slot:{agent_slot}"))
         .collect();
     if tasks.is_empty() {
         text.push_str("\n(none)\n");
@@ -272,14 +275,16 @@ pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
         pack_name: manifest.name,
         pack_version: manifest.version,
         pack_digest,
-        agent_id,
+        agent_slot,
         slot,
         collections,
         text,
     })
 }
 
-pub(super) fn read_pack(pack_dir: &Path) -> Result<(PackManifest, BTreeMap<String, Vec<u8>>)> {
+pub(super) fn read_pack(
+    pack_dir: &Path,
+) -> Result<(PackManifest, BTreeMap<String, Vec<u8>>)> {
     let manifest_path = pack_dir.join("manifest.json");
     let manifest: PackManifest = serde_json::from_slice(
         &std::fs::read(&manifest_path)
@@ -312,22 +317,22 @@ fn literal_placeholders(bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(&value)?)
 }
 
-fn choose_agent<'a>(config: &'a PackConfig, agent: Option<&str>) -> Result<&'a Agent> {
+fn choose_agent<'a>(config: &'a AuthoredPackConfig, agent: Option<&str>) -> Result<&'a Value> {
+    let agents = config.value["agents"]
+        .as_array()
+        .context("pack has no agents")?;
     let ids = || {
-        config
-            .agents
+        agents
             .iter()
-            .map(|agent| agent.agent_id.as_str())
+            .filter_map(|agent| agent["agent_slot"].as_str())
             .collect::<Vec<_>>()
             .join(", ")
     };
     match agent {
         Some(id) => config
-            .agents
-            .iter()
-            .find(|agent| agent.agent_id == id)
+            .agent(id)
             .with_context(|| format!("the pack has no agent {id:?}; it declares: {}", ids())),
-        None => match config.agents.as_slice() {
+        None => match agents.as_slice() {
             [only] => Ok(only),
             [] => anyhow::bail!("the pack declares no agent to evaluate"),
             _ => anyhow::bail!(
@@ -491,7 +496,7 @@ mod tests {
             .unwrap()
             .iter()
             .map(|agent| {
-                let id = agent["agent_id"].as_str().unwrap();
+                let id = agent["agent_slot"].as_str().unwrap();
                 json!({
                     "name": format!("slot_{id}"),
                     "description": "Runs it.",
@@ -524,7 +529,7 @@ mod tests {
 
     fn agent(id: &str) -> Value {
         json!({
-            "agent_id": id,
+            "agent_slot": id,
             "display_name": format!("Agent {id}"),
             "context_id": format!("{id}-context"),
             "inference_profile_id": format!("gents:inference-slot:slot_{id}"),
@@ -545,7 +550,7 @@ mod tests {
         assert_eq!(dossier.pack_name, "eval_canary");
         assert_eq!(dossier.pack_version, "1.0.0");
         assert!(dossier.pack_digest.starts_with("sha256:"));
-        assert_eq!(dossier.agent_id, "canary");
+        assert_eq!(dossier.agent_slot, "canary");
         assert_eq!(dossier.slot, "primary");
         let text = &dossier.text;
         assert!(text.contains("# Subject"));
@@ -586,7 +591,7 @@ mod tests {
         assert!(error.contains("nope"), "{error}");
 
         let dossier = render(dir.path(), Some("b")).unwrap();
-        assert_eq!(dossier.agent_id, "b");
+        assert_eq!(dossier.agent_slot, "b");
         assert_eq!(dossier.slot, "slot_b");
         assert!(dossier.text.contains("Prompt B."));
         assert!(!dossier.text.contains("Prompt A."));
@@ -615,7 +620,7 @@ mod tests {
             }],
             "tasks": [{
                 "task_id": "summarize",
-                "agent_id": "a",
+                "agent_did": "gents:agent-slot:a",
                 "prompt_template": "Summarize {{ topic }} for {{reader}}.",
             }],
         });

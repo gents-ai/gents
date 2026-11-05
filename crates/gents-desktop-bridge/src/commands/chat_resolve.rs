@@ -59,7 +59,7 @@ pub(super) fn sent(submitted: Result<SubmittedRequest>) -> Result<ChatSendResult
                 request_id: unconfirmed.request_id,
                 session_id: unconfirmed.session_id,
                 node_did: unconfirmed.node_did,
-                agent_id: None,
+                agent_did: None,
             },
             ChatSendOutcome::DeliveryUnknown,
         )),
@@ -97,7 +97,7 @@ pub(super) async fn resolve_chat_submission(
                 request_id: request_id.to_string(),
                 session_id: session_id.to_string(),
                 node_did: node_did.to_string(),
-                agent_id: None,
+                agent_did: None,
             },
             ChatSendOutcome::NotDelivered,
         )),
@@ -131,7 +131,7 @@ mod storage_failure_tests {
             request_id: "request".into(),
             session_id: "session".into(),
             node_did: "did:test:node".into(),
-            agent_id: Some("agent".into()),
+            agent_did: Some("agent".into()),
         };
         let pending = serde_json::from_value(serde_json::json!({
             "request_id": "request", "session_id": "session", "node_did": "did:test:node",

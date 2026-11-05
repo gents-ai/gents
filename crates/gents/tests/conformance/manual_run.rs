@@ -8,7 +8,7 @@ fn actor(did: &str) -> identity::Did {
     identity::Did::new(did.to_owned()).expect("fixture creator DID")
 }
 
-async fn fetch_manual_row(node: &gents::defra_node::EmbeddedNode, doc_id: &str) -> Value {
+async fn fetch_manual_row(node: &gents::defra_node::Node, doc_id: &str) -> Value {
     let escaped = escape_graphql_string(doc_id);
     let query = format!(
         r#"{{
@@ -36,7 +36,7 @@ async fn fetch_manual_row(node: &gents::defra_node::EmbeddedNode, doc_id: &str) 
         .expect("exactly one AgentRequest for the given doc_id")
 }
 
-async fn count_manual_agent_requests(node: &gents::defra_node::EmbeddedNode) -> usize {
+async fn count_manual_agent_requests(node: &gents::defra_node::Node) -> usize {
     let query = r#"{
         AgentRequest(filter: { caused_by_trigger_kind: { _eq: "manual" } }) {
             _docID

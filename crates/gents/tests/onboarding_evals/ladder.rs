@@ -66,6 +66,10 @@ fn every_native_case_validates_and_uses_shipped_checks() {
                 )
                 .stages
                 .remove(0);
+                evidence.subject_agent = Some(gents::eval::runner::subject_binding::SubjectAgent {
+                    slot: "engineer".into(),
+                    agent_did: "did:key:test-engineer".into(),
+                });
                 evidence.captures.clear();
                 for capture in &stage.capture {
                     evidence.captures.insert(
@@ -86,9 +90,8 @@ fn every_native_case_validates_and_uses_shipped_checks() {
                 }
                 for check in stage.checks {
                     let verdict = registry
-                        .get(&check.check)
-                        .unwrap()
-                        .evaluate(&check.params, &evidence);
+                        .evaluate_bound(&check.check, &check.params, &evidence)
+                        .unwrap();
                     assert_ne!(
                         verdict.kind,
                         OutcomeKind::Grader,
@@ -131,8 +134,8 @@ fn l2_checks_follow_selected_context_and_tools_and_reject_a_wrong_grant() {
     .unwrap();
     let instructions = "You are Analyst, a read-only file assistant for research notes. Read and report; never modify files.";
     evidence.captures.insert("agents".into(), CaptureResult::Documents { rows: vec![
-        serde_json::json!({"agent_id":"scope:analyst", "display_name":"analyst", "enabled":true, "context_id":"analyst-context"}),
-        serde_json::json!({"agent_id":"scope:engineer", "display_name":"The Engineer", "context_id":"engineer-context"}),
+        serde_json::json!({"agent_did":"scope:analyst", "display_name":"analyst", "enabled":true, "context_id":"analyst-context"}),
+        serde_json::json!({"agent_did":"did:key:test-engineer", "display_name":"The Engineer", "context_id":"engineer-context"}),
     ]});
     evidence.captures.insert("contexts".into(), CaptureResult::Documents { rows: vec![
         serde_json::json!({"context_id":"analyst-context", "tools_id":"analyst-tools", "system_prompt": instructions}),
@@ -148,20 +151,29 @@ fn l2_checks_follow_selected_context_and_tools_and_reject_a_wrong_grant() {
         })).unwrap()).unwrap(),
     ]});
     let registry = CheckRegistry::builtin();
-    let grader = registry.get("crew_spec_match").unwrap();
-    let good = grader.evaluate(&check.params, &evidence);
+    evidence.subject_agent = Some(gents::eval::runner::subject_binding::SubjectAgent {
+        slot: "engineer".into(),
+        agent_did: "did:key:test-engineer".into(),
+    });
+    let good = registry
+        .evaluate_bound("crew_spec_match", &check.params, &evidence)
+        .unwrap();
     assert_eq!(good.score_bp, Some(10000), "{}", good.raw);
     let CaptureResult::Documents { rows } = evidence.captures.get_mut("tools").unwrap() else {
         unreachable!()
     };
     rows[0]["host"]["files"]["mode"] = "ReadWrite".into();
-    let bad = grader.evaluate(&check.params, &evidence);
+    let bad = registry
+        .evaluate_bound("crew_spec_match", &check.params, &evidence)
+        .unwrap();
     assert!(bad.score_bp.unwrap() < 10000, "{}", bad.raw);
     let CaptureResult::Documents { rows } = evidence.captures.get_mut("contexts").unwrap() else {
         unreachable!()
     };
     rows[0]["tools_id"] = "engineer-tools".into();
-    let wrong_selection = grader.evaluate(&check.params, &evidence);
+    let wrong_selection = registry
+        .evaluate_bound("crew_spec_match", &check.params, &evidence)
+        .unwrap();
     assert!(
         wrong_selection.score_bp.unwrap() < good.score_bp.unwrap(),
         "{}",
@@ -194,8 +206,16 @@ fn delegation_requires_delivery_of_the_matching_child_reply() {
             .stages
             .remove(0);
     evidence.captures.insert("helper-request".into(), CaptureResult::Documents { rows: vec![
-        serde_json::json!({"agent_id":"scope:research-helper", "caused_by_parent_tool_call_doc_id":"matching-call"})
+        serde_json::json!({"agent_did":"did:key:random", "content":"TRAIN-111", "session_id":"child-session", "caused_by_parent_tool_call_doc_id":"matching-call"})
     ]});
+    evidence.captures.insert(
+        "helper-session".into(),
+        CaptureResult::Documents {
+            rows: vec![
+                serde_json::json!({"session_id":"child-session", "agent_did":"did:key:random"}),
+            ],
+        },
+    );
     let delivered = serde_json::json!({"_docID":"matching-call", "lifecycle_state":"completed", "completion_notification_delivered_at":"2026-09-30T00:00:00Z"});
     evidence.captures.insert(
         "delegation_calls".into(),
@@ -209,6 +229,23 @@ fn delegation_requires_delivery_of_the_matching_child_reply() {
         grader.evaluate(&check.params, &evidence).score_bp,
         Some(10000)
     );
+    for (field, value) in [
+        ("caused_by_parent_tool_call_doc_id", serde_json::Value::Null),
+        ("session_id", serde_json::json!("unrelated-session")),
+    ] {
+        let mut bad = evidence.clone();
+        let CaptureResult::Documents { rows } = bad.captures.get_mut("helper-request").unwrap()
+        else {
+            unreachable!()
+        };
+        rows[0][field] = value;
+        let verdict = grader.evaluate(&check.params, &bad);
+        assert!(
+            verdict.score_bp.unwrap() < 10000,
+            "{field}: {}",
+            verdict.raw
+        );
+    }
     for (field, value) in [
         (
             "completion_notification_delivered_at",
@@ -328,8 +365,12 @@ fn parallel_automation_accepts_default_concurrency_and_still_checks_its_task() {
             ScriptedExecutor::passed_evidence("did:x", "configure", "unused", vec![])
                 .stages
                 .remove(0);
+        evidence.subject_agent = Some(gents::eval::runner::subject_binding::SubjectAgent {
+            slot: "engineer".into(),
+            agent_did: "did:key:test-engineer".into(),
+        });
         evidence.captures.insert("trigger_config".into(), CaptureResult::Documents { rows:vec![serde_json::json!({"concurrency":concurrency,"task_id":task,"enabled":true,"source":{"event_source_id":"source"}})] });
-        evidence.captures.insert("task_config".into(), CaptureResult::Documents { rows:vec![serde_json::json!({"task_id":"task","agent_id":"engineer","emit_outcome":true,"enabled":true})] });
+        evidence.captures.insert("task_config".into(), CaptureResult::Documents { rows:vec![serde_json::json!({"task_id":"task","agent_did":"did:key:test-engineer","emit_outcome":true,"enabled":true})] });
         evidence.captures.insert("eventsource_config".into(), CaptureResult::Documents { rows:vec![serde_json::json!({"event_source_id":"source","source_collection":"TrainPing","event_kind":null})] });
         let all_pass = configured
             .checks
@@ -342,9 +383,8 @@ fn parallel_automation_accepts_default_concurrency_and_still_checks_its_task() {
             })
             .all(|c| {
                 registry
-                    .get(&c.check)
+                    .evaluate_bound(&c.check, &c.params, &evidence)
                     .unwrap()
-                    .evaluate(&c.params, &evidence)
                     .kind
                     == OutcomeKind::Passed
             });
@@ -418,12 +458,16 @@ fn repointed_delegation_grades_the_named_role_and_its_delivered_reply() {
     let mut evidence = ScriptedExecutor::passed_evidence("did:x", "repoint", "unused", vec![])
         .stages
         .remove(0);
+    evidence.subject_agent = Some(gents::eval::runner::subject_binding::SubjectAgent {
+        slot: "engineer".into(),
+        agent_did: "did:key:test-engineer".into(),
+    });
     for (name, rows) in [
         (
             "agents",
             vec![
-                json!({"agent_id":"engineer","context_id":"context"}),
-                json!({"agent_id":"did:x:the-specialist","display_name":"The Specialist"}),
+                json!({"agent_did":"did:key:test-engineer","context_id":"context"}),
+                json!({"agent_did":"did:x:the-specialist","display_name":"The Specialist"}),
             ],
         ),
         (
@@ -437,18 +481,22 @@ fn repointed_delegation_grades_the_named_role_and_its_delivered_reply() {
         (
             "targets",
             vec![
-                json!({"target_id":"helper","node_did":"did:x","target_node_did":"did:x","agent_id":"did:x:the-specialist"}),
+                json!({"target_id":"helper","node_did":"did:x","target_node_did":"did:x","agent_did":"did:x:the-specialist"}),
             ],
         ),
         (
             "role_agents",
-            vec![json!({"agent_id":"did:x:the-specialist","display_name":"The Specialist"})],
+            vec![json!({"agent_did":"did:x:the-specialist","display_name":"The Specialist"})],
         ),
         (
             "repointed-request",
             vec![
-                json!({"agent_id":"did:x:the-specialist","content":"Reply REP-555","caused_by_parent_tool_call_doc_id":"call"}),
+                json!({"agent_did":"did:x:the-specialist","session_id":"child-session","content":"Reply REP-555","caused_by_parent_tool_call_doc_id":"call"}),
             ],
+        ),
+        (
+            "repointed-session",
+            vec![json!({"session_id":"child-session","agent_did":"did:x:the-specialist"})],
         ),
         (
             "delegation_calls",
@@ -462,15 +510,16 @@ fn repointed_delegation_grades_the_named_role_and_its_delivered_reply() {
             .insert(name.into(), CaptureResult::Documents { rows });
     }
     let registry = CheckRegistry::builtin();
-    let grader = registry.get("crew_spec_match").unwrap();
     for index in [1, 2] {
-        let verdict = grader.evaluate(&check(index).params, &evidence);
+        let verdict = registry
+            .evaluate_bound("crew_spec_match", &check(index).params, &evidence)
+            .unwrap();
         assert_eq!(verdict.score_bp, Some(10000), "{}", verdict.raw);
     }
     for (capture, field, wrong, index) in [
         ("targets", "target_node_did", json!("did:foreign"), 1),
         ("role_agents", "display_name", json!("Publisher"), 2),
-        ("repointed-request", "agent_id", json!("other"), 2),
+        ("repointed-request", "agent_did", json!("other"), 2),
         (
             "delegation_calls",
             "completion_notification_delivered_at",
@@ -483,7 +532,9 @@ fn repointed_delegation_grades_the_named_role_and_its_delivered_reply() {
             unreachable!()
         };
         rows[0][field] = wrong;
-        let verdict = grader.evaluate(&check(index).params, &bad);
+        let verdict = registry
+            .evaluate_bound("crew_spec_match", &check(index).params, &bad)
+            .unwrap();
         assert!(
             verdict.score_bp.unwrap() < 10000,
             "{capture}.{field}: {}",
@@ -495,7 +546,9 @@ fn repointed_delegation_grades_the_named_role_and_its_delivered_reply() {
         unreachable!()
     };
     rows.push(rows[0].clone());
-    let verdict = grader.evaluate(&check(2).params, &evidence);
+    let verdict = registry
+        .evaluate_bound("crew_spec_match", &check(2).params, &evidence)
+        .unwrap();
     assert!(verdict.score_bp.unwrap() < 10000, "{}", verdict.raw);
 }
 
@@ -570,7 +623,7 @@ fn automation_outcomes_accept_request_and_goal_success_but_reject_other_states()
         .into_iter()
         .find(|d| d.definition_id == "configurator-l4-automation")
         .unwrap();
-    assert_eq!(definition.comparability_version, 11);
+    assert_eq!(definition.comparability_version, 12);
     let registry = CheckRegistry::builtin();
     let grader = registry.get("crew_spec_match").unwrap();
     let mut checked = 0;

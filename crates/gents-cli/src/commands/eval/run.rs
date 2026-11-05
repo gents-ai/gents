@@ -2,12 +2,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::io::Write;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use gents::eval::documents::default_breaker_threshold;
 use gents::eval::load_trials;
 use gents::eval::report::load_report;
 use gents::eval::runner::{self, CellRequest, RunOutcome, RunRequest, CANCEL_MARKER};
-use gents::{default_agent_id_for_node, default_inference_profile_id_for_agent};
 
 use super::{
     default_id, follow_progress, render, source_commit, source_dirty, write_json, Deps,
@@ -130,14 +129,12 @@ pub(super) async fn run_request(
     args: &EvalRunArgs,
 ) -> Result<(RunRequest, Vec<SubjectPack>)> {
     let profiles = profiles_by_cell(args).map_err(anyhow::Error::msg)?;
-    let default_profile =
-        default_inference_profile_id_for_agent(&default_agent_id_for_node(&ctx.owner));
     let mut cells = Vec::with_capacity(args.cells.len());
     let mut packs = Vec::with_capacity(args.cells.len());
     for cell in &args.cells {
         let pack =
             resolve_subject_pack(&ctx.home_dir, &cell.pack, args.registry.as_deref()).await?;
-        let agent_id = match &cell.agent {
+        let agent_slot = match &cell.agent {
             Some(agent) => agent.clone(),
             None => pack.default_agent()?,
         };
@@ -145,10 +142,11 @@ pub(super) async fn run_request(
             cell_id: cell.cell_id.clone(),
             label: cell.cell_id.clone(),
             source: pack.source.clone(),
-            agent_id,
-            inference_profile_id: profiles
-                .get(cell.cell_id.as_str())
-                .map_or_else(|| default_profile.clone(), |profile| (*profile).to_owned()),
+            agent_slot,
+            inference_profile_id: match profiles.get(cell.cell_id.as_str()) {
+                Some(profile) => (*profile).to_owned(),
+                None => ctx.default_inference_profile().await?,
+            },
         });
         packs.push(pack);
     }
@@ -158,7 +156,10 @@ pub(super) async fn run_request(
             .clone()
             .unwrap_or_else(|| default_id(&args.definition_id)),
         owner: ctx.owner.clone(),
-        evaluator_did: ctx.owner.clone(),
+        evaluator_did: ctx
+            .access
+            .actor_did()
+            .context("evaluation requires a caller identity")?,
         definition_id: args.definition_id.clone(),
         split: args.split,
         case_ids: None,

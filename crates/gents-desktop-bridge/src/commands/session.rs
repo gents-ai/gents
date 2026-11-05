@@ -16,83 +16,22 @@ pub async fn session_snapshot(
     let node_did = Some(resolve_session_node(core, &session_id, node_did)?);
     let mut request_id = request_id;
 
-    let hydrate_started = std::time::Instant::now();
-    let mut hydration_observation = None;
-    if let Some(node_did) = node_did.as_deref() {
-        if core
-            .session_unreadable_reason(&session_id, node_did)
-            .is_some()
-        {
-            return Ok(build_session_snapshot_for_node_with_transcript(
-                core.as_ref(),
-                &gents::store::config_client::ConfigAccess::local(core.node_arc()),
-                Some(node_did),
-                &session_id,
-                request_id.as_deref(),
-                None,
-                None,
-                None,
-                None,
-                None,
-                false,
-                false,
-                None,
-            )
-            .await);
-        }
-        if !core.session_read_through_operator(&session_id, node_did) {
-            match core
-                .ensure_session_hydration_started(&session_id, node_did)
-                .await
-            {
-                Ok(observation) => hydration_observation = Some(observation),
-                Err(error) => {
-                    tracing::warn!(
-                        target: "gents_desktop::chat",
-                        node_did,
-                        session_id = %session_id,
-                        error = %error,
-                        "session hydration request failed; rendering whatever is already local"
-                    );
-                }
-            }
-        }
-    }
-    let hydrate_start_ms = hydrate_started.elapsed().as_millis() as u64;
     let transcript_started = std::time::Instant::now();
     let TranscriptReadScope {
         operator_access,
         requester_scope,
-    } = transcript_read_scope(core, &session_id, node_did.as_deref().unwrap_or_default());
-    let page_read = async {
-        match operator_access.as_ref() {
-            Some(access) => {
-                gents_desktop_core::client::load_session_transcript_page_on(
-                    access,
-                    &session_id,
-                    node_did.as_deref(),
-                    requester_scope.as_deref(),
-                    timeline_before_item_key.as_deref(),
-                    timeline_limit,
-                )
-                .await
-            }
-            None => {
-                gents_desktop_core::client::load_session_transcript_page(
-                    core.node(),
-                    &session_id,
-                    node_did.as_deref(),
-                    requester_scope.as_deref(),
-                    timeline_before_item_key.as_deref(),
-                    timeline_limit,
-                )
-                .await
-            }
-        }
-    };
+    } = transcript_read_scope(core, &session_id, node_did.as_deref().unwrap_or_default())?;
+    let page_read = gents_desktop_core::client::load_session_transcript_page_on(
+        &operator_access,
+        &session_id,
+        node_did.as_deref(),
+        requester_scope.as_deref(),
+        timeline_before_item_key.as_deref(),
+        timeline_limit,
+    );
     let transcript_page = page_read
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     let page_request_doc_ids = transcript_page
         .store
         .transcript_messages
@@ -175,16 +114,8 @@ pub async fn session_snapshot(
                 .cloned()
                 .collect::<Vec<_>>()
         };
-        match operator_access.as_ref() {
-            Some(access) => {
-                gents_desktop_core::client::load_request_prompt_ownership_on(access, &requests)
-                    .await
-            }
-            None => {
-                gents_desktop_core::client::load_request_prompt_ownership(core.node(), &requests)
-                    .await
-            }
-        }
+        gents_desktop_core::client::load_request_prompt_ownership_on(&operator_access, &requests)
+            .await
     };
     let context_read = async {
         if timeline_before_item_key.is_some() {
@@ -211,23 +142,22 @@ pub async fn session_snapshot(
         let Some(request) = request else {
             return Ok(None);
         };
-        match operator_access.as_ref() {
-            Some(access) => gents_desktop_core::client::load_session_tip_store_on(access, &request)
-                .await
-                .map(Some),
-            None => gents_desktop_core::client::load_session_tip_store(core.node(), &request)
-                .await
-                .map(Some),
-        }
+        gents_desktop_core::client::load_session_tip_store_on(&operator_access, &request)
+            .await
+            .map(Some)
     };
     let (context, ownership) = tokio::join!(context_read, ownership_read);
     let context_store = match context {
         Ok(store) => store,
         Err(error) => {
+            let classified = BridgeError::classify_transport_error(error);
+            if classified.code == BridgeErrorCode::PermissionDenied {
+                return Err(classified);
+            }
             tracing::warn!(
                 target: "gents_desktop::chat",
                 session_id,
-                error = %error,
+                error = %classified,
                 "session tip query failed; returning the bounded transcript without live ownership evidence"
             );
             None
@@ -236,15 +166,18 @@ pub async fn session_snapshot(
     let prompt_ownership = match ownership {
         Ok(facts) => Some(facts),
         Err(error) => {
-            tracing::warn!(session_id, error = %error, "request prompt ownership unavailable; suppressing unproven pending inputs");
+            let classified = BridgeError::classify_transport_error(error);
+            if classified.code == BridgeErrorCode::PermissionDenied {
+                return Err(classified);
+            }
+            tracing::warn!(session_id, error = %classified, "request prompt ownership unavailable; suppressing unproven pending inputs");
             None
         }
     };
     let transcript_page_tip_ms = transcript_started.elapsed().as_millis() as u64;
     let projection_started = std::time::Instant::now();
     let context_store = context_store.map(|tip| transcript_page.store.merge_snapshot(tip));
-    let local_access = gents::store::config_client::ConfigAccess::local(core.node_arc());
-    let session_access = operator_access.as_ref().unwrap_or(&local_access);
+    let session_access = &operator_access;
     let mut snapshot = build_session_snapshot_for_node_with_transcript(
         core.as_ref(),
         session_access,
@@ -255,17 +188,14 @@ pub async fn session_snapshot(
         Some(&transcript_page.canonical_dependencies),
         context_store.as_ref(),
         prompt_ownership.as_ref(),
-        hydration_observation,
         false,
         timeline_before_item_key.is_none(),
         fresh_requests.as_deref(),
     )
-    .await;
+    .await
+    .map_err(BridgeError::classify_transport_error)?;
     if let Some(snapshot) = snapshot.as_mut() {
-        snapshot.read_through_operator = node_did
-            .as_deref()
-            .is_some_and(|node| core.session_read_through_operator(&session_id, node))
-            .then_some(true);
+        snapshot.read_through_operator = None;
         if let (Some(node), Some(requests), Some(selected)) = (
             node_did.as_deref(),
             fresh_requests.as_ref(),
@@ -283,7 +213,8 @@ pub async fn session_snapshot(
                     &session_id,
                     selected,
                 )
-                .await;
+                .await
+                .map_err(BridgeError::classify_transport_error)?;
             }
         }
         apply_session_timeline_page_with_query(
@@ -300,7 +231,6 @@ pub async fn session_snapshot(
         tracing::info!(
             target: "gents_desktop::chat",
             session_id,
-            hydrate_start_ms,
             request_refresh_ms,
             transcript_page_tip_ms,
             projection_ms,
@@ -340,37 +270,29 @@ fn resolve_session_node(
 }
 
 struct TranscriptReadScope {
-    operator_access: Option<gents::store::config_client::ConfigAccess>,
+    operator_access: gents::store::config_client::ConfigAccess,
     requester_scope: Option<String>,
 }
 
-/// Where a session's transcript is read and under which requester: the
-/// node's own runtime when this client operates it, else this computer's
-/// copy, scoped to the requester the session was started under.
 fn transcript_read_scope(
     core: &gents_desktop_core::client::ClientCore,
     session_id: &str,
     node_did: &str,
-) -> TranscriptReadScope {
-    let node_scope = core.transcript_node_scope(node_did);
+) -> Result<TranscriptReadScope, BridgeError> {
     let operator_access = core
         .operator_observation_graphql(node_did)
-        .map(gents::store::config_client::ConfigAccess::Graphql);
+        .map(gents::store::config_client::ConfigAccess::Graphql)
+        .ok_or_else(|| BridgeError::untyped("Connect to the runtime to read this session."))?;
     let store = core.store().snapshot();
-    let session = store
+    let requester_scope = store
         .sessions
         .iter()
-        .find(|row| row.session_id == session_id && row.node_did == node_did);
-    let requester_scope = gents_desktop_core::client::session_transcript_requester_scope(
-        session,
-        Some(node_did),
-        node_scope.as_deref(),
-        operator_access.is_some(),
-    );
-    TranscriptReadScope {
+        .find(|row| row.session_id == session_id && row.node_did == node_did)
+        .and_then(|session| session.requester_did.clone());
+    Ok(TranscriptReadScope {
         operator_access,
         requester_scope,
-    }
+    })
 }
 
 pub async fn message_attachments(
@@ -382,10 +304,8 @@ pub async fn message_attachments(
     if let Some(reason) = core.session_unreadable_reason(session_id, node_did) {
         return Err(BridgeError::untyped(reason));
     }
-    let scope = transcript_read_scope(core, session_id, node_did);
-    let access = scope
-        .operator_access
-        .unwrap_or_else(|| gents::store::config_client::ConfigAccess::local(core.node_arc()));
+    let scope = transcript_read_scope(core, session_id, node_did)?;
+    let access = scope.operator_access;
     let escape = gents::store::graphql::escape_graphql_string;
     let requester = scope
         .requester_scope
@@ -393,9 +313,10 @@ pub async fn message_attachments(
         .map(|did| format!(", requester_did: {{ _eq: \"{}\" }}", escape(did)))
         .unwrap_or_default();
     let query = format!("{{ AgentMessage(filter: {{ session_id: {{ _eq: \"{}\" }}, node_did: {{ _eq: \"{}\" }}, message_key: {{ _eq: \"{}\" }}{requester} }}, limit: 2) {{ _docID }} }}", escape(session_id), escape(node_did), escape(message_key));
-    let rows = access.execute(&query).await.map_err(|e| {
-        BridgeError::untyped(gents_protocol::error_chain::ErrorChain(&e).to_string())
-    })?;
+    let rows = access
+        .execute(&query)
+        .await
+        .map_err(|error| BridgeError::classify_transport_error(error.into()))?;
     let rows = rows["data"]["AgentMessage"]
         .as_array()
         .ok_or_else(|| BridgeError::untyped("Message attachments are unavailable"))?;
@@ -414,7 +335,7 @@ pub async fn message_attachments(
         scope.requester_scope.as_deref(),
     )
     .await
-    .map_err(|e| BridgeError::untyped(format!("{e:#}")))?;
+    .map_err(BridgeError::classify_transport_error)?;
     if header.session_id != session_id || header.message_key != message_key {
         return Err(BridgeError::untyped(
             "The attachment message belongs to another session",
@@ -454,51 +375,30 @@ pub async fn session_rows(
     let TranscriptReadScope {
         operator_access,
         requester_scope,
-    } = transcript_read_scope(core, &session_id, &node_did);
+    } = transcript_read_scope(core, &session_id, &node_did)?;
     let read = |window: TranscriptWindow, limit: Option<usize>| {
         let operator_access = operator_access.clone();
         let requester_scope = requester_scope.clone();
         let session_id = session_id.clone();
         let node_did = node_did.clone();
         async move {
-            match operator_access.as_ref() {
-                Some(access) => {
-                    gents_desktop_core::client::load_session_transcript_window_on(
-                        access,
-                        &session_id,
-                        Some(&node_did),
-                        requester_scope.as_deref(),
-                        window,
-                        limit,
-                    )
-                    .await
-                }
-                None => {
-                    gents_desktop_core::client::load_session_transcript_window(
-                        core.node(),
-                        &session_id,
-                        Some(&node_did),
-                        requester_scope.as_deref(),
-                        window,
-                        limit,
-                    )
-                    .await
-                }
-            }
+            gents_desktop_core::client::load_session_transcript_window_on(
+                &operator_access,
+                &session_id,
+                Some(&node_did),
+                requester_scope.as_deref(),
+                window,
+                limit,
+            )
+            .await
         }
     };
-    let error = |error: anyhow::Error| match error.downcast::<BridgeError>() {
-        Ok(error) => error,
-        Err(error) => BridgeError::untyped(format!("{error:#}")),
-    };
+    let error = BridgeError::classify_transport_error;
     let store = core.store().snapshot();
-    let local_access = gents::store::config_client::ConfigAccess::local(core.node_arc());
-    let provenance_access = operator_access.as_ref().unwrap_or(&local_access);
+    let provenance_access = &operator_access;
     let mut view = empty(None);
     let mut messages = Vec::new();
-    /* a read against the node's own runtime sees every message it has; a
-    read of this computer's copy may run ahead of what has arrived */
-    view.complete = operator_access.is_some();
+    view.complete = true;
     match window {
         SessionRowsWindow::Tip
         | SessionRowsWindow::Before { .. }
@@ -521,7 +421,8 @@ pub async fn session_rows(
                 &node_did,
                 &session_id,
             )
-            .await;
+            .await
+            .map_err(BridgeError::classify_transport_error)?;
             view.covered_from = page.covered.from;
             view.covered_through = page.covered.through;
             view.has_older = match window {
@@ -553,7 +454,8 @@ pub async fn session_rows(
                 &node_did,
                 &session_id,
             )
-            .await;
+            .await
+            .map_err(BridgeError::classify_transport_error)?;
             rows.extend(
                 crate::snapshot::render_transcript_rows_with_provenance(
                     provenance_access,
@@ -562,7 +464,8 @@ pub async fn session_rows(
                     &node_did,
                     &session_id,
                 )
-                .await,
+                .await
+                .map_err(BridgeError::classify_transport_error)?,
             );
             view.rows = rows;
             view.covered_from = older.covered.from;
@@ -588,7 +491,8 @@ pub async fn session_rows(
             &messages,
             &mut view.rows,
         )
-        .await;
+        .await
+        .map_err(BridgeError::classify_transport_error)?;
     }
     Ok(view)
 }
@@ -603,35 +507,16 @@ pub async fn session_context_details(
     {
         return Ok(None);
     }
-    let operator_access = core
-        .operator_observation_graphql(&request.node_did)
-        .map(gents::store::config_client::ConfigAccess::Graphql);
-    let node_scope = core.transcript_node_scope(&request.node_did);
-    let requester =
-        {
-            let store = core.store().snapshot();
-            let Some(session) = store.sessions.iter().find(|row| {
-                row.session_id == request.session_id && row.node_did == request.node_did
-            }) else {
-                return Ok(None);
-            };
-            gents_desktop_core::client::session_transcript_requester_scope(
-                Some(session),
-                Some(&request.node_did),
-                node_scope.as_deref(),
-                operator_access.is_some(),
-            )
-        };
-    let local_access = gents::store::config_client::ConfigAccess::local(core.node_arc());
+    let scope = transcript_read_scope(core, &request.session_id, &request.node_did)?;
     crate::snapshot::load_session_context_details(
         core,
-        operator_access.as_ref().unwrap_or(&local_access),
+        &scope.operator_access,
         &request.node_did,
-        requester.as_deref(),
+        scope.requester_scope.as_deref(),
         &request.session_id,
         &request.request_id,
         &request.call_id,
     )
     .await
-    .map_err(|error| BridgeError::untyped(error.to_string()))
+    .map_err(BridgeError::classify_transport_error)
 }

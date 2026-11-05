@@ -20,7 +20,7 @@ struct GoalChildRow {
 }
 
 async fn wait_for_goal_child(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     goal_id: &str,
     timeout: Duration,
 ) -> GoalChildRow {
@@ -71,7 +71,7 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
 
     let db = test_db("durable-goal-real-inference").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("durable-goal-real-inference"));
-    let (node_did, agent_id) = bind_target(&db.node, identity.as_ref(), &target).await;
+    let (node_did, agent_did) = bind_target(&db.node, identity.as_ref(), &target).await;
     let agent = boot_live_agent(&db, identity)
         .await
         .expect("boot real-inference goal agent");
@@ -93,7 +93,7 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
     create_runtime_request(
         &db.node,
         &node_did,
-        &agent_id,
+        &agent_did,
         initial_request_id,
         session_id,
         "This is the initial human turn, not a durable-controller continuation. Do not call update_goal on this turn. Reply with exactly INITIAL_GOAL_PROGRESS.",

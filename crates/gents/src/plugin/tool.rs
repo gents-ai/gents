@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::job::DataWrite;
 
 use super::data::DataCaller;
@@ -33,9 +33,7 @@ pub struct PluginTool {
     root: Option<PathBuf>,
     input_fields: Vec<WriteToolField>,
     tool_calls: bool,
-    /// The node a data-declaring plugin's `data_calls` read and whose
-    /// terminal commits its writes; absent, the plugin gets no data session.
-    data_node: Option<Arc<EmbeddedNode>>,
+    data_caller: Option<DataCaller>,
 }
 
 impl PluginTool {
@@ -69,20 +67,23 @@ impl PluginTool {
             root,
             input_fields: plugin.input_fields.clone(),
             tool_calls: plugin.tool_calls,
-            data_node: None,
+            data_caller: None,
         })
     }
 
-    /// Offers `node` as the data store of a plugin that declares `data`.
-    pub fn with_data_node(mut self, node: Arc<EmbeddedNode>) -> Self {
-        self.data_node = Some(node);
-        self
-    }
-
-    /// The `data_calls` caller for this tool call: the invoking node's DID.
-    fn data_caller(&self) -> Option<DataCaller> {
-        let node_did = current_tool_runtime_context()?.node_did?;
-        DataCaller::new(self.data_node.clone()?, &node_did).ok()
+    pub fn with_agent_data(
+        mut self,
+        node: Arc<EmbeddedNode>,
+        node_did: &str,
+        agent_did: Option<&str>,
+    ) -> Result<Self> {
+        if self.record.data_grant().is_some() {
+            let agent_did = agent_did.ok_or_else(|| {
+                anyhow::anyhow!("plugin data requires the selected agent identity")
+            })?;
+            self.data_caller = Some(DataCaller::for_agent(node, node_did, agent_did)?);
+        }
+        Ok(self)
     }
 
     /// Takes the `writes` a data-declaring plugin returned beside its output
@@ -114,6 +115,12 @@ impl PluginTool {
             return Err(tool_error("plugin writes commit with a persisted tool call, and this call has none; call the tool from a session"));
         }
         Ok(Some(DeferredToolWrites::new(PluginToolWrites {
+            actor: self
+                .data_caller
+                .as_ref()
+                .and_then(DataCaller::actor)
+                .cloned()
+                .ok_or_else(|| tool_error("plugin writes require the selected agent identity"))?,
             grant,
             writes,
         })))
@@ -160,7 +167,7 @@ impl ToolDyn for PluginTool {
                     input,
                     self.root.as_deref(),
                     self.tool_calls,
-                    self.data_caller(),
+                    self.data_caller.clone(),
                 )
                 .await;
             let mut deferred_writes = None;

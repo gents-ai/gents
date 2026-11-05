@@ -58,7 +58,7 @@ function session(over: Partial<DesktopSessionSnapshot> = {}) {
   return {
     sessionId: "session",
     nodeDid: NODE,
-    agentId: "default",
+    agentDid: "default",
     title: "Session",
     turnState: "interrupted",
     timelineItems: [],

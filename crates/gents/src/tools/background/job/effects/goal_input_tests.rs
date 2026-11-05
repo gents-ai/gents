@@ -219,7 +219,7 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
     let caller = write(&node, &caller.graphql_mutation().unwrap()).await;
     let cause = SessionMessageCause {
         caller_node_did: PIN_FIXED_DID.into(),
-        caller_agent_id: "caller-agent".to_owned(),
+        caller_agent_did: "caller-agent".to_owned(),
         caller_session_id: "caller-session".to_owned(),
         caller_requester_did: None,
         caller_request_id: "delivery-caller".into(),
@@ -262,7 +262,7 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
             continue;
         }
         if case["existing"] == true {
-            crate::session::ensure_session_with_agent_id_and_requester_did(
+            crate::session::ensure_session_with_agent_did_and_requester_did(
                 &node,
                 &session,
                 owner,
@@ -391,6 +391,6 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
             Some("caller-goal")
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

@@ -42,8 +42,12 @@ async fn workflows_list_is_routed() {
     crate::commands::grok_shim::seed_test_agent_configuration(
         &config.node,
         &config.node_did,
-        &config.agent_id,
-        &config.agent_id,
+        &gents::load_agent(&config.node, &config.agent_did)
+            .await
+            .unwrap()
+            .unwrap()
+            .identity_binding(),
+        &config.agent_did,
         "grok-workflows-model",
         true,
     )
@@ -256,7 +260,7 @@ async fn session_new_creates_exactly_one_session_and_zero_requests() {
     let node = service.config.node.clone();
     let query = r#"{
             AgentSession(filter: { session_id: { _eq: "grok-edge-docs" } }) {
-                session_id agent_id node_did requester_did created_at closed_at
+                session_id agent_did node_did requester_did created_at closed_at
             }
             AgentRequest(filter: { session_id: { _eq: "grok-edge-docs" } }) { request_id }
         }"#
@@ -270,7 +274,7 @@ async fn session_new_creates_exactly_one_session_and_zero_requests() {
         .and_then(Value::as_array)
         .expect("AgentSession array");
     assert_eq!(sessions.len(), 1, "exactly one AgentSession document");
-    assert_eq!(sessions[0]["agent_id"], "did:test:grok-shim:default");
+    assert_eq!(sessions[0]["agent_did"], "did:test:grok-shim:default");
     assert_eq!(sessions[0]["node_did"], "did:test:grok-shim");
     assert_eq!(sessions[0]["requester_did"], "did:test:grok-shim");
     assert!(sessions[0]["created_at"].as_str().is_some());
@@ -396,7 +400,7 @@ async fn session_new_rejects_an_existing_session_bound_to_a_different_agent() {
                 session_id: "grok-edge-foreign-agent",
                 node_did: "did:test:foreign-agent",
                 requester_did: "did:test:foreign-agent",
-                agent_id: "did:test:grok-shim:default",
+                agent_did: "did:test:grok-shim:default",
                 created_at: "2026-08-31T22:46:45Z",
                 closed_at: "2026-08-31T22:46:46Z"
             }) { _docID }

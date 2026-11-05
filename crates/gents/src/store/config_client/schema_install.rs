@@ -235,12 +235,7 @@ mod tests {
 
     #[tokio::test]
     async fn additive_series_preserves_exact_install_and_requires_declared_fields() {
-        let node = std::sync::Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node = std::sync::Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
         let access = ConfigAccess::local(node.clone());
         let base = "type EvalPatch { message: String }";
         let extended = "type EvalPatch { message: String owned_files: String @immutable }";
@@ -270,7 +265,13 @@ mod tests {
             .unwrap()
             .require_satisfied()
             .is_err());
-        node.patch_collection("EvalPatch", r#"[{"op":"add","path":"/EvalPatch/Fields/-","value":{"Name":"owned_files","Kind":"String","Immutable":true}}]"#).await.unwrap();
+        access
+            .patch_collection_schema(
+                "EvalPatch",
+                &serde_json::json!([{"op":"add","path":"/EvalPatch/Fields/-","value":{"Name":"owned_files","Kind":"String","Immutable":true}}]),
+            )
+            .await
+            .unwrap();
         preview_additive_schema_install(&access, extended)
             .await
             .unwrap()
@@ -295,17 +296,12 @@ mod tests {
                 "{conflicting}"
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
     async fn additive_schema_contract_preview_digest_and_reinstall() {
-        let node = std::sync::Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node = std::sync::Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
         let access = ConfigAccess::local(node.clone());
         let sdl = "type EvalInput { message: String }";
         let plan = preview_schema_install(&access, sdl).await.unwrap();

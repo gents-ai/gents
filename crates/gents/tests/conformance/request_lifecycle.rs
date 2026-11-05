@@ -103,7 +103,7 @@ async fn admission_rejection_persists_despite_an_undecodable_session_row_under_i
         .node
         .execute(&format!(
             r#"mutation {{ create_AgentSession(input: {{
-                session_id: "{}", node_did: "{}", agent_id: "{}",
+                session_id: "{}", node_did: "{}", agent_did: "{}",
                 created_at: "not-an-rfc3339-timestamp"
             }}) {{ _docID }} }}"#,
             escape_graphql_string(&session_id),
@@ -312,7 +312,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             .node
             .execute(&format!(
                 r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "{}", purpose: "normal", node_did: "{}", agent_id: "{}",
+                request_id: "{}", purpose: "normal", node_did: "{}", agent_did: "{}",
                 session_id: "{}", lifecycle_state: "workspaceBindingPending",
                 content: "hello", created_at: "{}", request_hop: 0,
                 retry_count: 0, max_retries: 0, caused_by_trigger_id: "conformance-trigger"
@@ -350,7 +350,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
 
     match action {
         "bindWorkspace" => {
-            gents::__test_internals::activate_workspace_bound_request(&db.node, &doc_id)
+            activate_workspace_fixture(&db, &doc_id)
                 .await
                 .expect("bindWorkspace CAS mutation failed");
         }
@@ -398,6 +398,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
                 .await;
                 gents::__test_internals::reconcile_coalesced_pending_request(
                     &db.node,
+                    AGENT_NAME,
                     &session_id,
                     NODE_DID,
                     gents::__test_internals::QueueSource::User,
@@ -814,6 +815,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 "coalesce_pending" => {
                     let _ = gents::__test_internals::reconcile_coalesced_pending_request(
                         &db.node,
+                        AGENT_NAME,
                         &session_id,
                         NODE_DID,
                         gents::__test_internals::QueueSource::User,
@@ -822,10 +824,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
                     .await;
                 }
                 "bind_workspace" => {
-                    let _ = gents::__test_internals::activate_workspace_bound_request(
-                        &db.node, &doc_id,
-                    )
-                    .await;
+                    let _ = activate_workspace_fixture(&db, &doc_id).await;
                 }
                 other => panic!("unhandled writer {other}"),
             }
@@ -1011,7 +1010,7 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
         fetch_request_snapshot(&db.node, &doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Claimed,
-            agent_id: AGENT_NAME.into(),
+            agent_did: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
             retry_parent_request: "".into(),
@@ -1096,7 +1095,7 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
         fetch_request_snapshot(&db.node, &doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Processing,
-            agent_id: AGENT_NAME.into(),
+            agent_did: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
             retry_parent_request: "".into(),
@@ -1158,7 +1157,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
         fetch_request_snapshot(&db.node, &doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Failed,
-            agent_id: AGENT_NAME.into(),
+            agent_did: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
             retry_parent_request: "".into(),
@@ -1209,7 +1208,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
         fetch_request_snapshot(&db.node, &lifecycle.request().doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Claimed,
-            agent_id: AGENT_NAME.into(),
+            agent_did: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "scheduled".into(),
             retry_parent_request: "".into(),
@@ -1846,7 +1845,7 @@ async fn create_queue_request(
                 request_id: "{escaped_request_id}",
                 purpose: "normal",
                 node_did: "{node_did}",
-                agent_id: "{AGENT_NAME}",
+                agent_did: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{escaped_request_id}",
@@ -2024,7 +2023,7 @@ async fn assert_session_observes_request_with_authoritative_state(
         .expect("canonical session");
     assert_eq!(session.session_id, session_id);
     assert_eq!(session.node_did, NODE_DID);
-    assert_eq!(session.agent_id, AGENT_NAME);
+    assert_eq!(session.agent_did, AGENT_NAME);
     assert!(
         session.closed_at.is_none(),
         "request terminality does not close the session"
@@ -2042,7 +2041,7 @@ async fn assert_session_observes_request_with_authoritative_state(
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{
         request_id: {{_eq: "{request_id}"}}, session_id: {{_eq: "{session_id}"}}
-    }}) {{ _docID node_did requester_did agent_id lifecycle_state }} }}"#
+    }}) {{ _docID node_did requester_did agent_did lifecycle_state }} }}"#
         ))
         .await;
     assert!(
@@ -2076,7 +2075,13 @@ async fn assert_session_observes_request_with_authoritative_state(
         "absent requester scope is exact, not a wildcard"
     );
     assert_eq!(
-        rows[0]["agent_id"].as_str(),
-        Some(session.agent_id.as_str())
+        rows[0]["agent_did"].as_str(),
+        Some(session.agent_did.as_str())
     );
+}
+
+async fn activate_workspace_fixture(db: &support::TestDb, doc_id: &str) -> anyhow::Result<()> {
+    let binding = gents::store::identity::provision_agent_identity(db.node_identity.as_ref())?;
+    let actor: ::identity::Did = binding.agent_did.parse()?;
+    gents::__test_internals::activate_workspace_bound_request(&db.node, doc_id, actor).await
 }

@@ -15,10 +15,13 @@ async fn a_seed_wait_resolves_as_soon_as_reconciliation_reports_an_error() {
     let seed = FixtureDocument {
         collection: "MissingSeedCollection".into(),
         document: json!({"label": "not submitted"}),
+        session_readers: Vec::new(),
+        session_agent_owned: false,
     };
     let error = {
         let waiting = seed_and_await_fire(
             &home,
+            "did:test:unselected",
             &ready,
             &seed,
             Some(Duration::from_secs(2)),
@@ -67,7 +70,7 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
             "request_id": "fired",
             "node_did": home.did(),
             "requester_did": home.did(),
-            "agent_id": "seeded-agent",
+            "agent_did": "seeded-agent",
             "session_id": "s-1",
             "content": "x",
             "execution_origin": "event",
@@ -110,7 +113,7 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
     )
     .await
     .unwrap();
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
     let StageSubmission::Submitted {
         request_id,
         remaining,

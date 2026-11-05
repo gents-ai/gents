@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use axum::{
     body::Bytes,
     extract::{rejection::BytesRejection, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -206,17 +206,26 @@ fn refused(status: StatusCode, error: impl std::fmt::Display) -> Response {
 
 pub(crate) async fn install_handler(
     State(state): State<RuntimeHttpState>,
+    identity: defra_http::ExtractIdentity,
+    headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> Response {
+    let Some(actor) = identity.did().cloned() else {
+        return refused(
+            StatusCode::UNAUTHORIZED,
+            "Client authentication is required.",
+        );
+    };
     let Some(home) = state.home.clone() else {
         return refused(
             StatusCode::SERVICE_UNAVAILABLE,
             "runtime plugin store unavailable",
         );
     };
-    if state.activation_runtime.get().is_none() {
-        return refused(StatusCode::SERVICE_UNAVAILABLE, "runtime is not active");
-    }
+    let access = match delegated_install_access(&state, &headers, actor) {
+        Ok(access) => access,
+        Err(error) => return refused(StatusCode::UNAUTHORIZED, error),
+    };
     let body = match body {
         Ok(body) => body,
         Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
@@ -239,8 +248,10 @@ pub(crate) async fn install_handler(
     };
     // Detached so a dropped client cannot cancel an install mid-commit.
     let result =
-        tokio::spawn(async move { install_owned(state, PathBuf::from(home), received).await })
-            .await;
+        tokio::spawn(
+            async move { install_owned(state, PathBuf::from(home), received, access).await },
+        )
+        .await;
     match result {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(error)) => (
@@ -257,6 +268,33 @@ pub(crate) async fn install_handler(
         )
             .into_response(),
     }
+}
+
+/// HttpAuthority has already restricted Host to this runtime. Preserve that authority
+/// when forwarding the audience-bound bearer; use neither proxy headers nor a new key.
+fn delegated_install_access(
+    state: &RuntimeHttpState,
+    headers: &HeaderMap,
+    actor: identity::Did,
+) -> Result<gents::store::config_client::ConfigAccess> {
+    let authorization = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .context("caller bearer is missing")?
+        .to_str()?;
+    let host = headers
+        .get(axum::http::header::HOST)
+        .context("caller authority is missing")?
+        .to_str()?;
+    let configured = reqwest::Url::parse(state.p2p_graphql.url())?;
+    let mut endpoint = reqwest::Url::parse(&format!("{}://{host}", configured.scheme()))?;
+    endpoint.set_path(configured.path());
+    Ok(gents::store::config_client::ConfigAccess::Graphql(
+        gents::store::config_client::GraphqlEndpoint::with_authenticated_delegation(
+            endpoint.to_string(),
+            authorization,
+            actor,
+        )?,
+    ))
 }
 
 struct Received {
@@ -339,6 +377,7 @@ async fn install_owned(
     state: RuntimeHttpState,
     home: PathBuf,
     received: Received,
+    access: gents::store::config_client::ConfigAccess,
 ) -> Result<serde_json::Value> {
     let Received {
         root,
@@ -366,7 +405,6 @@ async fn install_owned(
         expect_digest: None,
         explicit: request.explicit,
     };
-    let access = gents::store::config_client::ConfigAccess::Graphql(state.p2p_graphql.clone());
     let mut result = crate::commands::pack::install_documents_pack_resolved(
         &access,
         &state.node_did,

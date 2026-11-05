@@ -6,7 +6,7 @@ open CanonicalOutput
 
 def admission : Request := ⟨"inventory", "peer", "reader", "node", "session", 1⟩
 
-def tool : Tool := ⟨90, 700, ⟨"reader", "node", "session"⟩, true, .completed⟩
+def tool : Tool := ⟨90, 700, ⟨"reader", "node", "session"⟩, "agent", true, .completed⟩
 
 def call (id sequence : Nat) (selectedTool : Tool := tool) : MessageEnvelope :=
   let blocks := [MessageBlock.toolCall selectedTool.id "call" none "write"

@@ -185,10 +185,10 @@ where
         };
         let (resume_from_history, aggregate_token_budget, context_calibration) = admitted?;
         let trace_attrs = RequestTraceAttrs::from_request(&request);
-        let agent_name = self.agent_config.agent_id.clone();
+        let agent_name = self.agent_config.agent_did.clone();
         let admission_context = AdmissionCallContext::for_request(
             &request,
-            lifecycle.agent_id(),
+            lifecycle.agent_did(),
             lifecycle.backend_id(),
         );
         // One capture scope for the whole request: the pre-request compaction
@@ -233,7 +233,7 @@ where
             ));
         }
         let handled = admission::scope_request(admission_context, async {
-            let response_agent_id = lifecycle.agent_id().to_string();
+            let response_agent_did = lifecycle.agent_did().to_string();
             lifecycle
                 .begin_owned_execution(stream_writer)
                 .instrument(tracing::info_span!(
@@ -241,7 +241,7 @@ where
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     node_did = %request.node_did,
-                    agent_id = %response_agent_id,
+                    agent_did = %response_agent_did,
                     request_hop = trace_attrs.request_hop,
                 ))
                 .await?;
@@ -327,6 +327,7 @@ where
                     let compaction_state =
                         session::load_prompt_compaction_state(
                             &self.node,
+                            &request.agent_did,
                             &request.session_id,
                             &request.node_did,
                             request.requester_did.as_deref(),
@@ -336,7 +337,7 @@ where
                                 "request.load_prompt_compaction_state",
                                 request_id = %request.request_id,
                                 session_id = %request.session_id,
-                                agent_id = %agent_name,
+                                agent_did = %agent_name,
                                 compaction_entry_count = tracing::field::Empty,
                                 compacted_message_count = tracing::field::Empty,
                                 summary_count = tracing::field::Empty,
@@ -361,7 +362,7 @@ where
                         "request.load_active_history",
                         request_id = %request.request_id,
                         session_id = %request.session_id,
-                        agent_id = %agent_name,
+                        agent_did = %agent_name,
                         compacted_through_sequence = prior_cursor.map(i64::from),
                         compacted_provider_messages_skipped = total_compacted_messages as i64,
                         cursor_hit = prior_cursor.is_some(),
@@ -377,7 +378,7 @@ where
                     let file_activity = compaction::history::extract_file_activity(&durable_history);
                     if !file_activity.is_empty() {
                         tracing::debug!(
-                            agent_id = %self.agent_config.agent_id,
+                            agent_did = %self.agent_config.agent_did,
                             session_id = %request.session_id,
                             files_read = ?file_activity.files_read,
                             files_modified = ?file_activity.files_modified,
@@ -409,7 +410,7 @@ where
                             "request.build_prompt",
                             request_id = %request.request_id,
                             session_id = %request.session_id,
-                            agent_id = %agent_name,
+                            agent_did = %agent_name,
                             history_messages = history.len(),
                             summary_count = summaries.len(),
                         ))
@@ -448,7 +449,7 @@ where
                             tracing::info!(
                                 request_id = %request.request_id,
                                 session_id = %request.session_id,
-                                agent_id = %agent_name,
+                                agent_did = %agent_name,
                                 "compaction skipped: canonical provider prefix is not a stable turn boundary"
                             );
                         }
@@ -531,6 +532,7 @@ where
                                 match session::save_exact_compaction_entry(
                                     &self.node,
                                     session::NewExactSessionCompaction {
+                                        agent_did: &request.agent_did,
                                         session_id: &request.session_id,
                                         node_did: &request.node_did,
                                         requester_did: request.requester_did.as_deref(),
@@ -597,7 +599,7 @@ where
                                 "request.build_prompt",
                                 request_id = %request.request_id,
                                 session_id = %request.session_id,
-                                agent_id = %agent_name,
+                                agent_did = %agent_name,
                                 history_messages = history.len(),
                                 summary_count = summaries.len(),
                                 compacted = true,
@@ -614,7 +616,7 @@ where
                 request_id = %request.request_id,
                 session_id = %request.session_id,
                 node_did = %request.node_did,
-                agent_id = %agent_name,
+                agent_did = %agent_name,
                 deadline_at = %trace_attrs.deadline_at,
                 has_deadline = trace_attrs.has_deadline,
                 request_hop = trace_attrs.request_hop,
@@ -661,7 +663,7 @@ where
 
             let doc_id = lifecycle.request().doc_id.clone();
 
-            let inference_agent_id = lifecycle.agent_id().to_string();
+            let inference_agent_did = lifecycle.agent_did().to_string();
             let inference_backend_id = lifecycle.backend_id().to_string();
             let result = self
                 .run_inference(
@@ -689,7 +691,7 @@ where
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     node_did = %request.node_did,
-                    agent_id = %inference_agent_id,
+                    agent_did = %inference_agent_did,
                     backend_id = %inference_backend_id,
                     deadline_at = %trace_attrs.deadline_at,
                     has_deadline = trace_attrs.has_deadline,

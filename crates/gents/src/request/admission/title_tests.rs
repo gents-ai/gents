@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -160,7 +160,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
         parent_request_id,
         target,
         target,
-        &parent.agent_id,
+        &parent.agent_did,
         &parent.session_id,
         &case.request.content,
         "interactive",
@@ -203,7 +203,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
         &case.request.request_id,
         target,
         requester,
-        &case.request.agent_id,
+        &case.request.agent_did,
         &case.request.session_id,
         &case.request.content,
         "interactive",
@@ -275,7 +275,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
         assert_eq!(admitted.request_id, case.request.request_id);
         assert_eq!(admitted.purpose, native_purpose(case.request.purpose));
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]

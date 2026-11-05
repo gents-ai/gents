@@ -58,7 +58,7 @@ pub(super) fn child_request_view(row: &Value) -> ChildRequestView {
         node_did: string_field_or_unknown(row, "node_did"),
         session_id: string_field_or_unknown(row, "session_id"),
         state: string_field_or_unknown(row, "lifecycle_state"),
-        agent_id: string_field_or_unknown(row, "agent_id"),
+        agent_did: string_field_or_unknown(row, "agent_did"),
         created_at: string_field(row, "created_at"),
         caused_by_parent_tool_call_id: string_field(row, "caused_by_parent_tool_call_id"),
     }

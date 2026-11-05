@@ -176,9 +176,9 @@ pub async fn build_session_live_delta(
     let (observed, revision) = core.store().snapshot_with_revision();
     let mut live_store = ClientStore::default();
     if let Some(node_did) = node_did {
-        if core
-            .session_unreadable_reason(session_id, node_did)
-            .is_none()
+        if let Some(reason) = core.session_unreadable_reason(session_id, node_did) {
+            anyhow::bail!(reason);
+        }
         {
             let matches = observed
                 .requests
@@ -190,34 +190,21 @@ pub async fn build_session_live_delta(
                 })
                 .collect::<Vec<_>>();
             if let [request] = matches.as_slice() {
-                let operator = core
+                let access = core
                     .operator_observation_graphql(node_did)
-                    .map(gents::store::config_client::ConfigAccess::Graphql);
-                let node_scope = core.transcript_node_scope(node_did);
-                let session = observed
+                    .map(gents::store::config_client::ConfigAccess::Graphql)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Connect to the runtime to read this session.")
+                    })?;
+                let requester = observed
                     .sessions
                     .iter()
-                    .find(|row| row.session_id == session_id && row.node_did == node_did);
-                let requester = gents_desktop_core::client::session_transcript_requester_scope(
-                    session,
-                    Some(node_did),
-                    node_scope.as_deref(),
-                    operator.is_some(),
-                );
+                    .find(|row| row.session_id == session_id && row.node_did == node_did)
+                    .and_then(|session| session.requester_did.clone());
                 if request.requester_did == requester {
-                    live_store = match operator.as_ref() {
-                        Some(access) => {
-                            gents_desktop_core::client::load_session_live_store_on(access, request)
-                                .await?
-                        }
-                        None => {
-                            gents_desktop_core::client::load_session_live_store(
-                                core.node(),
-                                request,
-                            )
-                            .await?
-                        }
-                    };
+                    live_store =
+                        gents_desktop_core::client::load_session_live_store_on(&access, request)
+                            .await?;
                 }
             }
         }
@@ -254,7 +241,7 @@ pub async fn build_session_live_delta(
                     delta.inference_activity = super::inference_activity::read_activity(
                         core, request, node, session_id, request_id,
                     )
-                    .await;
+                    .await?;
                     let latest = core.store().snapshot();
                     let current = latest
                         .requests

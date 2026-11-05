@@ -120,7 +120,7 @@ fn render_self_payload(
         .and_then(|snapshot| {
             agents
                 .iter()
-                .find(|agent_config| agent_config.agent_id == snapshot.default_agent_id)
+                .find(|agent_config| agent_config.agent_did == snapshot.default_agent_did)
         })
         .map(render_self_agent)
         .unwrap_or(Value::Null);
@@ -146,7 +146,7 @@ fn render_self_payload(
 
 fn render_self_agent(agent_config: &SelfAgent) -> Value {
     json!({
-        "agent_id": &agent_config.agent_id,
+        "agent_did": &agent_config.agent_did,
         "display_name": &agent_config.display_name,
         "model_name": &agent_config.model_name,
         "enabled": agent_config.enabled,

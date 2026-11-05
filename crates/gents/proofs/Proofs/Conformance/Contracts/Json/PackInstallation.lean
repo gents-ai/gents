@@ -67,4 +67,44 @@ def casesJson : String := jsonArray [
   caseJson "plugin_references.remote_dependency" [[]] [] ["acme/search"] [] false
 ]
 
+
+def identityBindingJson (binding : Configuration.PackIdentity.Binding) : String :=
+  "{\"slot\":" ++ jsonString binding.slot ++
+    ",\"creation_nonce\":" ++ jsonString binding.creationNonce ++
+    ",\"agent_did\":" ++ jsonString binding.agentDid ++ "}"
+
+def identityBindingsJson (bindings : List Configuration.PackIdentity.Binding) : String :=
+  jsonArray (bindings.map identityBindingJson)
+
+def identityCasesJson : String := jsonArray (Configuration.PackIdentity.cases.map fun c =>
+  let result := Configuration.PackIdentity.plan c.recorded c.requested c.provisioned
+  "{\"name\":" ++ jsonString c.name ++
+    ",\"recorded\":" ++ identityBindingsJson c.recorded ++
+    ",\"requested\":" ++ jsonStringArray c.requested ++
+    ",\"provisioned\":" ++ identityBindingsJson c.provisioned ++
+    ",\"accepted\":" ++ toString result.isSome ++
+    ",\"selected\":" ++ identityBindingsJson ((result.map (·.selected)).getD []) ++
+    ",\"next_recorded\":" ++ identityBindingsJson ((result.map (·.recorded)).getD []) ++ "}")
+
+def identityReferenceCasesJson : String := jsonArray (Configuration.PackIdentity.referenceCases.map fun c =>
+  let result := Configuration.PackIdentity.resolveDependency c.declared c.available c.dependency c.slot
+  "{\"name\":" ++ jsonString c.name ++
+    ",\"declared\":" ++ jsonStringArray c.declared ++
+    ",\"available\":" ++ jsonArray (c.available.map fun entry =>
+      "{\"coordinate\":" ++ jsonString entry.coordinate ++
+      ",\"bindings\":" ++ identityBindingsJson entry.bindings ++ "}") ++
+    ",\"dependency\":" ++ jsonString c.dependency ++
+    ",\"slot\":" ++ jsonString c.slot ++
+    ",\"expected\":" ++ (match result with
+      | none => "null" | some binding => identityBindingJson binding) ++ "}")
+
+def evalSubjectCasesJson : String := jsonArray (Configuration.PackIdentity.evalSubjectCases.map fun c =>
+  let result := Configuration.PackIdentity.resolveEvalSubject c.selected c.slot
+  "{\"name\":" ++ jsonString c.name ++
+    ",\"selected\":" ++ (match c.selected with
+      | none => "null" | some binding => identityBindingJson binding) ++
+    ",\"slot\":" ++ jsonString c.slot ++
+    ",\"expected\":" ++ (match result with
+      | none => "null" | some did => jsonString did) ++ "}")
+
 end Conformance.Contracts.PackInstallation

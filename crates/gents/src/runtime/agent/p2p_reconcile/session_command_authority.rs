@@ -42,16 +42,6 @@ pub(super) fn remote_fence_rejection(
     None
 }
 
-/// A command authored by the node itself, with no peer route, is admitted as
-/// local self authority and never consults an enrollment fence.
-pub(super) fn is_local_scope(
-    requester_did: &str,
-    requester_peer_id: Option<&str>,
-    node_did: &str,
-) -> bool {
-    requester_peer_id.is_none() && requester_did == node_did
-}
-
 pub(super) async fn current_admission(
     txn: &ConfigApplyTxn<'_>,
     store: &GraphqlEnrollmentStore,
@@ -59,11 +49,9 @@ pub(super) async fn current_admission(
     collection: &'static str,
     now: DateTime<Utc>,
 ) -> Result<Result<AgentRequestAdmissionRecord, String>> {
-    let local = is_local_scope(scope.requester_did, scope.requester_peer_id, scope.node_did);
+    let local = scope.requester_peer_id.is_none();
     let mut expected_admission =
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-            scope.requester_did,
-        );
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(scope.requester_did);
     if !local {
         let Some(peer) = scope.requester_peer_id else {
             return Ok(Err("remote command lacks requester peer identity".into()));
@@ -210,13 +198,5 @@ mod tests {
             remote_fence_rejection(&expired_elsewhere, NODE, at("2030-01-01T00:04:59Z")),
             Some("enrollment targets another node")
         );
-    }
-
-    #[test]
-    fn local_self_scope_is_unchanged() {
-        assert!(is_local_scope(NODE, None, NODE));
-        assert!(!is_local_scope(MEMBER, None, NODE));
-        assert!(!is_local_scope(NODE, Some("member-peer"), NODE));
-        assert!(!is_local_scope(MEMBER, Some("member-peer"), NODE));
     }
 }

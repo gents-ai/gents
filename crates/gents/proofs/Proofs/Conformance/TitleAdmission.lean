@@ -98,11 +98,11 @@ private def world (c : Case) : World :=
 
 private def activation (c : Case) : Option Handover.AuxiliaryActivation :=
   _root_.AuxiliaryAdmission.activation? ids c.available ({} : Enrollment.State)
-    c.request c.admission evidence c.request.agentId c.row 7 20 30
+    c.request c.admission evidence c.request.agentDid c.row 7 20 30
 
 private def claimed (c : Case) : Option World :=
   _root_.AuxiliaryAdmission.activate? (world c) 9 1 ids c.available
-    ({} : Enrollment.State) c.request c.admission evidence c.request.agentId
+    ({} : Enrollment.State) c.request c.admission evidence c.request.agentDid
     c.row 7 20 30 99
     { transportRetries := 0, resampleRetries := 0, allowRepair := false } none
 
@@ -131,7 +131,7 @@ private theorem wrong_world_physical_rejects_valid_activation :
 
 private theorem unavailable_observation_retries_without_claim :
     Enrollment.auxiliaryPendingDisposition false ({} : Enrollment.State) baseRequest baseAdmission
-      evidence baseRequest.agentId unavailableCase.row.branchFieldsExact
+      evidence baseRequest.agentDid unavailableCase.row.branchFieldsExact
       unavailableCase.row.pendingDeadlineAbsent unavailableCase.row.maxRequestHop = .retry ∧
       (claimed unavailableCase).isNone = true := by
   native_decide

@@ -338,7 +338,7 @@ where
             request_id: "request".into(),
             node_did: "did:test:node".into(),
             requester_did: String::new(),
-            agent_id: "general".into(),
+            agent_did: "general".into(),
             session_id: "session".into(),
             model_name: "claude".into(),
             provider_family: None,

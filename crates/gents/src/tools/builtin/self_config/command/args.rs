@@ -10,7 +10,7 @@ pub(super) fn parse_limit(parsed: &ParsedArgs) -> Result<usize> {
 }
 
 pub(super) fn extract_agent_target(argv: &[String]) -> Result<(Option<String>, Vec<String>)> {
-    let mut agent_id = None;
+    let mut agent_did = None;
     let mut rest = Vec::with_capacity(argv.len());
     let mut index = 0;
     while index < argv.len() {
@@ -20,7 +20,7 @@ pub(super) fn extract_agent_target(argv: &[String]) -> Result<(Option<String>, V
             Some(
                 argv.get(index)
                     .filter(|value| !value.starts_with("--"))
-                    .context("--agent requires a AGENT_ID")?
+                    .context("--agent requires a AGENT_DID")?
                     .clone(),
             )
         } else {
@@ -29,10 +29,10 @@ pub(super) fn extract_agent_target(argv: &[String]) -> Result<(Option<String>, V
         if let Some(value) = value {
             anyhow::ensure!(
                 !value.trim().is_empty(),
-                "--agent requires a non-empty AGENT_ID"
+                "--agent requires a non-empty AGENT_DID"
             );
             anyhow::ensure!(
-                agent_id.replace(value).is_none(),
+                agent_did.replace(value).is_none(),
                 "--agent may be supplied once"
             );
         } else {
@@ -40,7 +40,7 @@ pub(super) fn extract_agent_target(argv: &[String]) -> Result<(Option<String>, V
         }
         index += 1;
     }
-    Ok((agent_id, rest))
+    Ok((agent_did, rest))
 }
 
 /// `--shared acknowledge` (or `options.shared = "acknowledge"`): accept an

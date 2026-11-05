@@ -240,7 +240,7 @@ export function createChatActions({
 
   async function sendMessage(
     content: string,
-    agentId?: string | null,
+    agentDid?: string | null,
     attachments: RequestAttachment[] = [],
     followUp?: QueueDelivery,
     acceptsView: () => boolean = () => true,
@@ -270,9 +270,9 @@ export function createChatActions({
       return null;
     }
     const admission =
-      agentId === undefined
+      agentDid === undefined
         ? projection.agentReadiness
-        : selectedNodeReadinessDecision(node, agentId);
+        : selectedNodeReadinessDecision(node, agentDid);
     if (admission.kind !== "ready") {
       reportSendFailure("The selected agent is unavailable");
       return null;
@@ -305,7 +305,7 @@ export function createChatActions({
       if (earlier) {
         const reply = await api.sendChatMessage({
           nodeDid: node.nodeDid,
-          agentId: admission.agentId,
+          agentDid: admission.agentDid,
           sessionId: earlier.sessionId,
           content,
           attachments,
@@ -336,7 +336,7 @@ export function createChatActions({
             requestId: reply.requestId,
             nodeDid: reply.nodeDid,
             sessionId: reply.sessionId,
-            agentId: reply.agentId,
+            agentDid: reply.agentDid,
             content,
             attachments,
             cwd,
@@ -351,7 +351,7 @@ export function createChatActions({
         {
           clientDid: callerDid,
           nodeDid: node.nodeDid,
-          agentId: admission.agentId,
+          agentDid: admission.agentDid,
           sessionId: selectedSessionId,
           content,
           attachments,
@@ -390,7 +390,7 @@ export function createChatActions({
       already on the session is replaced, fenced on the revision observed. */
   async function setGoal(
     objective: string,
-    agentId?: string | null,
+    agentDid?: string | null,
     acceptsView: () => boolean = () => true,
   ): Promise<GoalControlResult | null> {
     if (submissionInFlight) return null;
@@ -403,9 +403,9 @@ export function createChatActions({
       return null;
     }
     const admission =
-      agentId === undefined
+      agentDid === undefined
         ? projection.agentReadiness
-        : selectedNodeReadinessDecision(node, agentId);
+        : selectedNodeReadinessDecision(node, agentDid);
     if (admission.kind !== "ready") {
       reportFailure("The selected agent is unavailable");
       return null;
@@ -444,7 +444,7 @@ export function createChatActions({
           sessionId: selectedSessionId,
           sessionDocId: current?.sessionDocId ?? null,
           expected: current?.goal?.revision ?? null,
-          agentId: admission.agentId,
+          agentDid: admission.agentDid,
           action: { kind: "create", objective, tokenBudget: null },
           cwd: goalCwd,
         },
@@ -491,7 +491,7 @@ export function createChatActions({
           sessionId,
           sessionDocId: current.sessionDocId,
           expected: current.goal.revision,
-          agentId: null,
+          agentDid: null,
           action: originalAction,
           cwd: null,
         },

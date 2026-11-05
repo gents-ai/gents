@@ -9,6 +9,7 @@ pub struct P2pSyncStatusSnapshot {
     pub broadcast_coalesced_total: u64,
     pub push_updates_coalesced_total: u64,
     pub gossip_direction_filtered_total: u64,
+    pub gossip_unfollowed_dropped_total: u64,
     pub pending_dags: usize,
     pub pending_dag_capacity: usize,
     pub pending_dag_high_water: u64,
@@ -213,7 +214,7 @@ impl P2pSyncStatusAdapter for JsonP2pSyncStatusAdapter {
 }
 
 pub async fn observe_embedded_sync_status(
-    node: &crate::defra_node::EmbeddedNode,
+    node: &crate::defra_node::Node,
 ) -> anyhow::Result<P2pSyncStatusSnapshot> {
     use anyhow::Context;
     let p2p =

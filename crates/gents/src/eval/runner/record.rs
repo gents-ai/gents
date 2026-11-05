@@ -207,6 +207,6 @@ mod tests {
                 .len(),
             32
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shutdown node");
     }
 }

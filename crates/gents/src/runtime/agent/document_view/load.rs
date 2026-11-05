@@ -1,26 +1,26 @@
 use super::{DocumentRecord, DocumentRuntimeView};
-use crate::documents::ensure_node;
 use crate::store::collection::Collection;
 use crate::store::config_client::{config_projection, ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde::de::DeserializeOwned;
 
-pub(crate) async fn load_document_runtime_view(
+pub(crate) async fn load_document_runtime_view_as(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
+    reader_did: &str,
 ) -> Result<DocumentRuntimeView> {
     anyhow::ensure!(
         !node_did.trim().is_empty(),
         "runtime view requires an owner DID"
     );
-    ensure_node(node, node_did).await?;
+    let reader = identity::Did::new(reader_did.to_owned()).context("invalid runtime reader DID")?;
     let owner = node_did.to_owned();
     let mut view = ConfigAccess::transact_local_readonly(
         node,
-        None,
+        Some(reader.clone()),
         "load_runtime_document_view",
         move |txn| {
             let owner = owner.clone();
@@ -97,23 +97,25 @@ pub(crate) async fn load_document_runtime_view(
                     event_sources,
                     tool_services,
                 );
+                for backend_id in view.backends.keys() {
+                    if let Some(observation) =
+                        crate::inference::backends::registry::lookup_backend_observation_in_txn(
+                            txn, &owner, backend_id,
+                        )
+                        .await?
+                    {
+                        view.backend_observations
+                            .insert(backend_id.clone(), observation);
+                    }
+                }
                 Ok::<_, anyhow::Error>(view)
             })
         },
     )
     .await?;
-    for backend_id in view.backends.keys() {
-        if let Some(observation) = crate::inference::backends::registry::lookup_backend_observation(
-            node, node_did, backend_id,
-        )
-        .await?
-        {
-            view.backend_observations
-                .insert(backend_id.clone(), observation);
-        }
-    }
+    let access = ConfigAccess::local_as(node.clone(), reader);
     for credential in
-        crate::inference::auth::credential::list_oauth_credentials(node, node_did).await?
+        crate::inference::auth::credential::list_oauth_credentials_on(&access, node_did).await?
     {
         let doc_id = credential
             .doc_id
@@ -138,6 +140,14 @@ pub(crate) async fn load_document_runtime_view(
         );
     }
     Ok(view)
+}
+
+#[cfg(test)]
+pub(crate) async fn load_document_runtime_view(
+    node: &std::sync::Arc<EmbeddedNode>,
+    node_did: &str,
+) -> Result<DocumentRuntimeView> {
+    load_document_runtime_view_as(node, node_did, node_did).await
 }
 
 pub(super) fn decode_record<T>(name: &str, id: &str, canonical: serde_json::Value) -> Result<T>

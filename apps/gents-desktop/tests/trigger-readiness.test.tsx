@@ -21,7 +21,7 @@ const trigger = deployment.triggers.find((t) => t.config.trigger_id === "trigger
 describe("trigger readiness", () => {
   it("defers to the bridge's agent readiness decision", () => {
     const blocked = withReadiness([
-      { state: "unavailable", agentId: "default", reason: "credentials_required" },
+      { state: "unavailable", agentDid: "default", reason: "credentials_required" },
     ] as DeploymentView["nodeReadiness"]["agents"]);
     expect(triggerReadiness(blocked, trigger)).toEqual({
       ok: false,
@@ -31,14 +31,14 @@ describe("trigger readiness", () => {
 
   it("is not blocked when the bridge says the agent is ready", () => {
     const ready = withReadiness([
-      { state: "ready", agentId: "default" },
+      { state: "ready", agentDid: "default" },
     ] as DeploymentView["nodeReadiness"]["agents"]);
     expect(triggerReadiness(ready, trigger).ok).toBe(true);
   });
 
   it("never promises a trigger is Ready", () => {
     const ready = withReadiness([
-      { state: "ready", agentId: "default" },
+      { state: "ready", agentDid: "default" },
     ] as DeploymentView["nodeReadiness"]["agents"]);
     renderIn(testApp(), <TriggersPanel deployment={ready} item="trigger-a" />);
     expect(screen.queryByText("Ready")).toBeNull();
@@ -55,7 +55,7 @@ describe("dependents", () => {
       ...deployment,
       agentTargets: [
         ...deployment.agentTargets,
-        { agent_id: "ops" } as DeploymentView["agentTargets"][number],
+        { agent_did: "ops" } as DeploymentView["agentTargets"][number],
       ],
     };
     expect(dependents(withTarget, "agent", "ops")).toContain("1 agent target");

@@ -12,12 +12,13 @@ pub struct SessionTokenUsage {
 
 pub async fn session_token_usage(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: &identity::Did,
     node_did: &str,
     session_id: &str,
 ) -> Result<i64> {
     crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
-        None,
+        Some(actor.clone()),
         "goal.session_usage",
         |txn| Box::pin(async move { session_token_usage_in_txn(txn, node_did, session_id).await }),
     )
@@ -45,9 +46,10 @@ pub(crate) async fn session_token_usage_breakdown_in_txn(
 
 pub async fn refresh_goal_usage(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: &identity::Did,
     goal: &GoalDocument,
 ) -> Result<i64> {
-    let tokens = session_token_usage(node, &goal.node_did, &goal.session_id)
+    let tokens = session_token_usage(node, actor, &goal.node_did, &goal.session_id)
         .await?
         .saturating_sub(goal.token_usage_baseline.unwrap_or_default().max(0))
         .max(0);
@@ -66,6 +68,7 @@ pub async fn refresh_goal_usage(
         .context("Goal usage snapshot has an unknown status")?;
     update_goal_fields_if_status(
         node,
+        actor,
         goal,
         status,
         &format!(

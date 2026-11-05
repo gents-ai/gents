@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Result};
 use chrono::Utc;
 use gents::documents::ToolServiceRegistry;
-use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::store::graphql::escape_graphql_string;
 use gents::{
     run_health_check_cycle, HealthCheckerOptions, McpHealthCheckService, McpPool, ServiceHealthMap,
 };
@@ -48,14 +48,10 @@ pub(crate) async fn load_mcp_services_with_health_for_node(
         }}"#
     );
 
-    let response =
-        graphql_with_transaction_retry(core.node(), &query, "list_mcp_services_with_health query")
-            .await?;
+    let response = core.operator_access(node_did)?.execute(&query).await?;
 
     let raw = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("ToolServiceHealthState"))
+        .pointer("/data/ToolServiceHealthState")
         .and_then(|value| value.as_array())
         .cloned()
         .unwrap_or_default();
@@ -219,13 +215,9 @@ async fn load_registry_entry(
             }}
         }}"#
     );
-    let response =
-        graphql_with_transaction_retry(core.node(), &query, "probe_mcp_service registry query")
-            .await?;
+    let response = core.operator_access(node_did)?.execute(&query).await?;
     let row = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("ToolServiceRegistry"))
+        .pointer("/data/ToolServiceRegistry")
         .and_then(|rows| rows.as_array())
         .and_then(|rows| rows.first())
         .cloned()
@@ -239,20 +231,25 @@ mod probe_scope_tests {
 
     #[tokio::test]
     async fn registry_probe_resolves_the_node_and_service_compound_key() -> Result<()> {
-        let (core, _tempdir) = crate::tests::support::boot_core().await;
-        gents::store::config_client::ConfigAccess::write_local(
-            &core.node_arc(),
-            "test.mcp_probe_scope",
-            r#"mutation {
-                first: create_ToolServiceRegistry(input: {
-                    node_did: "did:test:first", service_id: "shared", hostname: "first", enabled: true
-                }) { _docID }
-                second: create_ToolServiceRegistry(input: {
-                    node_did: "did:test:second", service_id: "shared", hostname: "second", enabled: true
-                }) { _docID }
-            }"#,
-        ).await?;
-        for (node, hostname) in [("did:test:first", "first"), ("did:test:second", "second")] {
+        let (core, runtime, _directory) = crate::tests::support::runtime_core().await;
+        let (other_core, other_runtime, _other_directory) =
+            crate::tests::support::runtime_core().await;
+        let first = runtime.node_identity_did().unwrap();
+        let second = other_runtime.node_identity_did().unwrap();
+        let endpoint = other_core.operator_graphql(second).unwrap();
+        core.add_local_standard_peer_route_for_test(
+            "Other runtime",
+            "127.0.0.1:56002/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
+            second,
+            endpoint.url(),
+            "/tmp/mcp-test-other",
+        )
+        .await?;
+        for (node, hostname) in [(first, "first"), (second, "second")] {
+            core.operator_access(node)?.write("test.mcp_probe_scope", &format!(
+                "mutation {{ create_ToolServiceRegistry(input: {{node_did: \"{}\", service_id: \"shared\", hostname: \"{}\", enabled: true}}) {{_docID}} }}",
+                escape_graphql_string(node), escape_graphql_string(hostname),
+            )).await?;
             let row = load_registry_entry(&core, node, "shared").await?;
             assert_eq!(row.node_did, node);
             assert_eq!(row.hostname.as_deref(), Some(hostname));
@@ -261,6 +258,9 @@ mod probe_scope_tests {
             .await
             .is_err());
         core.shutdown().await?;
+        other_core.shutdown().await?;
+        runtime.shutdown().await.unwrap();
+        other_runtime.shutdown().await.unwrap();
         Ok(())
     }
 }

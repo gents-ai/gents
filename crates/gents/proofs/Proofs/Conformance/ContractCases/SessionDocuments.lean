@@ -35,6 +35,44 @@ example : observedStarter (some (5, 6)) (some starterReceipt) 8 (some ⟨5, 6, s
 example : observedStarter (some (5, 6)) (some starterReceipt) 8 none (some 12) true = none := by decide
 example : observedStarter none (some starterReceipt) 8 (some ⟨5, 6, some 7⟩) (some 11) true = none := by decide
 
+def admissionRequested : Document :=
+  { session with
+    title := some ⟨"task", .task⟩
+    provenance := some {
+      task := some 4
+      parentRequestDoc := some 11
+      startedBy := some ⟨5, 6, some 7⟩
+      openingRequestDoc := some 9 } }
+
+def admissionInput : AdmissionInput :=
+  { requested := admissionRequested, actor := 2, sessionDoc := 8, agentDoc := 30,
+    requestDoc := 9, receipt := some starterReceipt, authorized := true, commit := true }
+
+def unattendedRequested : Document :=
+  { admissionRequested with provenance := some { task := some 4, openingRequestDoc := some 9 } }
+
+def admissionExisting : AgentSession.AdmissionState :=
+  { session := some session, sessionOwner := some 2, sessionDoc := some 8,
+    sessionParent := some 30, sessionWorker := some 3, receipt := some starterReceipt }
+
+def admissionCases : List (String × AgentSession.AdmissionState × AdmissionInput) :=
+  [ ("client_creation", {}, admissionInput)
+  , ("agent_unattended_creation", {}, { admissionInput with actor := 3, requested := unattendedRequested })
+  , ("nested_other_agent_creation", {}, { admissionInput with actor := 7 })
+  , ("grant_denied_rolls_back", {}, { admissionInput with authorized := false })
+  , ("commit_failure_rolls_back", {}, { admissionInput with commit := false })
+  , ("reuse_preserves_title_and_receipt", admissionExisting, admissionInput)
+  , ("changed_agent_rejected", admissionExisting,
+      { admissionInput with requested := { admissionRequested with agent := 99 } })
+  , ("incomplete_session_rejected", { admissionExisting with sessionDoc := none }, admissionInput) ]
+
+example : (admitRequest {} admissionInput).requestParent = some 8 := by decide
+example : (admitRequest {} admissionInput).requestWorker = some 3 := by decide
+example : (admitRequest {} { admissionInput with actor := 3 }).sessionOwner = some 3 := by decide
+example : (admitRequest {} { admissionInput with actor := 3 }).requestWorker = none := by decide
+example : (admitRequest admissionExisting admissionInput).session = some session := by decide
+example : (admitRequest admissionExisting admissionInput).receipt = some starterReceipt := by decide
+
 def request (id time : Nat) : RequestFact :=
   { purpose := .normal, scope, agent:= 3, createdAt := time, observed := ⟨id + 100, id, .failed⟩ }
 def old := request 1 2
@@ -70,7 +108,7 @@ example : refresh indexed [{ completedRequest with agent:= 99 }]
 
 def retryState : SessionState :=
   { sessionId := 10
-    agentId := 3
+    agentDid := 3
     requestIds := {1}
     latest := 1
     ctx := fun _ =>

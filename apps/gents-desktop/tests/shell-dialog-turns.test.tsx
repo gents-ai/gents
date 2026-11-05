@@ -159,7 +159,7 @@ function sessionApp() {
     session: {
       sessionId: "session",
       nodeDid: "did:key:node",
-      agentId: "agent",
+      agentDid: "agent",
       title: "Session",
       turnState: "completed",
       timelineItems: [],
@@ -169,7 +169,7 @@ function sessionApp() {
       goal: null,
       context,
     } as unknown as DesktopSessionSnapshot,
-    selection: { agentId: "agent" },
+    selection: { agentDid: "agent" },
   });
 }
 

@@ -107,7 +107,7 @@ pub fn is_behavior_unavailable_rejection(failure_reason: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentReadinessEntry {
-    pub agent_id: String,
+    pub agent_did: String,
     pub state: AgentReadinessState,
     pub reason: Option<AgentReadinessUnavailableReason>,
 }
@@ -119,13 +119,13 @@ pub struct NodeReadinessSnapshot {
     pub process_state: NodeReadinessProcessState,
     pub active_generation: u64,
     pub router_generation: u64,
-    pub default_agent_id: String,
+    pub default_agent_did: String,
     pub agents: Vec<AgentReadinessEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentReadinessSourceEntry {
-    pub agent_id: String,
+    pub agent_did: String,
     pub dispatcher_present: bool,
     pub unavailable_reason: Option<AgentReadinessUnavailableReason>,
     pub startup_demoted: bool,
@@ -160,22 +160,22 @@ pub fn project_node_readiness_source(
     process_state: NodeReadinessProcessState,
     active_generation: u64,
     router_generation: u64,
-    default_agent_id: impl Into<String>,
+    default_agent_did: impl Into<String>,
     sources: impl IntoIterator<Item = AgentReadinessSourceEntry>,
 ) -> Result<NodeReadinessSnapshot, String> {
-    let default_agent_id = default_agent_id.into();
-    if !is_canonical_id(&default_agent_id) {
+    let default_agent_did = default_agent_did.into();
+    if !is_canonical_id(&default_agent_did) {
         return Err(format!(
-            "default agent {default_agent_id:?} is not canonical"
+            "default agent {default_agent_did:?} is not canonical"
         ));
     }
 
     let mut agents = BTreeMap::new();
     for source in sources {
-        if !is_canonical_id(&source.agent_id) {
+        if !is_canonical_id(&source.agent_did) {
             return Err(format!(
                 "agent identifier {:?} is not canonical",
-                source.agent_id
+                source.agent_did
             ));
         }
         let entry = match effective_agent_readiness_admission(
@@ -184,28 +184,28 @@ pub fn project_node_readiness_source(
             source.startup_demoted,
         ) {
             EffectiveAgentReadinessAdmission::Ready => Some(AgentReadinessEntry {
-                agent_id: source.agent_id.clone(),
+                agent_did: source.agent_did.clone(),
                 state: AgentReadinessState::Ready,
                 reason: None,
             }),
             EffectiveAgentReadinessAdmission::Unavailable(reason) => Some(AgentReadinessEntry {
-                agent_id: source.agent_id.clone(),
+                agent_did: source.agent_did.clone(),
                 state: AgentReadinessState::Unavailable,
                 reason: Some(reason),
             }),
             EffectiveAgentReadinessAdmission::Unassigned => None,
         };
-        if agents.insert(source.agent_id, entry).is_some() {
+        if agents.insert(source.agent_did, entry).is_some() {
             return Err("duplicate agent readiness source".to_string());
         }
     }
     let agents = agents.into_values().flatten().collect::<Vec<_>>();
     if !agents
         .iter()
-        .any(|entry| entry.agent_id == default_agent_id)
+        .any(|entry| entry.agent_did == default_agent_did)
     {
         return Err(format!(
-            "default agent {default_agent_id:?} is not assigned"
+            "default agent {default_agent_did:?} is not assigned"
         ));
     }
 
@@ -214,7 +214,7 @@ pub fn project_node_readiness_source(
         process_state,
         active_generation,
         router_generation,
-        default_agent_id,
+        default_agent_did,
         agents,
     })
 }
@@ -248,7 +248,7 @@ pub enum ProjectedAgentReadiness {
 pub struct NodeReadinessProjection {
     pub active_generation: Option<u64>,
     pub router_generation: Option<u64>,
-    pub default_agent_id: Option<String>,
+    pub default_agent_did: Option<String>,
     pub updated_at: Option<String>,
     pub unknown_reason: Option<AgentReadinessUnknownReason>,
     pub agents: BTreeMap<String, ProjectedAgentReadiness>,
@@ -272,18 +272,18 @@ fn is_canonical_id(value: &str) -> bool {
 }
 
 fn unknown_projection(
-    agent_ids: BTreeSet<String>,
+    agent_dids: BTreeSet<String>,
     reason: AgentReadinessUnknownReason,
 ) -> NodeReadinessProjection {
     NodeReadinessProjection {
         active_generation: None,
         router_generation: None,
-        default_agent_id: None,
+        default_agent_did: None,
         updated_at: None,
         unknown_reason: Some(reason),
-        agents: agent_ids
+        agents: agent_dids
             .into_iter()
-            .map(|agent_id| (agent_id, ProjectedAgentReadiness::Unknown(reason)))
+            .map(|agent_did| (agent_did, ProjectedAgentReadiness::Unknown(reason)))
             .collect(),
     }
 }
@@ -314,7 +314,7 @@ pub fn decode_node_readiness_snapshot(
     let snapshot = serde_json::from_str::<NodeReadinessSnapshot>(&row.snapshot_json)
         .map_err(|_| AgentReadinessUnknownReason::ReadinessMalformed)?;
     let entries_are_canonical = snapshot.agents.iter().all(|entry| {
-        is_canonical_id(&entry.agent_id)
+        is_canonical_id(&entry.agent_did)
             && match entry.state {
                 AgentReadinessState::Ready => entry.reason.is_none(),
                 AgentReadinessState::Unavailable => entry.reason.is_some(),
@@ -322,14 +322,14 @@ pub fn decode_node_readiness_snapshot(
     }) && snapshot
         .agents
         .windows(2)
-        .all(|pair| pair[0].agent_id < pair[1].agent_id);
-    if !entries_are_canonical || !is_canonical_id(&snapshot.default_agent_id) {
+        .all(|pair| pair[0].agent_did < pair[1].agent_did);
+    if !entries_are_canonical || !is_canonical_id(&snapshot.default_agent_did) {
         return Err(AgentReadinessUnknownReason::ReadinessMalformed);
     }
     if !snapshot
         .agents
         .iter()
-        .any(|entry| entry.agent_id == snapshot.default_agent_id)
+        .any(|entry| entry.agent_did == snapshot.default_agent_did)
     {
         return Err(AgentReadinessUnknownReason::AgentNotAssigned);
     }
@@ -366,7 +366,7 @@ pub fn project_node_readiness_summary(
             AgentReadinessState::Ready => ready_count += 1,
             AgentReadinessState::Unavailable => {
                 unavailable_agents.insert(
-                    entry.agent_id.clone(),
+                    entry.agent_did.clone(),
                     entry
                         .reason
                         .expect("canonical unavailable entry has reason"),
@@ -384,44 +384,44 @@ pub fn project_node_readiness_summary(
 pub fn project_node_readiness<'a>(
     row: Option<&NodeReadinessRow>,
     expected_node_did: &str,
-    configured_agent_ids: impl IntoIterator<Item = &'a str>,
-    configured_default_agent_id: Option<&str>,
+    configured_agent_dids: impl IntoIterator<Item = &'a str>,
+    configured_default_agent_did: Option<&str>,
 ) -> NodeReadinessProjection {
-    let mut agent_ids = BTreeSet::new();
+    let mut agent_dids = BTreeSet::new();
     let mut configured_ids_malformed = false;
-    for agent_id in configured_agent_ids {
-        if !is_canonical_id(agent_id) {
+    for agent_did in configured_agent_dids {
+        if !is_canonical_id(agent_did) {
             configured_ids_malformed = true;
         } else {
-            agent_ids.insert(agent_id.to_owned());
+            agent_dids.insert(agent_did.to_owned());
         }
     }
-    if let Some(default_agent_id) = configured_default_agent_id {
-        if !is_canonical_id(default_agent_id) {
+    if let Some(default_agent_did) = configured_default_agent_did {
+        if !is_canonical_id(default_agent_did) {
             configured_ids_malformed = true;
         } else {
-            agent_ids.insert(default_agent_id.to_owned());
+            agent_dids.insert(default_agent_did.to_owned());
         }
     }
     if configured_ids_malformed {
-        return unknown_projection(agent_ids, AgentReadinessUnknownReason::ReadinessMalformed);
+        return unknown_projection(agent_dids, AgentReadinessUnknownReason::ReadinessMalformed);
     }
 
     let Some(row) = row else {
-        return unknown_projection(agent_ids, AgentReadinessUnknownReason::ReadinessMissing);
+        return unknown_projection(agent_dids, AgentReadinessUnknownReason::ReadinessMissing);
     };
     let snapshot = match decode_node_readiness_snapshot(row, expected_node_did) {
         Ok(snapshot) => snapshot,
-        Err(reason) => return unknown_projection(agent_ids, reason),
+        Err(reason) => return unknown_projection(agent_dids, reason),
     };
 
     let entries = snapshot
         .agents
         .into_iter()
-        .map(|entry| (entry.agent_id.clone(), entry))
+        .map(|entry| (entry.agent_did.clone(), entry))
         .collect::<BTreeMap<_, _>>();
-    agent_ids.extend(entries.keys().cloned());
-    debug_assert!(entries.contains_key(&snapshot.default_agent_id));
+    agent_dids.extend(entries.keys().cloned());
+    debug_assert!(entries.contains_key(&snapshot.default_agent_did));
     let global_unknown = if !snapshot.process_state.accepts_work() {
         Some(AgentReadinessUnknownReason::ProcessNotReady)
     } else if snapshot.active_generation == 0
@@ -431,13 +431,13 @@ pub fn project_node_readiness<'a>(
     } else {
         None
     };
-    let agents = agent_ids
+    let agents = agent_dids
         .into_iter()
-        .map(|agent_id| {
+        .map(|agent_did| {
             let state = if let Some(reason) = global_unknown {
                 ProjectedAgentReadiness::Unknown(reason)
             } else {
-                match entries.get(&agent_id) {
+                match entries.get(&agent_did) {
                     Some(AgentReadinessEntry {
                         state: AgentReadinessState::Ready,
                         reason: None,
@@ -454,13 +454,13 @@ pub fn project_node_readiness<'a>(
                     ),
                 }
             };
-            (agent_id, state)
+            (agent_did, state)
         })
         .collect();
     NodeReadinessProjection {
         active_generation: Some(snapshot.active_generation),
         router_generation: Some(snapshot.router_generation),
-        default_agent_id: Some(snapshot.default_agent_id),
+        default_agent_did: Some(snapshot.default_agent_did),
         updated_at: Some(row.updated_at.clone()),
         unknown_reason: global_unknown,
         agents,

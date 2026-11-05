@@ -27,8 +27,8 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
         AcceptedTurnSpec {
             backend_id: "mailbox-tool-turn-backend",
             model: "mailbox-tool-turn-model",
-            parent_agent_id: AGENT,
-            configured_agent_ids: &[AGENT],
+            parent_agent_did: AGENT,
+            configured_agent_dids: &[AGENT],
             request_id,
             session_id: "mailbox-tool-turn-session",
             prompt,
@@ -242,8 +242,8 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
         AcceptedTurnSpec {
             backend_id: "mailbox-question-backend",
             model: "mailbox-question-model",
-            parent_agent_id: AGENT,
-            configured_agent_ids: &[AGENT],
+            parent_agent_did: AGENT,
+            configured_agent_dids: &[AGENT],
             request_id: "mailbox-question-request",
             session_id,
             prompt: "mailbox-question-prompt",
@@ -374,7 +374,7 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
 }
 
 pub(super) async fn request_state(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     request_id: &str,
 ) -> Option<String> {
     let response = node
@@ -432,8 +432,8 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
         AcceptedTurnSpec {
             backend_id: "mailbox-question-busy-backend",
             model: "mailbox-question-busy-model",
-            parent_agent_id: AGENT,
-            configured_agent_ids: &[AGENT],
+            parent_agent_did: AGENT,
+            configured_agent_dids: &[AGENT],
             request_id: asking,
             session_id,
             prompt,

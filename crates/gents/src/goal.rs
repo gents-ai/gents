@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +20,8 @@ mod history;
 mod load;
 mod observation;
 mod operator_resume;
+#[cfg(test)]
+pub(crate) use operator_resume::support as operator_resume_test_support;
 mod readiness_gate;
 mod request_assignment;
 mod request_head;
@@ -33,6 +35,8 @@ mod write;
 pub(crate) use claimed_publication::{
     publish_claimed_continuation, stop_claimed_continuation_for_unavailable_agent,
 };
+#[cfg(test)]
+pub(crate) use client_control::agent_document_for_test;
 pub(crate) use client_control::{prepare_goal_control, stage_goal_control};
 pub use client_submission::{
     load_applied_opening_goal_id, load_applied_opening_goal_ids,
@@ -58,6 +62,7 @@ pub(crate) use observation::{reconcile_goal_observations, SOURCES as GOAL_OBSERV
 pub use operator_resume::{
     resume_goal_on_account, resume_goal_request, GoalResumeOnReceipt, GoalResumeReceipt,
 };
+pub(crate) use readiness_gate::goal_reconcile_settled;
 pub use readiness_gate::{
     gate_claimed_goal_continuation, gate_goal_continuation, goal_agent_observation,
     goal_failure_cause, goal_readiness_newer_than_terminal, next_goal_infrastructure_retries,

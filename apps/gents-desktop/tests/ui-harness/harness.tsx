@@ -11,9 +11,6 @@ declare global {
     __GENTS_MOBILE_PERFORMANCE__?: NonNullable<
       ReturnType<typeof createDesktopUiHarness>["performance"]
     >;
-    __GENTS_SESSION_SYNC__?: NonNullable<
-      ReturnType<typeof createDesktopUiHarness>["sessionSync"]
-    >;
   }
 }
 
@@ -53,9 +50,6 @@ if ("bridgeUrl" in harness && harness.bridgeUrl) {
 }
 if ("performance" in harness && harness.performance) {
   window.__GENTS_MOBILE_PERFORMANCE__ = harness.performance;
-}
-if ("sessionSync" in harness && harness.sessionSync) {
-  window.__GENTS_SESSION_SYNC__ = harness.sessionSync;
 }
 
 setTimingForTests({

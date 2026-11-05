@@ -1,4 +1,4 @@
-type CompactionEntry @branchable {
+type CompactionEntry {
     compaction_key: String @index(unique: true)
     session_id: String @index
     node_did: String @index @immutable

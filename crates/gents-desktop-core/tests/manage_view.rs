@@ -73,20 +73,20 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
 
     let agent: Agent = serde_json::from_value(json!({
         "node_did": node_did,
-        "agent_id": "amy-default",
+        "agent_did": "amy-default",
         "display_name": "Amy Default",
         "inference_profile_id": "profile-amy",
         "tags": ["managed"]
     }))?;
     core.save_agent(&agent).await?;
-    node.default_agent_id = Some("amy-default".into());
+    node.default_agent_did = Some("amy-default".into());
     core.save_node(&node).await?;
 
     let task: Task = serde_json::from_value(json!({
         "node_did": node_did,
         "task_id": "task-amy-daily",
         "display_name": "Daily Amy",
-        "agent_id": "amy-default",
+        "agent_did": "amy-default",
         "prompt_template": "Check the daily queue.",
         "tags": ["managed"]
     }))?;
@@ -133,11 +133,11 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
     }));
     assert!(snapshot.agents.iter().any(|row| {
         row.node_did == node_did
-            && row.agent_id == "amy-default"
+            && row.agent_did == "amy-default"
             && row.inference_profile_id == "profile-amy"
     }));
     assert!(snapshot.tasks.iter().any(|row| {
-        row.node_did == node_did && row.task_id == "task-amy-daily" && row.agent_id == "amy-default"
+        row.node_did == node_did && row.task_id == "task-amy-daily" && row.agent_did == "amy-default"
     }));
     assert!(snapshot
         .schedules
@@ -190,18 +190,18 @@ async fn desktop_task_run_defers_declared_goal_until_claim() -> Result<()> {
     core.save_inference_profile(&profile).await?;
     let agent: Agent = serde_json::from_value(json!({
         "node_did": node_did,
-        "agent_id": "durable",
+        "agent_did": "durable",
         "inference_profile_id": "durable-profile"
     }))?;
     core.save_agent(&agent).await?;
-    node.default_agent_id = Some("durable".into());
+    node.default_agent_did = Some("durable".into());
     core.save_node(&node).await?;
 
     let task: Task = serde_json::from_value(json!({
         "node_did": node_did,
         "task_id": "durable-task",
         "display_name": "Durable task",
-        "agent_id": "durable",
+        "agent_did": "durable",
         "prompt_template": "Handle {{ args.item }}",
         "goal_objective_template": "Finish {{ args.item }}",
         "goal_token_budget": 10000
@@ -216,7 +216,7 @@ async fn desktop_task_run_defers_declared_goal_until_claim() -> Result<()> {
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc_id}" }} }} ) {{
-                _docID request_id purpose node_did requester_did agent_id
+                _docID request_id purpose node_did requester_did agent_did
                 session_id retry_key content input lifecycle_state created_at execution_origin
             }}
             Goal(filter: {{ node_did: {{ _eq: "{owner}" }} }}) {{

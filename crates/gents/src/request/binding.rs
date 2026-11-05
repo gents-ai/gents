@@ -2,11 +2,38 @@
 //! cannot become half-bound writes.
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 
 use crate::request::watcher::AgentRequest;
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+
+pub(crate) async fn load_agent_request_by_doc_id_with_access(
+    access: &crate::ConfigAccess,
+    request_doc_id: &str,
+) -> Result<Option<AgentRequest>> {
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
+            escape_graphql_string(request_doc_id),
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
+        ))
+        .await?;
+    let mut matches: Vec<AgentRequestRow> =
+        serde_json::from_value(response["data"]["AgentRequest"].clone())?;
+    anyhow::ensure!(
+        matches.len() <= 1,
+        "AgentRequest physical binding is ambiguous"
+    );
+    let Some(row) = matches.pop() else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        row.doc_id.as_deref() == Some(request_doc_id),
+        "AgentRequest physical binding changed"
+    );
+    Ok(Some(AgentRequest::try_from(row)?))
+}
 
 pub(crate) async fn resolve_request_doc_id(
     node: &EmbeddedNode,
@@ -76,7 +103,7 @@ pub(crate) async fn load_agent_request_by_doc_id(
                 purpose
                 node_did
                 requester_did
-                agent_id
+                agent_did
                 session_id
                 content
                 max_total_tokens

@@ -23,7 +23,7 @@ async fn p2p_node_with_options(
     let mut builder = EmbeddedNode::builder()
         .data_path(tempdir.path())
         .with_p2p(P2PConfig {
-            port: 0,
+            port: Some(0),
             bind_addr: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
             relay_mode: IrohRelayModeConfig::Disabled,
             discovery: IrohDiscoveryConfig::Disabled,
@@ -31,12 +31,8 @@ async fn p2p_node_with_options(
             max_concurrent_multipath_paths: None,
             secret_key_path: None,
             load_persisted_collections: false,
-            max_concurrent_dag_fetches: p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES,
-            max_concurrent_push_tasks: p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS,
-            rate_limit_burst: p2p::sync::DEFAULT_RATE_LIMIT_BURST,
-            rate_limit_rate: p2p::sync::DEFAULT_RATE_LIMIT_RATE,
-            max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-            max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
+            sync: Default::default(),
+            peer_key: Default::default(),
             rebroadcast_on_merge: false,
         });
     if let Some(did) = node_identity_did {
@@ -214,7 +210,7 @@ pub(in crate::runtime::agent::p2p_reconcile) async fn authorize_enrollment_peer(
         admin_did: admin_identity.did().to_string(),
         server_peer,
         server_ticket,
-        owner_agent: admin_identity.did().to_string(),
+        owner_node_did: admin_identity.did().to_string(),
         profile: "client".to_string(),
         schema_fingerprint: enrollment_schema_fingerprint(),
         issued_at: issued_at.clone(),
@@ -252,7 +248,7 @@ pub(in crate::runtime::agent::p2p_reconcile) async fn authorize_enrollment_peer(
         candidate_did: member_identity.did().to_string(),
         candidate_peer: member_peer.to_string(),
         candidate_ticket: member_ticket.to_string(),
-        owner_agent: offer.owner_agent.clone(),
+        owner_node_did: offer.owner_node_did.clone(),
         profile: offer.profile.clone(),
         client_nonce,
         issued_at,
@@ -275,7 +271,7 @@ pub(in crate::runtime::agent::p2p_reconcile) async fn authorize_enrollment_peer(
                 offer_id: "{}", offer_token: "{}", challenge: "{}",
                 network_id: "{}", admin_did: "{}", server_peer: "{}",
                 candidate_did: "{}", candidate_peer: "{}", candidate_ticket: "{}",
-                owner_agent: "{}", profile: "{}", client_nonce: "{}",
+                owner_node_did: "{}", profile: "{}", client_nonce: "{}",
                 issued_at: "{}", expires_at: "{}", candidate_sig: "{}"
             }}) {{ _docID }} }}"#,
             request.protocol_version,
@@ -290,7 +286,7 @@ pub(in crate::runtime::agent::p2p_reconcile) async fn authorize_enrollment_peer(
             escape_graphql_string(&request.candidate_did),
             escape_graphql_string(&request.candidate_peer),
             escape_graphql_string(&request.candidate_ticket),
-            escape_graphql_string(&request.owner_agent),
+            escape_graphql_string(&request.owner_node_did),
             escape_graphql_string(&request.profile),
             escape_graphql_string(&request.client_nonce),
             escape_graphql_string(&request.issued_at),

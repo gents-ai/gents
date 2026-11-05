@@ -479,7 +479,7 @@ mod tests {
         let tempdir = tempfile::tempdir().unwrap();
         let data = tempdir.path().join("data");
         let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .data_path(&data)
                 .with_storage_backend(defra_node::StorageBackend::Regolith)
                 .build()
@@ -505,7 +505,7 @@ mod tests {
                 .is_none(),
             "the refusal must precede baseline registration"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[cfg(unix)]

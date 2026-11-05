@@ -193,7 +193,7 @@ pub async fn promote(
         let pack = materialize_pack(
             &path,
             &origin.owner,
-            &origin.subject.agent_id,
+            &origin.subject.agent_slot,
             &origin.target.job_target(),
         )?;
         let text = baseline_text(&pack)?;
@@ -705,7 +705,7 @@ mod tests {
             .install(vec![(
                 Collection::Agent,
                 json!({
-                    "agent_id": "monitor",
+                    "agent_slot": "monitor",
                     "node_did": OWNER,
                     "display_name": "Monitor, renamed",
                     "context_id": "monitor-context",

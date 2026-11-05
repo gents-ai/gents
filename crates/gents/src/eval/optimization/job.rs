@@ -484,7 +484,7 @@ mod tests {
             closure: Vec::new(),
             subject: crate::eval::SubjectRef {
                 pack_digest: "sha256:baseline".into(),
-                agent_id: "monitor".into(),
+                agent_slot: "monitor".into(),
             },
             definition: crate::eval::DefinitionRef {
                 definition_id: "monitor-findings".into(),

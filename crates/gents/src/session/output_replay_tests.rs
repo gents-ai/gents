@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::message::Message;
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
@@ -152,7 +152,7 @@ impl ReplayFixture {
                 request_id: REQUEST_ID.into(),
                 node_did: NODE_DID.into(),
                 requester_did: String::new(),
-                agent_id: "general".into(),
+                agent_did: "general".into(),
                 session_id: SESSION_ID.into(),
                 model_name: "test-model".into(),
                 provider_family: Some(family.into()),
@@ -348,7 +348,7 @@ impl ReplayFixture {
         .await
         .expect("turn capture");
         self.boundary = capture_source_boundary(
-            &self.node,
+            &crate::store::config_client::ConfigAccess::local(self.node.clone()),
             SESSION_ID,
             NODE_DID,
             None,
@@ -443,7 +443,7 @@ impl ReplayFixture {
             .await;
         assert!(!created.has_errors(), "{:?}", created.errors);
         self.boundary = capture_source_boundary(
-            &self.node,
+            &crate::store::config_client::ConfigAccess::local(self.node.clone()),
             SESSION_ID,
             NODE_DID,
             None,
@@ -566,7 +566,7 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         .execute(&format!(
             r#"mutation {{ create_AgentRequest(input: {{
                 request_id: "{}", purpose: "normal", node_did: "{}",
-                agent_id: "general", session_id: "{}", content: "prompt",
+                agent_did: "general", session_id: "{}", content: "prompt",
                 lifecycle_state: "pending", execution_origin: "interactive",
                 created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
             }}) {{ _docID }} }}"#,
@@ -803,7 +803,7 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
             .unwrap()
             .to_string();
     let boundary = capture_source_boundary(
-        &node,
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         SESSION_ID,
         NODE_DID,
         None,
@@ -1272,7 +1272,7 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
         .await
         .unwrap();
     fixture.boundary = capture_source_boundary(
-        &fixture.node,
+        &crate::store::config_client::ConfigAccess::local(fixture.node.clone()),
         SESSION_ID,
         NODE_DID,
         None,
@@ -1399,7 +1399,7 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
         .execute(&format!(
             r#"mutation {{ create_AgentRequest(input: {{
                 request_id: "replay-request-next", purpose: "normal", node_did: "{}",
-                agent_id: "general", session_id: "{}", content: "next",
+                agent_did: "general", session_id: "{}", content: "next",
                 lifecycle_state: "pending", execution_origin: "interactive",
                 created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
             }}) {{ _docID }} }}"#,
@@ -1426,7 +1426,7 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
     .unwrap()
     .cid;
     let boundary = capture_source_boundary(
-        &fixture.node,
+        &crate::store::config_client::ConfigAccess::local(fixture.node.clone()),
         SESSION_ID,
         NODE_DID,
         None,

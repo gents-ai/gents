@@ -64,7 +64,7 @@ pub(super) fn behavior(display_name: &str) -> (Collection, Value) {
     (
         Collection::Agent,
         json!({
-            "agent_id": "monitor",
+            "agent_slot": "monitor",
             "node_did": OWNER,
             "display_name": display_name,
             "context_id": "monitor-context",

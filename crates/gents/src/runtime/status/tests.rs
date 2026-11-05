@@ -30,7 +30,7 @@ struct NodeReadinessRow {
     updated_at: String,
 }
 
-async fn test_node() -> Arc<defra_node::EmbeddedNode> {
+async fn test_node() -> Arc<defra_node::Node> {
     Arc::new(crate::test_support::node_builder().build().await.unwrap())
 }
 
@@ -41,11 +41,11 @@ fn node_runtime_writer_source_cannot_serialize_readiness_authority() {
         "row.process_state",
         "row.active_generation",
         "row.router_generation",
-        "row.default_agent_id",
+        "row.default_agent_did",
         "process_state: \"{process_state}\"",
         "active_generation: {active_generation}",
         "router_generation: {router_generation}",
-        "default_agent_id: \"{default_agent_id}\"",
+        "default_agent_did: \"{default_agent_did}\"",
     ] {
         assert!(
             !source.contains(forbidden),
@@ -62,7 +62,7 @@ fn status_test_request(request_id: &str) -> crate::request::watcher::AgentReques
         request_id: request_id.to_string(),
         node_did: "did:test:status-test".to_string(),
         requester_did: None,
-        agent_id: "general".to_string(),
+        agent_did: "general".to_string(),
         session_id: format!("{request_id}-session"),
         content: "status test".to_string(),
         max_total_tokens: None,
@@ -100,7 +100,7 @@ fn unavailable_general() -> RapidHashMap<String, crate::runtime::snapshot::Unava
     )])
 }
 
-async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, node_did: &str) -> NodeRuntimeRow {
+async fn fetch_runtime_row(node: &defra_node::Node, node_did: &str) -> NodeRuntimeRow {
     let escaped_node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
@@ -131,10 +131,7 @@ async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, node_did: &str) -> N
     serde_json::from_value(value).expect("decode NodeRuntime row")
 }
 
-async fn fetch_node_readiness_row(
-    node: &defra_node::EmbeddedNode,
-    node_did: &str,
-) -> NodeReadinessRow {
+async fn fetch_node_readiness_row(node: &defra_node::Node, node_did: &str) -> NodeReadinessRow {
     let escaped_node_did = escape_graphql_string(node_did);
     let response = node
         .execute(&format!(
@@ -398,7 +395,7 @@ async fn runtime_status_persists_agent_executor_capacity_and_queue_depth() {
             generation: 1,
             node: None,
             local_did: String::new(),
-            default_agent_id: "general".to_string(),
+            default_agent_did: "general".to_string(),
             agents: RapidHashMap::new(),
             tool_surfaces: RapidHashMap::new(),
             backend_admission_configs: RapidHashMap::new(),
@@ -443,7 +440,7 @@ async fn executor_metrics_do_not_republish_unchanged_node_readiness() {
         generation: 1,
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -484,7 +481,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         generation: 1,
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -502,7 +499,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         generation: 2,
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -560,7 +557,7 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
         generation: publish.pre_active_generation as u64,
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -578,7 +575,7 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
         generation: publish.post_active_generation as u64,
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -638,4 +635,35 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
         readiness.router_generation,
         router.post_router_generation as u64
     );
+}
+
+#[tokio::test]
+async fn goal_settled_uses_live_runtime_status_cases() {
+    let node = test_node().await;
+    let status = RuntimeStatusHandle::new(node, "did:test:live-status");
+    for case in &crate::lean_vocab_test::lean_contract_snapshot().identity_readiness_settled_cases {
+        {
+            let mut row = status.state.lock().await;
+            row.reconcile_phase = if case["idle"].as_bool().unwrap() {
+                "idle"
+            } else {
+                "applying"
+            }
+            .to_owned();
+            row.last_reconcile_result = if !case["result_known"].as_bool().unwrap() {
+                ""
+            } else if case["result_error"].as_bool().unwrap() {
+                "error"
+            } else {
+                "applied"
+            }
+            .to_owned();
+        }
+        let actual = if case["live_present"].as_bool().unwrap() {
+            status.goal_reconcile_settled().await
+        } else {
+            false
+        };
+        assert_eq!(actual, case["expected"].as_bool().unwrap(), "{case}");
+    }
 }

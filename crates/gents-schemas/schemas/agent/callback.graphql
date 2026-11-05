@@ -1,4 +1,4 @@
-type Callback @branchable @index(fields: ["node_did", "callback_id"], unique: true) {
+type Callback @index(fields: ["node_did", "callback_id"], unique: true) {
     callback_id: String
     node_did: String @index
     display_name: String

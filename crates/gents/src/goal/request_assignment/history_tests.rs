@@ -135,7 +135,7 @@ async fn persist_request(
 async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
     let identity = &identities[0];
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await
@@ -246,7 +246,9 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
         .unwrap();
     let rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap();
-    let actual = super::super::load_request_assignment(&node, &rows[0]).await;
+    let actual =
+        super::super::load_request_assignment(&crate::ConfigAccess::local(node.clone()), &rows[0])
+            .await;
     assert_eq!(
         observation(actual, Some(&roots)),
         case["expected"],
@@ -266,7 +268,7 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
         case["name"]
     );
     let handoff = crate::tools::background::completion::turn_assignment_handoff(
-        &node,
+        &crate::ConfigAccess::local(node.clone()),
         &rows[0],
         &crate::tools::call::lifecycle::CausedRequestTerminal::Completed {
             output: "turn finished".into(),
@@ -289,5 +291,5 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
         "{}: distinct current assignment",
         case["name"]
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

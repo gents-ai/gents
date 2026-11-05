@@ -166,8 +166,8 @@ pub struct DataWrite {
     pub on_conflict: Option<OnConflict>,
 }
 
-/// A filter value the host replaces with the calling node's DID.
-pub const CALLER_NODE_DID_FILTER: &str = "$caller.node_did";
+/// A filter value the host replaces with the authenticated invoker's DID.
+pub const CALLER_DID_FILTER: &str = "$caller.did";
 
 /// A read in the actor's ACP view. The host bounds `limit` at 256; nothing
 /// bounds `offset`.

@@ -48,7 +48,7 @@ impl AcpService {
                     crate::commands::grok_shim::sessions::load(
                         &self.config.node,
                         &self.config.node_did,
-                        &self.config.agent_id,
+                        &self.config.agent_did,
                         &parsed.session_id,
                     )
                     .await?;
@@ -57,6 +57,7 @@ impl AcpService {
                             command
                                 .execute(
                                     &self.config.node,
+                                    self.turns.actor(),
                                     &self.config.node_did,
                                     &parsed.session_id,
                                 )

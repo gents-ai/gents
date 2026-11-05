@@ -17,9 +17,12 @@ pub async fn resume_at_reset(
         return Ok(None);
     }
     let (node_did, session_id) = (goal.node_did.as_str(), goal.session_id.as_str());
-    ConfigAccess::transact_local_write(node, None, "goal.resume_at_reset", move |txn| {
-        Box::pin(stage_reset_resume(txn, identity, node_did, session_id, now))
-    })
+    ConfigAccess::transact_local_write(
+        node,
+        Some(identity::Did::new(identity.did())?),
+        "goal.resume_at_reset",
+        move |txn| Box::pin(stage_reset_resume(txn, identity, node_did, session_id, now)),
+    )
     .await
 }
 
@@ -35,6 +38,23 @@ async fn stage_reset_resume(
     else {
         return Ok(None);
     };
+    anyhow::ensure!(
+        txn.actor_did() == Some(identity.did()),
+        "reset resume actor must be its signing agent"
+    );
+    if request.agent_did.as_deref() != Some(identity.did())
+        || call.agent_did.as_deref() != Some(identity.did())
+    {
+        return Ok(None);
+    }
+    let sessions = txn.execute(&format!(r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 2) {{ agent_did }} }}"#, escape_graphql_string(node_did), escape_graphql_string(session_id))).await?;
+    let sessions = sessions
+        .pointer("/data/AgentSession")
+        .and_then(serde_json::Value::as_array)
+        .context("reset resume session query omitted rows")?;
+    if sessions.len() != 1 || sessions[0]["agent_did"].as_str() != Some(identity.did()) {
+        return Ok(None);
+    }
     if goal.parsed_status() != Some(GoalStatus::UsageLimited)
         || goal.auto_resume_at_reset != Some(true)
     {
@@ -54,12 +74,8 @@ async fn stage_reset_resume(
     if !(started < reset && reset <= now) {
         return Ok(None);
     }
-    let agent_id = call
-        .agent_id
-        .as_deref()
-        .or(request.agent_id.as_deref())
-        .unwrap_or_default();
-    let Some(profile) = served_profile(&references, agent_id, &call) else {
+    let agent_did = identity.did();
+    let Some(profile) = served_profile(&references, agent_did, &call) else {
         return Ok(None);
     };
     let Some((_, backend)) = references.profile_with_backend(&profile)? else {

@@ -2,11 +2,11 @@
   "node": {},
   "agents": [
     {
-      "agent_id": "fixture-author",
       "display_name": "Fixture author",
       "description": "A tool-less agent bound to the author slot.",
       "context_id": "fixture-author-context",
-      "inference_profile_id": "gents:inference-slot:author"
+      "inference_profile_id": "gents:inference-slot:author",
+      "agent_slot": "fixture-author"
     }
   ],
   "contexts": [

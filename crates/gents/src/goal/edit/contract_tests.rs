@@ -1,4 +1,5 @@
 use super::*;
+use crate::NodeIdentity;
 use serde_json::Value;
 
 #[derive(Deserialize)]
@@ -43,17 +44,50 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
     assert_eq!(contracts.goal_edit_cases.len(), 66);
     for case in contracts.goal_edit_cases {
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        let created =
-            create_goal_for_session(&node, "did:test:goal-edit", "session", "ship", Some(100))
+        let temp = tempfile::tempdir().unwrap();
+        let signer =
+            crate::KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap();
+        let user = crate::KeyIdentity::load_or_create(temp.path().join("user.key"), None).unwrap();
+        let binding = crate::store::identity::provision_agent_identity(&signer).unwrap();
+        let agent = crate::store::identity::resolve_agent_identity(&signer, &binding).unwrap();
+        let node = std::sync::Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(signer.did())
+                .build()
                 .await
-                .unwrap();
+                .unwrap(),
+        );
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let actor = identity::Did::new(user.did()).unwrap();
+        let access = crate::ConfigAccess::local_as(node.clone(), actor.clone());
+        let session = access.write("test.goal_edit_session", &format!(
+            "mutation {{ create_AgentSession(input: {{ node_did: \"{}\", session_id: \"session\", requester_did: \"{}\", agent_did: \"{}\", created_at: \"2026-11-04T00:00:00Z\" }}) {{ _docID }} }}",
+            escape_graphql_string(signer.did()), escape_graphql_string(user.did()), escape_graphql_string(agent.did()),
+        )).await.unwrap();
+        let session_doc = crate::store::graphql::created_doc_id(&session, "AgentSession").unwrap();
+        access
+            .add_actor_relationship(
+                "AgentSession",
+                &session_doc,
+                "working_agent",
+                &identity::Did::new(agent.did()).unwrap(),
+            )
+            .await
+            .unwrap();
+        let created = create_goal_for_session(
+            &node,
+            user.did(),
+            signer.did(),
+            "session",
+            "ship",
+            Some(100),
+        )
+        .await
+        .unwrap();
         let mut observed = match created {
             CreateGoalForSessionOutcome::Created(goal)
             | CreateGoalForSessionOutcome::Idempotent(goal) => goal,
         };
-        let access = crate::ConfigAccess::local(node.clone());
         access.write("test.goal_edit_state", &format!(
             "mutation {{ update_Goal(filter: {{ _docID: {{ _eq: \"{}\" }} }}, input: {{ status: \"{}\", continuation_sequence: {}, objective: \"{}\", {} }}) {{ _docID }} }}",
             escape_graphql_string(&observed.doc_id), escape_graphql_string(case.current.status.as_str()), case.current.sequence,
@@ -87,7 +121,7 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
                 let fields = &case.fields;
                 crate::ConfigAccess::transact_local_write(
                     &node,
-                    None,
+                    Some(actor.clone()),
                     "test.goal_client_edit",
                     |txn| {
                         Box::pin(async move {
@@ -133,7 +167,7 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
             assert_eq!(before, after, "{} must not write", case.name);
         }
         assert_eq!(after["Goal"][0]["goal_id"], before["Goal"][0]["goal_id"]);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -202,5 +236,5 @@ async fn edited_fields_match_operator_updates_without_changing_goal_identity() {
     assert!(set_goal(&node, owner, "operator", Some("  "), None, None)
         .await
         .is_err());
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

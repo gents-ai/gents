@@ -3,22 +3,41 @@ use super::{
     OutcomeStage, FIRE_FIELDS,
 };
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::trigger_delivery::TriggerFire;
 
 pub(crate) async fn recover_outcomes(
     node: &std::sync::Arc<EmbeddedNode>,
     owner: &str,
+    agent_did: &str,
 ) -> Result<usize> {
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "trigger.recover_outcomes",
-        |txn| Box::pin(async move { recover_outcomes_in_txn(txn, owner).await }),
-    )
-    .await
+    let actor = identity::Did::new(agent_did)?;
+    let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
+    let response = access.execute(&format!(
+        r#"{{TriggerFire(filter: {{owner_did: {{_eq: "{}"}}, emit_outcome: {{_eq: true}}}}) {{{FIRE_FIELDS}}}}}"#,
+        crate::store::graphql::escape_graphql_string(owner)
+    )).await?;
+    let fires: Vec<TriggerFire> = serde_json::from_value(response["data"]["TriggerFire"].clone())?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut recovered = 0;
+    for fire in fires {
+        recovered += crate::store::config_client::ConfigAccess::transact_local_write(
+            node,
+            Some(actor.clone()),
+            "trigger.recover_outcomes",
+            |txn| {
+                let (fire, now) = (&fire, &now);
+                Box::pin(async move {
+                    recover_fire_outcome_in_txn(txn, owner, fire, now, Some(agent_did)).await
+                })
+            },
+        )
+        .await?;
+    }
+    Ok(recovered)
 }
 
+#[cfg(test)]
 pub(crate) async fn recover_outcomes_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
@@ -31,60 +50,76 @@ pub(crate) async fn recover_outcomes_in_txn(
     let now = chrono::Utc::now().to_rfc3339();
     let mut recovered = 0;
     for fire in fires {
-        if outcome_published(txn, &fire).await? {
-            continue;
-        }
-        let response = txn
-            .execute_local_response(&format!(
-                r#"{{AgentRequest(filter: {{
-            node_did: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}
-        }}) {{request_id lifecycle_state failure_reason}}}}"#,
-                crate::store::graphql::escape_graphql_string(owner),
-                crate::store::graphql::escape_graphql_string(&fire.request_id)
-            ))
-            .await?;
-        let requests: Vec<gents_protocol::row::AgentRequestRow> =
-            crate::store::graphql::rows(&response, "AgentRequest")?;
-        anyhow::ensure!(
-            requests.len() == 1,
-            "Task fire has no unique admitted request during outcome recovery"
-        );
-        let request = &requests[0];
-        let status = request
-            .lifecycle_state
-            .context("Task request is missing lifecycle state")?;
-        let binding = if fire.goal_assignment_applied {
-            observe_goal_outcome_binding(txn, &fire).await?
-        } else {
-            None
-        };
-        let reason = binding
-            .as_ref()
-            .map(|goal| goal.status.as_str())
-            .unwrap_or_else(|| {
-                request
-                    .failure_reason
-                    .as_deref()
-                    .filter(|reason| !reason.is_empty())
-                    .unwrap_or(status.as_str())
-            });
-        recovered += usize::from(
-            stage_outcome(
-                txn,
-                &fire,
-                OutcomeStage {
-                    goal: binding.as_ref(),
-                    assignment_replaced: assignment_replaced(&fire, binding.as_ref()),
-                    request_terminal: status.is_terminal(),
-                    terminal_state: status.as_str(),
-                    reason,
-                },
-                &now,
-            )
-            .await?,
-        );
+        recovered += recover_fire_outcome_in_txn(txn, owner, &fire, &now, None).await?;
     }
     Ok(recovered)
+}
+
+async fn recover_fire_outcome_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    fire: &TriggerFire,
+    now: &str,
+    agent_did: Option<&str>,
+) -> Result<usize> {
+    if outcome_published(txn, fire).await? {
+        return Ok(0);
+    }
+    let response = txn
+        .execute_local_response(&format!(
+            r#"{{AgentRequest(filter: {{
+        node_did: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}
+    }}) {{request_id agent_did lifecycle_state failure_reason}}}}"#,
+            crate::store::graphql::escape_graphql_string(owner),
+            crate::store::graphql::escape_graphql_string(&fire.request_id)
+        ))
+        .await?;
+    let requests: Vec<gents_protocol::row::AgentRequestRow> =
+        crate::store::graphql::rows(&response, "AgentRequest")?;
+    if requests.is_empty() && agent_did.is_some() {
+        return Ok(0);
+    }
+    anyhow::ensure!(
+        requests.len() == 1,
+        "Task fire has no unique admitted request during outcome recovery"
+    );
+    let request = &requests[0];
+    if agent_did.is_some_and(|agent| request.agent_did.as_deref() != Some(agent)) {
+        return Ok(0);
+    }
+    let status = request
+        .lifecycle_state
+        .context("Task request is missing lifecycle state")?;
+    let binding = if fire.goal_assignment_applied {
+        observe_goal_outcome_binding(txn, fire).await?
+    } else {
+        None
+    };
+    let reason = binding
+        .as_ref()
+        .map(|goal| goal.status.as_str())
+        .unwrap_or_else(|| {
+            request
+                .failure_reason
+                .as_deref()
+                .filter(|reason| !reason.is_empty())
+                .unwrap_or(status.as_str())
+        });
+    Ok(usize::from(
+        stage_outcome(
+            txn,
+            fire,
+            OutcomeStage {
+                goal: binding.as_ref(),
+                assignment_replaced: assignment_replaced(fire, binding.as_ref()),
+                request_terminal: status.is_terminal(),
+                terminal_state: status.as_str(),
+                reason,
+            },
+            now,
+        )
+        .await?,
+    ))
 }
 
 #[cfg(test)]
@@ -145,7 +180,7 @@ mod tests {
             let state = if terminal { "completed" } else { "pending" };
             let request_mutation = format!(
                 r#"mutation {{create_AgentRequest(input: {{
-                request_id: "{}", node_did: "{}", session_id: "{}", agent_id: "behavior",
+                request_id: "{}", node_did: "{}", session_id: "{}", agent_did: "did:test:agent",
                 purpose: "normal", lifecycle_state: "{state}", created_at: "2026-01-01T00:00:00Z"
             }}) {{_docID}} }}"#,
                 crate::store::graphql::escape_graphql_string(&fire.request_id),
@@ -176,7 +211,7 @@ mod tests {
                     Ok::<_, anyhow::Error>(())
                 })
             }).await.unwrap();
-            node.shutdown().await;
+            node.shutdown().await.expect("node shutdown");
             drop(node);
             let node = std::sync::Arc::new(
                 EmbeddedNode::builder()
@@ -188,14 +223,14 @@ mod tests {
             let expected = case["post"]["outcomes"].as_array().unwrap().len();
             let before = case["pre"]["outcomes"].as_array().unwrap().len();
             assert_eq!(
-                recover_outcomes(&node, &fire.identity.owner_did)
+                recover_outcomes(&node, &fire.identity.owner_did, "did:test:agent")
                     .await
                     .unwrap(),
                 expected - before,
                 "{name}"
             );
             assert_eq!(
-                recover_outcomes(&node, &fire.identity.owner_did)
+                recover_outcomes(&node, &fire.identity.owner_did, "did:test:agent")
                     .await
                     .unwrap(),
                 0,
@@ -211,7 +246,7 @@ mod tests {
             let outcomes: Vec<serde_json::Value> =
                 crate::store::graphql::rows(&response, "FireOutcome").unwrap();
             assert_eq!(outcomes.len(), expected, "{name}");
-            node.shutdown().await;
+            node.shutdown().await.expect("node shutdown");
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
 use gents_protocol::output::{MessagePublication, PayloadRef};
 
@@ -270,7 +270,7 @@ async fn cached_output_reconstruction_request_size_benchmark() {
             "cached canonical reconstruction benchmark"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 fn authored_segments(

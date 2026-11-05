@@ -53,6 +53,7 @@ export function createBridgeHttpAdapter(
       throw new Error("Native picker is unavailable in the live browser bridge");
     },
     requestAttachments: unsupported("requestAttachments"),
+    provisionAgentIdentity: unsupported("provisionAgentIdentity"),
     removePeer: unsupported("removePeer"),
     renamePeer: unsupported("renamePeer"),
     listWorkspace: unsupported("listWorkspace"),
@@ -144,8 +145,8 @@ export function createBridgeHttpAdapter(
         timelineLimit: timelinePage?.limit,
         timelineBeforeItemKey: timelinePage?.beforeItemKey ?? null,
       }),
-    retrySessionHydration: async (sessionId, nodeDid) => {
-      await client.postJson("/desktop/session/hydration/retry", {
+    reloadSession: async (sessionId, nodeDid) => {
+      await client.postJson("/desktop/session/reload", {
         sessionId,
         nodeDid,
       });
@@ -158,7 +159,7 @@ export function createBridgeHttpAdapter(
       const normalized: TauriDriverChatRequest = {
         ...request,
         nodeDid: request.nodeDid,
-        agentId: request.agentId ?? null,
+        agentDid: request.agentDid ?? null,
         sessionId: request.sessionId ?? null,
         content: request.content,
       };

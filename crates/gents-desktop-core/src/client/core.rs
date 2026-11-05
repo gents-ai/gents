@@ -10,6 +10,7 @@ mod p2p_ops;
 mod route_manager;
 mod supervisor;
 pub(super) mod sync_state;
+mod tool_control;
 mod writes;
 
 #[cfg(test)]
@@ -23,7 +24,7 @@ use std::sync::RwLock as StdRwLock;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
 use gents::store::config_client::ConfigAccess;
 use gents::P2pSyncStatusSnapshot;
@@ -714,14 +715,33 @@ impl ClientCore {
             pause.node_shutdown_started.notify_one();
             pause.allow_node_shutdown.notified().await;
         }
-        self.node.shutdown().await;
+        let node_shutdown = self.node.shutdown().await;
         #[cfg(test)]
         if let Some(pause) = self.shutdown_test_pause.lock().await.clone() {
             pause.node_shutdown_returned.notify_one();
             pause.allow_access_release.notified().await;
         }
         self.store_access.lock().await.take();
+        node_shutdown.context("shutting down embedded node")?;
         tracing::info!("client core shutdown: complete");
+        Ok(())
+    }
+}
+
+impl ClientCore {
+    pub fn session_unreadable_reason(
+        &self,
+        _session_id: &str,
+        node_did: &str,
+    ) -> Option<&'static str> {
+        self.operator_observation_graphql(node_did)
+            .is_none()
+            .then_some("Connect to the runtime to read this session.")
+    }
+
+    pub async fn reload_session(&self, session_id: &str, node_did: &str) -> Result<()> {
+        self.refresh_local_request(node_did, session_id, None, None, &[])
+            .await?;
         Ok(())
     }
 }

@@ -19,38 +19,12 @@ use serde_json::Value;
 
 use crate::{post_graphql, require_non_empty};
 
-pub(crate) fn ensure_local_request_signer(
-    home: Option<&Path>,
-    target_node_did: &str,
-) -> Result<()> {
-    if gents::store::identity::RegisteredIdentity::from_registered_did(target_node_did, None)
-        .is_ok()
-    {
-        return Ok(());
-    }
-    let home = crate::resolve_home_dir(home);
-    let config = crate::read_init_config(&home)?.with_context(|| {
-        format!(
-            "initialized home {} is required to sign a local request",
-            home.display()
-        )
-    })?;
-    anyhow::ensure!(
-        config.node_did.trim() == target_node_did.trim(),
-        "local-self request target {} does not match initialized home node {}",
-        target_node_did,
-        config.node_did
-    );
-    crate::load_initialized_home_identity(&home, &config)?;
-    Ok(())
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct SubmittedRequest {
     pub(crate) request_id: String,
     pub(crate) session_id: String,
     pub(crate) node_did: String,
-    pub(crate) agent_id: Option<String>,
+    pub(crate) agent_did: Option<String>,
     pub(crate) request_doc_id: String,
     pub(crate) requester_did: Option<String>,
     pub(crate) input: Option<RequestInput>,
@@ -126,7 +100,7 @@ pub(crate) fn request_terminal_query(request_id: &str, physical: Option<&str>) -
                 {order}
                 limit: 2
             ) {{
-                _docID node_did requester_did agent_id session_id
+                _docID node_did requester_did agent_did session_id
                 request_id
                 lifecycle_state
                 failure_reason
@@ -160,7 +134,7 @@ pub(crate) struct CliRequestMetadata {
     pub(crate) request_id: String,
     pub(crate) node_did: String,
     pub(crate) requester_did: Option<String>,
-    pub(crate) agent_id: Option<String>,
+    pub(crate) agent_did: Option<String>,
     pub(crate) session_id: String,
     pub(crate) lifecycle_state: RequestLifecycleState,
     pub(crate) failure_reason: Option<String>,
@@ -231,7 +205,7 @@ pub(crate) fn request_output_envelope(
             .clone()
             .context("request output omitted node_did")?,
         requester_did: request.requester_did.clone(),
-        agent_id: request.agent_id.clone(),
+        agent_did: request.agent_did.clone(),
         session_id: request
             .session_id
             .clone()
@@ -288,11 +262,11 @@ pub(crate) async fn create_agent_request(
     node_did: &str,
     content: &str,
     session_id: Option<&str>,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     options: RequestSubmitOptions,
 ) -> Result<SubmittedRequest> {
     let prepared = prepare_agent_request(
-        graphql, node_did, content, session_id, agent_id, None, options,
+        graphql, node_did, content, session_id, agent_did, None, options,
     )
     .await?;
     submit_prepared_agent_request_committed(graphql, &prepared).await
@@ -308,7 +282,7 @@ pub(crate) async fn prepare_agent_request(
     node_did: &str,
     content: &str,
     session_id: Option<&str>,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     request_id: Option<String>,
     mut options: RequestSubmitOptions,
 ) -> Result<PreparedAgentRequest> {
@@ -324,7 +298,7 @@ pub(crate) async fn prepare_agent_request(
         );
     }
     prepare_agent_request_with_input(
-        graphql, node_did, content, session_id, agent_id, request_id, options,
+        graphql, node_did, content, session_id, agent_did, request_id, options,
     )
     .await
 }
@@ -334,14 +308,14 @@ pub(crate) async fn prepare_agent_request_with_input(
     node_did: &str,
     content: &str,
     session_id: Option<&str>,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     request_id: Option<String>,
     options: RequestSubmitOptions,
 ) -> Result<PreparedAgentRequest> {
     let (request_content, request_input) =
         content_and_input_with_prompt_selected_skill_ids(options.input, content);
     let request_id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let agent_id = resolve_request_agent_id(graphql, node_did, agent_id).await?;
+    let agent_did = resolve_request_agent_did(graphql, node_did, session_id, agent_did).await?;
     let session_id = session_id
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -359,9 +333,17 @@ pub(crate) async fn prepare_agent_request_with_input(
                 retry_parent_value.to_string()
             }
         });
+    let access = gents::ConfigAccess::Graphql(graphql.clone());
+    let actor_did = access
+        .actor_did()
+        .context("request submission requires an authenticated client identity")?;
+    let signer = gents::store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
+    let requester_did =
+        gents::session::client_requester_scope(&access, node_did, &session_id, &actor_did).await?;
     let admission =
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did);
-    let create = gents::build_signed_request(
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(&actor_did);
+    let create = gents::request::lifecycle::build_signed_client_request(
+        &access,
         gents::RequestSpec {
             trigger_lineage: gents::request::lifecycle::TriggerLineage {
                 source_doc_id: options.caused_by_source_doc_id,
@@ -385,8 +367,8 @@ pub(crate) async fn prepare_agent_request_with_input(
                 gents::RequestIdentity {
                     request_id: request_id.clone(),
                     node_did: node_did.to_string(),
-                    requester_did: None,
-                    agent_id: agent_id.clone(),
+                    requester_did: Some(requester_did),
+                    agent_did: agent_did.clone(),
                     session_id: session_id.clone(),
                     content: request_content,
                     execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
@@ -395,7 +377,7 @@ pub(crate) async fn prepare_agent_request_with_input(
                 admission,
             )
         },
-        gents::RequestSigner::RegisteredTarget,
+        gents::RequestSigner::Identity(&signer),
     )
     .await?;
     Ok(PreparedAgentRequest { create })
@@ -410,13 +392,19 @@ pub(crate) async fn prepare_cli_goal_input(
     if input.goal_assignment.is_some() {
         return Ok(input);
     }
-    let verifier = gents::store::identity::RegisteredIdentity::from_registered_did(node_did, None)?;
+    let actor_did = access
+        .actor_did()
+        .context("Goal input requires an authenticated client identity")?;
+    let verifier =
+        gents::store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
+    let requester_did =
+        gents::session::client_requester_scope(access, node_did, session_id, &actor_did).await?;
     gents::goal::prepare_goal_input(
         access,
         &verifier,
         node_did,
         session_id,
-        Some(node_did),
+        Some(&requester_did),
         input,
     )
     .await
@@ -434,7 +422,7 @@ pub(crate) async fn create_goal_backed_agent_request(
     node_did: &str,
     content: &str,
     session_id: &str,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     objective: &str,
     token_budget: Option<i64>,
     input: RequestInput,
@@ -465,7 +453,7 @@ pub(crate) async fn create_goal_backed_agent_request(
         node_did,
         content,
         Some(session_id),
-        agent_id,
+        agent_did,
         Some(request_id),
         RequestSubmitOptions {
             retry_key: Some(retry_key.clone()),
@@ -491,14 +479,14 @@ pub(crate) async fn create_goal_backed_agent_request(
 #[allow(clippy::too_many_arguments)]
 #[cfg(unix)]
 pub(crate) async fn create_goal_backed_agent_request_local(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     actor: identity::Did,
     graphql: &GraphqlEndpoint,
     node_did: &str,
     objective: &str,
     token_budget: Option<i64>,
     session_id: &str,
-    agent_id: &str,
+    agent_did: &str,
     request_id: String,
     mut options: RequestSubmitOptions,
 ) -> Result<SubmittedRequest> {
@@ -508,7 +496,7 @@ pub(crate) async fn create_goal_backed_agent_request_local(
         node_did,
         objective,
         Some(session_id),
-        Some(agent_id),
+        Some(agent_did),
         Some(request_id),
         options,
     )
@@ -531,25 +519,19 @@ pub(crate) async fn submit_prepared_agent_request_committed(
     prepared: &PreparedAgentRequest,
 ) -> Result<SubmittedRequest> {
     let access = gents::ConfigAccess::Graphql(graphql.clone());
-    let mutation = prepared
-        .create
-        .graphql_mutation()
-        .map_err(anyhow::Error::msg)?;
-    access
-        .write_with_receipt("cli.request.submit", &mutation, || async {
-            Ok::<_, anyhow::Error>(
-                matching_prepared_receipt(graphql, &prepared.create)
-                    .await?
-                    .is_some(),
-            )
-        })
-        .await
-        .with_context(|| {
-            format!(
-                "submitting prepared AgentRequest {}",
-                prepared.create.request_id
-            )
-        })?;
+    if let Err(error) =
+        gents::request::lifecycle::submit_client_request(&access, &prepared.create).await
+    {
+        match gents::request::lifecycle::reconcile_client_request(&access, &prepared.create).await {
+            Ok(true) => {}
+            Ok(false) => return Err(error.into()),
+            Err(recovery) => {
+                return Err(anyhow::Error::new(recovery).context(format!(
+                    "request submission remains unconfirmed after {error}"
+                )))
+            }
+        }
+    }
     let row = matching_prepared_receipt(graphql, &prepared.create)
         .await?
         .context("committed signed request receipt missing")?;
@@ -576,7 +558,7 @@ fn submitted_from_receipt(row: AgentRequestRow) -> Result<SubmittedRequest> {
         session_id: row.session_id.context("receipt has no session")?,
         node_did: row.node_did.context("receipt has no node_did")?,
         requester_did: row.requester_did,
-        agent_id: row.agent_id,
+        agent_did: row.agent_did,
         input: row.input,
         created_at: row.created_at,
     })
@@ -643,11 +625,35 @@ async fn read_submitted_receipt(
     Ok(Some(row))
 }
 
-async fn resolve_request_agent_id(
+async fn resolve_request_agent_did(
     graphql: &GraphqlEndpoint,
     node_did: &str,
+    session_id: Option<&str>,
     requested: Option<&str>,
 ) -> Result<String> {
+    let session_agent = if let Some(session_id) = session_id {
+        gents::ConfigAccess::Graphql(graphql.clone())
+            .transact_readonly("cli.request.session_agent", |txn| {
+                Box::pin(async move {
+                    Ok::<_, anyhow::Error>(
+                        gents::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+                            .await?
+                            .map(|row| row.session.agent_did),
+                    )
+                })
+            })
+            .await?
+    } else {
+        None
+    };
+    let requested = requested.map(str::trim).filter(|value| !value.is_empty());
+    if let (Some(existing), Some(requested)) = (session_agent.as_deref(), requested) {
+        anyhow::ensure!(
+            existing == requested,
+            "request agent differs from the canonical session agent"
+        );
+    }
+    let requested = session_agent.as_deref().or(requested);
     let escaped_node_did = gents::store::graphql::escape_graphql_string(node_did);
     let response = post_graphql(
         graphql,
@@ -656,10 +662,10 @@ async fn resolve_request_agent_id(
                 Node(
                     filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
                     limit: 2
-                ) {{ node_did default_agent_id enabled }}
+                ) {{ node_did default_agent_did enabled }}
                 Agent(
                     filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }}
-                ) {{ agent_id node_did enabled }}
+                ) {{ agent_did node_did enabled }}
             }}"#,
         ),
     )
@@ -678,10 +684,10 @@ async fn resolve_request_agent_id(
         principal.get("enabled").and_then(Value::as_bool) == Some(true),
         "request target node is disabled"
     );
-    let agent_id = match requested.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(agent_id) => agent_id.to_string(),
+    let agent_did = match requested.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(agent_did) => agent_did.to_string(),
         None => principal
-            .get("default_agent_id")
+            .get("default_agent_did")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -694,7 +700,7 @@ async fn resolve_request_agent_id(
         .context("Agent query returned no row array")?;
     let matching = agents
         .iter()
-        .filter(|row| row.get("agent_id").and_then(Value::as_str) == Some(&agent_id))
+        .filter(|row| row.get("agent_did").and_then(Value::as_str) == Some(&agent_did))
         .collect::<Vec<_>>();
     anyhow::ensure!(
         matching.len() == 1,
@@ -704,7 +710,7 @@ async fn resolve_request_agent_id(
         matching[0].get("enabled").and_then(Value::as_bool) == Some(true),
         "request agent is disabled"
     );
-    Ok(agent_id)
+    Ok(agent_did)
 }
 
 pub(crate) fn content_and_input_with_prompt_selected_skill_ids(
@@ -881,7 +887,7 @@ where
                     request.node_did == original.node_did
                         && request.requester_did == original.requester_did
                         && request.session_id == original.session_id
-                        && request.agent_id == original.agent_id,
+                        && request.agent_did == original.agent_did,
                     "successor output target crossed request scope"
                 );
             } else {
@@ -1148,7 +1154,7 @@ pub(crate) async fn fetch_request_view(
                 _docID
                 request_id
                 node_did
-                agent_id
+                agent_did
                 content
                 lifecycle_state
                 failure_reason
@@ -1268,7 +1274,7 @@ mod tests {
                         Json(json!({"data": {"AgentRequest": [{
                             "_docID": "physical", "request_id": "request",
                             "node_did": "did:test:owner", "requester_did": null,
-                            "agent_id": "engineer", "session_id": "session",
+                            "agent_did": "engineer", "session_id": "session",
                             "lifecycle_state": if terminal { "failed" } else { "processing" },
                             "execution_generation": "generation",
                             "execution_lease_secs": 30,
@@ -1370,36 +1376,83 @@ mod tests {
     async fn stable_test_prepared_request() -> (PreparedAgentRequest, Value) {
         use gents::NodeIdentity;
         let dir = tempfile::tempdir().unwrap();
-        let identity =
-            gents::KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap();
-        let did = identity.did().to_string();
-        let create = gents::build_signed_request(
+        let node_identity =
+            gents::KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
+        let user = gents::KeyIdentity::load_or_create(dir.path().join("user.key"), None).unwrap();
+        let node = Arc::new(
+            gents::defra_node::Node::builder()
+                .with_node_identity_did(node_identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let access =
+            gents::ConfigAccess::local_as(node.clone(), ::identity::Did::new(user.did()).unwrap());
+        let binding = gents::store::identity::provision_agent_identity(&node_identity).unwrap();
+        let (node_doc, agent_doc) = access
+            .transact_write("receipt_fixture.identities", |txn| {
+                Box::pin(async {
+                    let node_row = txn.execute_with_variables(
+                        "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                        &json!({"input": {"node_did": node_identity.did()}}),
+                    ).await?;
+                    let agent_row = txn.execute_with_variables(
+                        "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                        &json!({"input": {"node_did": node_identity.did(), "agent_did": binding.agent_did,
+                            "creation_nonce": binding.creation_nonce}}),
+                    ).await?;
+                    Ok::<_, anyhow::Error>((
+                        gents::store::graphql::created_doc_id(&node_row, "Node")?,
+                        gents::store::graphql::created_doc_id(&agent_row, "Agent")?,
+                    ))
+                })
+            })
+            .await
+            .unwrap();
+        access
+            .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
+            .await
+            .unwrap();
+        access
+            .add_actor_relationship(
+                "Agent",
+                &agent_doc,
+                "executor",
+                &::identity::Did::new(&binding.agent_did).unwrap(),
+            )
+            .await
+            .unwrap();
+        let create = gents::request::lifecycle::build_signed_client_request(
+            &access,
             gents::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 gents::RequestIdentity {
                     request_id: "stable-request-id".into(),
-                    node_did: did.clone(),
-                    requester_did: None,
-                    agent_id: "agent".into(),
+                    node_did: node_identity.did().into(),
+                    requester_did: Some(user.did().into()),
+                    agent_did: binding.agent_did,
                     session_id: "session".into(),
                     content: "hello".into(),
                     execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: "2026-09-01T00:00:00Z".into(),
                 },
-                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
             ),
-            gents::RequestSigner::Identity(&identity),
+            gents::RequestSigner::Identity(&user),
         )
         .await
         .unwrap();
+        node.shutdown().await.unwrap();
         let receipt = json!({
             "_docID":"physical-receipt", "request_id":create.request_id, "purpose":"normal", "node_did":create.node_did,
-            "requester_did":create.requester_did, "agent_id":create.agent_id, "session_id":create.session_id,
+            "requester_did":create.requester_did, "agent_did":create.agent_did, "session_id":create.session_id,
+            "session_doc_id":create.session_doc_id, "agent_doc_id":create.agent_doc_id,
             "content":create.content, "input":create.input, "execution_origin":create.execution_origin,
             "created_at":create.created_at, "retry_parent_request":create.retry_parent_request,
             "retry_root_request":create.retry_root_request, "retry_count":create.retry_count,
             "max_retries":create.max_retries, "request_hop":create.request_hop,
-            "admission_kind":"local-self", "admission_signer_did":create.admission.signer_did,
+            "admission_kind":"client", "admission_signer_did":create.admission.signer_did,
             "admission_signature":bs58::encode(&create.admission.signature).into_string()
         });
         gents::verify_request_receipt_signature(&serde_json::from_value(receipt.clone()).unwrap())
@@ -1541,7 +1594,7 @@ mod tests {
                             "request_id": if target {"active"} else {"input"},
                             "node_did":"did:test:owner", "requester_did":"did:test:author",
                             "session_id": if target && cross_scope {"other-session"} else {"same-session"},
-                            "agent_id":"engineer", "lifecycle_state": if target {"completed"} else {"superseded"},
+                            "agent_did":"engineer", "lifecycle_state": if target {"completed"} else {"superseded"},
                             "failure_reason": if target {Value::Null} else {json!(reason)},
                             "superseded_by_request": if target {Value::Null} else {json!("active")},
                             "superseded_by_request_doc_id": if target {Value::Null} else {json!("active-physical")},

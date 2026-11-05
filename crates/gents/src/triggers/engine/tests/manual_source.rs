@@ -1,11 +1,11 @@
 use super::*;
 
-fn resolved_task_for_test(task_id: &str, agent_id: &str, prompt_template: &str) -> ResolvedTask {
+fn resolved_task_for_test(task_id: &str, agent_did: &str, prompt_template: &str) -> ResolvedTask {
     ResolvedTask {
         emit_outcome: false,
         task_id: task_id.to_string(),
         name: None,
-        agent_id: agent_id.to_string(),
+        agent_did: agent_did.to_string(),
         prompt_template: prompt_template.to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -81,7 +81,7 @@ async fn production_materializer_persists_event_source_document_lineage() {
     crate::test_support::install_test_agent(&node, owner, "general").await;
     let config = serde_json::from_value(serde_json::json!({
         "node":{"node_did":owner},
-        "tasks":[{"node_did":owner,"task_id":"task-event","agent_id":"general","prompt_template":"event body"}],
+        "tasks":[{"node_did":owner,"task_id":"task-event","agent_did":"general","prompt_template":"event body"}],
         "event_sources":[{"node_did":owner,"event_source_id":"source","source_collection":"AgentRequest","event_kind":"created"}],
         "triggers":[{"node_did":owner,"trigger_id":"event-trigger","task_id":"task-event","source":{"kind":"event","event_source_id":"source"}}]
     })).unwrap();
@@ -195,7 +195,7 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
     crate::test_support::install_test_agent(&node, &owner, "general").await;
     let config = serde_json::from_value(serde_json::json!({
         "node":{"node_did":owner},
-        "tasks":[{"node_did":owner,"task_id":"task-lead","agent_id":"general","prompt_template":"continue the lead"}],
+        "tasks":[{"node_did":owner,"task_id":"task-lead","agent_did":"general","prompt_template":"continue the lead"}],
         "event_sources":[{"node_did":owner,"event_source_id":"outcomes","source_collection":"AgentRequest","event_kind":"created"}],
         "triggers":[{"node_did":owner,"trigger_id":"lead-outcomes","task_id":"task-lead","source":{"kind":"event","event_source_id":"outcomes"},"session_id_template":"{{ doc.session_id }}"}]
     })).unwrap();
@@ -230,7 +230,7 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
     )
     .unwrap();
     let session_id = "paired-client-console";
-    crate::session::ensure_session_with_agent_id_and_requester_did(
+    crate::session::ensure_session_with_agent_did_and_requester_did(
         &node,
         session_id,
         &owner,
@@ -350,7 +350,7 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
     crate::test_support::install_test_agent(&node, owner, "general").await;
     let config = serde_json::from_value(serde_json::json!({
         "node":{"node_did":owner},
-        "tasks":[{"node_did":owner,"task_id":"task-schedule","agent_id":"general","prompt_template":"schedule body"}],
+        "tasks":[{"node_did":owner,"task_id":"task-schedule","agent_did":"general","prompt_template":"schedule body"}],
         "schedules":[{"node_did":owner,"schedule_id":"source","cadence":{"kind":"interval","interval_secs":60}}],
         "triggers":[{"node_did":owner,"trigger_id":"schedule-trigger","task_id":"task-schedule","source":{"kind":"schedule","schedule_id":"source"}}]
     })).unwrap();
@@ -431,7 +431,7 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
 
 #[tokio::test]
 async fn production_materializer_rejects_incoherent_source_document_lineage() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     let snapshot =
         snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
@@ -479,7 +479,7 @@ async fn production_materializer_rejects_incoherent_source_document_lineage() {
 
 #[tokio::test]
 async fn production_materializer_rejects_manual_lineage_with_trigger_id() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     let snapshot = snapshot_with_schedules(RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node, rx);

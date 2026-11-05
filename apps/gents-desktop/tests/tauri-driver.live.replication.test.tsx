@@ -5,12 +5,8 @@ import { withLiveDesktop } from "./tauri-driver-live/harness";
 import { describeLive, logTurn } from "./tauri-driver-live/helpers";
 import { createFixtureHelpers } from "./live-bridge-runner/adapter";
 
-/* Live conformance witness for EventDelivery D1/D2 (Lean proofs): update this
-   file when a theorem's statement changes. The write must go to the remote node
-   and the read to the desktop node; a same-node roundtrip would not exercise
-   the P2P subscription path. */
-describeLive("Tauri app live replication (EventDelivery witnesses)", () => {
-  it("D1/D2: a remote write converges on the desktop node within the subscription window", async () => {
+describeLive("Tauri app live runtime observation", () => {
+  it("a remote configuration write reaches the desktop snapshot through its runtime subscription", async () => {
     await withLiveDesktop(async ({ runner, deployment }) => {
       const agent = deployment.agents.find((a) => a.isDefault) ?? deployment.agents[0];
       expect(agent).toBeDefined();
@@ -21,7 +17,8 @@ describeLive("Tauri app live replication (EventDelivery witnesses)", () => {
       await fixture.saveAgentConfigOnRemote({
         document: {
           node_did: agent!.nodeDid,
-          agent_id: agent!.agentId,
+          agent_did: agent!.agentDid,
+          creation_nonce: agent!.creationNonce,
           display_name: `${agent!.displayName} ${sentinel}`,
           description: agent!.description,
           context_id: agent!.contextId,
@@ -31,29 +28,27 @@ describeLive("Tauri app live replication (EventDelivery witnesses)", () => {
           created_at: agent!.createdAt,
         },
       });
-      logTurn(
-        `D1/D2 remote write issued agentId=${agent!.agentId} sentinel=${sentinel}`,
-      );
+      logTurn(`remote write issued agentDid=${agent!.agentDid} sentinel=${sentinel}`);
 
       await waitFor(
         async () => {
           const snapshot = await runner.fetchSnapshot();
-          const replicated = snapshot.client?.deployments[0]?.agents.find(
-            (a) => a.agentId === agent!.agentId,
+          const observed = snapshot.client?.deployments[0]?.agents.find(
+            (a) => a.agentDid === agent!.agentDid,
           );
-          expect(replicated?.displayName).toContain(sentinel);
-          const replicatedContext = snapshot.client?.deployments[0]?.contexts.find(
-            (candidate) => candidate.context_id === replicated?.contextId,
+          expect(observed?.displayName).toContain(sentinel);
+          const observedContext = snapshot.client?.deployments[0]?.contexts.find(
+            (candidate) => candidate.context_id === observed?.contextId,
           );
           expect(
-            replicatedContext?.tools_id,
-            "replicated agent must keep its canonical context linkage",
+            observedContext?.tools_id,
+            "observed agent must keep its canonical context linkage",
           ).toBeDefined();
         },
         { timeout: 5_000, interval: 200 },
       );
       logTurn(
-        `D1/D2 witnessed: remote write → desktop snapshot agentId=${agent!.agentId} sentinel=${sentinel}`,
+        `runtime subscription observed: remote write → desktop snapshot agentDid=${agent!.agentDid} sentinel=${sentinel}`,
       );
     });
   }, 180_000);

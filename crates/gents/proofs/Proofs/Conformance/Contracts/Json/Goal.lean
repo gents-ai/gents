@@ -434,7 +434,7 @@ def taskGoalPublicationCasesJson : String :=
 structure TaskGoalRecoveryCase where
   name : String
   nodeDid : String
-  agentId : String
+  agentDid : String
   taskId : String
   fireKey : String
   request : Option GoalAutomation.TaskGoalRequestBinding
@@ -443,36 +443,36 @@ structure TaskGoalRecoveryCase where
 
 def taskGoalRecoveryCases : List TaskGoalRecoveryCase :=
   let nodeDid := "did:key:z-feature-owner"
-  let agentId := "feature-engineer"
+  let agentDid := "feature-engineer"
   let taskId := "feature-implementation"
   let fireKey := "schedule:2026-09-02T12:00:00Z"
   let expected := GoalAutomation.expectedTaskGoalRequestBinding
-    nodeDid agentId taskId fireKey
-  [ { name := "request_absent_has_nothing_to_checkpoint", nodeDid, agentId, taskId, fireKey
+    nodeDid agentDid taskId fireKey
+  [ { name := "request_absent_has_nothing_to_checkpoint", nodeDid, agentDid, taskId, fireKey
       request := none, durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "matching_request_with_metadata_recovers", nodeDid, agentId, taskId, fireKey
+  , { name := "matching_request_with_metadata_recovers", nodeDid, agentDid, taskId, fireKey
       request := some expected, durableGoalPresent := true, creationClaimPresent := true }
-  , { name := "matching_request_without_goal_recovers", nodeDid, agentId, taskId, fireKey
+  , { name := "matching_request_without_goal_recovers", nodeDid, agentDid, taskId, fireKey
       request := some expected, durableGoalPresent := false, creationClaimPresent := true }
-  , { name := "matching_request_without_claim_recovers", nodeDid, agentId, taskId, fireKey
+  , { name := "matching_request_without_claim_recovers", nodeDid, agentDid, taskId, fireKey
       request := some expected, durableGoalPresent := true, creationClaimPresent := false }
   , { name := "matching_request_without_goal_or_claim_recovers",
-      nodeDid, agentId, taskId, fireKey
+      nodeDid, agentDid, taskId, fireKey
       request := some expected, durableGoalPresent := false, creationClaimPresent := false }
   , { name := "mismatched_node_conflicts",
-      nodeDid, agentId, taskId, fireKey
+      nodeDid, agentDid, taskId, fireKey
       request := some { expected with nodeDid := "did:key:z-other-owner" }
       durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "mismatched_agent_conflicts", nodeDid, agentId, taskId, fireKey
-      request := some { expected with agentId := "other-agent" }
+  , { name := "mismatched_agent_conflicts", nodeDid, agentDid, taskId, fireKey
+      request := some { expected with agentDid := "other-agent" }
       durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "mismatched_session_conflicts", nodeDid, agentId, taskId, fireKey
+  , { name := "mismatched_session_conflicts", nodeDid, agentDid, taskId, fireKey
       request := some { expected with sessionId := "other-session" }
       durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "mismatched_request_id_conflicts", nodeDid, agentId, taskId, fireKey
+  , { name := "mismatched_request_id_conflicts", nodeDid, agentDid, taskId, fireKey
       request := some { expected with requestId := "other-request" }
       durableGoalPresent := false, creationClaimPresent := false }
-  , { name := "mismatched_retry_key_conflicts", nodeDid, agentId, taskId, fireKey
+  , { name := "mismatched_retry_key_conflicts", nodeDid, agentDid, taskId, fireKey
       request := some { expected with retryKey := "other-retry" }
       durableGoalPresent := false, creationClaimPresent := false }
   ]
@@ -484,19 +484,19 @@ def taskFireRecoveryDispositionName : GoalAutomation.TaskFireRecoveryDisposition
 
 def taskGoalRecoveryCaseJson (w : TaskGoalRecoveryCase) : String :=
   let expected := GoalAutomation.expectedTaskGoalRequestBinding
-    w.nodeDid w.agentId w.taskId w.fireKey
+    w.nodeDid w.agentDid w.taskId w.fireKey
   let decision := GoalAutomation.decideTaskFireRecovery expected
     ⟨w.request, w.durableGoalPresent, w.creationClaimPresent⟩
   "{"
     ++ "\"name\":" ++ jsonString w.name ++ ","
     ++ "\"node_did\":" ++ jsonString w.nodeDid ++ ","
-    ++ "\"agent_id\":" ++ jsonString w.agentId ++ ","
+    ++ "\"agent_did\":" ++ jsonString w.agentDid ++ ","
     ++ "\"task_id\":" ++ jsonString w.taskId ++ ","
     ++ "\"fire_key\":" ++ jsonString w.fireKey ++ ","
     ++ "\"request_present\":" ++ boolString w.request.isSome ++ ","
     ++ "\"request_binding_matches\":" ++ boolString (w.request == some expected) ++ ","
     ++ "\"observed_node_did\":" ++ goalOptionalStringJson (w.request.map (·.nodeDid)) ++ ","
-    ++ "\"observed_agent_id\":" ++ goalOptionalStringJson (w.request.map (·.agentId)) ++ ","
+    ++ "\"observed_agent_did\":" ++ goalOptionalStringJson (w.request.map (·.agentDid)) ++ ","
     ++ "\"observed_session_id\":" ++ goalOptionalStringJson (w.request.map (·.sessionId)) ++ ","
     ++ "\"observed_request_id\":" ++ goalOptionalStringJson (w.request.map (·.requestId)) ++ ","
     ++ "\"observed_retry_key\":" ++ goalOptionalStringJson (w.request.map (·.retryKey)) ++ ","
@@ -520,8 +520,10 @@ structure GoalSubmissionCase where
 def goalSubmissionCases : List GoalSubmissionCase :=
   [ { name := "stage_goal_not_visible", state := ⟨false, false, false, false⟩,
       action := .stageGoal }
-  , { name := "request_cannot_stage_without_goal", state := ⟨false, false, false, false⟩,
+  , { name := "request_first_not_visible", state := ⟨false, false, false, false⟩,
       action := .stageRequest }
+  , { name := "goal_after_request", state := ⟨false, false, false, true⟩,
+      action := .stageGoal }
   , { name := "commit_both_atomically", state := ⟨false, false, true, true⟩,
       action := .commit }
   , { name := "failure_between_writes_discards_staging", state := ⟨false, false, true, false⟩,

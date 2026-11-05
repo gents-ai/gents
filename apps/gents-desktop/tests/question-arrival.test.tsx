@@ -26,7 +26,7 @@ const NODE = deployment.nodeDid;
 const session = {
   sessionId: "session",
   nodeDid: NODE,
-  agentId: "default",
+  agentDid: "default",
   title: "Session",
   turnState: "interrupted",
   timelineItems: [],
@@ -65,7 +65,7 @@ const question: MailboxItemView = {
   requestId: "request",
   causeDocId: null,
   targetNodeDid: NODE,
-  targetAgentId: "default",
+  targetAgentDid: "default",
   expectedCollection: null,
   parentItemId: null,
   deadlineAt: null,

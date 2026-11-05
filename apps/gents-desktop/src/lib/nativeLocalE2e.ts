@@ -26,7 +26,7 @@ type Config = NativeLocalSetup & {
 type Evidence = {
   nodeDid: string;
   sessionId: string;
-  agentId: string;
+  agentDid: string;
   requestId: string;
   response: string;
 };
@@ -598,7 +598,7 @@ export async function runNativeLocalE2e(
     throw new Error(
       "The original real provider response marker is missing from the durable timeline",
     );
-  if (session.agentId !== engineer.agentId)
+  if (session.agentDid !== engineer.agentDid)
     throw new Error("Conversation used a different agent");
   const responses = session.timelineItems
     .filter(
@@ -621,7 +621,7 @@ export async function runNativeLocalE2e(
   const evidence: Evidence = {
     nodeDid: deployment.nodeDid,
     sessionId: session.sessionId,
-    agentId: engineer.agentId,
+    agentDid: engineer.agentDid,
     requestId: session.latestRequestId!,
     response,
   };

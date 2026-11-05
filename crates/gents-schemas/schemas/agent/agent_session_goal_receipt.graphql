@@ -1,0 +1,6 @@
+type AgentSessionGoalReceipt @policy(id: "d23eb42a87668f3bd577087f604fd7919e24873705681fe9e3d1923d7d065c13", resource: "goal_receipts") {
+    command_doc_id: String @index(unique: true) @immutable
+    command_id: String @index(unique: true) @immutable
+    receipt_json: String @immutable
+    relationships_pending: Boolean @index
+}

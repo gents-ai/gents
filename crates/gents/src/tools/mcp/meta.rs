@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use crate::tools::mcp::health::ServiceHealthMap;
 use crate::tools::mcp::pool::McpPool;
@@ -33,10 +33,12 @@ pub async fn build_meta_tools(
     local_hostname: String,
     local_subnet: Option<String>,
     node_did: String,
+    actor: identity::Did,
     allowed_mcp_service_ids: Vec<String>,
     remote_tools: crate::documents::RemoteTools,
 ) -> anyhow::Result<Vec<Box<dyn crate::inference::llm::tool::ToolDyn>>> {
     let ctx = MetaToolContext {
+        actor,
         node,
         mcp_pool: mcp_pool.for_agent(&node_did),
         health,

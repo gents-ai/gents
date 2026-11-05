@@ -544,8 +544,10 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
         loop_config.context_window = 6_500;
         loop_config.compaction_threshold = 0.25;
         let compaction_node = node.clone();
+        let compaction_agent_did = crate::test_support::agent_did(&node);
         loop_config.turn_compactor = Some(Arc::new(move |_| {
             let node = compaction_node.clone();
+            let agent_did = compaction_agent_did.clone();
             let retained = retained.clone();
             Box::pin(async move {
                 let compacted_prefix = [Message::user("x".repeat(8_000))];
@@ -571,6 +573,7 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
                 };
                 crate::turn::provider_context_reduction::stage(
                     crate::turn::provider_context_reduction::NewProviderContextReduction {
+                        agent_did: &agent_did,
                         node_did: "did:test:test",
                         requester_did: None,
                         session_id: "session-3283",

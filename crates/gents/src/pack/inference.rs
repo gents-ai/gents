@@ -296,7 +296,7 @@ pub(super) fn validate_pack_inference_authoring(
         .flat_map(|slot| {
             slot.agents
                 .iter()
-                .map(move |agent_id| (agent_id.as_str(), slot.name.as_str()))
+                .map(move |agent_did| (agent_did.as_str(), slot.name.as_str()))
         })
         .collect::<BTreeMap<_, _>>();
     anyhow::ensure!(
@@ -305,13 +305,13 @@ pub(super) fn validate_pack_inference_authoring(
         manifest.name
     );
     for agent in &config.agents {
-        let slot = declared.get(agent.agent_id.as_str()).with_context(|| {
-            format!("agent {:?} is missing from inference slots", agent.agent_id)
+        let slot = declared.get(agent.agent_did.as_str()).with_context(|| {
+            format!("agent {:?} is missing from inference slots", agent.agent_did)
         })?;
         anyhow::ensure!(
             agent.inference_profile_id == inference_slot_reference(slot),
             "agent {:?} must reference inference slot {:?}",
-            agent.agent_id,
+            agent.agent_did,
             slot
         );
     }

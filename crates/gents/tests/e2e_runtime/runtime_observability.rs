@@ -47,7 +47,7 @@ impl RuntimeSnapshotObserver for RuntimeEventObserver {
         &self,
         generation: u64,
         _configuration_fingerprint: &str,
-        _runnable_agent_ids: &[String],
+        _runnable_agent_dids: &[String],
     ) {
         self.generation_tx.send_replace(generation);
     }
@@ -82,7 +82,7 @@ async fn wait_for_observed<T>(
 }
 
 async fn wait_for_runtime_snapshot<F>(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     node_did: &str,
     predicate: F,
 ) -> RuntimeSnapshot
@@ -139,7 +139,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
     .await
     .unwrap();
     let node_did = agent.node_did().to_string();
-    let default_agent_id = agent.default_agent_id().to_string();
+    let default_agent_did = agent.default_agent_did().to_string();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.clone().run(shutdown_rx));
@@ -158,7 +158,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
             && snapshot.last_reconcile_error.is_empty()
     })
     .await;
-    assert_eq!(startup.default_agent_id, default_agent_id);
+    assert_eq!(startup.default_agent_did, default_agent_did);
     assert!(startup.last_reconcile_error.is_empty());
     let initial_fingerprint = agent
         .document_runtime_configuration_fingerprint()
@@ -181,20 +181,20 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
         "test.update_context",
         |txn| {
             let node_did = &node_did;
-            let agent_id = &default_agent_id;
+            let agent_did = &default_agent_did;
             Box::pin(async move {
                 use gents::store::config_client::{
                     read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
                     DesiredStateApplyPlan,
                 };
                 use gents::Collection;
-                let (_, mut behavior) = read(txn, Collection::Agent, node_did, agent_id)
+                let (_, mut behavior) = read(txn, Collection::Agent, node_did, agent_did)
                     .await?
                     .expect("behavior");
                 let context_id = behavior["context_id"]
                     .as_str()
                     .map(str::to_owned)
-                    .unwrap_or_else(|| format!("{agent_id}:context"));
+                    .unwrap_or_else(|| format!("{agent_did}:context"));
                 let mut context = read(txn, Collection::AgentContext, node_did, &context_id)
                     .await?
                     .map(|(_, value)| value)
@@ -251,7 +251,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
             && snapshot.last_reconcile_error.is_empty()
     })
     .await;
-    assert_eq!(reconciled.default_agent_id, default_agent_id);
+    assert_eq!(reconciled.default_agent_did, default_agent_did);
     assert!(reconciled.last_reconcile_error.is_empty());
 
     let _ = shutdown_tx.send(true);

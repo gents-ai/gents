@@ -10,7 +10,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use gents::defra_node::{EmbeddedNode, StorageBackend};
+use gents::defra_node::{Node as EmbeddedNode, StorageBackend};
 use gents::ensure_runtime_schemas;
 use gents::inference::rendered_request::RenderedCompletionRequest;
 use serde::Deserialize;
@@ -59,7 +59,7 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
         let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
         ensure_runtime_schemas(&node).await?;
         seed_trace_export_rows(&node).await?;
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     let output = run_cli_text(
@@ -402,7 +402,7 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
         let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
         ensure_runtime_schemas(&node).await?;
         seed_trace_export_rows(&node).await?;
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     let output = run_cli_text(
@@ -493,7 +493,7 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentRequest(input: {purpose: "normal", 
                 request_id: "req-cap",
                 node_did: "did:test:amy",
-                agent_id: "amy",
+                agent_did: "amy",
                 session_id: "session-cap",
                 content: "capture me",
 
@@ -575,7 +575,7 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
                         session_id: "session-cap",
                         node_did: "did:test:amy",
                         requester_did: "",
-                        agent_id: "amy",
+                        agent_did: "amy",
                         capture_scope: "inference.1",
                         turn_index: 0,
                         attempt: {attempt},
@@ -631,7 +631,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
             attempt: 0,
             node_did: "did:test:amy".into(),
             requester_did: String::new(),
-            agent_id: "amy".into(),
+            agent_did: "amy".into(),
             session_id: "session-cap-v2".into(),
             model_name: "test-model".into(),
             source:
@@ -675,7 +675,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
                     r#"mutation {{ create_RenderedRequest(input: {{
                         capture_key: "{capture_key}", request_doc_id: "", request_commit_cid: "",
                         request_id: "{request_id}", session_id: "{session_id}",
-                        node_did: "did:test:amy", requester_did: "", agent_id: "amy",
+                        node_did: "did:test:amy", requester_did: "", agent_did: "amy",
                         capture_scope: "inference.1", turn_index: {turn}, attempt: 0,
                         capture_version: 2, model_name: "test-model", source: "openai_chat_completions",
                         request_json: "{request_json}", provenance_json: "{provenance}",
@@ -755,7 +755,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
                 r#"mutation {{ create_RenderedRequest(input: {{
                     capture_key: "{capture_key}", request_doc_id: "", request_commit_cid: "",
                     request_id: "{request_id}", session_id: "{session_id}",
-                    node_did: "did:test:amy", requester_did: "", agent_id: "amy",
+                    node_did: "did:test:amy", requester_did: "", agent_did: "amy",
                     capture_scope: "inference.1", turn_index: {turn}, attempt: 0,
                     capture_version: 2, model_name: "test-model", source: "openai_chat_completions",
                     request_json: "{request_json}", provenance_json: "{provenance}",
@@ -804,7 +804,7 @@ async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<
         attempt: 0,
         node_did: "did:test:amy".into(),
         requester_did: String::new(),
-        agent_id: "amy".into(),
+        agent_did: "amy".into(),
         session_id: "session-cap-manifest".into(),
         model_name: "test-model".into(),
         source: gents::inference::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
@@ -842,7 +842,7 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
         seed_rendered_request_rows(&node).await?;
         seed_v2_rendered_request_rows(&node).await?;
         seed_manifest_rendered_request_row(&node).await?;
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
     let home = agent_home.to_str().context("agent home utf8")?;
 
@@ -1058,7 +1058,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
         ensure_runtime_schemas(&node).await?;
         seed_trace_export_rows(&node).await?;
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     let home = agent_home.to_str().context("agent home utf8")?;
@@ -1915,7 +1915,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         node,
         r#"mutation {
             create_Agent(input: {
-                agent_id: "amy",
+                agent_did: "amy",
                 node_did: "did:test:amy",
                 display_name: "Amy",
                 enabled: true,
@@ -1930,7 +1930,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentSession(input: {
                 session_id: "session-1",
                 node_did: "did:test:amy",
-                agent_id: "amy",
+                agent_did: "amy",
                 title: { text: "Trace export test", source: "user" },
                 created_at: "2026-05-04T12:00:00Z",
                 observation: { last_activity_at: "2026-05-04T12:00:05Z", preview: "Inspect the repo" }
@@ -1944,7 +1944,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentRequest(input: {purpose: "normal", 
                 request_id: "req-1",
                 node_did: "did:test:amy",
-                agent_id: "amy",
+                agent_did: "amy",
                 session_id: "session-1",
                 content: "Inspect the repo and show README.md",
                 lifecycle_state: "completed",
@@ -1978,8 +1978,8 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
     let commit = escape_graphql_string(commit);
     let rendered_body = escape_graphql_string(&json!({"model":"baa-ai/GLM-5.1-RAM-420GB-MLX", "messages":[{"role":"user","content":"Inspect the repo and show README.md"}]}).to_string());
     exec(node, &format!(r#"mutation {{
-        create_InferenceCall(input: {{call_id: "trace-inference", request_id: "req-1", request_doc_id: "{observed}", node_did: "did:test:amy", agent_id: "amy", backend_id: "studios-cluster", call_seq: 0, attempt: 0, call_kind: "primary", call_state: "completed", queued_at: "2026-05-04T12:00:02Z"}}) {{_docID}}
-        create_RenderedRequest(input: {{capture_key: "trace-model", request_commit_cid: "{commit}", request_json: "{rendered_body}", request_id: "req-1", request_doc_id: "{observed}", session_id: "session-1", node_did: "did:test:amy", requester_did: "", agent_id: "amy", model_name: "baa-ai/GLM-5.1-RAM-420GB-MLX", capture_scope: "inference.0", turn_index: 0, attempt: 0, capture_version: 1, source: "openai_chat_completions", created_at: "2026-05-04T12:00:02Z"}}) {{_docID}}
+        create_InferenceCall(input: {{call_id: "trace-inference", request_id: "req-1", request_doc_id: "{observed}", node_did: "did:test:amy", agent_did: "amy", backend_id: "studios-cluster", call_seq: 0, attempt: 0, call_kind: "primary", call_state: "completed", queued_at: "2026-05-04T12:00:02Z"}}) {{_docID}}
+        create_RenderedRequest(input: {{capture_key: "trace-model", request_commit_cid: "{commit}", request_json: "{rendered_body}", request_id: "req-1", request_doc_id: "{observed}", session_id: "session-1", node_did: "did:test:amy", requester_did: "", agent_did: "amy", model_name: "baa-ai/GLM-5.1-RAM-420GB-MLX", capture_scope: "inference.0", turn_index: 0, attempt: 0, capture_version: 1, source: "openai_chat_completions", created_at: "2026-05-04T12:00:02Z"}}) {{_docID}}
     }}"#)).await?;
     let failed_result = format!(
         "gents_exec: {}\nstdout:\n(empty)\nstderr:\ngrep: invalid option -- P",
@@ -2047,7 +2047,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentSession(input: {
                 session_id: "session-child",
                 node_did: "did:test:reviewer",
-                agent_id: "reviewer",
+                agent_did: "reviewer",
                 title: { text: "Child trace export test", source: "user" },
                 created_at: "2026-05-04T12:00:04Z",
                 observation: { last_activity_at: "2026-05-04T12:00:07Z", preview: "Review the README finding" }
@@ -2062,7 +2062,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentRequest(input: {{purpose: "normal", 
                 request_id: "req-child",
                 node_did: "did:test:reviewer",
-                agent_id: "reviewer",
+                agent_did: "reviewer",
                 session_id: "session-child",
                 content: "Review the README finding",
                 lifecycle_state: "completed",
@@ -2150,7 +2150,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentSession(input: {
                 session_id: "session-2",
                 node_did: "did:test:amy",
-                agent_id: "amy",
+                agent_did: "amy",
                 title: { text: "Trace export deadline test", source: "user" },
                 created_at: "2026-05-04T13:00:00Z",
                 observation: { last_activity_at: "2026-05-04T13:00:10Z", preview: "Read a file then deadline" }
@@ -2164,7 +2164,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             create_AgentRequest(input: {purpose: "normal", 
                 request_id: "req-deadline",
                 node_did: "did:test:amy",
-                agent_id: "amy",
+                agent_did: "amy",
                 session_id: "session-2",
                 content: "Read README.md but the request later times out",
                 lifecycle_state: "failed",
@@ -2421,7 +2421,7 @@ fn projection_mock_root_request() -> Value {
         "request_id": "req-acp",
         "node_did": "did:test:amy",
         "requester_did": null,
-        "agent_id": "amy",
+        "agent_did": "amy",
         "session_id": "session-acp",
         "content": "root visible request",
         "input": null,
@@ -2445,7 +2445,7 @@ fn projection_mock_child_request() -> Value {
         "request_id": "req-acp-child",
         "node_did": "did:test:reviewer",
         "requester_did": null,
-        "agent_id": "reviewer",
+        "agent_did": "reviewer",
         "session_id": "session-acp",
         "content": "child private request",
         "input": null,
@@ -2469,7 +2469,7 @@ fn projection_mock_forged_child_request() -> Value {
         "request_id": "req-forged-child",
         "node_did": "did:test:reviewer",
         "requester_did": null,
-        "agent_id": "reviewer",
+        "agent_did": "reviewer",
         "session_id": "session-forged-child",
         "content": "forged child request",
         "input": null,
@@ -2892,7 +2892,7 @@ fn projection_mock_tool_calls(query: &str) -> Value {
 fn projection_mock_session() -> Value {
     json!({
         "_docID": "doc-session", "session_id": "session-acp",
-        "node_did": "did:test:amy", "agent_id": "amy",
+        "node_did": "did:test:amy", "agent_did": "amy",
         "created_at": "2026-06-05T18:00:00Z",
         "title": {"text": "ACP projection test", "source": "user"},
         "observation": {

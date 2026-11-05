@@ -4,13 +4,13 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use crate::defra_node::EmbeddedNode;
 use crate::documents::{InferenceSampling, PackConfig};
 use crate::eval::runner::embedded::home::EmbeddedHome;
 use crate::eval::runner::executor::{InferenceBinding, TrialFixtures, TrialSpec};
 use crate::pack::{
-    bind_pack_install_config, declared_paths, digest_declared_assets, load_pack_config,
-    PackInferenceBindings, PackInstallOptions, PackManifest,
+    declared_paths, digest_declared_assets, install_pack_documents, load_pack_install_config,
+    BoundPackConfig, DriftPolicy, InstalledVia, PackIdentity, PackInferenceBindings,
+    PackInstallOptions, PackManifest,
 };
 use crate::store::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
@@ -18,7 +18,11 @@ use crate::store::config_client::{
 use crate::store::graphql::{escape_graphql_string, validate_collection_identifier};
 use crate::{Collection, ConfigAccess};
 
-pub(super) async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &Path) -> Result<()> {
+pub(super) async fn install(
+    spec: &TrialSpec,
+    home: &EmbeddedHome,
+    workspace: &Path,
+) -> Result<String> {
     let (manifest, assets) = read_pack(&spec.pack_dir)?;
     let digest = digest_declared_assets(&manifest, |path| {
         assets
@@ -34,7 +38,20 @@ pub(super) async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &P
     );
 
     let node_did = home.did().to_string();
-    let config = load_pack_config(
+    let evaluator =
+        crate::store::identity::RegisteredIdentity::from_registered_did(&spec.evaluator_did, None)
+            .context(
+                "the evaluator signing identity must be available before installing a trial",
+            )?;
+    if home.node_acp_enabled() {
+        grant_trial_operations(home, &spec.evaluator_did).await?;
+    }
+    let access = ConfigAccess::local_as(
+        home.node.clone(),
+        ::identity::Did::new(spec.evaluator_did.clone())?,
+    );
+    let config = load_pack_install_config(
+        &access,
         &manifest,
         &PackInstallOptions {
             node_did: node_did.clone(),
@@ -46,12 +63,25 @@ pub(super) async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &P
                 .with_context(|| format!("pack has no asset {path:?}"))
         },
         &|name| std::env::var(name).ok(),
-    )?;
+        InstalledVia::Operator,
+    )
+    .await?;
+    let mut identity = PackIdentity::new(&manifest, &digest, Vec::new());
+    identity.installation_doc_id = config.installation_doc_id.clone();
+    identity.agent_bindings = config.agent_bindings.clone();
+    let agent_did = config
+        .agent_bindings
+        .get(&spec.agent_slot)
+        .with_context(|| format!("pack has no installed agent slot {:?}", spec.agent_slot))?
+        .agent_did
+        .clone();
+    if home.node_acp_enabled() {
+        grant_trial_operations(home, &agent_did).await?;
+    }
     let config = bind_inference_slots(&manifest, &config, &spec.inference)
         .context("binding the pack's inference slots to the frozen profile")?;
-    let mut config = root_host_tools(config, workspace)?;
-    config.node.default_agent_id = Some(spec.agent_id.clone());
-    let access = ConfigAccess::local(home.node.clone());
+    let config = root_host_tools(config, workspace)?;
+    drop(evaluator);
     for path in &manifest.schemas {
         let bytes = assets
             .get(path)
@@ -62,6 +92,44 @@ pub(super) async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &P
             .await
             .with_context(|| format!("installing pack schema {path:?}"))?;
     }
+    // The Agent parent must exist under the evaluator before the pack is installed.
+    let mut trial_node = config.node.clone();
+    trial_node.default_agent_did = None;
+    apply(
+        &access,
+        "eval.trial.create_node",
+        &DesiredStateApplyPlan::new(vec![desired(
+            Collection::Node,
+            serde_json::to_value(trial_node)?,
+        )])?,
+    )
+    .await
+    .context("creating the evaluator-owned trial node")?;
+    let node_doc = access
+        .transact_readonly("eval.trial.node_owner", |txn| {
+            let node_did = &node_did;
+            Box::pin(async move {
+                crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    Collection::Node,
+                    node_did,
+                    node_did,
+                )
+                .await?
+                .map(|(doc, _)| doc)
+                .context("created trial node is unavailable")
+            })
+        })
+        .await?;
+    access
+        .add_actor_relationship(
+            "Node",
+            &node_doc,
+            "administrator",
+            &::identity::Did::new(&spec.evaluator_did)?,
+        )
+        .await
+        .context("granting the evaluator trial-node administration")?;
     // A reference is only installable once what it names exists.
     apply(
         &access,
@@ -70,21 +138,75 @@ pub(super) async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &P
     )
     .await
     .context("installing the trial inference binding")?;
+    install_pack_documents(&access, &node_did, &identity, &config, DriftPolicy::Refuse)
+        .await
+        .context("installing the trial pack")?;
+    let mut selected = config.node.clone();
+    selected.default_agent_did = Some(agent_did.clone());
     apply(
         &access,
-        "eval.trial.install_pack",
-        &DesiredStateApplyPlan::from_pack_config(&config)?,
+        "eval.trial.select_agent",
+        &DesiredStateApplyPlan::new(vec![desired(
+            Collection::Node,
+            serde_json::to_value(selected)?,
+        )])?,
     )
-    .await
-    .context("installing the trial pack")?;
+    .await?;
+    install_workspace_root(&access, workspace).await?;
+    let mut fixtures = spec.fixtures.clone();
+    for fixture in &mut fixtures.documents {
+        crate::pack::bind_agent_references(&mut fixture.document, &identity.agent_bindings)?;
+        fixture.document = bind_fixture_actors(&fixture.document, &node_did, &spec.evaluator_did);
+        for reader in &mut fixture.session_readers {
+            *reader = identity
+                .agent_bindings
+                .get(reader)
+                .with_context(|| {
+                    format!("fixture session reader references unknown agent slot {reader:?}")
+                })?
+                .agent_did
+                .clone();
+        }
+    }
+    if home.node_acp_enabled() {
+        let mut owners = std::collections::BTreeSet::new();
+        for fixture in &fixtures.documents {
+            if fixture.session_agent_owned {
+                let agent = fixture.document["agent_did"]
+                    .as_str()
+                    .context("agent-owned fixture session has no agent")?;
+                if owners.insert(agent) {
+                    grant_trial_operations(home, agent).await?;
+                }
+            }
+        }
+    }
+    install_fixtures(&access, &fixtures, workspace, &node_did).await?;
+    Ok(agent_did)
+}
 
-    install_workspace_root(&home.node, workspace).await?;
-    install_fixtures(&access, &spec.fixtures, workspace, &node_did).await
+async fn grant_trial_operations(home: &EmbeddedHome, target: &str) -> Result<()> {
+    use crate::store::config_client::NodePermission;
+
+    let owner = ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(home.did())?);
+    let target = ::identity::Did::new(target)?;
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::CollectionPatch,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DocumentDelete,
+        NodePermission::DacRelationAdd,
+        NodePermission::DacRelationDelete,
+    ] {
+        owner.grant_node_permission(&target, permission).await?;
+    }
+    Ok(())
 }
 
 fn bind_inference_slots(
     manifest: &PackManifest,
-    config: &PackConfig,
+    config: &BoundPackConfig,
     binding: &InferenceBinding,
 ) -> Result<PackConfig> {
     let profile_id = binding
@@ -99,7 +221,7 @@ fn bind_inference_slots(
         .filter(|slot| !slot.optional)
         .map(|slot| (slot.name.clone(), profile_id.to_owned()))
         .collect();
-    bind_pack_install_config(manifest, config, &bindings)
+    config.bind_inference(manifest, &bindings)
 }
 
 fn root_host_tools(mut config: PackConfig, workspace: &Path) -> Result<PackConfig> {
@@ -209,10 +331,7 @@ fn object<'a>(value: &'a mut Value, named: &str) -> Result<&'a mut serde_json::M
         .with_context(|| format!("the trial's {named} document is not an object"))
 }
 
-async fn install_workspace_root(
-    node: &std::sync::Arc<EmbeddedNode>,
-    workspace: &Path,
-) -> Result<()> {
+async fn install_workspace_root(access: &ConfigAccess, workspace: &Path) -> Result<()> {
     let root = escape_graphql_string(
         workspace
             .to_str()
@@ -229,7 +348,8 @@ async fn install_workspace_root(
             }}) {{ _docID }}
         }}"#
     );
-    ConfigAccess::write_local(node, "eval.trial.workspace_root", &mutation)
+    access
+        .write("eval.trial.workspace_root", &mutation)
         .await
         .context("publishing the trial workspace root")?;
     Ok(())
@@ -247,13 +367,74 @@ async fn install_fixtures(
             .context("installing a fixture schema")?;
     }
     for fixture in &fixtures.documents {
-        create_document(
-            access,
+        let mut document = bind_fixture_owner(&fixture.document, trial_did);
+        if fixture.collection == "AgentSession" {
+            anyhow::ensure!(
+                document["node_did"] == trial_did,
+                "fixture session must belong to the trial node"
+            );
+            object(&mut document, "AgentSession")?
+                .insert("relationships_pending".into(), json!(true));
+        } else {
+            anyhow::ensure!(
+                fixture.session_readers.is_empty() && !fixture.session_agent_owned,
+                "session ownership and readers require an AgentSession fixture"
+            );
+        }
+        let agent_access = if fixture.session_agent_owned {
+            let did = document["agent_did"]
+                .as_str()
+                .context("agent-owned fixture session has no agent")?;
+            let node = access
+                .local_node()
+                .context("agent-owned fixture requires a local trial")?
+                .clone();
+            Some(ConfigAccess::local_as(node, ::identity::Did::new(did)?))
+        } else {
+            None
+        };
+        let creator = agent_access.as_ref().unwrap_or(access);
+        let doc_id = create_document(
+            creator,
             "eval.trial.fixture_document",
             &fixture.collection,
-            &bind_fixture_owner(&fixture.document, trial_did),
+            &document,
         )
         .await?;
+        if fixture.collection == "AgentSession" {
+            let agent_did = document["agent_did"]
+                .as_str()
+                .context("fixture session is missing its agent")?;
+            let agent_doc = access
+                .transact_readonly("eval.trial.fixture_agent", |txn| {
+                    Box::pin(async move {
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            Collection::Agent,
+                            trial_did,
+                            agent_did,
+                        )
+                        .await?
+                        .map(|(id, _)| id)
+                        .context("fixture session agent is unavailable")
+                    })
+                })
+                .await?;
+            crate::session::grant_created_session_relationships(
+                creator, &doc_id, &agent_doc, agent_did,
+            )
+            .await?;
+            for reader in &fixture.session_readers {
+                creator
+                    .add_actor_relationship(
+                        "AgentSession",
+                        &doc_id,
+                        "reader",
+                        &::identity::Did::new(reader)?,
+                    )
+                    .await?;
+            }
+        }
     }
     for file in &fixtures.files {
         let path = workspace_path(workspace, &file.path)?;
@@ -274,18 +455,30 @@ pub(super) async fn install_schema(access: &ConfigAccess, sdl: &str) -> Result<(
 }
 
 pub(crate) fn bind_fixture_owner(value: &Value, trial_did: &str) -> Value {
+    bind_fixture_token(value, "$trial", trial_did)
+}
+
+pub(super) fn bind_fixture_actors(value: &Value, trial_did: &str, evaluator_did: &str) -> Value {
+    bind_fixture_token(
+        &bind_fixture_owner(value, trial_did),
+        "$evaluator",
+        evaluator_did,
+    )
+}
+
+fn bind_fixture_token(value: &Value, token: &str, replacement: &str) -> Value {
     match value {
-        Value::String(text) if text == "$trial" => Value::String(trial_did.into()),
+        Value::String(text) if text == token => Value::String(replacement.into()),
         Value::Array(values) => Value::Array(
             values
                 .iter()
-                .map(|v| bind_fixture_owner(v, trial_did))
+                .map(|v| bind_fixture_token(v, token, replacement))
                 .collect(),
         ),
         Value::Object(fields) => Value::Object(
             fields
                 .iter()
-                .map(|(key, value)| (key.clone(), bind_fixture_owner(value, trial_did)))
+                .map(|(key, value)| (key.clone(), bind_fixture_token(value, token, replacement)))
                 .collect(),
         ),
         _ => value.clone(),

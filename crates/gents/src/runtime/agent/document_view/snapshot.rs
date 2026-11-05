@@ -3,7 +3,7 @@ use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
 use crate::documents::Agent as AgentDocument;
@@ -87,10 +87,10 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         anyhow::bail!("node {} is disabled", view.node.value.node_did);
     }
 
-    let default_agent_id = view
+    let default_agent_did = view
         .node
         .value
-        .default_agent_id
+        .default_agent_did
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned)
@@ -99,7 +99,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     let node_data = RuntimeNode {
         node_did: view.node.value.node_did.clone(),
         identity: context.identity.clone(),
-        default_agent_id: default_agent_id.clone(),
+        default_agent_did: default_agent_did.clone(),
         display_name: view.node.value.display_name.clone(),
         enabled: view.node.value.enabled,
     };
@@ -134,10 +134,10 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         let agent_config = &behavior_record.value;
         if !agent_config.enabled {
             unavailable_agents.insert(
-                agent_config.agent_id.clone(),
+                agent_config.agent_did.clone(),
                 UnavailableAgent::new(
                     AgentReadinessUnavailableReason::AgentDisabled,
-                    format!("agent {} is disabled", agent_config.agent_id),
+                    format!("agent {} is disabled", agent_config.agent_did),
                 ),
             );
             continue;
@@ -226,7 +226,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                             )?;
                         for target in &agents.targets {
                             if target.target_node_did == scope {
-                                owned_doc!(&view.agents, target.agent_id.as_str(), scope)?;
+                                owned_doc!(&view.agents, target.agent_did.as_str(), scope)?;
                             }
                         }
                         (selected, agents)
@@ -246,7 +246,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
 
         match resolved_result {
             Ok((inference, resolved_context, compaction, summary, tool_selection, agent_tools)) => {
-                let agent_id = agent_config.agent_id.clone();
+                let agent_did = agent_config.agent_did.clone();
                 let behavior_value = agent_config.clone();
                 let tool_ceiling = context.tool_ceiling.clone();
                 let skill_ids = resolved_context
@@ -279,7 +279,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                         },
                     )
                     .map_err(|error| AgentBuildError {
-                        agent_id: agent_id.clone(),
+                        agent_did: agent_did.clone(),
                         error,
                     })
                 });
@@ -287,7 +287,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
             }
             Err(error) => {
                 unavailable_agents.insert(
-                    agent_config.agent_id.clone(),
+                    agent_config.agent_did.clone(),
                     UnavailableAgent::new(error.code, error.detail.to_string()),
                 );
             }
@@ -300,9 +300,9 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     for result in agent_results {
         match result {
             Ok(agent_arc) => agents.push(agent_arc),
-            Err(AgentBuildError { agent_id, error }) => {
+            Err(AgentBuildError { agent_did, error }) => {
                 unavailable_agents.insert(
-                    agent_id,
+                    agent_did,
                     UnavailableAgent::new(
                         AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
                         error.to_string(),
@@ -313,9 +313,9 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     }
 
     let own_node_did = context.identity.did().to_string();
-    let candidate_agent_ids = agents
+    let candidate_agent_dids = agents
         .iter()
-        .map(|agent_config| agent_config.agent_id.clone())
+        .map(|agent_config| agent_config.agent_did.clone())
         .collect::<RapidHashSet<_>>();
     let mut behavior_surfaces = Vec::with_capacity(agents.len());
     for agent_config in agents {
@@ -324,7 +324,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
             .resolve_with_available_agent_targets(
                 node,
                 &own_node_did,
-                &candidate_agent_ids,
+                &candidate_agent_dids,
                 &context.plugins,
             )
             .await
@@ -332,7 +332,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
             Ok(tool_surface) => behavior_surfaces.push((agent_config, tool_surface)),
             Err(error) => {
                 unavailable_agents.insert(
-                    agent_config.agent_id.clone(),
+                    agent_config.agent_did.clone(),
                     UnavailableAgent::new(
                         AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
                         error.to_string(),
@@ -342,34 +342,54 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         }
     }
 
-    let active_agent_ids = behavior_surfaces
+    let active_agent_dids = behavior_surfaces
         .iter()
-        .map(|(agent_config, _)| agent_config.agent_id.clone())
+        .map(|(agent_config, _)| agent_config.agent_did.clone())
         .collect::<RapidHashSet<_>>();
     let mut agents = Vec::with_capacity(behavior_surfaces.len());
     let mut tool_surfaces = RapidHashMap::with_capacity(behavior_surfaces.len());
     for (agent_config, mut tool_surface) in behavior_surfaces {
         for target in tool_surface.agent_targets() {
             if target.target_node_did == own_node_did
-                && !active_agent_ids.contains(&target.agent_id)
+                && !active_agent_dids.contains(&target.agent_did)
             {
                 tracing::warn!(
-                    agent_id = %agent_config.agent_id,
+                    agent_did = %agent_config.agent_did,
                     target_name = %target.name,
-                    target_agent_id = %target.agent_id,
+                    target_agent_did = %target.agent_did,
                     "dropping LOCAL agent target: target agent is not active \
                      (agent may be disabled or its backend/MCP resolution failed)"
                 );
             }
         }
-        tool_surface.retain_agent_targets(&own_node_did, &active_agent_ids);
-        tool_surfaces.insert(agent_config.agent_id.clone(), Arc::new(tool_surface));
+        tool_surface.retain_agent_targets(&own_node_did, &active_agent_dids);
+        tool_surfaces.insert(agent_config.agent_did.clone(), Arc::new(tool_surface));
         agents.push(agent_config);
+    }
+
+    // Availability and locally verifiable identity are independent: the watcher
+    // must still observe work for a disabled or otherwise unrunnable agent.
+    for (agent_did, reason) in &mut unavailable_agents {
+        let Some(record) = view.agents.get(agent_did) else {
+            continue;
+        };
+        if record.value.node_did != context.identity.did() {
+            continue;
+        }
+        if let Ok(identity) = crate::store::identity::resolve_agent_identity(
+            context.identity.as_ref(),
+            &record.value.identity_binding(),
+        ) {
+            if identity.did() != context.identity.did() {
+                reason.watcher_identity =
+                    Some(crate::runtime::snapshot::ResolvedWatcherIdentity(identity));
+            }
+        }
     }
 
     let automation = resolve_automation(view, &unavailable_agents);
     Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-        default_agent_id,
+        default_agent_did,
         agents,
         tool_surfaces,
         backend_admission_configs,
@@ -481,7 +501,7 @@ pub(super) fn collect_unresolved_behavior_references(
         Ok(())
     })();
     if let Err(InferenceSelectionError::Other(error)) = result {
-        details.push(format!("agent {}: {error:#}", agent_config.agent_id));
+        details.push(format!("agent {}: {error:#}", agent_config.agent_did));
     }
 }
 

@@ -22,7 +22,8 @@ pub use catalog::{installed_catalog, InstalledCatalogEntry};
 pub use documents::{
     apply_prepared_dependency_schemas, document_pack_schema_paths, install_documents_with_plugins,
     install_prepared_document_graph, install_prepared_document_pack, plugin_data_unique_keys,
-    prepare_document_pack_install, PreparedDependency, PreparedDocumentPackInstall,
+    prepare_document_pack_archive, prepare_document_pack_install, PreparedDependency,
+    PreparedDocumentPackInstall,
 };
 pub use removal::ensure_plugins_unreferenced;
 const RECORD: &str = "PackInstallation";
@@ -30,6 +31,9 @@ const HISTORY_LIMIT: usize = 32;
 
 #[derive(Debug, Clone)]
 pub struct PackIdentity {
+    /// An authored binding plan is conditional on this installation still existing.
+    pub installation_doc_id: Option<String>,
+    pub agent_bindings: super::PackAgentBindings,
     pub coordinate: String,
     pub version: String,
     pub digest: String,
@@ -47,6 +51,8 @@ impl PackIdentity {
         plugins: Vec<InstalledPackPlugin>,
     ) -> Self {
         Self {
+            installation_doc_id: None,
+            agent_bindings: BTreeMap::new(),
             coordinate: format!("{}/{}", manifest.metadata.namespace, manifest.name),
             version: manifest.version.clone(),
             digest: digest.into(),
@@ -81,6 +87,7 @@ struct RecordedDocument {
 
 #[derive(Debug, Default, Clone)]
 struct Record {
+    agent_bindings: super::PackAgentBindings,
     doc_id: Option<String>,
     version: Option<String>,
     digest: Option<String>,
@@ -95,6 +102,7 @@ struct Record {
 
 #[derive(Debug, Default, Serialize)]
 pub struct InstallReport {
+    pub agents: BTreeMap<String, String>,
     #[serde(flatten)]
     pub applied: crate::store::config_client::DesiredStateApplyCounts,
     pub created: Vec<String>,
@@ -146,7 +154,7 @@ fn is_reserved(document: &RecordedDocument) -> bool {
 async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) -> Result<Record> {
     let response = txn
         .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID version digest documents plugins history required_by explicit plugin_store }} }}"#,
+            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID version digest agent_bindings documents plugins history required_by explicit plugin_store }} }}"#,
             escape_graphql_string(owner),
             escape_graphql_string(coordinate)
         ))
@@ -165,6 +173,7 @@ async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) ->
         decode_record_field(row, "documents", owner, coordinate)?;
     let required_by: Vec<String> = decode_record_field(row, "required_by", owner, coordinate)?;
     Ok(Record {
+        agent_bindings: decode_record_field(row, "agent_bindings", owner, coordinate)?,
         doc_id: row["_docID"].as_str().map(str::to_owned),
         version: row["version"].as_str().map(str::to_owned),
         digest: row["digest"].as_str().map(str::to_owned),
@@ -178,6 +187,21 @@ async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) ->
         explicit: row.get("explicit").and_then(Value::as_bool).unwrap_or(true),
         plugin_store: row["plugin_store"].as_bool().unwrap_or(false),
     })
+}
+
+pub(super) async fn read_agent_bindings(
+    access: &ConfigAccess,
+    owner: &str,
+    coordinate: &str,
+) -> Result<(Option<String>, super::PackAgentBindings)> {
+    access
+        .transact_readonly("pack.agent_bindings", |txn| {
+            Box::pin(async move {
+                let record = read_record(txn, owner, coordinate).await?;
+                Ok((record.doc_id, record.agent_bindings))
+            })
+        })
+        .await
 }
 
 fn decode_record_field<T>(row: &Value, field: &str, owner: &str, coordinate: &str) -> Result<T>
@@ -253,6 +277,7 @@ async fn write_record_in_txn(
         "coordinate": pack.coordinate,
         "version": pack.version,
         "digest": pack.digest,
+        "agent_bindings": if pack.agent_bindings.is_empty() { Value::Null } else { json!(pack.agent_bindings) },
         "documents": if documents.is_empty() { Value::Null } else { json!(documents) },
         "plugins": if pack.plugins.is_empty() {
             Value::Null
@@ -310,7 +335,44 @@ pub(crate) async fn install_in_txn(
     policy: DriftPolicy,
 ) -> Result<InstallReport> {
     let prior = read_record(txn, owner, &pack.coordinate).await?;
-    let mut report = InstallReport::default();
+    super::agent_bindings::validate_bindings(&pack.agent_bindings)?;
+    if !pack.agent_bindings.is_empty() {
+        anyhow::ensure!(
+            prior.doc_id == pack.installation_doc_id,
+            "pack installation changed after preparation; prepare the installation again"
+        );
+    }
+    for (slot, binding) in &prior.agent_bindings {
+        anyhow::ensure!(
+            pack.agent_bindings.get(slot) == Some(binding),
+            "pack agent bindings changed after preparation; prepare the installation again"
+        );
+    }
+    for binding in pack.agent_bindings.values() {
+        if let Some(agent) = documents.iter().find(|document| {
+            document.collection == Collection::Agent
+                && document.add["agent_did"].as_str() == Some(binding.agent_did.as_str())
+        }) {
+            anyhow::ensure!(
+                agent.add["creation_nonce"].as_str() == Some(binding.creation_nonce.as_str()),
+                "pack agent creation nonce does not match its installation binding"
+            );
+        }
+    }
+    let mut report = InstallReport {
+        agents: pack
+            .agent_bindings
+            .iter()
+            .filter(|(_, binding)| {
+                documents.iter().any(|document| {
+                    document.collection == Collection::Agent
+                        && document.add["agent_did"].as_str() == Some(binding.agent_did.as_str())
+                })
+            })
+            .map(|(slot, binding)| (slot.clone(), binding.agent_did.clone()))
+            .collect(),
+        ..InstallReport::default()
+    };
     let mut recorded = BTreeMap::new();
     let mut edited = Vec::new();
     let mut keep = Vec::new();
@@ -552,7 +614,7 @@ pub async fn record_plugin_store_change_as(
         ConfigAccess::Local(local) => {
             ConfigAccess::transact_local_write_with_finality(
                 local.node(),
-                identity,
+                identity.or_else(|| local.identity().cloned()),
                 "pack.record_plugin_store",
                 |txn| {
                     Box::pin(async move {
@@ -605,6 +667,8 @@ async fn write_plugin_record(
     }
     let current_home = super::read_home_install(home, coordinate)?;
     let current_identity = current_home.map(|record| PackIdentity {
+        installation_doc_id: None,
+        agent_bindings: BTreeMap::new(),
         coordinate: record.coordinate,
         version: record.version,
         digest: record.digest,
@@ -641,6 +705,8 @@ async fn write_plugin_record(
         plugins.push(plugin.clone());
     }
     let unchanged = PackIdentity {
+        installation_doc_id: prior.doc_id.clone(),
+        agent_bindings: prior.agent_bindings.clone(),
         coordinate: coordinate.to_owned(),
         version: prior.version.clone().unwrap_or_default(),
         digest: prior.digest.clone().unwrap_or_default(),

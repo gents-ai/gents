@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::store::graphql::escape_graphql_string;
 use gents::{ensure_runtime_schemas, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use serde_json::Value;
@@ -96,7 +96,7 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
     let default_agent = agent
         .agents()
         .iter()
-        .find(|behavior| behavior.agent_id == agent.default_agent_id())
+        .find(|behavior| behavior.agent_did == agent.default_agent_did())
         .expect("document runtime should load the default behavior");
     assert_eq!(default_agent.completion_client_api_key()?, "backend-key");
 
@@ -128,7 +128,7 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
     crate::support::fixtures::bind_agent_backend(
         &node,
         behavior.node_did(),
-        &behavior.agent_id,
+        &behavior.agent_did,
         "backend-openrouter",
         mock_endpoint.endpoint(),
         "openai/gpt-4o-mini",

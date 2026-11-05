@@ -54,8 +54,8 @@ impl Tool for DiscoverToolsTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let services = crate::tools::mcp::registry::configured_mcp_services(
-            &self.ctx.node,
+        let services = crate::tools::mcp::registry::configured_mcp_services_on(
+            &crate::ConfigAccess::local_as(self.ctx.node.clone(), self.ctx.actor.clone()),
             &self.ctx.node_did,
         )
         .await?
@@ -190,6 +190,7 @@ mod tests {
         );
 
         let tool = DiscoverToolsTool::new(MetaToolContext {
+            actor: identity::Did::new("did:test:actor").unwrap(),
             node,
             mcp_pool: McpPool::new(),
             health: ServiceHealthMap::new(),
@@ -222,7 +223,7 @@ mod tests {
     use crate::tools::mcp::health::{HealthStatus, ServiceHealth};
 
     async fn seed_registry_service(
-        node: &defra_node::EmbeddedNode,
+        node: &defra_node::Node,
         service_id: &str,
         hostname: &str,
         port: u16,
@@ -266,11 +267,12 @@ mod tests {
     }
 
     fn test_context(
-        node: Arc<defra_node::EmbeddedNode>,
+        node: Arc<defra_node::Node>,
         mcp_pool: McpPool,
         health: ServiceHealthMap,
     ) -> MetaToolContext {
         MetaToolContext {
+            actor: identity::Did::new("did:test:actor").unwrap(),
             node,
             mcp_pool,
             health,

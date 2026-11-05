@@ -765,7 +765,7 @@ fn query_scope_from_decls(
 fn agent_target_key(target: &AgentTargetDocument) -> (String, String) {
     (
         target.target_node_did.trim().to_string(),
-        target.agent_id.trim().to_string(),
+        target.agent_did.trim().to_string(),
     )
 }
 

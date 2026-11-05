@@ -37,7 +37,7 @@ where
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Expectation {
+pub(crate) struct Expectation {
     pub(super) field: String,
     #[serde(default)]
     fallback_field: Option<String>,
@@ -50,13 +50,13 @@ pub(super) struct Expectation {
 }
 
 #[derive(Clone)]
-pub(super) struct FieldPath {
+pub(crate) struct FieldPath {
     field: String,
     fallback_field: Option<String>,
 }
 
 impl FieldPath {
-    pub(super) fn resolve(&self, mut lookup: impl FnMut(&str) -> Option<Value>) -> Option<Value> {
+    pub(crate) fn resolve(&self, mut lookup: impl FnMut(&str) -> Option<Value>) -> Option<Value> {
         let actual = lookup(&self.field);
         match &self.fallback_field {
             Some(fallback) if actual.as_ref().is_none_or(Value::is_null) => lookup(fallback),
@@ -75,14 +75,14 @@ impl std::fmt::Display for FieldPath {
     }
 }
 
-pub(super) enum Test {
+pub(crate) enum Test {
     Equals(Value),
     Contains(String),
     Matches(Regex),
 }
 
 impl Test {
-    pub(super) fn holds(&self, actual: &Value) -> bool {
+    pub(crate) fn holds(&self, actual: &Value) -> bool {
         match self {
             Self::Equals(expected) => actual == expected,
             Self::Contains(needle) => text(actual).contains(needle.as_str()),
@@ -106,7 +106,7 @@ fn text(value: &Value) -> String {
     }
 }
 
-pub(super) fn test(expectation: Expectation) -> Result<(FieldPath, Test), String> {
+pub(crate) fn test(expectation: Expectation) -> Result<(FieldPath, Test), String> {
     let field = FieldPath {
         field: expectation.field,
         fallback_field: expectation.fallback_field,

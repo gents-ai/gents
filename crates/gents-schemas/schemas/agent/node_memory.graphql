@@ -1,4 +1,4 @@
-type NodeMemory @branchable {
+type NodeMemory {
     memory_id: String @index(unique: true)
     node_did: String @index
     key: String @index

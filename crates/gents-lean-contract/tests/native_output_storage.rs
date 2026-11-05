@@ -1,4 +1,4 @@
-use defra_node::{EmbeddedNode, QueryRequest};
+use defra_node::{Node as EmbeddedNode, QueryRequest};
 use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
 };
@@ -59,5 +59,5 @@ async fn canonical_segment_create_returns_physical_identity_and_exact_json() {
     let observed: OutputSegment =
         serde_json::from_value(data["AgentOutputSegment"][0].clone()).unwrap();
     assert_eq!(observed, segment);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use std::sync::Arc;
@@ -9,6 +9,7 @@ use super::UnresolvedSubmission;
 
 pub(crate) mod caller;
 pub(crate) mod goal;
+pub(crate) mod publication;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", content = "record", deny_unknown_fields)]
@@ -17,12 +18,15 @@ enum Envelope {
     Caller(Box<Record>),
     #[serde(rename = "goalCallerReceipt-v1")]
     Goal(Box<super::goal_delivery::Record>),
+    #[serde(rename = "agentPublication-v1")]
+    Publication(Box<publication::Record>),
 }
 
 enum Entry {
     Uncorrelated(Box<UnresolvedSubmission>),
     Caller(Box<Record>),
     Goal(Box<super::goal_delivery::Record>),
+    Publication(Box<publication::Record>),
 }
 
 fn decode(payload: &str, request_id: &str) -> Result<Entry> {
@@ -47,6 +51,14 @@ fn decode(payload: &str, request_id: &str) -> Result<Entry> {
                     "retained Goal caller binding is invalid"
                 );
                 Ok(Entry::Goal(record))
+            }
+            Envelope::Publication(record) => {
+                anyhow::ensure!(
+                    record.key() == request_id,
+                    "retained publication binding is invalid"
+                );
+                record.validate()?;
+                Ok(Entry::Publication(record))
             }
         }
     } else {
@@ -126,6 +138,7 @@ pub(crate) async fn load(
         Entry::Caller(record) if record.outcome == Outcome::Unresolved => record.pending,
         Entry::Caller(_) => None,
         Entry::Goal(_) => None,
+        Entry::Publication(_) => None,
     }))
 }
 

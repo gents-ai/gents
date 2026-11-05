@@ -106,7 +106,7 @@ struct InferenceNodeRow {
 #[derive(Debug, Clone, Deserialize)]
 struct InferenceAgentRow {
     #[serde(default)]
-    agent_id: String,
+    agent_did: String,
     #[serde(default)]
     node_did: String,
     #[serde(default)]
@@ -118,7 +118,7 @@ struct InferenceCallMetricRow {
     #[serde(default)]
     node_did: String,
     #[serde(default)]
-    agent_id: String,
+    agent_did: String,
     #[serde(default)]
     backend_id: String,
     #[serde(default)]
@@ -1045,7 +1045,7 @@ fn inference_metrics_query(
             display_name
         }
         Agent {
-            agent_id
+            agent_did: agent_did
             node_did
             display_name
         }
@@ -1069,7 +1069,7 @@ fn inference_metrics_query(
             offset: {offset}
         ) {{
             node_did
-            agent_id
+            agent_did
             backend_id
             call_state
             ended_at
@@ -1250,11 +1250,11 @@ fn build_inference_metric_families(data: &InferenceMetricsQueryData) -> Inferenc
             continue;
         }
 
-        let agent_id = clean_metric_label(&call.agent_id);
+        let agent_did = clean_metric_label(&call.agent_did);
         let call_node_did = clean_metric_label(&call.node_did);
-        let agent_config = agent_id.as_deref().and_then(|agent_id| {
+        let agent_config = agent_did.as_deref().and_then(|agent_did| {
             data.agents.iter().find(|agent_config| {
-                clean_metric_label(&agent_config.agent_id).as_deref() == Some(agent_id)
+                clean_metric_label(&agent_config.agent_did).as_deref() == Some(agent_did)
                     && call_node_did
                         .as_deref()
                         .is_none_or(|node_did| agent_config.node_did == node_did)
@@ -1807,15 +1807,15 @@ mod tests {
                 process_state: NodeReadinessProcessState::Ready,
                 active_generation: 4,
                 router_generation: 4,
-                default_agent_id: "default".to_string(),
+                default_agent_did: "default".to_string(),
                 agents: vec![
                     AgentReadinessEntry {
-                        agent_id: "default".to_string(),
+                        agent_did: "default".to_string(),
                         state: AgentReadinessState::Ready,
                         reason: None,
                     },
                     AgentReadinessEntry {
-                        agent_id: "offline".to_string(),
+                        agent_did: "offline".to_string(),
                         state: AgentReadinessState::Unavailable,
                         reason: Some(
                             AgentReadinessUnavailableReason::BackendTemporarilyUnavailable,
@@ -2564,14 +2564,14 @@ mod tests {
                 display_name: "observability-steward".to_string(),
             }],
             agents: vec![InferenceAgentRow {
-                agent_id: "agent_config-1".to_string(),
+                agent_did: "agent_config-1".to_string(),
                 node_did: "did:key:zAgent".to_string(),
                 display_name: "fallback-agent_config-name".to_string(),
             }],
             calls: vec![
                 InferenceCallMetricRow {
                     node_did: "did:key:zAgent".to_string(),
-                    agent_id: "agent_config-1".to_string(),
+                    agent_did: "agent_config-1".to_string(),
                     backend_id: "backend-1".to_string(),
                     call_state: "completed".to_string(),
                     ended_at: "2026-06-13T10:00:00.000000000+00:00".to_string(),
@@ -2585,7 +2585,7 @@ mod tests {
                 },
                 InferenceCallMetricRow {
                     node_did: "did:key:zAgent".to_string(),
-                    agent_id: "agent_config-1".to_string(),
+                    agent_did: "agent_config-1".to_string(),
                     backend_id: "backend-1".to_string(),
                     call_state: "completed".to_string(),
                     ended_at: "2026-06-13T10:00:01.000000000+00:00".to_string(),
@@ -2599,7 +2599,7 @@ mod tests {
                 },
                 InferenceCallMetricRow {
                     node_did: "did:key:zAgent".to_string(),
-                    agent_id: "agent_config-1".to_string(),
+                    agent_did: "agent_config-1".to_string(),
                     backend_id: "backend-1".to_string(),
                     call_state: "failed".to_string(),
                     ended_at: "2026-06-13T10:00:02.000000000+00:00".to_string(),
@@ -2613,7 +2613,7 @@ mod tests {
                 },
                 InferenceCallMetricRow {
                     node_did: "did:key:zAgent".to_string(),
-                    agent_id: "agent_config-1".to_string(),
+                    agent_did: "agent_config-1".to_string(),
                     backend_id: "backend-1".to_string(),
                     call_state: "running".to_string(),
                     ended_at: "2026-06-13T10:00:03.000000000+00:00".to_string(),
@@ -2677,13 +2677,13 @@ mod tests {
         let data = InferenceMetricsQueryData {
             nodes: vec![],
             agents: vec![InferenceAgentRow {
-                agent_id: "agent-1".to_string(),
+                agent_did: "agent-1".to_string(),
                 node_did: "did:key:zAgent".to_string(),
                 display_name: "agent \"friendly\"".to_string(),
             }],
             calls: vec![InferenceCallMetricRow {
                 node_did: "did:key:zAgent".to_string(),
-                agent_id: "agent-1".to_string(),
+                agent_did: "agent-1".to_string(),
                 backend_id: "backend-1".to_string(),
                 call_state: "completed".to_string(),
                 ended_at: "2026-06-13T10:00:00.000000000+00:00".to_string(),

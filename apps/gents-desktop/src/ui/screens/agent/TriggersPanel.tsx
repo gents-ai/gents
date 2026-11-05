@@ -174,7 +174,7 @@ export function TriggerEditor({
         }
         description={
           besideTask
-            ? `Runs with ${agentOf(deployment, besideTask.agentId)?.displayName ?? "no agent"}`
+            ? `Runs with ${agentOf(deployment, besideTask.agentDid)?.displayName ?? "no agent"}`
             : besideSchedule
               ? cadenceInWords(besideSchedule)
               : besideSource

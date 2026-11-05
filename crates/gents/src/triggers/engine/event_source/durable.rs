@@ -44,10 +44,19 @@ impl EventSource {
         if parked.is_empty() {
             return;
         }
-        let Ok(current) = self.read_source_doc(collection, doc_id).await else {
-            return;
-        };
         for trigger_id in parked {
+            let agent = self
+                .snapshot_rx
+                .borrow()
+                .active_event_triggers()
+                .get(&trigger_id)
+                .map(|trigger| trigger.task.agent_did.clone());
+            let Some(agent) = agent else {
+                continue;
+            };
+            let Ok(current) = self.read_source_doc(collection, doc_id, &agent).await else {
+                continue;
+            };
             self.release_if_changed(&trigger_id, current.as_ref());
         }
     }
@@ -88,7 +97,16 @@ impl EventSource {
             })
             .collect::<Vec<_>>();
         for (trigger_id, collection, doc_id) in refused {
-            let Ok(current) = self.read_source_doc(&collection, &doc_id).await else {
+            let agent = self
+                .snapshot_rx
+                .borrow()
+                .active_event_triggers()
+                .get(&trigger_id)
+                .map(|trigger| trigger.task.agent_did.clone());
+            let Some(agent) = agent else {
+                continue;
+            };
+            let Ok(current) = self.read_source_doc(&collection, &doc_id, &agent).await else {
                 continue;
             };
             self.release_if_changed(&trigger_id, current.as_ref());
@@ -333,6 +351,16 @@ impl EventSource {
                 .as_str()
                 .context("arrival lacks document ID")?;
             let position = entry["cursor"].as_str().context("arrival lacks cursor")?;
+            if !event_delivery::callback_result_ready(
+                &self.node,
+                &trigger.source_collection,
+                doc_id,
+                &trigger.task.agent_did,
+            )
+            .await?
+            {
+                anyhow::bail!("callback result is not yet visible and linked");
+            }
             if !self.probe_filter(doc_id, trigger).await? {
                 self.advance_arrival(&owner, trigger, position).await?;
                 continue;

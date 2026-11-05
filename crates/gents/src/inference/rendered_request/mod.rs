@@ -62,7 +62,7 @@ pub(crate) fn context_for_claimed_request(
         request_id: request.request_id.clone(),
         node_did: request.node_did.clone(),
         requester_did: request.requester_did.clone().unwrap_or_default(),
-        agent_id: request.agent_id.clone(),
+        agent_did: request.agent_did.clone(),
         session_id: request.session_id.clone(),
         model_name,
         provider_family,
@@ -250,7 +250,7 @@ mod tests {
                 .unwrap(),
             expected
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -262,7 +262,7 @@ mod tests {
         crate::ensure_runtime_schemas(&node).await.unwrap();
 
         async fn create_block(
-            node: &std::sync::Arc<defra_node::EmbeddedNode>,
+            node: &std::sync::Arc<defra_node::Node>,
             text: &str,
         ) -> (String, Vec<u8>) {
             let bytes = text.as_bytes().to_vec();
@@ -317,7 +317,7 @@ mod tests {
         assert_eq!(cached.content_key, requested_entry.content_key);
         assert!(!cache.contains_key(&missing_id));
         assert!(!cache.contains_key(&unrequested_id));
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -681,7 +681,7 @@ mod tests {
             request_id: "request-1".to_string(),
             node_did: "did:key:test".to_string(),
             requester_did: None,
-            agent_id: "behavior".to_string(),
+            agent_did: "behavior".to_string(),
             session_id: "session".to_string(),
             content: "hi".to_string(),
             max_total_tokens: None,
@@ -781,7 +781,7 @@ impl CaptureBaseReader for crate::store::config_client::ConfigAccess {
 }
 
 #[async_trait::async_trait]
-impl CaptureBaseReader for defra_node::EmbeddedNode {
+impl CaptureBaseReader for defra_node::Node {
     async fn execute_capture_query(&self, query: &str) -> Result<Value> {
         let response = crate::store::graphql::graphql_with_transaction_retry(
             self,
@@ -811,18 +811,21 @@ pub(crate) struct CaptureReadCache {
     blocks: std::collections::BTreeMap<String, CachedCaptureBlock>,
 }
 
-pub(crate) async fn load_shared_json(
-    node: &defra_node::EmbeddedNode,
+pub(crate) async fn load_shared_json<R>(
+    reader: &R,
     stored: &str,
     cache: &mut CaptureReadCache,
-) -> Result<String> {
+) -> Result<String>
+where
+    R: CaptureBaseReader + Sync,
+{
     if stored.trim_start().starts_with('[') {
         return Ok(stored.to_owned());
     }
     let encoding::DecodedRecord::Tree(tree) = encoding::decode_record(stored)? else {
         anyhow::bail!("shared JSON is not a pinned manifest tree");
     };
-    read_manifest_tree(node, &tree, &mut cache.blocks).await?;
+    read_manifest_tree(reader, &tree, &mut cache.blocks).await?;
     let value = encoding::resolve_tree(tree, |entry| {
         let block = cache
             .blocks
@@ -837,7 +840,7 @@ pub(crate) async fn load_shared_json(
     Ok(canonical_json_string(&value)?)
 }
 
-async fn decode_capture_json_from_cached<R>(
+pub(crate) async fn decode_capture_json_from_cached<R>(
     reader: &R,
     capture_version: u32,
     stored: &str,
@@ -1326,7 +1329,7 @@ pub async fn decode_capture_json(
 }
 
 pub async fn decode_capture_pair_embedded(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     capture_version: u32,
     stored: &str,
 ) -> Result<(Value, Value)> {
@@ -1334,20 +1337,10 @@ pub async fn decode_capture_pair_embedded(
 }
 
 pub async fn decode_capture_json_embedded(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     capture_version: u32,
     stored: &str,
     kind: CapturePayloadKind,
 ) -> Result<Value> {
     decode_capture_json_from(node, capture_version, stored, kind).await
-}
-
-pub(crate) async fn decode_capture_json_embedded_cached(
-    node: &defra_node::EmbeddedNode,
-    capture_version: u32,
-    stored: &str,
-    kind: CapturePayloadKind,
-    cache: &mut CaptureReadCache,
-) -> Result<Value> {
-    decode_capture_json_from_cached(node, capture_version, stored, kind, cache).await
 }

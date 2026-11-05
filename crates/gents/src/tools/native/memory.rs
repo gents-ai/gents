@@ -3,11 +3,11 @@ use std::sync::Arc;
 use crate::inference::llm::tool::ToolDefinition;
 use crate::inference::llm::tool::{Tool, ToolDyn};
 use anyhow::{anyhow, bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::escape_graphql_string;
 
 pub const MEMORY_TOOL_NAME: &str = "memory";
 
@@ -78,13 +78,15 @@ impl From<anyhow::Error> for MemoryToolError {
 
 #[derive(Clone)]
 pub struct MemoryTool {
+    actor: identity::Did,
     node: Arc<EmbeddedNode>,
     node_did: String,
 }
 
 impl MemoryTool {
-    pub fn new(node: Arc<EmbeddedNode>, node_did: impl Into<String>) -> Self {
+    pub fn new(node: Arc<EmbeddedNode>, node_did: impl Into<String>, actor: identity::Did) -> Self {
         Self {
+            actor,
             node,
             node_did: node_did.into(),
         }
@@ -132,14 +134,14 @@ impl Tool for MemoryTool {
         let key = normalize_key(&args.key)?;
 
         let output = match args.action {
-            MemoryAction::Read => read_memory(&self.node, &node_did, &key).await?,
+            MemoryAction::Read => read_memory(&self.node, &self.actor, &node_did, &key).await?,
             MemoryAction::Write => {
                 let value = normalize_value(
                     args.value
                         .as_deref()
                         .context("memory write requires `value`")?,
                 )?;
-                write_memory(&self.node, &node_did, &key, &value).await?
+                write_memory(&self.node, &self.actor, &node_did, &key, &value).await?
             }
         };
 
@@ -148,8 +150,12 @@ impl Tool for MemoryTool {
     }
 }
 
-pub fn build_memory_tool(node: Arc<EmbeddedNode>, node_did: impl Into<String>) -> Box<dyn ToolDyn> {
-    Box::new(MemoryTool::new(node, node_did))
+pub fn build_memory_tool(
+    node: Arc<EmbeddedNode>,
+    node_did: impl Into<String>,
+    actor: identity::Did,
+) -> Box<dyn ToolDyn> {
+    Box::new(MemoryTool::new(node, node_did, actor))
 }
 
 fn normalize_node_did(node_did: &str) -> Result<String> {
@@ -185,7 +191,12 @@ fn memory_id(node_did: &str, key: &str) -> String {
     format!("{}:{}{}", node_did.len(), node_did, key)
 }
 
-async fn read_memory(node: &EmbeddedNode, node_did: &str, key: &str) -> Result<MemoryOutput> {
+async fn read_memory(
+    node: &Arc<EmbeddedNode>,
+    actor: &identity::Did,
+    node_did: &str,
+    key: &str,
+) -> Result<MemoryOutput> {
     let memory_id = escape_graphql_string(&memory_id(node_did, key));
     let query = format!(
         r#"{{
@@ -199,12 +210,13 @@ async fn read_memory(node: &EmbeddedNode, node_did: &str, key: &str) -> Result<M
             }}
         }}"#
     );
-    let resp = graphql_with_transaction_retry(&node, &query, "reading node memory").await?;
+    let resp = crate::ConfigAccess::local_as(node.clone(), actor.clone())
+        .execute(&query)
+        .await?;
     tracing::debug!(node_did, key, "node memory read");
 
     let row = resp
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("NodeMemory"))
         .and_then(|value| serde_json::from_value::<Vec<MemoryRow>>(value.clone()).ok())
         .and_then(|mut rows| rows.pop());
@@ -228,7 +240,8 @@ async fn read_memory(node: &EmbeddedNode, node_did: &str, key: &str) -> Result<M
 }
 
 async fn write_memory(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
+    actor: &identity::Did,
     node_did: &str,
     key: &str,
     value: &str,
@@ -260,12 +273,9 @@ async fn write_memory(
             ) {{ _docID }}
         }}"#
     );
-    crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "toolset.write_node_memory",
-        &mutation,
-    )
-    .await?;
+    crate::ConfigAccess::local_as(node.clone(), actor.clone())
+        .write("toolset.write_node_memory", &mutation)
+        .await?;
     tracing::debug!(
         node_did,
         key,
@@ -312,23 +322,50 @@ mod tests {
             r#"mutation { create_NodeMemory(input: {memory_id: "16:did:key:z-memoryproject", node_did: "did:key:z-memory", key: "project", value: "original", updated_at: "2026-01-01T00:00:00Z"}) { _docID } }"#,
         ).await.unwrap();
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let before = read_memory(&node, "did:key:z-memory", "project")
-            .await
-            .unwrap();
+        let before = read_memory(
+            &node,
+            &identity::Did::new("did:test:memory").unwrap(),
+            "did:key:z-memory",
+            "project",
+        )
+        .await
+        .unwrap();
         assert_eq!(before.value.as_deref(), Some("original"));
-        write_memory(&node, "did:key:z-memory", "project", "")
-            .await
-            .unwrap();
-        let empty = read_memory(&node, "did:key:z-memory", "project")
-            .await
-            .unwrap();
+        write_memory(
+            &node,
+            &identity::Did::new("did:test:memory").unwrap(),
+            "did:key:z-memory",
+            "project",
+            "",
+        )
+        .await
+        .unwrap();
+        let empty = read_memory(
+            &node,
+            &identity::Did::new("did:test:memory").unwrap(),
+            "did:key:z-memory",
+            "project",
+        )
+        .await
+        .unwrap();
         assert_eq!(empty.value.as_deref(), Some(""));
-        write_memory(&node, "did:key:z-memory", "project", "updated")
-            .await
-            .unwrap();
-        let updated = read_memory(&node, "did:key:z-memory", "project")
-            .await
-            .unwrap();
+        write_memory(
+            &node,
+            &identity::Did::new("did:test:memory").unwrap(),
+            "did:key:z-memory",
+            "project",
+            "updated",
+        )
+        .await
+        .unwrap();
+        let updated = read_memory(
+            &node,
+            &identity::Did::new("did:test:memory").unwrap(),
+            "did:key:z-memory",
+            "project",
+        )
+        .await
+        .unwrap();
         assert_eq!(updated.value.as_deref(), Some("updated"));
         let response = crate::store::config_client::ConfigAccess::local(node)
             .execute("{ NodeMemory { value value_text } }")
@@ -341,8 +378,16 @@ mod tests {
     #[tokio::test]
     async fn memory_roundtrips_across_tool_instances_for_same_agent() {
         let node = seeded_node().await;
-        let writer = MemoryTool::new(node.clone(), "did:key:z-memory");
-        let reader = MemoryTool::new(node, "did:key:z-memory");
+        let writer = MemoryTool::new(
+            node.clone(),
+            "did:key:z-memory",
+            identity::Did::new(("did:key:z-memory").to_string()).unwrap(),
+        );
+        let reader = MemoryTool::new(
+            node,
+            "did:key:z-memory",
+            identity::Did::new(("did:key:z-memory").to_string()).unwrap(),
+        );
 
         Tool::call(
             &writer,
@@ -375,8 +420,16 @@ mod tests {
     #[tokio::test]
     async fn memory_is_scoped_to_node_did() {
         let node = seeded_node().await;
-        let first_agent = MemoryTool::new(node.clone(), "did:key:z-first");
-        let second_agent = MemoryTool::new(node, "did:key:z-second");
+        let first_agent = MemoryTool::new(
+            node.clone(),
+            "did:key:z-first",
+            identity::Did::new(("did:key:z-first").to_string()).unwrap(),
+        );
+        let second_agent = MemoryTool::new(
+            node,
+            "did:key:z-second",
+            identity::Did::new(("did:key:z-second").to_string()).unwrap(),
+        );
 
         Tool::call(
             &first_agent,
@@ -407,7 +460,11 @@ mod tests {
     #[tokio::test]
     async fn read_missing_key_for_same_agent_returns_not_found() {
         let node = seeded_node().await;
-        let tool = MemoryTool::new(node, "did:key:z-memory");
+        let tool = MemoryTool::new(
+            node,
+            "did:key:z-memory",
+            identity::Did::new(("did:key:z-memory").to_string()).unwrap(),
+        );
 
         let output = Tool::call(
             &tool,
@@ -427,7 +484,11 @@ mod tests {
     #[tokio::test]
     async fn write_updates_value_in_place() {
         let node = seeded_node().await;
-        let tool = MemoryTool::new(node, "did:key:z-memory");
+        let tool = MemoryTool::new(
+            node,
+            "did:key:z-memory",
+            identity::Did::new(("did:key:z-memory").to_string()).unwrap(),
+        );
 
         for value in ["first", "second"] {
             Tool::call(

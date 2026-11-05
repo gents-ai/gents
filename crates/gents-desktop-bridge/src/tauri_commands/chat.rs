@@ -135,7 +135,7 @@ pub async fn desktop_tool_file_changes(
 }
 
 #[tauri::command]
-pub async fn desktop_session_hydration_retry(
+pub async fn desktop_session_reload(
     session_id: String,
     node_did: Option<String>,
     state: State<'_, DesktopAppState>,
@@ -153,9 +153,9 @@ pub async fn desktop_session_hydration_retry(
                 .map(|session| session.node_did.clone())
         })
         .ok_or_else(|| {
-            BridgeError::untyped("session hydration retry requires a node for the selected session")
+            BridgeError::untyped("session reload requires a node for the selected session")
         })?;
-    core.retry_session_hydration(&session_id, &node_did)
+    core.reload_session(&session_id, &node_did)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }

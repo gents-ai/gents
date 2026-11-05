@@ -5,7 +5,7 @@ import type { TaskHook } from "./TaskHook.js";
  * Reusable task definition; the trigger engine renders templates into an
  * AgentRequest before the owned loop executes it.
  */
-export type Task = { node_did: string, task_id: string, display_name?: string | null, description?: string | null, agent_id: string, prompt_template: string,
+export type Task = { node_did: string, task_id: string, display_name?: string | null, description?: string | null, agent_did: string, prompt_template: string,
 /**
  * Emit one durable FireOutcome at the terminal boundary.
  */

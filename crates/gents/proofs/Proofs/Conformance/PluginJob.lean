@@ -1349,7 +1349,7 @@ private def wireInputJson (s : InputSample) : Json :=
     ("caller", Json.mkObj [("session_id", toJson j.callerSession),
       ("request_id", toJson c.callerScope.requestId), ("request_doc_id", toJson "request-doc-1"),
       ("tool_call_id", toJson "call-1"), ("node_did", toJson c.callerScope.nodeDid),
-      ("agent_id", toJson "engineer"), ("request_hop", toJson j.callerHop),
+      ("agent_did", toJson "engineer"), ("request_hop", toJson j.callerHop),
       ("correlation", Json.null), ("cwd", toJson j.callerCwd),
       ("started_by_job", toJson c.startedByJob)]),
     ("argv", toJson j.call.argv)] ++

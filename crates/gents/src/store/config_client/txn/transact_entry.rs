@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use futures::future::BoxFuture;
 use identity::Did;
 
@@ -21,6 +21,40 @@ use super::{
 use crate::store::config_client::write_telemetry::{WriteBackend, WriteOperation};
 
 impl ConfigAccess {
+    /// Bind durable client publication observations to this transaction's
+    /// post-commit Agent relationships.
+    pub async fn transact_write_with_agent_publication<'a, T, E, F>(
+        &'a self,
+        operation: &'static str,
+        observer: Arc<dyn crate::store::config_client::AgentPublicationObserver>,
+        callback: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
+    {
+        if !matches!(self, Self::Graphql(_)) {
+            return Err(E::from(ConfigClientError::ClientAgentTransportRequired));
+        }
+        transact_owned(
+            operation,
+            backend_for_access(self),
+            TransactionMode::ConflictRetry,
+            move |operation, rollback| {
+                let observer = observer.clone();
+                Box::pin(async move {
+                    let mut txn = self.begin_apply_txn(operation, rollback).await?;
+                    txn.publication_observer = Some(observer);
+                    Ok(txn)
+                })
+            },
+            callback,
+        )
+        .await
+        .map(expect_committed)
+    }
+
     async fn begin_apply_txn(
         &self,
         operation: WriteOperation,
@@ -33,7 +67,7 @@ impl ConfigAccess {
             Self::Local(local) => {
                 ConfigApplyTxn::begin_local_owned(
                     local.node(),
-                    None,
+                    local.identity().cloned(),
                     operation,
                     cancellation_rollback_scheduled,
                     EmbeddedTransactionPurpose::Mutation,
@@ -110,7 +144,13 @@ impl ConfigAccess {
     {
         match self {
             Self::Local(local) => {
-                Self::transact_local_readonly(local.node(), None, operation, callback).await
+                Self::transact_local_readonly(
+                    local.node(),
+                    local.identity().cloned(),
+                    operation,
+                    callback,
+                )
+                .await
             }
             Self::Graphql(endpoint) => transact_owned(
                 operation,
@@ -296,6 +336,7 @@ impl ConfigAccess {
     /// clock, so this is not a durable-commit-before-expiry guarantee.
     pub(crate) async fn renew_execution_lease<'a, T, E, F>(
         node: &'a Arc<EmbeddedNode>,
+        identity: Option<Did>,
         renew: F,
     ) -> Result<T, E>
     where
@@ -312,7 +353,7 @@ impl ConfigAccess {
             move |operation, rollback| {
                 Box::pin(ConfigApplyTxn::begin_local_owned(
                     node,
-                    None,
+                    identity.clone(),
                     operation,
                     rollback,
                     EmbeddedTransactionPurpose::ExecutionRenewal(Arc::clone(

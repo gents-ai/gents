@@ -28,13 +28,20 @@ impl Drop for RequestLifecycle {
             return;
         }
         let node = self.node.clone();
+        let actor = match self.actor_did() {
+            Ok(actor) => actor,
+            Err(error) => {
+                tracing::warn!(%error, "cannot relinquish request without its agent DID");
+                return;
+            }
+        };
         let doc_id = self.request.doc_id.clone();
         let generation = lease.generation.as_str().to_owned();
         // Relinquishment only expires the matching generation. Recovery remains
         // the terminal owner, including when a panic or task abort drops us.
         lease.runtime.spawn(async move {
             if let Err(error) =
-                relinquish_execution_lease(&node, &doc_id, &generation, Utc::now()).await
+                relinquish_execution_lease(&node, actor, &doc_id, &generation, Utc::now()).await
             {
                 tracing::warn!(%error, %doc_id, "could not promptly relinquish execution lease; durable expiry remains recoverable");
             }
@@ -44,6 +51,7 @@ impl Drop for RequestLifecycle {
 
 async fn relinquish_execution_lease(
     node: &Arc<EmbeddedNode>,
+    actor: identity::Did,
     request_doc_id: &str,
     generation: &str,
     now: DateTime<Utc>,
@@ -56,8 +64,7 @@ async fn relinquish_execution_lease(
         RequestLifecycleState::Claimed,
         RequestLifecycleState::Processing,
     ]);
-    crate::store::config_client::ConfigAccess::write_local(
-        node,
+    crate::store::config_client::ConfigAccess::local_as(node.clone(), actor).write(
         "lifecycle.relinquish_execution_lease",
         &format!(r#"mutation {{ update_AgentRequest(
             docID: "{doc_id}", filter: {{ _docID: {{ _eq: "{doc_id}" }}, execution_generation: {{ _eq: "{generation}" }},
@@ -82,13 +89,15 @@ impl ExecutionGeneration {
 #[derive(Debug, Clone)]
 pub(crate) struct RequestExecutionLease {
     pub(crate) generation: ExecutionGeneration,
+    actor: identity::Did,
     runtime: crate::runtime::drop_cleanup::DropCleanup,
 }
 
 impl RequestExecutionLease {
-    pub(crate) fn new(generation: String) -> Self {
+    pub(crate) fn new(generation: String, actor: identity::Did) -> Self {
         Self {
             generation: ExecutionGeneration(generation),
+            actor,
             runtime: crate::runtime::drop_cleanup::DropCleanup::current(),
         }
     }
@@ -147,11 +156,11 @@ enum TerminalAuthority<'a> {
 impl RequestExecutionLease {
     async fn decide_lease(
         &self,
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         request_doc_id: &str,
         decide: fn(super::execution_policy::LeaseObservation<'_>, &str, i64) -> bool,
     ) -> Result<Option<bool>> {
-        let Some(row) = super::query::request_view(node, request_doc_id).await? else {
+        let Some(row) = super::query::request_view(node, &self.actor, request_doc_id).await? else {
             return Ok(None);
         };
         let expiry = row
@@ -175,7 +184,7 @@ impl RequestExecutionLease {
 
     pub(crate) async fn owns_execution(
         &self,
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         request_doc_id: &str,
     ) -> Result<bool> {
         Ok(self
@@ -242,6 +251,7 @@ impl RequestLifecycle {
         let generation = self.execution_generation()?.to_owned();
         let result = terminalize_execution_with_time(
             &self.node,
+            self.actor_did()?,
             TerminalizeSpec {
                 request_doc_id: &self.request.doc_id,
                 authority: TerminalAuthority::Owner(&generation),
@@ -278,6 +288,7 @@ impl RequestLifecycle {
         let generation = self.execution_generation()?.to_string();
         let result = terminalize_execution(
             &self.node,
+            self.actor_did()?,
             &self.request.doc_id,
             TerminalAuthority::Owner(&generation),
             outcome,
@@ -307,6 +318,11 @@ pub(crate) async fn revoke_execution_generation(
 ) -> Result<TerminalizeResult> {
     terminalize_execution(
         node,
+        identity::Did::new(
+            row.agent_did
+                .clone()
+                .context("request is missing agent DID")?,
+        )?,
         row.doc_id.as_deref().context("missing request document")?,
         TerminalAuthority::Revocation {
             generation: row
@@ -336,6 +352,11 @@ pub(crate) async fn revoke_execution_preserving_output(
 ) -> Result<TerminalizeResult> {
     terminalize_execution(
         node,
+        identity::Did::new(
+            row.agent_did
+                .clone()
+                .context("request is missing agent DID")?,
+        )?,
         row.doc_id.as_deref().context("missing request document")?,
         TerminalAuthority::Revocation {
             generation: row
@@ -366,6 +387,11 @@ pub(crate) async fn revoke_execution_preserving_output_at(
 ) -> Result<TerminalizeResult> {
     terminalize_execution_with_time(
         node,
+        identity::Did::new(
+            row.agent_did
+                .clone()
+                .context("request is missing agent DID")?,
+        )?,
         TerminalizeSpec {
             request_doc_id: row.doc_id.as_deref().context("missing request document")?,
             authority: TerminalAuthority::Revocation {
@@ -388,6 +414,7 @@ pub(crate) async fn revoke_execution_preserving_output_at(
 
 async fn terminalize_execution(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
     request_doc_id: &str,
     authority: TerminalAuthority<'_>,
     outcome: RequestTerminalOutcome,
@@ -396,6 +423,7 @@ async fn terminalize_execution(
 ) -> Result<TerminalizeResult> {
     terminalize_execution_with_time(
         node,
+        actor,
         TerminalizeSpec {
             request_doc_id,
             authority,
@@ -421,6 +449,7 @@ pub(crate) async fn terminalize_owned_at(
 ) -> Result<TerminalizeResult> {
     terminalize_execution_with_time(
         node,
+        identity::Did::new("did:test:agent".to_owned())?,
         TerminalizeSpec {
             request_doc_id,
             authority: TerminalAuthority::Owner(generation),
@@ -448,6 +477,7 @@ struct TerminalizeSpec<'a> {
 
 async fn terminalize_execution_with_time(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
     spec: TerminalizeSpec<'_>,
 ) -> Result<TerminalizeResult> {
     let fresh_generation = spec
@@ -459,7 +489,7 @@ async fn terminalize_execution_with_time(
     let spec = &spec;
     crate::store::config_client::ConfigAccess::transact_local_idempotent(
         node,
-        None,
+        Some(actor),
         crate::store::config_client::IdempotentTransactionRetry::Standard,
         "lifecycle.terminalize_execution",
         move |txn| Box::pin(terminalize_execution_in_txn(txn, spec, fresh_generation)),

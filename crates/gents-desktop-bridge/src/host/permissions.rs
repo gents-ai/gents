@@ -9,7 +9,7 @@ use crate::error::{BridgeError, BridgeErrorCode};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkspacePermissionsRequest {
     pub node_did: String,
-    pub agent_id: String,
+    pub agent_did: String,
     pub workspace_path: String,
 }
 
@@ -141,7 +141,7 @@ pub(super) async fn save(
         Some(
             core.prepare_access_review_task(
                 &local.key.node_did,
-                &local.key.agent_id,
+                &local.key.agent_did,
                 local.settings.as_ref().and_then(|settings| {
                     settings
                         .selection
@@ -217,7 +217,7 @@ async fn target(
     core: &ClientCore,
     request: WorkspacePermissionsRequest,
 ) -> Result<Target, BridgeError> {
-    if request.agent_id.trim().is_empty() {
+    if request.agent_did.trim().is_empty() {
         return Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
             "Choose an agent and workspace before changing permissions.",
@@ -257,7 +257,7 @@ fn local_target(
     let key = WorkspaceKey::canonical(
         &request.node_did,
         requester,
-        &request.agent_id,
+        &request.agent_did,
         std::path::Path::new(&request.workspace_path),
     )?;
     anyhow::ensure!(
@@ -291,7 +291,7 @@ mod tests {
             "node":{"node_did":owner},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Fixture","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
-            "agents":[{"node_did":owner,"agent_id":"agent","inference_profile_id":"profile"}]
+            "agents":[{"node_did":owner,"agent_did":"agent","inference_profile_id":"profile"}]
         })).unwrap();
         let access = ConfigAccess::local(core.node_arc());
         let plan = DesiredStateApplyPlan::from_pack_config(&config).unwrap();
@@ -364,7 +364,7 @@ mod tests {
         .unwrap();
         let scope = WorkspacePermissionsRequest {
             node_did: owner.clone(),
-            agent_id: "engineer".into(),
+            agent_did: "engineer".into(),
             workspace_path: project.to_str().unwrap().into(),
         };
         let expected_path = project.canonicalize().unwrap().to_str().unwrap().to_owned();
@@ -501,7 +501,7 @@ mod tests {
         let home = folder.path().join("runtime");
         let mut request = WorkspacePermissionsRequest {
             node_did: "did:key:node".into(),
-            agent_id: "engineer".into(),
+            agent_did: "engineer".into(),
             workspace_path: folder.path().to_str().unwrap().into(),
         };
         let support = Support {
@@ -524,7 +524,7 @@ mod tests {
         let key = WorkspaceKey::canonical(
             &request.node_did,
             "did:key:client",
-            &request.agent_id,
+            &request.agent_did,
             folder.path(),
         )
         .unwrap();
@@ -533,7 +533,7 @@ mod tests {
         assert_eq!(configured["mode"], "fullAccess");
         assert_eq!(configured["revision"], "1");
         assert!(read(&request, "did:key:other")["mode"].is_null());
-        request.agent_id = "another".into();
+        request.agent_did = "another".into();
         assert!(read(&request, "did:key:client")["mode"].is_null());
         std::fs::write(workspace::preferences_file(&home), b"invalid").unwrap();
         assert!(local_target(&home, "did:key:client", &request, support).is_err());

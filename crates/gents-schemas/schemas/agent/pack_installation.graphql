@@ -3,6 +3,7 @@ type PackInstallation @index(fields: ["node_did", "coordinate"], unique: true) {
     coordinate: String @index @immutable
     version: String
     digest: String @index
+    agent_bindings: JSON
     documents: JSON
     plugins: JSON
     history: JSON

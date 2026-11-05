@@ -268,7 +268,7 @@ pub async fn load_run_activity_rows(
                     order: {{ started_at: ASC }}, limit: {limit}
                 ) {{
                     call_id request_id call_seq attempt call_state failure_reason
-                    queued_at started_at ended_at backend_id agent_id node_did call_kind
+                    queued_at started_at ended_at backend_id agent_did node_did call_kind
                     prompt_tokens completion_tokens cached_input_tokens cache_creation_input_tokens reasoning_output_tokens provider_total_tokens usage_completeness context_accounting_json
                 }}
                 AgentToolCall(
@@ -646,14 +646,14 @@ mod tests {
                     create_AgentSession(input: {
                         session_id: "activity-session"
                         node_did: "did:test:agent"
-                        agent_id: "review"
+                        agent_did: "review"
                         created_at: "2026-08-26T00:00:00Z"
                     }) { _docID }
                     create_AgentRequest(input: {
                         request_id: "activity-request"
                         purpose: "normal"
                         node_did: "did:test:agent"
-                        agent_id: "review"
+                        agent_did: "review"
                         session_id: "activity-session"
                         lifecycle_state: "completed"
                         created_at: "2026-08-26T00:00:00Z"
@@ -722,7 +722,7 @@ mod tests {
         );
         assert!(rows.tool_calls[0].args.is_empty());
         assert!(rows.tool_calls[0].result.is_none());
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -757,7 +757,7 @@ mod tests {
                 .execute(&format!(
                     r#"mutation {{ create_AgentRequest(input: {{
                         request_id: "job-child-{slot}", purpose: "normal", node_did: "{NODE_DID}",
-                        agent_id: "general", session_id: "job-child-session-{slot}",
+                        agent_did: "general", session_id: "job-child-session-{slot}",
                         content: "child", lifecycle_state: "completed", backend_id: "",
                         created_at: "2026-08-26T00:00:00Z", retry_count: 0, request_hop: 1,
                         caused_by_parent_request_id: "job-root",
@@ -786,7 +786,7 @@ mod tests {
             .find(|row| row.tool_call_id == "job-call")
             .expect("the job row");
         assert_eq!(job.child_request_id, None);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -800,14 +800,14 @@ mod tests {
                     create_AgentSession(input: {
                         session_id: "session-timeline"
                         node_did: "did:test:agent"
-                        agent_id: "general"
+                        agent_did: "general"
                         created_at: "2026-08-14T12:00:00Z"
                     }) { _docID }
                     create_AgentRequest(input: {
                         request_id: "request-timeline"
                         purpose: "normal"
                         node_did: "did:test:agent"
-                        agent_id: "general"
+                        agent_did: "general"
                         session_id: "session-timeline"
                         content: "run"
                         lifecycle_state: "completed"
@@ -833,7 +833,7 @@ mod tests {
                         request_doc_id: "{request_doc_id}"
                         call_seq: 1
                         backend_id: "backend-a"
-                        agent_id: "general"
+                        agent_did: "general"
                         node_did: "did:test:agent"
                         call_kind: "inference"
                         attempt: 1
@@ -871,7 +871,7 @@ mod tests {
             .unwrap()
             .contains("synthetic-inline-secret"));
 
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -930,7 +930,7 @@ mod tests {
                 r#"mutation {{
                     create_AgentRequest(input: {{
                         request_id: "request-accounts" purpose: "normal" node_did: "{did}"
-                        agent_id: "general" content: "run" lifecycle_state: "completed"
+                        agent_did: "general" content: "run" lifecycle_state: "completed"
                         created_at: "{}"
                     }}) {{ _docID }}
                 }}"#,
@@ -1021,7 +1021,7 @@ mod tests {
         let after = accounts().await;
         assert_eq!(after["call-a"], None, "before the reused slot's sign-in");
         assert_eq!(after["call-later"], label("label-new"));
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -1035,14 +1035,14 @@ mod tests {
                     create_AgentSession(input: {
                         session_id: "session-goal-history"
                         node_did: "did:test:agent"
-                        agent_id: "general"
+                        agent_did: "general"
                         created_at: "2026-08-14T12:00:00Z"
                     }) { _docID }
                     create_AgentRequest(input: {
                         request_id: "request-goal-history"
                         purpose: "normal"
                         node_did: "did:test:agent"
-                        agent_id: "general"
+                        agent_did: "general"
                         session_id: "session-goal-history"
                         content: "ship the timeline"
                         lifecycle_state: "completed"
@@ -1067,9 +1067,13 @@ mod tests {
         )
         .await
         .expect("create goal");
-        crate::goal::refresh_goal_usage(&node, &active)
-            .await
-            .expect("refresh usage");
+        crate::goal::refresh_goal_usage(
+            &node,
+            &identity::Did::new("did:test:agent").unwrap(),
+            &active,
+        )
+        .await
+        .expect("refresh usage");
         crate::goal::set_goal(
             &node,
             "did:test:agent",
@@ -1107,6 +1111,6 @@ mod tests {
             "the semantic event must preserve its immediate native usage-only parent",
         );
 
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

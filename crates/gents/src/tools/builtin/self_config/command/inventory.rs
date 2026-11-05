@@ -163,7 +163,8 @@ impl ConfigCommandTool {
                         "execution_id",
                         "retry_policy_id",
                         "compaction_id",
-                        "agent_id",
+                        "agent_did",
+                        "agent_did",
                         "task_id",
                         "source_collection",
                     ]

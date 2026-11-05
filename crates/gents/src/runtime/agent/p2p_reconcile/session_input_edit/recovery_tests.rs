@@ -11,7 +11,7 @@ async fn temp_home(p2p: bool) -> EmbeddedHome {
     let tempdir = tempfile::tempdir().unwrap();
     let config: Option<crate::eval::runner::embedded::home::P2PConfigForPath> = p2p.then(|| {
         Arc::new(|data_path: &std::path::Path| defra_node::P2PConfig {
-            port: 0,
+            port: Some(0),
             bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
             relay_mode: p2p::iroh::IrohRelayModeConfig::Disabled,
             discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
@@ -19,36 +19,36 @@ async fn temp_home(p2p: bool) -> EmbeddedHome {
             max_concurrent_multipath_paths: None,
             secret_key_path: Some(data_path.join("p2p.key")),
             load_persisted_collections: true,
-            max_concurrent_dag_fetches: p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES,
-            max_concurrent_push_tasks: p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS,
-            rate_limit_burst: p2p::sync::DEFAULT_RATE_LIMIT_BURST,
-            rate_limit_rate: p2p::sync::DEFAULT_RATE_LIMIT_RATE,
-            max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-            max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
+            sync: Default::default(),
+            peer_key: Default::default(),
             rebroadcast_on_merge: false,
         }) as _
     });
     let home = EmbeddedHome::in_tempdir(tempdir, config).await.unwrap();
-    crate::test_support::install_test_agent(&home.node, home.identity.did(), "general").await;
+    crate::test_support::ensure_test_default_agent(&home.node, home.identity.did()).await;
     home
 }
 
 async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionInputEdit {
     let did = home.identity.did();
-    let access = ConfigAccess::local(home.node.clone());
-    access.write("test.edit.session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "edit-session", node_did: "{did}", requester_did: "{did}", agent_id: "general", created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,
-        did = escape_graphql_string(did))).await.unwrap();
+    let binding = crate::test_support::ensure_test_default_agent(&home.node, did).await;
+    let access = ConfigAccess::local_as(
+        home.node.clone(),
+        ::identity::Did::new(did.to_owned()).unwrap(),
+    );
+    access.write("test.edit.session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "edit-session", node_did: "{did}", requester_did: "{did}", agent_did: "{agent}", created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,
+        did = escape_graphql_string(did), agent = escape_graphql_string(&binding.agent_did))).await.unwrap();
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "original",
         did,
         did,
-        "general",
+        &binding.agent_did,
         "edit-session",
         "original content",
         "interactive",
         "2026-10-10T00:00:00Z",
-        AgentRequestAdmissionRecord::local_self(did),
+        AgentRequestAdmissionRecord::client(did),
     );
     create.input.queue = Some(RequestQueue {
         delivery: QueueDelivery::Steer,
@@ -80,7 +80,7 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
     let replacements = crate::request::lifecycle::queue::prepare_pending_user_edit(
         &access,
         home.identity.as_ref(),
-        AgentRequestAdmissionRecord::local_self(did),
+        AgentRequestAdmissionRecord::client(did),
         did,
         "edit-session",
         did,
@@ -144,9 +144,10 @@ async fn future_issued_command_defers_without_receipt_then_applies() {
     assert_eq!(requests(&home.node).await, before);
 
     let cancel = CancellationToken::new();
-    let worker = tokio::spawn(run_session_command_reconciler(
+    let worker = tokio::spawn(run_session_command_reconciler_with_agents(
         home.node.clone(),
         home.identity.clone(),
+        None,
         cancel.clone(),
     ));
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
@@ -279,9 +280,10 @@ async fn reconcile_until_verified(
     id: &str,
 ) -> SessionInputEditReceipt {
     let cancel = CancellationToken::new();
-    let worker = tokio::spawn(run_session_command_reconciler(
+    let worker = tokio::spawn(run_session_command_reconciler_with_agents(
         home.node.clone(),
         home.identity.clone(),
+        None,
         cancel.clone(),
     ));
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);

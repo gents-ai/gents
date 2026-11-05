@@ -17,6 +17,10 @@ pub const REPORT_FILE: &str = "report.json";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvidenceRecord {
     pub evidence_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_agent: Option<super::subject_binding::SubjectAgent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluator_did: Option<String>,
     pub anchor: Anchor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,

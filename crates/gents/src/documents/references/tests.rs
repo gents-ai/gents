@@ -90,7 +90,7 @@ fn callback_admission_reuses_projection_and_filter_secret_checks() {
         "handler":{"kind":"built_in","emitter":"create_workspace"}});
     let source =
         json!({"event_source_id":"source", "node_did":"owner", "source_collection":"Records"});
-    let binding = json!({"binding_id":"binding", "node_did":"owner",
+    let binding = json!({"binding_id":"binding", "node_did":"owner", "agent_did":crate::triggers::callback::test_agent_did(),
         "callback_id":"callback", "event_source_id":"source", "input_fields":["name"]});
     let validate = |source, binding| {
         ConfigReferences::from_documents(
@@ -128,11 +128,11 @@ fn callback_admission_reuses_projection_and_filter_secret_checks() {
 fn trigger_scope_checks_use_bound_task_and_source_for_both_templates() {
     let base = json!({
         "node":{"node_did":"owner"},
-        "agents":[{"node_did":"owner","agent_id":"behavior","inference_profile_id":"profile"}],
+        "agents":[{"node_did":"owner","agent_did":"behavior","inference_profile_id":"profile"}],
         "inference_profiles":[{"node_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model"}],
         "inference_backends":[{"node_did":"owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible",
             "endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
-        "tasks":[{"node_did":"owner","task_id":"task","agent_id":"behavior","prompt_template":"{{ ctx.now }}"}],
+        "tasks":[{"node_did":"owner","task_id":"task","agent_did":"behavior","prompt_template":"{{ ctx.now }}"}],
         "schedules":[{"node_did":"owner","schedule_id":"schedule","cadence":{"kind":"interval","interval_secs":10}}],
         "event_sources":[{"node_did":"owner","event_source_id":"event","source_collection":"Records"}],
         "triggers":[{"node_did":"owner","trigger_id":"trigger","task_id":"task","source":{"kind":"schedule","schedule_id":"schedule"}}]
@@ -205,10 +205,10 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
     let access = ConfigAccess::local(node);
     let mut config = json!({
         "node":{"node_did":"owner"},
-        "agents":[{"node_did":"owner","agent_id":"behavior","inference_profile_id":"profile"}],
+        "agents":[{"node_did":"owner","agent_did":"behavior","inference_profile_id":"profile"}],
         "inference_profiles":[{"node_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model"}],
         "inference_backends":[{"node_did":"owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
-        "tasks":[{"node_did":"owner","task_id":"task","agent_id":"behavior","prompt_template":"{{ args.name }}"}],
+        "tasks":[{"node_did":"owner","task_id":"task","agent_did":"behavior","prompt_template":"{{ args.name }}"}],
         "event_sources":[{"node_did":"owner","event_source_id":"event","source_collection":"Records"}]
     });
     let plan = DesiredStateApplyPlan::from_pack_config(

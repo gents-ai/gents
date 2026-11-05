@@ -267,8 +267,8 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
         "expected follow-up request to include persisted tool result with token {token}: {tool_result_request}"
     );
 
-    let (_request_id, session_id, agent_id) = wait_for_request(&graphql, &node_did, prompt).await?;
-    assert!(!agent_id.is_empty(), "request should be pinned to a agent");
+    let (_request_id, session_id, agent_did) = wait_for_request(&graphql, &node_did, prompt).await?;
+    assert!(!agent_did.is_empty(), "request should be pinned to a agent");
 
     let tool_call = wait_for_tool_call(&graphql, &session_id, "read_file").await?;
     assert_eq!(

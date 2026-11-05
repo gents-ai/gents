@@ -15,8 +15,8 @@ pub(crate) async fn assert_paged_native_forks(
     let session = &opening.sessions[0];
     let node = gents::store::graphql::escape_graphql_string(&session.node_did);
     access.write("goal_marker.paged_session", &format!(r#"mutation {{
-        create_Agent(input: {{node_did:"{node}",agent_id:"default",inference_profile_id:"fixture",enabled:true}}) {{_docID}}
-        create_AgentSession(input: {{node_did:"{node}",requester_did:"{node}",agent_id:"default",session_id:"session",created_at:"2026-10-25T00:00:00Z"}}) {{_docID}}
+        create_Agent(input: {{node_did:"{node}",agent_did:"default",inference_profile_id:"fixture",enabled:true}}) {{_docID}}
+        create_AgentSession(input: {{node_did:"{node}",requester_did:"{node}",agent_did:"default",session_id:"session",created_at:"2026-10-25T00:00:00Z"}}) {{_docID}}
     }}"#)).await.unwrap();
     let mut publications = opening
         .transcript_messages
@@ -104,7 +104,7 @@ pub(crate) async fn assert_paged_native_forks(
             boundary: ForkBoundary::UserTurn(3),
             caller_node_did: &session.node_did,
             caller_requester_did: session.requester_did.as_deref(),
-            target_agent_id: None,
+            target_agent_did: None,
         },
     )
     .await
@@ -118,7 +118,7 @@ pub(crate) async fn assert_paged_native_forks(
             boundary: ForkBoundary::UserTurn(2),
             caller_node_did: &session.node_did,
             caller_requester_did: session.requester_did.as_deref(),
-            target_agent_id: None,
+            target_agent_did: None,
         },
     )
     .await
@@ -136,7 +136,7 @@ pub(crate) async fn assert_paged_native_forks(
                 boundary: ForkBoundary::BeforeMessageKey(key),
                 caller_node_did: &session.node_did,
                 caller_requester_did: session.requester_did.as_deref(),
-                target_agent_id: None,
+                target_agent_did: None,
             },
             child,
             &session.node_did,
@@ -203,7 +203,8 @@ async fn assert_native_pages(
             &source_session.node_did,
             session_id,
         )
-        .await;
+        .await
+        .expect("transcript provenance read");
         assert!(
             rows.len() <= 2,
             "{session_id} must retain the requested page bound"
@@ -357,7 +358,9 @@ pub(crate) async fn assert_copied_opening(
             )
             .unwrap();
         let measured = crate::tests::support::CountingRead::new(access.clone());
-        attach(&measured, &[], &page, Some(&dependencies), &mut snapshot).await;
+        attach(&measured, &[], &page, Some(&dependencies), &mut snapshot)
+            .await
+            .unwrap();
         assert!(measured.queries() <= 2, "{fault} must batch origin reads");
         let markers = snapshot
             .messages

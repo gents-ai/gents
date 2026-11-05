@@ -26,8 +26,9 @@ pub const DEFAULT_MODEL_NAME: &str = "default";
 
 #[derive(Clone)]
 pub struct ResolvedAgent {
-    pub agent_id: String,
+    pub agent_did: String,
     pub node: Arc<RuntimeNode>,
+    pub agent_identity: Arc<dyn NodeIdentity>,
     pub backend_id: Option<String>,
     pub backend_provider_kind: BackendProviderKind,
     pub openai_wire_api: OpenAiWireApi,
@@ -364,7 +365,7 @@ impl SamplingConfig {
 impl std::fmt::Debug for ResolvedAgent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResolvedAgent")
-            .field("agent_id", &self.agent_id)
+            .field("agent_did", &self.agent_did)
             .field("node_did", &self.node.node_did)
             .field("backend_id", &self.backend_id)
             .field("backend_provider_kind", &self.backend_provider_kind)
@@ -422,12 +423,20 @@ impl ResolvedAgent {
         &self.node.identity
     }
 
+    pub fn agent_did(&self) -> &str {
+        self.agent_identity.did()
+    }
+
+    pub fn agent_identity(&self) -> &Arc<dyn NodeIdentity> {
+        &self.agent_identity
+    }
+
     pub fn resolve_backend_api_key(&self) -> Result<Option<String>> {
         self.backend_auth.resolve_api_key().map_err(|error| {
             anyhow::anyhow!(
                 "backend {} for agent {}: {error:#}",
                 self.backend_id.as_deref().unwrap_or("<unbound>"),
-                self.agent_id
+                self.agent_did
             )
         })
     }
@@ -604,17 +613,25 @@ mod tests {
         Arc::new(RuntimeNode {
             node_did: identity.did().to_string(),
             identity,
-            default_agent_id: String::new(),
+            default_agent_did: String::new(),
             display_name: None,
             enabled: true,
         })
     }
 
     fn agent_with_wire(openai_wire_api: OpenAiWireApi) -> ResolvedAgent {
+        let node = stub_node();
+        let binding =
+            crate::store::identity::provision_agent_identity(node.identity.as_ref()).unwrap();
+        let agent_identity =
+            crate::store::identity::resolve_agent_identity(node.identity.as_ref(), &binding)
+                .unwrap();
+        let agent_did = binding.agent_did;
         ResolvedAgent {
             profile_id: None,
-            agent_id: "general".to_string(),
-            node: stub_node(),
+            agent_did,
+            agent_identity,
+            node,
             backend_id: Some("backend-general".to_string()),
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
             openai_wire_api,
@@ -660,7 +677,7 @@ mod tests {
     #[test]
     fn resolve_backend_api_key_errors_when_env_var_named_but_unset() {
         let mut agent = agent_with_wire(OpenAiWireApi::ChatCompletions);
-        agent.agent_id = "agent-alpha".to_string();
+        agent.agent_did = "agent-alpha".to_string();
         agent.backend_auth = crate::documents::BackendAuth::Environment {
             variable: "GENTS_CONFIG_TEST_KEY_MISSING_1338_NEVER_SET".into(),
         };

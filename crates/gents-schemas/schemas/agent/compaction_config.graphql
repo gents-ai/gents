@@ -1,4 +1,4 @@
-type CompactionConfig @branchable @index(fields: ["node_did", "compaction_id"], unique: true) {
+type CompactionConfig @index(fields: ["node_did", "compaction_id"], unique: true) {
     compaction_id: String
     node_did: String @index
     display_name: String

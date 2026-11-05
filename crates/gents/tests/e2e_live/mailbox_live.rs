@@ -20,12 +20,12 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
 
     let db = test_db("mailbox-real-inference").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("mailbox-real-inference"));
-    let (node_did, agent_id) = bind_target(&db.node, identity.as_ref(), &target).await;
+    let (node_did, agent_did) = bind_target(&db.node, identity.as_ref(), &target).await;
     let surface_id = "mailbox-live-surface";
     configure_agent_tools(
         &db.node,
         &node_did,
-        &agent_id,
+        &agent_did,
         None,
         Tools {
             tools_id: "mailbox-live-tools".into(),
@@ -89,7 +89,7 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     let session_id = "session-mailbox-live";
     let prompt = "Call file_mailbox_item exactly once with title='Mailbox live verified', then answer MAILBOX_FILED. The tool owns notification identity and handling.";
     create_runtime_request_caused_by_source(
-        &db.node, &node_did, &agent_id, request_id, session_id, &source_id, prompt,
+        &db.node, &node_did, &agent_did, request_id, session_id, &source_id, prompt,
     )
     .await;
     assert_eq!(
@@ -104,12 +104,12 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     assert_eq!(items[0].title, "Mailbox live verified");
     assert_eq!(items[0].requester_did, identity.did());
     assert_eq!(items[0].node_did, node_did);
-    assert_eq!(items[0].target_agent_id, agent_id);
+    assert_eq!(items[0].target_agent_did, agent_did);
     assert_eq!(items[0].source_kind, "agent");
     assert_eq!(
         items[0].source_id,
         gents::session::mailbox::NotificationIdentity::Event
-            .source_id(&node_did, identity.did(), &agent_id, request_id)
+            .source_id(&node_did, identity.did(), &agent_did, request_id)
             .unwrap()
     );
     assert_eq!(items[0].cause_doc_id.as_deref(), Some(source_id.as_str()));

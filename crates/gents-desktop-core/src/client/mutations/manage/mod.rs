@@ -8,7 +8,7 @@ mod tools;
 
 use anyhow::Result;
 #[cfg(test)]
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::collection::Collection;
 use gents::store::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyPlan,
@@ -100,13 +100,16 @@ pub async fn delete_scoped_document_local(
     .await
 }
 
-pub use behavior::{delete_agent_context_on, delete_agent_on, upsert_agent_on};
+#[cfg(test)]
+pub(crate) use behavior::upsert_agent_on;
+pub(crate) use behavior::upsert_agent_with_publication_on;
+pub use behavior::{delete_agent_context_on, delete_agent_on};
 pub use inference::{delete_inference_backend_on, upsert_inference_backend_on};
+pub(crate) use principal::apply_config_components_with_publication_on;
 pub use principal::{
-    apply_config_components_on, patch_config_components_on, read_backend_authentication_on,
-    read_config_editor_on, save_backend_authentication_on, save_config_editor_on,
-    set_backend_rotation_on, set_default_agent_on, upsert_node_on, ConfigEditorDocument,
-    ConfigEditorRevision,
+    patch_config_components_on, read_backend_authentication_on, read_config_editor_on,
+    save_backend_authentication_on, save_config_editor_on, set_backend_rotation_on,
+    set_default_agent_on, upsert_node_on, ConfigEditorDocument, ConfigEditorRevision,
 };
 pub use profile::{
     delete_inference_profile_on, select_agent_model_on, upsert_inference_profile_on,

@@ -6,6 +6,25 @@ use super::{AwaitMode, ToolCallLifecycle};
 use crate::tools::call::control::operator_process_control;
 use crate::tools::call::hook::BackgroundExecutionRegistry;
 
+async fn load_as_agent(
+    node: std::sync::Arc<defra_node::Node>,
+    actor: identity::Did,
+    request: &OperatorProcessControlRequest,
+    requester_did: Option<&str>,
+) -> ToolCallLifecycle {
+    ToolCallLifecycle::load_by_doc_id_as(
+        node,
+        actor,
+        &request.tool_call_doc_id,
+        &request.node_did,
+        &request.session_id,
+        requester_did,
+    )
+    .await
+    .unwrap()
+    .expect("selected agent can read its tool call")
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn operator_cancel_races_completion_without_replacing_terminal_state() {
@@ -17,6 +36,8 @@ async fn operator_cancel_races_completion_without_replacing_terminal_state() {
     })
     .await
     .unwrap();
+    let requester_did = request_owner.request().requester_did.clone();
+    let agent = request_owner.actor_did().unwrap();
     let node = admission.node.clone();
     let mut tool = admission.tool;
     let request = OperatorProcessControlRequest {
@@ -25,16 +46,13 @@ async fn operator_cancel_races_completion_without_replacing_terminal_state() {
         tool_call_id: tool.tool_call_id().to_owned(),
         tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
     };
-    let mut stale = ToolCallLifecycle::load_by_doc_id(
+    let mut stale = load_as_agent(
         node.clone(),
-        &request.tool_call_doc_id,
-        &request.node_did,
-        &request.session_id,
-        Some(&admission.node_did),
+        agent.clone(),
+        &request,
+        requester_did.as_deref(),
     )
-    .await
-    .unwrap()
-    .unwrap();
+    .await;
     let records = tempfile::tempdir().unwrap();
     let registry =
         BackgroundExecutionRegistry::default().with_process_records(records.path().into());
@@ -61,16 +79,13 @@ async fn operator_cancel_races_completion_without_replacing_terminal_state() {
         operator_process_control(node.clone(), &registry, Some(&admission.node_did), &request),
     );
     let cancelled = cancelled.unwrap();
-    let row = ToolCallLifecycle::load_by_doc_id(
+    let row = load_as_agent(
         node.clone(),
-        &request.tool_call_doc_id,
-        &request.node_did,
-        &request.session_id,
-        Some(&admission.node_did),
+        agent.clone(),
+        &request,
+        requester_did.as_deref(),
     )
-    .await
-    .unwrap()
-    .unwrap();
+    .await;
     assert!(row.is_terminal());
     let terminal = row.state().as_str().to_owned();
     assert!(matches!(terminal.as_str(), "completed" | "cancelled"));
@@ -99,19 +114,16 @@ async fn operator_cancel_races_completion_without_replacing_terminal_state() {
             state: terminal.clone()
         }
     );
-    let reloaded = ToolCallLifecycle::load_by_doc_id(
+    let reloaded = load_as_agent(
         node.clone(),
-        &request.tool_call_doc_id,
-        &request.node_did,
-        &request.session_id,
-        Some(&admission.node_did),
+        agent.clone(),
+        &request,
+        requester_did.as_deref(),
     )
-    .await
-    .unwrap()
-    .unwrap();
+    .await;
     assert_eq!(reloaded.state().as_str(), terminal);
     drop(request_owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(admission.path);
 }
 
@@ -128,6 +140,8 @@ async fn operator_cancel_and_completion_preserve_each_winning_terminal() {
             })
             .await
             .unwrap();
+        let requester_did = request_owner.request().requester_did.clone();
+        let agent = request_owner.actor_did().unwrap();
         let node = admission.node.clone();
         let mut tool = admission.tool;
         let request = OperatorProcessControlRequest {
@@ -197,19 +211,16 @@ async fn operator_cancel_and_completion_preserve_each_winning_terminal() {
         } else {
             "completed"
         };
-        let row = ToolCallLifecycle::load_by_doc_id(
+        let row = load_as_agent(
             node.clone(),
-            &request.tool_call_doc_id,
-            &request.node_did,
-            &request.session_id,
-            Some(&admission.node_did),
+            agent.clone(),
+            &request,
+            requester_did.as_deref(),
         )
-        .await
-        .unwrap()
-        .unwrap();
+        .await;
         assert_eq!(row.state().as_str(), terminal);
         drop(request_owner);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(admission.path);
     }
 }
@@ -224,6 +235,8 @@ async fn operator_unverified_stop_preserves_running_tool() {
     })
     .await
     .unwrap();
+    let requester_did = request_owner.request().requester_did.clone();
+    let agent = request_owner.actor_did().unwrap();
     let node = admission.node.clone();
     let tool = admission.tool;
     let request = OperatorProcessControlRequest {
@@ -263,20 +276,17 @@ async fn operator_unverified_stop_preserves_running_tool() {
     tokio::time::resume();
     let outcome = control.await.unwrap().unwrap();
     assert_eq!(outcome, ProcessControlOutcome::Unverified);
-    let row = ToolCallLifecycle::load_by_doc_id(
+    let row = load_as_agent(
         node.clone(),
-        &request.tool_call_doc_id,
-        &request.node_did,
-        &request.session_id,
-        Some(&admission.node_did),
+        agent.clone(),
+        &request,
+        requester_did.as_deref(),
     )
-    .await
-    .unwrap()
-    .unwrap();
+    .await;
     assert_eq!(row.state().as_str(), expected.durable_state);
     drop(reservation);
     drop(request_owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(admission.path);
 }
 
@@ -291,6 +301,8 @@ async fn operator_cancels_released_native_future_without_process_record() {
     })
     .await
     .unwrap();
+    let requester_did = request_owner.request().requester_did.clone();
+    let agent = request_owner.actor_did().unwrap();
     let node = admission.node.clone();
     let tool = admission.tool;
     let request = OperatorProcessControlRequest {
@@ -316,29 +328,26 @@ async fn operator_cancels_released_native_future_without_process_record() {
         operator_process_control(node.clone(), &registry, Some(&admission.node_did), &request)
             .await
             .unwrap();
+    assert_eq!(
+        outcome,
+        ProcessControlOutcome::Cancelled {
+            live_execution_cancelled: true
+        },
+    );
     worker.await.unwrap();
-    let row = ToolCallLifecycle::load_by_doc_id(
+    let row = load_as_agent(
         node.clone(),
-        &request.tool_call_doc_id,
-        &request.node_did,
-        &request.session_id,
-        Some(&admission.node_did),
+        agent.clone(),
+        &request,
+        requester_did.as_deref(),
     )
-    .await
-    .unwrap()
-    .unwrap();
+    .await;
     let expected = crate::lean_vocab_test::lean_process_stop_cases()
         .iter()
         .find(|case| case.before == "running" && case.after == "exited")
         .unwrap();
     assert_eq!(row.state().as_str(), expected.durable_state);
-    assert_eq!(
-        outcome,
-        ProcessControlOutcome::Cancelled {
-            live_execution_cancelled: true
-        }
-    );
     drop(request_owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(admission.path);
 }

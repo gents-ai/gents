@@ -99,7 +99,7 @@ fn document_digests(
     if pack.manifest().config.is_none() {
         return Ok(Default::default());
     }
-    let config = gents::pack::load_pack_config(
+    let config = gents::pack::load_pack_authoring_config(
         pack.manifest(),
         &gents::pack::PackInstallOptions {
             node_did: COMPARED_OWNER.into(),
@@ -107,10 +107,7 @@ fn document_digests(
         &|path| pack.asset(path).map(Vec::from),
         &|_| None,
     )?;
-    Ok(gents::pack::pack_document_digests(&config)?
-        .into_iter()
-        .map(|((collection, id), digest)| (format!("{collection}/{id}"), digest))
-        .collect())
+    config.document_digests()
 }
 
 fn changes(
@@ -171,7 +168,7 @@ mod tests {
         }))
         .await
         .unwrap();
-        assert_eq!(report["config"]["agents"][0]["agent_id"], "fixture-worker");
+        assert_eq!(report["config"]["agents"][0]["agent_did"], "fixture-worker");
         assert_eq!(report["scenario"]["seed"]["collection"], "FixtureJob");
     }
 }

@@ -191,7 +191,10 @@ impl PackInstaller {
             }
             _ => coordinate.to_owned(),
         };
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            self.node.clone(),
+            self.core.identity()?.to_owned(),
+        );
         let installed = crate::pack::installed_packs(
             self.home.as_deref(),
             Some((&access, self.core.node_did())),
@@ -236,7 +239,10 @@ impl PackInstaller {
                 .transpose()
                 .map_err(Into::into);
         }
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            self.node.clone(),
+            self.core.identity()?.to_owned(),
+        );
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
         crate::pack::read_installed_pack(&access, self.core.node_did(), &coordinate)
             .await?

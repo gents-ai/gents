@@ -90,6 +90,6 @@ async fn recovery_leaves_session_message_row_and_its_request_running_after_calle
         data["AgentRequest"][0]["interrupt_requested_at"].is_null(),
         "interrupting the caller must not reach the request its call caused"
     );
-    admitted.node.shutdown().await;
+    admitted.node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(admitted.path).expect("remove exact recovery fixture database");
 }

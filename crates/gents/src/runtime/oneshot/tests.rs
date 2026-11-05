@@ -97,7 +97,7 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         crate::store::identity::KeyIdentity::load_or_create(dir.path().join("identity.key"), None)
             .unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
             .data_path(dir.path())
             .build()
@@ -107,13 +107,13 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let mut behavior = crate::runtime::agent::PendingAgent::new("oneshot-lease")
         .build_with_identity_for_test(identity);
-    crate::test_support::install_test_agent(&node, behavior.node_did(), &behavior.agent_id).await;
+    crate::test_support::install_test_agent(&node, behavior.node_did(), &behavior.agent_did).await;
     behavior.model_name = "scripted".to_owned();
     behavior.stream_liveness_timeout = Duration::from_secs(1);
     behavior.deadline_duration = Duration::from_secs(60);
     let prompt = LayeredPromptBuilder::for_agent(
         &behavior.system_prompt,
-        &behavior.agent_id,
+        &behavior.agent_did,
         &[],
         false,
         &[],
@@ -233,7 +233,7 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         .unwrap();
     assert_eq!(repeated.requests_recovered, 0);
     assert_eq!(repeated.responses_recovered, 0);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[derive(Clone)]
@@ -322,7 +322,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         )
         .unwrap();
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            defra_node::Node::builder()
                 .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
                 .data_path(dir.path())
                 .build()
@@ -335,7 +335,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
             .unwrap();
         let mut behavior = crate::runtime::agent::PendingAgent::new("oneshot-output")
             .build_with_identity_for_test(identity);
-        crate::test_support::install_test_agent(&node, behavior.node_did(), &behavior.agent_id)
+        crate::test_support::install_test_agent(&node, behavior.node_did(), &behavior.agent_did)
             .await;
         behavior.model_name = "scripted".into();
         behavior.stream_liveness_timeout = Duration::from_secs(60);
@@ -364,7 +364,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
             ..Default::default()
         };
         behavior.tools = AgentToolSurfaceConfig::from_selection(
-            &behavior.agent_id,
+            &behavior.agent_did,
             selection,
             &ToolCeiling::readwrite(dir.path()),
             Vec::new(),
@@ -381,7 +381,8 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
             1,
             "configured writer contract must survive surface resolution"
         );
-        let runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), behavior.node_did());
+        let runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), behavior.node_did())
+            .for_agent(&behavior);
         let tools = Arc::new(surface.build_tools(&runtime).await.unwrap());
         let prompt = LayeredPromptBuilder::new(&behavior, &surface, &[]);
         let mut config = loop_config(
@@ -452,7 +453,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
                 data["AgentRequest"][0]["_docID"]
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -515,7 +516,7 @@ async fn oneshot_bash_uses_owned_request_context() {
         crate::store::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
             .unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
             .data_path(dir.path().join("db"))
             .build()
@@ -525,7 +526,7 @@ async fn oneshot_bash_uses_owned_request_context() {
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let mut agent = crate::runtime::agent::PendingAgent::new("oneshot-bash")
         .build_with_identity_for_test(identity);
-    crate::test_support::install_test_agent(&node, agent.node_did(), &agent.agent_id).await;
+    crate::test_support::install_test_agent(&node, agent.node_did(), &agent.agent_did).await;
     agent.model_name = "scripted".into();
     agent.stream_liveness_timeout = Duration::from_secs(60);
     agent.deadline_duration = Duration::from_secs(120);
@@ -543,7 +544,7 @@ async fn oneshot_bash_uses_owned_request_context() {
     );
     let prompt = LayeredPromptBuilder::for_agent(
         &agent.system_prompt,
-        &agent.agent_id,
+        &agent.agent_did,
         &["bash"],
         false,
         &[],
@@ -582,5 +583,5 @@ async fn oneshot_bash_uses_owned_request_context() {
         rows.data.unwrap()["AgentToolCall"][0]["lifecycle_state"],
         "completed"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

@@ -2,7 +2,6 @@ mod binding;
 mod request;
 mod session;
 
-pub use gents::interrupt_request;
 pub use request::retry::retry_request;
 pub use request::{
     reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,

@@ -6,7 +6,7 @@ namespace Conformance.GoalObservationContracts
 
 open GoalAutomation.Observation Conformance.Contracts
 
-def current : Scope := ⟨"node", "session", "session-document", some "requester"⟩
+def current : Scope := ⟨"node", "agent", "session", "session-document", some "requester"⟩
 def goal : GoalReference := ⟨"node", "session", "goal-document", "goal-commit"⟩
 
 structure Case where
@@ -18,10 +18,11 @@ structure Case where
   deriving DecidableEq, Repr
 
 def cases : List Case :=
-  ["node", "foreign-node"].flatMap fun actor =>
+  ["agent", "other-agent", "node"].flatMap fun actor =>
   [true, false].flatMap fun unique =>
   [true, false].flatMap fun verified =>
   [current, { current with node := "foreign-node" },
+    { current with agent := "other-agent" },
     { current with session := "foreign-session" },
     { current with sessionDocument := "recreated-document" },
     { current with requester := some "foreign-requester" },
@@ -32,7 +33,7 @@ def cases : List Case :=
       ⟨actor, scope, unique, goal, verified⟩
 
 def scopeJson (s : Scope) : String :=
-  "{\"node\":" ++ jsonString s.node ++ ",\"session\":" ++ jsonString s.session ++
+  "{\"node\":" ++ jsonString s.node ++ ",\"agent\":" ++ jsonString s.agent ++ ",\"session\":" ++ jsonString s.session ++
     ",\"session_document\":" ++ jsonString s.sessionDocument ++
     ",\"requester\":" ++ (match s.requester with
       | none => "null" | some did => jsonString did) ++ "}"
@@ -43,7 +44,7 @@ def goalJson : Option GoalReference → String
       ",\"document\":" ++ jsonString g.document ++ ",\"composite\":" ++ jsonString g.composite ++ "}"
 
 private def recoveryJson (c : Case) : String :=
-  if c.actor == current.node && c.scope == current && c.unique && c.verified &&
+  if c.actor == current.agent && c.scope == current && c.unique && c.verified &&
       c.goal.all (goalMatches current) then
     let previous := some (⟨current,
       some { goal with composite := "previous-commit" }⟩ : Observation)
@@ -69,6 +70,6 @@ def caseJson (c : Case) : String :=
 
 def casesJson : String := jsonArray (cases.map caseJson)
 
-example : cases.length = 288 := by native_decide
+example : cases.length = 504 := by native_decide
 
 end Conformance.GoalObservationContracts

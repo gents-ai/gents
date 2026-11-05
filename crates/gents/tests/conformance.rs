@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,

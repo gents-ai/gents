@@ -11,7 +11,7 @@ use crate::store::graphql::escape_graphql_string;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 pub const DEFAULT_MAX_CONCURRENT: i64 = 1;
 pub const DEFAULT_MAX_QUEUE_DEPTH: i64 = 100;
@@ -426,8 +426,24 @@ pub async fn set_backend_probe_status(
     backend_id: &str,
     probe_status: &str,
 ) -> Result<()> {
+    set_backend_probe_status_as(
+        &crate::ConfigAccess::local(node.clone()),
+        node_did,
+        backend_id,
+        probe_status,
+    )
+    .await
+}
+
+/// Store a probe observation using the explicit actor that owns the operation.
+pub async fn set_backend_probe_status_as(
+    access: &crate::ConfigAccess,
+    node_did: &str,
+    backend_id: &str,
+    probe_status: &str,
+) -> Result<()> {
     write_probe_observation(
-        node,
+        access,
         node_did,
         backend_id,
         serde_json::json!({"probe_status": probe_status}),
@@ -443,7 +459,7 @@ pub async fn set_backend_probe_status_with_last_probe(
     last_probe: chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
     write_probe_observation(
-        node,
+        &crate::ConfigAccess::local(node.clone()),
         node_did,
         backend_id,
         serde_json::json!({"probe_status": probe_status, "last_probe": last_probe.to_rfc3339()}),
@@ -452,28 +468,31 @@ pub async fn set_backend_probe_status_with_last_probe(
 }
 
 async fn write_probe_observation(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     node_did: &str,
     backend_id: &str,
     input: serde_json::Value,
 ) -> Result<()> {
-    // Resolve a unique scoped document first: a duplicate logical key must
-    // never cause a multi-document update.
-    let (doc_id, _) = lookup_backend_record(node, node_did, backend_id)
-        .await?
-        .context("backend observation target does not exist")?;
-    let input = gents_protocol::graphql::graphql_input_literal(&input)?;
-    let mutation = format!(
-        r#"mutation {{ update_InferenceBackend(docID: "{}", input: {input}) {{ _docID }} }}"#,
-        escape_graphql_string(&doc_id)
-    );
-    crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "backend_registry.update_probe",
-        &mutation,
-    )
-    .await?;
-    Ok(())
+    access
+        .transact_write("backend_registry.update_probe", |txn| {
+            let input = input.clone();
+            Box::pin(async move {
+                let (doc_id, value) = crate::store::config_client::read_desired_state_record_in_txn(
+                    txn, crate::Collection::InferenceBackend, node_did, backend_id,
+                )
+                .await?
+                .context("backend observation target does not exist")?;
+                InferenceBackend::from_value(&value)?;
+                let input = gents_protocol::graphql::graphql_input_literal(&input)?;
+                let mutation = format!(
+                    r#"mutation {{ update_InferenceBackend(docID: "{}", input: {input}) {{ _docID }} }}"#,
+                    escape_graphql_string(&doc_id)
+                );
+                txn.execute(&mutation).await?;
+                Ok(())
+            })
+        })
+        .await
 }
 
 // The connection is re-checked in the transaction so an in-flight probe

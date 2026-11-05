@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 pub use gents_loop::account_usage;
 use gents_loop::account_usage::{
     usage_from_headers, UsagePlan, UsageReport, UsageSource, READ_SKIP_WINDOW,

@@ -1,4 +1,5 @@
 pub(crate) mod access;
+mod agent_identity;
 pub(crate) mod enrollment;
 pub(crate) mod explorer;
 pub(crate) mod file_inventory;

@@ -82,6 +82,7 @@ pub(super) async fn run_batch<H>(
     hook: Option<Arc<H>>,
     scope: Option<CurrentToolRuntimeContext>,
     token_limit: bool,
+    handoff: Option<tokio::sync::mpsc::UnboundedSender<super::AdmissionWork>>,
 ) -> (Vec<BatchResult>, Option<String>)
 where
     H: SessionHook + 'static,
@@ -90,15 +91,37 @@ where
     for (call, internal_id) in calls {
         let args = super::value_to_json_string(&call.function.arguments);
         let action = match hook.as_ref() {
-            Some(hook) => {
-                hook.on_tool_call(
-                    &call.function.name,
-                    call.call_id.clone(),
-                    &internal_id,
-                    &args,
-                )
-                .await
-            }
+            Some(hook) => match handoff.as_ref() {
+                Some(handoff) => {
+                    let (work, reply) = super::admission_work(
+                        Arc::clone(hook),
+                        call.function.name.clone(),
+                        call.call_id.clone(),
+                        internal_id.clone(),
+                        args.clone(),
+                    );
+                    if handoff.send(work).is_err() {
+                        ToolCallHookAction::Terminate {
+                            reason: "tool admission handoff closed".into(),
+                        }
+                    } else {
+                        reply
+                            .await
+                            .unwrap_or_else(|_| ToolCallHookAction::Terminate {
+                                reason: "tool admission handoff closed".into(),
+                            })
+                    }
+                }
+                None => {
+                    hook.on_tool_call(
+                        &call.function.name,
+                        call.call_id.clone(),
+                        &internal_id,
+                        &args,
+                    )
+                    .await
+                }
+            },
             None => ToolCallHookAction::Continue,
         };
         match action {
@@ -553,7 +576,14 @@ mod control_tests {
             })]);
             let (results, termination) = tokio::time::timeout(
                 std::time::Duration::from_secs(2),
-                run_batch(calls(actions.len()), tools, Some(hook.clone()), None, false),
+                run_batch(
+                    calls(actions.len()),
+                    tools,
+                    Some(hook.clone()),
+                    None,
+                    false,
+                    None,
+                ),
             )
             .await
             .expect("accepted calls settle");
@@ -573,6 +603,58 @@ mod control_tests {
             }
         }
     }
+    #[tokio::test]
+    async fn relayed_batch_preserves_admission_order_and_skips() {
+        let hook = Arc::new(Hook {
+            actions: vec!["run", "skip", "run"],
+            settled: tokio::sync::Mutex::new(Vec::new()),
+            terminate_id: None,
+            cancelled_terminates: false,
+            cancel_token: false,
+            request_tokens: Default::default(),
+        });
+        let count = Arc::new(AtomicUsize::new(0));
+        let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(Probe {
+            calls: count.clone(),
+            pending_second: false,
+        })]);
+        let (admission_tx, mut admission_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let work = run_batch(
+            calls(3),
+            tools,
+            Some(hook.clone()),
+            None,
+            false,
+            Some(admission_tx),
+        );
+        let inner = async_stream::stream! {
+            tokio::pin!(work);
+            loop {
+                tokio::select! {
+                    Some(work) = admission_rx.recv() => yield Ok(super::super::OwnedLoopItem::Admission(work)),
+                    result = &mut work => { let _ = result_tx.send(result); break; }
+                }
+            }
+        };
+        let mut stream = Box::pin(super::super::drive_admissions(inner));
+        assert!(stream.next().await.is_none());
+        let (results, termination) = result_rx.await.unwrap();
+        assert!(termination.is_none());
+        assert_eq!(
+            results
+                .iter()
+                .map(|row| row.internal_id.as_str())
+                .collect::<Vec<_>>(),
+            ["0", "1", "2"]
+        );
+        assert!(results[1].skipped.is_some());
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        let mut settled = hook.settled.lock().await.clone();
+        settled.sort_unstable();
+        assert_eq!(settled, [(0, false), (2, false)]);
+    }
+
     struct HeldFirst {
         entered: Arc<tokio::sync::Notify>,
     }
@@ -633,7 +715,7 @@ mod control_tests {
         })]);
         let (results, termination) = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            run_batch(calls(2), tools, Some(hook.clone()), None, false),
+            run_batch(calls(2), tools, Some(hook.clone()), None, false, None),
         )
         .await
         .expect("later termination cancels the held first call");
@@ -686,7 +768,7 @@ mod control_tests {
             pending_second: false,
         })]);
         let (results, termination) =
-            run_batch(calls(2), tools, Some(hook.clone()), None, false).await;
+            run_batch(calls(2), tools, Some(hook.clone()), None, false, None).await;
         assert!(termination.is_none());
         assert_eq!(count.load(Ordering::SeqCst), 0);
         assert_eq!(results.len(), 2);

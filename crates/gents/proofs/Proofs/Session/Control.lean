@@ -6,7 +6,10 @@ namespace SessionQueue.Control
 /-- Durable stop intent belongs to the exact canonical session scope. Its
 native owner persists the latch on AgentSession and rechecks it at admission
 and claim; the single-active-runtime-per-node operating convention remains the
-external ordering premise. -/
+external ordering premise. Agent-initiated interrupt, stop, and resume retain
+the calling agent as the native database actor; selecting a target session never
+lends its agent key. Native ACP authorizes that caller independently of the
+causal guards modeled here. -/
 structure State where
   queue : SessionQueueState
   request : Option RequestContext

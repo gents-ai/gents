@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 

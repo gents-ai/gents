@@ -443,7 +443,7 @@ impl TriggerEngine {
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let (node_scope, ctx_scope) = crate::documents::template::task_node_ctx(
             &snapshot.local_did,
-            &intent.task.agent_id,
+            &intent.task.agent_did,
             &now,
         );
         let schedule = (intent.trigger_kind == TriggerKind::Schedule)
@@ -489,7 +489,7 @@ impl TriggerEngine {
         ) && !targeted_schedule
         {
             Some(if intent.task.goal_objective_template.is_some() {
-                let Some(agent) = snapshot.agent(&intent.task.agent_id) else {
+                let Some(agent) = snapshot.agent(&intent.task.agent_did) else {
                     let result = FireResult::Errored {
                         error: "Task agent unavailable".into(),
                     };
@@ -526,7 +526,7 @@ impl TriggerEngine {
             ctx: ctx_scope,
         };
         if intent.trigger_kind == TriggerKind::Event
-            && snapshot.agent(&intent.task.agent_id).is_none()
+            && snapshot.agent(&intent.task.agent_did).is_none()
         {
             let result = FireResult::Errored {
                 error: "prepare fire: trigger agent unavailable".into(),
@@ -550,7 +550,7 @@ impl TriggerEngine {
                     .and_then(|t| t.session_id_template.as_deref())
                     .or_else(|| schedule.and_then(|s| s.session_id_template.as_deref()));
                 let owner = snapshot
-                    .agent(&intent.task.agent_id)
+                    .agent(&intent.task.agent_did)
                     .ok_or_else(|| anyhow::anyhow!("trigger agent unavailable"))?
                     .node_did()
                     .to_string();
@@ -610,7 +610,7 @@ impl TriggerEngine {
                     identity,
                     goal_id: intent.task.goal_objective_template.as_ref().map(|_| {
                         crate::goal::deterministic_goal_id(
-                            snapshot.agent(&intent.task.agent_id).unwrap().node_did(),
+                            snapshot.agent(&intent.task.agent_did).unwrap().node_did(),
                             &session_id,
                         )
                     }),
@@ -692,13 +692,13 @@ impl TriggerEngine {
         }
         let concurrency_node_did = || {
             snapshot
-                .agent(&intent.task.agent_id)
+                .agent(&intent.task.agent_did)
                 .map(|agent| agent.node_did().to_string())
                 .ok_or_else(|| {
                     snapshot
-                        .unavailable_public_message(&intent.task.agent_id)
+                        .unavailable_public_message(&intent.task.agent_did)
                         .map(ToOwned::to_owned)
-                        .unwrap_or_else(|| format!("agent {} is not loaded", intent.task.agent_id))
+                        .unwrap_or_else(|| format!("agent {} is not loaded", intent.task.agent_did))
                 })
         };
         let durable_goal_request_id = if let Some(delivery) = &delivery {

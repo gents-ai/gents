@@ -748,7 +748,7 @@ pub(in crate::commands::codex_shim) mod tests {
                 "http://127.0.0.1/graphql",
             ),
             node_did: Arc::from("did:test:reasoning"),
-            agent_id: Arc::from("reasoning"),
+            agent_did: Arc::from("reasoning"),
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),
             poll_interval: Duration::from_millis(10),
@@ -849,7 +849,7 @@ pub(in crate::commands::codex_shim) mod tests {
                 );
             }
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[test]
@@ -1051,7 +1051,7 @@ pub(in crate::commands::codex_shim) mod tests {
                 "http://127.0.0.1/graphql",
             ),
             node_did: Arc::from(crate::caused_sessions::fixtures::FIXTURE_DID),
-            agent_id: Arc::from("notification"),
+            agent_did: Arc::from("notification"),
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),
             poll_interval: Duration::from_millis(10),
@@ -1165,7 +1165,7 @@ pub(in crate::commands::codex_shim) mod tests {
             turn_completed_count, 1,
             "the turn must terminate exactly once"
         );
-        state.node.shutdown().await;
+        state.node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -1265,6 +1265,6 @@ pub(in crate::commands::codex_shim) mod tests {
             (before_send..=after_send).contains(&observed),
             "the observation fallback must be the emit-time clock, got {observed}"
         );
-        state.node.shutdown().await;
+        state.node.shutdown().await.expect("node shutdown");
     }
 }

@@ -25,6 +25,17 @@ pub(crate) enum Delivery<'a> {
     },
 }
 impl Delivery<'_> {
+    fn actor(&self) -> Result<Option<identity::Did>> {
+        match self {
+            Self::Trigger { trigger, .. } => {
+                Ok(Some(identity::Did::new(trigger.task.agent_did.clone())?))
+            }
+            Self::Callback { binding, .. } => {
+                Ok(Some(identity::Did::new(binding.agent_did.clone())?))
+            }
+        }
+    }
+
     pub(crate) fn owner(&self) -> &str {
         match self {
             Self::Trigger { node_did, .. } => node_did,
@@ -211,19 +222,25 @@ pub(crate) fn selection_filter(
 }
 
 pub(crate) async fn probe_document(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::Node>,
     collection: &str,
     id: &str,
     filter: Option<&str>,
+    actor: Option<identity::Did>,
 ) -> Result<Option<String>> {
     crate::store::graphql::validate_collection_identifier(collection)?;
     let filter = selection_filter(filter, Some(("_docID", id)))?;
-    let response = graphql_with_transaction_retry(
+    let query = format!(
+        "{{{collection}(filter:{filter},limit:1){{_docID _version{{cid height fieldName}}}}}}"
+    );
+    let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
-        &format!(
-            "{{{collection}(filter:{filter},limit:1){{_docID _version{{cid height fieldName}}}}}}"
-        ),
-        "event selection probe",
+        actor,
+        "event.selection_probe",
+        |txn| {
+            let query = &query;
+            Box::pin(async move { txn.execute_local_response(query).await })
+        },
     )
     .await?;
     let rows = crate::store::graphql::rows::<Value>(&response, collection)?;
@@ -234,6 +251,38 @@ pub(crate) async fn probe_document(
                 .map(|v| v.cid)
         })
         .transpose()
+}
+
+/// Callback result creation and its ACP1 parent grant are separate commits.
+/// Missing and unlinked rows remain pending until the agent can observe the
+/// marked revision; a permanently hidden or deleted row blocks that cursor.
+pub(crate) async fn callback_result_ready(
+    node: &std::sync::Arc<defra_node::Node>,
+    collection: &str,
+    doc_id: &str,
+    actor: &str,
+) -> Result<bool> {
+    if collection != "CallbackResult" {
+        return Ok(true);
+    }
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(actor)?,
+    );
+    let response = access
+        .execute(&format!(
+            "{{ CallbackResult(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{parent_linked}} }}",
+            escape_graphql_string(doc_id),
+        ))
+        .await?;
+    let rows = response["data"]["CallbackResult"]
+        .as_array()
+        .context("callback result readiness omitted its rows")?;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "callback result readiness returned duplicate rows"
+    );
+    Ok(rows.first().and_then(|row| row["parent_linked"].as_bool()) == Some(true))
 }
 
 pub(crate) struct GroupRecord {
@@ -278,7 +327,7 @@ fn group_query(delivery: Delivery<'_>, correlation: &str) -> String {
 }
 
 pub(crate) async fn load_or_create_group(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     delivery: Delivery<'_>,
     correlation: &str,
 ) -> Result<GroupRecord> {
@@ -287,7 +336,7 @@ pub(crate) async fn load_or_create_group(
         !correlation.trim().is_empty(),
         "group correlation is missing"
     );
-    crate::store::config_client::ConfigAccess::transact_local_write(node,None,"event.group_clock",|txn| Box::pin(async move {
+    crate::store::config_client::ConfigAccess::transact_local_write(node,delivery.actor()?,"event.group_clock",|txn| Box::pin(async move {
         let query=group_query(delivery,correlation);
         if let Some(row)=decode_group(&txn.execute(&query).await?,delivery,correlation)? {return Ok(row);}
         let state=EventGroupState {group_key:delivery.group_key(correlation),node_did:delivery.owner().into(),consumer:delivery.consumer(),correlation:correlation.into(),consumer_config_key:delivery.config_key(),first_seen_at:Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true),quiesced_at:None,quiesced_reason:None};
@@ -297,14 +346,15 @@ pub(crate) async fn load_or_create_group(
 }
 
 pub(crate) async fn quiesce_group(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     record: &GroupRecord,
     reason: &str,
+    actor: Option<identity::Did>,
 ) -> Result<()> {
     if record.state.quiesced_at.is_some() {
         return Ok(());
     }
-    Ok(crate::store::config_client::ConfigAccess::write_local(node,"event.quiesce_group",&format!("mutation{{update_EventGroupState(filter:{{_docID:{{_eq:\"{}\"}},node_did:{{_eq:\"{}\"}}}},input:{{quiesced_at:\"{}\",quiesced_reason:\"{}\"}}){{_docID}}}}",escape_graphql_string(&record.doc_id),escape_graphql_string(&record.state.node_did),escape_graphql_string(&Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true)),escape_graphql_string(reason))).await.map(|_| ())?)
+    Ok(crate::store::config_client::ConfigAccess::transact_local_write(node, actor, "event.quiesce_group", |txn| Box::pin(async move { txn.execute(&format!("mutation{{update_EventGroupState(filter:{{_docID:{{_eq:\"{}\"}},node_did:{{_eq:\"{}\"}}}},input:{{quiesced_at:\"{}\",quiesced_reason:\"{}\"}}){{_docID}}}}",escape_graphql_string(&record.doc_id),escape_graphql_string(&record.state.node_did),escape_graphql_string(&Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true)),escape_graphql_string(reason))).await.map(|_| ()) })).await?)
 }
 
 pub(crate) enum GroupOutcome {
@@ -323,7 +373,7 @@ pub(crate) enum GroupOutcome {
 }
 
 pub(crate) async fn evaluate_group(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     cache: &SourceSchemaCache,
     delivery: Delivery<'_>,
     correlation: &str,
@@ -346,7 +396,16 @@ pub(crate) async fn evaluate_group(
         MAX_EVENT_TRIGGER_GROUP_DOCS + 1,
         fields.join(" ")
     );
-    let response = graphql_with_transaction_retry(node, &query, "group membership query").await?;
+    let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        delivery.actor()?,
+        "event.group_membership_query",
+        |txn| {
+            let query = &query;
+            Box::pin(async move { txn.execute_local_response(query).await })
+        },
+    )
+    .await?;
     let docs = crate::store::graphql::rows::<Value>(&response, delivery.collection())?;
     if docs.is_empty() {
         return Ok(GroupOutcome::Empty);
@@ -367,7 +426,7 @@ pub(crate) async fn evaluate_group(
         _ => None,
     };
     if let Some(reason) = reason {
-        quiesce_group(node, &record, &reason).await?;
+        quiesce_group(node, &record, &reason, delivery.actor()?).await?;
         return Ok(GroupOutcome::Quiesced);
     }
     let expected = expected?;
@@ -377,6 +436,7 @@ pub(crate) async fn evaluate_group(
             node,
             &record,
             "minimum count exceeds dynamic expected count",
+            delivery.actor()?,
         )
         .await?;
         return Ok(GroupOutcome::Quiesced);
@@ -438,7 +498,7 @@ pub(crate) fn expected_group_count(
 }
 
 pub(crate) async fn group_correlation_page(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     delivery: Delivery<'_>,
     cursor: Option<&str>,
 ) -> Result<(Vec<String>, Option<String>, bool)> {
@@ -564,7 +624,7 @@ mod tests {
                 emit_outcome: false,
                 task_id: "task".into(),
                 name: None,
-                agent_id: "behavior".into(),
+                agent_did: "behavior".into(),
                 prompt_template: String::new(),
                 goal_objective_template: None,
                 goal_token_budget: None,
@@ -618,7 +678,7 @@ mod tests {
 
     #[tokio::test]
     async fn shared_clock_survives_restart_and_quiescence_is_owner_scoped() {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(defra_node::Node::builder().build().await.unwrap());
         node.add_collection(gents_protocol::schemas::EVENT_GROUP_STATE)
             .await
             .unwrap();
@@ -671,6 +731,6 @@ mod tests {
         .unwrap();
         assert_ne!(stored.doc_id, independent.doc_id);
         assert!(independent.state.quiesced_at.is_none());
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

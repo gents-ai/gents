@@ -53,6 +53,20 @@ inductive Outcome where
   | created | recovered
   deriving DecidableEq, Repr
 
+/-- The resume transaction commits a client-owned request before detached ACP
+grants. The creator completes a pending publication; completed markers do not
+replay grants after a later revocation. Detached relationship operations are
+not fenced by this marker: a previously started worker can race a revocation
+and restore a grant, as in the SessionChild native ACP premise. -/
+def publicationPending (pending authorized grantsComplete : Bool) : Bool :=
+  pending && !(authorized && grantsComplete)
+
+theorem completed_publication_is_not_reopened (authorized grantsComplete : Bool) :
+    publicationPending false authorized grantsComplete = false := by rfl
+
+theorem publication_waits_for_successful_grants (authorized : Bool) :
+    publicationPending true authorized false = true := by simp [publicationPending]
+
 def sameKey (a b : Binding) : Bool :=
   a.goal == b.goal && a.predecessor == b.predecessor
 

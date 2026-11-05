@@ -4,7 +4,7 @@ use crate::tools::call::lifecycle::admission_fixture::{
     claimed_signed_request, complete_child, materialize_session_message,
     publish_accepted_on_claimed_request,
 };
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use std::sync::Arc;
 
 async fn exec(node: &EmbeddedNode, statement: &str) {
@@ -163,6 +163,6 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
         "{} coalesced count drifted",
         case.name
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(path).unwrap();
 }

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use chrono::{DateTime, SecondsFormat, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
@@ -157,10 +157,11 @@ pub(crate) struct SourceSchemaCache {
 }
 
 async fn enrich_native_outcome_provenance(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     collection: &str,
     source: &mut serde_json::Value,
     owner: &str,
+    agent_did: &str,
 ) -> anyhow::Result<()> {
     let (work_unit_id, invocation_id) = match collection {
         "CallbackResult" => {
@@ -208,9 +209,12 @@ async fn enrich_native_outcome_provenance(
         _ => anyhow::bail!("unsupported native provenance source {collection}"),
     };
 
-    let invocation = crate::triggers::callback::load_invocation(node, &invocation_id, owner)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("native source has no node-scoped CallbackInvocation"))?;
+    let invocation =
+        crate::triggers::callback::load_invocation(node, &invocation_id, owner, agent_did)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("native source has no node-scoped CallbackInvocation")
+            })?;
     anyhow::ensure!(
         invocation.invocation_id == invocation_id && invocation.owner_node_did == owner,
         "CallbackInvocation identity changed during lookup"
@@ -653,13 +657,15 @@ impl EventSource {
             .filter(|trigger| trigger.source_collection == collection)
             .map(|trigger| trigger.trigger_id.clone())
             .collect::<RapidHashSet<_>>();
-        let mut correlation_probes: BTreeMap<(Option<String>, String), Vec<String>> =
+        let mut correlation_probes: BTreeMap<(String, Option<String>, String), Vec<String>> =
             BTreeMap::new();
+        let mut actors = std::collections::BTreeSet::new();
         for trigger in snapshot
             .active_event_triggers()
             .values()
             .filter(|trigger| trigger.source_collection == collection)
         {
+            actors.insert(trigger.task.agent_did.clone());
             let Some(field) = trigger
                 .correlation_field
                 .as_deref()
@@ -669,21 +675,49 @@ impl EventSource {
                 continue;
             };
             correlation_probes
-                .entry((trigger.filter.clone(), field.to_string()))
+                .entry((
+                    trigger.task.agent_did.clone(),
+                    trigger.filter.clone(),
+                    field.to_string(),
+                ))
                 .or_default()
                 .push(trigger.trigger_id.clone());
         }
-        for (_, field) in correlation_probes.keys() {
+        for (_, _, field) in correlation_probes.keys() {
             crate::store::graphql::validate_graphql_name(field)?;
         }
-        let ids = tokio::select! {
-            biased;
-            _ = self.cancel.cancelled() => anyhow::bail!("event source seeding cancelled"),
-            ids = super::event_delivery::source_scan::load_doc_ids(&self.node, collection) => ids?,
-        };
-        let mut doc_ids: RapidHashSet<String> = ids.into_iter().collect();
+        let mut doc_ids = RapidHashSet::new();
         let mut deferred_by_doc: RapidHashMap<String, RapidHashSet<String>> = RapidHashMap::new();
-        for ((filter, field), correlated_trigger_ids) in correlation_probes {
+        for actor in actors {
+            let rows = tokio::select! {
+                biased;
+                _ = self.cancel.cancelled() => anyhow::bail!("event source seeding cancelled"),
+                rows = super::event_delivery::source_scan::load_source_rows(&self.node, collection,
+                    (collection == "CallbackResult").then_some("parent_linked"), None, &actor) => rows?,
+            };
+            for row in rows {
+                let id = row["_docID"]
+                    .as_str()
+                    .context("event source seed lacks document ID")?;
+                if collection == "CallbackResult" && row["parent_linked"].as_bool() != Some(true) {
+                    let pending = snapshot
+                        .active_event_triggers()
+                        .values()
+                        .filter(|trigger| {
+                            trigger.source_collection == collection
+                                && trigger.task.agent_did == actor
+                        })
+                        .map(|trigger| trigger.trigger_id.clone());
+                    deferred_by_doc
+                        .entry(id.to_owned())
+                        .or_default()
+                        .extend(pending);
+                } else {
+                    doc_ids.insert(id.to_owned());
+                }
+            }
+        }
+        for ((actor, filter, field), correlated_trigger_ids) in correlation_probes {
             let filter = filter
                 .as_deref()
                 .map(str::trim)
@@ -693,7 +727,7 @@ impl EventSource {
             let rows = tokio::select! {
                 biased;
                 _ = self.cancel.cancelled() => anyhow::bail!("event source correlation seeding cancelled"),
-                rows = super::event_delivery::source_scan::load_source_rows(&self.node, collection, Some(&field), Some(filter)) => rows?,
+                rows = super::event_delivery::source_scan::load_source_rows(&self.node, collection, Some(&field), Some(filter), &actor) => rows?,
             };
             for row in rows {
                 let correlation = row
@@ -909,6 +943,7 @@ impl EventSource {
             &trigger.source_collection,
             source_doc_id,
             trigger.filter.as_deref(),
+            Some(identity::Did::new(&trigger.task.agent_did)?),
         )
         .await?
         .is_some())
@@ -918,8 +953,9 @@ impl EventSource {
         &self,
         collection: &str,
         source_doc_id: &str,
+        agent_did: &str,
     ) -> anyhow::Result<serde_json::Value> {
-        self.read_source_doc(collection, source_doc_id)
+        self.read_source_doc(collection, source_doc_id, agent_did)
             .await?
             .with_context(|| format!("source doc {source_doc_id} not found in {collection}"))
     }
@@ -929,6 +965,7 @@ impl EventSource {
         &self,
         collection: &str,
         source_doc_id: &str,
+        agent_did: &str,
     ) -> anyhow::Result<Option<serde_json::Value>> {
         // `fields_for` validates this binding before the query is built, so
         // it is the one gate for both sites.
@@ -948,10 +985,14 @@ impl EventSource {
             id = crate::store::graphql::escape_graphql_string(source_doc_id),
             projection = projection,
         );
-        let response = crate::store::graphql::graphql_with_transaction_retry(
+        let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
-            &query,
-            "fetch source doc",
+            Some(identity::Did::new(agent_did)?),
+            "event.fetch_source_doc",
+            |txn| {
+                let query = &query;
+                Box::pin(async move { txn.execute_local_response(query).await })
+            },
         )
         .await?;
         let Some(rows) = response
@@ -975,7 +1016,7 @@ impl EventSource {
         doc: &serde_json::Value,
     ) -> anyhow::Result<Option<String>> {
         let fields = snapshot
-            .tool_surface(&trigger.task.agent_id)
+            .tool_surface(&trigger.task.agent_did)
             .map(|surface| surface.source_fill_fields())
             .unwrap_or_default();
         let mut source_fields = std::collections::BTreeMap::new();
@@ -1013,7 +1054,7 @@ impl EventSource {
         trigger: &'a crate::runtime::snapshot::ResolvedEventTrigger,
     ) -> anyhow::Result<Delivery<'a>> {
         let agent = snapshot
-            .agent(&trigger.task.agent_id)
+            .agent(&trigger.task.agent_did)
             .ok_or_else(|| anyhow::anyhow!("group trigger agent is unavailable"))?;
         Ok(Delivery::Trigger {
             node_did: agent.node_did(),
@@ -1259,7 +1300,7 @@ impl EventSource {
             return RapidHashSet::new();
         }
         let Some(node_did) = snapshot
-            .agent(&trigger.task.agent_id)
+            .agent(&trigger.task.agent_did)
             .map(|agent| agent.node_did())
         else {
             return RapidHashSet::new();
@@ -1711,6 +1752,33 @@ impl EventSource {
             {
                 continue;
             }
+            match event_delivery::callback_result_ready(
+                &self.node,
+                collection_name,
+                source_doc_id,
+                &trigger.task.agent_did,
+            )
+            .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    build.correlation_pending = true;
+                    build.deferred.push((
+                        trigger.trigger_id.clone(),
+                        "callback parent link".to_owned(),
+                    ));
+                    continue;
+                }
+                Err(error) => {
+                    tracing::warn!(trigger_id = %trigger.trigger_id, %error, "callback result readiness unavailable");
+                    build.correlation_pending = true;
+                    build.deferred.push((
+                        trigger.trigger_id.clone(),
+                        "callback parent link".to_owned(),
+                    ));
+                    continue;
+                }
+            }
             match self.probe_filter(source_doc_id, &trigger).await {
                 Ok(true) => {}
                 Ok(false) => {
@@ -1737,7 +1805,11 @@ impl EventSource {
             }
 
             let doc_vars = match self
-                .fetch_source_doc(&trigger.source_collection, source_doc_id)
+                .fetch_source_doc(
+                    &trigger.source_collection,
+                    source_doc_id,
+                    &trigger.task.agent_did,
+                )
                 .await
             {
                 Ok(value) => Some(value),
@@ -1762,7 +1834,7 @@ impl EventSource {
                 )
             {
                 let Some(owner) = snapshot
-                    .agent(&trigger.task.agent_id)
+                    .agent(&trigger.task.agent_did)
                     .map(|agent| agent.node_did())
                 else {
                     build.correlation_pending = true;
@@ -1785,6 +1857,7 @@ impl EventSource {
                     &trigger.source_collection,
                     doc,
                     owner,
+                    &trigger.task.agent_did,
                 )
                 .await
                 {

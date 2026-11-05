@@ -81,7 +81,7 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
             .with_context(|| format!("init receipt is missing {pointer}: {init}"))
     };
     let profile_id = field("/inference_profile_id")?;
-    let agent_id = field("/init/default_agent_id")?;
+    let agent_did = field("/init/default_agent_did")?;
     let tools_id = field("/init/tools_id")?;
 
     let install = run_cli_json(
@@ -123,7 +123,7 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
             "wire",
             "gents/workflow",
             "--agent",
-            &agent_id,
+            &agent_did,
             "--targets-from",
             "gents/dynamic_workflows",
             "--home",

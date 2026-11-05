@@ -154,7 +154,7 @@ mod tests {
                 cell_id: "baseline".into(),
                 label: "baseline".into(),
                 source: CellSource::Directory(pack.to_path_buf()),
-                agent_id: "monitor".into(),
+                agent_slot: "monitor".into(),
                 inference_profile_id: "local".into(),
             }],
             trials_per_case: 2,

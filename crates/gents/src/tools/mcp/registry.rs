@@ -17,7 +17,7 @@ where
 }
 
 pub(crate) async fn configured_mcp_services(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
 ) -> anyhow::Result<Vec<crate::documents::ToolServiceRegistry>> {
     let query = services_query(node_did)?;

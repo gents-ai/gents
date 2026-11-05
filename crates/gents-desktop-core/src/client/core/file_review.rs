@@ -1,30 +1,15 @@
-use anyhow::{Context, Result};
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
-use gents::tools::call::lifecycle::{
-    load_tool_file_change_observation, ToolFileChangeRead, VerifiedFileImageReceipt,
-};
-use gents::NodeIdentity;
-use gents_protocol::file_changes::ToolFileChanges;
-use gents_protocol::file_image_hydration::{
-    FileImageDemand, FileImageHydrationReceipt, FileImageInventoryReference, FileImageSelection,
-};
-use gents_protocol::session_hydration::HydrationRequest;
-use serde_json::Value;
-
 use super::bootstrap::normalize_required;
-use super::writes::ensure_peer_chat_ready_at;
 use super::ClientCore;
 use crate::error::{BridgeError, BridgeErrorCode};
-
-const DEMAND_FIELDS: &str = "_docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id inventory_reference status status_detail observation_doc_id processed_at outcome_signer_did outcome_signature";
+use anyhow::{Context, Result};
+use gents::store::config_client::ConfigAccess;
+use gents::tools::call::lifecycle::{load_tool_file_change_observation, ToolFileChangeRead};
+use gents_protocol::file_changes::ToolFileChanges;
 
 mod inventory;
 mod scope;
 
 impl ClientCore {
-    /// A remote image demand can remain unanswered even while the peer is
-    /// reachable; bound the observation wait and let the caller retry.
     pub async fn tool_file_changes(
         &self,
         node_did: &str,
@@ -37,396 +22,38 @@ impl ClientCore {
         let session_id = normalize_required("session_id", session_id)?;
         let request_id = normalize_required("request_id", request_id)?;
         let tool_call_doc_id = normalize_required("tool_call_doc_id", tool_call_doc_id)?;
-        let retry_id = retry_id.map(uuid::Uuid::parse_str).transpose()?;
-        let operator = self.operator_observation_graphql(node_did);
-        let access = match operator.as_ref() {
-            Some(endpoint) => ConfigAccess::Graphql(endpoint.clone()),
-            None => self
-                .store_access
-                .lock()
-                .await
-                .as_ref()
-                .context("local store access is unavailable")?
-                .clone(),
-        };
+        retry_id.map(uuid::Uuid::parse_str).transpose()?;
+        let access = ConfigAccess::Graphql(
+            self.operator_observation_graphql(node_did)
+                .context("Connect to the runtime to read recorded file versions.")?,
+        );
         let row = scope::load_request_scope(&access, node_did, session_id, request_id).await?;
         let request_doc_id = row
             .doc_id
             .as_deref()
             .context("request lacks physical identity")?;
-        if operator.is_some() {
-            return match load_tool_file_change_observation(
-                &access,
-                tool_call_doc_id,
-                request_doc_id,
-                node_did,
-                session_id,
-                row.requester_did.as_deref(),
+        match load_tool_file_change_observation(
+            &access,
+            tool_call_doc_id,
+            request_doc_id,
+            node_did,
+            session_id,
+            row.requester_did.as_deref(),
+        )
+        .await?
+        {
+            ToolFileChangeRead::Retained { changes, .. } => Ok(Some(changes)),
+            ToolFileChangeRead::Missing => Ok(None),
+            ToolFileChangeRead::Pending => Err(BridgeError::new(
+                BridgeErrorCode::ProjectionPending,
+                "This edit is still running. Open its changes again when it finishes.",
             )
-            .await?
-            {
-                ToolFileChangeRead::Retained { changes, .. } => Ok(Some(changes)),
-                ToolFileChangeRead::Missing => Ok(None),
-                ToolFileChangeRead::Pending => Err(BridgeError::new(
-                    BridgeErrorCode::ProjectionPending,
-                    "This edit is still running. Open its changes again when it finishes.",
-                )
-                .into()),
-                ToolFileChangeRead::Unsupported => Err(BridgeError::new(
-                    BridgeErrorCode::Unsupported,
-                    "This runtime does not support recorded file versions.",
-                )
-                .into()),
-            };
+            .into()),
+            ToolFileChangeRead::Unsupported => Err(BridgeError::new(
+                BridgeErrorCode::Unsupported,
+                "This runtime does not support recorded file versions.",
+            )
+            .into()),
         }
-        let requester_did = row
-            .requester_did
-            .as_deref()
-            .context("file review lacks its requester")?;
-        anyhow::ensure!(
-            requester_did == self.node_identity.did(),
-            "file review requester differs from the enrolled client"
-        );
-        let mut demand = FileImageDemand {
-            inventory_reference: None,
-            admission: HydrationRequest {
-                request_key: String::new(),
-                peer_id: self.local_peer_id().into(),
-                requester_did: requester_did.into(),
-                node_did: node_did.into(),
-                session_id: session_id.into(),
-            },
-            request_doc_id: request_doc_id.into(),
-            tool_call_doc_id: tool_call_doc_id.into(),
-        };
-        demand.admission.request_key = match retry_id {
-            Some(id) => demand.derive_retry_request_key(&id.to_string()),
-            None => demand.derive_request_key(),
-        };
-        demand.validate_reference()?;
-        if retry_id.is_none() {
-            demand = resumable_image_demand(&access, &demand, &self.node_identity).await?;
-        }
-        self.remote_file_images(demand).await
-    }
-
-    /// A terminal receipt confirms transport, while the scoped document-change
-    /// subscription waits for the exact image's local merge. Dropping this read
-    /// cancels the wait without changing the durable demand or its authority.
-    async fn remote_file_images(&self, demand: FileImageDemand) -> Result<Option<ToolFileChanges>> {
-        Ok(self
-            .remote_file_observation(demand, None)
-            .await?
-            .map(|(_, changes)| changes))
-    }
-
-    async fn remote_file_observation(
-        &self,
-        demand: FileImageDemand,
-        inventory_entry: Option<&gents_protocol::file_inventory::FileInventoryEntry>,
-    ) -> Result<Option<(String, ToolFileChanges)>> {
-        let mut changes = gents::subscribe_collections(
-            &self.node,
-            [
-                demand.collection_name(),
-                gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
-                gents_protocol::schemas::TOOL_FILE_CONTENT_NAME,
-            ],
-        )?;
-        let access = self
-            .store_access
-            .lock()
-            .await
-            .as_ref()
-            .context("local store access is unavailable")?
-            .clone();
-        let mut sync = self.sync_state.subscribe();
-        let mut observed_demand = false;
-        let read = async {
-            loop {
-                let response = access.execute(&demand_query(&demand)).await?;
-                let row = demand_row(&response)?;
-                anyhow::ensure!(
-                    row.is_some() || !observed_demand,
-                    "file review demand disappeared"
-                );
-                let receipt = match row {
-                    Some(row) => {
-                        observed_demand = true;
-                        verified_receipt(row, &demand, &self.node_identity).await?
-                    }
-                    None => None,
-                };
-                if let Some(receipt) = receipt {
-                    match receipt.selection() {
-                        FileImageSelection::Rejected => {
-                            anyhow::bail!("Runtime rejected file review: {}", receipt.detail())
-                        }
-                        FileImageSelection::Missing => return Ok(None),
-                        FileImageSelection::Selected { document } => {
-                            if demand.inventory_reference.is_some() {
-                                let entry = inventory_entry.context(
-                                    "bound image read omitted its received inventory entry",
-                                )?;
-                                if let Some(changes) = receipt
-                                    .read_inventory_image(self.node.clone(), entry)
-                                    .await?
-                                {
-                                    return Ok(Some((document.clone(), changes)));
-                                }
-                            } else if receipt.grant_local_read(self.node.clone()).await? {
-                                match load_tool_file_change_observation(
-                                    &access,
-                                    &demand.tool_call_doc_id,
-                                    &demand.request_doc_id,
-                                    &demand.admission.node_did,
-                                    &demand.admission.session_id,
-                                    Some(&demand.admission.requester_did),
-                                )
-                                .await?
-                                {
-                                    ToolFileChangeRead::Retained {
-                                        document_id,
-                                        changes,
-                                        ..
-                                    } => {
-                                        anyhow::ensure!(
-                                        &document_id == document,
-                                        "file review observation differs from the signed receipt"
-                                    );
-                                        return Ok(Some((document_id, changes)));
-                                    }
-                                    ToolFileChangeRead::Unsupported => {
-                                        anyhow::bail!("local file-image collection is unavailable")
-                                    }
-                                    ToolFileChangeRead::Missing | ToolFileChangeRead::Pending => {}
-                                }
-                            }
-                        }
-                    }
-                }
-                let records = self.sync_state.records();
-                let peer = records
-                    .iter()
-                    .find(|record| record.node_did == demand.admission.node_did);
-                ensure_peer_chat_ready_at(&demand.admission.node_did, peer, chrono::Utc::now())
-                    .context(BridgeError::new(
-                        BridgeErrorCode::EndpointUnreachable,
-                        "Reconnect this runtime to load new file versions.",
-                    ))?;
-                if row.is_none() {
-                    admit_image_demand(&self.node, &demand).await?;
-                    observed_demand = true;
-                    continue;
-                }
-                tokio::select! {
-                    event = changes.recv() => { event.context("file review observation subscription closed")?; }
-                    update = sync.changed() => { update.context("file review route observation closed")?; }
-                }
-            }
-        };
-        tokio::time::timeout(std::time::Duration::from_secs(30), read).await
-            .context(BridgeError::new(
-                BridgeErrorCode::EndpointUnreachable,
-                "File review is waiting for the runtime. Open the changes again when the connection is ready.",
-            ))?
     }
 }
-
-async fn resumable_image_demand(
-    access: &ConfigAccess,
-    original: &FileImageDemand,
-    identity: &dyn NodeIdentity,
-) -> Result<FileImageDemand> {
-    let fields = original
-        .reference_fields()
-        .into_iter()
-        .filter(|(field, _)| *field != "request_key")
-        .map(|(field, value)| format!(r#"{field}: {{ _eq: "{}" }}"#, escape_graphql_string(value)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let query = format!(
-        r#"{{ FileImageHydrationRequest: {}(filter: {{ {fields}, status: {{ _in: ["pending", "served"] }} }}) {{ {} }} }}"#,
-        original.collection_name(),
-        demand_fields(original),
-    );
-    let response = access.execute(&query).await?;
-    let rows = response["data"]["FileImageHydrationRequest"]
-        .as_array()
-        .context("file review lookup omitted demand rows")?;
-    let mut candidates = Vec::new();
-    let mut selected_document = None;
-    for row in rows {
-        let reference: Option<FileImageInventoryReference> =
-            serde_json::from_value(row["inventory_reference"].clone())?;
-        if reference != original.inventory_reference {
-            continue;
-        }
-        let mut demand = original.clone();
-        demand.admission.request_key = row["request_key"]
-            .as_str()
-            .context("file review demand omitted its request key")?
-            .into();
-        demand.validate_reference()?;
-        let receipt = verified_receipt(row, &demand, identity).await?;
-        let rank = match receipt.as_ref().map(VerifiedFileImageReceipt::selection) {
-            Some(FileImageSelection::Selected { document }) => {
-                if let Some(previous) = &selected_document {
-                    anyhow::ensure!(
-                        previous == document,
-                        "file review receipts selected conflicting images"
-                    );
-                }
-                selected_document = Some(document.clone());
-                0
-            }
-            Some(FileImageSelection::Missing) => 1,
-            None => 2,
-            Some(FileImageSelection::Rejected) => {
-                anyhow::bail!("file review lookup returned a rejected demand")
-            }
-        };
-        candidates.push((rank, demand));
-    }
-    candidates.sort_by(|(left_rank, left), (right_rank, right)| {
-        left_rank
-            .cmp(right_rank)
-            .then_with(|| left.admission.request_key.cmp(&right.admission.request_key))
-    });
-    Ok(candidates
-        .into_iter()
-        .next()
-        .map(|(_, demand)| demand)
-        .unwrap_or_else(|| original.clone()))
-}
-
-fn demand_query(demand: &FileImageDemand) -> String {
-    format!(
-        r#"{{ FileImageHydrationRequest: {}(filter: {{ request_key: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
-        demand.collection_name(),
-        escape_graphql_string(&demand.admission.request_key),
-        demand_fields(demand)
-    )
-}
-
-fn demand_fields(demand: &FileImageDemand) -> String {
-    if demand.inventory_reference.is_some() {
-        DEMAND_FIELDS.into()
-    } else {
-        DEMAND_FIELDS.replace(" inventory_reference", "")
-    }
-}
-
-fn demand_row(response: &Value) -> Result<Option<&Value>> {
-    let rows = response["data"]["FileImageHydrationRequest"]
-        .as_array()
-        .context("file review lookup omitted demand rows")?;
-    anyhow::ensure!(rows.len() <= 1, "file review demand has conflicting rows");
-    Ok(rows.first())
-}
-
-fn ensure_demand(row: &Value, demand: &FileImageDemand) -> Result<()> {
-    let reference: Option<FileImageInventoryReference> =
-        serde_json::from_value(row["inventory_reference"].clone())?;
-    anyhow::ensure!(
-        reference == demand.inventory_reference,
-        "file review demand differs from the selected metadata snapshot"
-    );
-    for (field, expected) in demand.reference_fields() {
-        anyhow::ensure!(
-            row[field].as_str() == Some(expected),
-            "file review demand {field} differs from the selected tool"
-        );
-    }
-    Ok(())
-}
-
-async fn admit_image_demand(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
-    demand: &FileImageDemand,
-) -> Result<()> {
-    let query = demand_query(demand);
-    let mut input: serde_json::Map<String, Value> = demand
-        .reference_fields()
-        .into_iter()
-        .map(|(field, value)| (field.to_owned(), Value::String(value.to_owned())))
-        .collect();
-    if let Some(reference) = &demand.inventory_reference {
-        input.insert(
-            "inventory_reference".into(),
-            serde_json::to_value(reference)?,
-        );
-    }
-    input.insert(
-        "created_at".into(),
-        Value::String(chrono::Utc::now().to_rfc3339()),
-    );
-    input.insert("status".into(), Value::String("pending".into()));
-    let demand = demand.clone();
-    ConfigAccess::transact_local_write(node, None, "desktop.file_review.admit", move |txn| {
-        let query = query.clone();
-        let input = input.clone();
-        let demand = demand.clone();
-        Box::pin(async move {
-            gents::store::graphql::fence_arrivals(txn, demand.collection_name()).await?;
-            let response = txn.execute(&query).await?;
-            if let Some(row) = demand_row(&response)? {
-                ensure_demand(row, &demand)?;
-            } else {
-                let response = txn.execute_with_variables(
-                    &format!("mutation($input: {0}MutationInputArg!) {{ create_FileImageHydrationRequest: create_{0}(input: $input) {{ _docID }} }}", demand.collection_name()),
-                    &serde_json::json!({"input": input}),
-                ).await?;
-                gents::store::graphql::created_doc_id(&response, "FileImageHydrationRequest")?;
-            }
-            Ok(())
-        })
-    })
-    .await
-}
-
-async fn verified_receipt(
-    row: &Value,
-    demand: &FileImageDemand,
-    identity: &dyn NodeIdentity,
-) -> Result<Option<VerifiedFileImageReceipt>> {
-    ensure_demand(row, demand)?;
-    let text = |field: &str| {
-        row[field]
-            .as_str()
-            .with_context(|| format!("file review receipt omitted {field}"))
-    };
-    let selection = match text("status")? {
-        "pending" => return Ok(None),
-        "rejected" => {
-            anyhow::ensure!(
-                row["observation_doc_id"].is_null(),
-                "rejected file review selected an image"
-            );
-            FileImageSelection::Rejected
-        }
-        "served" => match &row["observation_doc_id"] {
-            Value::Null => FileImageSelection::Missing,
-            Value::String(document) => FileImageSelection::Selected {
-                document: document.clone(),
-            },
-            _ => anyhow::bail!("file review receipt has an invalid observation identity"),
-        },
-        _ => anyhow::bail!("file review receipt has an unknown status"),
-    };
-    let receipt = FileImageHydrationReceipt {
-        version: demand.receipt_version(),
-        demand: demand.clone(),
-        selection,
-        detail: text("status_detail")?.into(),
-        processed_at: text("processed_at")?.into(),
-        signer_did: text("outcome_signer_did")?.into(),
-        signature: bs58::decode(text("outcome_signature")?).into_vec()?,
-    };
-    Ok(Some(
-        VerifiedFileImageReceipt::verify(receipt, demand, identity).await?,
-    ))
-}
-
-#[cfg(test)]
-mod tests;

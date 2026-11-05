@@ -165,9 +165,9 @@ function Editor({
             <NameLinks
               shown={USERS_SHOWN}
               items={users.map((b) => ({
-                key: b.agentId,
+                key: b.agentDid,
                 name: b.displayName,
-                href: href({ ...base, section: "agents", item: b.agentId }),
+                href: href({ ...base, section: "agents", item: b.agentDid }),
               }))}
             />
           ) : (
@@ -310,7 +310,7 @@ export function ContextsPanel({
   const origin = agentOf(deployment, originId);
   const back = origin
     ? {
-        route: { ...base, section: "agents", item: origin.agentId },
+        route: { ...base, section: "agents", item: origin.agentDid },
         label: `Back to ${origin.displayName}`,
       }
     : undefined;

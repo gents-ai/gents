@@ -18,7 +18,7 @@ fn test_identity(name: &str) -> KeyIdentity {
 }
 
 async fn apply_documents(
-    node: &Arc<gents::defra_node::EmbeddedNode>,
+    node: &Arc<gents::defra_node::Node>,
     documents: Vec<(gents::Collection, serde_json::Value)>,
 ) {
     use gents::store::config_client::{
@@ -46,17 +46,17 @@ async fn apply_documents(
 }
 
 async fn create_task(
-    node: &Arc<gents::defra_node::EmbeddedNode>,
+    node: &Arc<gents::defra_node::Node>,
     owner: &str,
     task_id: &str,
-    agent_id: &str,
+    agent_did: &str,
     prompt_template: &str,
 ) {
-    apply_documents(node, vec![(gents::Collection::Task, serde_json::json!({"node_did":owner,"task_id":task_id,"display_name":task_id,"agent_id":agent_id,"prompt_template":prompt_template}))]).await;
+    apply_documents(node, vec![(gents::Collection::Task, serde_json::json!({"node_did":owner,"task_id":task_id,"display_name":task_id,"agent_did":agent_did,"prompt_template":prompt_template}))]).await;
 }
 
 async fn create_schedule(
-    node: &Arc<gents::defra_node::EmbeddedNode>,
+    node: &Arc<gents::defra_node::Node>,
     owner: &str,
     schedule_id: &str,
     task_id: &str,
@@ -83,7 +83,7 @@ async fn create_schedule(
 }
 
 async fn set_trigger_enabled_and_cursor(
-    node: &Arc<gents::defra_node::EmbeddedNode>,
+    node: &Arc<gents::defra_node::Node>,
     owner: &str,
     trigger_id: &str,
     enabled: bool,
@@ -122,7 +122,7 @@ async fn set_trigger_enabled_and_cursor(
 }
 
 async fn create_event_trigger(
-    node: &Arc<gents::defra_node::EmbeddedNode>,
+    node: &Arc<gents::defra_node::Node>,
     owner: &str,
     trigger_id: &str,
     task_id: &str,
@@ -136,7 +136,7 @@ async fn create_event_trigger(
 }
 
 async fn wait_for_runtime_snapshot<F>(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     node_did: &str,
     predicate: F,
 ) -> RuntimeSnapshot
@@ -158,13 +158,13 @@ where
 }
 
 async fn fetch_schedule_agent_requests(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     owner: &str,
     trigger_id: &str,
 ) -> Vec<serde_json::Value> {
     let response = node
         .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, caused_by_trigger_id: {{ _eq: "{}" }}, caused_by_trigger_kind: {{ _eq: "schedule" }} }}, limit: 2) {{ content agent_id execution_origin caused_by_trigger_id caused_by_trigger_kind }} }}"#,
+            r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, caused_by_trigger_id: {{ _eq: "{}" }}, caused_by_trigger_kind: {{ _eq: "schedule" }} }}, limit: 2) {{ content agent_did execution_origin caused_by_trigger_id caused_by_trigger_kind }} }}"#,
             escape_graphql_string(owner),
             escape_graphql_string(trigger_id),
         ))
@@ -173,7 +173,7 @@ async fn fetch_schedule_agent_requests(
 }
 
 async fn fetch_trigger_observation(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     owner: &str,
     trigger_id: &str,
 ) -> serde_json::Value {
@@ -211,7 +211,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     .await
     .unwrap();
     let node_did = agent.node_did().to_string();
-    let default_agent_id = agent.default_agent_id().to_string();
+    let default_agent_did = agent.default_agent_did().to_string();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
@@ -231,7 +231,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
         &db.node,
         &node_did,
         "task-reconcile-alpha",
-        &default_agent_id,
+        &default_agent_did,
         "alpha prompt",
     )
     .await;
@@ -247,7 +247,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
         is_routed_ready_after(snapshot, initial_generation)
     })
     .await;
-    assert_eq!(reconciled.default_agent_id, default_agent_id);
+    assert_eq!(reconciled.default_agent_did, default_agent_did);
     assert!(
         reconciled.last_reconcile_error.is_empty(),
         "post-insert reconcile should be clean, got error={:?}",
@@ -318,7 +318,7 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
     .await
     .unwrap();
     let node_did = agent.node_did().to_string();
-    let default_agent_id = agent.default_agent_id().to_string();
+    let default_agent_did = agent.default_agent_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
@@ -330,7 +330,7 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
     const TASK_ID: &str = "task-scheduled-fire";
     const TRIGGER_ID: &str = "trigger-scheduled-fire";
     const TASK_PROMPT: &str = "render this exact configured schedule task";
-    create_task(&db.node, &node_did, TASK_ID, &default_agent_id, TASK_PROMPT).await;
+    create_task(&db.node, &node_did, TASK_ID, &default_agent_did, TASK_PROMPT).await;
     let due = (Utc::now() - ChronoDuration::seconds(2)).to_rfc3339();
     create_schedule(&db.node, &node_did, TRIGGER_ID, TASK_ID).await;
 
@@ -365,7 +365,7 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
         )) && content.ends_with(&format!("]\n\n{TASK_PROMPT}")),
         "{content}"
     );
-    assert_eq!(request["agent_id"], default_agent_id);
+    assert_eq!(request["agent_did"], default_agent_did);
     assert_eq!(request["execution_origin"], "scheduled");
     assert_eq!(request["caused_by_trigger_id"], TRIGGER_ID);
     assert_eq!(request["caused_by_trigger_kind"], "schedule");
@@ -419,7 +419,7 @@ async fn event_source_trigger_insert_bumps_active_generation() {
     .await
     .unwrap();
     let node_did = agent.node_did().to_string();
-    let default_agent_id = agent.default_agent_id().to_string();
+    let default_agent_did = agent.default_agent_did().to_string();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
@@ -439,7 +439,7 @@ async fn event_source_trigger_insert_bumps_active_generation() {
         &db.node,
         &node_did,
         "task-event-trigger-alpha",
-        &default_agent_id,
+        &default_agent_did,
         "alpha prompt",
     )
     .await;
@@ -457,7 +457,7 @@ async fn event_source_trigger_insert_bumps_active_generation() {
         is_routed_ready_after(snapshot, initial_generation)
     })
     .await;
-    assert_eq!(reconciled.default_agent_id, default_agent_id);
+    assert_eq!(reconciled.default_agent_did, default_agent_did);
     assert!(
         reconciled.last_reconcile_error.is_empty(),
         "post-insert reconcile should be clean, got error={:?}",

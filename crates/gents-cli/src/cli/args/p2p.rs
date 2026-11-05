@@ -113,12 +113,24 @@ pub(crate) enum P2pNetworkCommand {
 pub(crate) enum P2pEnrollmentCommand {
     #[command(about = "List fresh pending authenticated enrollment requests")]
     Pending(P2pAccessArgs),
+    #[command(about = "Grant a pending client Node administration explicitly")]
+    Grant(P2pEnrollmentGrantArgs),
     #[command(about = "Approve a pending request with a bounded lease")]
     Approve(P2pEnrollmentDecisionArgs),
     #[command(about = "Deny a pending request")]
     Deny(P2pEnrollmentDecisionArgs),
     #[command(about = "Revoke the current authorization for a request")]
     Revoke(P2pEnrollmentDecisionArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct P2pEnrollmentGrantArgs {
+    /// Immutable enrollment request ID shown by the operator pending queue.
+    pub(crate) request_id: String,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
 }
 
 #[derive(clap::Args)]

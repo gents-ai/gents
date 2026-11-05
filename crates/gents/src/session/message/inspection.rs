@@ -2,7 +2,7 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::message::{AssistantContent, Message, UserContent};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -396,27 +396,32 @@ pub(crate) async fn agent_session_read(
 ) -> Result<Value> {
     args.validate()?;
     anyhow::ensure!(args.session_id.trim() != caller.session_id, "agent_session_read cannot address the calling session; use sessions to inspect this conversation");
-    let target = super::resolve_send_target(node, &caller.node_did, tools, args.session_id.trim())
-        .await?
-        .context(
-            "session is not messageable; discover available sessions with agent_session_list",
-        )?;
-    let target = super::target_scope(&caller.node_did, &target);
+    let target = super::resolve_send_target(
+        node,
+        &caller.node_did,
+        &caller.agent_did,
+        tools,
+        args.session_id.trim(),
+    )
+    .await?
+    .context("session is not messageable; discover available sessions with agent_session_list")?;
+    let target = super::target_scope(&caller.agent_did, &target);
     args.validate_target(&target)?;
     // Captured before the first contributing lookup (active_session_request).
     let observation_started_at =
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let active = crate::request::interrupt::active_session_request(
-        node,
+    let identity: identity::Did = caller
+        .agent_did
+        .parse()
+        .context("session inspection requires a valid caller DID")?;
+    let access = ConfigAccess::local_as(node.clone(), identity.clone());
+    let active = crate::request::interrupt::active_session_request_with_access(
+        &access,
         &target.session_id,
         &target.node_did,
         target.requester_did.as_deref(),
     )
     .await?;
-    let identity = caller
-        .node_did
-        .parse()
-        .context("session inspection requires a valid caller DID")?;
     ConfigAccess::transact_local_readonly(node, Some(identity), "agent_session.read", |txn| {
         let target = target.clone();
         let active = active.clone();
@@ -428,7 +433,7 @@ pub(crate) async fn agent_session_read(
             let sessions = rows(&response, "AgentSession")?;
             anyhow::ensure!(sessions.len() == 1, "inspected session is unavailable or ambiguous");
             let session = crate::session::decode_session_row(&sessions[0])?.session;
-            anyhow::ensure!(super::target::session_target_allowed(&session, &caller.node_did, tools), "inspected session is no longer messageable");
+            anyhow::ensure!(super::target::session_target_allowed(&session, &caller.node_did, &caller.agent_did, tools), "inspected session is no longer messageable");
             let unobserved = if active.is_none() {
                 match session.observation.as_ref().and_then(|view| view.latest_request.as_ref()) {
                     Some(observed) if request_row(txn, &scope, &observed.request_doc_id).await?.is_none() => Some(observed),
@@ -576,6 +581,7 @@ mod tests {
         .unwrap();
         crate::goal::create_goal_for_session(
             &node,
+            identity.did(),
             identity.did(),
             "read-worker",
             "verify shard R3a",
@@ -797,7 +803,7 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("not messageable"), "{error:#}");
         drop(worker);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }
 }

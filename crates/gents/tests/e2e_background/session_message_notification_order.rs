@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::store::graphql::escape_graphql_string;
 use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use serde_json::json;
@@ -16,8 +16,8 @@ use crate::support::streaming_backend::{
 };
 use crate::support::{test_db, TestDb};
 
-const PARENT_AGENT_ID: &str = "e2e-session-order-parent";
-const CHILD_AGENT_ID: &str = "e2e-session-order-child";
+const PARENT_AGENT_DID: &str = "e2e-session-order-parent";
+const CHILD_AGENT_DID: &str = "e2e-session-order-child";
 const BACKEND_ID: &str = "e2e-session-order-backend";
 const MODEL: &str = "e2e-session-order-model";
 const RESUME_BACKEND_ID: &str = "e2e-session-order-resume-backend";
@@ -38,7 +38,7 @@ async fn configure_session_chain(db: &TestDb) {
     configure_child_agent(
         &db.node,
         &node_did,
-        CHILD_AGENT_ID,
+        CHILD_AGENT_DID,
         "e2e-session-order-child-tools",
         Vec::new(),
         false,
@@ -47,13 +47,13 @@ async fn configure_session_chain(db: &TestDb) {
     configure_child_agent(
         &db.node,
         &node_did,
-        PARENT_AGENT_ID,
+        PARENT_AGENT_DID,
         "e2e-session-order-parent-tools",
         vec![agent_target(
             &node_did,
-            CHILD_AGENT_ID,
+            CHILD_AGENT_DID,
             &node_did,
-            CHILD_AGENT_ID,
+            CHILD_AGENT_DID,
         )],
         true,
     )
@@ -125,15 +125,15 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
         AcceptedTurnSpec {
             backend_id: BACKEND_ID,
             model: MODEL,
-            parent_agent_id: PARENT_AGENT_ID,
-            configured_agent_ids: &[PARENT_AGENT_ID, CHILD_AGENT_ID],
+            parent_agent_did: PARENT_AGENT_DID,
+            configured_agent_dids: &[PARENT_AGENT_DID, CHILD_AGENT_DID],
             request_id: "e2e-session-order-request",
             session_id: SESSION_ID,
             prompt: PARENT_PROMPT,
             accepted_chunks: vec![StreamChunk::tool_call(
                 "e2e-session-order-tool-call",
                 gents::tools::native::AGENT_NEW_TOOL_NAME,
-                json!({ "agent": CHILD_AGENT_ID, "prompt": CHILD_PROMPT }).to_string(),
+                json!({ "agent": CHILD_AGENT_DID, "prompt": CHILD_PROMPT }).to_string(),
             )],
             child_plans: vec![StreamPlan::new(
                 CHILD_PROMPT,
@@ -168,7 +168,7 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
     bind_agent_backend(
         &db.node,
         db.node_identity.did(),
-        PARENT_AGENT_ID,
+        PARENT_AGENT_DID,
         RESUME_BACKEND_ID,
         resume_backend.endpoint(),
         RESUME_MODEL,
@@ -177,7 +177,7 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
     create_runtime_request(
         db.node.as_ref(),
         &node_did,
-        PARENT_AGENT_ID,
+        PARENT_AGENT_DID,
         "e2e-session-order-resume-request",
         SESSION_ID,
         RESUMED_PROMPT,

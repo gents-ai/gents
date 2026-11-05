@@ -60,7 +60,7 @@ pub async fn exercise(
                         *id += 1;
                         if settings["node"]["displayName"] == "editor-fixture"
                             && settings["node"]["enabled"] == true
-                            && settings["node"]["defaultAgentId"]
+                            && settings["node"]["defaultAgentDid"]
                                 .as_str()
                                 .is_some_and(|id| !id.is_empty())
                         {

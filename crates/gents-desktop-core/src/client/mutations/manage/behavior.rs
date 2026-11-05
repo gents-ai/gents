@@ -1,6 +1,6 @@
 use anyhow::Result;
 #[cfg(test)]
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::collection::Collection;
 #[cfg(test)]
 use gents::store::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
@@ -9,6 +9,11 @@ use gents::AgentDocument;
 #[cfg(test)]
 use std::sync::Arc;
 
+#[cfg(test)]
+#[path = "behavior/client_signed_tests.rs"]
+mod client_signed_tests;
+
+#[cfg(test)]
 pub async fn upsert_agent_on(access: &ConfigAccess, document: &AgentDocument) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -17,6 +22,28 @@ pub async fn upsert_agent_on(access: &ConfigAccess, document: &AgentDocument) ->
         update: value,
     }])?;
     super::apply_plan(access, "desktop.agent.save", plan).await
+}
+
+pub(crate) async fn upsert_agent_with_publication_on(
+    access: &ConfigAccess,
+    document: &AgentDocument,
+    observer: std::sync::Arc<dyn gents::store::config_client::AgentPublicationObserver>,
+) -> Result<()> {
+    let value = serde_json::to_value(document)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::Agent,
+        add: value.clone(),
+        update: value,
+    }])?;
+    access
+        .transact_write_with_agent_publication("desktop.agent.save", observer, |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents::store::config_client::apply_desired_state_plan(txn, plan).await?;
+                Ok(())
+            })
+        })
+        .await
 }
 
 #[cfg(test)]
@@ -146,12 +173,12 @@ mod tests {
             }))?;
             super::super::profile::upsert_inference_profile(&node, &profile).await?;
             let agent = serde_json::from_value(json!({
-                "node_did":owner,"agent_id":"review","inference_profile_id":"profile"
+                "node_did":owner,"agent_did":"review","inference_profile_id":"profile"
             }))?;
             upsert_agent(&node, &agent).await?;
         }
         let invalid = serde_json::from_value(json!({
-            "node_did":"did:test:alpha","agent_id":"review","inference_profile_id":"profile","context_id":"missing"
+            "node_did":"did:test:alpha","agent_did":"review","inference_profile_id":"profile","context_id":"missing"
         }))?;
         assert!(upsert_agent(&node, &invalid).await.is_err());
         assert!(super::super::profile::delete_inference_profile(
@@ -162,7 +189,7 @@ mod tests {
         .await
         .is_err());
         let target = json!({
-            "node_did":"did:test:alpha","target_id":"target","target_node_did":"did:test:alpha","agent_id":"review","name":"reviewer"
+            "node_did":"did:test:alpha","target_id":"target","target_node_did":"did:test:alpha","agent_did":"review","name":"reviewer"
         });
         let target_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
             collection: Collection::AgentTarget,
@@ -209,7 +236,7 @@ mod tests {
         }))?;
         super::super::profile::upsert_inference_profile(&node, &fallback_profile).await?;
         let fallback = serde_json::from_value(json!({
-            "node_did":"did:test:alpha","agent_id":"fallback","inference_profile_id":"fallback"
+            "node_did":"did:test:alpha","agent_did":"fallback","inference_profile_id":"fallback"
         }))?;
         upsert_agent(&node, &fallback).await?;
         for default in ["review", "fallback"] {
@@ -224,7 +251,7 @@ mod tests {
                         )
                         .await?
                         .unwrap();
-                        value["default_agent_id"] = json!(default);
+                        value["default_agent_did"] = json!(default);
                         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
                             collection: Collection::Node,
                             add: value.clone(),

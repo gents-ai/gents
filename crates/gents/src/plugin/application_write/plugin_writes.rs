@@ -12,14 +12,20 @@ use crate::store::config_client::ConfigApplyTxn;
 /// receipt per write. Any refused or failed write fails the whole output; the
 /// caller's rollback discards the rest.
 ///
-/// `txn` must be opened as the invoker: `admit_write` admits each write on
-/// that precondition. This opens no transaction of its own.
+/// `actor` is bound by the host to the invoker. Runtime bookkeeping may share
+/// the transaction, but plugin data reads and writes retain this actor.
 pub async fn apply_plugin_writes_in_txn(
     txn: &ConfigApplyTxn<'_>,
+    actor: &identity::Did,
     grant: &PluginData,
     stamps: &StampContext,
     writes: Vec<DataWrite>,
 ) -> Result<Vec<Value>> {
+    txn.validate_effect_actor(actor)?;
+    ensure!(
+        stamps.value(crate::plugin::data::Stamp::CallerDid) == Some(actor.as_str()),
+        "plugin provenance must match its authenticated actor"
+    );
     let admitted = admit_write(grant, stamps, writes)?;
     let mut receipts = Vec::with_capacity(admitted.len());
     for AdmittedWrite { write } in admitted {

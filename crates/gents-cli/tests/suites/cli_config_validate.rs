@@ -10,11 +10,11 @@ fn canonical_config(node_did: &str) -> Value {
     json!({
         "node": {
             "node_did": node_did,
-            "default_agent_id": "default",
+            "default_agent_did": "default",
             "enabled": true
         },
         "agents": [{
-            "agent_id": "default",
+            "agent_did": "default",
             "context_id": "default-context",
             "inference_profile_id": "default-profile",
             "enabled": true

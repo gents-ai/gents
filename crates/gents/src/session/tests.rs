@@ -72,7 +72,7 @@ async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
             if matches!(first_content(content), UserContent::Text(Text { text }) if text == "older steering")
     ));
     assert_eq!(history.get(1), Some(&tool_result));
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -111,7 +111,7 @@ async fn history_reconstruction_scans_a_shared_request_once() {
         scans, 1,
         "one history pass scans a shared request's output once"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -153,7 +153,7 @@ async fn history_reconstruction_batches_distinct_requests() {
         scans <= 2,
         "history used {scans} output scans for {count} requests"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -170,6 +170,7 @@ async fn compaction_entries_track_files_cumulatively() {
 
     save_compaction_entry(
         &node,
+        "did:test:test",
         "session-1",
         "did:test:test",
         "request-1",
@@ -186,6 +187,7 @@ async fn compaction_entries_track_files_cumulatively() {
     .unwrap();
     save_compaction_entry(
         &node,
+        "did:test:test",
         "session-1",
         "did:test:test",
         "request-2",
@@ -200,12 +202,20 @@ async fn compaction_entries_track_files_cumulatively() {
     )
     .await
     .unwrap();
-    let generation = load_prompt_compaction_state(&node, "session-1", "did:test:test", None, None)
-        .await
-        .unwrap()
-        .generation;
+    let generation = load_prompt_compaction_state(
+        &node,
+        "did:test:test",
+        "session-1",
+        "did:test:test",
+        None,
+        None,
+    )
+    .await
+    .unwrap()
+    .generation;
     save_compaction_entry_with_requester_did(
         &node,
+        "did:test:test",
         "session-1",
         "did:test:test",
         None,
@@ -269,24 +279,42 @@ async fn compaction_entries_track_files_cumulatively() {
             ),
         ]
     );
-    let prompt_state =
-        load_prompt_compaction_state(&node, "session-1", "did:test:test", None, None)
-            .await
-            .unwrap();
+    let prompt_state = load_prompt_compaction_state(
+        &node,
+        "did:test:test",
+        "session-1",
+        "did:test:test",
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(prompt_state.summaries.len(), 3);
     assert_eq!(prompt_state.total_messages_compacted, 15);
     assert_eq!(prompt_state.compacted_through_sequence, Some(40));
-    let before_cursor =
-        load_prompt_compaction_state(&node, "session-1", "did:test:test", None, Some(20))
-            .await
-            .unwrap();
+    let before_cursor = load_prompt_compaction_state(
+        &node,
+        "did:test:test",
+        "session-1",
+        "did:test:test",
+        None,
+        Some(20),
+    )
+    .await
+    .unwrap();
     assert_eq!(before_cursor.summaries, vec!["First summary"]);
     assert_eq!(before_cursor.total_messages_compacted, 5);
     assert_eq!(before_cursor.compacted_through_sequence, Some(10));
-    let at_cursor =
-        load_prompt_compaction_state(&node, "session-1", "did:test:test", None, Some(40))
-            .await
-            .unwrap();
+    let at_cursor = load_prompt_compaction_state(
+        &node,
+        "did:test:test",
+        "session-1",
+        "did:test:test",
+        None,
+        Some(40),
+    )
+    .await
+    .unwrap();
     assert_eq!(at_cursor.summaries.len(), 3);
     assert_eq!(at_cursor.total_messages_compacted, 15);
     assert_eq!(at_cursor.compacted_through_sequence, Some(40));
@@ -326,14 +354,22 @@ async fn legacy_cumulative_compaction_paths_extend_and_redeliver_as_deltas() {
         response.errors
     );
 
-    let prior = load_prompt_compaction_state(&node, session_id, "did:test:test", None, None)
-        .await
-        .unwrap();
+    let prior = load_prompt_compaction_state(
+        &node,
+        "did:test:test",
+        session_id,
+        "did:test:test",
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let files_read = ["/legacy/read.rs".to_string(), "/new/read.rs".to_string()];
     let files_modified = ["/new/write.rs".to_string()];
     let save = || {
         save_compaction_entry_with_requester_did(
             &node,
+            "did:test:test",
             session_id,
             "did:test:test",
             None,
@@ -382,23 +418,30 @@ async fn legacy_cumulative_compaction_paths_extend_and_redeliver_as_deltas() {
         stored_row["files_modified"].as_str(),
         Some(r#"{"version":1,"paths":["/new/write.rs"]}"#)
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
 async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    let generation =
-        load_prompt_compaction_state(&node, "session-race", "did:test:test", None, None)
-            .await
-            .unwrap()
-            .generation;
+    let generation = load_prompt_compaction_state(
+        &node,
+        "did:test:test",
+        "session-race",
+        "did:test:test",
+        None,
+        None,
+    )
+    .await
+    .unwrap()
+    .generation;
 
     let left_files = ["/tmp/left.rs".to_string()];
     let right_files = ["/tmp/right.rs".to_string()];
     let left = save_compaction_entry_with_requester_did(
         &node,
+        "did:test:test",
         "session-race",
         "did:test:test",
         None,
@@ -415,6 +458,7 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
     );
     let right = save_compaction_entry_with_requester_did(
         &node,
+        "did:test:test",
         "session-race",
         "did:test:test",
         None,
@@ -467,15 +511,22 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
 async fn exact_compaction_redelivery_is_idempotent() {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    let generation =
-        load_prompt_compaction_state(&node, "session-redelivery", "did:test:test", None, None)
-            .await
-            .unwrap()
-            .generation;
+    let generation = load_prompt_compaction_state(
+        &node,
+        "did:test:test",
+        "session-redelivery",
+        "did:test:test",
+        None,
+        None,
+    )
+    .await
+    .unwrap()
+    .generation;
     let files = ["/tmp/a.rs".to_string()];
     let save = || {
         save_compaction_entry_with_requester_did(
             &node,
+            "did:test:test",
             "session-redelivery",
             "did:test:test",
             None,
@@ -494,13 +545,20 @@ async fn exact_compaction_redelivery_is_idempotent() {
     let first = save().await.unwrap();
     let second = save().await.unwrap();
     assert_eq!(second, first);
-    let next_generation =
-        load_prompt_compaction_state(&node, "session-redelivery", "did:test:test", None, None)
-            .await
-            .unwrap()
-            .generation;
+    let next_generation = load_prompt_compaction_state(
+        &node,
+        "did:test:test",
+        "session-redelivery",
+        "did:test:test",
+        None,
+        None,
+    )
+    .await
+    .unwrap()
+    .generation;
     save_compaction_entry_with_requester_did(
         &node,
+        "did:test:test",
         "session-redelivery",
         "did:test:test",
         None,
@@ -620,7 +678,7 @@ async fn close_session_preserves_creation_time() {
                     filter: { session_id: { _eq: "session-1" } },
                     limit: 1
                 ) {
-                    agent_id
+                    agent_did
                     created_at
                     closed_at
                 }
@@ -643,7 +701,7 @@ async fn close_session_preserves_creation_time() {
         .expect("session row");
 
     assert_eq!(
-        row.get("agent_id").and_then(|value| value.as_str()),
+        row.get("agent_did").and_then(|value| value.as_str()),
         Some("deploy-test")
     );
     assert!(row
@@ -705,7 +763,7 @@ async fn create_session_with_id_is_idempotent() {
                     tags
                     title
                     node_did
-                    agent_id
+                    agent_did
                 }
             }"#,
         )
@@ -736,7 +794,7 @@ async fn create_session_with_id_is_idempotent() {
         Some("did:test:test")
     );
     assert_eq!(
-        rows[0].get("agent_id").and_then(|value| value.as_str()),
+        rows[0].get("agent_did").and_then(|value| value.as_str()),
         Some("general")
     );
 
@@ -744,7 +802,7 @@ async fn create_session_with_id_is_idempotent() {
 }
 
 #[tokio::test]
-async fn create_session_with_agent_id_rejects_mismatched_existing_binding() {
+async fn create_session_with_agent_did_rejects_mismatched_existing_binding() {
     let data_path =
         std::env::temp_dir().join(format!("gents-session-binding-{}", uuid::Uuid::new_v4()));
     let node = std::sync::Arc::new(
@@ -756,11 +814,11 @@ async fn create_session_with_agent_id_rejects_mismatched_existing_binding() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    create_session_with_agent_id(&node, "session-1", "did:test:test", "general")
+    create_session_with_agent_did(&node, "session-1", "did:test:test", "general")
         .await
         .unwrap();
 
-    let error = create_session_with_agent_id(&node, "session-1", "did:test:test", "code")
+    let error = create_session_with_agent_did(&node, "session-1", "did:test:test", "code")
         .await
         .unwrap_err();
     assert!(error.to_string().contains("agent mismatch"));
@@ -768,10 +826,10 @@ async fn create_session_with_agent_id_rejects_mismatched_existing_binding() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-async fn session_rewrite_rows(node: &defra_node::EmbeddedNode) -> Vec<Vec<String>> {
+async fn session_rewrite_rows(node: &defra_node::Node) -> Vec<Vec<String>> {
     let response = node
         .execute(
-            "{ AgentSession { _docID session_id agent_id } \
+            "{ AgentSession { _docID session_id agent_did } \
                AgentMessage { _docID session_id sequence message_key } \
                CompactionEntry { _docID session_id sequence compaction_key summary } }",
         )
@@ -806,7 +864,7 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     crate::test_support::install_test_agent(&node, AGENT, "edit-fork").await;
-    create_session_with_agent_id(&node, SOURCE, AGENT, "edit-fork")
+    create_session_with_agent_did(&node, SOURCE, AGENT, "edit-fork")
         .await
         .unwrap();
     for message in case["messages"].as_array().unwrap() {
@@ -827,12 +885,13 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
     let before = load_history(&node, SOURCE, AGENT, None).await.unwrap();
     let receipt = fork(
         &node,
+        &identity::Did::new(AGENT).unwrap(),
         ForkParams {
             source_session_id: SOURCE,
             boundary: ForkBoundary::BeforeMessageKey(case["key"].as_str().unwrap()),
             caller_node_did: AGENT,
             caller_requester_did: None,
-            target_agent_id: None,
+            target_agent_did: None,
         },
     )
     .await
@@ -849,7 +908,7 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
         load_history(&node, SOURCE, AGENT, None).await.unwrap(),
         before
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -862,14 +921,14 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
     let identity =
         crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
     let builder = || {
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .data_path(directory.path().join("data"))
     };
     let node = std::sync::Arc::new(builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     crate::test_support::install_test_agent(&node, NODE, "retained-fork").await;
-    create_session_with_agent_id(&node, SOURCE, NODE, "retained-fork")
+    create_session_with_agent_did(&node, SOURCE, NODE, "retained-fork")
         .await
         .unwrap();
     for sequence in 1..=3 {
@@ -882,7 +941,7 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
         boundary: ForkBoundary::BeforeMessageKey("retained-3"),
         caller_node_did: NODE,
         caller_requester_did: None,
-        target_agent_id: None,
+        target_agent_did: None,
     };
     let access = crate::store::config_client::ConfigAccess::local(node.clone());
     drop(
@@ -891,12 +950,12 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
             .unwrap(),
     );
     crate::store::config_client::ConfigAccess::write_local(&node, "test.disable_fork_agent",
-        r#"mutation { update_Agent(filter: {node_did: {_eq: "did:test:retained-edit-fork"}, agent_id: {_eq: "retained-fork"}}, input: {enabled: false}) { _docID } }"#).await.unwrap();
+        r#"mutation { update_Agent(filter: {node_did: {_eq: "did:test:retained-edit-fork"}, agent_did: {_eq: "retained-fork"}}, input: {enabled: false}) { _docID } }"#).await.unwrap();
     let before = session_rewrite_rows(&node).await;
     let history = load_history(&node, CHILD, NODE, None).await.unwrap();
     assert_eq!(history.len(), 2);
     drop(access);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     drop(node);
 
     let node = std::sync::Arc::new(builder().build().await.unwrap());
@@ -938,7 +997,7 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
             .is_err()
     );
     assert_eq!(session_rewrite_rows(&node).await, before);
-    create_session_with_agent_id(&node, "unbound-child", NODE, "retained-fork")
+    create_session_with_agent_did(&node, "unbound-child", NODE, "retained-fork")
         .await
         .unwrap();
     let unbound_before = session_rewrite_rows(&node).await;
@@ -949,7 +1008,7 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
     );
     assert_eq!(session_rewrite_rows(&node).await, unbound_before);
     drop(access);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -959,7 +1018,7 @@ async fn fork_rolls_back_at_every_mutation_position() {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     crate::test_support::install_test_agent(&node, AGENT, "fork-rollback").await;
-    create_session_with_agent_id(&node, SOURCE, AGENT, "fork-rollback")
+    create_session_with_agent_did(&node, SOURCE, AGENT, "fork-rollback")
         .await
         .unwrap();
     for sequence in 1..=3u32 {
@@ -978,6 +1037,7 @@ async fn fork_rolls_back_at_every_mutation_position() {
     }
     save_compaction_entry(
         &node,
+        AGENT,
         SOURCE,
         AGENT,
         "fork-rollback-compaction",
@@ -994,6 +1054,7 @@ async fn fork_rolls_back_at_every_mutation_position() {
     .unwrap();
     save_compaction_entry(
         &node,
+        AGENT,
         SOURCE,
         AGENT,
         "fork-rollback-compaction-2",
@@ -1013,12 +1074,13 @@ async fn fork_rolls_back_at_every_mutation_position() {
         boundary: ForkBoundary::UserTurn(3),
         caller_node_did: AGENT,
         caller_requester_did: None,
-        target_agent_id: None,
+        target_agent_did: None,
     };
 
+    let actor = identity::Did::new(AGENT).unwrap();
     let (outcome, writes) =
         crate::store::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
-            || fork(&node, params.clone()),
+            || fork(&node, &actor, params.clone()),
             || session_rewrite_rows(&node),
         )
         .await;
@@ -1034,7 +1096,7 @@ async fn fork_rolls_back_at_every_mutation_position() {
     assert_eq!(child_entries.len(), 2);
     assert_eq!(child_entries[0].files_read, vec!["/tmp/a.rs"]);
     assert_eq!(child_entries[1].files_read, vec!["/tmp/a.rs", "/tmp/b.rs"]);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -1045,6 +1107,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     ensure_runtime_schemas(&node).await.unwrap();
     save_compaction_entry(
         &node,
+        AGENT,
         SESSION,
         AGENT,
         "request-first",
@@ -1063,7 +1126,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
         let entries = load_compaction_entries(&node, SESSION, AGENT, None)
             .await
             .unwrap();
-        let state = load_prompt_compaction_state(&node, SESSION, AGENT, None, None)
+        let state = load_prompt_compaction_state(&node, AGENT, SESSION, AGENT, None, None)
             .await
             .unwrap();
         (entries, state)
@@ -1075,6 +1138,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
         || {
             save_compaction_entry_with_requester_did(
                 &node,
+                AGENT,
                 SESSION,
                 AGENT,
                 None,
@@ -1099,7 +1163,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     assert_eq!(entries.len(), 2);
     assert_ne!(after.generation, before.generation);
     assert_eq!(after.compacted_through_sequence, Some(20));
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[expect(
@@ -1107,7 +1171,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     reason = "shared test helper with call sites in modules outside session"
 )]
 pub(crate) async fn import_history_observation(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     request_id: &str,
     session_id: &str,
     node_did: &str,
@@ -1351,7 +1415,7 @@ async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
             .unwrap()
             .is_empty()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -1364,6 +1428,7 @@ async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
     ] {
         save_compaction_entry(
             &node,
+            owner,
             "same-chain",
             owner,
             "request",
@@ -1401,7 +1466,7 @@ async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
 }
 
 async fn claimed_authored_request(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     request_id: &str,
     node_did: &str,
     session_id: &str,
@@ -1415,7 +1480,7 @@ async fn claimed_authored_request(
         .execute(&format!(
             r#"mutation {{ create_AgentRequest(input: {{
         request_id: "{request_id}", purpose: "normal", node_did: "{escaped_agent}",
-        agent_id: "general", session_id: "{session_id}", content: "race",
+        agent_did: "general", session_id: "{session_id}", content: "race",
         lifecycle_state: "pending", execution_origin: "interactive", created_at: "{now}",
         retry_count: 0, max_retries: 3, request_hop: 0
     }}) {{ _docID }} }}"#
@@ -1495,7 +1560,7 @@ async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates(
             .len(),
         2
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -1615,7 +1680,7 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
         } else {
             result.unwrap();
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 }
 
@@ -1624,7 +1689,7 @@ async fn retry_frontier_matches_lean_admission() {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     async fn write_doc(
-        node: &std::sync::Arc<defra_node::EmbeddedNode>,
+        node: &std::sync::Arc<defra_node::Node>,
         mutation: &str,
         field: &str,
     ) -> String {
@@ -1654,13 +1719,13 @@ async fn retry_frontier_matches_lean_admission() {
         };
         let parent = write_doc(&node, &format!(r#"mutation {{ create_AgentRequest(input: {{
             request_id: "retry-frontier-parent-{index}", purpose: "normal", node_did: "did:test:test",
-            agent_id: "general", session_id: "{session}", content: "Do the work",
+            agent_did: "general", session_id: "{session}", content: "Do the work",
             lifecycle_state: "{state}", failure_reason:"Stale", execution_origin: "interactive", created_at: "2026-10-07T00:00:00Z"
         }}) {{ _docID }} }}"#), "create_AgentRequest").await;
         let mut request = crate::request::watcher::AgentRequest::try_from(
             serde_json::from_value::<gents_protocol::row::AgentRequestRow>(serde_json::json!({
                 "_docID":"successor", "request_id":"successor", "purpose":"normal",
-                "node_did":"did:test:test", "session_id":session_id, "agent_id":"general",
+                "node_did":"did:test:test", "session_id":session_id, "agent_did":"general",
                 "content":"Do the work", "created_at":"2026-10-07T00:00:01Z",
                 "retry_parent_request_doc_id":parent
             }))
@@ -1715,7 +1780,7 @@ async fn retry_frontier_matches_lean_admission() {
                     &format!(
                         r#"mutation {{
                 create_AgentRequest(input: {{ request_id:"retry-frontier-second", purpose:"normal",
-                    node_did:"did:test:test", agent_id:"general", session_id:"{session}",
+                    node_did:"did:test:test", agent_did:"general", session_id:"{session}",
                     content:"Do the work", lifecycle_state:"failed", execution_origin:"interactive",
                     created_at:"2026-10-07T00:00:02Z", retry_parent_request_doc_id:"{parent_gql}"
                 }}) {{_docID}} }}"#
@@ -1733,7 +1798,7 @@ async fn retry_frontier_matches_lean_admission() {
             );
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -1778,7 +1843,7 @@ async fn unsigned_starter_cannot_populate_the_index() {
                         txn,
                         &session.session_id,
                         &session.node_did,
-                        &session.agent_id,
+                        &session.agent_did,
                         session.requester_did.as_deref(),
                         session.title.clone(),
                         provenance,
@@ -1805,5 +1870,5 @@ async fn unsigned_starter_cannot_populate_the_index() {
         .unwrap()
         .started
         .is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

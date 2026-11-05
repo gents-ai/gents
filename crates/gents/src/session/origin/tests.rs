@@ -1,5 +1,5 @@
 use super::*;
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node as EmbeddedNode;
 use gents_protocol::session::SessionProvenance;
 use serde_json::json;
 
@@ -31,7 +31,7 @@ async fn seed(
     create(
         node,
         format!(
-            r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "did:test:node", requester_did: "did:test:node", agent_id: "worker", session_id: "{session_id}", {cause} content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{created_at}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "did:test:node", requester_did: "did:test:node", agent_did: "worker", session_id: "{session_id}", {cause} content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{created_at}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#
         ),
         "AgentRequest",
     )
@@ -43,7 +43,7 @@ async fn seed_session(node: &EmbeddedNode, session_id: &str, parent: Option<&str
         session_id: session_id.into(),
         node_did: "did:test:node".into(),
         requester_did: Some("did:test:node".into()),
-        agent_id: "worker".into(),
+        agent_did: "worker".into(),
         created_at: "2026-09-26T00:00:00Z".into(),
         closed_at: None,
         archived_at: None,
@@ -73,7 +73,7 @@ async fn seed_opened_session(node: &EmbeddedNode, node_did: &str, session_id: &s
         session_id: session_id.into(),
         node_did: node_did.into(),
         requester_did: Some("did:test:node".into()),
-        agent_id: "worker".into(),
+        agent_did: "worker".into(),
         created_at: "2026-09-26T00:00:00Z".into(),
         closed_at: None,
         archived_at: None,
@@ -159,7 +159,7 @@ async fn caused_requests_projection_omits_a_call_with_two_requests() {
         create(
             &node,
             format!(
-                r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "did:test:node", requester_did: "did:test:node", agent_id: "worker", session_id: "child", caused_by_parent_request_id: "p1", caused_by_parent_request_doc_id: "bae-parent", caused_by_parent_tool_call_id: "{call}", caused_by_parent_tool_call_doc_id: "{call}", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:01Z", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#
+                r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "did:test:node", requester_did: "did:test:node", agent_did: "worker", session_id: "child", caused_by_parent_request_id: "p1", caused_by_parent_request_doc_id: "bae-parent", caused_by_parent_tool_call_id: "{call}", caused_by_parent_tool_call_doc_id: "{call}", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:01Z", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#
             ),
             "AgentRequest",
         )
@@ -173,7 +173,7 @@ async fn caused_requests_projection_omits_a_call_with_two_requests() {
         projection,
         std::collections::BTreeMap::from([("call-one".to_owned(), "a1".to_owned())])
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 fn scope(session_id: &str) -> SessionScope {
@@ -229,7 +229,7 @@ async fn physical_request_scope_batch_keeps_requested_missing_and_foreign_rows_d
         vec![(requested, scope("requested-session"))],
         "the direct-ID read must return only found requested documents with their stored scope"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -286,7 +286,7 @@ async fn a_parent_pointer_without_a_verified_starter_is_only_messaging() {
     let from_existing = lineage(&access, &scope("existing")).await.unwrap();
     assert_eq!(from_existing.started_by, None);
     assert_eq!(ids(&from_existing.received), ["parent"]);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 /// The recorded opening request is read by the session's exact scope: a
@@ -323,7 +323,7 @@ async fn recorded_opening_reads_the_exact_session_scope() {
     assert!(load_session(&access, "child", Some("did:test:node"))
         .await
         .is_err());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 fn link() -> SessionLink {

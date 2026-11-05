@@ -72,6 +72,16 @@ impl crate::client::ClientCore {
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
+        if matches!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) {
+            return Err(crate::error::BridgeError::new(
+                crate::error::BridgeErrorCode::PermissionDenied,
+                "Access was denied. Check this client's permissions with the runtime owner.",
+            )
+            .into());
+        }
         anyhow::ensure!(
             response.status().is_success(),
             "runtime inference activity is unavailable"

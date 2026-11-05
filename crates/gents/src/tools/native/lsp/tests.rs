@@ -95,7 +95,7 @@ fn sample_config(
         digest: config_digest(&workspace, &servers, &constraints),
         workspace,
         session_id: session_id.into(),
-        agent_id: "b1".into(),
+        agent_did: "b1".into(),
         servers,
         constraints,
         format_on_write: false,
@@ -504,7 +504,7 @@ async fn workspace_edit_preflights_every_file_before_writing_any_file() {
     let key = PoolKey {
         runtime_home: None,
         session_id: "s-atomic-preflight".into(),
-        agent_id: "b1".into(),
+        agent_did: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -888,7 +888,7 @@ async fn request_cancel_does_not_kill_pooled_server() {
     let key = PoolKey {
         runtime_home: None,
         session_id: "s-cancel".into(),
-        agent_id: "b1".into(),
+        agent_did: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -1044,7 +1044,7 @@ async fn simultaneous_first_calls_share_one_process() {
     let key = PoolKey {
         runtime_home: None,
         session_id: "s-singleflight".into(),
-        agent_id: "b1".into(),
+        agent_did: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -1090,7 +1090,7 @@ async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent()
     let key = PoolKey {
         runtime_home: Some(first_home.clone()),
         session_id: config.session_id.clone(),
-        agent_id: config.agent_id.clone(),
+        agent_did: config.agent_did.clone(),
         workspace_root: root.clone(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1132,7 +1132,7 @@ async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent()
         async {
             assert!(pool.get_ready(&key).await.is_none());
             assert!(pool
-                .inspect_session(&config.session_id, &config.agent_id, &root, &config.digest)
+                .inspect_session(&config.session_id, &config.agent_did, &root, &config.digest)
                 .await
                 .unwrap()
                 .is_empty());
@@ -1215,7 +1215,7 @@ async fn pooled_server_restarts_when_same_runtime_home_credential_path_changes()
     let key = PoolKey {
         runtime_home: Some(home.clone()),
         session_id: config.session_id.clone(),
-        agent_id: config.agent_id.clone(),
+        agent_did: config.agent_did.clone(),
         workspace_root: root,
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1302,7 +1302,7 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
     let key = PoolKey {
         runtime_home: None,
         session_id: config.session_id.clone(),
-        agent_id: config.agent_id.clone(),
+        agent_did: config.agent_did.clone(),
         workspace_root: root.clone(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1313,7 +1313,7 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
         Some(&home),
         "node",
         Some("requester"),
-        &config.agent_id,
+        &config.agent_did,
         Some(&root),
     )
     .unwrap();
@@ -1331,13 +1331,13 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
             true,
         );
         let workspace =
-            workspace::WorkspaceKey::canonical("node", "requester", &config.agent_id, &root)
+            workspace::WorkspaceKey::canonical("node", "requester", &config.agent_did, &root)
                 .unwrap();
         workspace::save_mode(&home, &workspace, 0, workspace::Mode::FullAccess, None).unwrap();
         assert!(pool.get_ready(&key).await.is_none());
         assert!(!pool.has_ready(&key).await);
         assert!(pool
-            .inspect_session(&config.session_id, &config.agent_id, &root, &config.digest,)
+            .inspect_session(&config.session_id, &config.agent_did, &root, &config.digest,)
             .await
             .unwrap()
             .is_empty());
@@ -1377,7 +1377,7 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
         std::fs::hard_link(&private, &alias).unwrap();
         assert!(pool.get_ready(&guarded_key).await.is_none());
         let states = pool
-            .inspect_session(&config.session_id, &config.agent_id, &root, &config.digest)
+            .inspect_session(&config.session_id, &config.agent_did, &root, &config.digest)
             .await
             .unwrap();
         assert!(matches!(
@@ -1429,7 +1429,7 @@ async fn operator_guard_selection_is_rechecked_after_server_initialization() {
     let key = PoolKey {
         runtime_home: None,
         session_id: config.session_id.clone(),
-        agent_id: config.agent_id.clone(),
+        agent_did: config.agent_did.clone(),
         workspace_root: root.clone(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1440,7 +1440,7 @@ async fn operator_guard_selection_is_rechecked_after_server_initialization() {
         Some(&home),
         "node",
         Some("requester"),
-        &config.agent_id,
+        &config.agent_did,
         Some(&root),
     )
     .unwrap();
@@ -1454,7 +1454,7 @@ async fn operator_guard_selection_is_rechecked_after_server_initialization() {
             .await
             .expect("fixture did not reach initialization");
             let workspace =
-                workspace::WorkspaceKey::canonical("node", "requester", &config.agent_id, &root)
+                workspace::WorkspaceKey::canonical("node", "requester", &config.agent_did, &root)
                     .unwrap();
             workspace::save_mode(&home, &workspace, 0, workspace::Mode::FullAccess, None).unwrap();
             std::fs::write(&release, "continue").unwrap();
@@ -1514,7 +1514,7 @@ async fn resolved_executable_path_is_subject_to_command_prefix_policy() {
     let key = PoolKey {
         runtime_home: None,
         session_id: "s-resolved-prefix".into(),
-        agent_id: "b1".into(),
+        agent_did: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1595,7 +1595,7 @@ while True:
     let key = PoolKey {
         runtime_home: None,
         session_id: "s-empty-array".into(),
-        agent_id: "b1".into(),
+        agent_did: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1774,7 +1774,7 @@ async fn busy_fixture_symbols(
     let key = PoolKey {
         runtime_home: None,
         session_id,
-        agent_id: "b1".into(),
+        agent_did: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1817,7 +1817,7 @@ async fn ensure_open_resyncs_when_disk_text_changes_out_of_band() {
     let key = PoolKey {
         runtime_home: None,
         session_id: "s-resync".into(),
-        agent_id: "b1".into(),
+        agent_did: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1894,7 +1894,7 @@ while True:
     let key = PoolKey {
         runtime_home: None,
         session_id: "s-restart".into(),
-        agent_id: "b1".into(),
+        agent_did: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1946,7 +1946,7 @@ async fn rust_analyzer_readiness_waits_for_workspace_and_quiescence() {
     let key = PoolKey {
         runtime_home: None,
         session_id: "s-readiness".into(),
-        agent_id: "b1".into(),
+        agent_did: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -2025,7 +2025,7 @@ while True:
     let key = PoolKey {
         runtime_home: None,
         session_id: "s-backoff".into(),
-        agent_id: "b1".into(),
+        agent_did: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -2073,7 +2073,7 @@ async fn idle_sweep_retires_zero_lease_ready_clients() {
     let key = PoolKey {
         runtime_home: None,
         session_id: "s-idle".into(),
-        agent_id: "b1".into(),
+        agent_did: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -2158,7 +2158,7 @@ while True:
     let key = PoolKey {
         runtime_home: None,
         session_id: "s-fmt".into(),
-        agent_id: "b1".into(),
+        agent_did: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -2792,7 +2792,7 @@ while True:
     let key = PoolKey {
         runtime_home: None,
         session_id: "s-start-cancel".into(),
-        agent_id: "b1".into(),
+        agent_did: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -2873,7 +2873,7 @@ while True:
     let key = PoolKey {
         runtime_home: None,
         session_id: "s-drop-cancel".into(),
-        agent_id: "b1".into(),
+        agent_did: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -3116,7 +3116,7 @@ async fn start_client_initializes_with_pool_key_workspace() {
     let key = PoolKey {
         runtime_home: None,
         session_id: "s-overlay-root".into(),
-        agent_id: "b1".into(),
+        agent_did: "b1".into(),
         workspace_root: overlay.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -3175,7 +3175,7 @@ pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispa
     let key = PoolKey {
         runtime_home: None,
         session_id: config.session_id.clone(),
-        agent_id: config.agent_id.clone(),
+        agent_did: config.agent_did.clone(),
         workspace_root: source.clone(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),

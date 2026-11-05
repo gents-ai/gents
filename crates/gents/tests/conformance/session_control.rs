@@ -39,6 +39,9 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     assert_eq!(
         gents::session::message::interrupt_session(
             &db.node,
+            db.node
+                .node_identity_did()
+                .expect("fixture has a registered signing principal"),
             &gents::session::origin::SessionScope {
                 node_did: node_did.to_owned(),
                 session_id: interrupted_session.clone(),
@@ -107,9 +110,17 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     )
     .await
     .unwrap();
-    let receipt = gents::session::stop_session(&db.node, node_did, &stopped_session, None)
-        .await
-        .unwrap();
+    let receipt = gents::session::stop_session(
+        &db.node,
+        db.node
+            .node_identity_did()
+            .expect("fixture has a registered signing principal"),
+        node_did,
+        &stopped_session,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(receipt.drained_request_ids, pending_ids);
     let stopped_session_row = db.node.execute(&format!(
         r#"{{AgentSession(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, requester_did: {{_eq: null}}}}, limit: 2) {{stopped_at}}}}"#,
@@ -173,6 +184,9 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     );
     gents::session::resume_session(
         &db.node,
+        db.node
+            .node_identity_did()
+            .expect("fixture has a registered signing principal"),
         node_did,
         &stopped_session,
         None,
@@ -198,7 +212,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
             .status,
         resume_case["goal_status"].as_str().unwrap()
     );
-    db.node.shutdown().await;
+    db.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -253,9 +267,17 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
     )
     .await
     .unwrap();
-    let receipt = gents::session::stop_session(&db.node, node_did, &session_id, Some(node_did))
-        .await
-        .unwrap();
+    let receipt = gents::session::stop_session(
+        &db.node,
+        db.node
+            .node_identity_did()
+            .expect("fixture has a registered signing principal"),
+        node_did,
+        &session_id,
+        Some(node_did),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         receipt.interrupted_request_id.as_deref(),
         Some(predecessor_id.as_str())
@@ -273,6 +295,9 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
     let resume = || {
         gents::session::resume_session(
             &db.node,
+            db.node
+                .node_identity_did()
+                .expect("fixture has a registered signing principal"),
             node_did,
             &session_id,
             Some(node_did),
@@ -320,5 +345,5 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
         1,
         "resume stages exactly one signed continuation"
     );
-    db.node.shutdown().await;
+    db.node.shutdown().await.expect("node shutdown");
 }

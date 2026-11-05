@@ -24,7 +24,7 @@ pub use snapshot::{load_session_history_snapshot, load_session_history_snapshot_
 use crate::inference::llm::tool::ToolDefinition;
 use crate::inference::llm::tool::{Tool, ToolDyn};
 use anyhow::{anyhow, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
@@ -97,7 +97,7 @@ pub struct SessionHistoryRow {
     pub session_id: String,
     #[serde(default)]
     pub is_current: bool,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub title: Option<gents_protocol::session::SessionTitle>,
     pub tags: Vec<String>,
     pub created_at: Option<String>,
@@ -226,7 +226,7 @@ struct SessionRow {
     #[serde(default)]
     session_id: String,
     #[serde(default)]
-    agent_id: Option<String>,
+    agent_did: Option<String>,
     #[serde(default)]
     title: Option<gents_protocol::session::SessionTitle>,
     #[serde(default, deserialize_with = "deserialize_null_tags")]
@@ -302,13 +302,15 @@ impl From<anyhow::Error> for SessionHistoryToolError {
 
 #[derive(Clone)]
 pub struct SessionHistoryTool {
+    actor: identity::Did,
     node: Arc<EmbeddedNode>,
     node_did: String,
 }
 
 impl SessionHistoryTool {
-    pub fn new(node: Arc<EmbeddedNode>, node_did: impl Into<String>) -> Self {
+    pub fn new(node: Arc<EmbeddedNode>, node_did: impl Into<String>, actor: identity::Did) -> Self {
         Self {
+            actor,
             node,
             node_did: node_did.into(),
         }
@@ -337,7 +339,7 @@ impl Tool for SessionHistoryTool {
                     "limit":{"type":"integer","minimum":1,"maximum":100},
                     "session_id":{"type":"string","minLength":1,"description":"Session ID returned by list or search; required for get and transcript. Output defaults to the current session."},
                     "filter":{"type":"object","additionalProperties":false,"properties":{
-                        "agent_id":{"type":"string"},"status":{"type":"string","enum":["open","closed"]},
+                        "agent_did":{"type":"string"},"status":{"type":"string","enum":["open","closed"]},
                         "tag":{"type":"string"},"created_after":{"type":"string"},"created_before":{"type":"string"},"text":{"type":"string","description":"Title or session ID substring only; use query to search transcript text."}
                     }},
                     "cursor":{"type":"string","description":"Previous next_cursor with the same action and filters."},"query":{"type":"string","minLength":1,"description":"Required for search: literal case-insensitive substring of title, ID or transcript."},"details":{"type":"boolean","description":"Include accounting and timeline for get."},
@@ -380,8 +382,9 @@ impl Tool for SessionHistoryTool {
 pub fn build_session_history_tool(
     node: Arc<EmbeddedNode>,
     node_did: impl Into<String>,
+    actor: identity::Did,
 ) -> Box<dyn ToolDyn> {
-    Box::new(SessionHistoryTool::new(node, node_did))
+    Box::new(SessionHistoryTool::new(node, node_did, actor))
 }
 
 fn clamp_limit(limit: Option<usize>) -> usize {

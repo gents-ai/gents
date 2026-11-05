@@ -89,7 +89,7 @@ fn capture_scope() -> Arc<crate::rendered_request::scope::RequestCaptureScope> {
             request_id: "request".into(),
             node_did: "did:test:node".into(),
             requester_did: "did:test:requester".into(),
-            agent_id: "agent".into(),
+            agent_did: "agent".into(),
             session_id: "session".into(),
             model_name: "test-model".into(),
             provider_family: None,

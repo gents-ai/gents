@@ -38,9 +38,9 @@ pub(super) fn import_multi_agent_capture(
         mapping.node_did.as_deref(),
         root_participant.and_then(|participant| participant.node_did.as_deref()),
     ]);
-    let root_agent_id = first_owned([
-        mapping.agent_id.as_deref(),
-        root_participant.and_then(|participant| participant.agent_id.as_deref()),
+    let root_agent_did = first_owned([
+        mapping.agent_did.as_deref(),
+        root_participant.and_then(|participant| participant.agent_did.as_deref()),
     ]);
     let participant_by_request = mapping
         .participants
@@ -60,7 +60,7 @@ pub(super) fn import_multi_agent_capture(
     requests.push(TimelineRequestRow {
         request_id: mapping.request_id.clone(),
         node_did: root_node_did.clone(),
-        agent_id: root_agent_id.clone(),
+        agent_did: root_agent_did.clone(),
         session_id: Some(session_id.clone()),
         content: external_task_text(&capture.native),
         lifecycle_state: Some(lifecycle_state),
@@ -81,9 +81,9 @@ pub(super) fn import_multi_agent_capture(
                 participant.and_then(|participant| participant.node_did.as_deref()),
                 delegation.and_then(|delegation| delegation.node_did.as_deref()),
             ]),
-            agent_id: first_owned([
-                participant.and_then(|participant| participant.agent_id.as_deref()),
-                delegation.and_then(|delegation| delegation.agent_id.as_deref()),
+            agent_did: first_owned([
+                participant.and_then(|participant| participant.agent_did.as_deref()),
+                delegation.and_then(|delegation| delegation.agent_did.as_deref()),
             ]),
             session_id: Some(session_id.clone()),
             content: participant
@@ -198,7 +198,7 @@ pub(super) fn import_multi_agent_capture(
             session: imported_session(
                 &session_id,
                 root_node_did.as_deref(),
-                root_agent_id.as_deref(),
+                root_agent_did.as_deref(),
                 started_at,
                 format!("Imported {}", capture.source.system),
                 external_task_text(&capture.native).as_deref(),

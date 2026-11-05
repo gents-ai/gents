@@ -1,7 +1,7 @@
 use super::super::graphql::{escape_graphql_string, normalize_required};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::documents::{EventSource, Schedule, Task, Trigger};
 use gents::store::collection::Collection;
 use gents::store::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
@@ -238,7 +238,7 @@ pub async fn fire_task_now(
 ) -> Result<String> {
     let task_id = normalize_required("task_id", &task_row.task_id)?;
     let node_did = normalize_required("node_did", &task_row.node_did)?;
-    let agent_id = normalize_required("agent_id", &task_row.agent_id)?;
+    let agent_did = normalize_required("agent_did", &task_row.agent_did)?;
     normalize_required("prompt_template", &task_row.prompt_template)?;
     if !task_row.enabled {
         bail!("task {task_id} is disabled");
@@ -248,13 +248,13 @@ pub async fn fire_task_now(
         r#"query {{
             Agent(filter: {{
                 node_did: {{ _eq: "{node_did}" }},
-                agent_id: {{ _eq: "{id}" }}
+                agent_did: {{ _eq: "{id}" }}
             }}, limit: 1) {{
                 node_did
                 enabled
             }}
         }}"#,
-        id = escape_graphql_string(agent_id),
+        id = escape_graphql_string(agent_did),
         node_did = escape_graphql_string(node_did),
     );
     let agent_response = gents::store::graphql::graphql_with_transaction_retry(
@@ -272,24 +272,24 @@ pub async fn fire_task_now(
         .and_then(|arr| arr.first())
         .ok_or_else(|| {
             anyhow!(
-                "no Agent with agent_id = {} (referenced by task {task_id})",
-                agent_id
+                "no Agent with agent_did = {} (referenced by task {task_id})",
+                agent_did
             )
         })?;
     let agent_node_did = agent_row
         .get("node_did")
         .and_then(|value| value.as_str())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow!("Agent {agent_id} has no node_did"))?;
+        .ok_or_else(|| anyhow!("Agent {agent_did} has no node_did"))?;
     if agent_node_did != node_did {
-        bail!("Agent {agent_id} belongs to a different node");
+        bail!("Agent {agent_did} belongs to a different node");
     }
     if !agent_row
         .get("enabled")
         .and_then(|value| value.as_bool())
         .unwrap_or(false)
     {
-        bail!("Agent {agent_id} is disabled");
+        bail!("Agent {agent_did} is disabled");
     }
 
     enqueue_task_now(node, actor, task_row, args).await
@@ -348,7 +348,7 @@ async fn load_task_on(
                 node_did
                 display_name
                 description
-                agent_id
+                agent_did
                 prompt_template
                 emit_outcome
                 goal_objective_template
@@ -385,26 +385,26 @@ async fn load_task_on(
 async fn ensure_agent_enabled_on(
     access: &ConfigAccess,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<()> {
     let query = format!(
         r#"query {{
             Agent(filter: {{
                 node_did: {{ _eq: "{node_did}" }},
-                agent_id: {{ _eq: "{agent_id}" }}
+                agent_did: {{ _eq: "{agent_did}" }}
             }}, limit: 2) {{
                 node_did
-                agent_id
+                agent_did: agent_did
                 enabled
             }}
         }}"#,
         node_did = escape_graphql_string(node_did),
-        agent_id = escape_graphql_string(agent_id),
+        agent_did = escape_graphql_string(agent_did),
     );
     #[derive(serde::Deserialize)]
     struct AgentState {
         node_did: String,
-        agent_id: String,
+        agent_did: String,
         enabled: bool,
     }
     let mut rows =
@@ -413,15 +413,15 @@ async fn ensure_agent_enabled_on(
             .into_iter();
     let row = rows
         .next()
-        .ok_or_else(|| anyhow!("no Agent with agent_id = {agent_id} for {node_did}"))?;
+        .ok_or_else(|| anyhow!("no Agent with agent_did = {agent_did} for {node_did}"))?;
     if rows.next().is_some() {
-        bail!("Agent {agent_id} is ambiguous for {node_did}");
+        bail!("Agent {agent_did} is ambiguous for {node_did}");
     }
-    if row.node_did != node_did || row.agent_id != agent_id {
-        bail!("Agent {agent_id} belongs to a different node");
+    if row.node_did != node_did || row.agent_did != agent_did {
+        bail!("Agent {agent_did} belongs to a different node");
     }
     if !row.enabled {
-        bail!("Agent {agent_id} is disabled");
+        bail!("Agent {agent_did} is disabled");
     }
     Ok(())
 }
@@ -431,7 +431,7 @@ pub struct ManualTaskInvocation {
     pub fire: gents_protocol::trigger_delivery::TriggerFire,
     pub node_did: String,
     pub task_id: String,
-    pub agent_id: String,
+    pub agent_did: String,
     pub content: String,
     pub goal_objective: Option<String>,
     pub goal_token_budget: Option<i64>,
@@ -445,7 +445,7 @@ fn render_task_invocation(
 ) -> Result<ManualTaskInvocation> {
     let task_id = normalize_required("task_id", &task.task_id)?;
     let node_did = normalize_required("node_did", &task.node_did)?;
-    let agent_id = normalize_required("agent_id", &task.agent_id)?;
+    let agent_did = normalize_required("agent_did", &task.agent_did)?;
     let prompt_template = normalize_required("prompt_template", &task.prompt_template)?;
     if !task.enabled {
         bail!("task {task_id} is disabled");
@@ -456,7 +456,7 @@ fn render_task_invocation(
     )?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let (node_scope, ctx_scope) =
-        gents::documents::template::task_node_ctx(node_did, agent_id, &now);
+        gents::documents::template::task_node_ctx(node_did, agent_did, &now);
     let invocation_key = uuid::Uuid::new_v4().to_string();
     let identity = gents_protocol::trigger_delivery::FireIdentity {
         owner_did: node_did.into(),
@@ -529,7 +529,7 @@ fn render_task_invocation(
         fire,
         node_did: node_did.to_string(),
         task_id: task_id.to_string(),
-        agent_id: agent_id.to_string(),
+        agent_did: agent_did.to_string(),
         content,
         goal_objective,
         goal_token_budget: task.goal_token_budget,
@@ -552,8 +552,8 @@ pub async fn resolve_task_now_on(
     if !task.enabled {
         bail!("task {task_id} is disabled");
     }
-    let agent_id = normalize_required("agent_id", &task.agent_id)?;
-    ensure_agent_enabled_on(config_access, node_did, agent_id).await?;
+    let agent_did = normalize_required("agent_did", &task.agent_did)?;
+    ensure_agent_enabled_on(config_access, node_did, agent_did).await?;
     render_task_invocation(&task, &task_doc_id, args)
 }
 
@@ -582,7 +582,7 @@ async fn enqueue_task_now(
     let create =
         gents::build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
             &invocation.node_did,
-            &invocation.agent_id,
+            &invocation.agent_did,
             &invocation.content,
             gents::request::lifecycle::ExecutionOrigin::Interactive,
             gents::request::lifecycle::TriggerLineage {
@@ -677,7 +677,7 @@ pub async fn fire_schedule_now(
                 node_did
                 display_name
                 description
-                agent_id
+                agent_did
                 prompt_template
                 emit_outcome
                 goal_objective_template
@@ -795,8 +795,8 @@ pub async fn resolve_schedule_now_on(
     if !task.enabled {
         bail!("task {} is disabled", task.task_id);
     }
-    let agent_id = normalize_required("agent_id", &task.agent_id)?;
-    ensure_agent_enabled_on(config_access, node_did, agent_id).await?;
+    let agent_did = normalize_required("agent_did", &task.agent_did)?;
+    ensure_agent_enabled_on(config_access, node_did, agent_did).await?;
     render_task_invocation(&task, &task_doc_id, serde_json::json!({}))
 }
 
@@ -815,7 +815,7 @@ mod tests {
             "node":{"node_did":owner},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Fixture","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
-            "agents":[{"node_did":owner,"agent_id":"agent","inference_profile_id":"profile"}]
+            "agents":[{"node_did":owner,"agent_did":"agent","inference_profile_id":"profile"}]
         }))?;
         let access = ConfigAccess::local(node.clone());
         super::super::apply_plan(
@@ -871,7 +871,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        node.shutdown().await;
+        node.shutdown().await.unwrap();
         Ok(())
     }
 
@@ -886,7 +886,7 @@ mod tests {
             "node":{"node_did":owner},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
-            "agents":[{"node_did":owner,"agent_id":"agent","inference_profile_id":"profile"}]
+            "agents":[{"node_did":owner,"agent_did":"agent","inference_profile_id":"profile"}]
         }))?;
         let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
         for node in [Arc::clone(&operator), Arc::clone(&desktop)] {
@@ -903,7 +903,7 @@ mod tests {
         let canonical: Task = serde_json::from_value(json!({
             "node_did":owner,
             "task_id":"task",
-            "agent_id":"agent",
+            "agent_did":"agent",
             "prompt_template":"Canonical {{ args.item }}",
             "enabled":true
         }))?;
@@ -918,7 +918,7 @@ mod tests {
             resolve_task_now_on(&operator_access, owner, "task", json!({"item":"truth"})).await?;
         assert_eq!(invocation.content, "Canonical truth");
         assert_eq!(invocation.node_did, owner);
-        assert_eq!(invocation.agent_id, "agent");
+        assert_eq!(invocation.agent_did, "agent");
 
         let operator_response = operator
             .execute("query { AgentRequest { request_id } }")
@@ -980,7 +980,7 @@ mod tests {
             r#"mutation {
                 create_Task(input: {
                     node_did: "did:test:foreign", task_id: "shared-task",
-                    agent_id: "agent", prompt_template: "foreign", enabled: false
+                    agent_did: "agent", prompt_template: "foreign", enabled: false
                 }) { _docID }
                 create_Trigger(input: {
                     node_did: "did:test:local", trigger_id: "trigger", task_id: "shared-task",
@@ -1005,7 +1005,7 @@ mod tests {
             "test.schedule_task_scope.local",
             r#"mutation { create_Task(input: {
                 node_did: "did:test:local", task_id: "shared-task",
-                agent_id: "agent", prompt_template: "local", enabled: false
+                agent_did: "agent", prompt_template: "local", enabled: false
             }) { _docID } }"#
                 .replace("did:test:local", &escape_graphql_string(local_node_did))
                 .as_str(),
@@ -1044,7 +1044,7 @@ mod tests {
                 "node":{"node_did":owner},
                 "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
                 "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
-                "agents":[{"node_did":owner,"agent_id":"agent","inference_profile_id":"profile"}]
+                "agents":[{"node_did":owner,"agent_did":"agent","inference_profile_id":"profile"}]
             }))?;
             let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
             ConfigAccess::transact_local_write(&node, None, "desktop.automation.seed", |txn| {
@@ -1058,7 +1058,7 @@ mod tests {
         }
         let owner = "did:test:automation-a";
         let mut task: Task = serde_json::from_value(
-            json!({"node_did":owner,"task_id":"task","agent_id":"agent","prompt_template":"Do work","goal_objective_template":"Finish work","goal_token_budget":10000,"hooks":[{"hook_id":"prepare","phase":"before","command":["true"]}]}),
+            json!({"node_did":owner,"task_id":"task","agent_did":"agent","prompt_template":"Do work","goal_objective_template":"Finish work","goal_token_budget":10000,"hooks":[{"hook_id":"prepare","phase":"before","command":["true"]}]}),
         )?;
         upsert_task(&node, &task).await?;
         task.goal_objective_template = None;

@@ -46,51 +46,29 @@ async fn resume_goal_request_inner<'a>(
     required_backend: Option<&'a str>,
 ) -> Result<GoalResumeReceipt> {
     anyhow::ensure!(
-        identity.did() == node_did,
-        "goal resume requires the target node's signing identity"
+        access.actor_did().as_deref() == Some(identity.did()),
+        "goal resume signer must match the authenticated client actor"
     );
-    match access {
-        crate::ConfigAccess::Local(local) => {
-            let node = local.node();
-            let did = ::identity::Did::new(identity.did().to_owned())?;
-            crate::store::config_client::ConfigAccess::transact_local_write(
-                node,
-                Some(did),
-                "goal.resume_request",
-                move |txn| {
-                    Box::pin(async move {
-                        stage_resume_inner(
-                            txn,
-                            identity,
-                            node_did,
-                            session_id,
-                            from_request_id,
-                            required_backend,
-                        )
-                        .await
-                    })
-                },
-            )
-            .await
-        }
-        crate::ConfigAccess::Graphql(_) => {
-            access
-                .transact_write("goal.resume_request", move |txn| {
-                    Box::pin(async move {
-                        stage_resume_inner(
-                            txn,
-                            identity,
-                            node_did,
-                            session_id,
-                            from_request_id,
-                            required_backend,
-                        )
-                        .await
-                    })
-                })
+    let receipt = access
+        .transact_write("goal.resume_request", move |txn| {
+            Box::pin(async move {
+                stage_resume_inner(
+                    txn,
+                    identity,
+                    node_did,
+                    session_id,
+                    from_request_id,
+                    required_backend,
+                    false,
+                )
                 .await
-        }
-    }
+            })
+        })
+        .await?;
+    crate::request::lifecycle::complete_client_request_relationships(access, &receipt.doc_id)
+        .await
+        .context("goal resume committed but request relationship publication is unconfirmed")?;
+    Ok(receipt)
 }
 
 async fn existing_goal_resume_receipt<'a>(
@@ -198,8 +176,8 @@ where
         blocked_turn_from, stopped_request, BlockedReason, FailedCall,
     };
     anyhow::ensure!(
-        identity.did() == node_did,
-        "goal resume requires the target node's signing identity"
+        access.actor_did().as_deref() == Some(identity.did()),
+        "goal resume signer must match the authenticated client actor"
     );
     let (accounts, references, request, call) =
         stopped_request(access, node_did, from_request_id).await?;
@@ -210,6 +188,9 @@ where
     if let Some(resume) =
         existing_goal_resume_receipt(access, node_did, session_id, from_request_id).await?
     {
+        crate::request::lifecycle::complete_client_request_relationships(access, &resume.doc_id)
+            .await
+            .context("goal resume request relationship publication is unconfirmed")?;
         return Ok(GoalResumeOnReceipt {
             switch: None,
             resume,
@@ -290,7 +271,16 @@ pub(super) async fn stage_resume(
     session_id: &str,
     from_request_id: &str,
 ) -> Result<GoalResumeReceipt> {
-    stage_resume_inner(txn, identity, node_did, session_id, from_request_id, None).await
+    stage_resume_inner(
+        txn,
+        identity,
+        node_did,
+        session_id,
+        from_request_id,
+        None,
+        true,
+    )
+    .await
 }
 
 async fn stage_resume_inner(
@@ -300,11 +290,18 @@ async fn stage_resume_inner(
     session_id: &str,
     from_request_id: &str,
     required_backend: Option<&str>,
+    agent_initiated: bool,
 ) -> Result<GoalResumeReceipt> {
     let (goal, requests, parent_row) =
         resume_context_in_txn(txn, node_did, session_id, from_request_id).await?;
     let parent = crate::request::watcher::AgentRequest::try_from(parent_row.clone())?;
-    let agent = parent.agent_id.clone();
+    if agent_initiated {
+        anyhow::ensure!(
+            identity.did() == parent.agent_did && txn.actor_did() == Some(identity.did()),
+            "automatic goal resume requires its selected agent signer and actor"
+        );
+    }
+    let agent = parent.agent_did.clone();
     if let Some(receipt) =
         existing_resume_receipt_in_txn(txn, &goal, &parent_row, from_request_id).await?
     {
@@ -318,8 +315,11 @@ async fn stage_resume_inner(
                 .await?
                 .context("resume predecessor has no failed call")?;
         call.backend_id = Some(target_backend_id.to_owned());
-        let agent_id = call.agent_id.as_deref().unwrap_or(parent.agent_id.as_str());
-        let profile_id = crate::goal::blocked_turn::served_profile(&references, agent_id, &call)
+        let agent_did = call
+            .agent_did
+            .as_deref()
+            .unwrap_or(parent.agent_did.as_str());
+        let profile_id = crate::goal::blocked_turn::served_profile(&references, agent_did, &call)
             .context("profile that hit the limit is unavailable")?;
         let Some((_, backend)) = references.profile_with_backend(&profile_id)? else {
             anyhow::bail!("profile that hit the limit is unavailable");
@@ -388,6 +388,11 @@ async fn stage_resume_inner(
         session_hop,
     )?;
     create.input.goal_assignment = Some(continuation_assignment(&goal, &parent, None)?);
+    if !agent_initiated {
+        create.admission =
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(identity.did());
+    }
+    crate::request::lifecycle::bind_client_targets_in_txn(txn, &mut create).await?;
     sign_request(&mut create, RequestSigner::Identity(identity)).await?;
     stage_resume_state(txn, &goal, post, Some((sequence, from_request_id)), now).await?;
     let response = txn
@@ -464,8 +469,8 @@ pub(super) async fn stage_busy_resume(
     goal: &GoalDocument,
 ) -> Result<()> {
     anyhow::ensure!(
-        identity.did() == goal.node_did,
-        "goal resume requires its node signing identity"
+        txn.actor_did() == Some(identity.did()),
+        "goal resume requires its authenticated signing identity"
     );
     let state = goal.state().context("goal has an unknown status")?;
     anyhow::ensure!(
@@ -481,6 +486,6 @@ pub(super) async fn stage_busy_resume(
 #[cfg(test)]
 mod contract_tests;
 #[cfg(test)]
-pub(super) mod support;
+pub(crate) mod support;
 #[cfg(test)]
 mod tests;

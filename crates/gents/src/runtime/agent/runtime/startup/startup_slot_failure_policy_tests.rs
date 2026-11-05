@@ -66,7 +66,7 @@ async fn aborted_staged_generation_does_not_release_active_startup_obligation() 
         .await
         .expect("exact generation-one retirement should release the final obligation");
     status_owner.close().await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -92,7 +92,7 @@ async fn demotion_persistence_failure_closes_admission_and_cancels_runtime() {
             generation: 1,
             node: None,
             local_did: String::new(),
-            default_agent_id: "general".to_string(),
+            default_agent_did: "general".to_string(),
             agents: RapidHashMap::new(),
             tool_surfaces: RapidHashMap::new(),
             backend_admission_configs: RapidHashMap::new(),
@@ -158,5 +158,5 @@ async fn demotion_persistence_failure_closes_admission_and_cancels_runtime() {
     );
 
     status_owner.close().await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_loop::provider_audit::{
     AuxiliaryObserve, AuxiliaryOutputError, AuxiliaryOutputEvent, AuxiliaryOutputObservation,
     AuxiliaryOutputSink,
@@ -52,7 +52,7 @@ pub(crate) fn sink(
 ) -> AuxiliaryOutputSink {
     let writer = Arc::new(DefraStreamWriter::new(
         node,
-        &request.node_did,
+        &request.agent_did,
         batch_interval,
     ));
     sink_with_writer(writer, request, generation, profile)

@@ -6,14 +6,14 @@ fn task_with_template(template: &str) -> Task {
     serde_json::from_value(serde_json::json!({
         "node_did": "did:key:zNODE",
         "task_id": "fence-task",
-        "agent_id": "fence",
+        "agent_did": "fence",
         "prompt_template": template
     }))
     .expect("compact canonical task document")
 }
 
-fn fire_scope(agent_id: &str, now: &str, args: serde_json::Value) -> TemplateScope {
-    let (node, ctx) = task_node_ctx("did:key:zNODE", agent_id, now);
+fn fire_scope(agent_did: &str, now: &str, args: serde_json::Value) -> TemplateScope {
+    let (node, ctx) = task_node_ctx("did:key:zNODE", agent_did, now);
     TemplateScope {
         session: None,
         request: None,
@@ -28,7 +28,7 @@ fn fire_scope(agent_id: &str, now: &str, args: serde_json::Value) -> TemplateSco
 
 #[test]
 fn system_preamble_is_literal_template_syntax_is_inert() {
-    let literal = "You are {{ node.agent_id }}. Now: {{ ctx.now }}.";
+    let literal = "You are {{ node.agent_did }}. Now: {{ ctx.now }}.";
     let builder = LayeredPromptBuilder::for_agent(literal, "fence", &["bash"], false, &[]);
 
     let preamble = builder.preamble();
@@ -37,7 +37,7 @@ fn system_preamble_is_literal_template_syntax_is_inert() {
         "the preamble must carry the system instruction bytes unchanged, got: {preamble}"
     );
     assert!(
-        preamble.contains("{{ node.agent_id }}") && preamble.contains("{{ ctx.now }}"),
+        preamble.contains("{{ node.agent_did }}") && preamble.contains("{{ ctx.now }}"),
         "the preamble evaluated template syntax that must stay literal: {preamble}"
     );
 }
@@ -65,7 +65,7 @@ fn task_template_substitutes_only_in_the_task_slot() {
 #[test]
 fn task_template_renders_per_invocation() {
     let task =
-        task_with_template("Review {{ args.target }} at {{ ctx.now }} on {{ node.agent_id }}.");
+        task_with_template("Review {{ args.target }} at {{ ctx.now }} on {{ node.agent_did }}.");
 
     let first = render_template(
         &task.prompt_template,

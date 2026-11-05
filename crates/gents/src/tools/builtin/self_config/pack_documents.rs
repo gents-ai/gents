@@ -8,7 +8,10 @@ impl PackInstaller {
         distribution: &ConfigPackDistribution,
         commit: bool,
     ) -> anyhow::Result<String> {
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            self.node.clone(),
+            self.core.identity()?.to_owned(),
+        );
         let owner = self.core.node_did();
         let prior = self.installation_status(distribution.manifest()).await?;
         anyhow::ensure!(
@@ -88,27 +91,11 @@ impl PackInstaller {
                 "next": "repeat --inference-slot NAME=PROFILE_ID for every missing slot, using exact eligible profile IDs",
             }))?);
         }
-        let scope = crate::pack::PackInstallOptions {
-            node_did: owner.to_owned(),
-        };
         let environment = |name: &str| args.variables.get(name).cloned();
-        let authored = crate::pack::load_pack_config(
-            distribution.manifest(),
-            &scope,
-            &|path| {
-                distribution
-                    .0
-                    .archive
-                    .asset(path)
-                    .map(|asset| asset.to_vec())
-            },
-            &environment,
-        )?;
-        let prepared = crate::pack::prepare_document_pack_install(
+        let prepared = crate::pack::prepare_document_pack_archive(
             &access,
             owner,
-            distribution.manifest(),
-            &authored,
+            &distribution.0.archive,
             &args.inference_slots,
             &dependencies
                 .iter()
@@ -116,7 +103,6 @@ impl PackInstaller {
                 .collect::<Vec<_>>(),
             crate::pack::InstalledVia::SelfConfig,
             self.home.as_deref(),
-            Some(&distribution.0.archive),
             &environment,
         )
         .await?;

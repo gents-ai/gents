@@ -47,7 +47,7 @@ pub struct JobRequest {
     pub job_id: String,
     pub owner: String,
     pub evaluator_did: String,
-    pub agent_id: String,
+    pub agent_slot: String,
     pub target: JobTarget,
     pub definition_id: String,
     pub inference_profile_id: String,
@@ -225,7 +225,7 @@ pub(crate) fn run_request(request: &JobRequest, origin: &JobOrigin, plan: &RunPl
                 cell_id: (*cell_id).to_owned(),
                 label: (*cell_id).to_owned(),
                 source: CellSource::Directory(pack.clone()),
-                agent_id: origin.subject.agent_id.clone(),
+                agent_slot: origin.subject.agent_slot.clone(),
                 inference_profile_id: origin.inference_profile_id.clone(),
             })
             .collect(),
@@ -525,8 +525,8 @@ pub(crate) fn check_resume(
     if origin.seed_base != request.seed_base {
         differs.push("seed_base");
     }
-    if origin.subject.agent_id != request.agent_id {
-        differs.push("agent_id");
+    if origin.subject.agent_slot != request.agent_slot {
+        differs.push("agent_slot");
     }
     if origin.target.job_target() != request.target {
         differs.push("target");
@@ -589,7 +589,7 @@ pub(crate) fn check_run_matches_plan(
             && run.cells.iter().zip(&plan.cells).zip(digests).all(
                 |((cell, (cell_id, _)), digest)| {
                     cell.cell_id == *cell_id
-                        && cell.subject.agent_id == origin.subject.agent_id
+                        && cell.subject.agent_slot == origin.subject.agent_slot
                         && cell.subject.pack_digest == *digest
                         && cell.inference_profile_id == origin.inference_profile_id
                 },
@@ -784,7 +784,7 @@ fn proposed_candidate(
     let candidate = materialize_pack(
         &final_dir,
         &origin.owner,
-        &origin.subject.agent_id,
+        &origin.subject.agent_slot,
         &origin.target.job_target(),
     )?;
     anyhow::ensure!(
@@ -844,7 +844,7 @@ async fn freeze_job(
     let source = materialize_pack(
         &request.baseline_pack,
         owner,
-        &request.agent_id,
+        &request.agent_slot,
         &request.target,
     )?;
     let missing = missing_task_seed_splits(&source.config, &request.target, &definition);
@@ -878,8 +878,28 @@ async fn freeze_job(
             target.field.field_name()
         )));
     }
+    let installed = crate::pack::load_pack_install_config(
+        access,
+        &source.manifest,
+        &crate::pack::PackInstallOptions {
+            node_did: owner.to_owned(),
+        },
+        &|path| {
+            source
+                .files
+                .get(path)
+                .cloned()
+                .with_context(|| format!("pack has no asset {path:?}"))
+        },
+        &|name| std::env::var(name).ok(),
+        crate::pack::InstalledVia::SelfConfig,
+    )
+    .await
+    .context(
+        "the optimization baseline must already be installed with its recorded agent bindings",
+    )?;
     if let Err(error) = baseline_equivalence(
-        &crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&source.config)?,
+        &crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&installed.config)?,
         &closure,
     ) {
         return Err(match error.downcast::<BaselineMismatch>() {
@@ -902,7 +922,7 @@ async fn freeze_job(
         closure: closure_digests(&closure)?,
         subject: SubjectRef {
             pack_digest: baseline.digest.clone(),
-            agent_id: request.agent_id.clone(),
+            agent_slot: request.agent_slot.clone(),
         },
         definition: definition_ref(&definition)?,
         policy: policy.clone(),
@@ -1039,7 +1059,7 @@ pub async fn run_job(
     let baseline = materialize_pack(
         &baseline_path,
         owner,
-        &origin.subject.agent_id,
+        &origin.subject.agent_slot,
         &origin.target.job_target(),
     )?;
     if baseline.digest != origin.subject.pack_digest {
@@ -1337,7 +1357,7 @@ pub(crate) fn verified_checkpoint(
     let pack = materialize_pack(
         &path,
         &origin.owner,
-        &origin.subject.agent_id,
+        &origin.subject.agent_slot,
         &origin.target.job_target(),
     )?;
     anyhow::ensure!(
@@ -1442,7 +1462,7 @@ mod tests {
             job_id: "job-1".into(),
             owner: "did:key:o".into(),
             evaluator_did: "did:key:home".into(),
-            agent_id: "monitor".into(),
+            agent_slot: "monitor".into(),
             target: JobTarget::Context,
             definition_id: "monitor-findings".into(),
             inference_profile_id: "local".into(),
@@ -1474,7 +1494,7 @@ mod tests {
             closure: Vec::new(),
             subject: SubjectRef {
                 pack_digest: "sha256:baseline".into(),
-                agent_id: "monitor".into(),
+                agent_slot: "monitor".into(),
             },
             definition: DefinitionRef {
                 definition_id: "monitor-findings".into(),
@@ -1546,7 +1566,7 @@ mod tests {
         let mut drifted = request();
         drifted.trials_per_case = 5;
         drifted.seed_base = 9_999;
-        drifted.agent_id = "other".into();
+        drifted.agent_slot = "other".into();
         drifted.inference_profile_id = "other".into();
         drifted.definition_id = "other".into();
         drifted.captures.clear();
@@ -1559,7 +1579,7 @@ mod tests {
         assert!(frozen
             .cells
             .iter()
-            .all(|cell| cell.agent_id == "monitor" && cell.inference_profile_id == "local"));
+            .all(|cell| cell.agent_slot == "monitor" && cell.inference_profile_id == "local"));
         assert_eq!(
             plan.seed_base,
             validation_plan("job-1", &origin, 1, 0, Path::new("a"), Path::new("b")).seed_base
@@ -1917,7 +1937,7 @@ mod tests {
             label: cell_id.into(),
             subject: SubjectRef {
                 pack_digest: digest.into(),
-                agent_id: "monitor".into(),
+                agent_slot: "monitor".into(),
             },
             inference_profile_id: "local".into(),
         };

@@ -164,12 +164,6 @@ pub(crate) fn runtime_contract_router(
     };
 
     let operator_routes = Router::new()
-        .route(
-            "/packs/install",
-            post(crate::http::pack_install::install_handler).layer(
-                axum::extract::DefaultBodyLimit::max(crate::http::pack_install::MAX_BODY),
-            ),
-        )
         .route("/metrics", get(metrics_handler))
         .route("/healthz", get(healthz_handler))
         .route("/activation", get(activation_handler))
@@ -187,7 +181,17 @@ pub(crate) fn runtime_contract_router(
             super::access::require_operator,
         ));
     let mut router = Router::new()
+        .route(
+            "/packs/install",
+            post(crate::http::pack_install::install_handler).layer(
+                axum::extract::DefaultBodyLimit::max(crate::http::pack_install::MAX_BODY),
+            ),
+        )
         .route("/version", get(version_handler))
+        .route(
+            gents_protocol::agent_identity::AGENT_IDENTITY_PATH,
+            post(crate::http::agent_identity::provision),
+        )
         .route("/status", get(status_route))
         .route(
             gents_protocol::serve_lifecycle::control::RUNTIME_CONTROL_PATH,

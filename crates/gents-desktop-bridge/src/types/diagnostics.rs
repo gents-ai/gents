@@ -12,7 +12,7 @@ pub struct RequestTimelineView {
     pub node_did: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub child_request_ids: Vec<String>,
     pub events: Vec<RunTimelineEventView>,
     #[serde(flatten)]
@@ -29,7 +29,7 @@ pub struct RunTimelineEventView {
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolSurfaceExplanationView {
-    pub agent_id: String,
+    pub agent_did: String,
     pub enabled: bool,
     pub context_id: Option<String>,
     pub tools_id: Option<String>,

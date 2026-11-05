@@ -171,6 +171,20 @@ inductive SessionRowObservation where
   | outOfScope
   deriving DecidableEq, Repr
 
+/-- A direct runtime read returns the rows visible to the authenticated
+client. An absent or hidden session is an ordinary empty result; neither
+pairing state nor local request observations can reveal why it is empty. -/
+inductive DirectSessionRead where
+  | empty | visible | integrityFault
+  deriving DecidableEq, Repr
+
+def directSessionRead : SessionRowObservation → DirectSessionRead
+  | .absent => .empty
+  | .canonical => .visible
+  | .duplicate | .outOfScope => .integrityFault
+
+theorem direct_missing_session_is_empty : directSessionRead .absent = .empty := rfl
+
 /-- Signals 1 and 3: the `AgentRequest` this client wrote, whose presence
     means sending, with the node runtime's replicated `claimed_at`. After
     submission only the node runtime writes `claimed_at` or advances

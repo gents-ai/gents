@@ -76,16 +76,16 @@ impl StagedSlots {
         }
     }
 
-    fn record_registration(&mut self, agent_id: String, generation: u64) {
-        self.registered.insert((agent_id, generation));
+    fn record_registration(&mut self, agent_did: String, generation: u64) {
+        self.registered.insert((agent_did, generation));
     }
 
-    fn insert(&mut self, agent_id: String, slot: AgentSlot) {
-        self.slots.insert(agent_id, slot);
+    fn insert(&mut self, agent_did: String, slot: AgentSlot) {
+        self.slots.insert(agent_did, slot);
     }
 
-    fn get(&self, agent_id: &str) -> Option<&AgentSlot> {
-        self.slots.get(agent_id)
+    fn get(&self, agent_did: &str) -> Option<&AgentSlot> {
+        self.slots.get(agent_did)
     }
 
     fn into_slots(self) -> RapidHashMap<String, AgentSlot> {
@@ -94,7 +94,7 @@ impl StagedSlots {
 
     async fn abort(self) {
         let mut registered = self.registered;
-        for (agent_id, slot) in self.slots {
+        for (agent_did, slot) in self.slots {
             let generation = slot.generation;
             let _ = slot.state_tx.send(AgentSlotState::Retiring);
             drop(slot.dispatcher);
@@ -102,16 +102,16 @@ impl StagedSlots {
                 slot.handle.await,
                 "staged agent slot failed during rollback",
             ) {
-                tracing::error!(agent_id, generation, error = %error, "staged agent slot failed during rollback");
+                tracing::error!(agent_did, generation, error = %error, "staged agent slot failed during rollback");
             }
             if let Some(policy) = &self.failure_policy {
-                policy.on_slot_retired(&agent_id, generation, true).await;
+                policy.on_slot_retired(&agent_did, generation, true).await;
             }
-            registered.remove(&(agent_id, generation));
+            registered.remove(&(agent_did, generation));
         }
         if let Some(policy) = &self.failure_policy {
-            for (agent_id, generation) in registered {
-                policy.on_slot_retired(&agent_id, generation, true).await;
+            for (agent_did, generation) in registered {
+                policy.on_slot_retired(&agent_did, generation, true).await;
             }
         }
     }
@@ -145,14 +145,14 @@ where
         resolved_snapshot.validate_node_readiness_source()?;
         if let Some(policy) = &slot_failure_policy {
             let mut registered = Vec::new();
-            for agent_id in resolved_snapshot.agents.keys() {
-                if let Err(error) = policy.on_slot_created(agent_id, 1).await {
-                    for registered_agent_id in registered {
-                        policy.on_slot_retired(registered_agent_id, 1, true).await;
+            for agent_did in resolved_snapshot.agents.keys() {
+                if let Err(error) = policy.on_slot_created(agent_did, 1).await {
+                    for registered_agent_did in registered {
+                        policy.on_slot_retired(registered_agent_did, 1, true).await;
                     }
                     return Err(error);
                 }
-                registered.push(agent_id);
+                registered.push(agent_did);
             }
         }
         admission_registry.reconcile(1, &resolved_snapshot.backend_admission_configs);
@@ -166,15 +166,15 @@ where
         );
         let dispatchers = active_slots
             .iter()
-            .map(|(agent_id, slot)| (agent_id.clone(), slot.dispatcher.clone()))
+            .map(|(agent_did, slot)| (agent_did.clone(), slot.dispatcher.clone()))
             .collect();
         let executor_capacities = active_slots
             .iter()
-            .map(|(agent_id, slot)| (agent_id.clone(), slot.executor_capacity))
+            .map(|(agent_did, slot)| (agent_did.clone(), slot.executor_capacity))
             .collect();
         let executor_queue_capacities = active_slots
             .iter()
-            .map(|(agent_id, slot)| (agent_id.clone(), slot.queue_capacity))
+            .map(|(agent_did, slot)| (agent_did.clone(), slot.queue_capacity))
             .collect();
         let current_snapshot = Arc::new(resolved_snapshot.activate_with_executor_metadata(
             1,
@@ -218,7 +218,7 @@ where
                     let next_generation = current_generation + 1;
                     let proposed_agent_count = proposal.agents.len();
                     let proposed_unavailable_agent_count = proposal.unavailable_agents.len();
-                    let proposed_default_agent_id = proposal.default_agent_id.clone();
+                    let proposed_default_agent_did = proposal.default_agent_did.clone();
 
                     if let Err(error) = self.handle_proposal(proposal, &active_snapshot_tx, shutdown.clone())
                         .instrument(tracing::info_span!(
@@ -227,7 +227,7 @@ where
                             next_generation,
                             proposed_agent_count,
                             proposed_unavailable_agent_count,
-                            proposed_default_agent_id = %proposed_default_agent_id,
+                            proposed_default_agent_did = %proposed_default_agent_did,
                         ))
                         .await
                     {
@@ -289,9 +289,9 @@ where
                     "runtime reconcile applied"
                 );
                 if diff.unavailable_changed {
-                    for (agent_id, reason) in &self.current_snapshot.unavailable_agents {
+                    for (agent_did, reason) in &self.current_snapshot.unavailable_agents {
                         tracing::warn!(
-                            agent_id = %agent_id,
+                            agent_did = %agent_did,
                             public_reason = ?reason.public_reason,
                             diagnostic = %reason.diagnostic,
                             "agent unavailable after runtime reconcile"
@@ -340,50 +340,50 @@ where
     ) -> Result<()> {
         resolved_snapshot.validate_node_readiness_source()?;
 
-        let mut recreated_agent_ids = Vec::new();
-        for (agent_id, agent) in &resolved_snapshot.agents {
+        let mut recreated_agent_dids = Vec::new();
+        for (agent_did, agent) in &resolved_snapshot.agents {
             let tool_surface = resolved_snapshot
                 .tool_surfaces
-                .get(agent_id)
+                .get(agent_did)
                 .expect("validated runnable/tool-surface keyset parity");
             let executor_capacity =
                 agent_executor_capacity(agent, &resolved_snapshot.backend_admission_configs);
             if self
                 .active_slots
-                .get(agent_id)
+                .get(agent_did)
                 .is_none_or(|slot| !slot.matches(agent, tool_surface, executor_capacity))
             {
-                recreated_agent_ids.push(agent_id.clone());
+                recreated_agent_dids.push(agent_did.clone());
             }
         }
 
         let mut staged = StagedSlots::new(self.slot_failure_policy.clone());
         if let Some(policy) = &self.slot_failure_policy {
-            for agent_id in &recreated_agent_ids {
-                if let Err(error) = policy.on_slot_created(agent_id, generation).await {
+            for agent_did in &recreated_agent_dids {
+                if let Err(error) = policy.on_slot_created(agent_did, generation).await {
                     staged.abort().await;
                     return Err(error).with_context(|| {
-                        format!("register staged agent slot {agent_id} generation {generation}")
+                        format!("register staged agent slot {agent_did} generation {generation}")
                     });
                 }
-                staged.record_registration(agent_id.clone(), generation);
+                staged.record_registration(agent_did.clone(), generation);
             }
         }
 
-        for agent_id in &recreated_agent_ids {
+        for agent_did in &recreated_agent_dids {
             let agent = resolved_snapshot
                 .agents
-                .get(agent_id)
+                .get(agent_did)
                 .expect("recreation plan references a runnable agent");
             let tool_surface = resolved_snapshot
                 .tool_surfaces
-                .get(agent_id)
+                .get(agent_did)
                 .cloned()
                 .expect("validated runnable/tool-surface keyset parity");
             let executor_capacity =
                 agent_executor_capacity(agent, &resolved_snapshot.backend_admission_configs);
             staged.insert(
-                agent_id.clone(),
+                agent_did.clone(),
                 spawn_slot_with_capacity(
                     SlotConfig {
                         agent_config: agent.clone(),
@@ -399,18 +399,18 @@ where
             );
         }
 
-        let runnable_agent_ids = resolved_snapshot.agents.keys().cloned().collect::<Vec<_>>();
+        let runnable_agent_dids = resolved_snapshot.agents.keys().cloned().collect::<Vec<_>>();
         let mut dispatchers = RapidHashMap::new();
         let mut executor_capacities = RapidHashMap::new();
         let mut executor_queue_capacities = RapidHashMap::new();
-        for agent_id in &runnable_agent_ids {
+        for agent_did in &runnable_agent_dids {
             let slot = staged
-                .get(agent_id)
-                .or_else(|| self.active_slots.get(agent_id))
+                .get(agent_did)
+                .or_else(|| self.active_slots.get(agent_did))
                 .expect("validated recreation plan owns every runnable slot");
-            dispatchers.insert(agent_id.clone(), slot.dispatcher.clone());
-            executor_capacities.insert(agent_id.clone(), slot.executor_capacity);
-            executor_queue_capacities.insert(agent_id.clone(), slot.queue_capacity);
+            dispatchers.insert(agent_did.clone(), slot.dispatcher.clone());
+            executor_capacities.insert(agent_did.clone(), slot.executor_capacity);
+            executor_queue_capacities.insert(agent_did.clone(), slot.queue_capacity);
         }
         let next_snapshot = Arc::new(resolved_snapshot.activate_with_executor_metadata(
             generation,
@@ -456,25 +456,25 @@ where
         let mut retired_slots = Vec::new();
         let mut retired_agents: Vec<(String, u64, bool)> = Vec::new();
         let mut staged_slots = staged.into_slots();
-        for agent_id in &runnable_agent_ids {
-            if let Some(slot) = staged_slots.remove(agent_id) {
-                if let Some(existing) = self.active_slots.remove(agent_id) {
+        for agent_did in &runnable_agent_dids {
+            if let Some(slot) = staged_slots.remove(agent_did) {
+                if let Some(existing) = self.active_slots.remove(agent_did) {
                     let old_generation = existing.generation;
                     retired_slots.push(existing);
-                    retired_agents.push((agent_id.clone(), old_generation, true));
+                    retired_agents.push((agent_did.clone(), old_generation, true));
                 }
-                next_slots.insert(agent_id.clone(), slot);
+                next_slots.insert(agent_did.clone(), slot);
             } else {
                 let existing = self
                     .active_slots
-                    .remove(agent_id)
+                    .remove(agent_did)
                     .expect("reused slot disappeared before transaction commit");
-                next_slots.insert(agent_id.clone(), existing);
+                next_slots.insert(agent_did.clone(), existing);
             }
         }
         debug_assert!(staged_slots.is_empty());
-        for (agent_id, slot) in self.active_slots.drain() {
-            retired_agents.push((agent_id, slot.generation, false));
+        for (agent_did, slot) in self.active_slots.drain() {
+            retired_agents.push((agent_did, slot.generation, false));
             retired_slots.push(slot);
         }
 
@@ -496,9 +496,9 @@ where
             }
         }
         if let Some(policy) = self.slot_failure_policy.clone() {
-            for (agent_id, old_generation, recreated) in retired_agents {
+            for (agent_did, old_generation, recreated) in retired_agents {
                 policy
-                    .on_slot_retired(&agent_id, old_generation, recreated)
+                    .on_slot_retired(&agent_did, old_generation, recreated)
                     .await;
             }
         }
@@ -509,20 +509,20 @@ where
     pub(super) async fn shutdown_slots(mut self) -> Result<()> {
         let failure_policy = self.slot_failure_policy.clone();
         let mut first_error = self.retired_slot_error.take();
-        for (agent_id, slot) in self.active_slots {
+        for (agent_did, slot) in self.active_slots {
             let generation = slot.generation;
             let _ = slot.state_tx.send(AgentSlotState::Retiring);
             drop(slot.dispatcher);
             if let Err(error) =
                 slot_join_result(slot.handle.await, "agent slot failed during shutdown")
             {
-                tracing::error!(agent_id, generation, error = %error, "agent slot failed during shutdown");
+                tracing::error!(agent_did, generation, error = %error, "agent slot failed during shutdown");
                 if first_error.is_none() {
                     first_error = Some(error);
                 }
             }
             if let Some(policy) = &failure_policy {
-                policy.on_slot_retired(&agent_id, generation, false).await;
+                policy.on_slot_retired(&agent_did, generation, false).await;
             }
         }
         while let Some(joined) = self.retiring_slots.join_next().await {

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio::sync::Mutex;
 
 use super::*;

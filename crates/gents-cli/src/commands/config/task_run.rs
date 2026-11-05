@@ -9,8 +9,7 @@ use serde_json::Value;
 use crate::cli::ConfigTaskRunArgs;
 use crate::config_writes::ConfigAccess;
 use crate::request_helpers::{
-    content_and_input_with_prompt_selected_skill_ids, ensure_local_request_signer,
-    wait_for_terminal_response,
+    content_and_input_with_prompt_selected_skill_ids, wait_for_terminal_response,
 };
 use crate::{print_json, resolve_config_access, resolve_graphql_endpoint};
 
@@ -44,7 +43,7 @@ pub(crate) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct TaskRunOutput {
     pub(crate) task_id: String,
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
     pub(crate) node_did: String,
     pub(crate) request_id: String,
     pub(crate) session_id: String,
@@ -67,7 +66,10 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
     let node_did = crate::resolve_node_did(args.home.as_deref(), None)?;
-    ensure_local_request_signer(args.home.as_deref(), &node_did)?;
+    let actor_did = access
+        .actor_did()
+        .context("Task invocation requires an authenticated client identity")?;
+    let signer = gents::store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
     let (task_doc_id, task) = access
         .transact_write("cli.task_run.read", |txn| {
             let node_did = &node_did;
@@ -88,18 +90,18 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
                     txn,
                     gents::Collection::Agent,
                     node_did,
-                    &task.agent_id,
+                    &task.agent_did,
                 )
                 .await?
                 .context("task agent not found under the selected node")?;
                 let agent: gents::documents::Agent = serde_json::from_value(value)?;
-                anyhow::ensure!(agent.enabled, "Agent {} is disabled", agent.agent_id);
+                anyhow::ensure!(agent.enabled, "Agent {} is disabled", agent.agent_did);
                 Ok((task_doc_id, task))
             })
         })
         .await?;
     let emit_outcome = task.emit_outcome;
-    let agent_id = task.agent_id;
+    let agent_did = task.agent_did;
     let prompt_template = task.prompt_template;
     let goal_objective_template = task.goal_objective_template;
     let goal_token_budget = task.goal_token_budget;
@@ -156,7 +158,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         .transpose()?;
     let now = prior_created_at
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    let (node_scope, ctx_scope) = task_node_ctx(&node_did, &agent_id, &now);
+    let (node_scope, ctx_scope) = task_node_ctx(&node_did, &agent_did, &now);
     let scope = TemplateScope {
         session: Some(serde_json::json!({"session_id": session_id})),
         request: Some(serde_json::json!({"request_id": request_id})),
@@ -206,9 +208,12 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         admitted.as_ref(),
     )
     .await?;
+    let requester_did =
+        gents::session::client_requester_scope(&access, &node_did, &session_id, &actor_did).await?;
     let admission =
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&node_did);
-    let create = gents::build_signed_request(
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(&actor_did);
+    let create = gents::request::lifecycle::build_signed_client_request(
+        &access,
         gents::RequestSpec {
             input: input.clone(),
             trigger_lineage: gents::request::lifecycle::TriggerLineage {
@@ -221,8 +226,8 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
                 gents::RequestIdentity {
                     request_id: request_id.clone(),
                     node_did: node_did.clone(),
-                    requester_did: None,
-                    agent_id: agent_id.clone(),
+                    requester_did: Some(requester_did),
+                    agent_did: agent_did.clone(),
                     session_id: session_id.clone(),
                     content: content.clone(),
                     execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
@@ -231,7 +236,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
                 admission,
             )
         },
-        gents::RequestSigner::RegisteredTarget,
+        gents::RequestSigner::Identity(&signer),
     )
     .await?;
     let fire = gents_protocol::trigger_delivery::TriggerFire {
@@ -260,22 +265,22 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     )
     .await?;
 
-    let (agent_id, input) = if admitted.duplicate {
+    let (agent_did, input) = if admitted.duplicate {
         let persisted = lookup_request_by_retry_key(&access, &node_did, &fire.fire_key)
             .await?
             .context("duplicate Task fire is missing its admitted request")?;
         (
             persisted
-                .agent_id
-                .context("admitted Task request lacks agent_id")?,
+                .agent_did
+                .context("admitted Task request lacks agent_did")?,
             persisted.input.unwrap_or_default(),
         )
     } else {
-        (agent_id, input)
+        (agent_did, input)
     };
     Ok(TaskRunOutput {
         task_id,
-        agent_id,
+        agent_did,
         node_did,
         request_id: admitted.request.request_id,
         session_id: admitted.request.session_id,
@@ -317,9 +322,12 @@ async fn prepare_task_run_input(
     input: RequestInput,
 ) -> Result<RequestInput> {
     if let Some(admitted) = admitted {
+        let actor = access
+            .actor_did()
+            .context("Task invocation requires an authenticated client identity")?;
         anyhow::ensure!(
             admitted.node_did.as_deref() == Some(node_did)
-                && admitted.requester_did.as_deref() == Some(node_did)
+                && admitted.admission_signer_did.as_deref() == Some(actor.as_str())
                 && admitted.session_id.as_deref() == Some(session_id),
             "admitted Task input differs from its owner/session"
         );
@@ -370,12 +378,16 @@ async fn lookup_request_by_retry_key(
     node_did: &str,
     retry_key: &str,
 ) -> Result<Option<AgentRequestRow>> {
+    let actor = access
+        .actor_did()
+        .context("Task invocation requires an authenticated client identity")?;
     let query = format!(
         r#"query {{
-            AgentRequest(filter: {{ node_did: {{ _eq: "{owner}" }}, requester_did: {{ _eq: "{owner}" }}, retry_key: {{ _eq: "{key}" }} }}, limit: 2) {{
+            AgentRequest(filter: {{ node_did: {{ _eq: "{owner}" }}, admission_signer_did: {{ _eq: "{actor}" }}, retry_key: {{ _eq: "{key}" }} }}, limit: 2) {{
                 {signed_fields}
             }}
         }}"#,
+        actor = escape_graphql_string(&actor),
         key = escape_graphql_string(retry_key),
         owner = escape_graphql_string(node_did),
         signed_fields = gents::SIGNED_REQUEST_FIELDS,
@@ -437,6 +449,7 @@ mod tests {
 
     pub(super) async fn signed_task_receipt(
         identity: &gents::KeyIdentity,
+        agent_did: &str,
         input: RequestInput,
     ) -> Result<Value> {
         let create = gents::build_signed_request(
@@ -448,14 +461,14 @@ mod tests {
                     gents::RequestIdentity {
                         request_id: "manual-task".into(),
                         node_did: identity.did().into(),
-                        requester_did: None,
-                        agent_id: "engineer".into(),
+                        requester_did: Some(identity.did().into()),
+                        agent_did: agent_did.into(),
                         session_id: "chat".into(),
                         content: "Continue the Task".into(),
                         execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
                         created_at: "2026-10-21T00:00:00Z".into(),
                     },
-                    gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                    gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
                         identity.did(),
                     ),
                 )
@@ -465,7 +478,7 @@ mod tests {
         .await?;
         let mut row = serde_json::to_value(&create)?;
         row["_docID"] = json!("admitted-physical-request");
-        row["admission_kind"] = json!("local-self");
+        row["admission_kind"] = json!("client");
         row["admission_signer_did"] = json!(create.admission.signer_did);
         row["admission_signature"] = json!(bs58::encode(create.admission.signature).into_string());
         gents::verify_request_receipt_signature(&serde_json::from_value(row.clone())?)?;
@@ -497,7 +510,8 @@ mod tests {
                 let mut original = authored_input();
                 original.cwd = Some("/admitted-workspace".into());
                 original.goal_assignment = reference(&case["admitted_reference"]);
-                let row = signed_task_receipt(&identity, original.clone()).await?;
+                let row =
+                    signed_task_receipt(&identity, &source.agent_did, original.clone()).await?;
                 *source.requests.lock().unwrap() = json!([row]);
                 expected = original;
                 lookup_request_by_retry_key(&access, identity.did(), "manual-fire").await?
@@ -536,7 +550,7 @@ mod tests {
     #[tokio::test]
     async fn manual_task_goal_input_rejects_tampered_admitted_receipts() -> Result<()> {
         let (identity, graphql, source, server) = fixture(true, true, None, None).await?;
-        let mut row = signed_task_receipt(&identity, authored_input()).await?;
+        let mut row = signed_task_receipt(&identity, &source.agent_did, authored_input()).await?;
         row["input"]["cwd"] = json!("/forged-workspace");
         *source.requests.lock().unwrap() = json!([row]);
         let error = lookup_request_by_retry_key(

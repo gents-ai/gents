@@ -78,7 +78,7 @@ impl rig::completion::CompletionModel for RootReadModel {
 pub(super) fn config(categories: &[&str]) -> SelfConfigToolConfig {
     SelfConfigToolConfig {
         enabled: true,
-        agent_id: "beh-test".to_string(),
+        agent_did: "beh-test".to_string(),
         categories: categories.iter().map(|c| c.to_string()).collect(),
         no_lockout: false,
         preview: false,
@@ -286,7 +286,7 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
 #[tokio::test]
 async fn build_fails_closed_without_node_did() {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let node = defra_node::EmbeddedNode::builder()
+    let node = defra_node::Node::builder()
         .data_path(tempdir.path().join("data"))
         .build()
         .await
@@ -308,7 +308,7 @@ async fn build_fails_closed_without_node_did() {
 #[tokio::test]
 async fn build_registers_gated_family() {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let node = defra_node::EmbeddedNode::builder()
+    let node = defra_node::Node::builder()
         .data_path(tempdir.path().join("data"))
         .build()
         .await
@@ -357,7 +357,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
 
     let (home, plugins) = crate::test_support::home_with_fixture_pack("plugin_documents_fixture");
     let mut tool_config = config(&[]);
-    tool_config.agent_id = "setup".to_string();
+    tool_config.agent_did = "setup".to_string();
     tool_config.enable_pack_install = true;
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
@@ -525,7 +525,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     let owner = crate::store::graphql::escape_graphql_string(&node_did);
     let tagged = node
         .execute(&format!(
-            r#"mutation {{ update_Agent(filter: {{node_did: {{_eq: "{owner}"}}, agent_id: {{_eq: "fixture-worker"}}}}, input: {{tags: ["gents:pack:plugin_documents_fixture", "user:favorite"]}}) {{_docID}} }}"#
+            r#"mutation {{ update_Agent(filter: {{node_did: {{_eq: "{owner}"}}, agent_did: {{_eq: "fixture-worker"}}}}, input: {{tags: ["gents:pack:plugin_documents_fixture", "user:favorite"]}}) {{_docID}} }}"#
         ))
         .await;
     assert!(!tagged.has_errors(), "{:?}", tagged.errors);
@@ -567,7 +567,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     );
     let tags = node
         .execute(&format!(
-            r#"{{ Agent(filter: {{node_did: {{_eq: "{owner}"}}, agent_id: {{_eq: "fixture-worker"}}}}) {{tags}} }}"#
+            r#"{{ Agent(filter: {{node_did: {{_eq: "{owner}"}}, agent_did: {{_eq: "fixture-worker"}}}}) {{tags}} }}"#
         ))
         .await;
     assert!(!tags.has_errors(), "{:?}", tags.errors);
@@ -635,7 +635,7 @@ async fn pack_tool(
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     let mut tool_config = config(&[]);
-    tool_config.agent_id = "setup".to_string();
+    tool_config.agent_did = "setup".to_string();
     tool_config.enable_pack_install = true;
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
@@ -768,7 +768,7 @@ async fn pack_install_refuses_a_pack_shipped_job_block() {
         serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
     pack_config["tools"][0]["integrations"] =
         json!({"plugins": [{"plugin": "acme/runner", "job": {"agent_targets": ["wf-run"]}}]});
-    pack_config["agent_targets"] = json!([{"target_id": "wf-run", "target_node_did": "did:key:foreign", "agent_id": "fixture-worker", "name": "wf-run"}]);
+    pack_config["agent_targets"] = json!([{"target_id": "wf-run", "target_node_did": "did:key:foreign", "agent_did": "fixture-worker", "name": "wf-run"}]);
     std::fs::write(&config_path, serde_json::to_vec(&pack_config).unwrap()).unwrap();
     let (_home, plugins) = crate::test_support::home_with_pack_dir(&dir);
     let (_node, _did, tools) = pack_tool("pack-job-block", plugins).await;
@@ -838,7 +838,7 @@ async fn config_tools_cannot_self_grant_pack_install() {
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
 
     let mut tool_config = config(&["tools"]);
-    tool_config.agent_id = "setup".to_string();
+    tool_config.agent_did = "setup".to_string();
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
         node,
@@ -869,7 +869,7 @@ async fn config_tools_cannot_self_grant_pack_install() {
     );
 }
 
-async fn operator_replace_tools(node: &Arc<defra_node::EmbeddedNode>, tools: Value) {
+async fn operator_replace_tools(node: &Arc<defra_node::Node>, tools: Value) {
     use crate::store::config_client::{
         ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
@@ -890,7 +890,7 @@ async fn operator_replace_tools(node: &Arc<defra_node::EmbeddedNode>, tools: Val
 }
 
 async fn operator_grant_pack_install(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     owner: &str,
     tools_id: &str,
 ) {
@@ -910,7 +910,7 @@ async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
     crate::test_support::install_test_agent(&node, &owner, "granted").await;
     operator_grant_pack_install(&node, &owner, "granted:tools").await;
     let mut tool_config = config(&["tools"]);
-    tool_config.agent_id = "granted".to_string();
+    tool_config.agent_did = "granted".to_string();
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
         node,
@@ -960,7 +960,7 @@ async fn config_tools_holder_may_grant_pack_install_to_a_sibling() {
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     crate::test_support::install_test_agent(&node, &node_did, "sibling").await;
     let mut tool_config = config(&["node", "tools"]);
-    tool_config.agent_id = "setup".to_string();
+    tool_config.agent_did = "setup".to_string();
     tool_config.enable_pack_install = true;
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
@@ -1031,7 +1031,7 @@ async fn reselection_tools(
     operator_grant_pack_install(&node, &owner, "granted:tools").await;
     operator_grant_pack_install(&node, &owner, "granted-2:tools").await;
     let mut tool_config = config(&["node", "agent", "tools"]);
-    tool_config.agent_id = "worker".to_owned();
+    tool_config.agent_did = "worker".to_owned();
     tool_config.enable_pack_install = hold_pack_install;
     build_self_config_tools(
         std::sync::Arc::default(),
@@ -1171,7 +1171,7 @@ async fn context_create_selecting_granted_tools_requires_the_grant() {
         .expect("an agent holding the grant may create a Context that selects it");
 }
 
-pub(super) async fn build_agent_node() -> std::sync::Arc<defra_node::EmbeddedNode> {
+pub(super) async fn build_agent_node() -> std::sync::Arc<defra_node::Node> {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let node = crate::test_support::node_builder()
         .data_path(tempdir.path().join("data"))
@@ -2089,7 +2089,7 @@ async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "working").await;
     let mut settings = config(&["agent"]);
-    settings.agent_id = "working".into();
+    settings.agent_did = "working".into();
     settings.preview = true;
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
@@ -2124,7 +2124,7 @@ async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
         serde_json::from_str::<Value>(&tool.call(read).await.unwrap()).unwrap(),
         after
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 pub(super) async fn call_config_tool(
@@ -2200,7 +2200,7 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     tool.call(trigger.to_string()).await.unwrap();
     let rows = access.execute("{ Trigger { trigger_id } }").await.unwrap();
     assert_eq!(rows["data"]["Trigger"].as_array().unwrap().len(), 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -2276,7 +2276,7 @@ async fn config_errors_name_the_next_call() {
     let message = stray["error"].as_str().unwrap();
     assert!(
         message.contains(r#"agent context edit takes no positional argument "builder""#)
-            && message.contains(r#"{"argv":["agent","context","edit"],"options":{"agent":"AGENT_ID"},"set":{"FIELD":VALUE}}"#),
+            && message.contains(r#"{"argv":["agent","context","edit"],"options":{"agent":"AGENT_DID"},"set":{"FIELD":VALUE}}"#),
         "{message}"
     );
     assert_eq!(stray["config_execution"]["mutation_entered"], false);
@@ -2284,7 +2284,7 @@ async fn config_errors_name_the_next_call() {
     let named = failure(json!({"argv":["agent","get","Builder"]})).await;
     assert_eq!(
         named["error"],
-        "unknown agent_id \"Builder\"; did you mean \"builder\"?"
+        "unknown agent_did \"Builder\"; did you mean \"builder\"?"
     );
     let core = SelfConfigCore::new(node.clone(), owner.clone(), "beh-test".into()).unwrap();
     core.apply(agent_request(
@@ -2296,7 +2296,7 @@ async fn config_errors_name_the_next_call() {
     let display = failure(json!({"argv":["agent","get","night shift"]})).await;
     assert_eq!(
         display["error"],
-        "unknown agent_id \"night shift\"; did you mean \"beh-test\"?"
+        "unknown agent_did \"night shift\"; did you mean \"beh-test\"?"
     );
     let unknown = failure(json!({"argv":["agent","get","nobody"]})).await;
     assert!(
@@ -2306,7 +2306,7 @@ async fn config_errors_name_the_next_call() {
             .contains(r#"copy an exact ID from ["agent","list"]"#),
         "{unknown}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -2391,7 +2391,7 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
     )
     .unwrap();
     assert_eq!(read["config_execution"]["mutation_entered"], false);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -2433,7 +2433,7 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "current").await;
     let mut tool_config = config(&["agent"]);
-    tool_config.agent_id = "current".into();
+    tool_config.agent_did = "current".into();
     tool_config.preview = true;
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
@@ -2510,7 +2510,7 @@ async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only
         crate::test_support::install_test_agent(&node, &owner, agent).await;
     }
     let mut tool_config = config(&["node", "profile", "backend"]);
-    tool_config.agent_id = "alpha".into();
+    tool_config.agent_did = "alpha".into();
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
         node,
@@ -2543,15 +2543,15 @@ async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only
     .unwrap();
     assert_ne!(first["agents"][0], second["agents"][0]);
 
-    let agent_id = first["agents"][0]["agent_id"].as_str().unwrap();
+    let agent_did = first["agents"][0]["agent_did"].as_str().unwrap();
     let inspected: Value = serde_json::from_str(
         &config
-            .call(json!({"argv":["agent", "get", agent_id]}).to_string())
+            .call(json!({"argv":["agent", "get", agent_did]}).to_string())
             .await
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(inspected["agent_id"], agent_id);
+    assert_eq!(inspected["agent_did"], agent_did);
 
     for resource in ["profile", "backend"] {
         let inventory: Value = serde_json::from_str(
@@ -2601,7 +2601,7 @@ async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "setup").await;
     let mut tool_config = config(&["backend", "profile"]);
-    tool_config.agent_id = "setup".into();
+    tool_config.agent_did = "setup".into();
     tool_config.preview = true;
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
@@ -2742,7 +2742,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
         .unwrap();
 
     let mut tool_config = config(&["node", "agent", "tools", "profile", "backend"]);
-    tool_config.agent_id = "setup".into();
+    tool_config.agent_did = "setup".into();
     tool_config.preview = true;
     tool_config.no_lockout = true;
     let tools = build_self_config_tools(
@@ -3155,7 +3155,7 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     assert!(
         missing.contains("missing")
             || missing.contains("no owned")
-            || missing.contains("unknown agent_id"),
+            || missing.contains("unknown agent_did"),
         "{missing}"
     );
 
@@ -3179,16 +3179,21 @@ fn take_agent_tool(
 #[tokio::test]
 async fn agent_default_commits_through_the_agent_owner() {
     let node = build_agent_node().await;
-    let identity = node_identity("agent-default");
-    let node_did = identity.did().to_string();
-    for agent in ["seed", "working"] {
-        crate::test_support::install_test_agent(&node, &node_did, agent).await;
-    }
-    crate::documents::upsert_node(&node, &node_did, None, Some("seed"), true, None)
+    let root = crate::store::identity::RegisteredIdentity::from_registered_did(
+        node.node_identity_did().unwrap(),
+        None,
+    )
+    .unwrap();
+    let node_did = root.did().to_owned();
+    let seed = crate::test_support::install_test_agent(&node, &node_did, "seed").await;
+    let working = crate::test_support::install_test_agent(&node, &node_did, "working").await;
+    let identity = crate::store::identity::resolve_agent_identity(&root, &seed).unwrap();
+    let core = SelfConfigCore::new(node.clone(), node_did.clone(), seed.agent_did.clone()).unwrap();
+    crate::documents::upsert_node(&node, &node_did, None, Some(&seed.agent_did), true, None)
         .await
         .unwrap();
     let mut tool_config = config(&["node"]);
-    tool_config.agent_id = "seed".into();
+    tool_config.agent_did = seed.agent_did.clone();
     tool_config.preview = true;
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
@@ -3205,7 +3210,7 @@ async fn agent_default_commits_through_the_agent_owner() {
                 "agent".into(),
                 "preview".into(),
                 "default".into(),
-                "working".into(),
+                working.agent_did.clone(),
             ],
         )
         .await
@@ -3214,29 +3219,23 @@ async fn agent_default_commits_through_the_agent_owner() {
     .unwrap();
     assert_eq!(preview["admitted"], true);
     assert_eq!(
-        node_default_agent(&node, &node_did)
-            .await
-            .unwrap()
-            .as_deref(),
-        Some("seed")
+        node_default_agent(&core).await.unwrap().as_deref(),
+        Some(seed.agent_did.as_str())
     );
     let output: Value = serde_json::from_str(
         &call_config_tool(
             &tools,
-            vec!["agent".into(), "default".into(), "working".into()],
+            vec!["agent".into(), "default".into(), working.agent_did.clone()],
         )
         .await
         .unwrap(),
     )
     .unwrap();
     assert_eq!(output["committed"], true);
-    assert_eq!(output["agent_id"], "working");
+    assert_eq!(output["agent_did"], working.agent_did);
     assert_eq!(
-        node_default_agent(&node, &node_did)
-            .await
-            .unwrap()
-            .as_deref(),
-        Some("working")
+        node_default_agent(&core).await.unwrap().as_deref(),
+        Some(working.agent_did.as_str())
     );
 }
 
@@ -3338,7 +3337,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
         .expect("list agents");
     let created: Vec<_> = agents
         .iter()
-        .filter(|agent| agent.agent_id != "seed")
+        .filter(|agent| agent.agent_did != "seed")
         .collect();
     assert_eq!(created.len(), 1, "exactly one new agent materialized");
     assert_eq!(
@@ -3382,11 +3381,15 @@ async fn agent_create_commits_and_resolves_after_restart() {
 
     let output: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(output["committed"], true);
-    assert_eq!(output["agent_id"], created[0].agent_id);
+    assert_eq!(output["agent_did"], created[0].agent_did);
     let effective: Value = serde_json::from_str(
-        &agent_inspect(&node, &node_did, &created[0].agent_id, &Default::default())
-            .await
-            .unwrap(),
+        &agent_inspect(
+            &SelfConfigCore::new(node.clone(), node_did.clone(), created[0].agent_did.clone())
+                .unwrap(),
+            &created[0].agent_did,
+        )
+        .await
+        .unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -3411,7 +3414,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
             "tools".into(),
             "edit".into(),
             "--agent".into(),
-            created[0].agent_id.clone(),
+            created[0].agent_did.clone(),
             "--set".into(),
             r#"integrations={"lsp":{}}"#.into(),
             "--set".into(),
@@ -3424,7 +3427,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
     assert_eq!(applied["committed"], true);
     let selected = call_config_tool(
         &grant_tools,
-        vec!["get".into(), "--agent".into(), created[0].agent_id.clone()],
+        vec!["get".into(), "--agent".into(), created[0].agent_did.clone()],
     )
     .await
     .expect("inspect the selected sibling after the canonical tools patch");
@@ -3448,10 +3451,10 @@ async fn agent_create_commits_and_resolves_after_restart() {
     )
     .await
     .expect("restart-style runtime resolution accepts the materialized agent");
-    assert_eq!(snapshot.default_agent_id, created[0].agent_id);
+    assert_eq!(snapshot.default_agent_did, created[0].agent_did);
     let runtime_agent = snapshot
         .agents
-        .get(&created[0].agent_id)
+        .get(&created[0].agent_did)
         .unwrap_or_else(|| {
             panic!(
                 "new default is runnable after re-resolution: {:?}",
@@ -3476,7 +3479,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
 }
 
 #[tokio::test]
-async fn agent_clone_accepts_sibling_agent_id() {
+async fn agent_clone_accepts_sibling_agent_did() {
     let node = build_agent_node().await;
     let identity = node_identity("agent-clone");
     let node_did = identity.did().to_string();
@@ -3507,13 +3510,13 @@ async fn agent_clone_accepts_sibling_agent_id() {
         .await
         .unwrap()
         .into_iter()
-        .find(|a| a.agent_id == qualified_sibling_id)
+        .find(|a| a.agent_did == qualified_sibling_id)
         .unwrap();
     let cloned = crate::list_agents(&node, &node_did)
         .await
         .unwrap()
         .into_iter()
-        .find(|a| Some(a.agent_id.as_str()) == output["agent_id"].as_str())
+        .find(|a| Some(a.agent_did.as_str()) == output["agent_did"].as_str())
         .unwrap();
     assert_eq!(source.inference_profile_id, cloned.inference_profile_id);
     assert_ne!(source.context_id, cloned.context_id);
@@ -3632,7 +3635,7 @@ async fn agent_clone_by_holder_copies_granted_source() {
             .await
             .unwrap()
             .iter()
-            .any(|agent| Some(agent.agent_id.as_str()) == output["agent_id"].as_str()),
+            .any(|agent| Some(agent.agent_did.as_str()) == output["agent_did"].as_str()),
         "a holder's clone publishes its Agent"
     );
 }
@@ -3712,8 +3715,8 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
     let node = build_agent_node().await;
     let identity = node_identity("tools-root-policy");
     let owner = identity.did().to_string();
-    let agent_id = "root-policy";
-    crate::test_support::install_test_agent(&node, &owner, agent_id).await;
+    let agent_did = "root-policy";
+    crate::test_support::install_test_agent(&node, &owner, agent_did).await;
     let ceiling = tempfile::tempdir().unwrap();
     let selected = ceiling.path().join("selected");
     let sibling = ceiling.path().join("sibling");
@@ -3730,7 +3733,7 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
     )
     .await
     .unwrap();
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), agent_id.into())
+    let core = SelfConfigCore::new(node.clone(), owner.clone(), agent_did.into())
         .unwrap()
         .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
             file_mode: crate::tools::surface::FileToolMode::ReadOnly,
@@ -3765,7 +3768,7 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
     core.apply(tools_request(&core, patch(&authored_inside)))
         .await
         .expect("apply admits the selected root");
-    let tools_id = format!("{agent_id}:tools");
+    let tools_id = format!("{agent_did}:tools");
     let persisted: crate::documents::Tools =
         crate::store::config_client::ConfigAccess::local(node.clone())
             .transact_write("test.self_config.read_tools", |txn| {
@@ -3860,7 +3863,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     .expect("publish selected WorkspaceRoot");
 
     let mut tool_config = config(&["node"]);
-    tool_config.agent_id = seed_agent.into();
+    tool_config.agent_did = seed_agent.into();
     tool_config.process_ceiling = crate::tools::surface::SelfConfigProcessCeiling {
         file_mode: crate::tools::surface::FileToolMode::ReadOnly,
         bash_mode: crate::tools::surface::BashMode::Off,
@@ -3915,7 +3918,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         .expect("list materialized agents");
     let created = agents
         .iter()
-        .find(|agent| agent.agent_id != seed_agent)
+        .find(|agent| agent.agent_did != seed_agent)
         .expect("agent reconciler materialized one agent");
     let runtime_view =
         crate::runtime::agent::document_view::load_document_runtime_view(&node, &owner)
@@ -3951,7 +3954,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     .expect("fresh request runtime snapshot");
     let runtime_agent = snapshot
         .agents
-        .get(&created.agent_id)
+        .get(&created.agent_did)
         .expect("fresh request agent is runnable")
         .clone();
     let surface = Arc::new(
@@ -3991,7 +3994,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
             &node,
             fixture_actor.clone(),
             &owner,
-            &created.agent_id,
+            &created.agent_did,
             &format!("descendant-root-{label}"),
             "Read the requested workspace path.",
             json!({}),
@@ -4004,7 +4007,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         )
         .await
         .expect("load the fresh request through the admission representation");
-        assert_eq!(request.agent_id, created.agent_id);
+        assert_eq!(request.agent_did, created.agent_did);
         let turns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
 
@@ -4256,7 +4259,7 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
 async fn account_choice_core(
     agent: &str,
 ) -> (
-    std::sync::Arc<defra_node::EmbeddedNode>,
+    std::sync::Arc<defra_node::Node>,
     std::sync::Arc<dyn crate::NodeIdentity>,
     SelfConfigCore,
 ) {
@@ -4666,7 +4669,7 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
     let sources = ["original", "chat-b"]
         .into_iter()
         .map(|account| {
-            let value = json!({"node_did": owner, "agent_id": format!("src-{account}"),
+            let value = json!({"node_did": owner, "agent_did": format!("src-{account}"),
                 "context_id": format!("ctx-{account}"), "inference_profile_id": "p-original"});
             crate::store::config_client::DesiredStateApplyDocument {
                 collection: crate::Collection::Agent,
@@ -4836,7 +4839,7 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
     .await
     .unwrap();
     let mut tool_config = config(&["profile"]);
-    tool_config.agent_id = "setup".into();
+    tool_config.agent_did = "setup".into();
     tool_config.preview = true;
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
@@ -4918,7 +4921,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         .await
         .unwrap();
     let mut grants = config(&["node", "agent", "tools", "profile", "automation"]);
-    grants.agent_id = "setup".into();
+    grants.agent_did = "setup".into();
     grants.preview = true;
     grants.no_lockout = true;
     let tools = build_self_config_tools(
@@ -4940,7 +4943,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         "--set",
         &format!("target_node_did={}", json!(owner)),
         "--set",
-        "agent_id=\"lead\"",
+        "agent_did=\"lead\"",
     ];
     let preview = ok(call_config_tool(
         &tools,
@@ -4966,7 +4969,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "--set",
             &format!("target_node_did={}", json!(owner)),
             "--set",
-            "agent_id=\"missing\"",
+            "agent_did=\"missing\"",
         ]),
     )
     .await
@@ -5387,7 +5390,7 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
         .unwrap();
 
     let mut tool_config = config(&["backend"]);
-    tool_config.agent_id = "setup".into();
+    tool_config.agent_did = "setup".into();
     tool_config.preview = true;
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
@@ -5747,7 +5750,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     );
 }
 
-async fn account_state_rows(node: &std::sync::Arc<defra_node::EmbeddedNode>) -> Value {
+async fn account_state_rows(node: &std::sync::Arc<defra_node::Node>) -> Value {
     let response = node
         .execute(
             "{ OAuthCredential { _docID credential_id enabled label access_token } \
@@ -5760,7 +5763,7 @@ async fn account_state_rows(node: &std::sync::Arc<defra_node::EmbeddedNode>) -> 
 
 async fn seed_account_view(
     cache: &crate::inference::usage_observation::UsageCache,
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     owner: &str,
 ) {
     use crate::inference::auth::credential::{
@@ -5882,7 +5885,7 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
     );
     seed_account_view(&cache, &node, &owner).await;
     let mut tool_config = config(&["node", "profile", "backend"]);
-    tool_config.agent_id = "alpha".into();
+    tool_config.agent_did = "alpha".into();
     let tools = build_self_config_tools(
         cache,
         node.clone(),
@@ -5956,7 +5959,7 @@ async fn config_backend_accounts_is_readable_without_the_backend_grant() {
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "alpha").await;
     let mut tool_config = config(&["node", "profile"]);
-    tool_config.agent_id = "alpha".into();
+    tool_config.agent_did = "alpha".into();
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
         node,
@@ -6004,10 +6007,10 @@ async fn agent_management_clears_optional_fields_and_refuses_ignored_tool_modifi
         .unwrap(),
     )
     .unwrap();
-    let id = created["agent_id"].as_str().unwrap().to_owned();
+    let id = created["agent_did"].as_str().unwrap().to_owned();
     let edit = ConfigureAgentParams {
         action: "edit".into(),
-        agent_id: Some(id.clone()),
+        agent_did: Some(id.clone()),
         display_name: StringUpdate::Clear,
         description: StringUpdate::Clear,
         system_prompt: StringUpdate::Clear,
@@ -6020,7 +6023,7 @@ async fn agent_management_clears_optional_fields_and_refuses_ignored_tool_modifi
         .await
         .unwrap()
         .into_iter()
-        .find(|agent| agent.agent_id == id)
+        .find(|agent| agent.agent_did == id)
         .unwrap();
     assert_eq!(stored.display_name, None);
     assert_eq!(stored.description, None);
@@ -6052,7 +6055,7 @@ async fn agent_management_clears_optional_fields_and_refuses_ignored_tool_modifi
         .await
         .unwrap()
         .into_iter()
-        .find(|agent| agent.agent_id == id)
+        .find(|agent| agent.agent_did == id)
         .unwrap();
     assert_eq!(stored, after);
 }
@@ -6069,7 +6072,7 @@ async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
         .await
         .unwrap();
     let mut grants = config(&["node"]);
-    grants.agent_id = "current".into();
+    grants.agent_did = "current".into();
     grants.no_lockout = true;
     grants.preview = true;
     let tools = build_self_config_tools(
@@ -6096,7 +6099,7 @@ async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
         .await
         .unwrap()
         .into_iter()
-        .find(|agent| agent.agent_id == "current")
+        .find(|agent| agent.agent_did == "current")
         .unwrap();
     assert!(current.enabled);
 }
@@ -6114,7 +6117,7 @@ async fn agent_only_edits_preserve_an_optional_absent_context() {
         .await
         .unwrap();
     let mut grants = config(&["agent"]);
-    grants.agent_id = "current".into();
+    grants.agent_did = "current".into();
     grants.preview = true;
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
@@ -6147,7 +6150,7 @@ async fn agent_only_edits_preserve_an_optional_absent_context() {
         .await
         .unwrap()
         .into_iter()
-        .find(|agent| agent.agent_id == "current")
+        .find(|agent| agent.agent_did == "current")
         .unwrap();
     assert_eq!(current.display_name.as_deref(), Some("Contextless"));
     assert_eq!(current.inference_profile_id, "other:inference");
@@ -6155,30 +6158,34 @@ async fn agent_only_edits_preserve_an_optional_absent_context() {
 }
 
 #[tokio::test]
-async fn public_agent_management_previews_without_publishing_and_checks_signer() {
+async fn public_agent_management_uses_provisioned_binding_and_client_access() {
     let node = build_agent_node().await;
-    let identity = node_identity("public-agent-management");
-    let owner = identity.did().to_owned();
-    crate::test_support::install_test_agent(&node, &owner, "seed").await;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let root = crate::store::identity::RegisteredIdentity::from_registered_did(
+        node.node_identity_did().unwrap(),
+        None,
+    )
+    .unwrap();
+    let owner = root.did().to_owned();
+    let seed = crate::test_support::install_test_agent(&node, &owner, "seed").await;
+    let client = node_identity("public-agent-client");
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        ::identity::Did::new(client.did().to_owned()).unwrap(),
+    );
+    let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
     let mut args = ConfigureAgentParams {
         action: "preview".into(),
         operation: Some("create".into()),
+        identity_binding: Some(binding.clone()),
         display_name: StringUpdate::Set("Public agent".into()),
         system_prompt: StringUpdate::Set("Complete the requested work.".into()),
-        profile_id: StringUpdate::Set("seed:inference".into()),
+        profile_id: StringUpdate::Set(format!("{}:inference", seed.agent_did)),
         ..Default::default()
     };
     let preview: Value = serde_json::from_str(
-        &configure_agent(
-            &access,
-            &owner,
-            identity.as_ref(),
-            &args,
-            &Default::default(),
-        )
-        .await
-        .unwrap(),
+        &configure_agent(&access, &owner, &args, &Default::default())
+            .await
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(preview["admitted"], true);
@@ -6186,37 +6193,31 @@ async fn public_agent_management_previews_without_publishing_and_checks_signer()
     assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 1);
     args.action = "create".into();
     args.operation = None;
-    let foreign = node_identity("public-agent-foreign");
-    let error = configure_agent(
-        &access,
-        &owner,
-        foreign.as_ref(),
-        &args,
-        &Default::default(),
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        error.to_string().contains("exact local node identity"),
-        "{error:#}"
-    );
-    assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 1);
-    let committed: Value = serde_json::from_str(
-        &configure_agent(
-            &access,
-            &owner,
-            identity.as_ref(),
-            &args,
-            &Default::default(),
-        )
+    args.identity_binding = None;
+    let error = configure_agent(&access, &owner, &args, &Default::default())
         .await
-        .unwrap(),
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("runtime-provisioned identity binding"));
+    args.identity_binding = Some(binding.clone());
+    let committed: Value = serde_json::from_str(
+        &configure_agent(&access, &owner, &args, &Default::default())
+            .await
+            .unwrap(),
     )
     .unwrap();
-    assert_eq!(committed["admitted"], true);
     assert_eq!(committed["committed"], true);
-    assert_eq!(committed["agent_id"], preview["agent_id"]);
-    assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 2);
+    assert_eq!(committed["agent_did"], binding.agent_did);
+    assert_eq!(committed["agent_did"], preview["agent_did"]);
+    let stored = crate::load_agent(&node, &binding.agent_did)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.identity_binding(), binding);
+    let signer =
+        crate::store::identity::resolve_agent_identity(&root, &stored.identity_binding()).unwrap();
+    assert_eq!(signer.did(), stored.agent_did);
 }
 
 #[tokio::test]
@@ -6232,20 +6233,14 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
     let mut args = ConfigureAgentParams {
         action: "preview".into(),
         operation: Some("edit".into()),
-        agent_id: Some("target".into()),
+        agent_did: Some("target".into()),
         display_name: StringUpdate::Set("Edited while disabled".into()),
         ..Default::default()
     };
     let preview: Value = serde_json::from_str(
-        &configure_agent(
-            &access,
-            &owner,
-            identity.as_ref(),
-            &args,
-            &Default::default(),
-        )
-        .await
-        .unwrap(),
+        &configure_agent(&access, &owner, &args, &Default::default())
+            .await
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(preview["committed"], false);
@@ -6257,60 +6252,36 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
     args.action = "edit".into();
     args.operation = None;
     args.clone_from = Some("target".into());
-    let error = configure_agent(
-        &access,
-        &owner,
-        identity.as_ref(),
-        &args,
-        &Default::default(),
-    )
-    .await
-    .unwrap_err();
+    let error = configure_agent(&access, &owner, &args, &Default::default())
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("does not accept clone_from"));
     assert_eq!(
         crate::load_agent(&node, "target").await.unwrap(),
         Some(stored.clone())
     );
     args.clone_from = None;
-    configure_agent(
-        &access,
-        &owner,
-        identity.as_ref(),
-        &args,
-        &Default::default(),
-    )
-    .await
-    .unwrap();
+    configure_agent(&access, &owner, &args, &Default::default())
+        .await
+        .unwrap();
     stored.display_name = Some("Edited while disabled".into());
     assert_eq!(
         crate::load_agent(&node, "target").await.unwrap(),
         Some(stored.clone())
     );
     args.profile_id = StringUpdate::Set("missing-profile".into());
-    assert!(configure_agent(
-        &access,
-        &owner,
-        identity.as_ref(),
-        &args,
-        &Default::default()
-    )
-    .await
-    .is_err());
+    assert!(configure_agent(&access, &owner, &args, &Default::default())
+        .await
+        .is_err());
     assert_eq!(
         crate::load_agent(&node, "target").await.unwrap(),
         Some(stored.clone())
     );
     args.profile_id = StringUpdate::Omitted;
     args.make_default = true;
-    assert!(configure_agent(
-        &access,
-        &owner,
-        identity.as_ref(),
-        &args,
-        &Default::default()
-    )
-    .await
-    .is_err());
+    assert!(configure_agent(&access, &owner, &args, &Default::default())
+        .await
+        .is_err());
     assert_eq!(
         crate::load_agent(&node, "target").await.unwrap(),
         Some(stored)
@@ -6333,7 +6304,7 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
     sibling.context_id = shared.context_id;
     crate::upsert_agent(&node, &sibling).await.unwrap();
     let access = crate::store::config_client::ConfigAccess::local(node.clone());
-    let query = "query { Agent(order: {agent_id: ASC}) { agent_id display_name context_id inference_profile_id enabled } AgentContext(order: {context_id: ASC}) { context_id display_name system_prompt tools_id } }";
+    let query = "query { Agent(order: {agent_did: ASC}) { agent_did display_name context_id inference_profile_id enabled } AgentContext(order: {context_id: ASC}) { context_id display_name system_prompt tools_id } }";
     let before = access.execute(query).await.unwrap();
     for (target, expected) in [
         ("missing", "agent has no context"),
@@ -6343,20 +6314,14 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
             let args = ConfigureAgentParams {
                 action: if preview { "preview" } else { "edit" }.into(),
                 operation: preview.then(|| "edit".into()),
-                agent_id: Some(target.into()),
+                agent_did: Some(target.into()),
                 display_name: StringUpdate::Set("Must not be published".into()),
                 system_prompt: StringUpdate::Set("Replacement instructions".into()),
                 ..Default::default()
             };
-            let error = configure_agent(
-                &access,
-                &owner,
-                identity.as_ref(),
-                &args,
-                &Default::default(),
-            )
-            .await
-            .unwrap_err();
+            let error = configure_agent(&access, &owner, &args, &Default::default())
+                .await
+                .unwrap_err();
             assert!(error.to_string().contains(expected), "{error:#}");
             assert_eq!(access.execute(query).await.unwrap(), before);
         }
@@ -6364,19 +6329,13 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
     let private = crate::load_agent(&node, "private").await.unwrap().unwrap();
     let args = ConfigureAgentParams {
         action: "edit".into(),
-        agent_id: Some("private".into()),
+        agent_did: Some("private".into()),
         system_prompt: StringUpdate::Set("Private replacement instructions".into()),
         ..Default::default()
     };
-    configure_agent(
-        &access,
-        &owner,
-        identity.as_ref(),
-        &args,
-        &Default::default(),
-    )
-    .await
-    .unwrap();
+    configure_agent(&access, &owner, &args, &Default::default())
+        .await
+        .unwrap();
     let after = access.execute(query).await.unwrap();
     assert_eq!(after["data"]["Agent"], before["data"]["Agent"]);
     let mut expected_contexts = before["data"]["AgentContext"].clone();
@@ -6538,7 +6497,7 @@ fn reselection_keeps_job_grants() {
 }
 
 async fn grant_pack_install_for_test(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     owner: &str,
     tools_id: &str,
 ) {
@@ -6567,20 +6526,24 @@ async fn grant_pack_install_for_test(
 }
 
 #[tokio::test]
-async fn model_clone_is_atomically_grant_bounded_but_operator_clone_is_not() {
+async fn model_clone_requires_user_authored_creation_even_with_operator_grants() {
     let node = build_agent_node().await;
-    let identity = node_identity("clone-grant-bound");
-    let owner = identity.did().to_owned();
-    for id in ["worker", "source"] {
-        crate::test_support::install_test_agent(&node, &owner, id).await;
-    }
-    grant_pack_install_for_test(&node, &owner, "source:tools").await;
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "worker".into()).unwrap();
+    let root = crate::store::identity::RegisteredIdentity::from_registered_did(
+        node.node_identity_did().unwrap(),
+        None,
+    )
+    .unwrap();
+    let owner = root.did().to_owned();
+    let worker = crate::test_support::install_test_agent(&node, &owner, "worker").await;
+    let source = crate::test_support::install_test_agent(&node, &owner, "source").await;
+    let signer = crate::store::identity::resolve_agent_identity(&root, &worker).unwrap();
+    grant_pack_install_for_test(&node, &owner, &format!("{}:tools", source.agent_did)).await;
+    let core = SelfConfigCore::new(node.clone(), owner.clone(), worker.agent_did.clone()).unwrap();
     let args = ConfigureAgentParams {
         action: "clone".into(),
         display_name: StringUpdate::Set("Bound clone".into()),
-        clone_from: Some("source".into()),
-        profile_id: StringUpdate::Set("source:inference".into()),
+        clone_from: Some(source.agent_did.clone()),
+        profile_id: StringUpdate::Set(format!("{}:inference", source.agent_did)),
         ..Default::default()
     };
     let before = crate::list_agents(&node, &owner).await.unwrap();
@@ -6594,35 +6557,32 @@ async fn model_clone_is_atomically_grant_bounded_but_operator_clone_is_not() {
     assert!(preview["rejection"]
         .as_str()
         .unwrap()
-        .contains("cannot be self-granted"));
-    let error = agent_management::model_agent_mutate(&core, identity.as_ref(), &args)
-        .await
-        .unwrap_err();
-    assert!(format!("{error:#}").contains("cannot be self-granted"));
+        .contains("authenticated user client"));
+    for core in [
+        core.clone(),
+        core.with_held_grants(ops::OperatorGrants {
+            pack_install: true,
+            ..Default::default()
+        }),
+    ] {
+        let error = agent_management::model_agent_mutate(&core, signer.as_ref(), &args)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("authenticated user client"));
+    }
     assert_eq!(crate::list_agents(&node, &owner).await.unwrap(), before);
-    let holder = core.with_held_grants(ops::OperatorGrants {
-        pack_install: true,
-        ..Default::default()
-    });
-    let accepted: Value = serde_json::from_str(
-        &agent_management::model_agent_mutate(&holder, identity.as_ref(), &args)
+    let client = node_identity("operator-client");
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        ::identity::Did::new(client.did().to_owned()).unwrap(),
+    );
+    let mut operator_args = args;
+    operator_args.identity_binding =
+        Some(crate::store::identity::provision_agent_identity(&root).unwrap());
+    let operator: Value = serde_json::from_str(
+        &configure_agent(&access, &owner, &operator_args, &Default::default())
             .await
             .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(accepted["committed"], true);
-    let mut operator_args = args;
-    operator_args.display_name = StringUpdate::Set("Operator clone".into());
-    let operator: Value = serde_json::from_str(
-        &configure_agent(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
-            &owner,
-            identity.as_ref(),
-            &operator_args,
-            &Default::default(),
-        )
-        .await
-        .unwrap(),
     )
     .unwrap();
     assert_eq!(operator["committed"], true);
@@ -6639,7 +6599,7 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
     grant_pack_install_for_test(&node, &owner, "granted:tools").await;
     let core = SelfConfigCore::new(node.clone(), owner.clone(), "sibling".into())
         .unwrap()
-        .with_lockout_agent_id("worker".into());
+        .with_lockout_agent_did("worker".into());
     for preview in [true, false] {
         let request = protect_working_agent(
             agent_request(
@@ -6695,7 +6655,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     let did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &did, "setup").await;
     let mut cfg = config(&["tools", "agent"]);
-    cfg.agent_id = "setup".into();
+    cfg.agent_did = "setup".into();
     cfg.enable_pack_install = true;
     cfg.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadOnly;
     cfg.process_ceiling.root = Some(workspace.path().to_owned());
@@ -6875,7 +6835,7 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
     let did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &did, "setup").await;
     let mut cfg = config(&["tools"]);
-    cfg.agent_id = "setup".into();
+    cfg.agent_did = "setup".into();
     cfg.enable_pack_install = true;
     cfg.process_ceiling.root = Some(workspace.path().to_owned());
     let tools = build_self_config_tools(
@@ -7227,7 +7187,7 @@ async fn pack_tool_with_local_read(
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
     root: &std::path::Path,
 ) -> (
-    std::sync::Arc<defra_node::EmbeddedNode>,
+    std::sync::Arc<defra_node::Node>,
     String,
     Vec<Box<dyn ToolDyn>>,
 ) {
@@ -7236,7 +7196,7 @@ async fn pack_tool_with_local_read(
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     let mut tool_config = config(&["tools"]);
-    tool_config.agent_id = "setup".to_string();
+    tool_config.agent_did = "setup".to_string();
     tool_config.enable_pack_install = true;
     tool_config.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadOnly;
     tool_config.process_ceiling.root = Some(root.to_owned());

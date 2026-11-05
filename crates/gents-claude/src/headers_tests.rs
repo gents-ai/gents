@@ -74,8 +74,8 @@ fn background_subagent_with_every_hint() {
         background: true,
         workload: Some("cron"),
         agent: Some(AgentHeaders {
-            agent_id: "agent-1",
-            parent_agent_id: Some("parent 2%"),
+            agent_did: "agent-1",
+            parent_agent_did: Some("parent 2%"),
         }),
         agent_type: Some("Explore"),
         request_class: RequestClass::Subagent,
@@ -102,8 +102,8 @@ fn background_subagent_with_every_hint() {
             "claude-cli/2.1.311 (external, cli, workload/cron)",
         ),
         ("X-Claude-Code-Session-Id", SESSION),
-        ("x-claude-code-agent-id", "agent-1"),
-        ("x-claude-code-parent-agent-id", "parent 2%25"),
+        ("x-claude-code-agent-did", "agent-1"),
+        ("x-claude-code-parent-agent-did", "parent 2%25"),
         ("x-claude-code-request-class", "subagent"),
         ("x-claude-code-agent-type", "Explore"),
         ("x-claude-code-prompt-id", UUID),
@@ -146,8 +146,8 @@ fn custom_base_url_drops_gated_headers() {
         hint_headers: false,
         client_request_id_header: false,
         agent: Some(AgentHeaders {
-            agent_id: "a",
-            parent_agent_id: None,
+            agent_did: "a",
+            parent_agent_did: None,
         }),
         agent_type: Some("Explore"),
         request_class: RequestClass::Subagent,
@@ -158,7 +158,7 @@ fn custom_base_url_drops_gated_headers() {
         .into_iter()
         .map(|(name, _)| name)
         .collect();
-    assert!(names.contains(&"x-claude-code-agent-id"));
+    assert!(names.contains(&"x-claude-code-agent-did"));
     for gated in [
         "x-claude-code-request-class",
         "x-claude-code-agent-type",
@@ -197,8 +197,8 @@ fn optional_headers_are_omitted_when_empty_or_invalid() {
         betas: &[],
         timeout_ms: 0,
         agent: Some(AgentHeaders {
-            agent_id: "",
-            parent_agent_id: Some("p"),
+            agent_did: "",
+            parent_agent_did: Some("p"),
         }),
         agent_type: Some(""),
         client_app: Some(""),
@@ -212,8 +212,8 @@ fn optional_headers_are_omitted_when_empty_or_invalid() {
         "x-claude-code-prompt-id",
         "anthropic-beta",
         "X-Stainless-Timeout",
-        "x-claude-code-agent-id",
-        "x-claude-code-parent-agent-id",
+        "x-claude-code-agent-did",
+        "x-claude-code-parent-agent-did",
         "x-claude-code-agent-type",
         "x-client-app",
     ] {

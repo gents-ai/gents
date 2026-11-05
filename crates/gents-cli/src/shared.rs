@@ -26,7 +26,7 @@ pub(crate) struct InitSummary {
     pub(crate) model_name: String,
     pub(crate) max_concurrent: i64,
     pub(crate) max_queue_depth: i64,
-    pub(crate) default_agent_id: String,
+    pub(crate) default_agent_did: String,
     pub(crate) tools_id: String,
     pub(crate) wide_open_preset_id: String,
     pub(crate) inference_profile_id: String,
@@ -50,10 +50,10 @@ pub(crate) enum CodexShimHealth {
         websocket: String,
         auth_required: bool,
         bound_node_did: String,
-        bound_agent_id: String,
+        bound_agent_did: String,
     },
     Pending {
-        bound_agent_id: String,
+        bound_agent_did: String,
         reason: String,
     },
     Disabled {
@@ -73,20 +73,20 @@ impl CodexShimHealth {
                 websocket,
                 auth_required,
                 bound_node_did,
-                bound_agent_id,
+                bound_agent_did,
             } => serde_json::json!({
                 "status": "ok",
                 "websocket": websocket,
                 "auth_required": auth_required,
                 "bound_node_did": bound_node_did,
-                "bound_agent_id": bound_agent_id,
+                "bound_agent_did": bound_agent_did,
             }),
             Self::Pending {
-                bound_agent_id,
+                bound_agent_did,
                 reason,
             } => serde_json::json!({
                 "status": "pending",
-                "bound_agent_id": bound_agent_id,
+                "bound_agent_did": bound_agent_did,
                 "reason": reason,
             }),
             Self::Disabled { reason } => serde_json::json!({
@@ -126,7 +126,7 @@ pub(crate) struct StoredRuntimeState {
     pub(crate) graphql: String,
     pub(crate) node_name: String,
     pub(crate) node_did: String,
-    pub(crate) default_agent_id: String,
+    pub(crate) default_agent_did: String,
     #[serde(default = "default_p2p_transport")]
     pub(crate) p2p_transport: String,
     #[serde(default)]

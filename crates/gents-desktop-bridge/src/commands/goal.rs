@@ -180,7 +180,7 @@ pub(super) async fn control_goal_with_reference(
             request.session_doc_id,
             request.expected,
             operation,
-            request.agent_id.as_deref(),
+            request.agent_did.as_deref(),
             input,
             resume.as_ref().map(|submission| &submission.reference),
         )
@@ -192,7 +192,7 @@ pub(super) async fn control_goal_with_reference(
             request.session_doc_id,
             request.expected,
             operation,
-            request.agent_id.as_deref(),
+            request.agent_did.as_deref(),
             input,
         )
         .await

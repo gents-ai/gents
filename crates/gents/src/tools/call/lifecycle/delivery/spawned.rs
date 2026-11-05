@@ -30,7 +30,7 @@ impl ToolCallLifecycle {
         let tool_name = self.tool_name.clone();
         let message_sequence = self.message_sequence;
         let started = ConfigAccess::transact_local_idempotent(
-            &self.node, None, IdempotentTransactionRetry::Standard,
+            &self.node, Some(self.actor.clone()), IdempotentTransactionRetry::Standard,
             "tool_call.start_running_spawned_background",
             move |txn| {
                 let doc_id = doc_id.clone(); let parent_doc_id = parent_doc_id.clone();
@@ -144,7 +144,7 @@ impl ToolCallLifecycle {
         let persisted_stable_key = stable_key.clone();
 
         let created = ConfigAccess::transact_local_idempotent(
-            &self.node, None, IdempotentTransactionRetry::Standard,
+            &self.node, Some(self.actor.clone()), IdempotentTransactionRetry::Standard,
             "tool_call.admit_spawned_background",
             move |txn| {
                 let parent_doc_id = persisted_parent_doc_id.clone();
@@ -257,7 +257,12 @@ impl ToolCallLifecycle {
                             escape_graphql_string(service), escape_graphql_string(tool)),
                         None => String::new(),
                     };
+                    let (session_doc_id, selected_agent) = crate::session::canonical_rows::agent_session_child_binding_in_txn(
+                        txn, &node_did, &session_id, requester_did.as_deref()).await?;
+                    let session_doc_id = escape_graphql_string(&session_doc_id);
+                    let selected_agent = escape_graphql_string(&selected_agent);
                     let created = txn.execute(&format!(r#"mutation {{ create_AgentToolCall(input: {{
+                        session_doc_id: "{session_doc_id}", agent_did: "{selected_agent}", creator_did: "{selected_agent}", parent_linked: false,
                         tool_call_key: "{}", request_id: "{}", request_doc_id: "{request}",
                         session_id: "{session}", node_did: "{agent}", {}
                         message_sequence: {message_sequence}, tool_name: "{}", tool_call_id: "{}",
@@ -272,6 +277,14 @@ impl ToolCallLifecycle {
                 })
             }
         ).await?;
+
+        crate::session::child_ownership::publish_agent_session_child_relationships(
+            &self.node,
+            &self.node_did,
+            &self.actor,
+            &self.session_id,
+        )
+        .await?;
 
         ToolCallLifecycle::load_by_doc_id(
             self.node.clone(),

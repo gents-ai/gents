@@ -1,7 +1,11 @@
-type AgentOutputSegment @branchable {
+type AgentOutputSegment @policy(id: "d23eb42a87668f3bd577087f604fd7919e24873705681fe9e3d1923d7d065c13", resource: "children") {
     node_did: String @index @immutable
     requester_did: String @index @immutable
     session_id: String @index @immutable
+    session_doc_id: String @immutable
+    agent_did: String @immutable
+    creator_did: String @index @immutable
+    parent_linked: Boolean @index
     request_doc_id: String @index @immutable
     source: JSON @immutable
     ordinal: Int @immutable

@@ -1,9 +1,10 @@
-type AgentSessionGoalControl @branchable {
+type AgentSessionGoalControl @policy(id: "d23eb42a87668f3bd577087f604fd7919e24873705681fe9e3d1923d7d065c13", resource: "goal_controls") {
     command_id: String @index(unique: true) @immutable
     requester_did: String @index @immutable
     requester_peer_id: String @immutable
     node_did: String @index @immutable
+    agent_did: String @index @immutable
     session_id: String @immutable
+    session_doc_id: String @immutable
     intent_json: String @immutable
-    receipt_json: String
 }

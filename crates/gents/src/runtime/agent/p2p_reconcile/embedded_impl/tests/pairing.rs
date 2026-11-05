@@ -103,7 +103,7 @@ async fn applied_pairing_load_finds_the_twin_a_merge_left_out_of_the_unique_inde
             }
         );
 
-        sender.shutdown().await;
-        receiver.shutdown().await;
+        sender.shutdown().await.expect("node shutdown");
+        receiver.shutdown().await.expect("node shutdown");
     }
 }

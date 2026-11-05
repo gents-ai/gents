@@ -28,7 +28,7 @@ const BACKGROUND_TIMEOUT_NOTIFICATION: (&str, &str) = ("failed", "deadline_excee
 
 pub(in crate::tools::call::hook::persistence) async fn finish_background_execution(
     mut lifecycle: ToolCallLifecycle,
-    node: std::sync::Arc<defra_node::EmbeddedNode>,
+    node: std::sync::Arc<defra_node::Node>,
     live_outputs: crate::tools::call::hook::BackgroundLiveOutputState,
     executions: crate::tools::call::hook::BackgroundExecutionRegistry,
     execution_reservation: crate::tools::call::hook::BackgroundExecutionReservation,
@@ -240,8 +240,8 @@ pub(in crate::tools::call::hook::persistence) async fn finish_background_executi
                     }
                 };
                 let notification_result = if won_terminal_compare {
-                    match crate::tools::background::status::canonical_tool_output(
-                        node.as_ref(),
+                    match crate::tools::background::status::observe_canonical_tool_output_with_access(
+                        &crate::ConfigAccess::local_as(node.clone(), lifecycle.actor().clone()),
                         &execution_tool_doc_id,
                         &execution_request_doc_id,
                         &execution_session_id,
@@ -250,7 +250,7 @@ pub(in crate::tools::call::hook::persistence) async fn finish_background_executi
                     )
                     .await
                     {
-                        Ok(output) => output,
+                        Ok(output) => output.into_text(),
                         Err(error) => {
                             tracing::warn!(
                                 tool_call_id = %execution_call_id,
@@ -319,8 +319,8 @@ pub(in crate::tools::call::hook::persistence) async fn finish_background_executi
                     }
                 };
                 let notification_result = if won_terminal_compare {
-                    match crate::tools::background::status::canonical_tool_output(
-                        node.as_ref(),
+                    match crate::tools::background::status::observe_canonical_tool_output_with_access(
+                        &crate::ConfigAccess::local_as(node.clone(), lifecycle.actor().clone()),
                         &execution_tool_doc_id,
                         &execution_request_doc_id,
                         &execution_session_id,
@@ -329,7 +329,7 @@ pub(in crate::tools::call::hook::persistence) async fn finish_background_executi
                     )
                     .await
                     {
-                        Ok(output) => output,
+                        Ok(output) => output.into_text(),
                         Err(error) => {
                             tracing::warn!(
                                 tool_call_id = %execution_call_id,

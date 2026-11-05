@@ -4,10 +4,10 @@ pub(super) mod read;
 pub(super) mod schema_fields;
 pub(super) mod validate;
 
-use super::{mint_recreate_identity, ConfigApplyTxn};
+use super::{mint_recreate_identity, ConfigApplyTxn, ConfigRelationshipGrant};
 use crate::store::graphql::escape_graphql_string;
 use crate::Collection;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use gents_protocol::graphql::extract_mutation_doc_id;
 use plan::{
     document_identity, ensure_expectations_hold, validate_node_replacement,
@@ -23,8 +23,9 @@ use validate::{
     validate_advertised_profiles, validate_outcome_source_fields, validate_trigger_document_fields,
 };
 
-/// All writes remain in the caller's transaction. Reference checks run after
-/// staged writes so valid cyclic configurations do not depend on write order.
+/// Documents commit in the caller's transaction; creator-managed ACP1 grants
+/// follow the commit. Reference checks run after staged writes so valid cyclic
+/// configurations do not depend on write order.
 pub async fn apply_desired_state_plan(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
@@ -42,6 +43,7 @@ pub async fn apply_desired_state_plan(
         .collect::<Result<Vec<_>>>()?;
     let mut existing_documents = read_identity_records(txn, &document_identities).await?;
     let mut counts = DesiredStateApplyCounts::default();
+    let mut created_agents = Vec::new();
     for document in plan.documents() {
         let (owner, id) = document_identity(document.collection, &document.add)?;
         let existing =
@@ -49,6 +51,17 @@ pub async fn apply_desired_state_plan(
         let changed = existing
             .as_ref()
             .is_none_or(|(_, current)| current != &document.update);
+        let created = existing.is_none();
+        if created && matches!(document.collection, Collection::Node | Collection::Agent) {
+            if txn.actor_did().is_none() {
+                return Err(super::ConfigClientError::RelationshipActorRequired.into());
+            }
+            identity::Did::new(if document.collection == Collection::Node {
+                owner
+            } else {
+                id
+            })?;
+        }
         let name = document.collection.graphql_type();
         let (mutation, input) = if let Some((doc_id, current)) = existing {
             if document.collection == Collection::Node {
@@ -81,9 +94,30 @@ pub async fn apply_desired_state_plan(
         }
         if changed {
             let response = txn
-                .execute_with_variables(&mutation, &serde_json::json!({"input": input}))
+                .execute_desired_state_mutation(
+                    &mutation,
+                    &serde_json::json!({"input": input}),
+                    document.collection == Collection::Agent,
+                    created,
+                )
                 .await?;
-            extract_mutation_doc_id(&response, name)?;
+            let doc_id = extract_mutation_doc_id(&response, name)?;
+            if created {
+                match document.collection {
+                    Collection::Node => {
+                        txn.queue_relationship_grant(ConfigRelationshipGrant::Actor {
+                            collection: name.to_owned(),
+                            doc_id,
+                            relation: "runtime_reader".to_owned(),
+                            target: owner.to_owned(),
+                        })?;
+                    }
+                    Collection::Agent => {
+                        created_agents.push((owner.to_owned(), id.to_owned(), doc_id))
+                    }
+                    _ => {}
+                }
+            }
         }
         counts.increment(document.collection);
         if changed && document.collection == Collection::InferenceBackend {
@@ -97,6 +131,24 @@ pub async fn apply_desired_state_plan(
                 );
             }
         }
+    }
+    for (node_did, agent_did, agent_doc) in created_agents {
+        let (node_doc, _) = read::read_record(txn, Collection::Node, &node_did, &node_did)
+            .await?
+            .context("creating an agent requires its user-owned Node")?;
+        txn.queue_relationship_grant(ConfigRelationshipGrant::Resource {
+            collection: "Agent".to_owned(),
+            doc_id: agent_doc.clone(),
+            relation: "parent".to_owned(),
+            target_resource: "nodes".to_owned(),
+            target_doc_id: node_doc,
+        })?;
+        txn.queue_relationship_grant(ConfigRelationshipGrant::Actor {
+            collection: "Agent".to_owned(),
+            doc_id: agent_doc,
+            relation: "executor".to_owned(),
+            target: agent_did,
+        })?;
     }
     let removal_identities = plan
         .removals()

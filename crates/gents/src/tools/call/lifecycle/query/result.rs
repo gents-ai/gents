@@ -104,6 +104,8 @@ impl ReadSource<'_, '_> {
 
 #[derive(Debug)]
 pub(crate) struct CanonicalToolCallRead {
+    pub(crate) accepted_header_doc_id: String,
+    pub(crate) execution_generation: String,
     pub(crate) request_doc_id: String,
     pub(crate) tool_name: String,
     pub(crate) lifecycle_state: ToolCallState,
@@ -177,25 +179,6 @@ pub async fn load_tool_file_change_observation(
     .await
 }
 
-pub(crate) async fn load_tool_file_change_observation_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    tool_call_doc_id: &str,
-    request_doc_id: &str,
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-) -> Result<ToolFileChangeRead> {
-    load_tool_file_change_observation_source(
-        ReadSource::Txn(txn),
-        tool_call_doc_id,
-        request_doc_id,
-        node_did,
-        session_id,
-        requester_did,
-    )
-    .await
-}
-
 async fn load_tool_file_change_observation_source(
     source: ReadSource<'_, '_>,
     tool_call_doc_id: &str,
@@ -204,7 +187,7 @@ async fn load_tool_file_change_observation_source(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<ToolFileChangeRead> {
-    let (call, _, _, _) = load_accepted_tool_call(
+    let (call, _, _, _, _) = load_accepted_tool_call(
         source,
         tool_call_doc_id,
         node_did,
@@ -326,7 +309,7 @@ pub(crate) async fn load_tool_call_arguments_in_txn(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<String> {
-    let (_, _, _, arguments) = load_accepted_tool_call(
+    let (_, _, _, arguments, _) = load_accepted_tool_call(
         ReadSource::Txn(txn),
         tool_call_doc_id,
         node_did,
@@ -361,14 +344,22 @@ async fn load_tool_call_read_source(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<CanonicalToolCallRead> {
-    let (call, headers, accepted_call_id, accepted_arguments) = load_accepted_tool_call(
-        source,
-        tool_call_doc_id,
-        node_did,
-        session_id,
-        requester_did,
-    )
-    .await?;
+    let (call, headers, accepted_call_id, accepted_arguments, accepted_header) =
+        load_accepted_tool_call(
+            source,
+            tool_call_doc_id,
+            node_did,
+            session_id,
+            requester_did,
+        )
+        .await?;
+    let accepted_header_doc_id = accepted_header.doc_id;
+    let MessagePublication::RequestExecution {
+        execution_generation,
+    } = accepted_header.message.publication
+    else {
+        anyhow::bail!("accepted tool header has no execution generation");
+    };
     let lifecycle_state =
         ToolCallState::from_persisted(&call.lifecycle_state).ok_or_else(|| {
             anyhow!(
@@ -423,6 +414,8 @@ async fn load_tool_call_read_source(
             (None, None)
         };
         return Ok(CanonicalToolCallRead {
+            accepted_header_doc_id,
+            execution_generation,
             request_doc_id,
             tool_name: call.tool_name,
             lifecycle_state,
@@ -467,6 +460,8 @@ async fn load_tool_call_read_source(
             "a ToolDelivery publication exists for tool_call_doc_id={tool_call_doc_id} but carries no native tool-result invocation reply"
         );
         return Ok(CanonicalToolCallRead {
+            accepted_header_doc_id,
+            execution_generation,
             request_doc_id: expected_request_doc_id,
             tool_name: call.tool_name,
             lifecycle_state,
@@ -587,6 +582,8 @@ async fn load_tool_call_read_source(
         None
     };
     Ok(CanonicalToolCallRead {
+        accepted_header_doc_id,
+        execution_generation,
         request_doc_id: expected_request_doc_id,
         tool_name: call.tool_name,
         lifecycle_state,
@@ -696,6 +693,7 @@ async fn load_accepted_tool_call(
     Vec<crate::session::canonical_rows::TranscriptMessageRow>,
     Option<String>,
     String,
+    crate::session::canonical_rows::TranscriptMessageRow,
 )> {
     let call = load_tool_call_identity(
         source,
@@ -861,7 +859,8 @@ async fn load_accepted_tool_call(
     if call.spawned_by_tool_call_doc_id.is_some() || call.plugin_parent_tool_call_doc_id.is_some() {
         call_id = None;
     }
-    Ok((call, headers, call_id, arguments))
+    let accepted_header = accepted[0].clone();
+    Ok((call, headers, call_id, arguments, accepted_header))
 }
 
 fn is_invocation_reply(header: &TranscriptMessage, tool_call_doc_id: &str) -> bool {
@@ -1133,7 +1132,7 @@ mod tests {
                 "case {index}"
             );
             drop(request_owner);
-            node.shutdown().await;
+            node.shutdown().await.expect("shut down test node");
             let _ = std::fs::remove_dir_all(path);
         }
     }
@@ -1268,7 +1267,7 @@ mod tests {
                 .is_err()
         );
         drop(request_owner);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
 
@@ -1319,7 +1318,7 @@ mod tests {
         assert!(presented.contains("partial output"));
         assert!(presented.contains("tool call deadline exceeded"));
         drop(request_owner);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
 
@@ -1366,7 +1365,7 @@ mod tests {
             "{error:#}"
         );
         drop(request_owner);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
 
@@ -1446,7 +1445,7 @@ mod tests {
         })
         .await
         .unwrap();
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(path).unwrap();
     }
 
@@ -1490,7 +1489,7 @@ mod tests {
         })
         .await
         .unwrap();
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(path).unwrap();
     }
 }

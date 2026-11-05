@@ -11,7 +11,7 @@ export type SearchTarget =
   | { kind: "attention"; item: MailboxItemView }
   | { kind: "node"; nodeDid: string; name: string }
   | { kind: "session"; session: SessionSummary }
-  | { kind: "agent"; route: Route; agentId: string; nodeDid: string }
+  | { kind: "agent"; route: Route; agentDid: string; nodeDid: string }
   | { kind: "setting" | "action"; route: Route; icon: Icon };
 
 export type SearchEntry = SearchTarget & {
@@ -76,7 +76,7 @@ export type SearchSources = {
   attention: readonly MailboxItemView[];
   /** every agent, with its node and the pack it came from, if any */
   agents: readonly {
-    agentId: string;
+    agentDid: string;
     nodeDid: string;
     name: string;
     node: string;
@@ -133,16 +133,16 @@ export function searchEntries(src: SearchSources): SearchEntry[] {
       entry(
         {
           kind: "agent",
-          agentId: a.agentId,
+          agentDid: a.agentDid,
           nodeDid: a.nodeDid,
           route: {
             name: "agent",
             nodeDid: a.nodeDid,
             section: "agents",
-            item: a.agentId,
+            item: a.agentDid,
           },
         },
-        `agent:${a.nodeDid}:${a.agentId}`,
+        `agent:${a.nodeDid}:${a.agentDid}`,
         a.name,
         a.pack ? `${a.node} · ${a.pack}` : a.node,
         a.pack ? [a.node, a.pack] : [a.node],

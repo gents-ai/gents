@@ -7,8 +7,8 @@ use super::presentation::{
 use super::TerminalFields;
 use crate::request::lifecycle::queue::next_append_sequence_in_transaction;
 use crate::session::canonical_rows::{
-    decode_transcript_message_row, output_segment_create_variables,
-    transcript_message_create_variables, AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
+    decode_transcript_message_row, output_segment_bound_variables,
+    transcript_message_bound_variables, AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
     CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use crate::store::config_client::ConfigApplyTxn;
@@ -717,7 +717,7 @@ pub(super) async fn terminalize_transaction(
     let segment_response = txn
         .execute_with_variables(
             CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-            &output_segment_create_variables(&segment)?,
+            &output_segment_bound_variables(txn, &segment).await?,
         )
         .await?;
     let close_doc_id = created_doc_id(&segment_response, "AgentOutputSegment")?;
@@ -781,7 +781,7 @@ pub(super) async fn terminalize_transaction(
     };
     txn.execute_with_variables(
         CREATE_AGENT_MESSAGE_MUTATION,
-        &transcript_message_create_variables(&message)?,
+        &transcript_message_bound_variables(txn, &message).await?,
     )
     .await?;
     Ok(true)

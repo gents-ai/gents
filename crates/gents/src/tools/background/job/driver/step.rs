@@ -59,8 +59,12 @@ enum Stepped {
 /// Runs one step of the running job row `row_doc_id`: builds its input, runs
 /// the plugin on the shared executor without a tool dispatcher, and commits
 /// the step in one revision-checked transaction.
-pub async fn run_step(runtime: &JobRuntime, row_doc_id: &str) -> Result<StepOutcome> {
-    let access = ConfigAccess::local(runtime.node.clone());
+pub async fn run_step(
+    runtime: &JobRuntime,
+    row_doc_id: &str,
+    actor: &identity::Did,
+) -> Result<StepOutcome> {
+    let access = ConfigAccess::local_as(runtime.node.clone(), actor.clone());
     let mut lifecycle = load_lifecycle(&access, row_doc_id).await?;
     let row_running = lifecycle.is_running();
     // The precheck avoids invoking a guest for an already-stopped session;
@@ -68,6 +72,7 @@ pub async fn run_step(runtime: &JobRuntime, row_doc_id: &str) -> Result<StepOutc
     let session_stopped = row_running
         && crate::session::session_is_stopped(
             &runtime.node,
+            lifecycle.actor(),
             lifecycle.node_did(),
             lifecycle.session_id(),
             lifecycle.requester_did(),
@@ -101,13 +106,14 @@ pub(super) async fn step_on(
     input: JobStepInput,
     revision: u64,
 ) -> Result<StepOutcome> {
-    let access = ConfigAccess::local(runtime.node.clone());
+    let access = ConfigAccess::local_as(runtime.node.clone(), lifecycle.actor().clone());
     let row_doc_id = input.job.row_doc_id.as_str();
     let pin = input
         .pin
         .clone()
         .with_context(|| format!("job row {row_doc_id} has no job_pin"))?;
     let caller = &input.caller;
+    let agent_identity = runtime.agent_identity(&caller.node_did, &caller.agent_did)?;
     let jobs = JobCaller::new(
         runtime.node.clone(),
         ProcessControlScope {
@@ -117,7 +123,7 @@ pub(super) async fn step_on(
             requester_did: lifecycle.requester_did().map(str::to_owned),
         },
         StampContext::JobStep {
-            node_did: caller.node_did.clone(),
+            caller_did: caller.agent_did.clone(),
             session_id: caller.session_id.clone(),
             request_doc_id: caller.request_doc_id.clone(),
             tool_call_doc_id: row_doc_id.to_owned(),
@@ -131,7 +137,11 @@ pub(super) async fn step_on(
         .call_job_step_with_receipt(
             installed,
             serde_json::to_value(&input)?,
-            Some(DataCaller::new(runtime.node.clone(), &caller.node_did)?),
+            Some(DataCaller::for_agent(
+                runtime.node.clone(),
+                &caller.node_did,
+                agent_identity.did(),
+            )?),
             jobs,
         )
         .await;
@@ -195,7 +205,7 @@ pub(super) async fn step_on(
                     Some(SessionScope {
                         node_did: child.target.0.clone(),
                         session_id: job_session_id(&row.root, &child.slot, child.attempt),
-                        requester_did: Some(caller.node_did.clone()),
+                        requester_did: Some(caller.agent_did.clone()),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -204,7 +214,7 @@ pub(super) async fn step_on(
                 session_id: caller.session_id.clone(),
                 requester_did: lifecycle.requester_did().map(str::to_owned),
             };
-            interrupt_slots(&runtime.node, &spawner, &slots).await?;
+            interrupt_slots(&runtime.node, &caller.agent_did, &spawner, &slots).await?;
         }
     }
     if settlement_of(&output).is_some() {
@@ -213,7 +223,7 @@ pub(super) async fn step_on(
 
     let cause = SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
-        caller_agent_id: caller.agent_id.clone(),
+        caller_agent_did: caller.agent_did.clone(),
         caller_session_id: caller.session_id.clone(),
         caller_requester_did: lifecycle.requester_did().map(str::to_owned),
         caller_request_id: caller.request_id.clone(),
@@ -236,7 +246,7 @@ pub(super) async fn step_on(
         );
         ConfigAccess::transact_local_write(
             &runtime.node,
-            Some(::identity::Did::new(caller.node_did.clone())?),
+            Some(::identity::Did::new(caller.agent_did.clone())?),
             "plugin_job.run_step",
             |txn| {
                 Box::pin(async move {
@@ -263,7 +273,7 @@ pub(super) async fn step_on(
             let staged = std::mem::take(&mut *staged.lock().expect("staged requests lock"));
             recover_step_commit(
                 &runtime.node,
-                Some(::identity::Did::new(caller.node_did.clone())?),
+                Some(::identity::Did::new(caller.agent_did.clone())?),
                 error,
                 &staged,
             )
@@ -371,15 +381,19 @@ async fn step_transaction(
                 )
             })?;
         let stamps = StampContext::JobStep {
-            node_did: input.caller.node_did.clone(),
+            caller_did: input.caller.agent_did.clone(),
             session_id: input.caller.session_id.clone(),
             request_doc_id: input.caller.request_doc_id.clone(),
             tool_call_doc_id: row_doc_id.to_owned(),
             job_row_doc_id: row_doc_id.to_owned(),
             chain_root_doc_id: pin.chain_root_doc_id.clone(),
         };
+        let agent_identity =
+            runtime.agent_identity(&input.caller.node_did, &input.caller.agent_did)?;
+        let actor = ::identity::Did::new(agent_identity.did().to_owned())?;
         crate::plugin::application_write::apply_plugin_writes_in_txn(
             txn,
+            &actor,
             &grant,
             &stamps,
             writes.to_vec(),

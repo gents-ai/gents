@@ -1,4 +1,4 @@
-import { selectedAgentIdForDeployment } from "@source-inc/gents-desktop-client";
+import { selectedAgentDidForDeployment } from "@source-inc/gents-desktop-client";
 
 import { rememberedNode, rememberNode } from "./activeNode";
 import { firstNode, nodeOf } from "./fleetStore";
@@ -12,7 +12,7 @@ export function reconcileSelection(
 ) {
   const store = stores.selection;
   const settle = () => {
-    const { nodeDid, agentId, composingFor } = store.getState();
+    const { nodeDid, agentDid, composingFor } = store.getState();
     const fleet = stores.fleet.getState();
     if (!nodeDid) {
       /* the node chosen last on this device, else this machine's own,
@@ -26,7 +26,7 @@ export function reconcileSelection(
     const node = nodeOf(fleet, nodeDid);
     if (!node) return;
     if (composingFor === node.nodeDid) return;
-    selection.settleAgent(store, selectedAgentIdForDeployment(node, agentId));
+    selection.settleAgent(store, selectedAgentDidForDeployment(node, agentDid));
   };
   stores.fleet.subscribe(settle);
   store.subscribe(settle);

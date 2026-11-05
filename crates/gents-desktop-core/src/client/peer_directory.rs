@@ -63,21 +63,21 @@ impl PeerRecord {
     }
 
     pub fn operator_graphql(&self) -> Option<&str> {
-        if self.source.as_deref() != Some("local-standard")
-            && !(self.is_enrollment() && self.is_managed_runtime())
-        {
-            return None;
-        }
         let graphql = self.graphql.as_deref()?.trim();
-        graphql
-            .contains("/api/v0/graphql")
-            .then_some(graphql)
-            .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
+        let url = reqwest::Url::parse(graphql).ok()?;
+        (matches!(url.scheme(), "http" | "https")
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+            && url.path().ends_with("/api/v0/graphql"))
+        .then_some(graphql)
     }
 
     pub fn is_chat_ready_at(&self, now: DateTime<Utc>) -> bool {
-        if self.source.as_deref() == Some("local-standard") {
-            return self.pairing_ready;
+        if self.operator_graphql().is_some() {
+            return true;
         }
         self.is_enrollment()
             && self.pairing_ready
@@ -751,6 +751,29 @@ fn sort_peer_records(records: &mut [PeerRecord]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn operator_endpoint_requires_the_canonical_runtime_suffix() {
+        let mut record: PeerRecord = serde_json::from_value(serde_json::json!({
+            "peer_id": "peer", "node_did": "did:test:runtime", "label": "runtime", "addr": "iroh:peer",
+            "created_at": "2026-11-04T00:00:00Z", "updated_at": "2026-11-04T00:00:00Z"
+        }))
+        .unwrap();
+        for path in ["/api/v0/graphql", "/proxy/api/v0/graphql"] {
+            let url = format!("https://runtime.example{path}");
+            record.graphql = Some(url.clone());
+            assert_eq!(record.operator_graphql(), Some(url.as_str()));
+        }
+        for path in [
+            "/api/v1/graphql",
+            "/graphql",
+            "/api/v0/graphql/extra",
+            "/status?next=/api/v0/graphql",
+        ] {
+            record.graphql = Some(format!("https://runtime.example{path}"));
+            assert!(record.operator_graphql().is_none());
+        }
+    }
 
     #[test]
     fn source_less_peer_is_not_an_immediate_chat_authority() {

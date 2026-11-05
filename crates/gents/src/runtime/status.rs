@@ -99,14 +99,14 @@ impl RuntimeStatusOwner {
 
 #[derive(Clone)]
 pub(crate) struct RuntimeStatusHandle {
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     state: Arc<Mutex<RuntimeStatusRow>>,
     readiness: NodeReadinessPublisherHandle,
 }
 
 impl RuntimeStatusHandle {
     pub(crate) fn start(
-        node: Arc<defra_node::EmbeddedNode>,
+        node: Arc<defra_node::Node>,
         node_did: impl Into<String>,
     ) -> (RuntimeStatusOwner, Self) {
         let node_did = node_did.into();
@@ -126,7 +126,7 @@ impl RuntimeStatusHandle {
 
     #[cfg(test)]
     pub(crate) fn start_with_readiness_writer(
-        node: Arc<defra_node::EmbeddedNode>,
+        node: Arc<defra_node::Node>,
         node_did: impl Into<String>,
         writer: Arc<dyn crate::runtime::node_readiness_publisher::NodeReadinessWriter>,
         retry_delay: Duration,
@@ -147,7 +147,7 @@ impl RuntimeStatusHandle {
     }
 
     #[cfg(test)]
-    pub(crate) fn new(node: Arc<defra_node::EmbeddedNode>, node_did: impl Into<String>) -> Self {
+    pub(crate) fn new(node: Arc<defra_node::Node>, node_did: impl Into<String>) -> Self {
         let node_did = node_did.into();
         let (_owner, readiness) = NodeReadinessPublisherHandle::start_with_unbounded_test_clock(
             node.clone(),
@@ -162,7 +162,7 @@ impl RuntimeStatusHandle {
 
     #[cfg(test)]
     pub(crate) fn start_with_unbounded_test_clock(
-        node: Arc<defra_node::EmbeddedNode>,
+        node: Arc<defra_node::Node>,
         node_did: impl Into<String>,
     ) -> (RuntimeStatusOwner, Self) {
         let node_did = node_did.into();
@@ -183,12 +183,21 @@ impl RuntimeStatusHandle {
         )
     }
 
+    pub(crate) async fn goal_reconcile_settled(&self) -> bool {
+        let row = self.state.lock().await;
+        !row.last_reconcile_result.is_empty()
+            && crate::goal::goal_reconcile_settled(
+                Some(&row.reconcile_phase),
+                Some(&row.last_reconcile_result),
+            )
+    }
+
     pub(crate) fn readiness(&self) -> &NodeReadinessPublisherHandle {
         &self.readiness
     }
 
-    pub(crate) async fn initialize_startup(&self, default_agent_id: &str) -> anyhow::Result<()> {
-        self.readiness.initialize(default_agent_id).await?;
+    pub(crate) async fn initialize_startup(&self, default_agent_did: &str) -> anyhow::Result<()> {
+        self.readiness.initialize(default_agent_did).await?;
         Ok(())
     }
 
@@ -372,7 +381,7 @@ fn runtime_status_fields(row: &RuntimeStatusRow) -> [(&'static str, String); 8] 
 }
 
 async fn upsert_runtime_status(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     row: &RuntimeStatusRow,
 ) -> anyhow::Result<()> {
     let fields = runtime_status_fields(row)

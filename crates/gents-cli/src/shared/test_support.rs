@@ -6,7 +6,7 @@ pub(crate) fn node_builder() -> defra_node::NodeBuilder {
     let directory = tempfile::tempdir().unwrap();
     let identity =
         gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
-    defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
+    defra_node::Node::builder().with_node_identity_did(identity.did())
 }
 
 pub(crate) async fn seed_unsent_xai_effort(
@@ -91,6 +91,6 @@ async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()
         observation.catalogs[0].models[0].model_name,
         "retained-model"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }

@@ -15,6 +15,19 @@ pub struct IdentityKeyUnavailable {
 
 #[derive(Debug, thiserror::Error)]
 pub enum IdentityError {
+    #[error(
+        "agent creation_nonce must contain 32 bytes encoded as 64 lowercase hexadecimal characters"
+    )]
+    InvalidAgentCreationNonce,
+    #[error("agent identity cannot be derived from non-exportable node key {node_did}; configure an exportable file or Keychain node key")]
+    AgentDerivationUnavailable { node_did: String },
+    #[error("Agent identity {agent_did} does not match its runtime and creation nonce (derived {derived_did})")]
+    AgentIdentityMismatch {
+        agent_did: String,
+        derived_did: String,
+    },
+    #[error("agent key derivation requested an invalid output length")]
+    AgentDerivationLength,
     #[error(transparent)]
     InsecureKey(#[from] InsecureKeyPermissions),
     #[error("identity key does not exist at {}", path.display())]

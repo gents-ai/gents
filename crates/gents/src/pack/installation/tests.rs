@@ -62,6 +62,8 @@ fn config(tools: &[(&str, &str)]) -> PackConfig {
 
 fn identity(version: &str) -> PackIdentity {
     PackIdentity {
+        installation_doc_id: None,
+        agent_bindings: BTreeMap::new(),
         coordinate: "acme/demo".into(),
         version: version.into(),
         digest: format!(
@@ -346,7 +348,7 @@ async fn plugin_store_notification_lost_commit_receipt_is_unconfirmed() {
         pack.coordinate
     );
     assert_eq!(rows["data"]["PackInstallation"][0]["plugin_store"], true);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -709,7 +711,7 @@ async fn read_installed_pack_fails_loudly_on_a_malformed_record() {
 
 #[tokio::test]
 async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     let schema = gents_protocol::schemas::PACK_INSTALLATION.replace(
         r#"@index(fields: ["node_did", "coordinate"], unique: true)"#,
         "",
@@ -745,7 +747,7 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
     );
 }
 
-async fn dependency_fixture() -> (Arc<defra_node::EmbeddedNode>, ConfigAccess) {
+async fn dependency_fixture() -> (Arc<defra_node::Node>, ConfigAccess) {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::documents::ensure_node(&node, OWNER).await.unwrap();
@@ -789,6 +791,8 @@ async fn install_dependee(access: &ConfigAccess, explicit: bool) {
         access,
         OWNER,
         &PackIdentity {
+            installation_doc_id: None,
+            agent_bindings: BTreeMap::new(),
             coordinate: "fixture/dependee_fixture".into(),
             version: archive.manifest().version.clone(),
             digest: archive.digest().to_owned(),
@@ -805,6 +809,8 @@ async fn install_dependee(access: &ConfigAccess, explicit: bool) {
 
 fn demo_identity(dependencies: Vec<String>) -> PackIdentity {
     PackIdentity {
+        installation_doc_id: None,
+        agent_bindings: BTreeMap::new(),
         coordinate: "acme/demo".into(),
         version: "1".into(),
         digest: format!("sha256:{}", "d".repeat(64)),
@@ -1024,13 +1030,15 @@ async fn an_upgrade_that_drops_a_documents_dependency_releases_it() {
     let (_node, access) = dependency_fixture().await;
     let (_guards, dependee, dependent) = documents_dependency_pair(false, false);
     install_dependent_with_dependee(&access, &dependee, &dependent, None).await;
-    let agents = access.execute("{ Agent { agent_id } }").await.unwrap();
+    let agents = access.execute("{ Agent { agent_did } }").await.unwrap();
     let before = agents["data"]["Agent"].as_array().unwrap().len();
 
     super::super::install_pack_documents(
         &access,
         OWNER,
         &PackIdentity {
+            installation_doc_id: None,
+            agent_bindings: BTreeMap::new(),
             coordinate: "fixture/dependent_fixture".into(),
             version: "2".into(),
             digest: format!("sha256:{}", "2".repeat(64)),
@@ -1055,7 +1063,7 @@ async fn an_upgrade_that_drops_a_documents_dependency_releases_it() {
             .any(|row| row["coordinate"] == "fixture/dependee_fixture"),
         "the dropped documents dependency is released outright: {rows:?}"
     );
-    let agents = access.execute("{ Agent { agent_id } }").await.unwrap();
+    let agents = access.execute("{ Agent { agent_did } }").await.unwrap();
     assert!(
         agents["data"]["Agent"].as_array().unwrap().len() < before,
         "the released dependency's own documents are removed: {agents}"
@@ -1081,11 +1089,11 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
         ),
         home(
             Collection::Agent,
-            json!({"node_did":OWNER,"agent_id":"chosen","inference_profile_id":"profile"}),
+            json!({"node_did":OWNER,"agent_did":"chosen","inference_profile_id":"profile"}),
         ),
         home(
             Collection::Node,
-            json!({"node_did":OWNER,"default_agent_id":"chosen"}),
+            json!({"node_did":OWNER,"default_agent_did":"chosen"}),
         ),
     ])
     .unwrap();
@@ -1123,12 +1131,12 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
         .unwrap();
 
     let principal = access
-        .execute("{ Node { default_agent_id } }")
+        .execute("{ Node { default_agent_did } }")
         .await
         .unwrap();
     assert_eq!(
         principal["data"]["Node"],
-        json!([{"default_agent_id": "chosen"}])
+        json!([{"default_agent_did": "chosen"}])
     );
     assert_eq!(tools_ids(&access).await, ["pack-tools"]);
 }
@@ -1345,6 +1353,8 @@ fn documents_archive() -> crate::pack::archive::PackArchive {
 
 fn prepared() -> PreparedDocumentPackInstall {
     PreparedDocumentPackInstall {
+        installation_doc_id: None,
+        agent_bindings: BTreeMap::new(),
         config: config(&[("self-config-tools", "Self-config tools")]),
         inference: crate::pack::PackInferenceBindingPreview {
             slots: Vec::new(),
@@ -1580,7 +1590,7 @@ fn shipping(targets: &[&str]) -> PackConfig {
             .iter()
             .map(|id| json!({
                 "target_id": id, "node_did": OWNER, "target_node_did": OWNER,
-                "agent_id": id, "name": id,
+                "agent_did": id, "name": id,
             }))
             .collect::<Vec<_>>(),
     }))
@@ -2092,7 +2102,7 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .with_node_acp_enabled()
             .with_http(defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap())
@@ -2188,7 +2198,7 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
             .len(),
         1
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -2314,7 +2324,7 @@ async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
         let config: PackConfig = serde_json::from_value(json!({
             "node": {"node_did": OWNER},
             "agents": references.iter().enumerate().map(|(index, _)| json!({
-                "agent_id": format!("reference-{index}"), "node_did": OWNER,
+                "agent_did": format!("reference-{index}"), "node_did": OWNER,
                 "context_id": format!("context-{index}"), "inference_profile_id": "glm:inference"
             })).collect::<Vec<_>>(),
             "contexts": references.iter().enumerate().map(|(index, _)| json!({
@@ -2360,7 +2370,7 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
     access.write("test.surviving_plugin_user", r#"mutation {
         create_Tools(input: {tools_id: "surviving-tools", node_did: "did:key:zPackInstallOwner", integrations: {plugins: [{plugin: "acme/echo"}]}}) {_docID}
         create_AgentContext(input: {context_id: "surviving-context", node_did: "did:key:zPackInstallOwner", tools_id: "surviving-tools"}) {_docID}
-        create_Agent(input: {agent_id: "surviving-agent", node_did: "did:key:zPackInstallOwner", context_id: "surviving-context", inference_profile_id: "glm:inference"}) {_docID}
+        create_Agent(input: {agent_did: "surviving-agent", node_did: "did:key:zPackInstallOwner", context_id: "surviving-context", inference_profile_id: "glm:inference"}) {_docID}
     }"#).await.unwrap();
     let before = tools_ids(&access).await;
     let error = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
@@ -2377,7 +2387,7 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
         .write(
             "test.remove_plugin_user",
             r#"mutation {
-        delete_Agent(filter: {agent_id: {_eq: "surviving-agent"}}) {_docID}
+        delete_Agent(filter: {agent_did: {_eq: "surviving-agent"}}) {_docID}
     }"#,
         )
         .await
@@ -2402,7 +2412,7 @@ async fn removing_agents_with_their_plugin_pack_does_not_block_removal() {
     }))
     .unwrap()];
     config.agents = vec![serde_json::from_value(json!({
-        "agent_id": "owned-agent", "node_did": OWNER, "context_id": "owned-context", "inference_profile_id": "glm:inference"
+        "agent_did": "owned-agent", "node_did": OWNER, "context_id": "owned-context", "inference_profile_id": "glm:inference"
     })).unwrap()];
     install(&access, "1", &config, DriftPolicy::Refuse)
         .await
@@ -2418,7 +2428,7 @@ async fn plugin_removal_does_not_treat_dangling_scope_as_no_references() {
     let access = access().await;
     let removed = BTreeSet::from(["acme/echo".to_owned()]);
     access.write("test.dangling_plugin_scope", r#"mutation {
-        create_Agent(input: {agent_id: "dangling", node_did: "did:key:zPackInstallOwner", context_id: "missing", inference_profile_id: "profile"}) {_docID}
+        create_Agent(input: {agent_did: "dangling", node_did: "did:key:zPackInstallOwner", context_id: "missing", inference_profile_id: "profile"}) {_docID}
     }"#).await.unwrap();
     let missing_context = ensure_plugins_unreferenced(&access, OWNER, &removed)
         .await
@@ -2553,7 +2563,7 @@ async fn pinned_plugin_references_match_executable_model_before_install_or_updat
                 );
             }
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -2601,7 +2611,7 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
         .unwrap()["unconfirmed"]
         .as_bool()
         .unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     let error = super::documents::install_documents_with_plugins(
         &access,
         OWNER,
@@ -2670,7 +2680,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
     assert_eq!(initial.1[0].digest, old_digest);
     let external: PackConfig = serde_json::from_value(json!({
         "node": {"node_did": OWNER},
-        "agents": [{"agent_id": "survivor", "node_did": OWNER, "context_id": "survivor-context", "inference_profile_id": "glm:inference"}],
+        "agents": [{"agent_did": "survivor", "node_did": OWNER, "context_id": "survivor-context", "inference_profile_id": "glm:inference"}],
         "contexts": [{"context_id": "survivor-context", "node_did": OWNER, "tools_id": "survivor-tools"}],
         "tools": [{"tools_id": "survivor-tools", "node_did": OWNER,
             "integrations": {"plugins": [{"plugin": "acme/web_search", "digest": old_digest}]}}],
@@ -2681,7 +2691,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
     let before = crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap();
     let before_docs = access
         .execute(
-            "{Agent {agent_id} Tools {tools_id integrations} PackInstallation {coordinate digest}}",
+            "{Agent {agent_did} Tools {tools_id integrations} PackInstallation {coordinate digest}}",
         )
         .await
         .unwrap();
@@ -2718,7 +2728,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
         crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap(),
         before
     );
-    assert_eq!(access.execute("{Agent {agent_id} Tools {tools_id integrations} PackInstallation {coordinate digest}}").await.unwrap(), before_docs);
+    assert_eq!(access.execute("{Agent {agent_did} Tools {tools_id integrations} PackInstallation {coordinate digest}}").await.unwrap(), before_docs);
     let updated: PackConfig = serde_json::from_value(json!({
         "node": {"node_did": OWNER},
         "tools": [{"tools_id": "survivor-tools", "node_did": OWNER,
@@ -2749,7 +2759,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
             .digest,
         new_digest
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -2815,7 +2825,7 @@ async fn cancelling_pack_install_caller_does_not_cancel_owned_commit() {
             .unwrap()
             .is_some()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -2843,7 +2853,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
     let root_config = |pin: &str| {
         let config = serde_json::from_value::<PackConfig>(json!({
         "node": {"node_did": OWNER},
-        "agents": [{"agent_id":"graph-agent", "node_did":OWNER,"context_id":"graph-context","inference_profile_id":"glm:inference"}],
+        "agents": [{"agent_did":"graph-agent", "node_did":OWNER,"context_id":"graph-context","inference_profile_id":"glm:inference"}],
         "contexts": [{"context_id":"graph-context", "node_did":OWNER,"tools_id":"graph-tools"}],
         "tools": [{"tools_id":"graph-tools", "node_did":OWNER,"integrations":{"plugins":[{"plugin":"acme/web_search","digest":pin}]}}]
     })).unwrap();
@@ -2854,6 +2864,8 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
                  config: PackConfig,
                  bytes: Option<Vec<u8>>,
                  dependencies: Vec<String>| DocumentPackStage {
+        installation_doc_id: None,
+        agent_bindings: BTreeMap::new(),
         manifest: manifest.clone(),
         digest: format!("sha256:{}", digest.repeat(64)),
         config,
@@ -2918,7 +2930,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         rows["data"]["Tools"][0]["integrations"]["plugins"][0]["digest"],
         new_digest
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -3002,7 +3014,7 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
         .await
         .unwrap();
     assert!(rows["data"]["Tools"].as_array().unwrap().is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -3024,7 +3036,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
     let manifest = plugin_pack_manifest("installed_pin", "documents", &[]);
     let config: PackConfig = serde_json::from_value(json!({
         "node": {"node_did": OWNER},
-        "agents": [{"agent_id":"pin-agent", "node_did":OWNER,"context_id":"pin-context","inference_profile_id":"glm:inference"}],
+        "agents": [{"agent_did":"pin-agent", "node_did":OWNER,"context_id":"pin-context","inference_profile_id":"glm:inference"}],
         "contexts": [{"context_id":"pin-context", "node_did":OWNER,"tools_id":"pin-tools"}],
         "tools": [{"tools_id":"pin-tools", "node_did":OWNER,"integrations":{"plugins":[{"plugin":"fixture/native_echo","digest":old.digest}]}}]
     })).unwrap();
@@ -3128,7 +3140,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap(),
         old
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -3149,7 +3161,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
     let old = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
     let external: PackConfig = serde_json::from_value(json!({
         "node": {"node_did": OWNER},
-        "agents": [{"agent_id":"standalone-survivor", "node_did": OWNER, "context_id":"standalone-context", "inference_profile_id":"glm:inference"}],
+        "agents": [{"agent_did":"standalone-survivor", "node_did": OWNER, "context_id":"standalone-context", "inference_profile_id":"glm:inference"}],
         "contexts": [{"context_id":"standalone-context", "node_did":OWNER,"tools_id":"standalone-tools"}],
         "tools": [{"tools_id":"standalone-tools", "node_did":OWNER, "integrations":{"plugins":[{"plugin":"fixture/native_echo","digest":old.digest}]}}]
     })).unwrap();
@@ -3202,7 +3214,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
             .unwrap(),
         old_home
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -3264,7 +3276,7 @@ async fn dependency_schema_is_published_before_root_schema_rejection() {
         .unwrap();
     assert!(result["data"]["PackSchemaDependency"].is_array());
     assert!(result["data"]["PackSchemaRoot"].is_array());
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -3284,7 +3296,7 @@ async fn definitive_document_drift_rejection_restores_previously_pinned_plugin()
     );
     let config: PackConfig = serde_json::from_value(json!({
         "node": {"node_did": OWNER},
-        "agents": [{"agent_id":"drift-agent", "node_did":OWNER,"context_id":"drift-context","inference_profile_id":"glm:inference"}],
+        "agents": [{"agent_did":"drift-agent", "node_did":OWNER,"context_id":"drift-context","inference_profile_id":"glm:inference"}],
         "contexts": [{"context_id":"drift-context", "node_did":OWNER,"tools_id":"drift-tools"}],
         "tools": [{"tools_id":"drift-tools", "node_did":OWNER,"display_name":"original",
             "integrations":{"plugins":[{"plugin":"acme/web_search","digest":pin}]}}]
@@ -3332,7 +3344,7 @@ async fn definitive_document_drift_rejection_restores_previously_pinned_plugin()
         before
     );
     assert_eq!(access.execute("{Tools(filter: {tools_id: {_eq: \"drift-tools\"}}) {display_name integrations} PackInstallation {coordinate digest}}").await.unwrap(), docs);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[test]
@@ -3432,5 +3444,5 @@ async fn committed_ack_timeout_retains_staged_plugin_records() {
     );
     let rows = access.execute("{ AckProbe { value } }").await.unwrap();
     assert_eq!(rows["data"]["AckProbe"], json!([{"value":"committed"}]));
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

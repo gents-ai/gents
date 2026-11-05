@@ -273,7 +273,7 @@ mod tests {
         let namespaced_resource =
             format!("{IDENTITY_PERMISSION_POLICY_ID}:{IDENTITY_PERMISSION_RESOURCE_NAME}");
         for grant in &case.grants {
-            let principal = did_from_lean_case(&grant.node, case, "grant.node");
+            let principal = did_from_lean_case(&grant.actor, case, "grant.actor");
             let tuple = RelationTuple::try_new(
                 principal,
                 READER_RELATION,
@@ -378,7 +378,7 @@ mod tests {
         assert!(!cases.is_empty());
 
         for case in cases {
-            if case.expected_actor_node.is_none() || case.expected_peer_node.is_none() {
+            if case.expected_actor_did.is_none() || case.expected_peer_did.is_none() {
                 continue;
             }
             let runtime_addr =
@@ -391,7 +391,7 @@ mod tests {
             let actor = post_identity_decide(
                 runtime_addr,
                 &owner,
-                &case.actor_node,
+                case.expected_actor_did.as_deref().expect("resolved actor"),
                 &case.permission,
                 &resource,
             )
@@ -399,7 +399,7 @@ mod tests {
             let peer = post_identity_decide(
                 runtime_addr,
                 &owner,
-                &case.peer_node,
+                case.expected_peer_did.as_deref().expect("resolved peer"),
                 &case.permission,
                 &resource,
             )

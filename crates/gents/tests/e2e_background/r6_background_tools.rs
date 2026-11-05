@@ -1,4 +1,4 @@
-use gents::defra_node::{EmbeddedNode, EventName};
+use gents::defra_node::{EventName, Node as EmbeddedNode};
 use gents::inference::llm::message::{
     AssistantContent, Message, Text, ToolResultContent, UserContent,
 };
@@ -18,7 +18,7 @@ use crate::support::fixtures::configure_agent_tools;
 use crate::support::streaming_backend::StreamChunk;
 use crate::support::test_db;
 
-const R6_AGENT_ID: &str = "r6-background";
+const R6_AGENT_DID: &str = "r6-background";
 const R6_BACKEND_ID: &str = "r6-background-backend";
 const R6_MODEL: &str = "test-model";
 
@@ -69,8 +69,8 @@ async fn boot_background_turn_with_bounds(
         AcceptedTurnSpec {
             backend_id: R6_BACKEND_ID,
             model: R6_MODEL,
-            parent_agent_id: R6_AGENT_ID,
-            configured_agent_ids: &[R6_AGENT_ID],
+            parent_agent_did: R6_AGENT_DID,
+            configured_agent_dids: &[R6_AGENT_DID],
             request_id: &request_id,
             session_id: &session_id,
             prompt: &prompt,
@@ -95,7 +95,7 @@ async fn boot_background_turn_with_bounds(
             "test.configure_r6_execution_deadline",
             |txn| {
                 Box::pin(async move {
-                    let profile_id = format!("{R6_AGENT_ID}-inference");
+                    let profile_id = format!("{R6_AGENT_DID}-inference");
                     let (_, mut profile) = read(
                         txn,
                         gents::Collection::InferenceProfile,
@@ -104,7 +104,7 @@ async fn boot_background_turn_with_bounds(
                     )
                     .await?
                     .expect("R6 inference profile");
-                    let execution_id = format!("{R6_AGENT_ID}-deadline");
+                    let execution_id = format!("{R6_AGENT_DID}-deadline");
                     profile["execution_id"] = execution_id.clone().into();
                     let execution = serde_json::to_value(gents::documents::InferenceExecution {
                         node_did: node_did.to_string(),
@@ -138,10 +138,10 @@ async fn boot_background_turn_with_bounds(
     configure_agent_tools(
         &db.node,
         db.node_identity.did(),
-        R6_AGENT_ID,
+        R6_AGENT_DID,
         None,
         gents::documents::Tools {
-            tools_id: format!("{R6_AGENT_ID}:tools"),
+            tools_id: format!("{R6_AGENT_DID}:tools"),
             node_did: db.node_identity.did().to_string(),
             host: Some(gents::documents::HostTools {
                 bash: Some(gents::documents::BashTools {
@@ -785,7 +785,7 @@ async fn background_tool_execution_survives_parent_request_deadline() {
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     crate::support::accepted_turn::enqueue_local_accepted_request_until(
         &turn.db,
-        R6_AGENT_ID,
+        R6_AGENT_DID,
         "r6-background-outlives-deadline-request-2",
         &turn.session_id,
         prompt,
@@ -1250,7 +1250,7 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     crate::support::accepted_turn::enqueue_local_accepted_request_until(
         &turn.db,
-        R6_AGENT_ID,
+        R6_AGENT_DID,
         "r6-background-wait-deadline-request-2",
         &turn.session_id,
         prompt,
@@ -1421,7 +1421,7 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
     );
     crate::support::accepted_turn::enqueue_local_accepted_request(
         &turn.db,
-        R6_AGENT_ID,
+        R6_AGENT_DID,
         request_id,
         &turn.session_id,
         prompt,
@@ -1493,6 +1493,7 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
         turn.db.node.clone(),
         &turn.executions,
         turn.db.node_identity.did(),
+        turn.db.node_identity.did(),
         Some(turn.db.node_identity.did()),
         &turn.session_id,
         &tool_call_id,
@@ -1548,7 +1549,7 @@ async fn process_controls_manage_same_principal_job_across_request_turns() {
     );
     crate::support::accepted_turn::enqueue_local_accepted_request(
         &turn.db,
-        R6_AGENT_ID,
+        R6_AGENT_DID,
         "r6-background-cross-turn-controls-request-2",
         &turn.session_id,
         prompt,
@@ -1626,8 +1627,8 @@ async fn second_signed_principal_runtime_is_denied_foreign_process_handle() {
         AcceptedTurnSpec {
             backend_id: "r6-background-foreign-backend",
             model: R6_MODEL,
-            parent_agent_id: foreign_behavior,
-            configured_agent_ids: &[foreign_behavior],
+            parent_agent_did: foreign_behavior,
+            configured_agent_dids: &[foreign_behavior],
             request_id: "r6-background-foreign-request",
             session_id: foreign_session,
             prompt: foreign_prompt,
@@ -1764,7 +1765,7 @@ async fn list_processes_skips_malformed_legacy_rows_without_hiding_valid_jobs() 
     );
     crate::support::accepted_turn::enqueue_local_accepted_request(
         &turn.db,
-        R6_AGENT_ID,
+        R6_AGENT_DID,
         "r6-background-list-malformed-rows-request-2",
         &turn.session_id,
         prompt,
@@ -1880,7 +1881,7 @@ async fn same_tool_background_calls_execute_concurrently_without_registry_mutex(
     );
     crate::support::accepted_turn::enqueue_local_accepted_request(
         &turn.db,
-        R6_AGENT_ID,
+        R6_AGENT_DID,
         "r6-background-concurrent-tool-request-2",
         &turn.session_id,
         prompt,

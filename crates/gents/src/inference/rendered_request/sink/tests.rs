@@ -1,6 +1,29 @@
 use super::*;
 use serde_json::{json, Value};
 
+#[test]
+fn generated_capture_block_scope_cases_use_physical_session_identity() {
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().capture_block_scope_cases;
+    assert!(!cases.is_empty());
+    for case in cases {
+        let field = |name: &str| case[name].as_str().expect("block scope case field");
+        let first = BlockScope {
+            session_doc_id: field("first_session").into(),
+            agent_did: String::new(),
+        };
+        let second = BlockScope {
+            session_doc_id: field("second_session").into(),
+            agent_did: String::new(),
+        };
+        let left = first.key(field("first_digest"));
+        let right = second.key(field("second_digest"));
+        assert_eq!(
+            left == right,
+            case["same_storage_identity"].as_bool().unwrap()
+        );
+    }
+}
+
 fn capture_text(seed: u64, len: usize) -> String {
     let mut state = seed;
     let mut out = String::with_capacity(len);
@@ -14,6 +37,15 @@ fn capture_text(seed: u64, len: usize) -> String {
 }
 
 fn rendered_turn(turn_index: usize, request_json: Value) -> RenderedCompletionRequest {
+    static AGENT_DID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let agent_did = AGENT_DID.get_or_init(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let root =
+            crate::KeyIdentity::load_or_create(directory.path().join("root.key"), None).unwrap();
+        crate::store::identity::provision_agent_identity(&root)
+            .unwrap()
+            .agent_did
+    });
     let capture_scope = "inference.1".to_string();
     let assembly_trace = super::super::AssemblyTrace::from_effective_messages(
         super::super::AssemblyBuildPath::Budgeted,
@@ -38,7 +70,7 @@ fn rendered_turn(turn_index: usize, request_json: Value) -> RenderedCompletionRe
         attempt: 0,
         node_did: "did:key:test".into(),
         requester_did: String::new(),
-        agent_id: "behavior".into(),
+        agent_did: agent_did.clone(),
         session_id: "session".into(),
         model_name: "model".into(),
         source: super::super::RenderedRequestSource::OpenAiChatCompletions,
@@ -191,7 +223,7 @@ async fn capture_and_context_accounting_commit_together() {
         );
         assert_eq!(block_rows(&node).await.len(), original_blocks);
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -235,7 +267,7 @@ async fn capture_writes_blocks_and_a_manifest_that_decode_back() {
         provenance,
         super::super::canonical_json(&rendered.provenance_payload_json)
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -278,7 +310,7 @@ async fn repeated_tool_output_is_stored_once_across_wire_and_native_payloads() {
         decoded,
         (rendered.request_json, rendered.provenance_payload_json)
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -346,7 +378,7 @@ async fn a_shared_prefix_writes_only_new_blocks_and_a_small_manifest() {
         .unwrap(),
         super::super::canonical_json(&second.request_json)
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -411,7 +443,7 @@ async fn a_reused_block_pins_the_existing_row_field_commit() {
         }
     }
     assert!(block_rows(node.as_ref()).await.len() > first_blocks.len());
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 async fn manifest_entries(
@@ -467,12 +499,16 @@ async fn deleted_blocks_never_publish_dangling_references() {
     let next = rendered_turn(1, body);
     let error = sink.capture(next.clone()).await.unwrap_err();
     assert!(format!("{error:#}").contains("deleted"), "{error:#}");
-    assert!(sink.stored_fact(&next.capture_key).await.unwrap().is_none());
+    assert!(sink
+        .stored_fact(&next)
+        .await
+        .unwrap()
+        .is_none());
     let reopened = DefraRenderedRequestSink::new(Arc::clone(&node));
     let error = reopened.capture(next.clone()).await.unwrap_err();
     assert!(format!("{error:#}").contains("deleted"), "{error:#}");
     assert!(reopened
-        .stored_fact(&next.capture_key)
+        .stored_fact(&next)
         .await
         .unwrap()
         .is_none());
@@ -482,11 +518,11 @@ async fn deleted_blocks_never_publish_dangling_references() {
     );
     reopened.capture(unrelated.clone()).await.unwrap();
     assert!(reopened
-        .stored_fact(&unrelated.capture_key)
+        .stored_fact(&unrelated)
         .await
         .unwrap()
         .is_some());
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -579,7 +615,7 @@ async fn shared_manifest_roots_stay_small_and_reconstruct_after_reopen() {
         shared_bytes < flat_bytes,
         "shared={shared_bytes}, flat={flat_bytes}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -603,7 +639,7 @@ async fn same_capture_key_cannot_rebind_its_transport_route() {
         error.to_string().contains("integrity violation"),
         "{error:#}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -626,7 +662,7 @@ async fn re_delivering_a_capture_is_idempotent() {
         blocks_after_first,
         "no block may be written twice"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -675,7 +711,7 @@ async fn concurrent_identical_captures_store_each_block_once() {
             super::super::canonical_json(&request_json)
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 async fn block_payload_bytes(node: &EmbeddedNode) -> std::collections::BTreeMap<String, usize> {
@@ -834,7 +870,7 @@ async fn a_repeated_agent_loop_request_stores_only_its_appended_turn() {
         checked_turns >= 24,
         "the provenance trace must span several blocks"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[test]

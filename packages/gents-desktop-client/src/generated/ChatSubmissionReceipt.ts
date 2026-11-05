@@ -4,4 +4,4 @@
  * Native receipt fields are echoed for acknowledgement; the native owner
  * verifies their exact binding before retiring any signed replay bytes.
  */
-export type ChatSubmissionReceipt = { nodeDid: string, requestId: string, sessionId: string, agentId: string | null, envelopeHash: string, signedPayloadHash: string, };
+export type ChatSubmissionReceipt = { nodeDid: string, requestId: string, sessionId: string, agentDid: string | null, envelopeHash: string, signedPayloadHash: string, };

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use events::{DocumentChangeSubscription, EventName, Subscription};
 
 pub trait UpdateSubscriptionSource: Send + Sync {
@@ -79,9 +79,10 @@ mod tests {
         assert!(collection_ids(&node, ["Missing"]).is_err());
         let watched = collection_ids(&node, ["Watched"]).unwrap();
         let mut changes = subscribe_collections(&node, ["Watched"]).unwrap();
-        node.patch_collection(
-            "Watched",
+        node.patch_collection_as(
+            &defra_core::RequestContext::default(),
             r#"[{"op":"add","path":"/Watched/Fields/-","value":{"Name":"extra","Kind":"String"}}]"#,
+            None,
         )
         .await
         .unwrap();

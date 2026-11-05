@@ -1,4 +1,4 @@
-type InferenceSampling @branchable @index(fields: ["node_did", "sampling_id"], unique: true) {
+type InferenceSampling @index(fields: ["node_did", "sampling_id"], unique: true) {
     sampling_id: String
     node_did: String @index
     display_name: String

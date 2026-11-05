@@ -49,7 +49,7 @@ impl DefraSessionHook {
             }
         };
         let context = match load_goal_tool_context(
-            &self.node,
+            &crate::ConfigAccess::local_as(self.node.clone(), lifecycle.actor().clone()),
             &self.node_did,
             &session_id,
             &request_id,
@@ -152,7 +152,7 @@ impl DefraSessionHook {
         } else {
             let context = async {
                 let mut context = load_goal_tool_context(
-                    &self.node,
+                    &crate::ConfigAccess::local_as(self.node.clone(), lifecycle.actor().clone()),
                     &self.node_did,
                     &session_id,
                     &request_id,
@@ -161,10 +161,13 @@ impl DefraSessionHook {
                 .await?;
                 if context.can_write() {
                     if let RequestAssignmentObservation::Assigned(goal) = &context.assignment {
-                        refresh_goal_usage(&self.node, goal).await?;
+                        refresh_goal_usage(&self.node, lifecycle.actor(), goal).await?;
                     }
                     context = load_goal_tool_context(
-                        &self.node,
+                        &crate::ConfigAccess::local_as(
+                            self.node.clone(),
+                            lifecycle.actor().clone(),
+                        ),
                         &self.node_did,
                         &session_id,
                         &request_id,
@@ -276,7 +279,7 @@ impl DefraSessionHook {
             }
         };
         let context = match load_goal_tool_context(
-            &self.node,
+            &crate::ConfigAccess::local_as(self.node.clone(), lifecycle.actor().clone()),
             &self.node_did,
             &session_id,
             &request_id,
@@ -418,6 +421,7 @@ impl DefraSessionHook {
                     .unwrap_or_else(|| "completion_evidence: null,".to_string());
                 let applied = update_goal_fields_if_status(
                     &self.node,
+                    lifecycle.actor(),
                     &goal,
                     pre.status,
                     &format!(
@@ -479,6 +483,7 @@ impl DefraSessionHook {
                 let request_id = escape_graphql_string(&request_id);
                 let applied = update_goal_fields_if_status(
                     &self.node,
+                    lifecycle.actor(),
                     &goal,
                     pre.status,
                     &format!(

@@ -1,5 +1,5 @@
 use crate::session::canonical_rows::{
-    output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    output_segment_bound_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use crate::store::config_client::{ConfigAccess, IdempotentTransactionRetry};
 use crate::store::graphql::{created_doc_id, escape_graphql_string};
@@ -13,7 +13,8 @@ use gents_protocol::output::{
 
 #[derive(Clone)]
 pub(crate) struct ToolOutputBinding {
-    pub(crate) node: std::sync::Arc<defra_node::EmbeddedNode>,
+    pub(crate) actor: identity::Did,
+    pub(crate) node: std::sync::Arc<defra_node::Node>,
     pub(crate) tool_call_doc_id: String,
     pub(crate) request_doc_id: String,
     pub(crate) session_id: String,
@@ -63,6 +64,7 @@ impl ToolCallLifecycle {
             "raw tool output requires a running admitted lifecycle"
         );
         Ok(ToolOutputBinding {
+            actor: self.actor.clone(),
             node: self.node.clone(),
             tool_call_doc_id: self
                 .doc_id
@@ -138,9 +140,12 @@ async fn append_tool_output_with_time(
     let payload = bytes.to_owned();
     let binding = binding.clone();
     let node = binding.node.clone();
-    ConfigAccess::transact_local_idempotent(
+    let repair_actor = binding.actor.clone();
+    let repair_node_did = binding.node_did.clone();
+    let repair_session_id = binding.session_id.clone();
+    let result = ConfigAccess::transact_local_idempotent(
         &node,
-        None,
+        Some(binding.actor.clone()),
         IdempotentTransactionRetry::Standard,
         "tool_call.append_output_segment",
         move |txn| {
@@ -278,7 +283,7 @@ async fn append_tool_output_with_time(
                 let response = txn
                     .execute_with_variables(
                         CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                        &output_segment_create_variables(&segment)?,
+                        &output_segment_bound_variables(txn, &segment).await?,
                     )
                     .await?;
                 Ok(ToolOutputAppendReceipt {
@@ -288,5 +293,13 @@ async fn append_tool_output_with_time(
             })
         },
     )
-    .await
+    .await?;
+    crate::session::child_ownership::publish_agent_session_child_relationships(
+        &node,
+        &repair_node_did,
+        &repair_actor,
+        &repair_session_id,
+    )
+    .await?;
+    Ok(result)
 }

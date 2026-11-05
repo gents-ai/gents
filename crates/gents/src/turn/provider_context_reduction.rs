@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -155,6 +155,7 @@ impl ProviderContextReduction {
 
 #[derive(Debug)]
 pub(crate) struct NewProviderContextReduction<'a> {
+    pub agent_did: &'a str,
     pub node_did: &'a str,
     pub requester_did: Option<&'a str>,
     pub session_id: &'a str,
@@ -176,6 +177,7 @@ pub(crate) struct NewProviderContextReduction<'a> {
 }
 
 pub(crate) struct NewExactProviderContextReduction<'a> {
+    pub(crate) agent_did: &'a str,
     pub(crate) node_did: &'a str,
     pub(crate) requester_did: Option<&'a str>,
     pub(crate) session_id: &'a str,
@@ -272,7 +274,10 @@ impl StagedProviderContextReduction {
     ) -> Result<ProviderContextReduction> {
         let intended = self.intended;
         let reduction_key = intended.reduction_key.clone();
-        match load_by_key(node, &reduction_key).await?.as_slice() {
+        let actor = identity::Did::new(intended.agent_did.clone())?;
+        let access =
+            crate::store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
+        match load_by_key(&access, &reduction_key).await?.as_slice() {
             [] => {}
             [existing] => {
                 intended.ensure_matches(existing)?;
@@ -295,7 +300,7 @@ impl StagedProviderContextReduction {
         let requester_did = graphql_optional_string(intended.requester_did.as_deref());
         crate::store::config_client::ConfigAccess::transact_local_write(
             node,
-            None,
+            Some(actor),
             "provider_context.create_reduction",
             |txn| {
                 let intended = &intended;
@@ -305,15 +310,33 @@ impl StagedProviderContextReduction {
                 let parent_reduction_key = &parent_reduction_key;
                 let requester_did = &requester_did;
                 Box::pin(async move {
+                    let (session_doc_id, agent_did) =
+                        crate::session::canonical_rows::agent_session_child_binding_in_txn(
+                            txn,
+                            &intended.node_did,
+                            &intended.session_id,
+                            intended.requester_did.as_deref(),
+                        )
+                        .await?;
+                    anyhow::ensure!(
+                        agent_did == intended.agent_did,
+                        "reduction agent differs from session agent"
+                    );
+                    let block_scope = crate::inference::rendered_request::sink::BlockScope {
+                        session_doc_id,
+                        agent_did,
+                    };
                     let compacted_prefix_json =
                         crate::inference::rendered_request::sink::store_shared_json_in_txn(
                             txn,
+                            &block_scope,
                             &intended.compacted_prefix_json,
                         )
                         .await?;
                     let retained_suffix_json =
                         crate::inference::rendered_request::sink::store_shared_json_in_txn(
                             txn,
+                            &block_scope,
                             &intended.retained_suffix_json,
                         )
                         .await?;
@@ -324,6 +347,8 @@ impl StagedProviderContextReduction {
                 node_did: "{node_did}"
                 requester_did: {requester_did}
                 session_id: "{session_id}"
+                session_doc_id: "{session_doc_id}"
+                agent_did: "{agent_did}"
                 request_id: "{request_id}"
                 request_doc_id: "{request_doc_id}"
                 request_commit_cid: "{request_commit_cid}"
@@ -348,6 +373,8 @@ impl StagedProviderContextReduction {
                         reduction_key = escape_graphql_string(&intended.reduction_key),
                         node_did = escape_graphql_string(&intended.node_did),
                         session_id = escape_graphql_string(&intended.session_id),
+                        session_doc_id = escape_graphql_string(&block_scope.session_doc_id),
+                        agent_did = escape_graphql_string(&block_scope.agent_did),
                         request_id = escape_graphql_string(&intended.request_id),
                         request_doc_id = escape_graphql_string(&intended.request_doc_id),
                         request_commit_cid = escape_graphql_string(&intended.request_commit_cid),
@@ -374,7 +401,7 @@ impl StagedProviderContextReduction {
         .await
         .with_context(|| format!("creating ProviderContextReduction {reduction_key}"))?;
 
-        let rows = load_by_key(node, &reduction_key).await?;
+        let rows = load_by_key(&access, &reduction_key).await?;
         if rows.len() != 1 {
             anyhow::bail!(
                 "provider-context reduction key {reduction_key} has {} visible logical twins after create",
@@ -404,7 +431,7 @@ pub fn reduction_key(
 }
 
 pub async fn capture_source_boundary(
-    node: &EmbeddedNode,
+    access: &crate::store::config_client::ConfigAccess,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -424,19 +451,15 @@ pub async fn capture_source_boundary(
             }}
         }}"#,
     );
-    let response =
-        graphql_with_transaction_retry(node, &query, "capturing provider-context source boundary")
-            .await
-            .with_context(|| {
-                format!("capturing provider-context source boundary for session {session_id}")
-            })?;
+    access.transact_readonly("provider_context.capture_source_boundary", |txn| {
+        let query = &query;
+        Box::pin(async move {
+    let response = txn.execute(query).await?;
     let rows = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("AgentMessage"))
         .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+        .context("capturing provider-context source boundary omitted AgentMessage rows")?;
     let canonical_through = match rows.as_slice() {
         [] => None,
         [row] => {
@@ -445,8 +468,8 @@ pub async fn capture_source_boundary(
                 .get("sequence")
                 .and_then(Value::as_i64)
                 .with_context(|| format!("AgentMessage {doc_id} has no sequence"))?;
-            let commit = crate::store::graphql::newest_document_composite_commit(
-                node,
+            let commit = crate::store::graphql::newest_document_composite_commit_in_txn(
+                txn,
                 doc_id,
                 &format!("AgentMessage {doc_id} source boundary"),
             )
@@ -469,6 +492,8 @@ pub async fn capture_source_boundary(
         request_commit_cid: request_commit_cid.to_string(),
         canonical_through,
     })
+        })
+    }).await
 }
 
 #[cfg(test)]
@@ -538,6 +563,7 @@ pub(crate) fn stage_exact(
 ) -> Result<StagedProviderContextReduction> {
     let checkpoint_messages = reduction.checkpoint_messages();
     stage(NewProviderContextReduction {
+        agent_did: input.agent_did,
         node_did: input.node_did,
         requester_did: input.requester_did,
         session_id: input.session_id,
@@ -705,7 +731,7 @@ pub fn rendered_capture_cites_reduction(
 const REDUCTION_FIELDS: &str = "_docID reduction_key node_did requester_did session_id request_id request_doc_id request_commit_cid reduction_index turn_index parent_reduction_key producer_call_id producer_call_seq source_boundary_json compacted_prefix_json retained_suffix_json pair_closed checkpoint_messages_json replay_associations_json summary messages_compacted original_tokens compacted_tokens created_at";
 
 async fn load_by_key(
-    node: &EmbeddedNode,
+    access: &crate::store::config_client::ConfigAccess,
     reduction_key: &str,
 ) -> Result<Vec<ProviderContextReduction>> {
     let query = format!(
@@ -713,34 +739,36 @@ async fn load_by_key(
         escape_graphql_string(reduction_key),
         REDUCTION_FIELDS
     );
-    let response =
-        graphql_with_transaction_retry(node, &query, "loading ProviderContextReduction by key")
-            .await
-            .with_context(|| format!("loading ProviderContextReduction key {reduction_key}"))?;
+    let response = access
+        .execute(&query)
+        .await
+        .with_context(|| format!("loading ProviderContextReduction key {reduction_key}"))?;
     let mut rows = serde_json::from_value(
         response
-            .data
-            .as_ref()
+            .get("data")
             .and_then(|data| data.get("ProviderContextReduction"))
             .cloned()
             .unwrap_or_else(|| json!([])),
     )
     .context("decoding ProviderContextReduction rows")?;
-    hydrate_rows(node, &mut rows).await?;
+    hydrate_rows(access, &mut rows).await?;
     Ok(rows)
 }
 
-async fn hydrate_rows(node: &EmbeddedNode, rows: &mut Vec<ProviderContextReduction>) -> Result<()> {
+async fn hydrate_rows<R>(reader: &R, rows: &mut Vec<ProviderContextReduction>) -> Result<()>
+where
+    R: crate::inference::rendered_request::CaptureBaseReader + Sync,
+{
     let mut cache = crate::inference::rendered_request::CaptureReadCache::default();
     for row in rows {
         row.compacted_prefix_json = crate::inference::rendered_request::load_shared_json(
-            node,
+            reader,
             &row.compacted_prefix_json,
             &mut cache,
         )
         .await?;
         row.retained_suffix_json = crate::inference::rendered_request::load_shared_json(
-            node,
+            reader,
             &row.retained_suffix_json,
             &mut cache,
         )
@@ -751,6 +779,7 @@ async fn hydrate_rows(node: &EmbeddedNode, rows: &mut Vec<ProviderContextReducti
 
 #[derive(Debug)]
 struct IntendedReduction {
+    agent_did: String,
     reduction_key: String,
     node_did: String,
     requester_did: Option<String>,
@@ -778,6 +807,7 @@ impl IntendedReduction {
     fn from_input(input: &NewProviderContextReduction<'_>, reduction_key: String) -> Result<Self> {
         Ok(Self {
             reduction_key,
+            agent_did: input.agent_did.to_owned(),
             node_did: input.node_did.to_string(),
             requester_did: input.requester_did.map(ToOwned::to_owned),
             session_id: input.session_id.to_string(),
@@ -1251,6 +1281,7 @@ mod tests {
     async fn durable_chain_is_idempotent_conflict_visible_and_restartable() {
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
+        let agent_did = crate::test_support::agent_did(&node);
         let prefix = vec![Message::user("old")];
         let suffix = vec![Message::assistant("current")];
         let checkpoint = checkpoint_from_suffix(&suffix, "summary");
@@ -1292,6 +1323,7 @@ mod tests {
         let first = persist(
             &node,
             NewProviderContextReduction {
+                agent_did: &agent_did,
                 node_did: "did:key:agent",
                 requester_did: Some("did:key:user"),
                 session_id: "session",
@@ -1317,6 +1349,7 @@ mod tests {
         let redelivery = persist(
             &node,
             NewProviderContextReduction {
+                agent_did: &agent_did,
                 node_did: "did:key:agent",
                 requester_did: Some("did:key:user"),
                 session_id: "session",
@@ -1345,6 +1378,7 @@ mod tests {
         let conflict = persist(
             &node,
             NewProviderContextReduction {
+                agent_did: &agent_did,
                 node_did: "did:key:agent",
                 requester_did: Some("did:key:user"),
                 session_id: "session",
@@ -1393,6 +1427,7 @@ mod tests {
         let second = persist(
             &node,
             NewProviderContextReduction {
+                agent_did: &agent_did,
                 node_did: "did:key:agent",
                 requester_did: Some("did:key:user"),
                 session_id: "session",
@@ -1455,7 +1490,7 @@ mod tests {
                 session_id: "session"
                 node_did: "did:key:agent"
                 requester_did: "did:key:user"
-                agent_id: "behavior"
+                agent_did: "behavior"
                 capture_scope: "title.1"
                 turn_index: 99
                 attempt: 0
@@ -1494,7 +1529,7 @@ mod tests {
                 session_id: "session"
                 node_did: "did:key:agent"
                 requester_did: "did:key:user"
-                agent_id: "behavior"
+                agent_did: "behavior"
                 capture_scope: "inference.1"
                 turn_index: 4
                 attempt: 0
@@ -1520,7 +1555,7 @@ mod tests {
             session_id: "session"
             node_did: "did:key:agent"
             requester_did: "did:key:user"
-            agent_id: "behavior"
+            agent_did: "behavior"
             capture_scope: "inference.1"
             turn_index: 4
             attempt: 1
@@ -1585,7 +1620,7 @@ mod tests {
                 session_id: "session"
                 node_did: "did:key:agent"
                 requester_did: "did:key:user"
-                agent_id: "behavior"
+                agent_did: "behavior"
                 capture_scope: "inference.1"
                 turn_index: 4
                 attempt: 2
@@ -1628,6 +1663,7 @@ mod tests {
     async fn persistence_rejects_a_split_through_a_tool_pair() {
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
+        let agent_did = crate::test_support::agent_did(&node);
         let call = Message::Assistant {
             request_id: None,
             id: None,
@@ -1660,6 +1696,7 @@ mod tests {
         let error = persist(
             &node,
             NewProviderContextReduction {
+                agent_did: &agent_did,
                 node_did: "did:key:agent",
                 requester_did: None,
                 session_id: "session",
@@ -1794,7 +1831,7 @@ mod tests {
             other_principal.errors
         );
         let boundary = capture_source_boundary(
-            &node,
+            &crate::ConfigAccess::local(node.clone()),
             "session-boundary",
             "did:test:boundary-owner",
             None,
@@ -1813,6 +1850,7 @@ mod tests {
     async fn shared_reduction_snapshots_reload_exactly_and_reuse_pinned_blocks() {
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
+        let agent_did = crate::test_support::agent_did(&node);
         let prefix = vec![Message::user("prefix 🦀 ".repeat(2400))];
         let suffix = vec![Message::user("retained suffix ".repeat(2400))];
         let associations = ReplayAssociations {
@@ -1827,6 +1865,7 @@ mod tests {
             canonical_through: None,
         });
         let make_input = |source: usize| NewProviderContextReduction {
+            agent_did: &agent_did,
             node_did: "did:key:agent",
             requester_did: None,
             session_id: "session",

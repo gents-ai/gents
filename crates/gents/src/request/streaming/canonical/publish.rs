@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{
     MessageBlock, MessagePublication, OutputOutcome, OutputSegment, OutputSource, OutputWriter,
@@ -9,8 +9,8 @@ use gents_protocol::output::{
 
 use crate::request::lifecycle::execution_policy::{authorize_output_append, LeaseObservation};
 use crate::session::canonical_rows::{
-    decode_transcript_message_row, output_segment_create_variables,
-    transcript_message_create_variables, AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
+    decode_transcript_message_row, output_segment_bound_variables,
+    transcript_message_bound_variables, AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
     CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
@@ -78,36 +78,47 @@ fn created_tool_call_doc_ids(
 
 pub(crate) async fn publish_provider_turn(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
     generation: &str,
     plan: ProviderPublicationPlan,
 ) -> Result<PublishedProviderTurn> {
-    publish_provider_turn_with_time(node, generation, plan, None).await
+    publish_provider_turn_with_time(node, actor, generation, plan, None).await
 }
 
 #[cfg(test)]
 pub(crate) async fn publish_provider_turn_at(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
     generation: &str,
     plan: ProviderPublicationPlan,
     now: DateTime<Utc>,
 ) -> Result<PublishedProviderTurn> {
-    publish_provider_turn_with_time(node, generation, plan, Some(now)).await
+    publish_provider_turn_with_time(node, actor, generation, plan, Some(now)).await
 }
 
 pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
     generation: &str,
     plan: ProviderPublicationPlan,
     fixture_now: Option<DateTime<Utc>>,
 ) -> Result<PublishedProviderTurn> {
     let plan = std::sync::Arc::new(plan);
-    ConfigAccess::transact_local_idempotent(
+    let exemplar = plan
+        .final_flush
+        .as_ref()
+        .context("provider publication has no output")?;
+    let node_did = exemplar.node_did.clone();
+    let session_id = exemplar.session_id.clone();
+    let repair_actor = actor.clone();
+    let result = ConfigAccess::transact_local_idempotent(
         node,
-        None,
+        Some(actor.clone()),
         IdempotentTransactionRetry::Standard,
         "streaming.publish_provider_turn",
         move |txn| {
             let plan = std::sync::Arc::clone(&plan);
+            let actor = actor.clone();
             let message_key = plan.message_key.clone();
             let encoded = std::sync::Arc::clone(&plan.encoded);
             let expected = std::sync::Arc::clone(&plan.expected);
@@ -153,7 +164,7 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
                     .iter()
                     .find(|row| row.segment.close.is_some())
                     .map(|row| row.segment.writer.clone());
-                let published = replay_publication_in_txn(txn, &mut reader, ReplayPublication { exemplar, generation, accepted_writer: accepted_writer.as_ref(), message_key: &message_key, expected: expected.as_ref(), background_calls: &background_calls })
+                let published = replay_publication_in_txn(txn, &mut reader, ReplayPublication { actor: &actor, exemplar, generation, accepted_writer: accepted_writer.as_ref(), message_key: &message_key, expected: expected.as_ref(), background_calls: &background_calls })
                 .await?;
                 if let Some(consumption) = plan.consumes_folded.as_ref() {
                     crate::request::lifecycle::queue::ensure_folded_consumed_in_txn(txn, consumption).await?;
@@ -186,7 +197,7 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
             if prepared.close.as_ref().is_some_and(|candidate| candidate != &derived_close) {
                 return Err(ProviderCloseRejection::InvalidExtent.into());
             }
-            let mut variables = output_segment_create_variables(prepared)?;
+            let mut variables = output_segment_bound_variables(txn, prepared).await?;
             variables["input"]["close"] = serde_json::to_value(&derived_close)?;
             let created = txn.execute_with_variables(
                 CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &variables,
@@ -203,6 +214,9 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
             );
             let mut tool_call_keys = Vec::with_capacity(encoded.tool_calls.len());
             let mut tool_inputs = Vec::with_capacity(encoded.tool_calls.len());
+            let (session_doc_id, agent_did) = crate::session::canonical_rows::agent_session_child_binding_in_txn(
+                txn, &prepared.node_did, &prepared.session_id, prepared.requester_did.as_deref(),
+            ).await?;
             for tool in &encoded.tool_calls {
                 let await_mode = if background_calls.contains(&tool.id) {
                     crate::tools::call::lifecycle::AwaitMode::Background
@@ -216,6 +230,10 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
                         "request_id": request.request_id,
                         "request_doc_id": prepared.request_doc_id,
                         "session_id": prepared.session_id,
+                        "session_doc_id": session_doc_id,
+                        "agent_did": agent_did,
+                        "creator_did": agent_did,
+                        "parent_linked": false,
                         "node_did": prepared.node_did,
                         "requester_did": prepared.requester_did,
                         "message_sequence": sequence,
@@ -252,7 +270,7 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
                 created_at: prepared.created_at.clone(),
             };
             let created = txn.execute_with_variables(
-                CREATE_AGENT_MESSAGE_MUTATION, &transcript_message_create_variables(&message)?,
+                CREATE_AGENT_MESSAGE_MUTATION, &transcript_message_bound_variables(txn, &message).await?,
             ).await?;
             let message_doc_id = created_doc_id(&created, "AgentMessage")?;
             let (_, reconstructed) = reader.load_created_message(&message_doc_id, &close_doc_id).await?;
@@ -273,6 +291,7 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
             }
             let accepted_tools = encoded.tool_calls.iter().zip(tool_doc_ids).map(|(tool, tool_call_doc_id)| {
                 crate::request::streaming::AcceptedToolCall {
+                    actor: actor.clone(),
                     tool_call_doc_id,
                     request_doc_id: prepared.request_doc_id.clone(),
                     session_id: prepared.session_id.clone(),
@@ -297,10 +316,19 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
                 accepted_tools,
             })
         })},
-    ).await
+    ).await?;
+    crate::session::child_ownership::publish_agent_session_child_relationships(
+        node,
+        &node_did,
+        &repair_actor,
+        &session_id,
+    )
+    .await?;
+    Ok(result)
 }
 
 struct ReplayPublication<'a> {
+    actor: &'a identity::Did,
     exemplar: &'a OutputSegment,
     generation: &'a str,
     accepted_writer: Option<&'a OutputWriter>,
@@ -315,6 +343,7 @@ async fn replay_publication_in_txn(
     replay: ReplayPublication<'_>,
 ) -> Result<PublishedProviderTurn> {
     let ReplayPublication {
+        actor,
         exemplar,
         generation,
         accepted_writer,
@@ -432,6 +461,7 @@ async fn replay_publication_in_txn(
             return Err(ProviderReplayRejection::AwaitModeChanged.into());
         }
         accepted_tools.push(crate::request::streaming::AcceptedToolCall {
+            actor: actor.clone(),
             tool_call_doc_id: tool_call_doc_id.clone(),
             request_doc_id: exemplar.request_doc_id.clone(),
             session_id: exemplar.session_id.clone(),

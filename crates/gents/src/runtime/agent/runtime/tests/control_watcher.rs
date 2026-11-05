@@ -100,7 +100,7 @@ async fn run_test_control_watcher(inputs: ControlWatcherInputs) -> Result<()> {
 }
 
 fn test_tool_runtime(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     resolve_context: &crate::runtime::agent::DocumentResolveContext,
 ) -> crate::tools::surface::ToolRuntimeContext {
@@ -116,7 +116,7 @@ fn test_tool_runtime(
     .with_plugins(resolve_context.plugins.clone())
 }
 
-async fn update_node_enabled(node: &defra_node::EmbeddedNode, node_did: &str, enabled: bool) {
+async fn update_node_enabled(node: &defra_node::Node, node_did: &str, enabled: bool) {
     let escaped_node_did = escape_graphql_string(node_did);
     let mutation = format!(
         r#"mutation {{
@@ -135,7 +135,7 @@ async fn update_node_enabled(node: &defra_node::EmbeddedNode, node_did: &str, en
 }
 
 async fn write_documents(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     operation: &'static str,
     documents: Vec<(crate::Collection, serde_json::Value)>,
 ) {
@@ -189,7 +189,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_string());
     runtime_status
-        .initialize_startup(agent.default_agent_id())
+        .initialize_startup(agent.default_agent_did())
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -204,8 +204,8 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     let subscription = subscribe_control_changes(&node).unwrap();
     let context = serde_json::json!({
         "node_did": agent.node_did(),
-        "context_id": format!("{}:context", agent.default_agent_id()),
-        "tools_id": format!("{}:tools", agent.default_agent_id()),
+        "context_id": format!("{}:context", agent.default_agent_did()),
+        "tools_id": format!("{}:tools", agent.default_agent_did()),
         "system_prompt": "updated prompt"
     });
     let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
@@ -252,7 +252,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     assert_eq!(
         snapshot
             .agents
-            .get(agent.default_agent_id())
+            .get(agent.default_agent_did())
             .expect("default agent in snapshot")
             .system_prompt,
         "updated prompt"
@@ -287,7 +287,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
 
     let context_id = crate::store::graphql::escape_graphql_string(&format!(
         "{}:context",
-        agent.default_agent_id()
+        agent.default_agent_did()
     ));
     let mutation = format!(
         r#"mutation {{ update_AgentContext(
@@ -347,7 +347,7 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_string());
     runtime_status
-        .initialize_startup(agent.default_agent_id())
+        .initialize_startup(agent.default_agent_did())
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -378,8 +378,8 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
             crate::Collection::AgentContext,
             serde_json::json!({
                 "node_did": agent.node_did(),
-                "context_id": format!("{}:context", agent.default_agent_id()),
-                "tools_id": format!("{}:tools", agent.default_agent_id()),
+                "context_id": format!("{}:context", agent.default_agent_did()),
+                "tools_id": format!("{}:tools", agent.default_agent_did()),
                 "system_prompt": "operator prompt"
             }),
         )],
@@ -393,7 +393,7 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
     assert_eq!(
         snapshot
             .agents
-            .get(agent.default_agent_id())
+            .get(agent.default_agent_did())
             .expect("default agent in snapshot")
             .system_prompt,
         "operator prompt"
@@ -431,10 +431,10 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
         .cloned()
         .expect("document-backed agent");
     let backend_health = agent.backend_health();
-    let agent_id = agent.default_agent_id().to_string();
+    let agent_did = agent.default_agent_did().to_string();
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_string());
     runtime_status
-        .initialize_startup(agent.default_agent_id())
+        .initialize_startup(agent.default_agent_did())
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -480,12 +480,12 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
         "a measured-health transition debounces before it resolves"
     );
     assert!(
-        !snapshot.agents.contains_key(&agent_id),
+        !snapshot.agents.contains_key(&agent_did),
         "agent on a measured-unhealthy backend must leave the active set"
     );
     let reason = snapshot
         .unavailable_agents
-        .get(&agent_id)
+        .get(&agent_did)
         .expect("unavailable reason for demoted agent");
     assert_eq!(
         reason.public_reason,
@@ -516,7 +516,7 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
         "recovery debounces before it resolves"
     );
     assert!(
-        snapshot.agents.contains_key(&agent_id),
+        snapshot.agents.contains_key(&agent_did),
         "agent must return to the active set after recovery"
     );
     assert!(
@@ -560,7 +560,7 @@ async fn control_watcher_recovers_after_resolve_error() {
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_string());
     runtime_status
-        .initialize_startup(agent.default_agent_id())
+        .initialize_startup(agent.default_agent_did())
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -604,7 +604,7 @@ async fn control_watcher_recovers_after_resolve_error() {
         .await
         .expect("a re-enabled Node must reach the reconcile owner")
         .expect("recovered snapshot");
-    assert_eq!(snapshot.default_agent_id, agent.default_agent_id());
+    assert_eq!(snapshot.default_agent_did, agent.default_agent_did());
 
     let _ = shutdown_tx.send(true);
     watcher_task.await.unwrap().unwrap();
@@ -638,7 +638,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_string());
     runtime_status
-        .initialize_startup(agent.default_agent_id())
+        .initialize_startup(agent.default_agent_did())
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -659,7 +659,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     tokio::task::yield_now().await;
 
     let tools: Tools = serde_json::from_value(serde_json::json!({
-        "tools_id": format!("{}:tools", agent.default_agent_id()),
+        "tools_id": format!("{}:tools", agent.default_agent_did()),
         "node_did": agent.node_did(),
         "display_name": "Read tools",
         "host": {"files": {"mode": "ReadOnly"}}
@@ -679,7 +679,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     let snapshot = proposal_rx.recv().await.expect("reconciled snapshot");
     let tool_surface = snapshot
         .tool_surfaces
-        .get(agent.default_agent_id())
+        .get(agent.default_agent_did())
         .expect("default agent tool surface");
     let tool_names = tool_surface.tool_names();
     assert!(tool_names.contains(&"read_file".to_string()));
@@ -713,7 +713,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     .await
     .unwrap();
     let node_did = agent.node_did().to_string();
-    let selected_agent_id = agent.default_agent_id().to_string();
+    let selected_agent_did = agent.default_agent_did().to_string();
 
     let backend = crate::inference::backends::registry::lookup_backend(
         node.as_ref(),
@@ -755,15 +755,15 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did.clone());
     runtime_status
-        .initialize_startup(&selected_agent_id)
+        .initialize_startup(&selected_agent_did)
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
 
     let subscription = subscribe_control_changes(&node).unwrap();
-    let spare_agent_id = format!("{selected_agent_id}:spare");
-    let spare_profile_id = format!("{spare_agent_id}:inference");
+    let spare_agent_did = format!("{selected_agent_did}:spare");
+    let spare_profile_id = format!("{spare_agent_did}:inference");
     write_documents(
         &node,
         "test.settle.spare",
@@ -781,7 +781,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
                 crate::Collection::Agent,
                 serde_json::json!({
                     "node_did": node_did,
-                    "agent_id": spare_agent_id,
+                    "agent_did": spare_agent_did,
                     "inference_profile_id": spare_profile_id
                 }),
             ),
@@ -812,12 +812,12 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
         .await
         .expect("a permanently invalid unselected agent must not hold reconciliation")
         .expect("reconciled snapshot");
-    assert!(snapshot.agents.contains_key(&selected_agent_id));
-    assert!(!snapshot.agents.contains_key(&spare_agent_id));
+    assert!(snapshot.agents.contains_key(&selected_agent_did));
+    assert!(!snapshot.agents.contains_key(&spare_agent_did));
     assert_eq!(
         snapshot
             .unavailable_agents
-            .get(&spare_agent_id)
+            .get(&spare_agent_did)
             .expect("unavailable reason for the invalid agent")
             .public_reason,
         AgentReadinessUnavailableReason::InferenceProfileInvalid
@@ -837,11 +837,13 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
 }
 
 async fn record_plugin_install(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     plugin_home: &std::path::Path,
 ) {
     let identity = crate::pack::PackIdentity {
+        installation_doc_id: None,
+        agent_bindings: Default::default(),
         coordinate: "fixture/list_files".to_owned(),
         version: "0.1.0".to_owned(),
         digest: "sha256:pack-digest".to_owned(),
@@ -863,11 +865,7 @@ async fn record_plugin_install(
     .unwrap();
 }
 
-async fn write_tools_naming_plugin(
-    node: &Arc<defra_node::EmbeddedNode>,
-    node_did: &str,
-    tools_id: &str,
-) {
+async fn write_tools_naming_plugin(node: &Arc<defra_node::Node>, node_did: &str, tools_id: &str) {
     let tools: Tools = serde_json::from_value(serde_json::json!({
         "tools_id": tools_id,
         "node_did": node_did,
@@ -925,13 +923,13 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     .await
     .unwrap();
     let node_did = agent.node_did().to_string();
-    let agent_id = agent.default_agent_id().to_string();
+    let agent_did = agent.default_agent_did().to_string();
     let resolve_context = agent
         .document_runtime_context()
         .cloned()
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did.clone());
-    runtime_status.initialize_startup(&agent_id).await.unwrap();
+    runtime_status.initialize_startup(&agent_did).await.unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
     let watcher_task = tokio::spawn(run_test_control_watcher(ControlWatcherInputs {
@@ -947,13 +945,13 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     }));
     tokio::task::yield_now().await;
 
-    write_tools_naming_plugin(&node, &node_did, &format!("{agent_id}:tools")).await;
+    write_tools_naming_plugin(&node, &node_did, &format!("{agent_did}:tools")).await;
     let absent = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
         .expect("the Tools write naming a missing plugin must reach the reconcile owner")
         .expect("proposal channel");
     assert_eq!(
-        absent.unavailable_agents[&agent_id].public_reason,
+        absent.unavailable_agents[&agent_did].public_reason,
         AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
         "while the plugin is missing the agent's tools cannot build"
     );
@@ -1015,16 +1013,16 @@ async fn control_watcher_keeps_an_agent_whose_tools_fail_to_build_demoted() {
     .await
     .unwrap();
     let node_did = agent.node_did().to_string();
-    let agent_id = agent.default_agent_id().to_string();
+    let agent_did = agent.default_agent_did().to_string();
     // As at startup: the Tools document already names a plugin that is not
     // installed, so the agent's tool surface resolves but cannot build.
-    write_tools_naming_plugin(&node, &node_did, &format!("{agent_id}:tools")).await;
+    write_tools_naming_plugin(&node, &node_did, &format!("{agent_did}:tools")).await;
     let resolve_context = agent
         .document_runtime_context()
         .cloned()
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did.clone());
-    runtime_status.initialize_startup(&agent_id).await.unwrap();
+    runtime_status.initialize_startup(&agent_did).await.unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
     let (health_tx, health_rx) = mpsc::channel::<()>(1);
@@ -1047,11 +1045,11 @@ async fn control_watcher_keeps_an_agent_whose_tools_fail_to_build_demoted() {
         .expect("the health event must reach the reconcile owner")
         .expect("proposal channel");
     assert!(
-        !proposal.agents.contains_key(&agent_id),
+        !proposal.agents.contains_key(&agent_did),
         "an agent whose tools fail to build must not come back runnable"
     );
     assert_eq!(
-        proposal.unavailable_agents[&agent_id].public_reason,
+        proposal.unavailable_agents[&agent_did].public_reason,
         AgentReadinessUnavailableReason::ToolSurfaceUnavailable
     );
 

@@ -13,7 +13,7 @@ fn placement_entry(
 
 /// `(requester, request_doc_id, sequence)` messages in session `session` on `node`.
 async fn seed_placement_messages(
-    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<gents::defra_node::Node>,
     messages: &[(String, String, i64)],
 ) {
     for chunk in messages.chunks(64) {
@@ -120,7 +120,7 @@ async fn a_start_of_request_compaction_reads_one_first_message_per_request() {
             .is_empty()
     );
     assert_eq!(reads.queries(), 2);
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -287,5 +287,5 @@ async fn compaction_placement_read_benchmark() {
         std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
     }
     tracing::info!(report = %report, "compaction placement read benchmark");
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
 }

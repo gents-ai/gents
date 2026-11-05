@@ -5,7 +5,9 @@ use gents::request::lifecycle::TriggerLineage;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::session::{SessionTitle, SessionTitleSource};
 
-use super::{agent_id_for_write, ensure_peer_chat_ready_at, observe_submitted_request, ClientCore};
+use super::{
+    agent_did_for_write, ensure_peer_chat_ready_at, observe_submitted_request, ClientCore,
+};
 use crate::client::mutations::{self, SubmitRequestOptions, SubmittedRequest};
 
 impl ClientCore {
@@ -101,10 +103,9 @@ impl ClientCore {
             },
             ..SubmitRequestOptions::default()
         };
-        let agent_id = agent_id_for_write(Some(&invocation.agent_id));
+        let agent_did = agent_did_for_write(Some(&invocation.agent_did));
         let access = self.operator_access(&invocation.node_did)?;
         let submitted = mutations::submit_task_request(
-            self.node.as_ref(),
             snapshot.as_ref(),
             &access,
             &invocation.fire,
@@ -112,7 +113,7 @@ impl ClientCore {
             signer.as_ref(),
             admission,
             &invocation.content,
-            agent_id.as_deref(),
+            agent_did.as_deref(),
             options,
         )
         .await;

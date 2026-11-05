@@ -9,16 +9,10 @@ pub(super) async fn run(case: &Value) {
     let fixture = Fixture::new_with_parent_state(execution, start["busy"] == false).await;
     let node = &fixture.node;
     let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
-    let access = ConfigAccess::local(node.clone());
-    crate::session::ensure_session_with_agent_id_and_requester_did(
-        node,
-        SESSION,
-        identity.did(),
-        "contract-behavior",
-        Some(identity.did()),
-    )
-    .await
-    .unwrap();
+    let access = ConfigAccess::local_as(
+        node.clone(),
+        ::identity::Did::new(fixture.user.did()).unwrap(),
+    );
     let session = access
         .transact_readonly("test.replacement_session", |txn| {
             Box::pin(async {
@@ -28,8 +22,12 @@ pub(super) async fn run(case: &Value) {
         .await
         .unwrap()
         .unwrap();
+    let agent_access = ConfigAccess::local_as(
+        node.clone(),
+        ::identity::Did::new(&session.session.agent_did).unwrap(),
+    );
     let old_root = &fixture.parent.doc_id;
-    access
+    agent_access
         .write(
             "test.replacement_accounting",
             &format!(
@@ -48,17 +46,19 @@ pub(super) async fn run(case: &Value) {
     let owner = escape_graphql_string(identity.did());
     access.write("test.replacement_usage", &format!(r#"mutation {{add_InferenceCall(input: {{
         call_id: "old-usage", runtime_instance_id: "contract", request_id: "{PARENT}",
-        request_doc_id: "{}", call_seq: 1, backend_id: "contract", agent_id: "contract-behavior",
+        request_doc_id: "{}", call_seq: 1, backend_id: "contract", agent_did: "contract-behavior",
         node_did: "{owner}", call_kind: "inference", attempt: 1, call_state: "completed",
         queued_at: "2026-01-01T00:00:00Z", started_at: "2026-01-01T00:00:00Z", ended_at: "2026-01-01T00:00:01Z",
         priority: 0, queue_depth_at_enqueue: 0, controller_generation: 1, backend_config_fingerprint: "contract",
         prompt_tokens: {}, completion_tokens: 0
     }}) {{_docID}}}}"#, escape_graphql_string(old_root), c["session_usage"])).await.unwrap();
     let old_claim = deterministic_goal_creation_key(identity.did(), SESSION);
-    access.write("test.replacement_original_claim", &format!(r#"mutation {{create_GoalCreationClaim(input: {{
+    agent_access.write("test.replacement_original_claim", &format!(r#"mutation {{create_GoalCreationClaim(input: {{
         creation_key: "{}", goal_id: "{}", node_did: "{owner}", session_id: "{SESSION}",
+        session_doc_id: "{}", agent_did: "{}",
         objective: "Finish the original work", token_budget: 1000, created_at: "2026-01-01T00:00:00Z"
-    }}) {{_docID}}}}"#, escape_graphql_string(&old_claim), escape_graphql_string(&fixture.goal.goal_id))).await.unwrap();
+    }}) {{_docID}}}}"#, escape_graphql_string(&old_claim), escape_graphql_string(&fixture.goal.goal_id),
+        escape_graphql_string(&session.doc_id), escape_graphql_string(&session.session.agent_did))).await.unwrap();
     let original = load_canonical_goal(node, identity.did(), SESSION)
         .await
         .unwrap()
@@ -78,7 +78,7 @@ pub(super) async fn run(case: &Value) {
         fields.insert("goal_id".into(), json!("historical-assignment"));
         fields.insert("creation_key".into(), json!("historical-claim"));
         fields.insert("status".into(), json!("complete"));
-        let response = access.transact_write("test.retained_goal", |txn| {
+        let response = agent_access.transact_write("test.retained_goal", |txn| {
             let input = input.clone();
             Box::pin(async move {
                 let created = txn.execute_with_variables(
@@ -94,16 +94,19 @@ pub(super) async fn run(case: &Value) {
     let command_id = "replacement-command";
     let fresh_identity = replacement_goal_identity(identity.did(), SESSION, command_id);
     if !start["claim"].is_null() {
-        access
+        agent_access
             .write(
                 "test.replacement_conflicting_claim",
                 &format!(
                     r#"mutation {{create_GoalCreationClaim(input: {{
             creation_key: "{}", goal_id: "{}", node_did: "{owner}", session_id: "{SESSION}",
+            session_doc_id: "{}", agent_did: "{}",
             objective: "earlier", token_budget: 1000, created_at: "2026-01-01T00:00:00Z"
         }}) {{_docID}}}}"#,
                     escape_graphql_string(&fresh_identity.creation_key),
-                    escape_graphql_string(&fresh_identity.goal_id)
+                    escape_graphql_string(&fresh_identity.goal_id),
+                    escape_graphql_string(&session.doc_id),
+                    escape_graphql_string(&session.session.agent_did)
                 ),
             )
             .await
@@ -125,14 +128,16 @@ pub(super) async fn run(case: &Value) {
         RequestPurpose::Normal,
         "replacement-first",
         identity.did(),
-        identity.did(),
-        "contract-behavior",
+        fixture.user.did(),
+        &fixture.parent.agent_did,
         SESSION,
         start["objective"].as_str().unwrap(),
         "interactive",
         Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::local_self(identity.did()),
+        AgentRequestAdmissionRecord::client(fixture.user.did()),
     );
+    initial.session_doc_id = Some(fixture.session_doc_id.clone());
+    initial.agent_doc_id = Some(fixture.agent_doc_id.clone());
     initial.input = crate::request::lifecycle::prepare_user_message_input(
         &access,
         identity.did(),
@@ -159,7 +164,7 @@ pub(super) async fn run(case: &Value) {
         }
     });
     initial.retry_key = Some(format!("session-goal:{command_id}"));
-    crate::sign_agent_request_create(identity.as_ref(), &mut initial)
+    crate::sign_agent_request_create(fixture.user.as_ref(), &mut initial)
         .await
         .unwrap();
     if start["first_request_valid"] == false {
@@ -169,9 +174,16 @@ pub(super) async fn run(case: &Value) {
     let mut command = SessionGoalControl {
         version: SESSION_GOAL_CONTROL_VERSION,
         command_id: command_id.into(),
-        requester_did: identity.did().into(),
+        requester_did: fixture.user.did().into(),
         requester_peer_id: None,
         node_did: identity.did().into(),
+        agent_did: session.session.agent_did.clone(),
+        agent_doc_id: super::agent_document_for_test(
+            &access,
+            identity.did(),
+            &session.session.agent_did,
+        )
+        .await,
         session_id: SESSION.into(),
         session_doc_id: Some(
             if start["expected_session_document"] == "session-document" {
@@ -213,22 +225,52 @@ pub(super) async fn run(case: &Value) {
         initial_request: Some(Box::new(initial)),
         signature: Vec::new(),
     };
-    command.signature = identity
+    command.signature = fixture
+        .user
         .sign(&command.signing_payload().unwrap())
         .await
         .unwrap();
     if start["signature_valid"] == false {
         command.signature[0] ^= 1;
     }
-    let doc_id = persist_command(&access, &command).await;
     let accepted = !c["expected"].is_null();
+    if start["expected_session_document"] != "session-document" {
+        assert!(!accepted, "{}", case["name"]);
+        let doc_id = persist_command(&access, &command).await;
+        process_command(
+            node,
+            &identity,
+            &doc_id,
+            &::identity::Did::new(&command.agent_did).unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(
+                receipt(&access, &doc_id).await.unwrap().outcome,
+                GoalControlOutcome::Rejected { .. }
+            ),
+            "{}",
+            case["name"]
+        );
+        node.shutdown().await.expect("node shutdown");
+        return;
+    }
+    let doc_id = persist_command(&access, &command).await;
     if start["commit"] == true {
-        process_command(node, &identity, &doc_id).await.unwrap();
+        process_command(
+            node,
+            &identity,
+            &doc_id,
+            &::identity::Did::new(&command.agent_did).unwrap(),
+        )
+        .await
+        .unwrap();
         let result = receipt(&access, &doc_id).await.unwrap();
         result.validate_for(&command).unwrap();
         assert!(identity
             .verify(
-                identity.did(),
+                &result.agent_did,
                 &result.signing_payload().unwrap(),
                 &result.signature
             )
@@ -242,7 +284,12 @@ pub(super) async fn run(case: &Value) {
             result.outcome
         );
     } else {
-        let txn = ConfigApplyTxn::begin_local(node, None).await.unwrap();
+        let txn = ConfigApplyTxn::begin_local(
+            node,
+            Some(::identity::Did::new(&command.agent_did).unwrap()),
+        )
+        .await
+        .unwrap();
         let prepared = prepare_goal_control(&txn, &command).await.unwrap().unwrap();
         stage_goal_control(&txn, identity.as_ref(), prepared)
             .await
@@ -372,7 +419,7 @@ pub(super) async fn run(case: &Value) {
         .unwrap()
         .unwrap();
     assert_eq!(session.session, session_after.session);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[test]

@@ -72,7 +72,7 @@ const summary = (turnState: string | null): SessionSummary =>
   ({
     sessionId: "child-session",
     title: "Reviewer",
-    agentId: null,
+    agentDid: null,
     turnState,
     latestRequestId: "child-req-2",
     messageCount: null,

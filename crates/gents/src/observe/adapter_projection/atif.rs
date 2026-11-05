@@ -280,15 +280,15 @@ pub(super) fn build_atif_trajectory(
             .or_else(|| Some(timeline.request_id.clone())),
         trajectory_id: Some(timeline.request_id.clone()),
         agent: AtifAgent {
-            name: timeline.agent_id.clone().unwrap_or_else(|| "gents".to_string()),
+            name: timeline.agent_did.clone().unwrap_or_else(|| "gents".to_string()),
             version: env!("CARGO_PKG_VERSION").to_string(),
             model_name: root_observed_model(timeline),
             extra: optional_extra([
                 ("runtime", string_value("gents")),
                 ("node_did", optional_string_value(timeline.node_did.as_deref())),
                 (
-                    "agent_id",
-                    optional_string_value(timeline.agent_id.as_deref()),
+                    "agent_did",
+                    optional_string_value(timeline.agent_did.as_deref()),
                 ),
                 (
                     "backend_id",

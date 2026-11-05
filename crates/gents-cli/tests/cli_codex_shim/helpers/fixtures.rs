@@ -557,7 +557,7 @@ pub(super) async fn seed_running_background_tool(
 pub(super) async fn seed_background_completion_wake(
     graphql: &str,
     identity: &dyn gents::NodeIdentity,
-    agent_id: &str,
+    agent_did: &str,
     session_id: &str,
 ) -> Result<String> {
     let node_did = identity.did();
@@ -581,7 +581,7 @@ pub(super) async fn seed_background_completion_wake(
         &source_request_id,
         node_did,
         node_did,
-        agent_id,
+        agent_did,
         session_id,
         "completed source for background continuation",
         "interactive",
@@ -629,7 +629,7 @@ pub(super) async fn seed_background_completion_wake(
         &request_id,
         node_did,
         node_did,
-        agent_id,
+        agent_did,
         session_id,
         gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
         "scheduled",

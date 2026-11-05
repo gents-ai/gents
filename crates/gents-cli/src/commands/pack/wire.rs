@@ -134,21 +134,21 @@ async fn wire_in_owned(
         targets_from.push((pack.clone(), target_ids, via));
     }
 
-    let (plugin_ref, agent_id, remove, preview) =
+    let (plugin_ref, agent_did, remove, preview) =
         (&plugin, &request.agent, request.remove, request.preview);
     let (tools_ids, skill_ids, targets_from) = (&tools_ids, &skill_ids, &targets_from);
     let report = access
         .transact_write("cli.pack.wire", move |txn| {
             Box::pin(async move {
                 let missing =
-                    |link: &str| format!("{link}. Next: gents tools explain --agent {agent_id}");
-                let (context, tools) = load_agent_context_and_tools_in_txn(txn, owner, agent_id)
+                    |link: &str| format!("{link}. Next: gents tools explain --agent {agent_did}");
+                let (context, tools) = load_agent_context_and_tools_in_txn(txn, owner, agent_did)
                     .await
-                    .with_context(|| missing(&format!("cannot read the Tools of {agent_id}")))?;
+                    .with_context(|| missing(&format!("cannot read the Tools of {agent_did}")))?;
                 let context = context
-                    .with_context(|| missing(&format!("{agent_id} has no Context document")))?;
+                    .with_context(|| missing(&format!("{agent_did} has no Context document")))?;
                 let tools =
-                    tools.with_context(|| missing(&format!("{agent_id} has no Tools document")))?;
+                    tools.with_context(|| missing(&format!("{agent_did} has no Tools document")))?;
 
                 let (tools, context, report) = if remove {
                     unwire_plugin(&tools, &context, plugin_ref, skill_ids, targets_from)?

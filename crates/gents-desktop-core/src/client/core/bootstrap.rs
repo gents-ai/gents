@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_node::{EmbeddedNode, HttpConfig, P2PConfig};
+use defra_node::{HttpConfig, Node as EmbeddedNode, P2PConfig};
 #[cfg(test)]
 use defra_node::{NodeBuilder, StorageBackend};
 use defra_p2p_adapter::P2POperations as P2POps;
@@ -14,7 +14,6 @@ use super::super::observe::{spawn_observer_with_selection, ObservedStore};
 use super::super::paths::DesktopPaths;
 use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::principal_identity::PrincipalIdentity;
-use super::super::query::load_full_snapshot_with_peer_records;
 use super::super::schema::subscribe_all_collections;
 use super::p2p_ops::{
     p2p_connect_peer, p2p_connected_peers, p2p_listen_addresses, p2p_local_peer_id,
@@ -97,7 +96,9 @@ impl ClientCore {
         ) {
             Ok(access) => access,
             Err(error) => {
-                node.shutdown().await;
+                if let Err(shutdown_error) = node.shutdown().await {
+                    tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&shutdown_error), "failed to shut down embedded node after startup failure");
+                }
                 return Err(error.into());
             }
         };
@@ -133,15 +134,7 @@ impl ClientCore {
 
             let observation_scope = super::observation_scope::ObservationScope::new();
 
-            let initial_snapshot = {
-                load_full_snapshot_with_peer_records(
-                    node.as_ref(),
-                    &records,
-                    node_identity.did(),
-                    options.operator_identity_interaction,
-                )
-                .await?
-            };
+            let initial_snapshot = Default::default();
             let (store, _store_updates) = ObservedStore::new(initial_snapshot);
             checkpoint("initial_snapshot");
 
@@ -244,7 +237,9 @@ impl ClientCore {
                 Ok(core)
             }
             Err(error) => {
-                node.shutdown().await;
+                if let Err(shutdown_error) = node.shutdown().await {
+                    tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&shutdown_error), "failed to shut down embedded node after startup failure");
+                }
                 Err(error)
             }
         }
@@ -253,20 +248,24 @@ impl ClientCore {
 
 fn desktop_p2p_config(paths: &DesktopPaths, options: &ClientCoreOptions) -> P2PConfig {
     P2PConfig {
-        port: options.port,
+        port: Some(options.port),
         bind_addr: options.bind_addr,
         relay_mode: options.relay_mode.clone(),
         discovery: options.discovery.clone(),
         allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
         max_concurrent_multipath_paths: None,
         secret_key_path: Some(paths.iroh_secret_key_path().to_path_buf()),
+        peer_key: defra_node::PeerKeySource::File,
         load_persisted_collections: options.load_persisted_collections,
-        max_concurrent_dag_fetches: options.max_concurrent_dag_fetches,
-        max_concurrent_push_tasks: options.max_concurrent_push_tasks,
-        rate_limit_burst: options.rate_limit_burst,
-        rate_limit_rate: options.rate_limit_rate,
-        max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-        max_pending_dags: options.max_pending_dags,
+        sync: defra_node::SyncTuning {
+            max_concurrent_dag_fetches: options.max_concurrent_dag_fetches,
+            max_concurrent_push_tasks: options.max_concurrent_push_tasks,
+            rate_limit_burst: options.rate_limit_burst,
+            rate_limit_rate: options.rate_limit_rate,
+            max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
+            max_pending_dags: options.max_pending_dags,
+            replicator_retry_intervals: None,
+        },
         // DefraDB forwards merges to explicit downstream replicators itself.
         rebroadcast_on_merge: false,
     }
@@ -724,7 +723,7 @@ mod tests {
             assert!(!is_known_off_lineage(name, &on_client), "{name}");
         }
         core.shutdown().await.unwrap();
-        runtime.shutdown().await;
+        runtime.shutdown().await.expect("shutdown node");
     }
 
     #[tokio::test]
@@ -795,7 +794,7 @@ mod tests {
                 "test.client_upgrade.session",
                 &format!(
                     r#"mutation {{ create_AgentSession(input: {{
-                session_id: "upgrade-session", node_did: "{}", agent_id: "default",
+                session_id: "upgrade-session", node_did: "{}", agent_did: "default",
                 title: {{ text: "before upgrade", source: "user" }},
                 created_at: "2026-09-30T00:00:00Z"
             }}) {{ _docID }} }}"#,
@@ -849,7 +848,7 @@ mod tests {
             .all(|name| old_subscriptions.contains(name)));
         drop(admin);
         drop(access);
-        plain.shutdown().await;
+        plain.shutdown().await.expect("shutdown node");
         drop(plain);
         assert!(!paths.store_encryption_path().exists());
 

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::{json, Value};
 
 use super::*;
@@ -259,7 +259,7 @@ async fn a_page_creates_through_the_declared_create_tool_and_reads_it_back() {
         projected["output"]["results"],
         json!([{"title": "Write the tests"}])
     );
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -286,7 +286,7 @@ async fn the_tools_own_refusals_reach_the_page() {
         format!("{error:#}").contains("args must be a JSON object"),
         "{error:#}"
     );
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -301,7 +301,7 @@ async fn an_undeclared_tool_or_surface_is_refused_before_the_node_is_asked() {
     let error = fixture.refusal("notes", "list_tasks").await;
     assert!(error.contains("not declared"), "{error}");
     assert!(error.contains("surface \"notes\""), "{error}");
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -330,7 +330,7 @@ async fn a_disabled_missing_or_foreign_surface_is_refused() {
         error,
         format!("surface \"board\" is not installed on node {OTHER_NODE}")
     );
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -345,7 +345,7 @@ async fn a_surface_without_the_tool_is_refused() {
     );
     let error = fixture.refusal("board", "rename_task").await;
     assert_eq!(error, "surface \"board\" has no tool \"rename_task\"");
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -377,7 +377,7 @@ async fn a_dev_door_listing_declares_nothing_and_is_refused() {
         error.contains("no ux plugin \"acme/nope/board\""),
         "{error}"
     );
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -388,7 +388,7 @@ async fn a_tool_with_a_runtime_filled_field_is_not_callable_from_a_page() {
         error,
         "tool \"add_note\" has runtime-filled fields and is not callable from a page"
     );
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -454,5 +454,5 @@ async fn surfaces_lists_each_declared_surface_with_its_callable_tools() {
         listed[4],
         json!({"surface": "nowhere", "enabled": false, "missing": true, "tools": []})
     );
-    fixture.node.shutdown().await;
+    fixture.node.shutdown().await.expect("node shutdown");
 }

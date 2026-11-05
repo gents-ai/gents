@@ -793,7 +793,7 @@ fn prime_projection_from_turn(
     known_tool_calls: &mut BTreeMap<String, ToolProjectionStatus>,
     known_compaction_states: &mut BTreeMap<String, String>,
 ) {
-    let preferred_agent_id = format!("gents-{request_id}");
+    let preferred_agent_did = format!("gents-{request_id}");
     let preferred_reasoning_id = reasoning_item_id(request_id, 0);
     let mut resumed_agent = None;
     let mut found_preferred_agent = false;
@@ -801,7 +801,7 @@ fn prime_projection_from_turn(
     for item in &turn.items {
         match item {
             codex::ThreadItem::AgentMessage { id, text, .. } => {
-                if id == &preferred_agent_id {
+                if id == &preferred_agent_did {
                     resumed_agent = Some((id.clone(), text.clone()));
                     found_preferred_agent = true;
                 } else if !found_preferred_agent {
@@ -1121,7 +1121,7 @@ async fn send_thread_token_usage_update(
         &state.node,
         &request.node_did,
         request
-            .agent_id
+            .agent_did
             .as_deref()
             .context("committed request missing agent")?,
     )
@@ -1384,7 +1384,7 @@ mod tests {
 
         let temp = tempfile::tempdir().expect("reasoning projection directory");
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            gents::defra_node::Node::builder()
                 .data_path(temp.path().join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
@@ -1403,7 +1403,7 @@ mod tests {
                 "http://127.0.0.1/graphql",
             ),
             node_did: Arc::from("did:test:reasoning"),
-            agent_id: Arc::from("reasoning"),
+            agent_did: Arc::from("reasoning"),
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),
             poll_interval: Duration::from_millis(10),

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::inference::llm::tool::Tool;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::json;
 
 use super::BoundedWriteTool;
@@ -114,6 +114,27 @@ async fn rejects_a_persisted_protected_collection_at_execution() {
     .await
     .unwrap_err();
     assert!(format!("{err:#}").contains("protected"), "{err:#}");
+}
+
+#[tokio::test]
+async fn rejects_client_publication_mutations() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let mut protected = decl();
+    protected.collection = crate::lean_vocab_test::lean_contract_snapshot()
+        .client_publication_protected_collection
+        .clone();
+    let tool = BoundedWriteTool::new(ConfigAccess::local(node), protected);
+    assert!(!tool.is_well_formed());
+    let error = Tool::call(
+        &tool,
+        serde_json::from_value(json!({
+            "drift_sig":"abc", "summary":"stale", "status":"open"
+        }))
+        .unwrap(),
+    )
+    .await
+    .expect_err("client publication data is not agent-writable");
+    assert!(format!("{error:#}").contains("protected"));
 }
 
 #[tokio::test]

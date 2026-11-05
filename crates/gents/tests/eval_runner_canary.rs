@@ -267,8 +267,8 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
             "document": {
                 "session_id": "supplied-destination",
                 "node_did": "$trial",
-                "requester_did": "$trial",
-                "agent_id": "seeded",
+                "requester_did": "$evaluator",
+                "agent_did": "gents:agent-slot:seeded",
                 "created_at": "2026-01-01T00:00:00Z"
             }
         }]);
@@ -292,7 +292,7 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
     } else {
         source
     });
-    request.cells[0].agent_id = "seeded".into();
+    request.cells[0].agent_slot = "seeded".into();
     let executor = EmbeddedExecutor::new(
         DocumentRuntimeOptions::default(),
         canary.runs_dir(),
@@ -321,7 +321,7 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
         let home = EmbeddedHome::open_retained(&retained).await.unwrap();
         let state = gents::store::graphql::graphql_with_transaction_retry(
             &home.node,
-            "{ Trigger { trigger_id last_status last_error } AgentRequest { request_id lifecycle_state failure_reason session_id requester_did } AgentSession { session_id node_did requester_did agent_id } }",
+            "{ Trigger { trigger_id last_status last_error } AgentRequest { request_id lifecycle_state failure_reason session_id requester_did } AgentSession { session_id node_did requester_did agent_did } }",
             "failed routing canary",
         ).await.unwrap();
         panic!(
@@ -418,7 +418,7 @@ async fn a_seed_stage_no_trigger_fires_for_ends_unsubmitted_at_its_deadline() {
     request.cells[0].source = CellSource::Directory(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/eval_runner/trigger_pack"),
     );
-    request.cells[0].agent_id = "seeded".into();
+    request.cells[0].agent_slot = "seeded".into();
     let executor = EmbeddedExecutor::new(
         DocumentRuntimeOptions::default(),
         canary.runs_dir(),
@@ -471,7 +471,7 @@ async fn a_seed_stage_whose_event_sources_do_not_reconcile_fails_at_once() {
     request.cells[0].source = CellSource::Directory(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/eval_runner/trigger_pack"),
     );
-    request.cells[0].agent_id = "seeded".into();
+    request.cells[0].agent_slot = "seeded".into();
     let executor = EmbeddedExecutor::new(
         DocumentRuntimeOptions::default(),
         canary.runs_dir(),
@@ -511,7 +511,7 @@ async fn a_seed_stage_whose_event_sources_do_not_reconcile_fails_at_once() {
         .await
         .unwrap();
     assert_eq!(seeds["data"]["QuietItem"], json!([]), "{seeds:#?}");
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("node shutdown");
 
     let verdicts = load_verdicts(&canary.access, &request.owner, &request.run_id)
         .await
@@ -826,19 +826,29 @@ impl Canary {
 }
 async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
     let home = EmbeddedHome::create_temp("eval-canary").await.unwrap();
-    let access = ConfigAccess::local(home.node.clone());
+    let dirs = tempfile::tempdir().unwrap();
+    let evaluator = gents::store::identity::KeyIdentity::load_or_create(
+        dirs.path().join("evaluator.key"),
+        None,
+    )
+    .unwrap();
+    let evaluator_did = gents::store::identity::NodeIdentity::did(&evaluator).to_owned();
+    let access = ConfigAccess::local_as(
+        home.node.clone(),
+        ::identity::Did::new(evaluator_did.clone()).unwrap(),
+    );
     let owner = home.did().to_string();
-    gents::ensure_node(&home.node, &owner).await.unwrap();
     let canary = Canary {
         access,
         owner: owner.clone(),
         pack_dir: Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/eval_runner/canary_pack"),
-        dirs: tempfile::tempdir().unwrap(),
+        dirs,
         _home: home,
     };
     canary
         .install(vec![
+            (Collection::Node, json!({"node_did": owner})),
             (Collection::EvalDefinition, definition_document(&owner)),
             (
                 Collection::InferenceBackend,
@@ -866,7 +876,7 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
 
     let request = RunRequest {
         run_id: run_id.to_string(),
-        evaluator_did: owner.clone(),
+        evaluator_did,
         owner,
         definition_id: "canary".into(),
         split: EvalSplit::Validation,
@@ -875,7 +885,7 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
             cell_id: "baseline".into(),
             label: "baseline".into(),
             source: CellSource::Directory(canary.pack_dir.clone()),
-            agent_id: "canary".into(),
+            agent_slot: "canary".into(),
             inference_profile_id: "canary".into(),
         }],
         trials_per_case: 1,

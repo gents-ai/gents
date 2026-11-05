@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::store::graphql::escape_graphql_string;
 use gents::NodeIdentity;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -277,7 +277,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
     install_one_way_replicator(&topo.owner().node, &topo.peer_b().node, REPLICATED).await;
 
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("p2p-adm-live-owner"));
-    let (node_did, agent_id) = bind_target(&topo.owner().node, identity.as_ref(), &target).await;
+    let (node_did, agent_did) = bind_target(&topo.owner().node, identity.as_ref(), &target).await;
     let agent = boot_live_agent(topo.owner(), identity).await?;
     topo.set_agent(agent);
     eprintln!("[p2p-admission-live] owner ready did={node_did}");
@@ -294,7 +294,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
         create_runtime_request(
             &topo.owner().node,
             &node_did,
-            &agent_id,
+            &agent_did,
             request_id,
             &session_ids[i],
             &format!("Reply with exactly one word: wave{i}"),

@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 
 use crate::tools::workspace::journal::{advance, current_state};
@@ -352,6 +352,7 @@ async fn persist_claimed_to_running(
         node,
         &invocation.invocation_id,
         &invocation.owner_node_did,
+        &invocation.agent_did,
     )
     .await?;
     match current {
@@ -525,8 +526,13 @@ async fn execute_running_invocation(
         persist_journal(node, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
     }
 
-    let mut docs =
-        load_memory_workspace_docs(node, &action.workspace_id, &invocation.owner_node_did).await?;
+    let mut docs = load_memory_workspace_docs(
+        node,
+        &action.workspace_id,
+        &invocation.owner_node_did,
+        &invocation.agent_did,
+    )
+    .await?;
     let capabilities: BTreeSet<String> = callback.capabilities.iter().cloned().collect();
     let correlation = correlation_from_source(source);
     let execute_result = {
@@ -553,9 +559,9 @@ async fn execute_running_invocation(
         }) => {
             if let Some(outcome) = outcome {
                 let written = memory_from_outcome(&outcome);
-                flush_workspace_docs(node, &written).await?;
+                flush_workspace_docs(node, &written, &invocation.agent_did).await?;
             } else {
-                flush_workspace_docs(node, &docs).await?;
+                flush_workspace_docs(node, &docs, &invocation.agent_did).await?;
             }
             persist_journal(node, invocation, &journal, LIFECYCLE_FAILED, Some(&reason)).await?;
             return Ok(());
@@ -563,7 +569,7 @@ async fn execute_running_invocation(
     };
 
     let written = memory_from_outcome(&outcome);
-    flush_workspace_docs(node, &written).await?;
+    flush_workspace_docs(node, &written, &invocation.agent_did).await?;
     persist_journal(node, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
     succeed_then_emit_result(
         node,
@@ -673,6 +679,7 @@ async fn succeed_then_emit_result(
             invocation_id: invocation.invocation_id.clone(),
             binding_id: Some(invocation.origin.binding_id().to_string()),
             owner_node_did: invocation.owner_node_did.clone(),
+            agent_did: invocation.agent_did.clone(),
             workspace_id: Some(workspace.workspace_id.clone()),
             work_unit_id: Some(workspace.work_unit_id.clone()),
             caused_by_correlation: Some(correlation),
@@ -695,6 +702,18 @@ pub async fn recover_local_invocations(
         workers.prioritize(&mut invocations);
     }
     for invocation in invocations {
+        if let Err(error) = super::documents::ensure_callback_parent(
+            node,
+            "CallbackInvocation",
+            &invocation.invocation_id,
+            &invocation.owner_node_did,
+            &invocation.agent_did,
+        )
+        .await
+        {
+            tracing::warn!(invocation_id = %invocation.invocation_id, %error, "callback parent repair failed");
+            continue;
+        }
         if engine
             .and_then(|engine| engine.workers.as_ref())
             .is_some_and(|workers| workers.contains(&invocation.invocation_id))
@@ -841,7 +860,13 @@ pub async fn finish_succeeded_if_docs_ready(
     let Some(workspace_id) = workspace_id else {
         return Ok(false);
     };
-    let docs = load_memory_workspace_docs(node, &workspace_id, &invocation.owner_node_did).await?;
+    let docs = load_memory_workspace_docs(
+        node,
+        &workspace_id,
+        &invocation.owner_node_did,
+        &invocation.agent_did,
+    )
+    .await?;
     let workspace = docs.load_isolated_workspace(&workspace_id)?;
     let placement = docs.load_placement(&workspace_id)?;
     if !result_docs_ready(&journal, workspace.as_ref(), placement.as_ref()) {
@@ -853,9 +878,14 @@ pub async fn finish_succeeded_if_docs_ready(
     let Some(placement) = placement else {
         return Ok(false);
     };
-    if load_callback_result(node, &invocation.invocation_id, &invocation.owner_node_did)
-        .await?
-        .is_some()
+    if load_callback_result(
+        node,
+        &invocation.invocation_id,
+        &invocation.owner_node_did,
+        &invocation.agent_did,
+    )
+    .await?
+    .is_some()
         && invocation.lifecycle_state == LIFECYCLE_SUCCEEDED
     {
         return Ok(true);

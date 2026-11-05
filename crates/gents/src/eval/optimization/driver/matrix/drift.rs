@@ -60,7 +60,8 @@ async fn a_pack_that_is_not_the_live_configuration_is_refused_at_freeze() {
             .unwrap_err();
     let reason = refusal(error);
     assert!(
-        reason.contains("Agent \"monitor\"") && reason.contains("display_name"),
+        reason.contains(&format!("Agent {:?}", harness.binding.agent_did))
+            && reason.contains("display_name"),
         "{reason}"
     );
     assert!(!baseline_dir(&request.jobs_dir, &request.job_id).exists());

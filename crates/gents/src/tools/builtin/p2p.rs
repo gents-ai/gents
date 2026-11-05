@@ -6,7 +6,7 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node as EmbeddedNode;
 use crate::inference::llm::tool::{Tool, ToolDefinition};
 use crate::runtime::agent::p2p_reconcile::{
     templates::admit_app_collections, ActiveEnrollment, EmbeddedRemoteP2pAdmin,

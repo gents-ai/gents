@@ -98,7 +98,7 @@ fn cell(cell_id: &str, pack: &Path) -> CellRequest {
         cell_id: cell_id.into(),
         label: cell_id.into(),
         source: CellSource::Directory(pack.to_path_buf()),
-        agent_id: "monitor".into(),
+        agent_slot: "monitor".into(),
         inference_profile_id: "local".into(),
     }
 }

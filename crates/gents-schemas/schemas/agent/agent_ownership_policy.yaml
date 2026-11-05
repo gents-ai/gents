@@ -1,0 +1,135 @@
+name: Gents identity ownership model
+resources:
+  - name: nodes
+    relations:
+      - name: administrator
+        types: [actor]
+        manages: [administrator, runtime_reader]
+      - name: runtime_reader
+        types: [actor]
+    permissions:
+      - name: read
+        expr: administrator + runtime_reader
+      - name: update
+        expr: administrator
+      - name: delete
+        expr: administrator
+  - name: operations
+    relations:
+      - name: parent
+        types: [nodes]
+    permissions:
+      - name: read
+        expr: parent->read
+      - name: update
+      - name: delete
+  - name: agents
+    relations:
+      - name: parent
+        types: [nodes]
+      - name: reader
+        types: [actor]
+      - name: session_writer
+        types: [actor]
+      - name: administrator
+        types: [actor]
+        manages: [parent, reader, session_writer, administrator, executor, config_writer]
+      - name: executor
+        types: [actor]
+      - name: config_writer
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + session_writer + administrator + executor + config_writer + parent->read
+      - name: update
+        expr: administrator + config_writer + parent->update
+      - name: delete
+        expr: administrator + parent->delete
+      - name: invoke
+        expr: session_writer + executor + administrator + parent->delete
+      - name: session_read
+        expr: reader + session_writer + administrator + parent->delete
+      - name: session_admin
+        expr: administrator + parent->delete
+  - name: sessions
+    relations:
+      - name: parent
+        types: [agents]
+      - name: reader
+        types: [actor]
+      - name: working_agent
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + working_agent + parent->session_read
+      - name: update
+        expr: working_agent + parent->session_admin + parent->session_writer
+      - name: delete
+        expr: parent->session_admin
+  - name: delivered_requests
+    relations:
+      - name: parent
+        types: [agents]
+      - name: session
+        types: [sessions]
+      - name: working_agent
+        types: [actor]
+      - name: reader
+        types: [actor]
+    permissions:
+      - name: read
+        expr: working_agent + reader + parent->session_read + session->read
+      - name: update
+        expr: working_agent + parent->session_admin + session->delete
+      - name: delete
+        expr: parent->session_admin + session->delete
+  - name: goal_controls
+    relations:
+      - name: parent
+        types: [sessions]
+      - name: working_agent
+        types: [actor]
+    permissions:
+      - name: read
+        expr: working_agent + parent->read
+      - name: update
+        expr: working_agent + parent->delete
+      - name: delete
+        expr: parent->delete
+  - name: goal_receipts
+    relations:
+      - name: parent
+        types: [goal_controls]
+      - name: reader
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + parent->read
+      - name: update
+      - name: delete
+  - name: agent_children
+    relations:
+      - name: parent
+        types: [agents]
+    permissions:
+      - name: read
+        expr: parent->session_read
+      - name: update
+        expr: parent->session_admin
+      - name: delete
+        expr: parent->session_admin
+  - name: children
+    relations:
+      - name: parent
+        types: [sessions]
+      - name: reader
+        types: [actor]
+      - name: working_agent
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader + working_agent + parent->read
+      - name: update
+        expr: working_agent + parent->delete
+      - name: delete
+        expr: parent->delete

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use rig::http_client::{
     self, HeaderMap, HttpClientExt, LazyBody, MultipartForm, Request, ReqwestClient, Response,
     StreamingResponse,

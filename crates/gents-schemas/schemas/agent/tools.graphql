@@ -1,4 +1,4 @@
-type Tools @branchable @index(fields: ["node_did", "tools_id"], unique: true) {
+type Tools @index(fields: ["node_did", "tools_id"], unique: true) {
     tools_id: String
     node_did: String @index
     display_name: String

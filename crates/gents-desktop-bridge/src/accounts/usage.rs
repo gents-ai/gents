@@ -109,7 +109,7 @@ pub async fn read(
     let node_did = request.node_did.trim();
     let access = core
         .operator_access(node_did)
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     let trigger = if request.refresh {
         gents::inference::usage_observation::UsageTrigger::Refresh
     } else {
@@ -139,9 +139,9 @@ pub async fn read(
             );
             None
         }
-        Err(error) => return Err(BridgeError::untyped(error.to_string())),
+        Err(error) => return Err(BridgeError::classify_transport_error(error)),
     };
     account_usage_views(&access, node_did, reads.as_ref())
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }

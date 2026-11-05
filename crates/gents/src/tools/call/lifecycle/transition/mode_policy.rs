@@ -18,7 +18,7 @@ impl ToolCallLifecycle {
                 )
             })
             .unwrap_or_default();
-        crate::store::config_client::ConfigAccess::write_local_response(&self.node,
+        crate::store::config_client::ConfigAccess::local_as(self.node.clone(), self.actor.clone()).write(
             "tool.clear_background_request", &format!(r#"mutation {{ update_AgentToolCall(
                 docID: "{doc}", filter: {{ _docID: {{ _eq: "{doc}" }}, await_mode: {{ _eq: "foreground" }}{expected} }},
                 input: {{ background_requested_at: null, started_at: "{started}", deadline_at: "{deadline}" }}
@@ -63,7 +63,7 @@ impl ToolCallLifecycle {
             self.doc_id().unwrap()
         ));
         crate::store::config_client::ConfigAccess::transact_local_idempotent(
-            &self.node, None, crate::store::config_client::IdempotentTransactionRetry::Standard,
+            &self.node, Some(self.actor.clone()), crate::store::config_client::IdempotentTransactionRetry::Standard,
             "tool.background_handoff", move |txn| {
                 let binding = binding.clone();
                 let receipt_key = receipt_key.clone();
@@ -83,6 +83,13 @@ impl ToolCallLifecycle {
             },
         ).await?;
         self.await_mode = AwaitMode::Background;
+        crate::session::child_ownership::publish_agent_session_child_relationships(
+            &self.node,
+            &self.node_did,
+            &self.actor,
+            &self.session_id,
+        )
+        .await?;
         Ok(())
     }
 
@@ -98,7 +105,7 @@ impl ToolCallLifecycle {
         let original = self.clone();
         let adopted = crate::store::config_client::ConfigAccess::transact_local_idempotent(
             &self.node,
-            None,
+            Some(self.actor.clone()),
             crate::store::config_client::IdempotentTransactionRetry::Standard,
             "tool.background",
             move |txn| {
@@ -245,13 +252,14 @@ impl ToolCallLifecycle {
             }}"#
         );
 
-        let response = crate::store::config_client::ConfigAccess::write_local_response(
-            &self.node,
-            "foreground",
-            &mutation,
+        let response = crate::store::config_client::ConfigAccess::local_as(
+            self.node.clone(),
+            self.actor.clone(),
         )
+        .write("foreground", &mutation)
         .await
         .context("foreground mutation")?;
+        let response: defra_node::QueryResponse = serde_json::from_value(response)?;
         if !response
             .data
             .as_ref()

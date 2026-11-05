@@ -381,16 +381,35 @@ pub async fn request_usage_reads(
     url.set_path("/accounts/usage/read");
     url.set_query(None);
     url.set_fragment(None);
-    let response = reqwest::Client::builder()
+    let access = gents::store::config_client::ConfigAccess::Graphql(graphql.clone());
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(identity.did()),
+        "usage request actor does not match its signer"
+    );
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(30))
-        .build()?
-        .post(url)
+        .build()?;
+    let response = graphql
+        .authorize(client.post(url))?
         .json(&command)
         .send()
         .await
         .context("asking the runtime to read usage")?;
     let status = response.status();
     if !status.is_success() {
+        if matches!(
+            status,
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) {
+            return Err(
+                gents::store::config_client::ConfigClientError::HttpOperationStatus {
+                    operation: "runtime usage request",
+                    status,
+                }
+                .into(),
+            );
+        }
         let body: Value = response.json().await.unwrap_or_default();
         anyhow::bail!(
             "runtime refused the usage read ({status}): {}",
@@ -427,7 +446,7 @@ pub(crate) fn attach_reads(rows: &mut [AccountRow], reads: &UsageReads, node_did
 
 pub(crate) async fn list_with_usage(
     access: &ConfigAccess,
-    home: &std::path::Path,
+    _home: &std::path::Path,
     node_did: &str,
     provider: Option<&str>,
     refresh: bool,
@@ -442,9 +461,8 @@ pub(crate) async fn list_with_usage(
                 UsageTrigger::Open
             };
             let requested = async {
-                let identity =
-                    crate::commands::p2p::enrollment_admin::resolve_home_identity(Some(home))?;
-                request_usage_reads(identity.as_ref(), graphql, trigger, provider).await
+                let identity = crate::load_client_identity().await?;
+                request_usage_reads(&identity, graphql, trigger, provider).await
             }
             .await;
             match requested {

@@ -1,23 +1,26 @@
 use super::*;
 
-fn goal_creation_claim_selection(node_did: &str, session_id: &str) -> String {
+fn goal_creation_claim_selection(node_did: &str, session_id: &str, session_doc_id: &str) -> String {
     format!(
         r#"Goal(
-            filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }},
+            filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, session_doc_id: {{ _eq: "{}" }} }},
             order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
         ) {{ {GOAL_FIELDS} }}
-        GoalCreationClaim(filter: {{ creation_key: {{ _eq: "{}" }} }}, limit: 2) {{
+        GoalCreationClaim(filter: {{ creation_key: {{ _eq: "{}" }}, session_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{
             goal_id node_did session_id objective token_budget
         }}"#,
         escape_graphql_string(node_did),
         escape_graphql_string(session_id),
+        escape_graphql_string(session_doc_id),
         escape_graphql_string(&deterministic_goal_creation_key(node_did, session_id)),
+        escape_graphql_string(session_doc_id),
     )
 }
 
 fn goal_backed_request_recovery_query(
     node_did: &str,
     session_id: &str,
+    session_doc_id: &str,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<String> {
     let retry_key = request
@@ -32,7 +35,7 @@ fn goal_backed_request_recovery_query(
             {}
         }}"#,
         escape_graphql_string(retry_key),
-        goal_creation_claim_selection(node_did, session_id),
+        goal_creation_claim_selection(node_did, session_id, session_doc_id),
     ))
 }
 
@@ -55,22 +58,6 @@ fn decode_agent_request_by_retry_key(
         .map(str::to_string)
         .context("AgentRequest matched by retry key has no document ID")
         .map(Some)
-}
-
-pub(crate) async fn load_agent_request_by_retry_key(
-    node: &EmbeddedNode,
-    retry_key: &str,
-    expected: &GoalBackedRequestFingerprint,
-) -> Result<Option<String>> {
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}, limit: 2) {{
-            _docID {GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS}
-        }} }}"#,
-        escape_graphql_string(retry_key),
-    );
-    let response =
-        graphql_with_transaction_retry(node, &query, "load AgentRequest by retry key").await?;
-    decode_agent_request_by_retry_key(&rows(&response, "AgentRequest")?, expected)
 }
 
 fn verify_goal_creation_claim_cross_check(
@@ -187,60 +174,31 @@ pub(super) async fn load_goal_backed_request_by_retry_key_from_access(
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<Option<crate::request::lifecycle::materialize::EnqueuedAgentRequest>> {
-    let query = goal_backed_request_recovery_query(node_did, session_id, request)?;
-    let response = access.execute(&query).await?;
-    decode_goal_backed_request_recovery(
-        &response,
-        node_did,
-        session_id,
-        objective,
-        token_budget,
-        request,
-    )
-}
-
-fn goal_creation_claim_recovery_query(node_did: &str, session_id: &str) -> String {
-    format!(
-        "{{ {} }}",
-        goal_creation_claim_selection(node_did, session_id)
-    )
-}
-
-pub(super) async fn load_goal_backed_request_by_retry_key(
-    node: &EmbeddedNode,
-    node_did: &str,
-    session_id: &str,
-    objective: &str,
-    token_budget: Option<i64>,
-    request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<Option<crate::request::lifecycle::materialize::EnqueuedAgentRequest>> {
-    let retry_key = request
-        .retry_key
-        .as_deref()
-        .context("goal-backed request requires a stable retry_key")?;
-    let expected = GoalBackedRequestFingerprint::from_create(request)?;
-    let Some(doc_id) = load_agent_request_by_retry_key(node, retry_key, &expected).await? else {
-        return Ok(None);
-    };
-    let query = goal_creation_claim_recovery_query(node_did, session_id);
-    let response =
-        graphql_with_transaction_retry(node, &query, "load goal-backed request creation claim")
-            .await?;
-    let response = serde_json::json!({
-        "data": response.data.unwrap_or(serde_json::Value::Null),
-    });
-    verify_goal_creation_claim_cross_check(
-        &response,
-        node_did,
-        session_id,
-        objective,
-        token_budget,
-    )?;
-    Ok(Some(
-        crate::request::lifecycle::materialize::EnqueuedAgentRequest {
-            doc_id,
-            request_id: request.request_id.clone(),
-            session_id: request.session_id.clone(),
-        },
-    ))
+    access
+        .transact_readonly("goal.backed_request.recover", |txn| {
+            Box::pin(async move {
+                let Some(session) =
+                    crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+                        .await?
+                else {
+                    return Ok(None);
+                };
+                let query = goal_backed_request_recovery_query(
+                    node_did,
+                    session_id,
+                    &session.doc_id,
+                    request,
+                )?;
+                let response = txn.execute(&query).await?;
+                decode_goal_backed_request_recovery(
+                    &response,
+                    node_did,
+                    session_id,
+                    objective,
+                    token_budget,
+                    request,
+                )
+            })
+        })
+        .await
 }

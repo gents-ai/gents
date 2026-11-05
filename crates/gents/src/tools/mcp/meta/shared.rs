@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Serialize;
 
 use crate::tools::call::lifecycle::FailureClass;
@@ -10,6 +10,7 @@ use crate::tools::mcp::pool::McpPool;
 
 #[derive(Clone)]
 pub struct MetaToolContext {
+    pub actor: identity::Did,
     pub node: Arc<EmbeddedNode>,
     pub mcp_pool: McpPool,
     pub health: ServiceHealthMap,
@@ -328,13 +329,14 @@ pub(super) async fn lookup_service(
     ctx: &MetaToolContext,
     service_id: &str,
 ) -> anyhow::Result<ResolvedMcpService> {
-    let entry = crate::tools::mcp::registry::configured_mcp_services(&ctx.node, &ctx.node_did)
-        .await?
-        .into_iter()
-        .find(|service| service.service_id == service_id && service.enabled)
-        .ok_or_else(|| {
-            anyhow!("service '{service_id}' is not configured or enabled for this node")
-        })?;
+    let entry = crate::tools::mcp::registry::configured_mcp_services_on(
+        &crate::ConfigAccess::local_as(ctx.node.clone(), ctx.actor.clone()),
+        &ctx.node_did,
+    )
+    .await?
+    .into_iter()
+    .find(|service| service.service_id == service_id && service.enabled)
+    .ok_or_else(|| anyhow!("service '{service_id}' is not configured or enabled for this node"))?;
     resolve_service(&entry, &ctx.local_hostname, ctx.local_subnet.as_deref())
 }
 

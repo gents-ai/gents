@@ -17,8 +17,8 @@ const READINESS_REASON: Record<string, string> = {
   executor_start_failed: "executor failed to start",
 };
 
-export function agentReadiness(deployment: NodeView | null, agentId: string | null) {
-  const decision = selectedNodeReadinessDecision(deployment, agentId);
+export function agentReadiness(deployment: NodeView | null, agentDid: string | null) {
+  const decision = selectedNodeReadinessDecision(deployment, agentDid);
   if (decision.kind === "ready") return { ready: true, reason: null };
   const reason = decision.reason;
   return {

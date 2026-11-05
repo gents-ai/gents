@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use super::*;
 use crate::store::identity::NodeIdentity;
@@ -30,7 +30,7 @@ pub(super) fn context(owner: &str) -> MailboxStampContext {
     MailboxStampContext {
         requester_did: owner.into(),
         node_did: "did:test:agent".into(),
-        agent_id: "operator".into(),
+        agent_did: "operator".into(),
         session_id: Some("session-1".into()),
     }
 }
@@ -83,9 +83,9 @@ async fn stamping_is_owner_scoped_idempotent_and_never_reopens() {
     .unwrap_err();
     assert!(collision.to_string().contains("collision"));
 
-    assert!(dismiss_mailbox_item(&node, &first.doc_id, "did:test:other")
+    dismiss_mailbox_item(&node, &first.doc_id, "did:test:other")
         .await
-        .is_err());
+        .unwrap();
     dismiss_mailbox_item(&node, &first.doc_id, "did:test:owner-a")
         .await
         .unwrap();
@@ -106,7 +106,7 @@ async fn stamping_is_owner_scoped_idempotent_and_never_reopens() {
             title: "duplicate", summary: null, payload: null, source_kind: "session",
             source_id: "wait-1", session_id: null, request_id: null,
             cause_doc_id: null, target_node_did: "did:test:agent",
-            target_agent_id: "operator", expected_collection: null, parent_item_id: null,
+            target_agent_did: "operator", expected_collection: null, parent_item_id: null,
             deadline_at: null, created_at: "{}", updated_at: "{}",
             resolved_at: null, resolved_doc_id: null
         }}) {{ _docID }} }}"#,
@@ -274,7 +274,7 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
     let event_child = format!(
         r#"mutation {{ create_AgentRequest(input: {{
             request_id: "mailbox-observer-child", purpose: "normal", node_did: "did:test:agent",
-            requester_did: "did:test:owner", agent_id: "operator",
+            requester_did: "did:test:owner", agent_did: "operator",
             session_id: "session-1", content: "observe",
             lifecycle_state: "pending", execution_origin: "scheduled",
             caused_by_trigger_kind: "event", caused_by_source_doc_id: "{}",
@@ -312,7 +312,7 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
     let create_request = format!(
         r#"mutation {{ create_AgentRequest(input: {{
             request_id: "mailbox-request", purpose: "normal", node_did: "did:test:agent",
-            requester_did: "did:test:owner", agent_id: "operator",
+            requester_did: "did:test:owner", agent_did: "operator",
             session_id: "session-1", content: "continue",
             lifecycle_state: "pending", execution_origin: "interactive",
             caused_by_source_doc_id: "{}", created_at: "{}"
@@ -346,7 +346,7 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
         r#"mutation {{ create_AgentRequest(input: {{ request_id: "transport-only",
             purpose: "normal",
             node_did: "did:test:agent", requester_did: "did:test:owner",
-            agent_id: "operator", session_id: "session-1", content: "draft",
+            agent_did: "operator", session_id: "session-1", content: "draft",
             caused_by_source_doc_id: "{}", created_at: "{}" }}) {{ _docID }} }}"#,
         escape_graphql_string(&domain_item.doc_id),
         Utc::now().to_rfc3339()
@@ -405,7 +405,7 @@ async fn a_0_21_graph_sourced_item_still_lists() {
             node_did: "did:test:agent", status: "open", kind: "ask", action: "ack",
             title: "from a graph run", source_kind: "graph", source_id: "wait-1",
             graph_run_id: "run-1", target_node_did: "did:test:agent",
-            target_agent_id: "operator", created_at: "{now}", updated_at: "{now}"
+            target_agent_did: "operator", created_at: "{now}", updated_at: "{now}"
         }}) {{ _docID }} }}"#
     );
     assert!(!node.execute(&stored).await.has_errors());
@@ -427,7 +427,7 @@ async fn poisoned_item_does_not_block_later_expiry() {
             node_did: "did:test:agent", status: "open", kind: "gate",
             action: "write_document", title: "hostile", source_kind: "session",
             source_id: "hostile", target_node_did: "did:test:agent",
-            target_agent_id: "operator", created_at: "{now}", updated_at: "{now}"
+            target_agent_did: "operator", created_at: "{now}", updated_at: "{now}"
         }}) {{ _docID }} }}"#
     );
     assert!(!node.execute(&hostile).await.has_errors());
@@ -436,7 +436,7 @@ async fn poisoned_item_does_not_block_later_expiry() {
             item_key: "session:undecodable:gate:1", requester_did: "did:test:owner",
             node_did: "did:test:agent", status: "open", kind: "gate",
             action: "ack", source_kind: "session", source_id: "undecodable",
-            target_node_did: "did:test:agent", target_agent_id: "operator",
+            target_node_did: "did:test:agent", target_agent_did: "operator",
             created_at: "{now}", updated_at: "{now}"
         }}) {{ _docID }} }}"#
     );

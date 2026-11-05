@@ -60,6 +60,17 @@ private def traceJson (actions : List Action) : String := Id.run do
 private def obs (attempt sequence time : Nat) (activity : Activity) : Observation :=
   ⟨target, 0, attempt, sequence, time, activity⟩
 
+def visibilityCasesJson : String :=
+  let cases : List (Nat × Nat × Bool) := [
+    (0, 0, false), (0, 1, true), (1, 0, true), (1, 1, false),
+    (1, 1, true), (2, 1, true), (1, 2, true)]
+  let render (c : Nat × Nat × Bool) : String :=
+    let (sessions, requests, active) := c
+    "{\"sessions\":" ++ toString sessions ++ ",\"requests\":" ++ toString requests ++
+      ",\"active\":" ++ (if active then "true" else "false") ++
+      ",\"expected\":" ++ (if sourceVisible sessions requests active then "true" else "false") ++ "}"
+  "[" ++ String.intercalate "," (cases.map render) ++ "]"
+
 def casesJson : String :=
   let traces : List (List Action) := [
     [.receive 0 (obs 0 1 10 .awaitingProvider), .receive 0 (obs 0 2 11 .retrying),

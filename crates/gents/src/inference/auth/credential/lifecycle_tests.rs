@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::{json, Value};
 use std::sync::Arc;
 

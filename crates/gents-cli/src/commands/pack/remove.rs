@@ -92,7 +92,9 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     }
     .await;
     if let Some(node) = access.local_node() {
-        node.shutdown().await;
+        if let Err(error) = node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+        }
     }
     crate::print_json(&result?)
 }
@@ -197,7 +199,9 @@ pub(crate) async fn ensure_home_plugins_unreferenced(
     let (access, owner) = super::resolve_scope_owner(&scope).await?;
     let result = gents::pack::ensure_plugins_unreferenced(&access, &owner, plugins).await;
     if let Some(node) = access.local_node() {
-        node.shutdown().await;
+        if let Err(error) = node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+        }
     }
     drop(access);
     #[cfg(test)]

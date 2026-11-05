@@ -72,7 +72,7 @@ fn stub_principal() -> Arc<crate::store::identity::RuntimeNode> {
     Arc::new(crate::store::identity::RuntimeNode {
         node_did: identity.did().to_string(),
         identity,
-        default_agent_id: String::new(),
+        default_agent_did: String::new(),
         display_name: None,
         enabled: true,
     })
@@ -435,7 +435,7 @@ fn resolved_task(prompt_template: &str) -> ResolvedTask {
         emit_outcome: false,
         task_id: "t1".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: "general".to_string(),
         prompt_template: prompt_template.to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -566,15 +566,22 @@ fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
     let principal = Arc::new(RuntimeNode {
         node_did: identity.did().to_string(),
         identity,
-        default_agent_id: String::new(),
+        default_agent_did: String::new(),
         display_name: None,
         enabled: true,
     });
+    let binding =
+        crate::store::identity::provision_agent_identity(principal.identity.as_ref()).unwrap();
+    let agent_identity =
+        crate::store::identity::resolve_agent_identity(principal.identity.as_ref(), &binding)
+            .unwrap();
+    let agent_did = binding.agent_did;
     Arc::new(ResolvedAgent {
         profile_id: None,
         skills: Vec::new(),
         oauth_pool: Vec::new(),
-        agent_id: behavior_name.to_string(),
+        agent_did,
+        agent_identity,
         node: principal,
         backend_id: Some("backend-it".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
@@ -617,7 +624,7 @@ fn snapshot_with_agent_and_schedules(
     let principal = behavior.node.clone();
     let local_did = behavior.node_did().to_string();
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-        behavior.agent_id.clone(),
+        behavior.agent_did.clone(),
         vec![behavior],
         RapidHashMap::new(),
         RapidHashMap::new(),

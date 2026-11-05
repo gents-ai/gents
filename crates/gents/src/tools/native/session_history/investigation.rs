@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::{bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use super::inference::{
@@ -101,7 +101,7 @@ pub(super) fn session_investigation_scoped_query(
                 {{ session_id: {{ _eq: "{session_id}" }} }}
             ] }}) {{
                 session_id
-                agent_id
+                agent_did
             }}
             AgentRequest(
                 filter: {{ _and: [
@@ -117,7 +117,7 @@ pub(super) fn session_investigation_scoped_query(
                 purpose
                 node_did
                 requester_did
-                agent_id
+                agent_did
                 session_id
                 lifecycle_state
                 created_at
@@ -169,7 +169,7 @@ pub(super) fn session_investigation_scoped_query(
                 compacted_tokens
             }}
             Agent(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{
-                agent_id
+                agent_did
                 inference_profile_id
                 context_id
             }}
@@ -248,13 +248,13 @@ pub(super) fn build_session_investigation(
         envelope.sessions.len() == 1,
         "session investigation requires one canonical AgentSession"
     );
-    let agent_id = clean(envelope.sessions[0].agent_id.as_ref())
-        .context("canonical AgentSession is missing agent_id")?;
+    let agent_did = clean(envelope.sessions[0].agent_did.as_ref())
+        .context("canonical AgentSession is missing agent_did")?;
     let agent = {
         envelope
             .agents
             .iter()
-            .find(|agent| agent.agent_id == agent_id)
+            .find(|agent| agent.agent_did == agent_did)
     };
     let context = agent
         .and_then(|agent| agent.context_id.as_deref())
@@ -400,7 +400,7 @@ pub(super) struct ToolCallDetailRow {
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct AgentDetailRow {
     #[serde(default)]
-    agent_id: String,
+    agent_did: String,
     #[serde(default)]
     inference_profile_id: Option<String>,
     #[serde(default)]

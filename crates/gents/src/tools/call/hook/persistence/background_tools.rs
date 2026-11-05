@@ -248,9 +248,9 @@ impl DefraSessionHook {
         let request_node_did = runtime_context
             .as_ref()
             .and_then(|runtime| runtime.node_did.clone());
-        let request_agent_id = runtime_context
+        let request_agent_did = runtime_context
             .as_ref()
-            .and_then(|runtime| runtime.agent_id.clone());
+            .and_then(|runtime| runtime.agent_did.clone());
         let source_fields = runtime_context
             .map(|runtime| runtime.source_fields)
             .unwrap_or_default();
@@ -264,7 +264,7 @@ impl DefraSessionHook {
                 crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
                     requester_did,
                     request_node_did,
-                    request_agent_id,
+                    request_agent_did,
                     Some(execution_request_id.clone()),
                     async {
                         crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
@@ -365,7 +365,7 @@ impl DefraSessionHook {
         lifecycle: &crate::tools::call::lifecycle::ToolCallLifecycle,
     ) -> anyhow::Result<ToolCallHookAction> {
         let message = crate::tools::call::lifecycle::query::load_tool_call_result(
-            &crate::store::config_client::ConfigAccess::local(self.node.clone()),
+            &self.actor_access()?,
             lifecycle
                 .doc_id()
                 .context("lost terminal compare requires physical tool identity")?,

@@ -186,6 +186,130 @@ pub fn transcript_message_create_variables(
     )])))
 }
 
+/// Capture the physical session while creating a child so its creator can
+/// restore the native parent relationship after the document commits.
+pub(crate) async fn session_child_binding_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<(String, String)> {
+    anyhow::ensure!(
+        txn.actor_did().is_some(),
+        "session child creation requires an explicit actor"
+    );
+    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let response = txn
+        .execute(&format!(
+            "{{ AgentSession(filter: {{ {scope} }}, limit: 2) {{ _docID agent_did }} }}"
+        ))
+        .await?;
+    let rows = response["data"]["AgentSession"]
+        .as_array()
+        .context("session child parent lookup omitted its authorized result")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "session child requires one visible physical session"
+    );
+    let session_doc = rows[0]["_docID"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .context("session child parent is missing its document ID")?;
+    let agent = rows[0]["agent_did"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .context("session child parent is missing its selected agent")?;
+    Ok((session_doc.to_owned(), agent.to_owned()))
+}
+
+pub(crate) async fn output_segment_bound_variables(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    segment: &gents_protocol::output::OutputSegment,
+) -> Result<serde_json::Value> {
+    let (session_doc, agent) = agent_session_child_binding_in_txn(
+        txn,
+        &segment.node_did,
+        &segment.session_id,
+        segment.requester_did.as_deref(),
+    )
+    .await?;
+    let mut variables = output_segment_create_variables(segment)?;
+    variables["input"]["session_doc_id"] = session_doc.into();
+    variables["input"]["agent_did"] = agent.into();
+    variables["input"]["creator_did"] = txn
+        .actor_did()
+        .context("session child creator missing")?
+        .into();
+    variables["input"]["parent_linked"] = false.into();
+    Ok(variables)
+}
+
+pub(crate) async fn transcript_message_bound_variables(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    message: &gents_protocol::output::TranscriptMessage,
+) -> Result<serde_json::Value> {
+    let (session_doc, agent) = agent_session_child_binding_in_txn(
+        txn,
+        &message.node_did,
+        &message.session_id,
+        message.requester_did.as_deref(),
+    )
+    .await?;
+    transcript_message_variables_with_binding(
+        message,
+        session_doc,
+        agent,
+        txn.actor_did().context("session child creator missing")?,
+    )
+}
+
+pub(crate) async fn fork_message_bound_variables(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    message: &gents_protocol::output::TranscriptMessage,
+) -> Result<serde_json::Value> {
+    let (session_doc, agent) = session_child_binding_in_txn(
+        txn,
+        &message.node_did,
+        &message.session_id,
+        message.requester_did.as_deref(),
+    )
+    .await?;
+    transcript_message_variables_with_binding(
+        message,
+        session_doc,
+        agent,
+        txn.actor_did().context("session child creator missing")?,
+    )
+}
+
+fn transcript_message_variables_with_binding(
+    message: &gents_protocol::output::TranscriptMessage,
+    session_doc: String,
+    agent: String,
+    creator: &str,
+) -> Result<serde_json::Value> {
+    let mut variables = transcript_message_create_variables(message)?;
+    variables["input"]["session_doc_id"] = session_doc.into();
+    variables["input"]["agent_did"] = agent.into();
+    variables["input"]["creator_did"] = creator.into();
+    variables["input"]["parent_linked"] = false.into();
+    Ok(variables)
+}
+
+pub(crate) async fn agent_session_child_binding_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<(String, String)> {
+    let binding = session_child_binding_in_txn(txn, node_did, session_id, requester_did).await?;
+    anyhow::ensure!(
+        txn.actor_did() == Some(binding.1.as_str()),
+        "runtime session child requires its selected agent actor"
+    );
+    Ok(binding)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

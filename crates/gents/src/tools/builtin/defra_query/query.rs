@@ -82,7 +82,6 @@ pub const AGENT_CONFIG_QUERY_COLLECTIONS: &[&str] = &[
     "Trigger",
     "NodeRuntime",
     "Network",
-    "PeerEndpoint",
     "PeerRegistry",
     "PeerPairingDesired",
     "PeerPairingApplied",

@@ -2,11 +2,12 @@
 # Absent requester scope grants no wildcard authority. Projection/listing
 # orders by created_at then the logical session_id / request_id labels, never
 # the physical document ID.
-type AgentSession @branchable @index(fields: ["node_did", "session_id"], unique: true) {
+type AgentSession @policy(id: "d23eb42a87668f3bd577087f604fd7919e24873705681fe9e3d1923d7d065c13", resource: "sessions") @index(fields: ["node_did", "session_id"], unique: true) {
     session_id: String @index @immutable
     node_did: String @index @immutable
     requester_did: String @index @immutable
-    agent_id: String @index @immutable
+    agent_did: String @index @immutable
+    relationships_pending: Boolean @index
     created_at: String @index @immutable
     closed_at: String @index
     title: JSON

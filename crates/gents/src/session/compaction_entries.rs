@@ -195,7 +195,8 @@ where
 }
 
 pub(crate) async fn load_prompt_compaction_state(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -219,19 +220,14 @@ pub(crate) async fn load_prompt_compaction_state(
             }}
         }}"#
     );
-    let resp = execute_query_timed(node, &query, "load_prompt_compaction_state").await?;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "loading prompt compaction state for session_id={}: {:?}",
-            session_id,
-            resp.errors
-        );
-    }
-    let rows: Vec<PromptCompactionRow> = match resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("CompactionEntry"))
-    {
+    let resp = crate::store::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        Some(identity::Did::new(agent_did)?),
+        "session.load_prompt_compaction_state",
+        |txn| Box::pin(txn.execute(&query)),
+    )
+    .await?;
+    let rows: Vec<PromptCompactionRow> = match resp.pointer("/data/CompactionEntry") {
         Some(value) => serde_json::from_value(value.clone())?,
         None => Vec::new(),
     };
@@ -353,6 +349,7 @@ pub async fn load_compaction_entries(
 }
 
 pub(crate) struct NewExactSessionCompaction<'a> {
+    pub(crate) agent_did: &'a str,
     pub(crate) session_id: &'a str,
     pub(crate) node_did: &'a str,
     pub(crate) requester_did: Option<&'a str>,
@@ -376,6 +373,7 @@ pub(crate) async fn save_exact_compaction_entry(
 ) -> Result<CompactionEntry> {
     save_compaction_entry_with_requester_did(
         node,
+        input.agent_did,
         input.session_id,
         input.node_did,
         input.requester_did,
@@ -397,6 +395,7 @@ pub(crate) async fn save_exact_compaction_entry(
 #[cfg(test)]
 pub(crate) async fn save_compaction_entry(
     node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
     session_id: &str,
     node_did: &str,
     request_id: &str,
@@ -409,9 +408,11 @@ pub(crate) async fn save_compaction_entry(
     original_tokens: usize,
     compacted_tokens: usize,
 ) -> Result<CompactionEntry> {
-    let state = load_prompt_compaction_state(node, session_id, node_did, None, None).await?;
+    let state =
+        load_prompt_compaction_state(node, agent_did, session_id, node_did, None, None).await?;
     save_compaction_entry_with_requester_did(
         node,
+        agent_did,
         session_id,
         node_did,
         None,
@@ -432,6 +433,7 @@ pub(crate) async fn save_compaction_entry(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn save_compaction_entry_with_requester_did(
     node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -463,7 +465,7 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
     let requester_did_field = &requester_did_field;
     crate::store::config_client::ConfigAccess::transact_local_idempotent(
         node,
-        None,
+        Some(identity::Did::new(agent_did)?),
         crate::store::config_client::IdempotentTransactionRetry::Standard,
         "session.save_compaction_entry",
         move |txn| {

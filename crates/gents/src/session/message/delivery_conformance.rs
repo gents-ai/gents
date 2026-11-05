@@ -21,3 +21,57 @@ fn agent_delivery_matches_lean() {
         assert_eq!(actual, case.expected.as_deref(), "{case:?}");
     }
 }
+
+#[tokio::test]
+async fn remote_delivery_waits_for_authenticated_http_transport() {
+    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let claim = snapshot["remote_agent_delivery_claim_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "native-read-no-atomic-authority")
+        .unwrap();
+    assert_eq!(claim["document_visible"], true);
+    assert_eq!(claim["atomic_requester_authorization"], false);
+    assert_eq!(claim["claim"], false);
+    let cases = snapshot["remote_agent_delivery_cases"].as_array().unwrap();
+    let case = cases
+        .iter()
+        .find(|case| case["name"] == "committed-response-observed")
+        .unwrap();
+    assert_eq!(case["result"], "committed");
+    let intent = &case["intent"];
+    let node = std::sync::Arc::new(defra_node::Node::builder().build().await.unwrap());
+    let cause = crate::request::lifecycle::SessionMessageCause {
+        caller_node_did: "source-runtime".into(),
+        caller_agent_did: intent["sender"].as_str().unwrap().into(),
+        caller_session_id: "source-session".into(),
+        caller_requester_did: None,
+        caller_request_id: "request".into(),
+        caller_request_doc_id: "request-doc".into(),
+        caller_hop: 0,
+        tool_call_id: "tool".into(),
+        tool_call_doc_id: "tool-doc".into(),
+        correlation: None,
+    };
+    let target = crate::request::lifecycle::SessionMessageTarget {
+        node_did: "target-runtime".into(),
+        agent_did: intent["target"].as_str().unwrap().into(),
+        session_id: "target-session".into(),
+    };
+    let result = super::plan::plan_with_delivery(
+        &node,
+        &cause,
+        &target,
+        RenderedBody {
+            content: "message".into(),
+            goal: None,
+        },
+        None,
+        AgentMessageDelivery::Queue,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(result, Err(reason) if reason.contains("authenticated HTTP delivery path")));
+    node.shutdown().await.expect("shut down test node");
+}

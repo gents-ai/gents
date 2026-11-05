@@ -13,14 +13,14 @@ import { agentName } from "./behavior";
 
 export function NodeAgentStack({
   nodeDid,
-  agentId,
+  agentDid,
   description,
   size = "md",
   workers = [],
   keyboard = false,
 }: {
   nodeDid: string | null | undefined;
-  agentId: string | null | undefined;
+  agentDid: string | null | undefined;
   description?: string;
   size?: "sm" | "md";
   workers?: readonly SessionSummary[];
@@ -37,11 +37,11 @@ export function NodeAgentStack({
   const workerAgents = [
     ...new Map(
       workers.flatMap((w, i) =>
-        w.agentId && (w.agentId !== agentId || w.nodeDid !== nodeDid)
+        w.agentDid && (w.agentDid !== agentDid || w.nodeDid !== nodeDid)
           ? [
               [
-                JSON.stringify([w.nodeDid, w.agentId]),
-                [w.agentId, workersOn[i] ?? null] as const,
+                JSON.stringify([w.nodeDid, w.agentDid]),
+                [w.agentDid, workersOn[i] ?? null] as const,
               ] as const,
             ]
           : [],
@@ -88,27 +88,30 @@ export function NodeAgentStack({
       )}
       <AgentHoverCard
         deployment={found}
-        agentId={agentId ?? null}
+        agentDid={agentDid ?? null}
         description={description}
         side={spread ? "bottom" : "right"}
       >
         {keyboard ? (
           <button
             type="button"
-            aria-label={`About ${agentName(agentId ?? null, found)} agent`}
+            aria-label={`About ${agentName(agentDid ?? null, found)} agent`}
             className="grid cursor-default place-items-center rounded-full p-0 leading-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none"
           >
             <AgentInitials
-              name={agentName(agentId ?? null, found)}
+              name={agentName(agentDid ?? null, found)}
               className={shifted}
             />
           </button>
         ) : (
-          <AgentInitials name={agentName(agentId ?? null, found)} className={shifted} />
+          <AgentInitials
+            name={agentName(agentDid ?? null, found)}
+            className={shifted}
+          />
         )}
       </AgentHoverCard>
       {shownAgents.map(([identity, [b, on]]) => (
-        <AgentHoverCard key={identity} deployment={on} agentId={b} side="bottom">
+        <AgentHoverCard key={identity} deployment={on} agentDid={b} side="bottom">
           <AgentInitials name={agentName(b, on)} className={shifted} />
         </AgentHoverCard>
       ))}

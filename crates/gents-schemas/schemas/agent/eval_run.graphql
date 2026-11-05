@@ -1,4 +1,4 @@
-type EvalRun @branchable @index(fields: ["owner_node_did", "run_id"], unique: true) {
+type EvalRun @index(fields: ["owner_node_did", "run_id"], unique: true) {
     run_id: String @immutable
     owner_node_did: String @index @immutable
     evaluator_did: String @immutable

@@ -1,7 +1,7 @@
 use rapidhash::RapidHashSet;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use crate::tools::native::ToolSet;
 
@@ -246,7 +246,7 @@ impl AgentToolSurfaceConfig {
             || !cli_tool_names.is_empty()
             || static_policy.lsp)
             .then(|| super::RootExecutionGuard {
-                agent_id: agent_name.to_string(),
+                agent_did: agent_name.to_string(),
                 selected_root: root_was_authored
                     .then(|| host_tools.read_root().map(ToOwned::to_owned))
                     .flatten(),
@@ -317,7 +317,7 @@ impl AgentToolSurfaceConfig {
         effective_agent_targets.retain(|target| {
             static_policy
                 .agent_targets
-                .permits(&(target.target_node_did.clone(), target.agent_id.clone()))
+                .permits(&(target.target_node_did.clone(), target.agent_did.clone()))
         });
 
         Ok(Self {
@@ -359,7 +359,7 @@ impl AgentToolSurfaceConfig {
                 .collect(),
             self_config: super::SelfConfigToolConfig {
                 enabled: static_policy.include_self_config(),
-                agent_id: agent_name.to_string(),
+                agent_did: agent_name.to_string(),
                 categories: static_policy.self_config_category_set(),
                 no_lockout: self_config_no_lockout,
                 preview: self_config_preview,
@@ -591,7 +591,7 @@ impl AgentToolSurfaceConfig {
                     ),
                     workspace,
                     session_id: String::new(),
-                    agent_id: self.self_config.agent_id.clone(),
+                    agent_did: self.self_config.agent_did.clone(),
                     servers,
                     constraints,
                     format_on_write: doc.format_on_write.unwrap_or(false),
@@ -609,12 +609,12 @@ impl AgentToolSurfaceConfig {
         &self,
         node: &std::sync::Arc<EmbeddedNode>,
         own_node_did: &str,
-        active_agent_ids: &RapidHashSet<String>,
+        active_agent_dids: &RapidHashSet<String>,
         plugins: &crate::plugin::executor::PluginExecutor,
     ) -> Result<ToolSurface> {
         let mut agent_tools = self.agent_tools.clone();
         agent_tools.targets.retain(|target| {
-            target.target_node_did != own_node_did || active_agent_ids.contains(&target.agent_id)
+            target.target_node_did != own_node_did || active_agent_dids.contains(&target.agent_did)
         });
         self.resolve_with_agent_tools(node, own_node_did, plugins, agent_tools)
             .await
@@ -625,11 +625,11 @@ impl AgentToolSurfaceConfig {
         &self,
         mcp_services_online: bool,
         own_node_did: &str,
-        active_agent_ids: &RapidHashSet<String>,
+        active_agent_dids: &RapidHashSet<String>,
     ) -> ToolSurface {
         let mut agent_tools = self.agent_tools.clone();
         agent_tools.targets.retain(|target| {
-            target.target_node_did != own_node_did || active_agent_ids.contains(&target.agent_id)
+            target.target_node_did != own_node_did || active_agent_dids.contains(&target.agent_did)
         });
         self.resolve_with_agent_tools_for_mcp_presence(mcp_services_online, agent_tools)
     }

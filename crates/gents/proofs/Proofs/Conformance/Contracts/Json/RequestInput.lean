@@ -38,6 +38,7 @@ private def goalJson : Option GoalContinuationInput → String
 
 private def admissionKindJson : AgentRequestAdmissionKind → String
   | .enrollment => jsonString "enrollment"
+  | .client => jsonString "client"
   | .localSelf => jsonString "local-self"
   | .runtimeInternal => jsonString "runtime-internal"
   | .peer => jsonString "peer"

@@ -1,4 +1,4 @@
-type EventGroupState @branchable
+type EventGroupState
     @index(fields: ["node_did", "group_key"], unique: true) {
     group_key: String @immutable
     node_did: String @index @immutable

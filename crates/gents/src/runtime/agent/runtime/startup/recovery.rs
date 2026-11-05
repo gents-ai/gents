@@ -1,7 +1,8 @@
 pub(super) async fn log_recovery(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     node_did: &str,
-    default_agent_id: &str,
+    default_agent_did: &str,
+    agent_dids: &[String],
     executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
 ) {
     // The inference-call sweep is parent-gated and must run after request repair.
@@ -9,6 +10,32 @@ pub(super) async fn log_recovery(
         node, node_did, executions,
     )
     .await;
+    for agent_did in agent_dids {
+        let result = match identity::Did::new(agent_did.clone()) {
+            Ok(actor) => {
+                crate::session::child_ownership::recover_agent_session_child_relationships(
+                    node, node_did, &actor,
+                )
+                .await
+            }
+            Err(error) => Err(error.into()),
+        };
+        if let Err(error) = result {
+            tracing::warn!(%agent_did, %error, "session child relationship recovery failed");
+        }
+        if let Ok(actor) = identity::Did::new(agent_did.clone()) {
+            if let Err(error) =
+                crate::session::recover_agent_session_relationships(node, node_did, &actor).await
+            {
+                tracing::warn!(%agent_did, %error, "session relationship recovery failed");
+            }
+        }
+        if let Err(error) =
+            crate::triggers::engine::durable::recover_outcomes(node, node_did, agent_did).await
+        {
+            tracing::warn!(%agent_did, %error, "agent trigger outcome recovery failed");
+        }
+    }
     let mut recovered_any = false;
 
     match outcome.tool_calls {
@@ -102,7 +129,7 @@ pub(super) async fn log_recovery(
     if !recovered_any {
         tracing::debug!(
             node_did = %node_did,
-            default_agent_id = %default_agent_id,
+            default_agent_did = %default_agent_did,
             "startup recovery found no stuck documents"
         );
     }

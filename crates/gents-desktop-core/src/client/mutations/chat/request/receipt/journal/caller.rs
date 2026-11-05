@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use std::sync::Arc;
@@ -36,6 +36,9 @@ pub(crate) async fn lookup(
             anyhow::bail!("request identity has no caller binding")
         }
         Some((_, Entry::Goal(_))) => anyhow::bail!("request identity belongs to a Goal command"),
+        Some((_, Entry::Publication(_))) => {
+            anyhow::bail!("request identity belongs to a configuration publication")
+        }
     }
 }
 
@@ -72,6 +75,7 @@ pub(crate) async fn reserve(node: &Arc<EmbeddedNode>, proposal: &Record) -> Resu
                 Some((_, Entry::Caller(record))) => vec![*record],
                 Some((_, Entry::Uncorrelated(_))) => anyhow::bail!("request identity has no caller binding"),
                 Some((_, Entry::Goal(_))) => anyhow::bail!("request identity belongs to a Goal command"),
+                Some((_, Entry::Publication(_))) => anyhow::bail!("request identity belongs to a configuration publication"),
                 None => Vec::new(),
             };
             let (staged, decision) = correlated::prepare(&records, proposal, true);

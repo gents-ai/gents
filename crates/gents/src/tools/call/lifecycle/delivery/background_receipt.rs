@@ -1,7 +1,7 @@
 use crate::request::lifecycle::queue::next_append_sequence_in_transaction;
 use crate::session::canonical_rows::{
-    decode_output_segment_row, decode_transcript_message_row, output_segment_create_variables,
-    transcript_message_create_variables, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
+    decode_output_segment_row, decode_transcript_message_row, output_segment_bound_variables,
+    transcript_message_bound_variables, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use crate::store::config_client::ConfigApplyTxn;
@@ -22,9 +22,9 @@ impl ToolCallLifecycle {
     pub(crate) async fn publish_background_receipt(&mut self, text: &str) -> Result<bool> {
         let binding = self.background_receipt_binding()?;
         let receipt = text.to_owned();
-        ConfigAccess::transact_local_idempotent(
+        let result = ConfigAccess::transact_local_idempotent(
             &self.node,
-            None,
+            Some(self.actor.clone()),
             IdempotentTransactionRetry::Standard,
             "tool_call.publish_background_receipt",
             move |txn| {
@@ -35,7 +35,15 @@ impl ToolCallLifecycle {
                 )
             },
         )
-        .await
+        .await?;
+        crate::session::child_ownership::publish_agent_session_child_relationships(
+            &self.node,
+            &self.node_did,
+            &self.actor,
+            &self.session_id,
+        )
+        .await?;
+        Ok(result)
     }
 
     pub(crate) fn background_receipt_binding(&self) -> Result<BackgroundReceiptBinding> {
@@ -300,7 +308,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
     let segment_response = txn
         .execute_with_variables(
             CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-            &output_segment_create_variables(&segment)?,
+            &output_segment_bound_variables(txn, &segment).await?,
         )
         .await?;
     let close_doc_id = created_doc_id(&segment_response, "AgentOutputSegment")?;
@@ -344,7 +352,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
     };
     txn.execute_with_variables(
         CREATE_AGENT_MESSAGE_MUTATION,
-        &transcript_message_create_variables(&message)?,
+        &transcript_message_bound_variables(txn, &message).await?,
     )
     .await?;
     Ok(true)

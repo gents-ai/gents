@@ -253,7 +253,7 @@ pub async fn verify_permission_recovery(
         );
     }
     let enrollment = access.execute(&format!(
-        r#"{{ NetworkEnrollmentRequest(filter: {{ candidate_did: {{ _eq: "{}" }}, owner_agent: {{ _eq: "{}" }} }}) {{ request_id candidate_peer }} }}"#,
+        r#"{{ NetworkEnrollmentRequest(filter: {{ candidate_did: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ request_id candidate_peer }} }}"#,
         escape_graphql_string(author), escape_graphql_string(&demand.admission.node_did),
     )).await?;
     let enrollments = enrollment["data"]["NetworkEnrollmentRequest"]

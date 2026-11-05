@@ -461,7 +461,7 @@
     "read": {
       "path": "crates/gents/src/turn/completion_factory.rs",
       "collection": "InferenceCall",
-      "arguments": "filter: { _and: [ { node_did: { _eq: \"$GENTS_0$\" } }, { agent_id: { _eq: \"$GENTS_1$\" } }, { session_id: { _eq: \"$GENTS_2$\" } }, { model_name: { _eq: \"$GENTS_3$\" } }, { call_kind: { _eq: \"inference\" } } ] }, order: [{ queued_at: DESC }, { call_seq: DESC }], limit: $GENTS_CALIBRATION_CALL_SCAN$"
+      "arguments": "filter: { _and: [ { node_did: { _eq: \"$GENTS_0$\" } }, { agent_did: { _eq: \"$GENTS_1$\" } }, { session_id: { _eq: \"$GENTS_2$\" } }, { model_name: { _eq: \"$GENTS_3$\" } }, { call_kind: { _eq: \"inference\" } } ] }, order: [{ queued_at: DESC }, { call_seq: DESC }], limit: $GENTS_CALIBRATION_CALL_SCAN$"
     },
     "bindings": [
       {
@@ -709,13 +709,13 @@
     "read": {
       "path": "crates/gents/src/tools/native/context_budget.rs",
       "collection": "InferenceCall",
-      "arguments": "filter: { _and: [ { node_did: { _eq: \"$GENTS_node_did$\" } }, { agent_id: { _eq: \"$GENTS_agent_id$\" } }, { call_kind: { _eq: \"inference\" } }, { request_id: { _in: [$GENTS_list$] } } ] }, order: { queued_at: DESC }, limit: $GENTS_RECENT_REQUEST_SCAN$"
+      "arguments": "filter: { _and: [ { node_did: { _eq: \"$GENTS_node_did$\" } }, { agent_did: { _eq: \"$GENTS_agent_did$\" } }, { call_kind: { _eq: \"inference\" } }, { request_id: { _in: [$GENTS_list$] } } ] }, order: { queued_at: DESC }, limit: $GENTS_RECENT_REQUEST_SCAN$"
     },
     "bindings": [
       {
         "node_did": "probe",
         "RECENT_REQUEST_SCAN": "1",
-        "agent_id": "probe",
+        "agent_did": "probe",
         "list": "\"probe\""
       }
     ]

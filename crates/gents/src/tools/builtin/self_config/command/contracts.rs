@@ -170,7 +170,7 @@ pub(in crate::tools::builtin::self_config) fn help_patch_contracts(
         Some("agent-target") => vec![patch_contract(
             SelfConfigTarget::AgentTarget,
             json!({
-                "name":"string; the agent name agent_new exposes","target_node_did":"node DID; omit on create for a local helper (authenticated node). Set explicitly for remote targets. Omitted on update preserves the destination; never infer identity from a document ID","agent_id":"agent ID on target_node_did; must exist when local","description":"string|null","tags":"array<string>; default []"
+                "name":"string; the agent name agent_new exposes","target_node_did":"node DID; omit on create for a local helper (authenticated node). Set explicitly for remote targets. Omitted on update preserves the destination; never infer identity from a document ID","agent_did":"agent ID on target_node_did; must exist when local","description":"string|null","tags":"array<string>; default []"
             }),
         )],
         Some("execution") => help_patch_contracts(Some("profile"))

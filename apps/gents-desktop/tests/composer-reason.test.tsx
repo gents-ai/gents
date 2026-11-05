@@ -28,9 +28,9 @@ const readiness = (reason: string | null) => ({
   ...deployment.nodeReadiness,
   agents: [
     reason
-      ? { state: "unavailable", agentId: "default", reason }
-      : { state: "ready", agentId: "default" },
-    { state: "ready", agentId: "ops" },
+      ? { state: "unavailable", agentDid: "default", reason }
+      : { state: "ready", agentDid: "default" },
+    { state: "ready", agentDid: "ops" },
   ],
 });
 
@@ -91,7 +91,7 @@ describe("the composer's reason box", () => {
   });
 
   it("says a node is offline", () => {
-    show({ dialSucceeded: false, chatSafe: false });
+    show({ runtimeConnection: "disconnected" });
     expect(box()).toHaveTextContent(/is offline/);
     expect(screen.getByRole("link", { name: "Switch node" })).toBeInTheDocument();
     inputOutOfReach();
@@ -115,7 +115,7 @@ describe("the composer's reason box", () => {
       {
         sessionId: "worker",
         nodeDid: NODE,
-        agentId: "default",
+        agentDid: "default",
         title: "Worker",
         turnState: "completed",
         timelineItems: [],

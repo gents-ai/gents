@@ -1,4 +1,4 @@
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use crate::error::{Error, Result};
 use crate::expectation::CollectionExpectation;
@@ -23,13 +23,12 @@ const BACKEND_RC1_FRESH: &str = "bafyreibyanrs5nrmpd6dp5pa74agyp5njjfztpctt3ls5q
 /// - `AgentMessage` is client-authored and keeps its v1.0.0-rc0 schema (#1123/#1125), so rc1's
 ///   `native_request_id` column is off the lineage whether a store was created by rc1 or
 ///   patched by it.
-/// - An `InferenceBackend` rc1 registered fresh, and a `Node` a pre-canonical #3353 build
-///   registered fresh, never match the canonical rc0-root-plus-patches versions.
+/// - An `InferenceBackend` rc1 registered fresh never matches the canonical
+///   rc0-root-plus-patches version.
 pub(crate) const KNOWN_OFF_LINEAGE: &[(&str, &str)] = &[
     ("AgentMessage", MESSAGE_REQUEST_ID_TARGET),
     ("AgentMessage", MESSAGE_RC1_FRESH),
     ("InferenceBackend", BACKEND_RC1_FRESH),
-    ("Node", NODE_UNPATCHED_FRESH),
 ];
 
 const INFERENCE_CALL_ROOT: &str = "bafyreibbbdmb7au32traw5ufp6rqytb3jv63bmjflykfhize2u6bwvqiwe";
@@ -44,19 +43,7 @@ const INFERENCE_CALL_USAGE_PATCH: &str = r#"[
     {"op":"add","path":"/InferenceCall/Fields/-","value":{"Name":"usage_completeness","Kind":"String"}}
 ]"#;
 
-pub(crate) const NODE_ROOT: &str = "bafyreiebppz3w6ri6lg6ft2jy3il7gk6bexfy3wjqizbcct4pzx3puppby";
-/// `Node` as a build that registered the current SDL directly produced it (a #3353 build
-/// before the canonical lineage). Off the lineage: the canonical version is the rc0 root plus
-/// `node-add-avatar`.
-const NODE_UNPATCHED_FRESH: &str = "bafyreicv7z6tsacsg3xe6iia7a32wxqxth7wzm3nuydgo67lcpkzf2axey";
-/// v1.0.0-rc0's SDL of the collections in [`CANONICAL_ROOTS`], vendored from the tag. These
-/// are what [`crate::DEFAULT_BASELINE`] registers on a fresh store.
-pub(crate) const NODE_RC0_SDL: &str = include_str!("../schemas/rc0/node.graphql");
 pub(crate) const BACKEND_RC0_SDL: &str = include_str!("../schemas/rc0/inference_backend.graphql");
-const NODE_AVATAR_TARGET: &str = "bafyreibibfxzzu4wbr2z5w3fxdfik6vnalwg3mkxqm66sivdoesqpjosli";
-const NODE_AVATAR_PATCH: &str =
-    r#"[{"op":"add","path":"/Node/Fields/-","value":{"Name":"avatar","Kind":"String"}}]"#;
-
 const PROFILE_ROOT: &str = "bafyreiat2uhx24kbgbm54lz7nt56vtjjsfttkiwop2ntii7qn2xtceehxi";
 const PROFILE_TARGET: &str = "bafyreieksrjdkg546ymilx5qrpbtciuyr3cwqyq25u52o64lobpoek3qqi";
 const TOOL_ROOT: &str = "bafyreiexmbjxfqyg6yhjst6r746spzge27f6mhh2moyrkawbmvtvba4mbi";
@@ -111,10 +98,8 @@ const BACKEND_PLATFORM_PATCH: &str = r#"[{"op":"add","path":"/InferenceBackend/F
 /// here with its rc0 SDL vendored under `schemas/rc0/` (copied from tag v1.0.0-rc0), and point
 /// its baseline entry at the same SDL and root. `tests/rc0_lineage_parity.rs` fails until both
 /// are done.
-pub(crate) const CANONICAL_ROOTS: &[(&str, &str, &str)] = &[
-    ("InferenceBackend", BACKEND_RC0_SDL, BACKEND_FRESHNESS_FRESH),
-    ("Node", NODE_RC0_SDL, NODE_ROOT),
-];
+pub(crate) const CANONICAL_ROOTS: &[(&str, &str, &str)] =
+    &[("InferenceBackend", BACKEND_RC0_SDL, BACKEND_FRESHNESS_FRESH)];
 
 fn canonical_root(name: &str) -> Option<&'static str> {
     CANONICAL_ROOTS
@@ -178,19 +163,11 @@ pub(crate) fn include_existing_by_version(
 ) -> Result<()> {
     // A store an earlier build registered off the canonical lineage stays where it is:
     // verified at its own version, never patched. `non_canonical_store_lineages` names it.
-    for (name, current_sdl, off) in [
-        ("Node", gents_protocol::schemas::NODE, NODE_UNPATCHED_FRESH),
-        (
-            "InferenceBackend",
-            gents_protocol::schemas::INFERENCE_BACKEND,
-            BACKEND_RC1_FRESH,
-        ),
-    ] {
-        if get_version(name)?.as_deref() == Some(off) {
-            if let Some(entry) = baseline.iter_mut().find(|entry| entry.name == name) {
-                entry.sdl = current_sdl;
-                entry.expected_version = Some(off);
-            }
+    let name = "InferenceBackend";
+    if get_version(name)?.as_deref() == Some(BACKEND_RC1_FRESH) {
+        if let Some(entry) = baseline.iter_mut().find(|entry| entry.name == name) {
+            entry.sdl = gents_protocol::schemas::INFERENCE_BACKEND;
+            entry.expected_version = Some(BACKEND_RC1_FRESH);
         }
     }
     // A collection the store lacks is registered at its canonical root (the baseline entry),
@@ -234,14 +211,6 @@ pub(crate) fn include_existing_by_version(
                 "provider_total_tokens",
                 "usage_completeness",
             ][..],
-        ),
-        (
-            "Node",
-            NODE_ROOT,
-            NODE_AVATAR_TARGET,
-            "node-add-avatar",
-            NODE_AVATAR_PATCH,
-            &["avatar"][..],
         ),
         (
             "InferenceProfile",

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use identity::Did;
 use serde_json::{json, Map, Value};
 
@@ -42,13 +42,13 @@ pub(super) struct MissingConfigDocument {
 
 #[derive(Debug, thiserror::Error)]
 pub(super) struct MissingAgent {
-    pub agent_id: String,
+    pub agent_did: String,
     pub suggestions: Vec<String>,
 }
 
 impl std::fmt::Display for MissingAgent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "unknown agent_id {:?}; ", self.agent_id)?;
+        write!(f, "unknown agent_did {:?}; ", self.agent_did)?;
         match self.suggestions.as_slice() {
             [] => write!(
                 f,
@@ -69,8 +69,8 @@ pub const EFFECT_TIMING_NOTE: &str = "Committed changes are picked up by the run
 pub struct SelfConfigCore {
     node: Arc<EmbeddedNode>,
     node_did: String,
-    agent_id: String,
-    lockout_agent_id: String,
+    agent_did: String,
+    lockout_agent_did: String,
     no_lockout: bool,
     process_ceiling: SelfConfigProcessCeiling,
     held_grants: OperatorGrants,
@@ -81,7 +81,7 @@ pub struct PatchOutcome {
     pub committed: bool,
     pub collection: &'static str,
     pub target_id: String,
-    pub agent_id: String,
+    pub agent_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<Value>,
     pub created: bool,
@@ -98,7 +98,7 @@ pub(super) fn target_destination(document: &Map<String, Value>, owner: &str) -> 
     json!({
         "kind": if document.get("target_node_did").and_then(Value::as_str) == Some(owner) { "local" } else { "remote" },
         "target_node_did": document.get("target_node_did"),
-        "agent_id": document.get("agent_id"),
+        "agent_did": document.get("agent_did"),
         "runtime_verified": false
     })
 }
@@ -114,9 +114,9 @@ fn connection_view(
             let selected_id = anchor.ref_id("inference_profile_id");
             let profile_id = document.get("profile_id")?.as_str()?;
             let selected = selected_id.as_deref() == Some(profile_id);
-            let mut view = json!({"agent_id": anchor.doc.get("agent_id"), "selected_profile_id": selected_id, "selected": selected});
+            let mut view = json!({"agent_did": anchor.doc.get("agent_did"), "selected_profile_id": selected_id, "selected": selected});
             if !selected {
-                view["select_with"] = json!({"argv":["agent","update"],"target_id":anchor.doc.get("agent_id"),"set":{"inference_profile_id":profile_id}});
+                view["select_with"] = json!({"argv":["agent","update"],"target_id":anchor.doc.get("agent_did"),"set":{"inference_profile_id":profile_id}});
             }
             Some(view)
         }
@@ -146,18 +146,18 @@ impl AgentAnchor {
 }
 
 impl SelfConfigCore {
-    pub fn new(node: Arc<EmbeddedNode>, node_did: String, agent_id: String) -> Result<Self> {
+    pub fn new(node: Arc<EmbeddedNode>, node_did: String, agent_did: String) -> Result<Self> {
         if node_did.trim().is_empty() {
             bail!("self-config requires a non-empty node DID (fail closed)");
         }
-        if agent_id.trim().is_empty() {
+        if agent_did.trim().is_empty() {
             bail!("self-config requires a non-empty agent id (fail closed)");
         }
         Ok(Self {
             node,
             node_did,
-            lockout_agent_id: agent_id.clone(),
-            agent_id,
+            lockout_agent_did: agent_did.clone(),
+            agent_did,
             no_lockout: false,
             process_ceiling: SelfConfigProcessCeiling::default(),
             held_grants: OperatorGrants::default(),
@@ -183,8 +183,8 @@ impl SelfConfigCore {
 
     /// Preserve the invoking agent as the recoverability anchor while a
     /// catalog-authorized command targets a sibling agent.
-    pub(crate) fn with_lockout_agent_id(mut self, agent_id: String) -> Self {
-        self.lockout_agent_id = agent_id;
+    pub(crate) fn with_lockout_agent_did(mut self, agent_did: String) -> Self {
+        self.lockout_agent_did = agent_did;
         self
     }
 
@@ -204,8 +204,8 @@ impl SelfConfigCore {
         &self.node_did
     }
 
-    pub fn agent_id(&self) -> &str {
-        &self.agent_id
+    pub fn agent_did(&self) -> &str {
+        &self.agent_did
     }
 
     pub(crate) fn node_handle(&self) -> Arc<EmbeddedNode> {
@@ -213,12 +213,12 @@ impl SelfConfigCore {
     }
 
     pub(crate) fn identity(&self) -> Result<Did> {
-        Did::new(self.node_did.clone())
-            .map_err(|error| anyhow!("node DID is not ACP-addressable: {error}"))
+        Did::new(self.lockout_agent_did.clone())
+            .map_err(|error| anyhow!("selected agent DID is not ACP-addressable: {error}"))
     }
 
     pub(crate) async fn load_agent_anchor(&self, txn: &ConfigApplyTxn<'_>) -> Result<AgentAnchor> {
-        load_agent_anchor_for(txn, &self.node_did, &self.agent_id).await
+        load_agent_anchor_for(txn, &self.node_did, &self.agent_did).await
     }
 
     pub(crate) async fn apply(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome> {
@@ -252,7 +252,7 @@ impl SelfConfigCore {
         request: &ApplyRequest<'_>,
     ) -> Result<PatchOutcome> {
         let anchor = self.load_agent_anchor(txn).await?;
-        if self.agent_id != self.lockout_agent_id
+        if self.agent_did != self.lockout_agent_did
             && matches!(
                 request.target,
                 SelfConfigTarget::Agent | SelfConfigTarget::AgentContext | SelfConfigTarget::Tools
@@ -306,7 +306,7 @@ impl SelfConfigCore {
         .await?;
 
         if self.no_lockout && request.guard_selected_chain {
-            if self.lockout_agent_id == self.agent_id {
+            if self.lockout_agent_did == self.agent_did {
                 (request.guard)(&anchor, &stored_doc, &merged)?;
             }
             self.guard_candidate_chain(txn, request.target, &merged)
@@ -325,7 +325,7 @@ impl SelfConfigCore {
 
         Ok(PatchOutcome {
             collection: request.target.collection_name(),
-            agent_id: self.agent_id.clone(),
+            agent_did: self.agent_did.clone(),
             connection: connection_view(request.target, &anchor, &merged, &self.node_did),
             target_id: unique_value,
             doc_id: Some(doc_id),
@@ -347,7 +347,7 @@ impl SelfConfigCore {
                             .is_some_and(|ids| !ids.is_empty())
                 })
             {
-                "Selected targets are inactive: agents.enabled is not true. To enable delegation, call tools update with options.agent set to this agent_id and set.agents containing enabled:true plus the existing target_ids. Tools apply after reconciliation to later requests."
+                "Selected targets are inactive: agents.enabled is not true. To enable delegation, call tools update with options.agent set to this agent_did and set.agents containing enabled:true plus the existing target_ids. Tools apply after reconciliation to later requests."
             } else {
                 EFFECT_TIMING_NOTE
             },
@@ -364,7 +364,7 @@ impl SelfConfigCore {
             txn,
             self.node_did(),
             SelfConfigTarget::Agent,
-            &self.lockout_agent_id,
+            &self.lockout_agent_did,
             target,
             merged,
         )
@@ -443,7 +443,7 @@ impl SelfConfigCore {
                 .map(|(_, doc)| doc)
                 .context("no-lockout: stored reference chain is incomplete")
         };
-        let agent = read(SelfConfigTarget::Agent, self.lockout_agent_id.clone()).await?;
+        let agent = read(SelfConfigTarget::Agent, self.lockout_agent_did.clone()).await?;
         let field = |doc: &Map<String, Value>, name: &str| {
             doc.get(name)
                 .and_then(Value::as_str)
@@ -474,7 +474,7 @@ impl SelfConfigCore {
         request: &ApplyRequest<'_>,
     ) -> Result<PatchOutcome> {
         let anchor = self.load_agent_anchor(txn).await?;
-        if self.agent_id != self.lockout_agent_id
+        if self.agent_did != self.lockout_agent_did
             && matches!(
                 request.target,
                 SelfConfigTarget::Agent | SelfConfigTarget::AgentContext | SelfConfigTarget::Tools
@@ -524,7 +524,7 @@ impl SelfConfigCore {
         )
         .await?;
         if self.no_lockout && request.guard_selected_chain {
-            if self.lockout_agent_id == self.agent_id {
+            if self.lockout_agent_did == self.agent_did {
                 (request.guard)(&anchor, &stored_doc, &merged)?;
             }
             self.guard_candidate_chain(txn, request.target, &merged)
@@ -535,7 +535,7 @@ impl SelfConfigCore {
             shared_receipt(txn, request.target, &self.node_did, &unique_value, &merged).await?;
         Ok(PatchOutcome {
             collection: request.target.collection_name(),
-            agent_id: self.agent_id.clone(),
+            agent_did: self.agent_did.clone(),
             changed: safe_diff(request.target, &stored_doc, &merged),
             connection: connection_view(request.target, &anchor, &merged, &self.node_did),
             target_id: unique_value,
@@ -548,25 +548,25 @@ impl SelfConfigCore {
     }
 }
 
-/// Load one agent's anchor by exact `agent_id`, for the invoking agent or for
+/// Load one agent's anchor by exact `agent_did`, for the invoking agent or for
 /// a sibling the write reaches. Fails closed when the row is owned elsewhere.
 pub(crate) async fn load_agent_anchor_for(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<AgentAnchor> {
     let Some((_doc_id, doc)) =
-        read_owned_doc(txn, SelfConfigTarget::Agent, node_did, agent_id).await?
+        read_owned_doc(txn, SelfConfigTarget::Agent, node_did, agent_did).await?
     else {
         return Err(MissingAgent {
-            agent_id: agent_id.to_owned(),
+            agent_did: agent_did.to_owned(),
             suggestions: Vec::new(),
         }
         .into());
     };
     let owner = doc.get("node_did").and_then(Value::as_str).unwrap_or("");
     if owner != node_did {
-        bail!("agent {agent_id} is owned by {owner:?}, not this node — self-config is self only");
+        bail!("agent {agent_did} is owned by {owner:?}, not this node — self-config is self only");
     }
     let context = match doc.get("context_id").and_then(Value::as_str) {
         Some(context_id) => {

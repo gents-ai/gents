@@ -1,4 +1,4 @@
-type Schedule @branchable @index(fields: ["node_did", "schedule_id"], unique: true) {
+type Schedule @index(fields: ["node_did", "schedule_id"], unique: true) {
     schedule_id: String
     node_did: String @index
     display_name: String

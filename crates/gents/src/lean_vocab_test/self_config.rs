@@ -62,7 +62,7 @@ pub(crate) struct LeanSelfConfigCase {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LeanAgentCatalogEntry {
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
     pub(crate) enabled: bool,
 }
 
@@ -108,7 +108,7 @@ pub(crate) struct LeanAgentResolvedSession {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCandidateAgent {
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
     pub(crate) context_id: Option<String>,
     pub(crate) inference_profile_id: String,
     pub(crate) enabled: bool,

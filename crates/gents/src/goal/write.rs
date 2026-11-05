@@ -8,9 +8,10 @@ pub async fn set_goal(
     status: Option<GoalStatus>,
     token_budget: Option<Option<i64>>,
 ) -> Result<GoalDocument> {
-    crate::store::config_client::ConfigAccess::transact_local_write(
+    let actor = crate::session::load_session_agent_did(node, node_did, session_id).await?;
+    let goal = crate::store::config_client::ConfigAccess::transact_local_write(
         node,
-        None,
+        Some(actor.clone()),
         "goal.set",
         move |txn| {
             Box::pin(async move {
@@ -27,7 +28,14 @@ pub async fn set_goal(
             })
         },
     )
-    .await
+    .await?;
+    super::creation::finish_goal_relationships(
+        &crate::ConfigAccess::local_as(node.clone(), actor),
+        node_did,
+        session_id,
+    )
+    .await?;
+    Ok(goal)
 }
 
 pub async fn set_goal_from_access(
@@ -39,7 +47,7 @@ pub async fn set_goal_from_access(
     token_budget: Option<Option<i64>>,
     auto_resume: Option<bool>,
 ) -> Result<GoalDocument> {
-    access
+    let goal = access
         .transact_write("goal.set_from_access", move |txn| {
             Box::pin(async move {
                 set_goal_in_txn(
@@ -54,7 +62,9 @@ pub async fn set_goal_from_access(
                 .await
             })
         })
-        .await
+        .await?;
+    super::creation::finish_goal_relationships(access, node_did, session_id).await?;
+    Ok(goal)
 }
 
 /// An operator reset preference belongs to the observed Goal, including when
@@ -222,6 +232,17 @@ pub(super) async fn set_goal_in_txn(
     let escaped_goal_id = escape_graphql_string(&goal_id);
     let escaped_node_did = escape_graphql_string(node_did);
     let escaped_session_id = escape_graphql_string(session_id);
+    let session = crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+        .await?
+        .context("goal creation requires a visible physical session")?;
+    let escaped_session_doc_id = escape_graphql_string(&session.doc_id);
+    let escaped_agent_did = escape_graphql_string(&session.session.agent_did);
+    let creator = escape_graphql_string(
+        txn.actor_did()
+            .context("goal creation requires an authenticated actor")?,
+    );
+    let requester_field =
+        optional_string_graphql_field("requester_did", session.session.requester_did.as_deref());
     let escaped_objective = escape_graphql_string(&objective);
     let escaped_now = escape_graphql_string(&now_string);
     let budget_field = optional_int_graphql_field("token_budget", budget);
@@ -235,6 +256,10 @@ pub(super) async fn set_goal_in_txn(
             create_Goal(input: {{
                 goal_id: "{escaped_goal_id}",
                 session_id: "{escaped_session_id}",
+                session_doc_id: "{escaped_session_doc_id}",
+                agent_did: "{escaped_agent_did}",
+                creator_did: "{creator}", parent_linked: false,
+                {requester_field}
                 node_did: "{escaped_node_did}",
                 objective: "{escaped_objective}",
                 status: "{status}",
@@ -273,12 +298,13 @@ pub async fn delete_goal(node: &std::sync::Arc<EmbeddedNode>, goal: &GoalDocumen
             delete_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}) {{ _docID }}
         }}"#
     );
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "goal.delete",
-        &mutation,
+    let response = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        crate::session::load_session_agent_did(node, &goal.node_did, &goal.session_id).await?,
     )
+    .write("goal.delete", &mutation)
     .await?;
+    let response: defra_node::QueryResponse = serde_json::from_value(response)?;
     Ok(response
         .data
         .as_ref()
@@ -291,13 +317,14 @@ pub async fn delete_goals_for_session(
     node_did: &str,
     session_id: &str,
 ) -> Result<usize> {
+    let actor = crate::session::load_session_agent_did(node, node_did, session_id).await?;
     let node_did = escape_graphql_string(node_did);
     let session_id = escape_graphql_string(session_id);
     let node_did = &node_did;
     let session_id = &session_id;
     crate::store::config_client::ConfigAccess::transact_local_write(
         node,
-        None,
+        Some(actor),
         "goal.delete_for_session",
         move |txn| {
             Box::pin(async move {

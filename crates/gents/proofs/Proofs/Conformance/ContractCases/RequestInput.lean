@@ -219,6 +219,24 @@ def requestInputCases : List RequestInputCase :=
   , { name := "signed-owner-cannot-author-goal-runtime-facts",
       input := { goalContinuation := some ⟨1, false⟩ }, contextSkillIds := [],
       verifiedGoalContinuation := some ⟨1, false⟩ }
+  , { name := "client-goal-original-edge-preserved"
+      input := { goalContinuation := some ⟨1, false⟩, queue := some { source := .goal, policy := .coalesce } }
+      contextSkillIds := [], admissionKind := .client
+      verifiedGoalContinuation := some ⟨1, false⟩ }
+  , { name := "client-goal-without-physical-edge-denied"
+      input := { goalContinuation := some ⟨1, false⟩ }
+      contextSkillIds := [], admissionKind := .client }
+  , { name := "client-goal-changed-wrapup-denied"
+      input := { goalContinuation := some ⟨1, true⟩ }
+      contextSkillIds := [], admissionKind := .client
+      verifiedGoalContinuation := some ⟨1, false⟩ }
+  , { name := "client-goal-zero-sequence-denied"
+      input := { goalContinuation := some ⟨0, false⟩ }
+      contextSkillIds := [], admissionKind := .client
+      verifiedGoalContinuation := some ⟨0, false⟩ }
+  , { name := "client-unrelated-runtime-queue-denied"
+      input := { queue := some { source := .backgroundCompletion, policy := .coalesce } }
+      contextSkillIds := [], admissionKind := .client, queueSourceAllowed := false }
   , { name := "runtime-goal-without-verified-physical-edge-denied",
       input := { goalContinuation := some ⟨1, false⟩ }, contextSkillIds := [],
       admissionKind := .runtimeInternal }
@@ -275,7 +293,7 @@ def requestInputCases : List RequestInputCase :=
 
 theorem input_boundary_cases_pinned : requestInputCases.map RequestInputCase.accepted =
     [true, true, false, false, false, false, false, true, true, true, false,
-     false, false, true, true, false, false, false, false, false, false, true,
+     false, true, false, false, false, false, false, true, true, false, false, false, false, false, false, true,
      true, false, false, false, false, false, true, false, false, false, true, true, true, true, true] ++
       List.replicate 17 true ++ [false, false, false, false] ++ List.replicate 33 true ++ List.replicate 4 false := by native_decide
 

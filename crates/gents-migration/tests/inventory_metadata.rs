@@ -21,7 +21,7 @@ async fn inventory_metadata_has_its_pinned_fresh_schema() {
     let policy = collection.policy.unwrap();
     assert_eq!(policy.id, TOOL_FILE_CHANGE_POLICY_ID);
     assert_eq!(policy.resource_name, TOOL_FILE_CHANGE_POLICY_RESOURCE);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -47,7 +47,7 @@ async fn inventory_metadata_collection_fallback_stays_owned_by_its_node() {
             .unwrap();
         assert_eq!(owner.as_str(), node.node_identity_did().unwrap());
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -85,7 +85,7 @@ async fn inventory_metadata_refuses_an_unprotected_collection() {
         let after = node.get_collection(name).unwrap().unwrap();
         assert_eq!(after.version_id, before.version_id);
         assert!(after.policy.is_none());
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 }
 
@@ -109,7 +109,7 @@ async fn inventory_reply_has_its_pinned_protected_local_schema() {
     assert!(gents_protocol::schemas::is_local_only_collection(
         FILE_INVENTORY_REPLY_NAME
     ));
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -128,7 +128,7 @@ async fn inventory_transport_has_its_pinned_fresh_schemas() {
             .find(|entry| entry.name == name)
             .unwrap();
         observed.push((name, collection.version_id, entry.expected_version.unwrap()));
-        assert!(requires_explicit_delivery(name));
+        assert!(!is_replicated_protocol_collection(name));
     }
     assert!(
         observed
@@ -136,7 +136,7 @@ async fn inventory_transport_has_its_pinned_fresh_schemas() {
             .all(|(_, actual, expected)| actual == expected),
         "{observed:?}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -161,7 +161,7 @@ async fn inventory_client_progress_has_its_pinned_protected_local_schema() {
     ));
     assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES
         .contains(&FILE_INVENTORY_PROGRESS_NAME));
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -179,7 +179,7 @@ async fn selected_inventory_image_demand_has_its_pinned_fresh_schema() {
         .find(|entry| entry.name == "FileInventoryImageRequest")
         .unwrap();
     assert_eq!(collection.version_id, entry.expected_version.unwrap());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -234,5 +234,5 @@ async fn bound_image_request_install_preserves_existing_image_demands() {
             .steps_applied,
         0
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

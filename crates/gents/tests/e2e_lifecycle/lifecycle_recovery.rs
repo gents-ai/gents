@@ -48,8 +48,8 @@ async fn boot_running_recovery_bash(
         AcceptedTurnSpec {
             backend_id: "lifecycle-recovery-backend",
             model: "lifecycle-recovery-model",
-            parent_agent_id: AGENT_NAME,
-            configured_agent_ids: &[AGENT_NAME],
+            parent_agent_did: AGENT_NAME,
+            configured_agent_dids: &[AGENT_NAME],
             request_id: &request_id,
             session_id: &session_id,
             prompt: &prompt,
@@ -136,7 +136,7 @@ async fn boot_two_running_recovery_bashes(
 }
 
 async fn accepted_tool_call_doc_id(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     session_id: &str,
     provider_tool_call_id: &str,
 ) -> Option<String> {
@@ -224,7 +224,7 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
                 purpose: "normal",
                 node_did: "{node_did}",
                 requester_did: "{node_did}",
-                agent_id: "{AGENT_NAME}",
+                agent_did: "{AGENT_NAME}",
                 session_id: "wake-redrive-session",
                 retry_parent_request: "",
                 retry_root_request: "failed-wake",
@@ -268,7 +268,7 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         "continue after background completion",
     )
     .await;
-    let foreign = serde_json :: json ! ({ "request_id" : "foreign-interactive" , "node_did" : node_did , "purpose" : "normal" , "requester_did" : "did:test:foreign-requester" , "agent_id" : AGENT_NAME , "session_id" : "wake-redrive-session" , "content" : "foreign interactive" , "lifecycle_state" : "pending" , "execution_origin" : "interactive" , "created_at" : "2099-01-01T00:00:00Z" , "retry_count" : 0 , "max_retries" : 3 , "request_hop" : 0 });
+    let foreign = serde_json :: json ! ({ "request_id" : "foreign-interactive" , "node_did" : node_did , "purpose" : "normal" , "requester_did" : "did:test:foreign-requester" , "agent_did" : AGENT_NAME , "session_id" : "wake-redrive-session" , "content" : "foreign interactive" , "lifecycle_state" : "pending" , "execution_origin" : "interactive" , "created_at" : "2099-01-01T00:00:00Z" , "retry_count" : 0 , "max_retries" : 3 , "request_hop" : 0 });
     let foreign_input = gents_protocol::graphql::graphql_input_literal(&foreign).unwrap();
     let response = db
         .node
@@ -384,7 +384,7 @@ async fn failed_background_wake_without_pending_sibling_obeys_persisted_backoff(
         "purpose": "normal",
         "node_did": node_did,
         "requester_did": node_did,
-        "agent_id": AGENT_NAME,
+        "agent_did": AGENT_NAME,
         "session_id": session_id,
         "retry_root_request": request_id,
         "content": "continue after background completion",
@@ -487,8 +487,8 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         AcceptedTurnSpec {
             backend_id: "wake-backoff-backend",
             model: "wake-backoff-model",
-            parent_agent_id: AGENT_NAME,
-            configured_agent_ids: &[AGENT_NAME],
+            parent_agent_did: AGENT_NAME,
+            configured_agent_dids: &[AGENT_NAME],
             request_id: "failed-wake-backoff",
             session_id,
             prompt: "continue",
@@ -866,7 +866,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
 }
 
 async fn background_wake_retry_rows(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     session_id: &str,
 ) -> Vec<AgentRequestRow> {
     let session_id = gents::store::graphql::escape_graphql_string(session_id);
@@ -895,7 +895,7 @@ async fn background_wake_retry_rows(
 }
 
 async fn recover_interrupted_request_after_crash(
-    node: &Arc<gents::defra_node::EmbeddedNode>,
+    node: &Arc<gents::defra_node::Node>,
     doc_id: &str,
     expected_active_child_doc_id: Option<&str>,
 ) {
@@ -1024,7 +1024,7 @@ async fn recover_interrupted_request_after_crash(
 }
 
 async fn seed_accepted_request_projection(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     session_id: &str,
     request_id: &str,
 ) {
@@ -1041,7 +1041,7 @@ async fn seed_accepted_request_projection(
 /// Fixture fault injection only: force the exact stored lease fields the
 /// production recovery predicate compares; no live path writes them directly.
 async fn seed_expired_execution_lease(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     request_doc_id: &str,
     generation: Option<&str>,
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -1120,7 +1120,7 @@ fn canonical_created_doc_id(
 
 #[allow(clippy::too_many_arguments)]
 async fn seed_completed_canonical_output(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     request_doc_id: &str,
     session_id: &str,
     node_did: &str,
@@ -1211,7 +1211,7 @@ async fn seed_completed_canonical_output(
 
 #[allow(clippy::too_many_arguments)]
 async fn seed_open_canonical_flush(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     request_doc_id: &str,
     session_id: &str,
     node_did: &str,
@@ -1711,14 +1711,14 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
     let db = test_db("tool-call-repair-notification").await;
     let node_did = db.node_identity.did().to_string();
     let session_id = "tool-notification-session";
-    let agent_id = AGENT_NAME;
+    let agent_did = AGENT_NAME;
     let prepared = prepare_accepted_turn(
         &db,
         AcceptedTurnSpec {
             backend_id: "tool-notification-backend",
             model: "tool-notification-model",
-            parent_agent_id: agent_id,
-            configured_agent_ids: &[agent_id],
+            parent_agent_did: agent_did,
+            configured_agent_dids: &[agent_did],
             request_id: "tool-notification-req",
             session_id,
             prompt: "run background notification fixture",
@@ -1737,10 +1737,10 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
     configure_agent_tools(
         &db.node,
         &node_did,
-        agent_id,
+        agent_did,
         None,
         gents::documents::Tools {
-            tools_id: format!("{agent_id}:notification-tools"),
+            tools_id: format!("{agent_did}:notification-tools"),
             node_did: node_did.clone(),
             host: Some(gents::documents::HostTools {
                 bash: Some(gents::documents::BashTools {

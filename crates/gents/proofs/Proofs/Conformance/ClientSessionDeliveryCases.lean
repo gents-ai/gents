@@ -62,4 +62,15 @@ def caseJson (view : SessionDeliveryView) : String :=
 
 def casesJson : String := jsonArray (views.map caseJson)
 
+def directReadJson : DirectSessionRead → String
+  | .empty => "empty"
+  | .visible => "visible"
+  | .integrityFault => "integrity_fault"
+
+def directCaseJson (row : SessionRowObservation) : String :=
+  "{\"session_row\":" ++ jsonString (sessionRowJson row) ++
+  ",\"expected\":" ++ jsonString (directReadJson (directSessionRead row)) ++ "}"
+
+def directCasesJson : String := jsonArray (sessionRows.map directCaseJson)
+
 end Conformance.ClientSessionDelivery

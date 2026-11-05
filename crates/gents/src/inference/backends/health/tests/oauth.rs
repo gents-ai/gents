@@ -136,7 +136,7 @@ async fn scheduled_oauth_probe_failure_records_a_bounded_reason_and_recovers() {
     assert_eq!(observation.probe_status.as_deref(), Some("healthy"));
     assert!(observation.last_probe.is_some());
     server.abort();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[test]
@@ -643,7 +643,7 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
         }
     }
     models.shutdown().await;
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -702,7 +702,7 @@ async fn subscription_probe_account_changes_retire_previous_measurement() {
         changed.state_for(&backend),
         Some(BackendHealthState::Degraded)
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]

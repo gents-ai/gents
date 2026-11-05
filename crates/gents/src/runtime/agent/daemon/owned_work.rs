@@ -145,7 +145,7 @@ where
                 record_current_request_outcome("failed_after_response");
                 record_current_failure_class(&error);
                 tracing::error!(
-                    agent_id = %self.agent_config.agent_id,
+                    agent_did = %self.agent_config.agent_did,
                     request_id = %request.request_id,
                     error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                     "request failed after response started"
@@ -160,7 +160,7 @@ where
                 record_current_request_outcome("shutdown_drain_failed");
                 record_current_failure_class(&error);
                 tracing::error!(
-                    agent_id = %self.agent_config.agent_id,
+                    agent_did = %self.agent_config.agent_did,
                     request_id = %request.request_id,
                     error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                     "graceful shutdown could not confirm provider output retention; leaving durable execution for recovery"
@@ -175,7 +175,7 @@ where
                 record_current_request_outcome("failed");
                 record_current_failure_class(&error);
                 tracing::error!(
-                    agent_id = %self.agent_config.agent_id,
+                    agent_did = %self.agent_config.agent_did,
                     request_id = %request.request_id,
                     error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                     "request handling failed"

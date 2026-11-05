@@ -81,7 +81,7 @@ impl Facts {
                 format!("request-{id}"),
                 &did,
                 &did,
-                "fixture-agent",
+                &did,
                 &session,
                 "goal objective",
                 "interactive",
@@ -109,7 +109,9 @@ impl Facts {
             command_id: format!("command-{}", number(value, "command")?),
             requester_did: did.clone(),
             requester_peer_id: None,
-            node_did: did,
+            node_did: did.clone(),
+            agent_did: did,
+            agent_doc_id: "fixture-agent-document".into(),
             session_id: session,
             session_doc_id: Some("fixture-session-document".into()),
             issued_at: created,
@@ -162,7 +164,8 @@ impl Facts {
             command_id: format!("command-{}", number(value, "command")?),
             command_digest: hash.clone(),
             requester_did: did.clone(),
-            node_did: did,
+            node_did: did.clone(),
+            agent_did: did,
             session_id: format!("session-{}", number(context, "session")?),
             outcome: if value["outcome"] == "applied" {
                 GoalControlOutcome::Applied {
@@ -195,6 +198,7 @@ impl Facts {
                 .as_ref()
                 .map(|r| r.request_id.clone()),
             requester_did: command.requester_did.clone(),
+            agent_did: command.agent_did.clone(),
         };
         let receipt = if value["receipt"].is_null() {
             None
@@ -317,6 +321,7 @@ async fn generated_goal_delivery_histories_bind_native_signed_preparations() -> 
                             .as_ref()
                             .map(|r| r.request_id.clone()),
                         requester_did: command.requester_did,
+                        agent_did: command.agent_did,
                     };
                     acknowledge(&mut records, &intent, &reference);
                     Value::Null

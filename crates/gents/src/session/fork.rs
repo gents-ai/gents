@@ -1,14 +1,13 @@
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, TranscriptMessage};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::{json, Value};
 
 use super::canonical_rows::{
-    decode_transcript_message_row, transcript_message_create_variables, AGENT_MESSAGE_FIELDS,
-    CREATE_AGENT_MESSAGE_MUTATION,
+    decode_transcript_message_row, AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
 };
 use super::compaction_entries::{
     compaction_key, validate_compaction_chain, CompactionGenerationRow,
@@ -70,7 +69,7 @@ pub struct ForkParams<'a> {
     pub boundary: ForkBoundary<'a>,
     pub caller_node_did: &'a str,
     pub caller_requester_did: Option<&'a str>,
-    pub target_agent_id: Option<&'a str>,
+    pub target_agent_did: Option<&'a str>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -80,6 +79,22 @@ pub struct ForkOutcome {
     pub copied_tool_calls: u32,
     pub copied_tool_results: u32,
     pub copied_compaction_entries: u32,
+}
+
+#[derive(Debug)]
+pub struct ForkRelationshipIntent {
+    session_id: String,
+    creator_did: String,
+    session_doc_id: String,
+    agent_doc_id: String,
+    agent_did: String,
+    session_pending: bool,
+    message_doc_ids: Vec<String>,
+}
+
+struct ForkPublication {
+    outcome: ForkOutcome,
+    intent: ForkRelationshipIntent,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -96,6 +111,19 @@ pub enum ForkError {
     ForkMessageNotEditable(String),
     #[error("target agent not found: {0}")]
     ForkAgentNotFound(String),
+    #[error(
+        "forking to a different agent is unavailable until source fragments can be copied safely"
+    )]
+    CrossAgentForkUnavailable,
+    #[error("fork {session_id} committed but relationship publication is incomplete: {source}")]
+    ForkRelationshipIncomplete {
+        session_id: String,
+        intent: Box<ForkRelationshipIntent>,
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error("fork {0} has incomplete relationships; retry its retained creation intent")]
+    ForkRecoveryIntentRequired(String),
     #[error("fork copy step failed: {0}")]
     ForkCopyFailed(#[from] anyhow::Error),
 }
@@ -107,11 +135,16 @@ fn fork_error(error: anyhow::Error) -> ForkError {
     }
 }
 
+fn may_reuse_source_fragments(source_agent: &str, target_agent: &str) -> bool {
+    source_agent == target_agent
+}
+
 pub async fn fork(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: &identity::Did,
     params: ForkParams<'_>,
 ) -> Result<ForkOutcome, ForkError> {
-    fork_on(&ConfigAccess::local(node.clone()), params).await
+    fork_on(&ConfigAccess::local_as(node.clone(), actor.clone()), params).await
 }
 
 pub async fn fork_via_http(
@@ -126,14 +159,58 @@ pub async fn fork_on(
     params: ForkParams<'_>,
 ) -> Result<ForkOutcome, ForkError> {
     let child = uuid::Uuid::new_v4().to_string();
-    access
+    let publication = access
         .transact_write("session.fork", |txn| {
             let child = child.clone();
             let params = params.clone();
             Box::pin(async move { fork_in_txn(txn, &params, &child, None).await })
         })
         .await
-        .map_err(fork_error)
+        .map_err(fork_error)?;
+    publish_fork_relationships(access, publication.intent).await?;
+    Ok(publication.outcome)
+}
+
+/// Retry only an intent returned by the committed fork creation or an earlier
+/// failed retry. Its exact physical IDs and creator are retained in memory.
+pub async fn publish_fork_relationships(
+    access: &ConfigAccess,
+    mut intent: ForkRelationshipIntent,
+) -> Result<(), ForkError> {
+    let result: Result<()> = async {
+        anyhow::ensure!(access.actor_did().as_deref() == Some(intent.creator_did.as_str()),
+            "fork relationship retry requires its creating actor");
+        if intent.session_pending {
+            super::sessions::grant_created_session_relationships(
+                access, &intent.session_doc_id, &intent.agent_doc_id, &intent.agent_did,
+            ).await?;
+            intent.session_pending = false;
+        }
+        while let Some(doc_id) = intent.message_doc_ids.last() {
+            let doc = crate::store::graphql::escape_graphql_string(doc_id);
+            let creator = crate::store::graphql::escape_graphql_string(&intent.creator_did);
+            let response = access.execute(&format!(r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{doc}" }}, creator_did: {{ _eq: "{creator}" }} }}, limit: 2) {{ _docID parent_linked }} }}"#)).await?;
+            let rows = response["data"]["AgentMessage"].as_array().context("fork relationship status omitted rows")?;
+            anyhow::ensure!(rows.len() == 1 && rows[0]["_docID"].as_str() == Some(doc_id.as_str()), "fork relationship status lost its creation binding");
+            if rows[0]["parent_linked"] == true {
+                intent.message_doc_ids.pop();
+                continue;
+            }
+            anyhow::ensure!(rows[0]["parent_linked"] == false, "fork relationship marker is missing");
+            access.add_resource_relationship("AgentMessage", doc_id, "parent", "sessions", &intent.session_doc_id).await?;
+            access.add_actor_relationship("AgentMessage", doc_id, "working_agent", &identity::Did::new(&intent.agent_did)?).await?;
+            let response = access.write("session.mark_fork_parent_linked", &format!(r#"mutation {{ update_AgentMessage(docID: "{doc}", filter: {{ creator_did: {{ _eq: "{creator}" }}, parent_linked: {{ _eq: false }} }}, input: {{ parent_linked: true }}) {{ _docID }} }}"#)).await?;
+            let rows = crate::store::graphql::mutation_documents(&response, "update_AgentMessage")?.context("fork relationship marker omitted mutation result")?;
+            anyhow::ensure!(rows.len() == 1 && rows[0]["_docID"].as_str() == Some(doc_id.as_str()), "fork relationship marker lost its creation binding");
+            intent.message_doc_ids.pop();
+        }
+        Ok(())
+    }.await;
+    result.map_err(|source| ForkError::ForkRelationshipIncomplete {
+        session_id: intent.session_id.clone(),
+        intent: Box::new(intent),
+        source,
+    })
 }
 
 /// The caller retains `child` before this call. Prefix publication and its exact
@@ -150,7 +227,8 @@ pub async fn fork_edit_on(
             "an edit fork requires a canonical message key"
         )));
     };
-    if child.trim().is_empty() || client_did.trim().is_empty() || params.target_agent_id.is_some() {
+    if child.trim().is_empty() || client_did.trim().is_empty() || params.target_agent_did.is_some()
+    {
         return Err(fork_error(anyhow::anyhow!(
             "an edit fork requires a retained destination and the source agent"
         )));
@@ -170,7 +248,7 @@ pub async fn fork_edit_on(
         parent,
         message_key: message_key.to_owned(),
     };
-    access
+    let publication = access
         .transact_write("session.edit_fork", |txn| {
             let requested = requested.clone();
             let params = params.clone();
@@ -213,13 +291,16 @@ pub async fn fork_edit_on(
                     };
                 match decide_edit_fork(&requested, &retained) {
                     EditForkDecision::Create => {
-                        Ok(
-                            fork_in_txn(txn, &params, &child, Some(&requested.client_did))
-                                .await?
-                                .session_id,
-                        )
+                        Ok(Some(fork_in_txn(txn, &params, &child, Some(&requested.client_did)).await?))
                     }
-                    EditForkDecision::Reuse => Ok(child),
+                    EditForkDecision::Reuse => {
+                        let escaped = crate::store::graphql::escape_graphql_string(&child);
+                        let owner = crate::store::graphql::escape_graphql_string(params.caller_node_did);
+                        let rows = txn.execute(&format!(r#"{{ AgentMessage(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{escaped}" }}, parent_linked: {{ _eq: false }} }}, limit: 1) {{ _docID }} AgentSession(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{escaped}" }}, relationships_pending: {{ _eq: true }} }}, limit: 1) {{ _docID }} }}"#)).await?;
+                        anyhow::ensure!(rows["data"]["AgentMessage"].as_array().is_some_and(Vec::is_empty), ForkError::ForkRecoveryIntentRequired(child));
+                        anyhow::ensure!(rows["data"]["AgentSession"].as_array().is_some_and(Vec::is_empty), ForkError::ForkRecoveryIntentRequired(child));
+                        Ok(None)
+                    },
                     EditForkDecision::Refuse => {
                         anyhow::bail!("the retained fork destination has another source binding")
                     }
@@ -227,7 +308,14 @@ pub async fn fork_edit_on(
             })
         })
         .await
-        .map_err(fork_error)
+        .map_err(fork_error)?;
+    if let Some(publication) = publication {
+        let child = publication.outcome.session_id;
+        publish_fork_relationships(access, publication.intent).await?;
+        Ok(child)
+    } else {
+        Ok(child)
+    }
 }
 
 fn rows(response: &Value, collection: &str) -> Result<Vec<Value>> {
@@ -355,7 +443,7 @@ async fn fork_in_txn(
     params: &ForkParams<'_>,
     child: &str,
     edit_client_did: Option<&str>,
-) -> Result<ForkOutcome> {
+) -> Result<ForkPublication> {
     let parent = load_agent_session_row_in_txn(
         txn,
         params.caller_node_did,
@@ -370,18 +458,23 @@ async fn fork_in_txn(
             && parent.requester_did.as_deref() == params.caller_requester_did,
         ForkError::ForkNotSameAgent
     );
-    let agent = params.target_agent_id.unwrap_or(&parent.agent_id);
-    let agent_document = crate::store::config_client::read_desired_state_document_in_txn(
-        txn,
-        crate::store::collection::Collection::Agent,
-        params.caller_node_did,
-        agent,
-    )
-    .await?
-    .ok_or_else(|| ForkError::ForkAgentNotFound(agent.to_owned()))?;
+    let agent = params.target_agent_did.unwrap_or(&parent.agent_did);
+    let (agent_doc_id, agent_document) =
+        crate::store::config_client::read_desired_state_record_in_txn(
+            txn,
+            crate::store::collection::Collection::Agent,
+            params.caller_node_did,
+            agent,
+        )
+        .await?
+        .ok_or_else(|| ForkError::ForkAgentNotFound(agent.to_owned()))?;
     anyhow::ensure!(
         agent_document["enabled"] == true,
         "fork target agent is disabled"
+    );
+    anyhow::ensure!(
+        may_reuse_source_fragments(&parent.agent_did, agent),
+        ForkError::CrossAgentForkUnavailable
     );
 
     let scope = session_scope_filter(
@@ -480,6 +573,42 @@ async fn fork_in_txn(
         &source_compactions,
     )?;
 
+    anyhow::ensure!(
+        ensure_session_in_txn(
+            txn,
+            child,
+            params.caller_node_did,
+            agent,
+            params.caller_requester_did,
+            None,
+            Some(gents_protocol::session::SessionProvenance {
+                fork: Some(gents_protocol::session::SessionFork {
+                    source_session_id: params.source_session_id.to_owned(),
+                    at_user_turn,
+                    before_message_key: match params.boundary {
+                        ForkBoundary::BeforeMessageKey(key) => Some(key.to_owned()),
+                        ForkBoundary::UserTurn(_) => None,
+                    },
+                    edit_client_did: edit_client_did.map(str::to_owned),
+                }),
+                ..Default::default()
+            }),
+            &chrono::Utc::now().to_rfc3339(),
+        )
+        .await?,
+        "fork child session already exists"
+    );
+
+    let session_doc_id = load_agent_session_owner_in_txn(txn, params.caller_node_did, child)
+        .await?
+        .context("created fork session is unavailable")?
+        .doc_id;
+    let creator_did = txn
+        .actor_did()
+        .context("fork requires an explicit creating actor")?
+        .to_owned();
+    let mut message_doc_ids = Vec::with_capacity(retained.len());
+
     for origin in &retained {
         let (resolved, _) = load_canonical_message_in_txn(
             txn,
@@ -506,10 +635,14 @@ async fn fork_in_txn(
         let response = txn
             .execute_with_variables(
                 CREATE_AGENT_MESSAGE_MUTATION,
-                &transcript_message_create_variables(&child_header)?,
+                &crate::session::canonical_rows::fork_message_bound_variables(txn, &child_header)
+                    .await?,
             )
             .await?;
-        crate::store::graphql::created_doc_id(&response, "AgentMessage")?;
+        message_doc_ids.push(crate::store::graphql::created_doc_id(
+            &response,
+            "AgentMessage",
+        )?);
     }
 
     let mut copied_compactions = 0u32;
@@ -539,37 +672,24 @@ async fn fork_in_txn(
         create_compaction(txn, compaction).await?;
         copied_compactions += 1;
     }
-    anyhow::ensure!(
-        ensure_session_in_txn(
-            txn,
-            child,
-            params.caller_node_did,
-            agent,
-            params.caller_requester_did,
-            None,
-            Some(gents_protocol::session::SessionProvenance {
-                fork: Some(gents_protocol::session::SessionFork {
-                    source_session_id: params.source_session_id.to_owned(),
-                    at_user_turn,
-                    before_message_key: match params.boundary {
-                        ForkBoundary::BeforeMessageKey(key) => Some(key.to_owned()),
-                        ForkBoundary::UserTurn(_) => None,
-                    },
-                    edit_client_did: edit_client_did.map(str::to_owned),
-                }),
-                ..Default::default()
-            }),
-            &chrono::Utc::now().to_rfc3339(),
-        )
-        .await?,
-        "fork child session already exists"
-    );
-    Ok(ForkOutcome {
+    let outcome = ForkOutcome {
         session_id: child.to_owned(),
         copied_messages: u32::try_from(retained.len())?,
         copied_tool_calls: 0,
         copied_tool_results: 0,
         copied_compaction_entries: copied_compactions,
+    };
+    Ok(ForkPublication {
+        outcome,
+        intent: ForkRelationshipIntent {
+            session_id: child.to_owned(),
+            creator_did,
+            session_doc_id,
+            agent_doc_id,
+            agent_did: agent.to_owned(),
+            session_pending: true,
+            message_doc_ids,
+        },
     })
 }
 
@@ -579,6 +699,28 @@ mod tests {
     use gents_protocol::output::{
         OutputOutcome, PayloadPresentation, PayloadRef, PresentedPayload,
     };
+
+    #[test]
+    fn generated_fork_reference_authority_matches_native_decision() {
+        let cases = crate::lean_vocab_test::lean_contract_snapshot()
+            .session_document_cases
+            .projection
+            .iter()
+            .filter(|case| case["operation"] == "fork_reference_authority")
+            .collect::<Vec<_>>();
+        assert!(!cases.is_empty());
+        for case in cases {
+            assert_eq!(
+                may_reuse_source_fragments(
+                    case["source_agent"].as_str().unwrap(),
+                    case["target_agent"].as_str().unwrap(),
+                ),
+                case["allowed"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+    }
 
     fn modeled_message(row: &Value) -> TranscriptMessage {
         TranscriptMessage {

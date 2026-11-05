@@ -3,7 +3,7 @@ use chrono::Timelike;
 use super::*;
 
 async fn read_trigger_cursor(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     owner_did: &str,
     trigger_id: &str,
 ) -> anyhow::Result<Option<String>> {
@@ -24,7 +24,7 @@ fn schedule_test_behavior() -> Arc<ResolvedAgent> {
 }
 
 async fn create_schedule_cadence_doc(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     owner_did: &str,
     schedule_id: &str,
     cadence: serde_json::Value,
@@ -64,7 +64,7 @@ struct ScheduleFixture<'a> {
 }
 
 async fn create_schedule_with_next_run_at(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     owner_did: &str,
     fixture: ScheduleFixture<'_>,
 ) -> String {
@@ -128,7 +128,7 @@ async fn create_schedule_with_next_run_at(
 }
 
 async fn observed_trigger(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     owner_did: &str,
     trigger_id: &str,
 ) -> serde_json::Value {
@@ -149,7 +149,7 @@ async fn observed_trigger(
 }
 
 async fn observed_schedule_cadence(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     owner_did: &str,
     schedule_id: &str,
 ) -> ScheduleCadence {
@@ -221,7 +221,7 @@ async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_erro
         batch[2].is_err(),
         "invalid owner error must remain per-trigger"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -240,7 +240,7 @@ async fn schedule_cursor_batches_more_than_one_chunk() {
     assert_eq!(cursors.len(), 128);
     assert!(cursors.iter().all(|cursor| matches!(cursor, Ok(None))));
     assert_eq!(query_count, 2, "128 scopes use two 64-alias queries");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -298,7 +298,7 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
     );
     drop(intent);
     cancel.cancel();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -331,7 +331,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
         emit_outcome: false,
         task_id: "task-1".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: "general".to_string(),
         prompt_template: "hi".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -415,7 +415,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
         emit_outcome: false,
         task_id: "task-1".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: "general".to_string(),
         prompt_template: "hi".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -622,7 +622,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         emit_outcome: false,
         task_id: "task-e2e".to_string(),
         name: Some("Mini Host Health".to_string()),
-        agent_id: behavior.agent_id.clone(),
+        agent_did: behavior.agent_did.clone(),
         prompt_template: "integration fire".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -785,7 +785,7 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
         emit_outcome: false,
         task_id: "task-null".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: "general".to_string(),
         prompt_template: "hi".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -865,7 +865,7 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
         emit_outcome: false,
         task_id: "task-cron".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: "general".to_string(),
         prompt_template: "hi".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,

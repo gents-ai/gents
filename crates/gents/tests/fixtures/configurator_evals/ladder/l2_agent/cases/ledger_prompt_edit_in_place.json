@@ -16,7 +16,7 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "ledger",
+                  "agent_did": "ledger",
                   "agent": [
                     {
                       "field": "display_name",
@@ -58,10 +58,14 @@
                       "field": "datastore.datastore_tool_surface_ids",
                       "matches": "^(null|\\[\\])$"
                     }
-                  ]
+                  ],
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^ledger$"
+                  }
                 },
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "agent": [
                     {
                       "field": "display_name",
@@ -173,7 +177,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",
@@ -231,7 +235,7 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "ledger",
+                  "agent_did": "ledger",
                   "agent": [
                     {
                       "field": "display_name",
@@ -277,10 +281,14 @@
                       "field": "datastore.datastore_tool_surface_ids",
                       "matches": "^(null|\\[\\])$"
                     }
-                  ]
+                  ],
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^ledger$"
+                  }
                 },
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "agent": [
                     {
                       "field": "display_name",
@@ -392,7 +400,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",

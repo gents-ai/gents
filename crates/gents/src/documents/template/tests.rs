@@ -203,7 +203,7 @@ fn authoring_accepts_a_called_name_the_template_binds_itself() {
 #[test]
 fn authoring_accepts_fields_configuration_cannot_enumerate() {
     for template in [
-        "{{ doc.customer.name | upper }} at {{ ctx.now }} for {{ node.agent_id }}",
+        "{{ doc.customer.name | upper }} at {{ ctx.now }} for {{ node.agent_did }}",
         "{{ args.mode | default('review') }} {{ args.count | int }}",
         "{{ doc.whatever.deeply.nested.field }}",
         "{% for row in group.docs %}{{ row.title | default('untitled') }}{% endfor %}",

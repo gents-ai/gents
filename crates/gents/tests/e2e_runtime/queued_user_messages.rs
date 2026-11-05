@@ -62,8 +62,8 @@ async fn messages_queued_behind_a_busy_turn_are_answered_by_one_inference() {
         AcceptedTurnSpec {
             backend_id: "queued-user-messages-backend",
             model: "queued-user-messages-model",
-            parent_agent_id: AGENT,
-            configured_agent_ids: &[AGENT],
+            parent_agent_did: AGENT,
+            configured_agent_dids: &[AGENT],
             request_id: asking,
             session_id,
             prompt,

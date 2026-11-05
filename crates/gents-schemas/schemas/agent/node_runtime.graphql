@@ -1,4 +1,4 @@
-type NodeRuntime @branchable {
+type NodeRuntime {
     node_did: String @index(unique: true)
     reconcile_phase: String @index
     agent_executor_capacity: Int

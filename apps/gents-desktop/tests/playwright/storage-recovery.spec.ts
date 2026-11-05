@@ -16,7 +16,7 @@ for (const colorScheme of ["light", "dark"] as const) {
       nodeDid: "did:key:z6MkBombadilAgent",
       requestId: "retained-storage-failure",
       sessionId: "session-intro",
-      agentId: "default",
+      agentDid: "default",
       cwd: null,
       content: "Retain this original message",
     };

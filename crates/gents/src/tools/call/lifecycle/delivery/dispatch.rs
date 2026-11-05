@@ -54,7 +54,7 @@ impl ToolCallLifecycle {
         let start = self.dispatch_start()?;
         let started_at = ConfigAccess::transact_local_idempotent(
             &self.node,
-            None,
+            Some(self.actor.clone()),
             IdempotentTransactionRetry::Standard,
             "tool_call.start_running_canonical",
             move |txn| {

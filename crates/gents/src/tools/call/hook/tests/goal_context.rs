@@ -363,7 +363,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             let before = versions(&access).await;
             if tool == crate::goal::GET_GOAL_TOOL_NAME && case["read_only"] == true {
                 let context = crate::goal::load_goal_tool_context(
-                    &node,
+                    &access,
                     identity.did(),
                     &session,
                     &request_id,
@@ -393,6 +393,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 assert!(
                     !crate::goal::update_goal_fields_if_status(
                         &node,
+                        &identity::Did::new("did:test:agent").unwrap(),
                         &observed,
                         observed.parsed_status().unwrap(),
                         r#"last_failure: "Stale controller write""#
@@ -401,9 +402,13 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     .unwrap(),
                     "{name}: controller crossed physical root"
                 );
-                crate::goal::refresh_goal_usage(&node, &observed)
-                    .await
-                    .unwrap();
+                crate::goal::refresh_goal_usage(
+                    &node,
+                    &identity::Did::new("did:test:agent").unwrap(),
+                    &observed,
+                )
+                .await
+                .unwrap();
                 assert_eq!(
                     versions(&access).await,
                     before,
@@ -517,7 +522,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 .lock()
                 .await
                 .remove(&hook_execution_fixture_key(&hook, &request_id));
-            node.shutdown().await;
+            node.shutdown().await.expect("shut down test node");
         }
     }
 }

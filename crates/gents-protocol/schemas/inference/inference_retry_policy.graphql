@@ -1,4 +1,4 @@
-type InferenceRetryPolicy @branchable @index(fields: ["node_did", "retry_policy_id"], unique: true) {
+type InferenceRetryPolicy @index(fields: ["node_did", "retry_policy_id"], unique: true) {
     retry_policy_id: String
     node_did: String @index
     display_name: String

@@ -4,7 +4,7 @@ mod oauth;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::{routing::get, Json, Router};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 

@@ -31,7 +31,7 @@ impl ConfigCommandTool {
             format!(
                 "selected agent does not reference a {}; inspect config agent get {} to see its exact reference chain",
                 target.collection_name(),
-                core.agent_id()
+                core.agent_did()
             )
         })?;
         if target == SelfConfigTarget::InferenceBackend {
@@ -149,7 +149,7 @@ impl ConfigCommandTool {
                 format!(
                     "no {} {id:?} is reachable from selected agent {:?}; use options.agent to select its owning agent, then get to read its automation IDs",
                     target.collection_name(),
-                    core.agent_id()
+                    core.agent_did()
                 )
             })?;
         ordered! {"resource": target.collection_name(), "document": document}.pretty()

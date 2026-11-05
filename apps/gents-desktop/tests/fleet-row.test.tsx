@@ -54,7 +54,7 @@ describe("FleetRow", () => {
     expect(props.onOpenChat).toHaveBeenCalledWith(deployment.nodeDid);
   });
 
-  it("keeps chat disabled while authenticated enrollment is pending", () => {
+  it("keeps chat available when pairing is pending but the runtime is connected", () => {
     const props = renderRow(
       {},
       {
@@ -64,9 +64,19 @@ describe("FleetRow", () => {
       },
     );
 
-    expect(screen.getByTestId("fleet-status-peer-1")).toHaveTextContent(
-      "Waiting for pairing",
+    expect(screen.getByTestId("fleet-status-peer-1")).toHaveTextContent("Online");
+    expect(screen.getByTestId("fleet-chat-peer-1")).toBeEnabled();
+    fireEvent.click(screen.getByTestId("fleet-chat-peer-1"));
+    expect(props.onOpenChat).toHaveBeenCalledWith(deployment.nodeDid);
+  });
+
+  it("keeps chat disabled until the runtime connection is ready", () => {
+    const props = renderRow(
+      {},
+      { ...deployment, source: "enrollment", runtimeConnection: "connecting" },
     );
+
+    expect(screen.getByTestId("fleet-status-peer-1")).toHaveTextContent("Connecting");
     expect(screen.getByTestId("fleet-chat-peer-1")).toBeDisabled();
     fireEvent.click(screen.getByTestId("fleet-chat-peer-1"));
     expect(props.onOpenChat).not.toHaveBeenCalled();
@@ -122,10 +132,10 @@ describe("FleetRow", () => {
         agents: [
           {
             state: "unavailable",
-            agentId: "default",
+            agentDid: "default",
             reason: "backend_not_configured",
           },
-          { state: "ready", agentId: "ops" },
+          { state: "ready", agentDid: "ops" },
         ],
       },
     };
@@ -146,7 +156,7 @@ describe("FleetRow", () => {
         agents: [
           {
             state: "unavailable",
-            agentId: "default",
+            agentDid: "default",
             reason: "credentials_required",
           },
         ],

@@ -7,7 +7,7 @@ use super::*;
 
 #[tokio::test]
 async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     node.add_collection("type Reports { duty: String @fulltext rank: String }")
         .await
         .unwrap();
@@ -112,10 +112,10 @@ async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
             "{error}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
-async fn seeded_node() -> Arc<defra_node::EmbeddedNode> {
+async fn seeded_node() -> Arc<defra_node::Node> {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
@@ -288,6 +288,29 @@ async fn refuses_a_protected_collection_even_when_unrestricted() {
         message.contains(gents_protocol::schemas::EVAL_VERDICT_NAME),
         "{message}"
     );
+}
+
+#[tokio::test]
+async fn refuses_client_publication_reads_and_discovery() {
+    let node = seeded_node().await;
+    let tool = DefraQueryTool::new(node, CollectionScope::all());
+    let collection =
+        &crate::lean_vocab_test::lean_contract_snapshot().client_publication_protected_collection;
+    for fields in [vec!["payload".to_owned()], vec!["*".to_owned()]] {
+        let error = Tool::call(
+            &tool,
+            DefraQueryParams {
+                collection: collection.clone(),
+                filter: None,
+                fields,
+                limit: None,
+            }
+            .into(),
+        )
+        .await
+        .expect_err("client publication data is not agent-readable");
+        assert!(format!("{error:#}").contains("protected"));
+    }
 }
 
 #[tokio::test]
@@ -564,7 +587,7 @@ async fn wildcard_mixed_with_fields_is_rejected_with_hint() {
 
 #[tokio::test]
 async fn count_is_filtered_total_and_find_is_a_stable_page() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     node.add_collection("type Ticket { name: String priority: Int status: String }")
         .await
         .unwrap();
@@ -586,7 +609,7 @@ async fn count_is_filtered_total_and_find_is_a_stable_page() {
     assert_eq!(result["results"][0]["name"], "T005");
     assert_eq!(result["results"][4]["name"], "T009");
     assert!(result.get("count").is_none());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -601,13 +624,19 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
     let alice_did = crate::store::identity::NodeIdentity::did(&alice);
     let bob_did = crate::store::identity::NodeIdentity::did(&bob);
     let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
+        crate::defra_node::Node::builder()
             .with_node_identity_did(alice_did.to_owned())
             .build()
             .await
             .unwrap(),
     );
-    let policy = node.add_dac_policy(alice_did, "name: Private query rows\nresources:\n  - name: records\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
+    let policy = node
+        .add_dac_policy_as(
+            &defra_core::RequestContext::default().with_identity(Some(alice_did.to_owned())),
+            "name: Private query rows\nresources:\n  - name: records\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n",
+        )
+        .await
+        .unwrap();
     node.add_collection(&format!(
         "type PrivateRecord @policy(id: \"{}\", resource: \"records\") {{ label: String @fulltext }}",
         crate::store::graphql::escape_graphql_string(&policy)
@@ -707,17 +736,12 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         let result: Value = serde_json::from_str(&Tool::call(&tool, count).await.unwrap()).unwrap();
         assert_eq!(result["total_count"], 0);
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
 async fn explain_preserves_native_plan_and_requires_explicit_execution() {
-    let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node = Arc::new(crate::defra_node::Node::builder().build().await.unwrap());
     node.add_collection("type PlanTicket { reference: String status: String @index }")
         .await
         .unwrap();
@@ -794,5 +818,5 @@ async fn explain_preserves_native_plan_and_requires_explicit_execution() {
         .await
         .unwrap();
     assert_eq!(persisted["data"]["PlanTicket"][0]["status"], "open");
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

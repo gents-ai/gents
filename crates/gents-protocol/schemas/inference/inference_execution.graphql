@@ -1,4 +1,4 @@
-type InferenceExecution @branchable @index(fields: ["node_did", "execution_id"], unique: true) {
+type InferenceExecution @index(fields: ["node_did", "execution_id"], unique: true) {
     execution_id: String
     node_did: String @index
     display_name: String

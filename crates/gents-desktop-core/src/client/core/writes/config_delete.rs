@@ -254,12 +254,12 @@ impl ClientCore {
         .await
     }
 
-    pub async fn delete_agent(&self, agent_id: &str, source_node_did: &str) -> Result<()> {
+    pub async fn delete_agent(&self, agent_did: &str, source_node_did: &str) -> Result<()> {
         let access = self.operator_access(source_node_did)?;
         let result = async {
-            let deleted = mutations::delete_agent_on(&access, source_node_did, agent_id).await?;
+            let deleted = mutations::delete_agent_on(&access, source_node_did, agent_did).await?;
             if deleted == 0 {
-                bail!("no Agent document with agent_id {agent_id:?}");
+                bail!("no Agent document with agent_did {agent_did:?}");
             }
             Ok(())
         }
@@ -268,11 +268,11 @@ impl ClientCore {
             result,
             "delete agent",
             "config_agent_delete",
-            agent_id,
+            agent_did,
             source_node_did,
             |rows| {
                 rows.agents
-                    .retain(|row| row.agent_id != agent_id || row.node_did != source_node_did);
+                    .retain(|row| row.agent_did != agent_did || row.node_did != source_node_did);
             },
         )
         .await

@@ -33,7 +33,7 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
             .unwrap(),
         0
     );
-    let row = |node: Arc<crate::defra_node::EmbeddedNode>| {
+    let row = |node: Arc<crate::defra_node::Node>| {
         let tool_doc_id = tool_doc_id.clone();
         async move {
             let response = node
@@ -80,7 +80,7 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
     );
     let (notifications, _) = completion_obligations(node, &session_id, &did).await;
     assert_eq!(notifications.len(), 1, "delivered exactly once");
-    message.admission.node.shutdown().await;
+    message.admission.node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).expect("remove exact recovery fixture");
 }
 
@@ -116,7 +116,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         identity,
         crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
     );
-    let pending_wakes = |node: Arc<crate::defra_node::EmbeddedNode>, session: String| async move {
+    let pending_wakes = |node: Arc<crate::defra_node::Node>, session: String| async move {
         let response = node
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }}, execution_origin: {{ _eq: "scheduled" }}, lifecycle_state: {{ _eq: "pending" }} }}) {{ _docID }} }}"#,
@@ -139,7 +139,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
                 .await
                 .unwrap()
                 .unwrap();
-            let behavior = request.agent_id.clone();
+            let behavior = request.agent_did.clone();
             let admitted = crate::runtime::agent::daemon::verify_request_at_claim_boundary(
                 verifier,
                 node.clone(),
@@ -207,12 +207,12 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         .unwrap();
     assert!(!native.created_request);
     assert_eq!(pending_wakes(node.clone(), session_id.clone()).await, wakes);
-    crate::test_support::install_test_agent(&node, &did, &caller.agent_id).await;
+    crate::test_support::install_test_agent(&node, &did, &caller.agent_did).await;
     let (admitted, row) = admit(wakes[0].clone()).await;
     assert!(admitted, "{row}");
     assert_eq!(row["request_hop"], caller.request_hop);
     assert_eq!(row["lifecycle_state"], "pending");
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -288,7 +288,7 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
         .await
         .unwrap();
 
-    crate::test_support::install_test_agent(&node, &did, &caller.agent_id).await;
+    crate::test_support::install_test_agent(&node, &did, &caller.agent_did).await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(
         crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
             .unwrap(),
@@ -298,21 +298,22 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
         identity,
         crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
     );
-    let verified = crate::runtime::agent::daemon::verify_request_at_claim_boundary(
+    let (verified, client_claim) = crate::runtime::agent::daemon::verify_request_at_claim_boundary(
         &verifier,
         node.clone(),
-        &wake.agent_id,
+        &wake.agent_did,
         wake.clone(),
     )
     .await
     .expect("the returned result is admitted into the client's session");
     let mut lifecycle = crate::RequestLifecycle::new_with_node_did(
         node.clone(),
-        &wake.agent_id,
+        &wake.agent_did,
         &did,
         verified.clone(),
         60,
     );
+    lifecycle.set_client_claim_admission(client_claim);
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
@@ -326,6 +327,6 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     )
     .await
     .expect("the result resumes the client's session");
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }

@@ -4,7 +4,7 @@ use crate::store::identity::NodeIdentity;
 use std::sync::Arc;
 use std::time::Duration;
 
-async fn query(node: &defra_node::EmbeddedNode, document: &str) -> serde_json::Value {
+async fn query(node: &defra_node::Node, document: &str) -> serde_json::Value {
     let response = node.execute(document).await;
     assert!(!response.has_errors(), "{document}: {:?}", response.errors);
     response.data.expect("database result")
@@ -18,7 +18,7 @@ async fn runtime_seal_case(unowned: bool) {
             .unwrap();
     let did = identity.did();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .data_path(db_dir.path().join("db"))
             .with_node_identity_did(did)
             .build()
@@ -209,7 +209,7 @@ async fn runtime_seal_case(unowned: bool) {
     assert!(!fx.repo.join("patch.rs").exists());
     assert!(!fx.repo.join(".tmp-build/test-build.log").exists());
     drop(owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     // Keep the DB directory alive for Defra background tasks.
     std::mem::forget(db_dir);
 }

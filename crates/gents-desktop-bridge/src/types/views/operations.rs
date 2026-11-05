@@ -12,51 +12,74 @@ pub struct DesktopOperationsSnapshot {
     pub stuck_diagnostics: Vec<StuckWorkDiagnosticView>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeLivenessView {
+    #[serde(alias = "expired_processing_count")]
     pub expired_processing_count: i64,
     pub requests: Vec<ActiveRequestView>,
+    #[serde(alias = "active_tool_calls")]
     pub active_tool_calls: Vec<ActiveToolCallView>,
+    #[serde(alias = "active_native_executors_available")]
     pub active_native_executors_available: bool,
+    #[serde(alias = "active_native_executors")]
     pub active_native_executors: Vec<NativeExecutorStatusView>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ActiveRequestView {
+    #[serde(alias = "request_id")]
     pub request_id: String,
+    #[serde(alias = "claimed_at")]
     pub claimed_at: Option<String>,
     pub deadline: Option<String>,
+    #[serde(alias = "deadline_expired")]
     pub deadline_expired: bool,
+    #[serde(alias = "deadline_age_ms")]
     pub deadline_age_ms: Option<i64>,
+    #[serde(alias = "last_progress_age_ms")]
     pub last_progress_age_ms: i64,
+    #[serde(alias = "request_hop")]
     pub request_hop: i64,
+    #[serde(alias = "caused_by_parent_request_id")]
     pub caused_by_parent_request_id: Option<String>,
+    #[serde(alias = "caused_by_trigger_kind")]
     pub caused_by_trigger_kind: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ActiveToolCallView {
+    #[serde(alias = "request_id")]
     pub request_id: String,
+    #[serde(alias = "tool_call_id")]
     pub tool_call_id: String,
+    #[serde(alias = "tool_name")]
     pub tool_name: String,
+    #[serde(alias = "started_at")]
     pub started_at: Option<String>,
+    #[serde(alias = "deadline_at")]
     pub deadline_at: Option<String>,
+    #[serde(alias = "await_mode")]
     pub await_mode: Option<String>,
+    #[serde(alias = "running_age_ms")]
     pub running_age_ms: i64,
+    #[serde(alias = "deadline_expired")]
     pub deadline_expired: bool,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeExecutorStatusView {
     pub id: i64,
     pub pid: u32,
     pub argv0: String,
+    #[serde(alias = "tool_name")]
     pub tool_name: Option<String>,
+    #[serde(alias = "started_at")]
     pub started_at: String,
+    #[serde(alias = "age_ms")]
     pub age_ms: i64,
 }
 

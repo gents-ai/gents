@@ -2,7 +2,7 @@ use super::{AwaitMode, ToolCallLifecycle};
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 async fn update(node: &EmbeddedNode, collection: &str, doc_id: &str, fields: &str) {
     let response = node
@@ -26,7 +26,7 @@ async fn row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
 }
 
 async fn teardown(admission: PublishedAdmission) {
-    admission.node.shutdown().await;
+    admission.node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 

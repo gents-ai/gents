@@ -16,11 +16,11 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use self::capture::run_captures;
-use self::evidence::{anchor, home_usage, session_requests};
+use self::capture::{run_captures, CaptureBindings};
+use self::evidence::{anchor, home_usage, home_usage_with_access, session_requests};
 use self::install::install;
 use self::outcome::{outcome_kind, provider_reason};
-use self::stage::run_stages;
+use self::stage::{run_stages, StageEnv};
 use crate::eval::runner::embedded::home::{boot_runtime, EmbeddedHome};
 use crate::eval::runner::embedded::live::LiveObserver;
 use crate::eval::runner::embedded::observe::{
@@ -66,7 +66,7 @@ impl EmbeddedExecutor {
     async fn provision_home(&self, spec: &TrialSpec) -> Result<TrialLocator> {
         let dir = spec.trial_dir.join("home");
         let home = opened(&self.runtime, move || async move {
-            EmbeddedHome::create_retained(&dir).await
+            EmbeddedHome::create_trial_retained(&dir).await
         })
         .await?;
         let workspace = workspace_dir(&spec.trial_dir);
@@ -128,10 +128,13 @@ impl EmbeddedExecutor {
         locator: TrialLocator,
     ) -> TrialEvidence {
         let workspace = workspace_dir(&spec.trial_dir);
-        if let Err(error) = install(spec, &home, &workspace).await {
-            close(home).await;
-            return infrastructure(&spec.trial_id, locator, &error);
-        }
+        let agent_did = match install(spec, &home, &workspace).await {
+            Ok(agent_did) => agent_did,
+            Err(error) => {
+                close(home).await;
+                return infrastructure(&spec.trial_id, locator, &error);
+            }
+        };
         let (event_sources_ready, ready) = watch::channel(None);
         let mut options = self.runtime_options.clone();
         options.plugin_home = Some(home.path().to_path_buf());
@@ -145,13 +148,16 @@ impl EmbeddedExecutor {
             }
         };
 
-        let stages = observed_live(
-            spec,
-            &home,
-            &locator,
-            run_stages(spec, &cancel, &home, &runtime, &locator, &workspace, &ready),
-        )
-        .await;
+        let environment = StageEnv {
+            agent_did: &agent_did,
+            cancel: &cancel,
+            home: &home,
+            runtime: &runtime,
+            locator: &locator,
+            workspace: &workspace,
+            ready: &ready,
+        };
+        let stages = observed_live(spec, &home, &locator, run_stages(spec, &environment)).await;
 
         if let Err(error) = runtime.shutdown().await {
             tracing::warn!(
@@ -160,7 +166,16 @@ impl EmbeddedExecutor {
                 "eval trial runtime did not shut down cleanly"
             );
         }
-        let usage = home_usage(&home.node).await;
+        let usage = match identity::Did::new(&spec.evaluator_did) {
+            Ok(actor) => {
+                home_usage_with_access(&crate::ConfigAccess::local_as(home.node.clone(), actor))
+                    .await
+            }
+            Err(error) => {
+                tracing::warn!(%error, "eval usage has an invalid evaluator identity");
+                Default::default()
+            }
+        };
         close(home).await;
         let anchor = anchor(&stages);
         TrialEvidence::new(locator, stages, usage, anchor)
@@ -197,7 +212,16 @@ where
     if !spec.progress.attached() {
         return stages.await;
     }
-    let observer = LiveObserver::new(&home.node, &locator.trial_node_did, &spec.stages).await;
+    let actor = match identity::Did::new(&spec.evaluator_did) {
+        Ok(actor) => actor,
+        Err(error) => {
+            tracing::warn!(%error, "eval observer has an invalid evaluator identity");
+            return stages.await;
+        }
+    };
+    let access = crate::ConfigAccess::local_as(home.node.clone(), actor);
+    let observer =
+        LiveObserver::new(&home.node, &access, &locator.trial_node_did, &spec.stages).await;
     let report = || async {
         match observer.snapshot().await {
             Ok(snapshot) => spec.progress.live(snapshot),
@@ -293,7 +317,7 @@ impl TrialExecutor for EmbeddedExecutor {
         let dir = trial_dir.join("home");
         let workspace = workspace_dir(&trial_dir);
         let home = match opened(&self.runtime, move || async move {
-            EmbeddedHome::open_retained(&dir).await
+            EmbeddedHome::open_trial_retained(&dir).await
         })
         .await
         {
@@ -320,6 +344,21 @@ impl TrialExecutor for EmbeddedExecutor {
             }
         };
 
+        let record = tokio::task::spawn_blocking({
+            let trial_dir = trial_dir.clone();
+            move || crate::eval::runner::read_evidence_record(&trial_dir)
+        })
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "eval trial evidence record could not be read");
+            None
+        });
+        let subject = record
+            .as_ref()
+            .and_then(|record| record.subject_agent.clone());
+        let evaluator_did = record
+            .as_ref()
+            .and_then(|record| record.evaluator_did.as_deref());
         let mut stages = Vec::new();
         for (index, request) in requests.into_iter().enumerate() {
             let evidence = collect_request_evidence(&home.node, &request.request_id)
@@ -338,9 +377,10 @@ impl TrialExecutor for EmbeddedExecutor {
             let failure_kind =
                 classify_request_outcome(terminal_state, false, &evidence).map(outcome_kind);
             stages.push(StageEvidence {
+                subject_agent: subject.clone(),
                 prods: 0,
                 stage_id: index.to_string(),
-                request_id: Some(request.request_id),
+                request_id: Some(request.request_id.clone()),
                 terminal_state,
                 provider_reason: provider_reason(failure_kind, &evidence),
                 failure_kind,
@@ -353,6 +393,11 @@ impl TrialExecutor for EmbeddedExecutor {
                     &at.session_id,
                     &workspace,
                     captures,
+                    CaptureBindings {
+                        subject: subject.as_ref(),
+                        evaluator_did,
+                        request_id: Some(&request.request_id),
+                    },
                 )
                 .await,
             });
@@ -377,7 +422,9 @@ where
 }
 
 async fn close(home: EmbeddedHome) {
-    home.node.shutdown().await;
+    if let Err(error) = home.node.shutdown().await {
+        tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down trial node");
+    }
 }
 
 fn workspace_dir(trial_dir: &Path) -> PathBuf {

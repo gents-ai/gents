@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::runtime::agent::p2p_reconcile::{
     EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
 };
@@ -24,11 +24,12 @@ async fn create_endpoint(node: &EmbeddedNode, address: &str) -> String {
     let address = escape_graphql_string(address);
     let mutation = format!(
         r#"mutation {{
-            create_PeerEndpoint(input: {{
-                did: "{did}",
-                node_id: "node-{address}",
-                address: "{address}",
-                updated_at: "2026-07-31T00:00:00Z",
+            create_PeerRegistry(input: {{
+                peer_id: "{did}",
+                node_did: "did:test:node",
+                addresses: ["{address}"],
+                endpoint_address: "{address}",
+                endpoint_updated_at: "2026-07-31T00:00:00Z",
                 binding_sig: "sig-{address}"
             }}) {{ _docID }}
         }}"#
@@ -36,7 +37,7 @@ async fn create_endpoint(node: &EmbeddedNode, address: &str) -> String {
     let resp = node.execute(&mutation).await;
     assert!(
         !resp.has_errors(),
-        "create_PeerEndpoint failed: {:?}",
+        "create_PeerRegistry failed: {:?}",
         resp.errors
     );
     let indexed = indexed_endpoint_doc_ids(node).await;
@@ -48,7 +49,7 @@ async fn indexed_endpoint_doc_ids(node: &EmbeddedNode) -> Vec<String> {
     let did = escape_graphql_string(CONFLICT_DID);
     let resp = node
         .execute(&format!(
-            r#"{{ PeerEndpoint(filter: {{ did: {{ _eq: "{did}" }} }}) {{ _docID }} }}"#
+            r#"{{ PeerRegistry(filter: {{ peer_id: {{ _eq: "{did}" }} }}) {{ _docID }} }}"#
         ))
         .await;
     scan_endpoint_doc_ids(&resp)
@@ -58,7 +59,7 @@ fn scan_endpoint_doc_ids(resp: &gents::defra_node::QueryResponse) -> Vec<String>
     assert!(!resp.has_errors(), "scan failed: {:?}", resp.errors);
     resp.data
         .as_ref()
-        .and_then(|d| d.get("PeerEndpoint"))
+        .and_then(|d| d.get("PeerRegistry"))
         .and_then(|rows| rows.as_array())
         .map(|rows| {
             rows.iter()
@@ -71,7 +72,7 @@ fn scan_endpoint_doc_ids(resp: &gents::defra_node::QueryResponse) -> Vec<String>
 
 async fn scan_endpoints(node: &EmbeddedNode) -> Vec<String> {
     let resp = node
-        .execute(r#"{ PeerEndpoint { _docID did address } }"#)
+        .execute(r#"{ PeerRegistry { _docID peer_id endpoint_address } }"#)
         .await;
     scan_endpoint_doc_ids(&resp)
 }
@@ -79,7 +80,7 @@ async fn scan_endpoints(node: &EmbeddedNode) -> Vec<String> {
 async fn install_replicator(sender: &Arc<EmbeddedNode>, receiver: &Arc<EmbeddedNode>) {
     let receiver_addr = wait_for_listen_addr(receiver).await;
     let sender_addr = wait_for_listen_addr(sender).await;
-    let collections = vec!["PeerEndpoint".to_string()];
+    let collections = vec!["PeerRegistry".to_string()];
 
     sender
         .p2p()
@@ -153,7 +154,7 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
         "unique index must resolve to the deterministic winner"
     );
 
-    client.node.shutdown().await;
+    client.node.shutdown().await.expect("node shutdown");
 
     let reopen_deadline = Instant::now() + Duration::from_secs(90);
     loop {

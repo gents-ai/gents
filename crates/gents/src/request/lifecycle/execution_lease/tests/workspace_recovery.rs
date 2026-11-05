@@ -169,7 +169,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         generation: 1,
         node: None,
         local_did: did.into(),
-        default_agent_id: "general".into(),
+        default_agent_did: "general".into(),
         agents: Default::default(),
         tool_surfaces: Default::default(),
         backend_admission_configs: Default::default(),
@@ -189,7 +189,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         1,
         "general",
         [gents_protocol::row::AgentReadinessSourceEntry {
-            agent_id: "general".into(),
+            agent_did: "general".into(),
             dispatcher_present: true,
             unavailable_reason: None,
             startup_demoted: false,

@@ -8,7 +8,7 @@ use tempfile::TempDir;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
+use crate::defra_node::{Node as EmbeddedNode, P2PConfig, QueryResponse};
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::{ensure_runtime_schemas, DocumentRuntimeOptions, Gents, KeyIdentity, NodeIdentity};
 
@@ -33,6 +33,7 @@ pub struct EmbeddedHome {
     did: String,
     path: PathBuf,
     p2p: Option<P2PConfigForPath>,
+    node_acp_enabled: bool,
     #[allow(dead_code)]
     tempdir: Option<TempDir>,
 }
@@ -54,6 +55,16 @@ impl EmbeddedHome {
         Self::in_tempdir(tempdir, None).await
     }
 
+    #[cfg(test)]
+    pub(super) async fn create_trial_temp(prefix: &str) -> Result<Self> {
+        let tempdir = tempfile::Builder::new()
+            .prefix(&format!("gents-{prefix}-"))
+            .tempdir()?;
+        let mut home = Self::open_at_mode(tempdir.path().to_path_buf(), None, true).await?;
+        home.tempdir = Some(tempdir);
+        Ok(home)
+    }
+
     pub async fn in_tempdir(tempdir: TempDir, p2p: Option<P2PConfigForPath>) -> Result<Self> {
         let mut home = Self::open_at(tempdir.path().to_path_buf(), p2p).await?;
         home.tempdir = Some(tempdir);
@@ -62,6 +73,12 @@ impl EmbeddedHome {
 
     pub async fn create_retained(dir: &Path) -> Result<Self> {
         Self::create_retained_with_p2p(dir, None).await
+    }
+
+    pub(super) async fn create_trial_retained(dir: &Path) -> Result<Self> {
+        ensure!(!dir.exists(), "trial home {} already exists", dir.display());
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        Self::open_at_mode(dir.to_path_buf(), None, true).await
     }
 
     pub async fn create_retained_with_p2p(
@@ -83,10 +100,27 @@ impl EmbeddedHome {
     }
 
     async fn open_at(path: PathBuf, p2p: Option<P2PConfigForPath>) -> Result<Self> {
+        Self::open_at_mode(path, p2p, false).await
+    }
+
+    async fn open_at_mode(
+        path: PathBuf,
+        p2p: Option<P2PConfigForPath>,
+        node_acp_enabled: bool,
+    ) -> Result<Self> {
         let identity: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_or_create(path.join("node.key"), None).context("node identity")?,
         );
-        Self::open_with_identity(path, p2p, identity, true).await
+        Self::open_with_identity(path, p2p, identity, true, node_acp_enabled).await
+    }
+
+    pub(super) async fn open_trial_retained(dir: &Path) -> Result<Self> {
+        ensure!(
+            dir.join("node.key").exists(),
+            "no trial home at {}",
+            dir.display()
+        );
+        Self::open_at_mode(dir.to_path_buf(), None, true).await
     }
 
     pub(super) async fn open_for_inspection(dir: &Path, expected_did: &str) -> Result<Self> {
@@ -105,7 +139,7 @@ impl EmbeddedHome {
             "retained trial identity {} does not match recorded DID {expected_did}",
             identity.did()
         );
-        Self::open_with_identity(dir.to_path_buf(), None, identity, false).await
+        Self::open_with_identity(dir.to_path_buf(), None, identity, false, true).await
     }
 
     async fn open_with_identity(
@@ -113,12 +147,16 @@ impl EmbeddedHome {
         p2p: Option<P2PConfigForPath>,
         identity: Arc<dyn NodeIdentity>,
         initialize_schemas: bool,
+        node_acp_enabled: bool,
     ) -> Result<Self> {
         let did = identity.did().to_string();
         let mut builder = EmbeddedNode::builder()
             .data_path(&path)
             .with_regolith_options(crate::store::local::storage_backend::regolith_options())
             .with_node_identity_did(&did);
+        if node_acp_enabled {
+            builder = builder.with_node_acp_enabled();
+        }
         if let Some(p2p) = &p2p {
             builder = builder.with_p2p(p2p(&path));
         }
@@ -134,6 +172,7 @@ impl EmbeddedHome {
             did,
             path,
             p2p,
+            node_acp_enabled,
             tempdir: None,
         })
     }
@@ -146,11 +185,18 @@ impl EmbeddedHome {
         &self.path
     }
 
+    pub(super) fn node_acp_enabled(&self) -> bool {
+        self.node_acp_enabled
+    }
+
     pub async fn reopen(&mut self) -> Result<()> {
         // Stopping the node closes its subscriptions and other node-owned
         // services; wait for their handles to be released before claiming an
         // exclusive durable-store reopen.
-        self.node.shutdown().await;
+        self.node
+            .shutdown()
+            .await
+            .context("shutting down trial node")?;
         let release_deadline = tokio::time::Instant::now() + NODE_RELEASE_TIMEOUT;
         while Arc::strong_count(&self.node) != 1 && tokio::time::Instant::now() < release_deadline {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -188,6 +234,9 @@ impl EmbeddedHome {
             .data_path(&self.path)
             .with_regolith_options(crate::store::local::storage_backend::regolith_options())
             .with_node_identity_did(&self.did);
+        if self.node_acp_enabled {
+            builder = builder.with_node_acp_enabled();
+        }
         if let Some(p2p) = &self.p2p {
             builder = builder.with_p2p(p2p(&self.path));
         }

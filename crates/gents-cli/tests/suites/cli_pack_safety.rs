@@ -164,7 +164,7 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
     graphql_query(&graphql, &format!(r#"mutation {{
         create_Tools(input: {{tools_id: "broken-tools", node_did: "{owner_escaped}", integrations: {{plugins: [{{plugin: "private/missing"}}]}}}}) {{_docID}}
         create_AgentContext(input: {{context_id: "broken-context", node_did: "{owner_escaped}", tools_id: "broken-tools"}}) {{_docID}}
-        create_Agent(input: {{agent_id: "broken-agent", node_did: "{owner_escaped}", context_id: "broken-context", inference_profile_id: "{profile}", enabled: true}}) {{_docID}}
+        create_Agent(input: {{agent_did: "broken-agent", node_did: "{owner_escaped}", context_id: "broken-context", inference_profile_id: "{profile}", enabled: true}}) {{_docID}}
     }}"#)).await?;
     wait_for_runtime_quiescence(&graphql, &owner, 2, Duration::from_millis(200)).await?;
     let diagnosed = run_cli_json(&home, &["diagnose", "--graphql", &graphql])?;
@@ -174,7 +174,7 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
         .unwrap();
     let broken = unavailable
         .iter()
-        .find(|entry| entry["agent_id"] == "broken-agent")
+        .find(|entry| entry["agent_did"] == "broken-agent")
         .unwrap();
     assert_eq!(broken["reason"], "tool_surface_unavailable");
     assert_eq!(

@@ -1,4 +1,4 @@
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node as EmbeddedNode;
 use crate::inference::llm::tool::{Tool, ToolDefinition};
 use crate::store::config_client::ConfigAccess;
 use anyhow::{bail, ensure, Context, Result};
@@ -95,17 +95,26 @@ struct SchemaSdlFailure;
 
 #[derive(Clone)]
 pub struct SchemaTool {
-    node: Arc<EmbeddedNode>,
+    access: ConfigAccess,
 }
 
 impl SchemaTool {
+    #[cfg(test)]
     pub fn new(node: Arc<EmbeddedNode>) -> Self {
-        Self { node }
+        Self {
+            access: ConfigAccess::local(node),
+        }
+    }
+
+    pub fn for_actor(node: Arc<EmbeddedNode>, actor: identity::Did) -> Self {
+        Self {
+            access: ConfigAccess::local_as(node, actor),
+        }
     }
 
     async fn execute(&self, command: &SchemaCommand) -> Result<Value> {
         let args = &command.args;
-        let access = ConfigAccess::local(self.node.clone());
+        let access = &self.access;
         let words: Vec<_> = args.argv.iter().map(String::as_str).collect();
         let target = || {
             args.target_id.as_deref().filter(|s| !s.is_empty()).context("target_id is required; use collection list or version list to discover exact names and IDs")
@@ -171,7 +180,7 @@ impl SchemaTool {
                 return Ok(json!({"versions":values}));
             }
             ["version", "get"] => {
-                return Ok(json!({"version":find_version(&access, target()?).await?}))
+                return Ok(json!({"version":find_version(access, target()?).await?}))
             }
             _ => {}
         }
@@ -201,7 +210,7 @@ impl SchemaTool {
                     );
                 }
                 if words[0] == "collection" {
-                    crate::store::config_client::preview_schema_install(&access, text("sdl")?).await.context("collection create installs new schemas or verifies matching schemas; use collection update to evolve an existing schema")?;
+                    crate::store::config_client::preview_schema_install(access, text("sdl")?).await.context("collection create installs new schemas or verifies matching schemas; use collection update to evolve an existing schema")?;
                 }
                 Value::Object(existing)
             }
@@ -218,7 +227,7 @@ impl SchemaTool {
                 current
             }
             ["version", "activate"] => {
-                let version = find_version(&access, target()?).await?;
+                let version = find_version(access, target()?).await?;
                 let name = version["Name"]
                     .as_str()
                     .context("version has no collection name")?;
@@ -233,9 +242,9 @@ impl SchemaTool {
                     !config.lenses.is_empty(),
                     "config.Lenses must contain inline WASM modules"
                 );
-                let source = find_version(&access, &config.source_collection_version_id).await?;
+                let source = find_version(access, &config.source_collection_version_id).await?;
                 let destination =
-                    find_version(&access, &config.destination_collection_version_id).await?;
+                    find_version(access, &config.destination_collection_version_id).await?;
                 for v in [&source, &destination] {
                     ensure_application_collection(
                         v["Name"]
@@ -268,10 +277,10 @@ impl SchemaTool {
         let result = match words.as_slice() {
             ["collection", "create"] => {
                 let plan =
-                    crate::store::config_client::preview_schema_install(&access, text("sdl")?)
+                    crate::store::config_client::preview_schema_install(access, text("sdl")?)
                         .await?;
                 let installed = crate::store::config_client::apply_schema_install(
-                    &access,
+                    access,
                     text("sdl")?,
                     &plan.artifact_digest,
                 )

@@ -1,7 +1,7 @@
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::{Arc, Mutex};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use super::client::{current_context, AdmissionError};
 #[cfg(test)]
@@ -112,7 +112,7 @@ impl AdmissionRegistry {
         &self,
         request_id: impl Into<String>,
         backend_id: impl Into<String>,
-        agent_id: impl Into<String>,
+        agent_did: impl Into<String>,
         node_did: impl Into<String>,
         call_kind: CallKind,
     ) -> Result<AdmissionPermit, AdmissionError> {
@@ -120,7 +120,7 @@ impl AdmissionRegistry {
         self.acquire_with_connection_for_test(
             request_id,
             backend_id,
-            agent_id,
+            agent_did,
             node_did,
             call_kind,
             TEST_SLOT_CONNECTION,
@@ -133,7 +133,7 @@ impl AdmissionRegistry {
         &self,
         request_id: impl Into<String>,
         backend_id: impl Into<String>,
-        agent_id: impl Into<String>,
+        agent_did: impl Into<String>,
         node_did: impl Into<String>,
         call_kind: CallKind,
         connection: &str,
@@ -143,7 +143,7 @@ impl AdmissionRegistry {
             request_id: request_id.into(),
             request_doc_id: "doc-test".to_string(),
             backend_id: backend_id.into(),
-            agent_id: agent_id.into(),
+            agent_did: agent_did.into(),
             node_did: node_did.into(),
             session_id: "session-test".to_string(),
             call_kind,
@@ -197,7 +197,7 @@ impl AdmissionRegistry {
         if pending.backend_id.trim().is_empty() {
             return Err(AdmissionError(format!(
                 "agent {} has no backend binding",
-                pending.agent_id
+                pending.agent_did
             )));
         }
 

@@ -11,7 +11,7 @@ import { type DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desk
 
 export type TauriDriverChatRequest = {
   nodeDid: string;
-  agentId?: string | null;
+  agentDid?: string | null;
   sessionId?: string | null;
   content: string;
 };

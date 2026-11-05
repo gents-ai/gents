@@ -19,7 +19,7 @@ async fn disconnect_parked_before_latch_with_finishing_submission_failure_resolv
     .await;
     let manager = Arc::new(TurnManager::new(
         node.clone(),
-        test_config(graphql, &node_did),
+        test_config(graphql, &node_did, &node).await,
     ));
     let engine = test_engine(node.clone());
     let (_buffer, sender) = buffer_sender();
@@ -130,7 +130,7 @@ async fn cancel_parked_before_latch_with_finishing_submission_failure_resolves_c
     .await;
     let manager = Arc::new(TurnManager::new(
         node.clone(),
-        test_config(graphql, &node_did),
+        test_config(graphql, &node_did, &node).await,
     ));
     let engine = test_engine(node.clone());
     let (_buffer, sender) = buffer_sender();

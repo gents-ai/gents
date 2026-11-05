@@ -7,8 +7,8 @@ use super::streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, St
 pub struct AcceptedTurnSpec<'a> {
     pub backend_id: &'a str,
     pub model: &'a str,
-    pub parent_agent_id: &'a str,
-    pub configured_agent_ids: &'a [&'a str],
+    pub parent_agent_did: &'a str,
+    pub configured_agent_dids: &'a [&'a str],
     pub request_id: &'a str,
     pub session_id: &'a str,
     pub prompt: &'a str,
@@ -33,17 +33,17 @@ pub struct AcceptedTurnRuntime {
 
 pub async fn enqueue_local_accepted_request(
     db: &super::TestDb,
-    agent_id: &str,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     prompt: &str,
 ) {
-    enqueue_local_accepted_request_until(db, agent_id, request_id, session_id, prompt, None).await;
+    enqueue_local_accepted_request_until(db, agent_did, request_id, session_id, prompt, None).await;
 }
 
 pub async fn enqueue_local_accepted_request_until(
     db: &super::TestDb,
-    agent_id: &str,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     prompt: &str,
@@ -55,7 +55,7 @@ pub async fn enqueue_local_accepted_request_until(
         request_id,
         db.node_identity.did(),
         db.node_identity.did(),
-        agent_id,
+        agent_did,
         session_id,
         prompt,
         "interactive",
@@ -112,11 +112,11 @@ pub async fn prepare_accepted_turn_as(
     );
     let backend = MockStreamingBackend::start_with_plans(spec.model, plans)
         .expect("start accepted-turn backend");
-    for agent_id in spec.configured_agent_ids {
+    for agent_did in spec.configured_agent_dids {
         bind_agent_backend(
             &db.node,
             identity.did(),
-            agent_id,
+            agent_did,
             spec.backend_id,
             backend.endpoint(),
             spec.model,
@@ -128,7 +128,7 @@ pub async fn prepare_accepted_turn_as(
         super::snapshots::fetch_session_snapshot(db.node.as_ref(), spec.session_id).await;
     if existing_session.is_none() {
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let mut session = super::session_document(spec.session_id, spec.parent_agent_id, &now);
+        let mut session = super::session_document(spec.session_id, spec.parent_agent_did, &now);
         session.node_did = identity.did().to_string();
         session.requester_did = Some(identity.did().to_string());
         session.title = Some(gents_protocol::session::SessionTitle {
@@ -162,7 +162,7 @@ pub async fn prepare_accepted_turn_as(
         spec.request_id,
         identity.did(),
         identity.did(),
-        spec.parent_agent_id,
+        spec.parent_agent_did,
         spec.session_id,
         spec.prompt,
         "interactive",

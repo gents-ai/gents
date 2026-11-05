@@ -13,7 +13,7 @@ beforeEach(() => vi.stubGlobal("localStorage", goalDeliveryStorage()));
 afterEach(() => vi.unstubAllGlobals());
 const unknownOutcome = {
   nodeDid: "agent",
-  agentId: "setup",
+  agentDid: "setup",
   sessionId: "session-1",
   requestId: "request-unknown",
   outcome: "deliveryUnknown",
@@ -33,7 +33,7 @@ it("preserves exact resolution of an already saved uncertain mailbox answer", as
   });
   const stores = shellStores({
     deployments: [],
-    selection: { nodeDid: "agent", agentId: "setup", sessionId: "session-1" },
+    selection: { nodeDid: "agent", agentDid: "setup", sessionId: "session-1" },
   });
   const reportFailure = vi.fn();
   const mailbox = createMailboxActions({
@@ -44,8 +44,9 @@ it("preserves exact resolution of an already saved uncertain mailbox answer", as
   } as never);
   const item = {
     itemId: "question-1",
+    nodeDid: "agent",
     targetNodeDid: "agent",
-    targetAgentId: "setup",
+    targetAgentDid: "setup",
     sessionId: "session-1",
   } as never;
 

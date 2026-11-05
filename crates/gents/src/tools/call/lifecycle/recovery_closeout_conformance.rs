@@ -56,7 +56,7 @@ async fn generated_native_missing_parent_restart_cases_defer() {
             "running",
             "{name}"
         );
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
     }
 }
@@ -79,7 +79,7 @@ fn assert_notification_reason(
 /// goal controller tests use, producing an unreadable assignment observation
 /// (`parsed_status` resolves the document but cannot parse the status).
 async fn seed_goal_status(
-    node: &crate::defra_node::EmbeddedNode,
+    node: &crate::defra_node::Node,
     goal: &crate::goal::GoalDocument,
     fields: &str,
 ) {
@@ -168,7 +168,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
             );
             assert_notification_reason(&notifications[0], case);
             assert_eq!(settle(&admission).await, 0, "{name}: fails closed once");
-            admission.node.shutdown().await;
+            admission.node.shutdown().await.expect("shut down test node");
             std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
             continue;
         }
@@ -388,7 +388,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
         );
         assert_notification_reason(&notifications[0], case);
         assert_eq!(settle(admission).await, 0, "{name}");
-        message.admission.node.shutdown().await;
+        message.admission.node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(&message.admission.path).expect("remove exact recovery fixture");
     }
 }
@@ -447,6 +447,10 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         if case.owner_session_stopped == Some(true) {
             crate::session::stop_session(
                 &admission.node,
+                admission
+                    .node
+                    .node_identity_did()
+                    .expect("fixture has a registered signing principal"),
                 &admission.node_did,
                 admission.tool.session_id(),
                 admission.tool.requester_did(),
@@ -532,7 +536,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         .await
         .unwrap();
         assert_eq!(second.tool_calls_terminalized, 0, "{name}");
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
     }
 }
@@ -598,7 +602,7 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
             "running",
             "{name}"
         );
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
     }
 }
@@ -648,6 +652,6 @@ async fn generated_background_completion_recovery_uses_accepted_native_call() {
         completion_obligations(&admission.node, &session_id, &admission.node_did).await;
     assert_eq!(notifications.len(), 1, "{}", case.name);
     assert_eq!(wakes.len(), 1, "{}", case.name);
-    admission.node.shutdown().await;
+    admission.node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
 }

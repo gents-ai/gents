@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio_util::sync::CancellationToken;
 
 use crate::inference::backends::registry::{InferenceBackend, UNKNOWN_PROBE_STATUS};

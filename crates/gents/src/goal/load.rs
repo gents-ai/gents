@@ -74,12 +74,19 @@ pub async fn load_canonical_goal_in_txn(
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalDocument>> {
+    let Some(session) =
+        crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id).await?
+    else {
+        return Ok(None);
+    };
+    let session_doc_id = escape_graphql_string(&session.doc_id);
     let node_did = escape_graphql_string(node_did);
     let session_id = escape_graphql_string(session_id);
     let response = txn
         .execute(&format!(
             r#"{{ Goal(filter: {{
-        node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }}
+        node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }},
+        session_doc_id: {{ _eq: "{session_doc_id}" }}
     }}) {{ {GOAL_FIELDS} }} }}"#
         ))
         .await?;

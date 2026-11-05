@@ -382,6 +382,19 @@ pub async fn request_arrival_order(
     txn: &ConfigApplyTxn<'_>,
     doc_ids: &[String],
 ) -> Result<Vec<String>> {
+    Ok(request_arrival_positions(txn, doc_ids)
+        .await?
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect())
+}
+
+/// The native collection-wide cursor lets independently authorized request
+/// scans preserve the same arrival order without broadening their actors.
+pub(crate) async fn request_arrival_positions(
+    txn: &ConfigApplyTxn<'_>,
+    doc_ids: &[String],
+) -> Result<Vec<(String, u64)>> {
     if doc_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -436,18 +449,19 @@ pub async fn request_arrival_order(
         }
     }
     ordered.sort_unstable_by_key(|(cursor, _)| *cursor);
-    let ordered = ordered.into_iter().map(|(_, id)| id).collect::<Vec<_>>();
     let positions = ordered
         .iter()
-        .enumerate()
-        .map(|(index, id)| (id.as_str(), index))
+        .map(|(cursor, id)| (id.as_str(), *cursor))
         .collect::<rapidhash::RapidHashMap<_, _>>();
     let mut slots = slots
         .into_iter()
         .filter(|(_, slot)| positions.contains_key(slot.as_str()))
         .collect::<Vec<_>>();
     slots.sort_by_key(|(_, slot)| positions[slot.as_str()]);
-    Ok(slots.into_iter().map(|(id, _)| id).collect())
+    Ok(slots
+        .into_iter()
+        .map(|(id, slot)| (id, positions[slot.as_str()]))
+        .collect())
 }
 
 #[derive(Clone, serde::Deserialize)]

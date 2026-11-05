@@ -68,8 +68,24 @@ async fn completed_harness(name: &str, value: Value) -> (JobHarness, String) {
     (h, row)
 }
 
-fn caller(h: &JobHarness, session_id: &str, request_doc_id: &str, row_doc_id: &str) -> JobCaller {
+async fn caller(
+    h: &JobHarness,
+    session_id: &str,
+    request_doc_id: &str,
+    row_doc_id: &str,
+) -> JobCaller {
     let node_did = h.db.node_identity.did().to_string();
+    let response = ConfigAccess::local(h.db.node.clone())
+        .execute(&format!(
+            r#"{{ AgentRequest(docID: "{}") {{ agent_did }} }}"#,
+            gents::store::graphql::escape_graphql_string(request_doc_id),
+        ))
+        .await
+        .expect("load selected parent agent");
+    let caller_did = response["data"]["AgentRequest"][0]["agent_did"]
+        .as_str()
+        .expect("parent agent DID")
+        .to_owned();
     JobCaller::new(
         h.db.node.clone(),
         ProcessControlScope {
@@ -79,7 +95,7 @@ fn caller(h: &JobHarness, session_id: &str, request_doc_id: &str, row_doc_id: &s
             requester_did: Some(node_did.clone()),
         },
         StampContext::ToolOutput {
-            node_did,
+            caller_did,
             session_id: session_id.into(),
             request_doc_id: request_doc_id.into(),
             tool_call_doc_id: row_doc_id.into(),
@@ -174,7 +190,7 @@ async fn job_result_over_4000_bytes_is_truncated_in_the_notification_and_paged_i
     assert!(shown.len() <= 4000, "{} bytes shown", shown.len());
 
     let request_doc_id = parent_request_doc_id(&h).await;
-    let caller = caller(&h, &h.session_id, &request_doc_id, &row_doc_id);
+    let caller = caller(&h, &h.session_id, &request_doc_id, &row_doc_id).await;
     let page = |offset: u64, limit: u64| {
         let request = JobResultRequest {
             row_doc_id: row_doc_id.clone(),
@@ -205,7 +221,7 @@ async fn job_calls_result_refuses_a_row_outside_process_control_scope() {
     let (h, row_doc_id) = completed_harness("plugin-job-surface-scope", json!("done")).await;
     let request_doc_id = parent_request_doc_id(&h).await;
 
-    let caller = caller(&h, "another-session", &request_doc_id, &row_doc_id);
+    let caller = caller(&h, "another-session", &request_doc_id, &row_doc_id).await;
     let error = read_result(
         &caller,
         PLUGIN,

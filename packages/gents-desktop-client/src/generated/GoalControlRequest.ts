@@ -4,4 +4,4 @@ import type { GoalControlAction } from "./GoalControlAction.js";
 import type { GoalRevision } from "./GoalRevision.js";
 import type { RequestAttachment } from "./RequestAttachment.js";
 
-export type GoalControlRequest = { clientDid?: string | null, commandId?: string | null, nodeDid: string, sessionId: string | null, sessionDocId: string | null, expected: GoalRevision | null, agentId: string | null, action: GoalControlAction, cwd: string | null, capturedContext?: Array<CapturedContext> | null, attachments?: Array<RequestAttachment> | null, };
+export type GoalControlRequest = { clientDid?: string | null, commandId?: string | null, nodeDid: string, sessionId: string | null, sessionDocId: string | null, expected: GoalRevision | null, agentDid: string | null, action: GoalControlAction, cwd: string | null, capturedContext?: Array<CapturedContext> | null, attachments?: Array<RequestAttachment> | null, };

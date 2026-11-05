@@ -540,7 +540,7 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
                 .unwrap();
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[cfg(unix)]
@@ -666,7 +666,7 @@ async fn interrupted_foreground_with_unverified_exit_remains_background_controll
             .await
     );
     process.finish().await;
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[cfg(unix)]
@@ -778,7 +778,7 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     assert_eq!(row["cancel_cause"], "userCancelled");
     assert!(!registry.contains("failed-handoff", &doc).await);
     process.finish().await;
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -833,7 +833,7 @@ async fn confirmation_before_worker_release_keeps_typed_stop_receipt() {
     let row = fetch_tool_call_row(&node, &session, "early-confirm").await;
     assert_eq!(row["cancel_cause"], "userCancelled");
     assert!(!registry.contains("early-confirm", &doc).await);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -874,7 +874,7 @@ async fn interruption_before_native_registration_cancels_without_starting_proces
         .background_executions
         .active_tool_call_doc_ids()
         .is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -924,5 +924,5 @@ async fn interrupt_sweep_preserves_confirmed_timeout_intent() {
     let row = fetch_tool_call_row(&node, &session, "timeout-first-sweep").await;
     assert_eq!(row["lifecycle_state"], "timedOut");
     assert!(!registry.contains("timeout-first-sweep", &doc).await);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

@@ -3,7 +3,6 @@ export type { ChatSubmissionReceipt } from "../generated/ChatSubmissionReceipt.j
 export type { ChatSubmissionRecovery } from "../generated/ChatSubmissionRecovery.js";
 export type { CommandDenialView } from "../generated/CommandDenialView.js";
 export type { DesktopSessionSnapshot } from "../generated/DesktopSessionSnapshot.js";
-export type { SessionHydrationView } from "../generated/SessionHydrationView.js";
 export type { SessionLiveDeltaView } from "../generated/SessionLiveDeltaView.js";
 export type { SessionRowsView } from "../generated/SessionRowsView.js";
 export type { SessionRowsWindow } from "../generated/SessionRowsWindow.js";

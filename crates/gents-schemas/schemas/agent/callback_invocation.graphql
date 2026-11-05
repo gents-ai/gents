@@ -1,8 +1,12 @@
-type CallbackInvocation @branchable
+type CallbackInvocation
+    @policy(id: "d23eb42a87668f3bd577087f604fd7919e24873705681fe9e3d1923d7d065c13", resource: "agent_children")
     @index(fields: ["owner_node_did", "invocation_id"], unique: true)
     @index(fields: ["owner_node_did", "idempotency_key"], unique: true) {
     invocation_id: String @immutable
     owner_node_did: String @index @immutable
+    agent_did: String @index @immutable
+    agent_doc_id: String @immutable
+    parent_linked: Boolean
     callback_id: String @index @immutable
     origin: JSON @immutable
     input: JSON @immutable

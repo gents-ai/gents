@@ -11,9 +11,9 @@ use super::Attachment;
 pub async fn seed_editor_settings(
     access: &ConfigAccess,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<()> {
-    let value = json!({"node_did":node_did,"task_id":"editor-settings","agent_id":agent_id,
+    let value = json!({"node_did":node_did,"task_id":"editor-settings","agent_did":agent_did,
         "display_name":"Editor settings fixture","prompt_template":"Editor fixture task"});
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: Collection::Task,
@@ -34,15 +34,15 @@ pub async fn seed_editor_settings(
 pub async fn verify_editor_settings(
     access: &ConfigAccess,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<()> {
-    let response = access.execute(&format!(r#"{{ Task(filter: {{node_did: {{_eq: "{}"}}, task_id: {{_eq: "editor-settings"}}}}) {{ display_name prompt_template agent_id }} }}"#,
+    let response = access.execute(&format!(r#"{{ Task(filter: {{node_did: {{_eq: "{}"}}, task_id: {{_eq: "editor-settings"}}}}) {{ display_name prompt_template agent_did }} }}"#,
         escape_graphql_string(node_did))).await?;
     let rows = response["data"]["Task"]
         .as_array()
         .context("saved editor settings")?;
     ensure!(rows.len() == 1 && rows[0]["display_name"] == "Editor saved settings"
-        && rows[0]["prompt_template"] == "Editor fixture task" && rows[0]["agent_id"] == agent_id,
+        && rows[0]["prompt_template"] == "Editor fixture task" && rows[0]["agent_did"] == agent_did,
         "the editor must save canonical fields while retaining the configured task owner: {response}");
     Ok(())
 }
@@ -58,15 +58,15 @@ pub async fn exercise(
     id: &mut u32,
     access: &ConfigAccess,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     client_did: &str,
 ) -> Result<()> {
     let plan = DesiredStateApplyPlan::new(vec![
-        (Collection::Task, json!({"node_did":node_did,"task_id":"editor-task","agent_id":agent_id,
+        (Collection::Task, json!({"node_did":node_did,"task_id":"editor-task","agent_did":agent_did,
             "prompt_template":"Editor sequence {{ args.sequence }}","display_name":"Editor task"})),
-        (Collection::Task, json!({"node_did":node_did,"task_id":"editor-disabled","agent_id":agent_id,
+        (Collection::Task, json!({"node_did":node_did,"task_id":"editor-disabled","agent_did":agent_did,
             "prompt_template":"Disabled","enabled":false})),
-        (Collection::Task, json!({"node_did":node_did,"task_id":"editor-scheduled-task","agent_id":agent_id,
+        (Collection::Task, json!({"node_did":node_did,"task_id":"editor-scheduled-task","agent_did":agent_did,
             "prompt_template":"Editor scheduled task"})),
         (Collection::Schedule, json!({"node_did":node_did,"schedule_id":"editor-schedule",
             "cadence":{"kind":"cron","expression":"0 0 1 1 *","timezone":"UTC"}})),
@@ -112,7 +112,7 @@ pub async fn exercise(
         ),
     ] {
         let receipt = call(client, id, command, args).await;
-        ensure!(receipt["nodeDid"] == node_did && receipt["agentId"] == agent_id);
+        ensure!(receipt["nodeDid"] == node_did && receipt["agentDid"] == agent_did);
         let request_id = receipt["requestId"]
             .as_str()
             .context("accepted action request")?;

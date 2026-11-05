@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -20,6 +20,8 @@ struct StaleInferenceCallRow {
     doc_id: String,
     call_id: String,
     request_id: String,
+    request_doc_id: String,
+    agent_did: String,
     call_state: String,
 }
 
@@ -37,7 +39,7 @@ impl InferenceCall {
         let mut calls_recovered = 0;
 
         for row in rows {
-            let Some(parent) = lookup_parent_request(node, node_did, &row.request_id).await? else {
+            let Some(parent) = lookup_parent_request(node, node_did, &row).await? else {
                 continue;
             };
             let Some(outcome) = recovery_outcome(&row, &parent) else {
@@ -52,7 +54,7 @@ impl InferenceCall {
                         call_id = %row.call_id,
                         request_id = %row.request_id,
                         call_state = %row.call_state,
-                        error = %error,
+                        error = %gents_protocol::error_chain::ErrorChain(error.as_ref()),
                         "failed to recover stale inference call"
                     );
                     continue;
@@ -87,6 +89,8 @@ async fn load_stale_inference_calls(
                 _docID
                 call_id
                 request_id
+                request_doc_id
+                agent_did
                 call_state
             }}
         }}"#
@@ -95,28 +99,28 @@ async fn load_stale_inference_calls(
     let resp =
         graphql_with_transaction_retry(node, &query, "querying stale InferenceCall rows").await?;
 
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("InferenceCall"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
-    Ok(rows)
+    Ok(crate::store::graphql::required_rows(
+        &resp,
+        "InferenceCall",
+    )?)
 }
 
 async fn lookup_parent_request(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
-    request_id: &str,
+    row: &StaleInferenceCallRow,
 ) -> Result<Option<AgentRequestRow>> {
     let escaped_node_did = escape_graphql_string(node_did);
+    let request_id = &row.request_id;
     let escaped_request_id = escape_graphql_string(request_id);
+    let request_doc_id = escape_graphql_string(&row.request_doc_id);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
                     node_did: {{ _eq: "{escaped_node_did}" }},
                     request_id: {{ _eq: "{escaped_request_id}" }}
+                    _docID: {{ _eq: "{request_doc_id}" }}
                 }},
                 limit: 1
             ) {{
@@ -126,17 +130,21 @@ async fn lookup_parent_request(
         }}"#
     );
 
-    let resp = graphql_with_transaction_retry(
+    let resp = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
-        &query,
-        "querying parent request for inference recovery",
+        Some(identity::Did::new(row.agent_did.clone())?),
+        "inference.recovery_parent",
+        |txn| {
+            let query = &query;
+            Box::pin(async move { txn.execute_local_response(query).await })
+        },
     )
     .await
     .with_context(|| {
         format!("querying parent request for inference recovery request_id={request_id}")
     })?;
 
-    let rows: Vec<AgentRequestRow> = crate::store::graphql::rows(&resp, "AgentRequest")?;
+    let rows: Vec<AgentRequestRow> = crate::store::graphql::required_rows(&resp, "AgentRequest")?;
     Ok(rows.into_iter().next())
 }
 
@@ -187,17 +195,22 @@ async fn recover_inference_call_row(
         }}"#,
     );
 
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::transact_local_write(
         node,
+        Some(identity::Did::new(row.agent_did.clone())?),
         "recover_inference_call",
-        &mutation,
+        |txn| {
+            let mutation = &mutation;
+            Box::pin(async move { txn.execute_local_response(mutation).await })
+        },
     )
     .await
     .context("recover inference call mutation")?;
-    Ok(
-        !crate::store::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?
-            .is_empty(),
-    )
+    Ok(!crate::store::graphql::required_rows::<serde_json::Value>(
+        &response,
+        "update_InferenceCall",
+    )?
+    .is_empty())
 }
 
 fn request_is_interrupted(parent: &AgentRequestRow) -> bool {

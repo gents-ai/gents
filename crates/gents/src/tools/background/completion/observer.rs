@@ -5,6 +5,7 @@ pub(crate) async fn run_background_completion_observer(
     local_did: String,
     background_executions: crate::tools::call::hook::BackgroundExecutionRegistry,
     job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
+    agents: tokio::sync::watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let mut observer = BackgroundCompletionObserver::new(
@@ -12,6 +13,7 @@ pub(crate) async fn run_background_completion_observer(
         local_did,
         background_executions,
         job_driver,
+        agents,
         cancel,
     )?;
     observer.run().await
@@ -22,6 +24,7 @@ struct BackgroundCompletionObserver {
     local_did: String,
     background_executions: crate::tools::call::hook::BackgroundExecutionRegistry,
     job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
+    agents: tokio::sync::watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>>,
     cancel: CancellationToken,
     subscription: events::DocumentChangeSubscription,
     mailbox_cursor: Option<String>,
@@ -33,6 +36,7 @@ impl BackgroundCompletionObserver {
         local_did: String,
         background_executions: crate::tools::call::hook::BackgroundExecutionRegistry,
         job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
+        agents: tokio::sync::watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>>,
         cancel: CancellationToken,
     ) -> Result<Self> {
         let subscription = crate::subscribe_collections(&node, [AGENT_REQUEST_COLLECTION])?;
@@ -41,6 +45,7 @@ impl BackgroundCompletionObserver {
             local_did,
             background_executions,
             job_driver,
+            agents,
             cancel,
             subscription,
             mailbox_cursor: None,
@@ -95,19 +100,34 @@ impl BackgroundCompletionObserver {
                     );
                 }
 
-                if let Err(error) =
-                    crate::tools::background::job::recovery::wake_jobs_after_request_update(
-                        &crate::store::config_client::ConfigAccess::local(self.node.clone()),
-                        &self.job_driver,
-                        &change.doc_id,
+                for actor in self.selected_agents() {
+                    if let Err(error) = crate::session::recover_agent_session_relationships(
+                        &self.node,
+                        &self.local_did,
+                        &actor,
                     )
                     .await
-                {
-                    tracing::warn!(
-                        request_doc_id = %change.doc_id,
-                        error = %format!("{error:#}"),
-                        "job wake from a request update failed"
-                    );
+                    {
+                        tracing::warn!(agent_did = %actor, %error, "session relationship recovery failed; will retry");
+                    }
+                    if let Err(error) =
+                        crate::tools::background::job::recovery::wake_jobs_after_request_update(
+                            &crate::store::config_client::ConfigAccess::local_as(
+                                self.node.clone(),
+                                actor.clone(),
+                            ),
+                            &self.job_driver,
+                            &change.doc_id,
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            request_doc_id = %change.doc_id,
+                            agent_did = %actor,
+                            error = %format!("{error:#}"),
+                            "job wake from a request update failed"
+                        );
+                    }
                 }
             }
         }
@@ -155,12 +175,39 @@ impl BackgroundCompletionObserver {
                 );
             }
         }
-        match crate::tools::background::job::recovery::redrive_running_jobs(&self.job_driver).await
-        {
-            Ok(0) => {}
-            Ok(ticked) => tracing::debug!(ticked, "plugin job recovery sweep ticked running jobs"),
-            Err(error) => {
-                tracing::warn!(error = %format!("{error:#}"), "plugin job recovery sweep failed; will retry");
+        for actor in self.selected_agents() {
+            if let Err(error) = crate::session::recover_agent_session_relationships(
+                &self.node,
+                &self.local_did,
+                &actor,
+            )
+            .await
+            {
+                tracing::warn!(agent_did = %actor, %error, "session relationship recovery failed; will retry");
+            }
+            if let Err(error) =
+                crate::session::child_ownership::recover_agent_session_child_relationships(
+                    &self.node,
+                    &self.local_did,
+                    &actor,
+                )
+                .await
+            {
+                tracing::warn!(agent_did = %actor, %error, "session child relationship recovery failed; will retry");
+            }
+            match crate::tools::background::job::recovery::redrive_running_jobs(
+                &self.job_driver,
+                &actor,
+            )
+            .await
+            {
+                Ok(0) => {}
+                Ok(ticked) => {
+                    tracing::debug!(ticked, "plugin job recovery sweep ticked running jobs")
+                }
+                Err(error) => {
+                    tracing::warn!(agent_did = %actor, error = %format!("{error:#}"), "plugin job recovery sweep failed; will retry");
+                }
             }
         }
         let wake_redrive =
@@ -190,5 +237,26 @@ impl BackgroundCompletionObserver {
             );
         }
         Ok(())
+    }
+
+    fn selected_agents(&self) -> Vec<identity::Did> {
+        self.agents
+            .borrow()
+            .agents
+            .keys()
+            .filter_map(|did| {
+                if did == &self.local_did {
+                    tracing::error!(agent_did = %did, "runtime identity cannot execute agent work");
+                    return None;
+                }
+                match identity::Did::new(did.clone()) {
+                    Ok(actor) => Some(actor),
+                    Err(error) => {
+                        tracing::warn!(agent_did = %did, %error, "agent identity is invalid");
+                        None
+                    }
+                }
+            })
+            .collect()
     }
 }

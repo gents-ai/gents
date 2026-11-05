@@ -107,6 +107,9 @@ async fn node() -> Arc<EmbeddedNode> {
 #[tokio::test]
 async fn schema_publication_matches_executable_lean_contract() {
     for case in &crate::lean_vocab_test::lean_contract_snapshot().schema_publication_cases {
+        if !case["native_allowed"].as_bool().unwrap() {
+            continue;
+        }
         let node = node().await;
         let tool = SchemaTool::new(node.clone());
         let access = ConfigAccess::local(node.clone());
@@ -160,6 +163,63 @@ async fn schema_publication_matches_executable_lean_contract() {
             );
         }
         assert!(!surface.tool_names().contains(&"config".to_owned()));
+    }
+}
+
+#[tokio::test]
+async fn schema_publication_uses_agent_native_authority() {
+    use crate::store::config_client::NodePermission;
+    use crate::store::identity::{KeyIdentity, NodeIdentity};
+
+    for case in &crate::lean_vocab_test::lean_contract_snapshot().schema_publication_cases {
+        if case["grant"] != true || case["artifact"] != true || case["compatible"] != true {
+            continue;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
+        let agent = KeyIdentity::load_or_create(home.path().join("agent.key"), None).unwrap();
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(runtime.did())
+                .with_node_acp_enabled()
+                .build()
+                .await
+                .unwrap(),
+        );
+        let agent_did = identity::Did::new(agent.did()).unwrap();
+        let tool = SchemaTool::for_actor(node.clone(), agent_did.clone());
+        assert!(
+            tool.call(args(json!({"argv":["collection","list"]})))
+                .await
+                .is_err(),
+            "collection discovery must honor the agent's native node permission"
+        );
+        let admin =
+            ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
+        admin
+            .grant_node_permission(&agent_did, NodePermission::CollectionGet)
+            .await
+            .unwrap();
+        if case["native_allowed"] == true {
+            admin
+                .grant_node_permission(&agent_did, NodePermission::CollectionPatch)
+                .await
+                .unwrap();
+        }
+        let preview = call(&tool, json!({"argv":["collection","preview","create"],"options":{"sdl":"type AgentSchemaProbe { value: String }"}})).await;
+        let result = tool.call(args(preview["next_call"]["args"].clone())).await;
+        assert_eq!(
+            result.is_ok(),
+            case["accepted"].as_bool().unwrap(),
+            "{case}: {result:?}"
+        );
+        let installed = ConfigAccess::local(node.clone())
+            .collection_version("AgentSchemaProbe")
+            .await
+            .unwrap()
+            .is_some();
+        assert_eq!(installed, case["accepted"].as_bool().unwrap(), "{case}");
+        node.shutdown().await.unwrap();
     }
 }
 

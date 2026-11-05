@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct NodeView {
     pub node_did: String,
     pub display_name: Option<String>,
-    pub default_agent_id: Option<String>,
+    pub default_agent_did: Option<String>,
     pub enabled: Option<bool>,
     pub created_at: Option<String>,
     pub created_by: Option<String>,
@@ -17,7 +17,8 @@ pub struct NodeView {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentView {
-    pub agent_id: String,
+    pub creation_nonce: String,
+    pub agent_did: String,
     pub node_did: String,
     pub display_name: String,
     pub description: Option<String>,
@@ -127,7 +128,7 @@ impl InferenceSetupState {
             .map(|row| NodeView {
                 node_did: row.node_did.clone(),
                 display_name: normalize_optional(row.display_name.as_deref()),
-                default_agent_id: normalize_optional(row.default_agent_id.as_deref()),
+                default_agent_did: normalize_optional(row.default_agent_did.as_deref()),
                 enabled: Some(row.enabled),
                 created_at: normalize_optional(row.created_at.as_deref()),
                 created_by: normalize_optional(row.created_by.as_deref()),
@@ -135,7 +136,7 @@ impl InferenceSetupState {
             .unwrap_or_else(|| NodeView {
                 node_did: node_did.to_owned(),
                 display_name: None,
-                default_agent_id: None,
+                default_agent_did: None,
                 enabled: None,
                 created_at: None,
                 created_by: None,
@@ -146,21 +147,22 @@ impl InferenceSetupState {
             .filter(|row| row.node_did == node_did)
             .cloned()
             .collect::<Vec<_>>();
-        agent_configs.sort_by(|left, right| left.agent_id.cmp(&right.agent_id));
-        let default_agent_id = store.default_agent_id_for_node(node_did).map(str::to_owned);
+        agent_configs.sort_by(|left, right| left.agent_did.cmp(&right.agent_did));
+        let default_agent_did = store.default_agent_did_for_node(node_did).map(str::to_owned);
         let mut agents = store
             .agent_rows(node_did)
             .into_iter()
             .map(|row| AgentView {
-                agent_id: row.agent_id.clone(),
+                creation_nonce: row.creation_nonce.clone(),
+                agent_did: row.agent_did.clone(),
                 node_did: row.node_did.clone(),
                 display_name: normalize_optional(row.display_name.as_deref())
-                    .unwrap_or_else(|| row.agent_id.clone()),
+                    .unwrap_or_else(|| row.agent_did.clone()),
                 description: row.description.clone(),
                 context_id: row.context_id.clone(),
                 inference_profile_id: Some(row.inference_profile_id.clone()),
                 enabled: row.enabled,
-                is_default: default_agent_id.as_deref() == Some(row.agent_id.as_str()),
+                is_default: default_agent_did.as_deref() == Some(row.agent_did.as_str()),
                 tags: row.tags.clone(),
                 created_at: row.created_at.clone(),
             })
@@ -555,7 +557,7 @@ mod tests {
                 "malformed agent",
                 {
                     let mut data = data.clone();
-                    data["agents"] = json!([{"agent_id":"incomplete"}]);
+                    data["agents"] = json!([{"agent_did":"incomplete"}]);
                     data
                 },
                 false,

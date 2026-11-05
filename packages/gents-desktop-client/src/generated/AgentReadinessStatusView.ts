@@ -2,4 +2,4 @@
 import type { AgentReadinessUnknownReasonView } from "./AgentReadinessUnknownReasonView.js";
 import type { AgentUnavailableReasonView } from "./AgentUnavailableReasonView.js";
 
-export type AgentReadinessStatusView = { "state": "ready", agentId: string, } | { "state": "unavailable", agentId: string, reason: AgentUnavailableReasonView, } | { "state": "unknown", agentId: string, reason: AgentReadinessUnknownReasonView, };
+export type AgentReadinessStatusView = { "state": "ready", agentDid: string, } | { "state": "unavailable", agentDid: string, reason: AgentUnavailableReasonView, } | { "state": "unknown", agentDid: string, reason: AgentReadinessUnknownReasonView, };

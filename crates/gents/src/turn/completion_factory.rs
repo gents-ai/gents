@@ -1,6 +1,6 @@
 use crate::inference::llm::ToolChoice;
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use crate::inference::admission::{AdmissionRegistry, AdmittedCompletionModel};
@@ -351,7 +351,7 @@ pub(crate) async fn context_calibration_for_session(
     match load_session_calibration_rows(
         node,
         node_did,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         session_id,
         &agent_config.model_name,
     )
@@ -391,7 +391,7 @@ pub(crate) async fn context_calibration_for_session(
 async fn load_session_calibration_rows(
     node: &EmbeddedNode,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     session_id: &str,
     model_name: &str,
 ) -> anyhow::Result<Vec<CalibrationCallRow>> {
@@ -400,7 +400,7 @@ async fn load_session_calibration_rows(
             InferenceCall(
                 filter: {{ _and: [
                     {{ node_did: {{ _eq: "{}" }} }},
-                    {{ agent_id: {{ _eq: "{}" }} }},
+                    {{ agent_did: {{ _eq: "{}" }} }},
                     {{ session_id: {{ _eq: "{}" }} }},
                     {{ model_name: {{ _eq: "{}" }} }},
                     {{ call_kind: {{ _eq: "inference" }} }}
@@ -417,7 +417,7 @@ async fn load_session_calibration_rows(
             }}
         }}"#,
         escape_graphql_string(node_did),
-        escape_graphql_string(agent_id),
+        escape_graphql_string(agent_did),
         escape_graphql_string(session_id),
         escape_graphql_string(model_name),
     );

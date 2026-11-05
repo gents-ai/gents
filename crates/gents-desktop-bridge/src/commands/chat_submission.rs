@@ -44,7 +44,7 @@ fn receipt(intent: &SubmissionIntent, reference: SubmissionReference) -> ChatSub
         node_did: reference.request.node_did,
         request_id: reference.request.request_id,
         session_id: reference.request.session_id,
-        agent_id: reference.request.agent_id,
+        agent_did: reference.request.agent_did,
         envelope_hash: intent.envelope_hash.clone(),
         signed_payload_hash: reference.signed_payload_hash,
     }
@@ -64,7 +64,7 @@ pub(super) async fn sent(
         reference.request.request_id == result.request_id
             && reference.request.session_id == result.session_id
             && reference.request.node_did == result.node_did
-            && reference.request.agent_id == result.agent_id,
+            && reference.request.agent_did == result.agent_did,
         "caller submission reply crossed its retained scope"
     );
     result.submission_receipt = Some(receipt(intent, reference));
@@ -118,7 +118,7 @@ pub async fn acknowledge_chat_submission(
             node_did: receipt.node_did,
             request_id: receipt.request_id,
             session_id: receipt.session_id,
-            agent_id: receipt.agent_id,
+            agent_did: receipt.agent_did,
         },
         signed_payload_hash: receipt.signed_payload_hash,
     };

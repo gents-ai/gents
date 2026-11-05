@@ -9,7 +9,7 @@ type NetworkEnrollmentDecision @branchable {
     admin_did: String @index @immutable
     candidate_did: String @index @immutable
     candidate_peer: String @index @immutable
-    owner_agent: String @index @immutable
+    owner_node_did: String @index @immutable
     decision: String @index @immutable
     authorization_sequence: Int @immutable
     authorization_expires_at: DateTime @immutable

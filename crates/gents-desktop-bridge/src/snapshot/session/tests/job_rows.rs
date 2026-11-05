@@ -58,12 +58,12 @@ async fn snapshot_of(
         Some(&page.canonical_dependencies),
         None,
         None,
-        None,
         false,
         true,
         None,
     )
     .await
+    .expect("session snapshot read")
     .expect("session snapshot")
 }
 

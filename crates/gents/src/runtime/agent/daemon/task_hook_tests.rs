@@ -78,7 +78,7 @@ enum Lineage {
 }
 
 struct Harness {
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     agent_config: Arc<ResolvedAgent>,
     calls: Arc<AtomicUsize>,
     marks: tempfile::TempDir,
@@ -104,7 +104,7 @@ impl Harness {
         crate::test_support::install_test_agent(
             &node,
             agent_config.node_did(),
-            &agent_config.agent_id,
+            &agent_config.agent_did,
         )
         .await;
         Self {
@@ -166,7 +166,7 @@ impl Harness {
                 json!({
                     "node_did": owner,
                     "task_id": TASK_ID,
-                    "agent_id": self.agent_config.agent_id,
+                    "agent_did": self.agent_config.agent_did,
                     "prompt_template": "run the gate",
                     "hooks": hooks,
                 }),
@@ -252,7 +252,7 @@ impl Harness {
             request_id,
             &owner,
             &owner,
-            &self.agent_config.agent_id,
+            &self.agent_config.agent_did,
             session_id,
             "run the gate",
             origin,
@@ -323,7 +323,7 @@ impl Harness {
     ) -> AgentDaemon<ScriptedModel> {
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &self.agent_config.system_prompt,
-            &self.agent_config.agent_id,
+            &self.agent_config.agent_did,
             &[],
             false,
             &[],
@@ -1074,7 +1074,7 @@ async fn a_request_bound_to_a_disabled_hookless_task_fails_closed() {
             json!({
                 "node_did": harness.owner(),
                 "task_id": TASK_ID,
-                "agent_id": harness.agent_config.agent_id,
+                "agent_did": harness.agent_config.agent_did,
                 "prompt_template": "run the gate",
                 "enabled": false,
             }),

@@ -9,7 +9,7 @@ import type {
 import {
   nodeReadinessCanConfigureInference,
   projectDeploymentOperationalState,
-  selectedAgentIdForDeployment,
+  selectedAgentDidForDeployment,
   selectedNodeReadinessDecision,
 } from "@source-inc/gents-desktop-client";
 import { projectChatShell } from "@source-inc/gents-desktop-chat";
@@ -18,6 +18,7 @@ function deployment(
   status: AgentReadinessStatusView,
   options: {
     chatSafe?: boolean;
+    runtimeConnection?: DeploymentView["runtimeConnection"];
     nodeDefault?: string | null;
     sourceReason?: AgentReadinessUnknownReasonView;
   } = {},
@@ -25,10 +26,11 @@ function deployment(
   return {
     nodeDid: "did:key:z6MkRemote",
     dialSucceeded: true,
+    runtimeConnection: options.runtimeConnection ?? "connected",
     chatSafe: options.chatSafe ?? true,
     node: {
       nodeDid: "did:key:z6MkRemote",
-      defaultAgentId:
+      defaultAgentDid:
         options.nodeDefault === undefined ? "default" : options.nodeDefault,
     },
     nodeReadiness: {
@@ -42,7 +44,7 @@ function deployment(
     },
     agents: [
       {
-        agentId: "default",
+        agentDid: "default",
         displayName: "Default",
         enabled: false,
         isDefault: true,
@@ -53,7 +55,7 @@ function deployment(
 }
 
 function unavailable(reason: AgentUnavailableReasonView): DeploymentView {
-  return deployment({ state: "unavailable", agentId: "default", reason });
+  return deployment({ state: "unavailable", agentDid: "default", reason });
 }
 
 describe("selectedNodeReadinessDecision", () => {
@@ -77,7 +79,7 @@ describe("selectedNodeReadinessDecision", () => {
 
   it("does not mislabel missing readiness or non-inference failures", () => {
     const missing = deployment(
-      { state: "ready", agentId: "default" },
+      { state: "ready", agentDid: "default" },
       { sourceReason: "readiness_missing" },
     );
     expect(
@@ -119,12 +121,12 @@ describe("selectedNodeReadinessDecision", () => {
   });
 
   it("uses runtime readiness as the sole agent authority", () => {
-    const remote = deployment({ state: "ready", agentId: "default" });
+    const remote = deployment({ state: "ready", agentDid: "default" });
     expect(remote.inferenceBackends).toEqual([]);
     expect(remote.agents[0]?.enabled).toBe(false);
     expect(selectedNodeReadinessDecision(remote, null)).toEqual({
       kind: "ready",
-      agentId: "default",
+      agentDid: "default",
       agentLabel: "Default",
     });
   });
@@ -146,7 +148,7 @@ describe("selectedNodeReadinessDecision", () => {
     (reason) => {
       expect(selectedNodeReadinessDecision(unavailable(reason), null)).toEqual({
         kind: "unavailable",
-        agentId: "default",
+        agentDid: "default",
         agentLabel: "Default",
         reason,
       });
@@ -164,59 +166,66 @@ describe("selectedNodeReadinessDecision", () => {
     "fails closed for the typed unknown reason %s",
     (reason) => {
       const unknown = deployment(
-        { state: "ready", agentId: "default" },
+        { state: "ready", agentDid: "default" },
         { sourceReason: reason },
       );
       expect(selectedNodeReadinessDecision(unknown, null)).toEqual({
         kind: "unknown",
-        agentId: "default",
+        agentDid: "default",
         reason,
       });
     },
   );
 
   it("keeps current readiness ready regardless of observation age", () => {
-    const lagged = deployment({ state: "ready", agentId: "default" });
+    const lagged = deployment({ state: "ready", agentDid: "default" });
     lagged.nodeReadiness.updatedAt = "2000-01-01T00:00:00Z";
     expect(selectedNodeReadinessDecision(lagged, null)).toEqual({
       kind: "ready",
-      agentId: "default",
+      agentDid: "default",
       agentLabel: "Default",
     });
   });
 
   it("keeps an explicit unassigned selection unknown", () => {
-    const current = deployment({ state: "ready", agentId: "default" });
+    const current = deployment({ state: "ready", agentDid: "default" });
     expect(selectedNodeReadinessDecision(current, "unassigned")).toEqual({
       kind: "unknown",
-      agentId: "unassigned",
+      agentDid: "unassigned",
       reason: "agent_not_assigned",
     });
   });
 
   it("falls back to the gossiped agent when the node document is absent", () => {
     const noNodeDefault = deployment(
-      { state: "ready", agentId: "default" },
+      { state: "ready", agentDid: "default" },
       { nodeDefault: null },
     );
     expect(selectedNodeReadinessDecision(noNodeDefault, null)).toEqual({
       kind: "ready",
-      agentId: "default",
+      agentDid: "default",
       agentLabel: "Default",
     });
   });
 
   it("replaces an agent-scoped selection that the next deployment does not assign", () => {
-    const nextNode = deployment({ state: "ready", agentId: "default" });
-    expect(selectedAgentIdForDeployment(nextNode, "previous-agent")).toBe("default");
-    expect(selectedAgentIdForDeployment(nextNode, "default")).toBe("default");
+    const nextNode = deployment({ state: "ready", agentDid: "default" });
+    expect(selectedAgentDidForDeployment(nextNode, "previous-agent")).toBe("default");
+    expect(selectedAgentDidForDeployment(nextNode, "default")).toBe("default");
   });
 
   it.each([
     ["missing", { sourceReason: "readiness_missing" }, "agentUnavailable"],
     ["stale", { sourceReason: "router_generation_stale" }, "agentUnavailable"],
     ["disabled", {}, "agentUnavailable"],
-    ["route-not-ready", { chatSafe: false }, "routeNotReady"],
+    ["pairing-pending", { chatSafe: false }, null],
+    ["runtime-connecting", { runtimeConnection: "connecting" }, "runtimeNotConnected"],
+    [
+      "runtime-disconnected",
+      { runtimeConnection: "disconnected" },
+      "runtimeNotConnected",
+    ],
+    ["runtime-denied", { runtimeConnection: "denied" }, "runtimeNotConnected"],
     ["ready", {}, null],
   ] as const)(
     "gates the empty-backend remote topology when readiness is %s",
@@ -225,10 +234,10 @@ describe("selectedNodeReadinessDecision", () => {
         _name === "disabled"
           ? {
               state: "unavailable",
-              agentId: "default",
+              agentDid: "default",
               reason: "agent_disabled",
             }
-          : { state: "ready", agentId: "default" };
+          : { state: "ready", agentDid: "default" };
       const remote = deployment(status, options);
       expect(remote.inferenceBackends).toEqual([]);
       const projection = projectChatShell({

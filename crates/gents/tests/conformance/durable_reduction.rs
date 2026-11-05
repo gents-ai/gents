@@ -1,6 +1,6 @@
 use super::ReplayAssociations;
 use crate::lean_vocab_test::lean_durable_reduction_cases;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
@@ -92,6 +92,9 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
+        let agent_did = gents::store::identity::provision_agent_identity(&identity)
+            .unwrap()
+            .agent_did;
         let request_doc_id = format!("request-doc-{}", case.request_doc_id);
         let key = reduction_key(
             "did:key:agent",
@@ -113,6 +116,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
             let predecessor = persist(
                 &node,
                 NewProviderContextReduction {
+                    agent_did: &agent_did,
                     node_did: "did:key:agent",
                     requester_did: None,
                     session_id: "session-11",
@@ -147,6 +151,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
             let row = persist(
                 &node,
                 NewProviderContextReduction {
+                    agent_did: &agent_did,
                     node_did: "did:key:agent",
                     requester_did: None,
                     session_id: "session-11",
@@ -189,6 +194,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
         let result = persist(
             &node,
             NewProviderContextReduction {
+                agent_did: &agent_did,
                 node_did: "did:key:agent",
                 requester_did: None,
                 session_id: "session-11",
@@ -282,7 +288,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
             "{} consumption drifted",
             case.name
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     assert!(!rendered_capture_cites_reduction(

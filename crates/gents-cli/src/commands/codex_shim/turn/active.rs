@@ -430,8 +430,12 @@ pub(in crate::commands::codex_shim) async fn interrupt_caused_thread_turn(
     turn_id: &str,
 ) -> Result<()> {
     cancel_stream_control(connection, &thread.session_id, turn_id).await;
-    let interrupted =
-        gents::session::message::interrupt_session(&state.node, &thread.scope()).await?;
+    let interrupted = gents::session::message::interrupt_session(
+        &state.node,
+        state.local_requester_did(),
+        &thread.scope(),
+    )
+    .await?;
     trace::shim_event_fields(
         &state.trace_path,
         "turn_interrupt_caused_thread",
@@ -482,7 +486,7 @@ async fn load_thread_request_rows(
         Box::pin(async move {
             let response=txn.execute(&format!(r#"{{
                 AgentRequest(filter:{{{scope}}},order:[{{created_at:ASC}},{{request_id:ASC}}]){{
-                    _docID request_id node_did requester_did session_id agent_id lifecycle_state superseded_by_request failure_reason input created_at
+                    _docID request_id node_did requester_did session_id agent_did lifecycle_state superseded_by_request failure_reason input created_at
                 }}
             }}"#)).await?;
             let values=response.pointer("/data/AgentRequest").and_then(Value::as_array).context("active request query omitted rows")?;
@@ -659,7 +663,7 @@ mod tests {
             super::super::super::turn_projection::tests::notification_test_state(temp.path()).await;
         let node = state.node.clone();
         let node_did = gents::store::graphql::escape_graphql_string(state.node_did.as_ref());
-        let agent_id = gents::store::graphql::escape_graphql_string(state.agent_id.as_ref());
+        let agent_did = gents::store::graphql::escape_graphql_string(state.agent_did.as_ref());
         for (id, purpose, created_at) in [
             ("normal-turn", "normal", "2026-09-25T00:00:00Z"),
             ("title-audit", "title-audit", "2026-09-25T00:00:01Z"),
@@ -668,7 +672,7 @@ mod tests {
             let purpose = gents::store::graphql::escape_graphql_string(purpose);
             let created_at = gents::store::graphql::escape_graphql_string(created_at);
             let mutation = format!(
-                r#"mutation {{ create_AgentRequest(input: {{request_id: "{id}", purpose: "{purpose}", session_id: "thread", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "{agent_id}", content: "prompt", lifecycle_state: "processing", created_at: "{created_at}"}}) {{_docID}} }}"#
+                r#"mutation {{ create_AgentRequest(input: {{request_id: "{id}", purpose: "{purpose}", session_id: "thread", node_did: "{node_did}", requester_did: "{node_did}", agent_did: "{agent_did}", content: "prompt", lifecycle_state: "processing", created_at: "{created_at}"}}) {{_docID}} }}"#
             );
             gents::store::config_client::ConfigAccess::write_local(
                 &node,
@@ -716,11 +720,11 @@ mod tests {
         let state =
             super::super::super::turn_projection::tests::notification_test_state(temp.path()).await;
         let node_did = state.node_did.to_string();
-        let agent_id = state.agent_id.to_string();
+        let agent_did = state.agent_did.to_string();
         let request = |request_id: String, created_at: String, input: Value| {
             json!({
                 "request_id": request_id, "purpose": "normal", "session_id": "thread",
-                "node_did": node_did, "requester_did": node_did, "agent_id": agent_id,
+                "node_did": node_did, "requester_did": node_did, "agent_did": agent_did,
                 "content": "prompt", "lifecycle_state": "completed",
                 "created_at": created_at, "input": input,
             })

@@ -43,24 +43,8 @@ async fn inference_settings(state: RuntimeHttpState, identity: ExtractIdentity) 
             "The runtime identity is unavailable. Reconnect the runtime.",
         );
     }
-    match runtime.client_observation_authorized(member.as_ref()).await {
-        Ok(true) => {}
-        Ok(false) => {
-            return failure(
-                StatusCode::FORBIDDEN,
-                "This client is no longer authorized. Reconnect it to the runtime.",
-            )
-        }
-        Err(error) => {
-            tracing::warn!(%error, "checking client model-settings authority failed");
-            return failure(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Client authorization is unavailable. Try again shortly.",
-            );
-        }
-    }
-    match load_inference_setup_state(&ConfigAccess::Graphql(state.p2p_graphql), &state.node_did)
-        .await
+    let access = ConfigAccess::local_as(runtime.observation_node().clone(), member.clone());
+    match load_inference_setup_state(&access, &state.node_did).await
     {
         Ok(settings) => Json(InferenceSettingsResponse {
             contract_version: INFERENCE_SETTINGS_CONTRACT_VERSION,

@@ -57,12 +57,15 @@ Do not duplicate changing versions in instructions.
 - The owned loop is the sole provider-input boundary. Durable transcripts may
   be permissive; sanitize and narrow them there.
 - DefraDB authenticates actors as DIDs and enforces document authorization
-  through ACP. Keep Gents node identity bound to those DIDs; do not add a parallel
-  identity or authorization layer. Agents are reusable configuration. The
-  operating convention is one active runtime per node; enforcement is
-  deferred. Do not add host identity, leases, or host-migration machinery. Validate
-  configured paths/resources through existing owners and fail affected work
-  clearly when unavailable. Paths/observations are not portable identity data.
+  through ACP; do not add a parallel identity or authorization layer. User keys
+  stay on clients, which sign user configuration, plugin installs and agent creation.
+  The node key authenticates peer admission and synchronization and owns node-local
+  operational documents not caused by an agent; enrollment grants no document access. Each node-local Agent has a runtime-managed DID and owns the
+  data it creates. Clients connect to its hosting runtime. The operating convention
+  is one active runtime per node; enforcement is deferred. Do not add host identity,
+  leases, or host-migration machinery. Validate configured paths/resources through
+  existing owners and fail affected work clearly when unavailable. Paths and
+  observations are not portable identity data.
 - Tools, MCP services, agent targets, skills, tasks, callbacks, schedules,
   and event sources are documents. Tool groups are nested settings within Tools.
   Extend existing reconcilers and owners instead of adding side channels.
@@ -78,10 +81,10 @@ Do not duplicate changing versions in instructions.
   Agent is its only configuration selection. Title and creation provenance live
   within the session; request state and derived UI observations keep their existing
   owners. Use the canonical protocol session type rather than another writable copy.
-- Client sync has one observation owner: the p2p observability adapter reads
-  DefraDB status, `ClientSyncStateOwner` combines facts, and
-  `project_sync_health` derives product state. Keep runtime readiness separate
-  and do not add UI-local sync heuristics.
+- Discovery and enrollment use P2P; clients read runtime data through authenticated
+  GraphQL and observe it through subscriptions. `ClientSyncStateOwner` combines
+  P2P status facts and `project_sync_health` derives product state. Keep runtime
+  readiness separate and do not add UI-local sync heuristics.
 - Rig is a provider client behind `gents_loop::rig_compat` and
   `gents_loop::provider_input`, re-exported by the inference owner
   (`llm::rig_compat`) and the turn owner (`provider_input`) for callers here. Rig's own types stay inside those two

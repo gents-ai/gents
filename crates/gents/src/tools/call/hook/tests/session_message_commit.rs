@@ -39,7 +39,7 @@ async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str) {
             target_id: "general:general".to_owned(),
             node_did: did.to_owned(),
             target_node_did: did.to_owned(),
-            agent_id: "general".to_owned(),
+            agent_did: "general".to_owned(),
             name: "general".to_owned(),
             description: None,
             tags: Vec::new(),
@@ -62,7 +62,7 @@ async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str) {
         &serde_json::json!({
             "node_did": did,
             "task_id": "goal",
-            "agent_id": "general",
+            "agent_did": "general",
             "prompt_template": "pursue the goal",
             "goal_objective_template": "finish the work"
         }),
@@ -155,7 +155,7 @@ async fn agent_new_inherits_the_signed_caller_directory() {
         crate::KeyIdentity::load_or_create(dir.path().join("test-agent.key"), None).unwrap();
     let did = identity.did().to_owned();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&did)
             .data_path(dir.path())
             .build()
@@ -217,7 +217,7 @@ async fn agent_new_inherits_the_signed_caller_directory() {
             dir.path().to_string_lossy().as_ref()
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -226,7 +226,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     let identity =
         crate::KeyIdentity::load_or_create(dir.path().join("test-agent.key"), None).unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
             .data_path(dir.path())
             .build()
@@ -446,5 +446,5 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     )
     .await;
     assert_eq!(previous[0]["lifecycle_state"], "pending");
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

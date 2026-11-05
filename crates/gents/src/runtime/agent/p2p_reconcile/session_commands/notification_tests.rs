@@ -99,6 +99,7 @@ async fn collection_block_notifications_never_enter_the_command_retry_queue() {
             changes: changes_rx,
         },
         ticks,
+        None,
     )
     .with_subscriber(tracing_subscriber::registry().with(FailedCommands(failures.clone())));
     tokio::pin!(run);
@@ -128,5 +129,5 @@ async fn collection_block_notifications_never_enter_the_command_retry_queue() {
     }
     cancel.cancel();
     run.await.unwrap();
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

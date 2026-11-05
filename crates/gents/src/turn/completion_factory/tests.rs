@@ -16,7 +16,7 @@ fn request() -> AgentRequest {
         request_id: "request-123".to_string(),
         node_did: String::new(),
         requester_did: None,
-        agent_id: "agent-test".to_owned(),
+        agent_did: "agent-test".to_owned(),
         session_id: "session-456".to_string(),
         content: String::new(),
         max_total_tokens: None,
@@ -522,14 +522,19 @@ fn agent_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedA
     let node = Arc::new(RuntimeNode {
         node_did: identity.did().to_string(),
         identity,
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         display_name: None,
         enabled: true,
     });
 
+    let binding = crate::store::identity::provision_agent_identity(node.identity.as_ref()).unwrap();
+    let agent_identity =
+        crate::store::identity::resolve_agent_identity(node.identity.as_ref(), &binding).unwrap();
+    let agent_did = binding.agent_did;
     ResolvedAgent {
         profile_id: None,
-        agent_id: "general".to_string(),
+        agent_did,
+        agent_identity,
         node,
         backend_id: Some("backend-general".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
@@ -690,13 +695,13 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let agent = agent_with_retry(CompletionRetryProfileFields::default());
-        crate::test_support::install_test_agent(&node, agent.node_did(), &agent.agent_id).await;
+        crate::test_support::install_test_agent(&node, agent.node_did(), &agent.agent_did).await;
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "req-budget",
             agent.node_did(),
             agent.node_did(),
-            &agent.agent_id,
+            &agent.agent_did,
             "session-budget",
             "Resume the request",
             "interactive",
@@ -718,7 +723,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
             .unwrap();
         let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
             node.clone(),
-            &agent.agent_id,
+            &agent.agent_did,
             agent.node_did(),
             parent,
             120,
@@ -765,7 +770,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                     request_doc_id: "{doc_id}"
                     call_seq: {index}
                     backend_id: "backend-rehydrate"
-                    agent_id: "agent-rehydrate"
+                    agent_did: "agent-rehydrate"
                     node_did: "{did}"
                     call_kind: "{call_kind}"
                     attempt: 1
@@ -801,7 +806,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                 actual.is_some()
             ),
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -864,7 +869,7 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
         request_id: "req-1".to_string(),
         node_did: "did:key:agent".to_string(),
         requester_did: String::new(),
-        agent_id: "general".to_string(),
+        agent_did: "general".to_string(),
         session_id: "session-1".to_string(),
         model_name: "model".to_string(),
         provider_family: None,
@@ -1184,8 +1189,8 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
         agent.openai_wire_api,
     )
     .estimator_name();
-    let own = agent.agent_id.as_str();
-    for (index, (agent_id, session_id, queued_at, prompt, cached, ratio)) in [
+    let own = agent.agent_did.as_str();
+    for (index, (agent_did, session_id, queued_at, prompt, cached, ratio)) in [
         (own, session, "2026-10-28T10:00:00Z", 15_000, 0, None),
         (own, session, "2026-10-28T11:00:00Z", 12_500, 0, None),
         (
@@ -1229,7 +1234,7 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
                 model_name: "{model}"
                 call_seq: {index}
                 backend_id: "backend-calibration"
-                agent_id: "{agent_id}"
+                agent_did: "{agent_did}"
                 node_did: "{did}"
                 call_kind: "inference"
                 attempt: 1
@@ -1282,7 +1287,7 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
         (15_000, true),
         "each request seeds its own calibration; one request's observations never reach another's"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[test]

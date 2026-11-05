@@ -54,7 +54,7 @@ impl ClientCore {
                     .await?;
                 let (signer, _, _) = self.request_authority(node_did, peer.as_ref()).await?;
                 if let Some(receipt) = gents::goal::recover_session_goal_control(
-                    &self.session_queue_access(node_did),
+                    &self.session_queue_access(node_did)?,
                     signer.as_ref(),
                     command,
                 )
@@ -76,9 +76,9 @@ impl ClientCore {
             if let Some(receipt) = &record.receipt {
                 anyhow::ensure!(
                     self.node_identity
-                        .verify(node_did, &receipt.signing_payload()?, &receipt.signature)
+                        .verify(&receipt.agent_did, &receipt.signing_payload()?, &receipt.signature)
                         .await?,
-                    "retained Goal outcome has no verified runtime signature"
+                    "retained Goal outcome has no verified agent signature"
                 );
             }
         }
@@ -120,9 +120,9 @@ impl ClientCore {
         if let goal_delivery::Decision::Confirmed(_, receipt) = decision {
             anyhow::ensure!(
                 self.node_identity
-                    .verify(node_did, &receipt.signing_payload()?, &receipt.signature)
+                    .verify(&receipt.agent_did, &receipt.signing_payload()?, &receipt.signature)
                     .await?,
-                "retained Goal outcome has no verified runtime signature"
+                "retained Goal outcome has no verified agent signature"
             );
             return Ok(*receipt);
         }
@@ -140,7 +140,7 @@ impl ClientCore {
         super::ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
         let (signer, _, _) = self.request_authority(node_did, peer.as_ref()).await?;
         let receipt = gents::goal::submit_prepared_session_goal_control(
-            &self.session_queue_access(node_did),
+            &self.session_queue_access(node_did)?,
             signer.as_ref(),
             command,
         )
@@ -167,12 +167,12 @@ impl ClientCore {
         session_doc_id: Option<String>,
         expected: Option<GoalRevision>,
         operation: GoalOperation,
-        agent_id: Option<&str>,
+        agent_did: Option<&str>,
         input: RequestInput,
         resume_reference: Option<&GoalSubmissionReference>,
     ) -> Result<SessionGoalControlReceipt> {
         let authored =
-            serde_json::to_vec(&(&session_doc_id, &expected, &operation, agent_id, &input))?;
+            serde_json::to_vec(&(&session_doc_id, &expected, &operation, agent_did, &input))?;
         let intent = goal_delivery::Intent::new(
             self.node_identity.did().into(),
             node_did.into(),
@@ -200,7 +200,7 @@ impl ClientCore {
                     session_doc_id,
                     expected,
                     operation,
-                    agent_id,
+                    agent_did,
                     input,
                     command_id.into(),
                 )

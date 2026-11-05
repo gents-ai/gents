@@ -280,7 +280,6 @@ fn selection(case: &Value) -> HydrationSelection {
             .map(|value| segment(value, selected))
             .collect(),
         publications,
-        ..Default::default()
     }
 }
 

@@ -58,7 +58,7 @@ async fn materialize_session_at(
                 txn,
                 &caused.session_id,
                 &caused.node_did,
-                &caused.agent_id,
+                &caused.agent_did,
                 caused.requester_did.as_deref(),
                 None,
                 crate::request::lifecycle::materialize::created_session_provenance(&caused),
@@ -124,7 +124,7 @@ async fn steer_reachability_matches_lean() {
                     node_did: Some(head.node_did.clone()),
                     session_id: Some(head.session_id.clone()),
                     requester_did: head.requester_did.clone(),
-                    agent_id: Some(head.agent_id.clone()),
+                    agent_did: Some(head.agent_did.clone()),
                     purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
                     execution_origin: Some("interactive".into()),
                     caused_by_parent_request_doc_id: agent.then(|| "parent".into()),
@@ -143,7 +143,12 @@ async fn steer_reachability_matches_lean() {
         .is_ok();
         assert_eq!(actual, case.expected, "{case:?}");
     }
-    message.admission.node.shutdown().await;
+    message
+        .admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -176,7 +181,7 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
         let cause = super::hop_tests::cause(&message, caller.request_hop);
         let target = SessionMessageTarget {
             node_did: caused.node_did.clone(),
-            agent_id: caused.agent_id.clone(),
+            agent_did: caused.agent_did.clone(),
             session_id: caused.session_id.clone(),
         };
         let plan = plan_with_delivery(
@@ -276,7 +281,7 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
             new["interrupt_requested_at"].is_null(),
             "{case:?}, rows={rows:?}"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }
 }
@@ -288,7 +293,7 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
     set_state(&node, &caused.doc_id, "processing").await;
     let cause = SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
-        caller_agent_id: caller.agent_id.clone(),
+        caller_agent_did: caller.agent_did.clone(),
         caller_session_id: caller.session_id.clone(),
         caller_requester_did: caller.requester_did.clone(),
         caller_request_id: caller.request_id.clone(),
@@ -300,7 +305,7 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
     };
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
-        agent_id: caused.agent_id.clone(),
+        agent_did: caused.agent_did.clone(),
         session_id: caused.session_id.clone(),
     };
     let make_plan = || async {
@@ -448,7 +453,7 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         };
         assert_eq!(disposition, modeled.expected, "{name}");
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -458,23 +463,41 @@ async fn only_the_starting_session_may_interrupt() {
     let node = message.admission.node.clone();
     let caller = SessionScope::of_request(&caller);
     let target = SessionScope::of_request(&caused);
-    assert!(interrupt_refusal(&node, &caller, &target)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(interrupt_refusal(
+        &node,
+        node.node_identity_did()
+            .expect("fixture has a registered signing principal"),
+        &caller,
+        &target
+    )
+    .await
+    .unwrap()
+    .is_none());
     let another = SessionScope {
         session_id: "another-session".to_owned(),
         ..caller.clone()
     };
-    assert!(interrupt_refusal(&node, &another, &target)
-        .await
-        .unwrap()
-        .is_some());
-    assert!(interrupt_refusal(&node, &target, &caller)
-        .await
-        .unwrap()
-        .is_some());
-    node.shutdown().await;
+    assert!(interrupt_refusal(
+        &node,
+        node.node_identity_did()
+            .expect("fixture has a registered signing principal"),
+        &another,
+        &target
+    )
+    .await
+    .unwrap()
+    .is_some());
+    assert!(interrupt_refusal(
+        &node,
+        node.node_identity_did()
+            .expect("fixture has a registered signing principal"),
+        &target,
+        &caller
+    )
+    .await
+    .unwrap()
+    .is_some());
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -527,10 +550,16 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
     .unwrap()
     .unwrap();
     assert!(session.provenance.unwrap().creation_receipt.is_some());
-    assert!(interrupt_refusal(&node, &source, &target)
-        .await
-        .unwrap()
-        .is_some());
+    assert!(interrupt_refusal(
+        &node,
+        node.node_identity_did()
+            .expect("fixture has a registered signing principal"),
+        &source,
+        &target
+    )
+    .await
+    .unwrap()
+    .is_some());
     access
         .write(
             "test.restore_creation_cause",
@@ -538,10 +567,16 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
         )
         .await
         .unwrap();
-    assert!(interrupt_refusal(&node, &source, &target)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(interrupt_refusal(
+        &node,
+        node.node_identity_did()
+            .expect("fixture has a registered signing principal"),
+        &source,
+        &target
+    )
+    .await
+    .unwrap()
+    .is_none());
     let mut forged = caused.input.clone();
     forged.session_creation = Some(gents_protocol::request_input::SessionCreationIntent::PluginJob);
     let mutation = format!("mutation($input: JSON) {{update_AgentRequest(docID: \"{}\", input: {{input: $input}}) {{_docID}}}}", escape_graphql_string(&caused.doc_id));
@@ -560,11 +595,17 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
         rejected.to_string().contains("immutable field"),
         "{rejected:#}"
     );
-    assert!(interrupt_refusal(&node, &source, &target)
-        .await
-        .unwrap()
-        .is_none());
-    node.shutdown().await;
+    assert!(interrupt_refusal(
+        &node,
+        node.node_identity_did()
+            .expect("fixture has a registered signing principal"),
+        &source,
+        &target
+    )
+    .await
+    .unwrap()
+    .is_none());
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -769,10 +810,17 @@ async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() 
         .as_array()
         .unwrap()
         .is_empty());
-    assert!(interrupt_refusal(&target, &caller, &child_scope)
-        .await
-        .unwrap()
-        .is_some());
+    assert!(interrupt_refusal(
+        &target,
+        target
+            .node_identity_did()
+            .expect("fixture has a registered signing principal"),
+        &caller,
+        &child_scope
+    )
+    .await
+    .unwrap()
+    .is_some());
 
     for collection in [
         "AgentRequest",
@@ -793,12 +841,27 @@ async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() 
             .collect();
         push(&source.node, &target, &peer, collection, &docs).await;
     }
-    assert!(interrupt_refusal(&target, &caller, &child_scope)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(interrupt_refusal(
+        &target,
+        target
+            .node_identity_did()
+            .expect("fixture has a registered signing principal"),
+        &caller,
+        &child_scope
+    )
+    .await
+    .unwrap()
+    .is_none());
     assert_eq!(
-        interrupt_session(&target, &child_scope).await.unwrap(),
+        interrupt_session(
+            &target,
+            target
+                .node_identity_did()
+                .expect("fixture has a registered signing principal"),
+            &child_scope
+        )
+        .await
+        .unwrap(),
         Some(child.request().request_id.clone())
     );
     let observed = ConfigAccess::local(target.clone())
@@ -813,8 +876,8 @@ async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() 
             .as_str()
             .is_some()
     );
-    target.shutdown().await;
-    source.node.shutdown().await;
+    target.shutdown().await.expect("shut down test node");
+    source.node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&source.path).unwrap();
 }
 
@@ -855,10 +918,16 @@ async fn forged_descriptive_provenance_and_altered_creation_receipt_cannot_grant
         })
         .await
         .unwrap();
-    assert!(interrupt_refusal(&node, &caller_scope, &target_scope)
-        .await
-        .unwrap()
-        .is_some());
+    assert!(interrupt_refusal(
+        &node,
+        node.node_identity_did()
+            .expect("fixture has a registered signing principal"),
+        &caller_scope,
+        &target_scope
+    )
+    .await
+    .unwrap()
+    .is_some());
 
     let human = "unrelated-human-session";
     let provenance = gents_protocol::session::SessionProvenance {
@@ -875,7 +944,7 @@ async fn forged_descriptive_provenance_and_altered_creation_receipt_cannot_grant
             txn.execute_with_variables(
                 "mutation($input: AgentSessionMutationInputArg!) {create_AgentSession(input: $input) {_docID}}",
                 &serde_json::json!({"input": {"node_did": caller.node_did, "session_id": human,
-                    "requester_did": caller.node_did, "agent_id": caller.agent_id,
+                    "requester_did": caller.node_did, "agent_did": caller.agent_did,
                     "created_at": created_at, "provenance": provenance}}),
             ).await
         })
@@ -884,10 +953,16 @@ async fn forged_descriptive_provenance_and_altered_creation_receipt_cannot_grant
         session_id: human.into(),
         ..caller_scope.clone()
     };
-    assert!(interrupt_refusal(&node, &caller_scope, &human_scope)
-        .await
-        .unwrap()
-        .is_some());
+    assert!(interrupt_refusal(
+        &node,
+        node.node_identity_did()
+            .expect("fixture has a registered signing principal"),
+        &caller_scope,
+        &human_scope
+    )
+    .await
+    .unwrap()
+    .is_some());
     let lineage = crate::session::origin::lineage(&access, &caller_scope)
         .await
         .unwrap();
@@ -903,7 +978,7 @@ async fn forged_descriptive_provenance_and_altered_creation_receipt_cannot_grant
             .unwrap(),
         None
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -914,7 +989,7 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
     let scope = SessionScope::of_request(&caused);
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
-        agent_id: caused.agent_id.clone(),
+        agent_did: caused.agent_did.clone(),
         session_id: caused.session_id.clone(),
     };
     crate::goal::set_goal(
@@ -927,7 +1002,17 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
     )
     .await
     .unwrap();
-    assert_eq!(interrupt_session(&node, &scope).await.unwrap(), None);
+    assert_eq!(
+        interrupt_session(
+            &node,
+            node.node_identity_did()
+                .expect("fixture has a registered signing principal"),
+            &scope
+        )
+        .await
+        .unwrap(),
+        None
+    );
     assert_eq!(
         crate::goal::load_canonical_goal(&node, &caused.node_did, &caused.session_id)
             .await
@@ -941,7 +1026,7 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
 
     let cause = SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
-        caller_agent_id: "caller-agent".to_owned(),
+        caller_agent_did: "caller-agent".to_owned(),
         caller_session_id: "caller-session".to_owned(),
         caller_requester_did: None,
         caller_request_id: caller.request_id.clone(),
@@ -968,7 +1053,14 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
     assert_eq!(steer.hop(), 1);
 
     assert_eq!(
-        interrupt_session(&node, &scope).await.unwrap(),
+        interrupt_session(
+            &node,
+            node.node_identity_did()
+                .expect("fixture has a registered signing principal"),
+            &scope
+        )
+        .await
+        .unwrap(),
         Some(caused.request_id.clone())
     );
     assert!(
@@ -980,7 +1072,7 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         .unwrap()
         .is_some()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -1001,6 +1093,8 @@ async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
 
     let receipt = crate::session::stop_session(
         &node,
+        node.node_identity_did()
+            .expect("fixture has a registered signing principal"),
         &caused.node_did,
         &caused.session_id,
         caused.requester_did.as_deref(),
@@ -1011,6 +1105,7 @@ async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
     assert_eq!(receipt.drained_request_ids, vec![caused.request_id.clone()]);
     assert!(crate::session::session_is_stopped(
         &node,
+        &identity::Did::new(caused.agent_did.clone()).unwrap(),
         &caused.node_did,
         &caused.session_id,
         caused.requester_did.as_deref(),
@@ -1030,7 +1125,7 @@ async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
         &node,
         &SessionMessageCause {
             caller_node_did: caller.node_did.clone(),
-            caller_agent_id: "caller-agent".to_owned(),
+            caller_agent_did: "caller-agent".to_owned(),
             caller_session_id: "caller-session".to_owned(),
             caller_requester_did: None,
             caller_request_id: caller.request_id.clone(),
@@ -1042,7 +1137,7 @@ async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
         },
         &SessionMessageTarget {
             node_did: caused.node_did.clone(),
-            agent_id: caused.agent_id.clone(),
+            agent_did: caused.agent_did.clone(),
             session_id: caused.session_id.clone(),
         },
         RenderedBody {
@@ -1059,7 +1154,7 @@ async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
         "late message admission must honor durable stop"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -1073,7 +1168,7 @@ async fn agent_lists_separate_targets_from_messageable_sessions() {
             target_id: "worker".to_owned(),
             node_did: caller.node_did.clone(),
             target_node_did: caused.node_did.clone(),
-            agent_id: caused.agent_id.clone(),
+            agent_did: caused.agent_did.clone(),
             name: "worker".to_owned(),
             description: Some("does the work".to_owned()),
             tags: Vec::new(),
@@ -1081,7 +1176,7 @@ async fn agent_lists_separate_targets_from_messageable_sessions() {
     };
     let listed = agent_list(&node, &caller, &tools).await.unwrap();
     assert_eq!(listed["agents"][0]["agent"], "worker");
-    assert_eq!(listed["agents"][0]["agent_id"], caused.agent_id);
+    assert_eq!(listed["agents"][0]["agent_did"], caused.agent_did);
     assert!(listed.get("sessions").is_none());
     let listed = agent_session_list(&node, &caller, &tools, &AgentSessionListArgs::default())
         .await
@@ -1102,6 +1197,7 @@ async fn agent_lists_separate_targets_from_messageable_sessions() {
         assert!(resolve_send_target(
             &node,
             &caused.node_did,
+            &caused.agent_did,
             &tools,
             session["session_id"].as_str().unwrap()
         )
@@ -1109,7 +1205,7 @@ async fn agent_lists_separate_targets_from_messageable_sessions() {
         .unwrap()
         .is_some());
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -1130,7 +1226,7 @@ fn session_target_authority_matches_lean_owner() {
                 }
                 .to_owned(),
             ),
-            agent_id: "worker".to_owned(),
+            agent_did: "worker".to_owned(),
             created_at: "2026-10-14T00:00:00Z".to_owned(),
             closed_at: None,
             archived_at: None,
@@ -1151,7 +1247,7 @@ fn session_target_authority_matches_lean_owner() {
                     target_id: "worker".to_owned(),
                     node_did: "caller".to_owned(),
                     target_node_did: session.node_did.clone(),
-                    agent_id: "worker".to_owned(),
+                    agent_did: "worker".to_owned(),
                     name: "worker".to_owned(),
                     description: None,
                     tags: Vec::new(),
@@ -1161,7 +1257,7 @@ fn session_target_authority_matches_lean_owner() {
             },
         };
         assert_eq!(
-            session_target_allowed(&session, "caller", &tools),
+            session_target_allowed(&session, "caller", "caller", &tools),
             case.expected_allowed,
             "{case:?}"
         );
@@ -1236,7 +1332,7 @@ async fn session_listing_pages_by_logical_labels_and_compares_timestamp_instants
             );
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -1318,7 +1414,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     for id in candidates {
         assert_eq!(
             listed.contains(&id),
-            resolve_send_target(&node, &caller.node_did, &tools, &id)
+            resolve_send_target(&node, &caller.node_did, &caller.agent_did, &tools, &id)
                 .await
                 .unwrap()
                 .is_some(),
@@ -1357,10 +1453,16 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     );
     assert_eq!(filtered["sessions"][0]["lifecycle_state"], "claimed");
     assert_eq!(filtered["sessions"][0]["can_interrupt"], false);
-    let target = resolve_send_target(&node, &caller.node_did, &tools, "correlated-worker")
-        .await
-        .unwrap()
-        .unwrap();
+    let target = resolve_send_target(
+        &node,
+        &caller.node_did,
+        &caller.agent_did,
+        &tools,
+        "correlated-worker",
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let mut send_call =
         crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(
             node.clone(),
@@ -1377,7 +1479,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
         .unwrap();
     let cause = crate::request::lifecycle::SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
-        caller_agent_id: "caller-agent".to_owned(),
+        caller_agent_did: "caller-agent".to_owned(),
         caller_session_id: "caller-session".to_owned(),
         caller_requester_did: None,
         caller_request_id: caller.request_id.clone(),
@@ -1422,7 +1524,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
         .await
         .unwrap();
     drop(caller_owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
@@ -1515,6 +1617,6 @@ async fn caused_session_records_its_opening_request() {
     );
     materialize_session(&node, &without_call).await;
     assert_eq!(provenance().await, recorded);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }

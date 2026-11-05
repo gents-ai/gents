@@ -4,7 +4,7 @@
 //! `identity::Did` as the DefraDB ACP actor; authorization remains at the node.
 //! Embedded paths default to the node DID and signer; HTTP paths authenticate
 //! as the [`GraphqlEndpoint`]'s DID with a DefraDB bearer; anonymous HTTP
-//! access is read-only because a served home admits writes only from its own DID.
+//! access is subject to DefraDB's native authorization.
 //!
 //! Write conventions (load-bearing — see `AGENTS.md`):
 //! - every interpolated value goes through
@@ -17,20 +17,30 @@
 mod agent_behavior;
 mod application_failure;
 mod common;
+mod client_agent_publication;
+mod client_signed_agent;
+#[cfg(test)]
+mod client_signed_agent_conformance;
 mod desired_state;
 mod error;
 pub(crate) mod event_source_cursor;
 mod graphql;
 mod inference_backend;
 mod inference_profile;
+mod node_permissions;
 mod profile_switch;
 #[cfg(test)]
 mod query_tests;
+mod relationships;
 mod retry;
 mod schema_contract;
 mod schema_install;
 mod schema_management;
+mod self_config_permission;
+mod subscription;
 mod txn;
+pub use acp::nac::NodePermission;
+pub use subscription::GraphqlSubscription;
 pub use txn::TRACING_TARGET as TXN_TRACING_TARGET;
 pub(crate) mod write_telemetry;
 
@@ -59,6 +69,7 @@ pub mod patch;
 
 pub use agent_behavior::write_agent_document;
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
+pub use client_agent_publication::{AgentPublicationObserver, ClientAgentJournal, PublicationStage, PublicationStatus};
 pub use desired_state::apply_desired_state_plan;
 pub use desired_state::plan::{
     stale_expectation, DesiredStateApplyCounts, DesiredStateApplyDocument, DesiredStateApplyPlan,
@@ -102,7 +113,9 @@ pub use txn::{
 };
 
 pub use error::{ConfigClientError, TransactionConflict};
+pub use relationships::ConfigRelationshipGrant;
 pub use retry::TransactionFailure;
+pub use self_config_permission::{AgentSelfConfigPermission, AgentSelfConfigPermissionError};
 pub use write_telemetry::WriteTelemetryError;
 
 mod tools;
@@ -110,7 +123,7 @@ mod tools;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node;
 use futures::future::BoxFuture;
 use gents_protocol::graphql::GraphqlRequestOptions;
 use serde_json::Value;
@@ -122,6 +135,7 @@ pub struct GraphqlEndpoint {
     url: String,
     principal_did: Option<String>,
     delegated_authorization: Option<reqwest::header::HeaderValue>,
+    client_signed_agent_creates: bool,
 }
 
 impl GraphqlEndpoint {
@@ -130,6 +144,7 @@ impl GraphqlEndpoint {
             url: url.into(),
             principal_did: None,
             delegated_authorization: None,
+            client_signed_agent_creates: false,
         }
     }
 
@@ -138,6 +153,7 @@ impl GraphqlEndpoint {
             url: url.into(),
             principal_did: Some(principal_did.into()),
             delegated_authorization: None,
+            client_signed_agent_creates: false,
         }
     }
 
@@ -156,12 +172,32 @@ impl GraphqlEndpoint {
             url: url.into(),
             principal_did: None,
             delegated_authorization: Some(header),
+            client_signed_agent_creates: false,
         })
+    }
+
+    /// Preserve an HTTP caller's verified identity and original bearer. The caller
+    /// must obtain `actor` from DefraDB's authenticated request extractor; this method
+    /// neither verifies credentials nor mints a replacement signature.
+    pub fn with_authenticated_delegation(
+        url: impl Into<String>,
+        authorization: &str,
+        actor: identity::Did,
+    ) -> Result<Self, ConfigClientError> {
+        let mut endpoint = Self::with_delegated_authorization(url, authorization)?;
+        endpoint.principal_did = Some(actor.to_string());
+        Ok(endpoint)
     }
 
     /// **Must end with `/graphql`**: begin/commit/discard derive the REST base by stripping this suffix.
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    /// Require this client principal to sign Agent genesis blocks locally.
+    pub fn with_client_signed_agent_creates(mut self) -> Self {
+        self.client_signed_agent_creates = true;
+        self
     }
 
     pub fn is_anonymous(&self) -> bool {
@@ -266,18 +302,43 @@ impl ConfigAccess {
         Self::Graphql(GraphqlEndpoint::as_principal(url, principal_did))
     }
 
-    pub fn local(node: Arc<EmbeddedNode>) -> Self {
+    pub fn local(node: Arc<Node>) -> Self {
         Self::Local(LocalConfigAccess::new(node))
     }
 
+    /// Bind document reads and writes to this actor across retries and transactions.
+    /// A denied operation retains this identity; it never retries as the node.
+    pub fn local_as(node: Arc<Node>, identity: identity::Did) -> Self {
+        Self::Local(LocalConfigAccess::new(node).with_identity(identity))
+    }
+
+    /// Returns the explicitly selected actor, without interpreting delegated
+    /// bearer contents or substituting the runtime identity.
+    pub fn actor_did(&self) -> Option<String> {
+        match self {
+            Self::Local(local) => local.identity().map(ToString::to_string),
+            Self::Graphql(endpoint) => endpoint.principal_did.clone(),
+        }
+    }
+
     pub fn claimed_local(
-        node: Arc<EmbeddedNode>,
+        node: Arc<Node>,
         claim: crate::store::local::home::StoreLock,
     ) -> Result<Self> {
         Ok(Self::Local(LocalConfigAccess::claimed(node, claim)?))
     }
 
-    pub fn local_node(&self) -> Option<&Arc<EmbeddedNode>> {
+    pub fn claimed_local_as(
+        node: Arc<Node>,
+        claim: crate::store::local::home::StoreLock,
+        identity: identity::Did,
+    ) -> Result<Self> {
+        Ok(Self::Local(
+            LocalConfigAccess::claimed(node, claim)?.with_identity(identity),
+        ))
+    }
+
+    pub fn local_node(&self) -> Option<&Arc<Node>> {
         match self {
             Self::Local(local) => Some(local.node()),
             Self::Graphql(_) => None,
@@ -288,7 +349,7 @@ impl ConfigAccess {
     where
         T: Send + 'static,
         E: From<ConfigClientError> + Send + 'static,
-        F: FnOnce(Arc<EmbeddedNode>) -> Fut + Send + 'static,
+        F: FnOnce(Arc<Node>) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
     {
         match self {
@@ -353,11 +414,18 @@ impl ConfigAccess {
             }
             Self::Local(local) => {
                 let sdl = sdl.to_owned();
+                let actor = local.identity().cloned();
                 local
                     .run_owned(move |node| async move {
-                        node.add_collection(&sdl)
-                            .await
-                            .map_err(|error| ConfigClientError::AddSchema(Box::new(error)))
+                        match actor {
+                            Some(actor) => {
+                                let context = defra_core::RequestContext::default()
+                                    .with_identity(Some(actor.to_string()));
+                                node.add_collection_as(&context, &sdl).await.map(|_| ())
+                            }
+                            None => node.add_collection(&sdl).await,
+                        }
+                        .map_err(|error| ConfigClientError::AddSchema(Box::new(error)))
                     })
                     .await
             }
@@ -379,6 +447,13 @@ impl ConfigAccess {
 
     pub async fn collection_names(&self) -> Result<BTreeSet<String>> {
         match self {
+            Self::Local(local) if local.identity().is_some() => Ok(self
+                .collection_versions()
+                .await?
+                .into_iter()
+                .filter(|version| version["IsActive"].as_bool().unwrap_or(true))
+                .filter_map(|version| version["Name"].as_str().map(str::to_owned))
+                .collect()),
             Self::Local(local) => Ok(local.node().list_collections()?.into_iter().collect()),
             Self::Graphql(graphql) => {
                 let api_base = graphql_api_base(graphql.url())?;
@@ -423,6 +498,24 @@ impl ConfigAccess {
     pub async fn collection_version(&self, collection: &str) -> Result<Option<Value>> {
         crate::store::graphql::validate_collection_identifier(collection)?;
         match self {
+            Self::Local(local) if local.identity().is_some() => {
+                let collection = collection.to_owned();
+                let actor = local.identity().cloned();
+                local
+                    .run_owned(move |node| async move {
+                        let context = defra_core::RequestContext::default()
+                            .with_identity(actor.map(|did| did.to_string()));
+                        let selector = schema::CollectionSelector::with_names(vec![collection]);
+                        node.get_collections_as(&context, &selector)
+                            .await?
+                            .into_iter()
+                            .next()
+                            .map(serde_json::to_value)
+                            .transpose()
+                            .map_err(ConfigClientError::SerializeCollectionVersion)
+                    })
+                    .await
+            }
             Self::Local(local) => local
                 .node()
                 .get_collection(collection)?

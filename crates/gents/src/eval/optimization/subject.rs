@@ -28,7 +28,7 @@ pub struct MaterializedPack {
     pub config: PackConfig,
     pub manifest: PackManifest,
     pub files: BTreeMap<String, Vec<u8>>,
-    pub agent_id: String,
+    pub agent_slot: String,
     pub target: TargetField,
     pub target_id: String,
     pub prompt_asset: Option<String>,
@@ -37,30 +37,30 @@ pub struct MaterializedPack {
 pub fn materialize_pack(
     dir: &Path,
     owner: &str,
-    agent_id: &str,
+    agent_slot: &str,
     target: &JobTarget,
 ) -> Result<MaterializedPack> {
     let pack = load_pack(&CellSource::Directory(dir.to_path_buf()), owner)
         .with_context(|| format!("loading pack {}", dir.display()))?;
 
     let agent = pack
-        .config
-        .agents
-        .iter()
-        .find(|agent| agent.agent_id == agent_id)
-        .with_context(|| format!("pack declares no agent {agent_id:?}"))?;
+        .authored
+        .agent(agent_slot)
+        .with_context(|| format!("pack declares no agent slot {agent_slot:?}"))?;
     let target_id = match target {
         JobTarget::Context => agent
-            .context_id
-            .clone()
-            .with_context(|| format!("agent {agent_id:?} names no context to optimize"))?,
+            .get("context_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .with_context(|| format!("agent slot {agent_slot:?} names no context to optimize"))?,
         JobTarget::Task(task_id) => {
+            let reference = crate::pack::agent_slot_reference(agent_slot);
             pack.config
                 .tasks
                 .iter()
-                .find(|task| &task.task_id == task_id && task.agent_id == agent_id)
+                .find(|task| &task.task_id == task_id && task.agent_did == reference)
                 .with_context(|| {
-                    format!("pack declares no task {task_id:?} of agent {agent_id:?}")
+                    format!("pack declares no task {task_id:?} of agent slot {agent_slot:?}")
                 })?;
             task_id.clone()
         }
@@ -78,7 +78,7 @@ pub fn materialize_pack(
         config: pack.config,
         manifest: pack.manifest,
         files: pack.files,
-        agent_id: agent_id.to_owned(),
+        agent_slot: agent_slot.to_owned(),
         target,
         target_id,
         prompt_asset,
@@ -272,7 +272,7 @@ pub fn materialize_candidate(
     materialize_pack(
         dir,
         owner,
-        &baseline.agent_id,
+        &baseline.agent_slot,
         &baseline.target.job_target(&baseline.target_id),
     )
 }
@@ -332,7 +332,7 @@ pub(crate) mod tests {
             let config: PackConfig = serde_json::from_value(json!({
                 "node": {"node_did": OWNER},
                 "tasks": [{
-                    "node_did": OWNER, "task_id": "target", "agent_id": "monitor",
+                    "node_did": OWNER, "task_id": "target", "agent_did": "gents:agent-slot:monitor",
                     "prompt_template": "Work", "enabled": row.task_enabled,
                 }],
                 "triggers": triggers,
@@ -409,7 +409,7 @@ pub(crate) mod tests {
             serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
         config["tasks"] = json!([{
             "task_id": "plan",
-            "agent_id": "monitor",
+            "agent_did": "gents:agent-slot:monitor",
             "prompt_template": template,
         }]);
         config["event_sources"] = json!([{
@@ -492,7 +492,7 @@ pub(crate) mod tests {
             serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
         config["tasks"].as_array_mut().unwrap().push(json!({
             "task_id": "review",
-            "agent_id": "monitor",
+            "agent_did": "gents:agent-slot:monitor",
             "prompt_template": "./tasks/plan/prompt.md",
         }));
         std::fs::write(&config_path, serde_json::to_vec_pretty(&config).unwrap()).unwrap();

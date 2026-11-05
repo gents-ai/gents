@@ -53,7 +53,7 @@ pub struct RunTimeline {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub request: TimelineRequestRow,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session: Option<TimelineSessionRow>,
@@ -90,7 +90,7 @@ pub struct TimelineRequestRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_did: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,7 +153,7 @@ impl From<gents_protocol::row::AgentRequestRow> for TimelineRequestRow {
             request_id: row.request_id,
             node_did: row.node_did,
             requester_did: row.requester_did,
-            agent_id: row.agent_id,
+            agent_did: row.agent_did,
             session_id: row.session_id,
             content: row.content,
             max_total_tokens: row.max_total_tokens,
@@ -263,7 +263,7 @@ pub struct TimelineInferenceCallRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_did: Option<String>,
     #[serde(default)]
@@ -579,7 +579,7 @@ pub struct TimelineRequestEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -653,7 +653,7 @@ pub struct TimelineInferenceCallEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_did: Option<String>,
     pub call_kind: String,
@@ -833,7 +833,7 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
                 call_state: call.call_state.clone(),
                 failure_reason: call.failure_reason.clone(),
                 backend_id: call.backend_id.clone(),
-                agent_id: call.agent_id.clone(),
+                agent_did: call.agent_did.clone(),
                 node_did: call.node_did.clone(),
                 call_kind: call.call_kind.clone(),
                 priority: call.priority,
@@ -992,7 +992,7 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
         request_doc_id: rows.request.doc_id.clone(),
         session_id,
         node_did: rows.request.node_did.clone(),
-        agent_id: rows.request.agent_id.clone(),
+        agent_did: rows.request.agent_did.clone(),
         request: rows.request,
         session: rows.session,
         child_request_ids,
@@ -1198,7 +1198,7 @@ fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequ
         caused_by_trigger_context: request.caused_by_trigger_context.clone(),
         caused_by_source_doc_id: request.caused_by_source_doc_id.clone(),
         node_did: request.node_did.clone(),
-        agent_id: request.agent_id.clone(),
+        agent_did: request.agent_did.clone(),
         session_id: request.session_id.clone(),
         lifecycle_state: request
             .lifecycle_state
@@ -1525,7 +1525,7 @@ mod tests {
                     session_id: "session".into(),
                     node_did: "projection-owner".into(),
                     requester_did: None,
-                    agent_id: "projection-behavior".into(),
+                    agent_did: "projection-behavior".into(),
                     created_at: "2026-01-01T00:00:00Z".into(),
                     closed_at: None,
                     archived_at: None,
@@ -1540,7 +1540,7 @@ mod tests {
             ..Default::default()
         });
         assert!(timeline.node_did.is_none());
-        assert!(timeline.agent_id.is_none());
+        assert!(timeline.agent_did.is_none());
     }
 
     #[test]
@@ -1637,7 +1637,7 @@ mod tests {
                 attempt: 2,
                 call_state: "completed".to_string(),
                 backend_id: Some("backend-a".to_string()),
-                agent_id: Some("behavior-a".to_string()),
+                agent_did: Some("behavior-a".to_string()),
                 node_did: Some("did:test:agent".to_string()),
                 call_kind: "inference".to_string(),
                 priority: Some(7),
@@ -1667,7 +1667,7 @@ mod tests {
         });
         let inference = inference.expect("inference event");
         assert_eq!(inference.runtime_instance_id.as_deref(), Some("runtime-a"));
-        assert_eq!(inference.agent_id.as_deref(), Some("behavior-a"));
+        assert_eq!(inference.agent_did.as_deref(), Some("behavior-a"));
         assert_eq!(inference.node_did.as_deref(), Some("did:test:agent"));
         assert_eq!(inference.priority, Some(7));
         assert_eq!(inference.queue_depth_at_enqueue, Some(3));
@@ -1687,7 +1687,7 @@ mod tests {
                 doc_id: Some("doc-req-1".to_string()),
                 request_id: "req-1".to_string(),
                 node_did: Some("did:test:amy".to_string()),
-                agent_id: Some("amy".to_string()),
+                agent_did: Some("amy".to_string()),
                 session_id: Some("session-1".to_string()),
                 lifecycle_state: Some(RequestLifecycleState::Completed),
                 caused_by_trigger_id: Some("trigger-1".to_string()),

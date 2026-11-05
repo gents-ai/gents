@@ -1,6 +1,6 @@
 use super::*;
 
-async fn materializer_with_node() -> (Arc<defra_node::EmbeddedNode>, ProductionMaterializer) {
+async fn materializer_with_node() -> (Arc<defra_node::Node>, ProductionMaterializer) {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
@@ -16,7 +16,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
     let owner = snapshot.local_did.clone();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&owner)
             .build()
             .await
@@ -101,7 +101,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
                     txn,
                     &request.session_id,
                     &request.node_did,
-                    &request.agent_id,
+                    &request.agent_did,
                     request.requester_did.as_deref(),
                     None,
                     crate::request::lifecycle::materialize::created_session_provenance(&request),
@@ -122,12 +122,16 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         session_id: "caller".into(),
         ..scope.clone()
     };
-    assert!(
-        crate::session::message::interrupt_refusal(&node, &caller, &scope)
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(crate::session::message::interrupt_refusal(
+        &node,
+        node.node_identity_did()
+            .expect("fixture has a registered signing principal"),
+        &caller,
+        &scope
+    )
+    .await
+    .unwrap()
+    .is_none());
     let mut caller_request = request.clone();
     caller_request.session_id = caller.session_id.clone();
     let tools = crate::tools::surface::AgentToolConfig {
@@ -136,7 +140,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
             target_id: "worker".into(),
             node_did: owner.clone(),
             target_node_did: owner.clone(),
-            agent_id: request.agent_id.clone(),
+            agent_did: request.agent_did.clone(),
             name: "worker".into(),
             description: None,
             tags: Vec::new(),
@@ -170,12 +174,16 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         node_did: "did:other".into(),
         ..caller
     };
-    assert!(
-        crate::session::message::interrupt_refusal(&node, &foreign, &scope)
-            .await
-            .unwrap()
-            .is_some()
-    );
+    assert!(crate::session::message::interrupt_refusal(
+        &node,
+        node.node_identity_did()
+            .expect("fixture has a registered signing principal"),
+        &foreign,
+        &scope
+    )
+    .await
+    .unwrap()
+    .is_some());
     access.write("test.ambiguous_fire", &format!(
         r#"mutation {{create_TriggerFire(input: {{fire_key: "duplicate-fire", owner_did: "{}", request_id: "{}", session_id: "{}", trigger_id: "authority-trigger", task_id: "authority-task"}}) {{_docID}}}}"#,
         escape_graphql_string(&owner), escape_graphql_string(&request.request_id), escape_graphql_string(&scope.session_id)
@@ -242,7 +250,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
                     txn,
                     &request.session_id,
                     &request.node_did,
-                    &request.agent_id,
+                    &request.agent_did,
                     Some("did:wrong:requester"),
                     None,
                     crate::request::lifecycle::materialize::created_session_provenance(&request),
@@ -374,7 +382,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
             "{test_session}"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -390,7 +398,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         emit_outcome: false,
         task_id: "task-goal-release".to_string(),
         name: Some("release task".to_string()),
-        agent_id: "general".to_string(),
+        agent_did: "general".to_string(),
         prompt_template: "implement release".to_string(),
         goal_objective_template: Some("ship release".to_string()),
         goal_token_budget: Some(4_096),
@@ -601,7 +609,7 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
         snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
     let owner = snapshot.local_did.clone();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&owner)
             .build()
             .await
@@ -611,7 +619,7 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let session = "replaced-task-goal-session";
-    crate::session::ensure_session_with_agent_id_and_requester_did(
+    crate::session::ensure_session_with_agent_did_and_requester_did(
         &node,
         session,
         &owner,
@@ -759,7 +767,7 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
             .goal_id,
         replacement.goal_id
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -780,7 +788,7 @@ async fn goal_task_identity_and_recovery_are_scoped_by_node_did() {
         emit_outcome: false,
         task_id: "shared-task-id".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: "general".to_string(),
         prompt_template: "shared prompt".to_string(),
         goal_objective_template: Some("shared objective".to_string()),
         goal_token_budget: None,
@@ -855,7 +863,7 @@ async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id(
         emit_outcome: false,
         task_id: "foreign-collision-task".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: "general".to_string(),
         prompt_template: "prompt".to_string(),
         goal_objective_template: Some("objective".to_string()),
         goal_token_budget: None,
@@ -870,7 +878,7 @@ async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id(
                 request_id: "{}",
                 purpose: "normal",
                 node_did: "did:key:foreign-task-owner",
-                agent_id: "general",
+                agent_did: "general",
                 session_id: "{}",
                 retry_key: "{}",
                 content: "foreign collision",
@@ -899,7 +907,7 @@ async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id(
 }
 
 async fn create_request(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     request_id: &str,
     node_did: &str,
     lifecycle_state: &str,
@@ -919,7 +927,7 @@ async fn create_request(
                 request_id: "{request_id}",
                 purpose: "normal",
                 node_did: "{node_did}",
-                agent_id: "general",
+                agent_did: "general",
                 session_id: "{request_id}",
                 content: "production marker test",
                 lifecycle_state: "{lifecycle_state}",
@@ -1159,7 +1167,7 @@ fn workspace_writer_task() -> ResolvedTask {
         emit_outcome: false,
         task_id: "task-ws".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: "general".to_string(),
         prompt_template: "patch".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -1173,7 +1181,7 @@ fn writer_context(workspace_id: &str, owner: &str) -> String {
 }
 
 async fn insert_ready_workspace(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     workspace_id: &str,
     owner: &str,
     writer_principal: &str,
@@ -1208,7 +1216,7 @@ async fn insert_ready_workspace(
 }
 
 async fn workspace_requests(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     workspace_id: &str,
 ) -> Vec<serde_json::Value> {
     let query = format!(
@@ -1508,7 +1516,7 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
 }
 
 async fn claimed_trigger_request(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     request_id: &str,
     node_did: &str,
 ) -> crate::request::lifecycle::RequestLifecycle {
@@ -1549,7 +1557,7 @@ async fn claimed_trigger_request(
 }
 
 async fn canonical_partial_streams(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     row: &gents_protocol::row::AgentRequestRow,
 ) -> (String, String) {
     use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
@@ -1724,7 +1732,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
             assert!(crate::triggers::engine::durable::stage_fire_receipt(txn, &fire).await?);
             txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) {create_AgentRequest(input: $input) {_docID}}", &serde_json::json!({"input": {
                 "request_id": fire.request_id, "node_did": fire.identity.owner_did,
-                "session_id": fire.session_id, "agent_id": "general", "purpose": "normal",
+                "session_id": fire.session_id, "agent_did": "general", "purpose": "normal",
                 "lifecycle_state": "processing", "caused_by_trigger_id": "replay-trigger",
                 "created_at": fire.created_at
             }})).await?;
@@ -1735,7 +1743,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
     let engine = TriggerEngine::new(rx, Arc::new(materializer));
     let mut task = resolved_task("{{ doc.field_added_after_admission }}");
     task.task_id = "replay-task".into();
-    task.agent_id = "general".into();
+    task.agent_did = "general".into();
     let result = engine.dispatch(FireIntent {
         trigger_id: Some("replay-trigger".into()), trigger_kind: TriggerKind::Event,
         task, concurrency: ConcurrencyMode::LatestOnly,
@@ -1802,7 +1810,7 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
             assert!(crate::triggers::engine::durable::stage_fire_receipt(txn, &fire).await?);
             txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) {create_AgentRequest(input: $input) {_docID}}", &serde_json::json!({"input": {
                 "request_id": fire.request_id, "node_did": fire.identity.owner_did,
-                "session_id": fire.session_id, "agent_id": "general", "purpose": "normal",
+                "session_id": fire.session_id, "agent_did": "general", "purpose": "normal",
                 "lifecycle_state": "processing", "caused_by_trigger_id": "replay-trigger",
                 "created_at": fire.created_at
             }})).await?;
@@ -1813,7 +1821,7 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
     let engine = TriggerEngine::new(rx, Arc::new(materializer));
     let mut task = resolved_task("{{ doc.field_added_after_admission }}");
     task.task_id = "replay-task".into();
-    task.agent_id = "general".into();
+    task.agent_did = "general".into();
     let result = engine.dispatch(FireIntent {
         trigger_id: Some("replay-trigger".into()), trigger_kind: TriggerKind::Schedule,
         task, concurrency: ConcurrencyMode::LatestOnly,
@@ -1853,7 +1861,7 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
         ("closed", "general", true),
         ("foreign-owner", "general", false),
     ] {
-        crate::session::ensure_session_with_agent_id_and_requester_did(
+        crate::session::ensure_session_with_agent_did_and_requester_did(
             &node,
             target,
             if target == "foreign-owner" {

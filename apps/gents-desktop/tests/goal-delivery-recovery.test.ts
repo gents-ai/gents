@@ -39,7 +39,7 @@ function fixture(sessionId: string | null = null) {
     deployments: [
       {
         nodeDid: "node",
-        node: { nodeDid: "node", defaultAgentId: "agent" },
+        node: { nodeDid: "node", defaultAgentDid: "agent" },
         agents: [],
         sessions: [],
         mailboxItems: [],

@@ -72,8 +72,8 @@ export function createDesktopApiAdapter(
         nodeDid,
         requestId,
       }),
-    explainToolSurface: (nodeDid, agentId) =>
-      invokeDesktop("desktop_tool_surface_explain", { nodeDid, agentId }),
+    explainToolSurface: (nodeDid, agentDid) =>
+      invokeDesktop("desktop_tool_surface_explain", { nodeDid, agentDid }),
     fetchNetworkStatus: () => invokeDesktop("desktop_network_status"),
     fetchSessionContextDetails: (request) =>
       invokeDesktop("desktop_session_context_details", { request }),
@@ -85,8 +85,8 @@ export function createDesktopApiAdapter(
         timelineLimit: timelinePage?.limit,
         timelineBeforeItemKey: timelinePage?.beforeItemKey ?? null,
       }),
-    retrySessionHydration: (sessionId, nodeDid) =>
-      invokeDesktop("desktop_session_hydration_retry", {
+    reloadSession: (sessionId, nodeDid) =>
+      invokeDesktop("desktop_session_reload", {
         sessionId,
         nodeDid: nodeDid ?? null,
       }),
@@ -172,6 +172,7 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_default_agent_set", {
         request,
       }),
+    provisionAgentIdentity: (nodeDid) => invokeDesktop("desktop_agent_identity_provision", { nodeDid }),
     saveAgentConfig: (request) =>
       invokeDesktop("desktop_agent_save", {
         request,

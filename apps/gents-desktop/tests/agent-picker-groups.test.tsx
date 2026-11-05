@@ -8,8 +8,8 @@ import { deployment } from "./config-panel-wiring/fixtures";
 
 afterEach(() => vi.unstubAllGlobals());
 
-const agent = (agentId: string, displayName: string, extra = {}) => ({
-  agentId,
+const agent = (agentDid: string, displayName: string, extra = {}) => ({
+  agentDid,
   displayName,
   description: `${displayName} does things.`,
   enabled: true,
@@ -18,11 +18,11 @@ const agent = (agentId: string, displayName: string, extra = {}) => ({
   ...extra,
 });
 
-const session = (sessionId: string, agentId: string, createdAt: string, over = {}) =>
+const session = (sessionId: string, agentDid: string, createdAt: string, over = {}) =>
   ({
     sessionId,
     nodeDid: deployment.nodeDid,
-    agentId,
+    agentDid,
     createdAt,
     startedBy: null,
     taskId: null,
@@ -31,7 +31,7 @@ const session = (sessionId: string, agentId: string, createdAt: string, over = {
   }) as SessionSummary;
 
 const open = async (
-  agentId = deployment.agents[0]!.agentId,
+  agentDid = deployment.agents[0]!.agentDid,
   sessions: SessionSummary[] = [],
 ) => {
   const store = new Map<string, string>();
@@ -45,12 +45,12 @@ const open = async (
       agent("worker", "Pack worker", { tags: ["gents:pack:demo"] }),
       agent("lister", "Lister"),
       agent("reviewer", "Reviewer"),
-      agent(deployment.agents[0]!.agentId, "The Engineer", { isDefault: true }),
+      agent(deployment.agents[0]!.agentDid, "The Engineer", { isDefault: true }),
     ].map((a) => ({ ...deployment.agents[0]!, ...a })),
   };
   renderIn(
     testApp({ deployments: [node({ sessions })] }),
-    <AgentPicker deployment={view} agentId={agentId} onChange={vi.fn()} />,
+    <AgentPicker deployment={view} agentDid={agentDid} onChange={vi.fn()} />,
   );
   await userEvent.setup().click(screen.getByRole("button", { name: "Agent" }));
   return screen.getByRole("listbox", { name: "Agent" });
@@ -76,7 +76,7 @@ describe("the agent picker", () => {
     const list = await open(undefined, [
       session("s1", "lister", "2026-11-01T09:00:00Z"),
       session("s2", "reviewer", "2026-11-01T10:00:00Z"),
-      session("s3", deployment.agents[0]!.agentId, "2026-11-01T11:00:00Z"),
+      session("s3", deployment.agents[0]!.agentDid, "2026-11-01T11:00:00Z"),
       /* started by another session or a task: not the person's pick */
       session("s4", "worker", "2026-11-01T12:00:00Z", {
         startedBy: { sessionId: "s2" },

@@ -60,11 +60,12 @@ pub async fn validate_position(read: &impl ConfigRead, row: &AgentRequestRow) ->
                 && previous.lifecycle_state == Some(RequestLifecycleState::Superseded)
                 && previous.superseded_by_request_doc_id == current.doc_id
                 && previous.failure_reason.as_deref() == Some(super::management::REPLACED_REASON)
-                && previous.admission_signer_did == previous.requester_did
+                && (previous.admission_kind.as_deref() == Some("client")
+                    || previous.admission_signer_did == previous.requester_did)
                 && previous.node_did == current.node_did
                 && previous.requester_did == current.requester_did
                 && previous.session_id == current.session_id
-                && previous.agent_id == current.agent_id
+                && previous.agent_did == current.agent_did
                 && previous.workspace_id == current.workspace_id
                 && previous.workspace_owner_node_did == current.workspace_owner_node_did
                 && previous.workspace_authority == current.workspace_authority
@@ -96,7 +97,7 @@ pub(crate) async fn effective_slots(
     let response = txn
         .execute(&format!(
             r#"{{ AgentRequest(docIDs: {literal}) {{
-            _docID request_id node_did requester_did session_id agent_id input
+            _docID request_id node_did requester_did session_id agent_did input
             workspace_id workspace_owner_node_did workspace_authority workspace_seal_hash
         }} }}"#,
         ))
@@ -131,7 +132,7 @@ mod tests {
 
     #[tokio::test]
     async fn effective_slot_batch_uses_only_found_physical_requests() {
-        use crate::defra_node::EmbeddedNode;
+        use crate::defra_node::Node as EmbeddedNode;
         use crate::store::config_client::ConfigAccess;
 
         let dir = tempfile::tempdir().unwrap();
@@ -154,7 +155,7 @@ mod tests {
                 r#"mutation {{ create_AgentRequest(input: {{
                     purpose: "normal", request_id: "{request_id}",
                     node_did: "{node_did}", requester_did: "did:test:requester",
-                    agent_id: "worker", session_id: "{session_id}", content: "work",
+                    agent_did: "worker", session_id: "{session_id}", content: "work",
                     lifecycle_state: "completed", backend_id: "",
                     execution_origin: "interactive", failure_reason: "",
                     created_at: "2026-10-10T00:00:00Z", retry_count: 0, max_retries: 3
@@ -188,6 +189,6 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(slots, vec![(requested.clone(), requested)]);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 }

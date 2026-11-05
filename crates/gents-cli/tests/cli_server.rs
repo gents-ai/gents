@@ -11,13 +11,11 @@ use std::time::{Duration, Instant};
 use std::process::Command;
 
 use anyhow::{anyhow, Context, Result};
-use gents::default_agent_id_for_node;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-fn generated_tools_id_for_agent(node_did: &str) -> String {
-    let default_agent_id = default_agent_id_for_node(node_did);
-    format!("{default_agent_id}-tools")
+fn generated_tools_id_for_agent(agent_did: &str) -> String {
+    format!("{agent_did}-tools")
 }
 
 fn find_snapshot_row<'a>(
@@ -53,7 +51,7 @@ async fn wait_for_inference_call_state(
                     ) {{
                         request_id
                         backend_id
-                        agent_id
+                        agent_did
                         call_state
                     }}
                 }}"#,
@@ -94,7 +92,7 @@ async fn active_inference_calls_for_backend(graphql: &str, backend_id: &str) -> 
                 ) {{
                     request_id
                     backend_id
-                    agent_id
+                    agent_did
                     call_state
                 }}
             }}"#,
@@ -117,12 +115,12 @@ async fn active_inference_calls_for_backend(graphql: &str, backend_id: &str) -> 
         .collect())
 }
 
-fn count_inference_calls(rows: &[Value], agent_id: Option<&str>, call_state: &str) -> i64 {
+fn count_inference_calls(rows: &[Value], agent_did: Option<&str>, call_state: &str) -> i64 {
     rows.iter()
         .filter(|row| {
             row.get("call_state").and_then(Value::as_str) == Some(call_state)
-                && agent_id.is_none_or(|expected| {
-                    row.get("agent_id").and_then(Value::as_str) == Some(expected)
+                && agent_did.is_none_or(|expected| {
+                    row.get("agent_did").and_then(Value::as_str) == Some(expected)
                 })
         })
         .count() as i64
@@ -207,7 +205,7 @@ async fn server_sigterm_runs_the_graceful_shutdown_path() -> Result<()> {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
-    use gents::defra_node::{EmbeddedNode, StorageBackend};
+    use gents::defra_node::{Node as EmbeddedNode, StorageBackend};
     use gents_protocol::row::{
         decode_node_readiness_snapshot, NodeReadinessProcessState, NodeReadinessRow,
     };
@@ -284,7 +282,7 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
             escape_graphql_string(&node_did),
         ))
         .await;
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     anyhow::ensure!(
         !response.has_errors(),
         "reading agent readiness: {:?}",
@@ -691,7 +689,7 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
         .context("inference_profiles is not an array")?
         .push(profile);
     let mut agent = config["agents"][0].clone();
-    agent["agent_id"] = Value::String(GROK_BEHAVIOR.to_string());
+    agent["agent_did"] = Value::String(GROK_BEHAVIOR.to_string());
     agent["inference_profile_id"] = Value::String(applied_profile);
     config["agents"]
         .as_array_mut()
@@ -711,7 +709,7 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
             "--grok-shim",
             "--grok-shim-socket-path",
             socket_path.to_str().context("socket path is not UTF-8")?,
-            "--grok-shim-agent-id",
+            "--grok-shim-agent-did",
             GROK_BEHAVIOR,
         ],
         &[],
@@ -761,7 +759,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let default_agent_id = default_agent_id_for_node(&node_did);
+    let default_agent_did = agent_did_from_init(&init)?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -949,9 +947,9 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
 
     for mutation in [
         format!(
-            r#"mutation {{ create_AgentSession(input: {{ session_id: "self-budget-session", node_did: "{}", agent_id: "{}", created_at: "2026-06-02T09:59:00Z" }}) {{ _docID }} }}"#,
+            r#"mutation {{ create_AgentSession(input: {{ session_id: "self-budget-session", node_did: "{}", agent_did: "{}", created_at: "2026-06-02T09:59:00Z" }}) {{ _docID }} }}"#,
             escape_graphql_string(&node_did),
-            escape_graphql_string(&default_agent_id),
+            escape_graphql_string(&default_agent_did),
         ),
         format!(
             r#"mutation {{ create_AgentRequest(input: {{purpose: "normal",  request_id: "self-budget-req", node_did: "{node_did}", session_id: "self-budget-session", lifecycle_state: "completed", created_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
@@ -1060,9 +1058,9 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "process_state": "ready",
         "active_generation": 1,
         "router_generation": 1,
-        "default_agent_id": "foreign-agent",
+        "default_agent_did": "foreign-agent",
         "agents": [{
-            "agent_id": "foreign-agent",
+            "agent_did": "foreign-agent",
             "state": "ready",
             "reason": null,
         }],
@@ -1071,7 +1069,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     let foreign_readiness_updated_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let foreign_readiness_snapshot = escape_graphql_string(&foreign_readiness_snapshot);
     for mutation in [
-        r#"mutation { create_AgentRequest(input: {purpose: "normal",  request_id: "foreign-metrics-req", node_did: "did:test:foreign-cli", agent_id: "foreign-agent", session_id: "foreign-metrics-session", lifecycle_state: "processing", created_at: "2026-06-02T11:00:00Z" }) { _docID } }"#.to_string(),
+        r#"mutation { create_AgentRequest(input: {purpose: "normal",  request_id: "foreign-metrics-req", node_did: "did:test:foreign-cli", agent_did: "foreign-agent", session_id: "foreign-metrics-session", lifecycle_state: "processing", created_at: "2026-06-02T11:00:00Z" }) { _docID } }"#.to_string(),
         r#"mutation { create_AgentToolCall(input: { tool_call_key: "foreign-metrics-session:tc-foreign", request_id: "foreign-metrics-req", request_doc_id: "", session_id: "foreign-metrics-session", node_did: "did:test:foreign-cli", tool_name: "bash", tool_call_id: "tc-foreign", status: "running", lifecycle_state: "running", started_at: "2026-06-02T10:00:00Z" }) { _docID } }"#.to_string(),
         r#"mutation { create_ToolServiceHealthState(input: { service_id: "runtime-mcp-pool-obs", node_did: "did:test:foreign-cli", endpoint: "http://127.0.0.1:9/mcp", status: "unreachable", tool_count: 5, failure_count: 9, k_max: 3, last_probe_at: "2026-06-06T00:00:00Z", last_seen: "2026-06-06T00:00:00Z", updated_at: "2026-06-06T00:00:00Z" }) { _docID } }"#.to_string(),
         r#"mutation {
@@ -1540,11 +1538,11 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
         .to_string();
-    let default_agent_id = init
-        .pointer("/init/default_agent_id")
+    let default_agent_did = init
+        .pointer("/init/default_agent_did")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| default_agent_id_for_node(&node_did));
+        .context("init output missing provisioned default agent")?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -1616,8 +1614,8 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
                 active_calls.clone(),
                 backend_running,
                 backend_queued,
-                count_inference_calls(&active_calls, Some(&default_agent_id), "running"),
-                count_inference_calls(&active_calls, Some(&default_agent_id), "queued"),
+                count_inference_calls(&active_calls, Some(&default_agent_did), "running"),
+                count_inference_calls(&active_calls, Some(&default_agent_did), "queued"),
             );
         }
         if Instant::now() >= stable_deadline {
@@ -1690,7 +1688,7 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
         Some(true)
     );
 
-    let agent = find_snapshot_row(&snapshot, "agents", "agent_id", &default_agent_id)?;
+    let agent = find_snapshot_row(&snapshot, "agents", "agent_did", &default_agent_did)?;
     assert_eq!(
         agent.get("backend_id").and_then(Value::as_str),
         Some(backend_id.as_str())
@@ -1887,7 +1885,7 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let default_agent_id = default_agent_id_for_node(&node_did);
+    let default_agent_did = agent_did_from_init(&init)?;
     let (mut serve, readiness) = p2p_bind::spawn_observed_server(
         &home_dir,
         port,
@@ -1916,8 +1914,8 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
         Some(graphql.as_str())
     );
     assert_eq!(
-        readiness.get("default_agent_id").and_then(Value::as_str),
-        Some(default_agent_id.as_str())
+        readiness.get("default_agent_did").and_then(Value::as_str),
+        Some(default_agent_did.as_str())
     );
     assert_eq!(
         readiness.get("p2p_transport").and_then(Value::as_str),
@@ -2276,7 +2274,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
         .to_string();
-    let tools_id = generated_tools_id_for_agent(&node_did);
+    let tools_id = generated_tools_id_for_agent(&agent_did_from_init(&init)?);
 
     let (_serve, readiness) = spawn_server_with_ready_json(
         &home_dir,
@@ -3051,7 +3049,7 @@ async fn owner_reads_job_fields() -> Result<()> {
         let mutation = format!(
             r#"mutation {{ create_AgentRequest(input: {{
                 request_id: "{request}", purpose: "normal", node_did: "{node_did}",
-                agent_id: "default", session_id: "{session}", retry_key: "{retry}",
+                agent_did: "default", session_id: "{session}", retry_key: "{retry}",
                 content: "child {slot}", lifecycle_state: "failed", failure_reason: "seeded",
                 caused_by_parent_tool_call_doc_id: "{row}",
                 created_at: "2026-06-01T10:01:00Z", terminalized_at: "2026-06-01T10:02:00Z"

@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter};
 
 use crate::request::lifecycle::execution_policy::{authorize_output_append, LeaseObservation};
 use crate::session::canonical_rows::{
-    output_segment_create_variables, OutputSegmentRow, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    output_segment_bound_variables, OutputSegmentRow, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::store::graphql::created_doc_id;
@@ -18,34 +18,52 @@ use super::{
 
 pub(crate) async fn append_provider_segment(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
     generation: &str,
     prepared: &OutputSegment,
 ) -> Result<String> {
-    ConfigAccess::transact_local_idempotent(
+    let result = ConfigAccess::transact_local_idempotent(
         node,
-        None,
+        Some(actor.clone()),
         IdempotentTransactionRetry::Standard,
         "streaming.append_provider_segment",
         |txn| Box::pin(async move { append_in_txn(txn, generation, prepared).await }),
     )
-    .await
+    .await?;
+    crate::session::child_ownership::publish_agent_session_child_relationships(
+        node,
+        &prepared.node_did,
+        &actor,
+        &prepared.session_id,
+    )
+    .await?;
+    Ok(result)
 }
 
 #[cfg(test)]
 pub(crate) async fn append_provider_segment_at(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
     generation: &str,
     prepared: &OutputSegment,
     now: DateTime<Utc>,
 ) -> Result<String> {
-    ConfigAccess::transact_local_idempotent(
+    let result = ConfigAccess::transact_local_idempotent(
         node,
-        None,
+        Some(actor.clone()),
         IdempotentTransactionRetry::Standard,
         "streaming.append_provider_segment",
         |txn| Box::pin(async move { append_in_txn_at(txn, generation, prepared, now).await }),
     )
-    .await
+    .await?;
+    crate::session::child_ownership::publish_agent_session_child_relationships(
+        node,
+        &prepared.node_did,
+        &actor,
+        &prepared.session_id,
+    )
+    .await?;
+    Ok(result)
 }
 
 pub(crate) async fn append_in_txn(
@@ -121,7 +139,7 @@ async fn append_in_txn_with_time(
     let result = txn
         .execute_with_variables(
             CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-            &output_segment_create_variables(prepared)?,
+            &output_segment_bound_variables(txn, prepared).await?,
         )
         .await?;
     let doc_id = created_doc_id(&result, "AgentOutputSegment")?;

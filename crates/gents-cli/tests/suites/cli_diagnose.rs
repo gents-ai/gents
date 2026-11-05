@@ -185,15 +185,15 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
         Some("unknown")
     );
 
-    let default_agent_id = gents::default_agent_id_for_node(&node_did);
+    let default_agent_did = agent_did_from_init(&init)?;
     let stale_degraded_snapshot = serde_json::json!({
         "format_version": gents_protocol::node_readiness::NODE_READINESS_FORMAT_VERSION,
         "process_state": "ready",
         "active_generation": 1,
         "router_generation": 1,
-        "default_agent_id": default_agent_id,
+        "default_agent_did": default_agent_did,
         "agents": [{
-            "agent_id": default_agent_id,
+            "agent_did": default_agent_did,
             "state": "unavailable",
             "reason": "backend_disabled",
         }],

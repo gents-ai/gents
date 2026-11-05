@@ -1,4 +1,4 @@
-type EvalVerdict @branchable @index(fields: ["owner_node_did", "verdict_id"], unique: true) {
+type EvalVerdict @index(fields: ["owner_node_did", "verdict_id"], unique: true) {
     verdict_id: String @immutable
     owner_node_did: String @index @immutable
     run_id: String @index @immutable

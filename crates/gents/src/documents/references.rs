@@ -131,11 +131,11 @@ impl ConfigReferences {
             .collect()
     }
 
-    pub(crate) fn agent_profiles(&self, agent_id: &str) -> Vec<String> {
+    pub(crate) fn agent_profiles(&self, agent_did: &str) -> Vec<String> {
         let get = |collection: Collection, id: Option<&str>| {
             self.documents.get(&(collection, id?.to_owned()))
         };
-        let Some(agent) = get(Collection::Agent, Some(agent_id)) else {
+        let Some(agent) = get(Collection::Agent, Some(agent_did)) else {
             return Vec::new();
         };
         let compaction = get(Collection::AgentContext, agent["context_id"].as_str())
@@ -260,10 +260,10 @@ impl ConfigReferences {
                 let doc: Node = decode(value)?;
                 optional(
                     Collection::Agent,
-                    doc.default_agent_id.as_deref(),
-                    "default_agent_id",
+                    doc.default_agent_did.as_deref(),
+                    "default_agent_did",
                 )?;
-                if let Some(default) = doc.default_agent_id.as_deref() {
+                if let Some(default) = doc.default_agent_did.as_deref() {
                     let agent: Agent =
                         decode(&self.documents[&(Collection::Agent, default.to_owned())])?;
                     ensure!(
@@ -364,13 +364,13 @@ impl ConfigReferences {
             Collection::AgentTarget => {
                 let doc: AgentTargetDocument = decode(value)?;
                 ensure!(
-                    !doc.target_node_did.trim().is_empty() && !doc.agent_id.trim().is_empty(),
-                    "AgentTarget {id} requires target_node_did and agent_id"
+                    !doc.target_node_did.trim().is_empty() && !doc.agent_did.trim().is_empty(),
+                    "AgentTarget {id} requires target_node_did and agent_did"
                 );
                 // Same-owner targets close legal agent/context/tools cycles;
                 // foreign targets are checked by delegation admission under ACP.
                 if doc.target_node_did == self.node_did {
-                    require(Collection::Agent, &doc.agent_id, "agent_id")?;
+                    require(Collection::Agent, &doc.agent_did, "agent_did")?;
                 }
             }
             Collection::InferenceProfile => {
@@ -413,12 +413,12 @@ impl ConfigReferences {
             Collection::ProjectionAcpBinding => {
                 let doc: ProjectionAcpBinding = decode(value)?;
                 doc.validate()?;
-                optional(Collection::Agent, doc.agent_id.as_deref(), "agent_id")?;
+                optional(Collection::Agent, doc.agent_did.as_deref(), "agent_did")?;
             }
             Collection::Task => {
                 let task: Task = decode(value)?;
                 task.validate()?;
-                require(Collection::Agent, &task.agent_id, "agent_id")?;
+                require(Collection::Agent, &task.agent_did, "agent_did")?;
             }
             Collection::Trigger => {
                 let doc: Trigger = decode(value)?;
@@ -522,6 +522,7 @@ impl ConfigReferences {
             },
             Collection::CallbackBinding => {
                 let doc: CallbackBinding = decode(value)?;
+                require(Collection::Agent, &doc.agent_did, "agent_did")?;
                 doc.projected_fields()?;
                 require(
                     Collection::EventSource,

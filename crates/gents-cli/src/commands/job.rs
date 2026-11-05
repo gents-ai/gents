@@ -6,7 +6,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use gents::store::config_client::ConfigAccess;
-use gents::tools::background::job::control::control;
 use gents::tools::background::job::dispatch::split_address;
 use gents::tools::background::job::view::{
     list_jobs, load_job_view, JobFilter, JobKey, StateFilter,
@@ -14,7 +13,7 @@ use gents::tools::background::job::view::{
 use gents::tools::background::status::ProcessControlScope;
 use gents_protocol::job::{
     JobChildState, JobControlKind, JobControlOutcome, JobOrigin, JobPauseReason, JobPhaseState,
-    JobReadError, JobState, JobView,
+    JobReadError, JobState, JobView, JOB_CONTROL_PATH,
 };
 
 use serde_json::{json, Value};
@@ -254,11 +253,11 @@ async fn job_show(args: JobShowArgs) -> Result<()> {
     let format = args
         .output
         .ensure_supported("job show", &[OutputFormat::Text, OutputFormat::Json])?;
-    let actor = resolve_node_did(args.scope.home.as_deref(), args.scope.node_did.as_deref())
+    let node_did = resolve_node_did(args.scope.home.as_deref(), args.scope.node_did.as_deref())
         .context("resolving job owner node_did")?;
     let (access, _home_dir) =
         resolve_config_access(args.scope.home.as_deref(), args.scope.graphql.as_deref()).await?;
-    let view = resolve_job(&access, &actor, &args.selector, args.session.as_deref()).await?;
+    let view = resolve_job(&access, &node_did, &args.selector, args.session.as_deref()).await?;
     match format {
         OutputFormat::Json => print_json(&view),
         _ => {
@@ -294,7 +293,9 @@ pub(crate) async fn job_promote(args: JobPromoteArgs) -> Result<()> {
     )
     .await;
     if let Some(node) = access.local_node() {
-        node.shutdown().await;
+        if let Err(error) = node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+        }
     }
     let report = result.map_err(|error| {
         let code = promote::refusal_code(&error);
@@ -328,7 +329,6 @@ async fn job_control(args: JobControlArgs, kind: JobControlKind) -> Result<()> {
     Ok(())
 }
 
-/// The operator acts as the job's own scope; the owner refuses a GraphQL access.
 pub(crate) fn operator_scope(view: &JobView) -> ProcessControlScope {
     ProcessControlScope {
         request_id: String::new(),
@@ -343,8 +343,183 @@ async fn control_job(
     view: &JobView,
     kind: JobControlKind,
 ) -> Result<Vec<String>> {
-    let result = control(access, &operator_scope(view), &view.tool_call_id, kind).await;
+    let result = control_job_remote(access, view, kind).await;
     control_lines(kind, view, result)
+}
+
+async fn control_job_remote(
+    access: &ConfigAccess,
+    view: &JobView,
+    kind: JobControlKind,
+) -> std::result::Result<JobControlOutcome, JobReadError> {
+    let ConfigAccess::Graphql(endpoint) = access else {
+        return Err(JobReadError::Unavailable {
+            message: "start the hosting runtime to control a job".to_owned(),
+        });
+    };
+    if endpoint.is_anonymous() {
+        return Err(JobReadError::NotAuthorized);
+    }
+    let unavailable = |message: String| JobReadError::Unavailable { message };
+    let actor = access.actor_did().ok_or(JobReadError::NotAuthorized)?;
+    let signer = gents::store::identity::RegisteredIdentity::from_registered_did(&actor, None)
+        .map_err(|error| unavailable(error.to_string()))?;
+    let action = match kind {
+        JobControlKind::Stop => "job_stop",
+        JobControlKind::Pause => "job_pause",
+    };
+    let intent = gents::tools::call::control::client::prepare(
+        access,
+        &signer,
+        &view.scope.node_did,
+        &view.row_doc_id,
+        None,
+        action,
+    )
+    .await
+    .map_err(|error| match error {
+        gents::tools::call::control::client::ClientControlError::NotFound => {
+            JobReadError::NotYetObservable
+        }
+        gents::tools::call::control::client::ClientControlError::NotAuthorized
+        | gents::tools::call::control::client::ClientControlError::WrongNode => {
+            JobReadError::NotAuthorized
+        }
+        error => unavailable(error.to_string()),
+    })?;
+    let unconfirmed = |detail: String| {
+        unavailable(format!("control intent {} was not confirmed after submission; the action may still take effect: {detail}", intent.intent_id))
+    };
+    let mut url =
+        reqwest::Url::parse(endpoint.url()).map_err(|error| unavailable(error.to_string()))?;
+    let prefix = url
+        .path()
+        .strip_suffix("/api/v0/graphql")
+        .ok_or_else(|| unavailable("runtime endpoint has no canonical GraphQL path".to_owned()))?;
+    url.set_path(&format!("{prefix}{JOB_CONTROL_PATH}"));
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| unavailable(error.to_string()))?;
+    let response = endpoint
+        .authorize(client.post(url))
+        .map_err(|error| unavailable(error.to_string()))?
+        .json(&intent)
+        .send()
+        .await
+        .map_err(|error| unconfirmed(error.to_string()))?;
+    match response.status() {
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
+            Err(JobReadError::NotAuthorized)
+        }
+        reqwest::StatusCode::NOT_FOUND => Err(JobReadError::NotYetObservable),
+        status if status.is_server_error() || status == reqwest::StatusCode::REQUEST_TIMEOUT => {
+            let detail = response.text().await.unwrap_or_default();
+            Err(unconfirmed(format!("runtime returned {status}: {detail}")))
+        }
+        status if !status.is_success() => Err(unavailable(format!("runtime returned {status}"))),
+        _ => {
+            let outcome: JobControlOutcome = response
+                .json()
+                .await
+                .map_err(|error| unconfirmed(error.to_string()))?;
+            let JobControlOutcome::Queued { intent_doc_id } = outcome else {
+                return Err(unconfirmed(
+                    "runtime returned an unsigned job outcome".into(),
+                ));
+            };
+            observe_control_receipt(access, view, kind, &intent_doc_id).await
+        }
+    }
+}
+
+async fn observe_control_receipt(
+    access: &ConfigAccess,
+    view: &JobView,
+    kind: JobControlKind,
+    intent_doc_id: &str,
+) -> std::result::Result<JobControlOutcome, JobReadError> {
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        observe_control_receipt_inner(access, view, kind, intent_doc_id),
+    ).await.unwrap_or_else(|_| Err(JobReadError::Unavailable {
+        message: format!("control {intent_doc_id} was not confirmed before the observation deadline; it may still complete"),
+    }))
+}
+
+async fn observe_control_receipt_inner(
+    access: &ConfigAccess,
+    view: &JobView,
+    kind: JobControlKind,
+    intent_doc_id: &str,
+) -> std::result::Result<JobControlOutcome, JobReadError> {
+    let unavailable = |error: String| JobReadError::Unavailable {
+        message: format!("control {intent_doc_id}: {error}"),
+    };
+    let query = format!(
+        r#"subscription {{ AgentToolControl(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+        gents::store::graphql::escape_graphql_string(intent_doc_id)
+    );
+    let mut events = access
+        .subscribe(&query)
+        .await
+        .map_err(|error| unavailable(error.to_string()))?;
+    let claim_query = format!(
+        r#"subscription {{ AgentToolControlClaim(filter: {{ intent_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+        gents::store::graphql::escape_graphql_string(intent_doc_id)
+    );
+    let mut claim_events = access
+        .subscribe(&claim_query)
+        .await
+        .map_err(|error| unavailable(error.to_string()))?;
+    let action = match kind {
+        JobControlKind::Stop => "job_stop",
+        JobControlKind::Pause => "job_pause",
+    };
+    loop {
+        match gents::tools::call::control::client::read_receipt(
+            access,
+            &view.scope.node_did,
+            intent_doc_id,
+            &view.row_doc_id,
+            action,
+        )
+        .await
+        {
+            Ok(Some(receipt)) => return match receipt.outcome {
+                gents_protocol::process_control::ToolControlReceiptOutcome::Job(outcome) => {
+                    Ok(outcome)
+                }
+                gents_protocol::process_control::ToolControlReceiptOutcome::Rejected => {
+                    Err(JobReadError::PermissionDenied)
+                }
+                gents_protocol::process_control::ToolControlReceiptOutcome::Unconfirmed => {
+                    Err(unavailable(
+                        "the runtime could not confirm the control outcome; refresh the job state because the action may have taken effect"
+                            .into(),
+                    ))
+                }
+                _ => Err(JobReadError::Malformed {
+                    message: "unexpected control receipt".into(),
+                }),
+            },
+            Ok(None) => {}
+            Err(error) => return Err(unavailable(error.to_string())),
+        }
+        let event = tokio::select! {
+            event = events.recv() => event,
+            event = claim_events.recv() => event,
+        };
+        if event
+            .map_err(|error| unavailable(error.to_string()))?
+            .is_none()
+        {
+            return Err(unavailable(
+                "outcome subscription closed before a receipt arrived".into(),
+            ));
+        }
+    }
 }
 
 /// Answer first. A job that is not ours or not a job is an error carrying the
@@ -359,6 +534,11 @@ pub(crate) fn control_lines(
         JobControlKind::Pause => "pause",
     };
     match result {
+        Ok(JobControlOutcome::Queued { intent_doc_id }) => Ok(vec![
+            format!("{verb} requested"),
+            format!("control: {intent_doc_id}"),
+            format!("next: gents job show {}", view.address),
+        ]),
         Ok(JobControlOutcome::Applied {
             state,
             killed_children,
@@ -1234,7 +1414,7 @@ mod tests {
 
     #[tokio::test]
     async fn watch_refuses_local_access() {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(defra_node::Node::builder().build().await.unwrap());
         let error = require_served(&ConfigAccess::local(node))
             .unwrap_err()
             .to_string();
@@ -1304,23 +1484,85 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn graphql_access_prints_the_owner_refusal() {
+    async fn anonymous_job_control_is_rejected() {
         let row = view("s1", "call-1", "alpha", JobState::Running, 1);
-        let access = ConfigAccess::graphql("http://127.0.0.1:9/graphql");
-        let owner = control(
-            &access,
-            &operator_scope(&row),
-            "call-1",
-            JobControlKind::Stop,
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(owner, JobReadError::Unavailable { .. }));
-        let printed = control_job(&access, &row, JobControlKind::Stop)
+        let access = ConfigAccess::graphql("http://127.0.0.1:9/api/v0/graphql");
+        assert!(matches!(
+            control_job_remote(&access, &row, JobControlKind::Stop).await,
+            Err(JobReadError::NotAuthorized)
+        ));
+    }
+
+    #[tokio::test]
+    async fn job_control_authenticates_the_client_and_rejects_unsigned_outcomes() {
+        use axum::{routing::post, Json, Router};
+        use gents::NodeIdentity as _;
+        let home = tempfile::tempdir().unwrap();
+        let paths = gents_desktop_core::client::DesktopPaths::from_root(home.path());
+        paths.ensure_root_dirs().await.unwrap();
+        let identity = gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths)
             .await
-            .unwrap_err()
-            .to_string();
-        assert_eq!(printed, owner.to_string());
+            .unwrap();
+        let expected_did = identity.did().to_owned();
+        let graphql_actor = expected_did.clone();
+        let verifier = identity.clone();
+        let app = Router::new().route("/api/v0/graphql", post(move |actor: defra_http::ExtractIdentity| {
+            let expected = graphql_actor.clone();
+            async move {
+                assert_eq!(actor.did().map(identity::Did::as_str), Some(expected.as_str()));
+                Json(serde_json::json!({"data": {"AgentToolCall": [{
+                    "_docID": "row-s1-call-1", "node_did": ACTOR, "agent_did": "did:key:agent",
+                    "session_id": "s1", "session_doc_id": "session-doc", "request_doc_id": "request-doc",
+                    "requester_did": expected, "tool_call_id": "call-1"
+                }]}}))
+            }
+        })).route(
+            JOB_CONTROL_PATH,
+            post(
+                move |actor: defra_http::ExtractIdentity,
+                      Json(request): Json<gents_protocol::process_control::ToolControlIntent>| {
+                    let expected_did = expected_did.clone();
+                    let verifier = verifier.clone();
+                    async move {
+                        assert_eq!(
+                            actor.did().map(identity::Did::as_str),
+                            Some(expected_did.as_str())
+                        );
+                        assert_eq!(request.node_did, ACTOR);
+                        assert_eq!(request.tool_call_doc_id, "row-s1-call-1");
+                        assert_eq!(request.client_did, expected_did);
+                        assert_eq!(request.agent_did, "did:key:agent");
+                        assert_eq!(request.session_id, "s1");
+                        assert_eq!(request.session_doc_id, "session-doc");
+                        assert_eq!(request.request_doc_id, "request-doc");
+                        assert_eq!(request.tool_call_id, "call-1");
+                        assert_eq!(request.action, "job_stop");
+                        request.validate_shape().unwrap();
+                        assert!(verifier.verify(
+                            &request.client_did, &request.signing_payload().unwrap(), &request.signature,
+                        ).await.unwrap());
+                        Json(JobControlOutcome::Applied {
+                            state: JobState::Cancelled,
+                            killed_children: 0,
+                        })
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        }));
+        let access =
+            ConfigAccess::graphql_as(format!("http://{address}/api/v0/graphql"), identity.did());
+        let row = view("s1", "call-1", "alpha", JobState::Running, 1);
+        assert!(matches!(
+            control_job_remote(&access, &row, JobControlKind::Stop).await,
+            Err(JobReadError::Unavailable { message }) if message.contains("control intent ")
+                && message.contains("the action may still take effect")
+                && message.contains("runtime returned an unsigned job outcome")
+        ));
     }
 
     #[test]

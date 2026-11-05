@@ -123,7 +123,7 @@ where
     ) {
         tracing::info!(
             target: super::TRACING_TARGET,
-            agent_id = %self.agent_config.agent_id,
+            agent_did = %self.agent_config.agent_did,
             request_id = %request.request_id,
             session_id = %request.session_id,
             cancellation_source = source.as_str(),

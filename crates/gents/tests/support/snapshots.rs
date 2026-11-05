@@ -1,4 +1,4 @@
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::store::graphql::escape_graphql_string;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -9,7 +9,7 @@ use super::{first_optional_row, first_row};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshot {
     pub lifecycle_state: RequestLifecycleState,
-    pub agent_id: String,
+    pub agent_did: String,
     pub backend_id: String,
     pub execution_origin: String,
     pub retry_parent_request: String,
@@ -28,7 +28,7 @@ impl From<AgentRequestRow> for RequestSnapshot {
             lifecycle_state: row
                 .lifecycle_state
                 .expect("request snapshot is missing lifecycle_state"),
-            agent_id: row.agent_id.unwrap_or_default(),
+            agent_did: row.agent_did.unwrap_or_default(),
             backend_id: row.backend_id.unwrap_or_default(),
             execution_origin: row.execution_origin.unwrap_or_default(),
             retry_parent_request: row.retry_parent_request.unwrap_or_default(),
@@ -63,7 +63,7 @@ pub struct RuntimeSnapshot {
     pub reconcile_phase: String,
     pub active_generation: i64,
     pub router_generation: i64,
-    pub default_agent_id: String,
+    pub default_agent_did: String,
     pub last_reconcile_result: String,
     pub last_reconcile_error: String,
 }
@@ -93,7 +93,7 @@ pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> Reques
             ) {{
                 request_id
                 lifecycle_state
-                agent_id
+                agent_did
                 backend_id
                 execution_origin
                 retry_parent_request
@@ -212,7 +212,7 @@ pub async fn fetch_session_snapshot(
         .execute(&format!(
             r#"{{
         AgentSession(filter: {{session_id: {{_eq: "{session_id}"}}}}, limit: 2) {{
-            session_id node_did requester_did agent_id created_at closed_at tags
+            session_id node_did requester_did agent_did created_at closed_at tags
             title
             provenance
             observation
@@ -279,7 +279,7 @@ pub async fn fetch_runtime_snapshot(
         reconcile_phase: diagnostic.reconcile_phase,
         active_generation: i64::try_from(readiness.active_generation).unwrap_or(i64::MAX),
         router_generation: i64::try_from(readiness.router_generation).unwrap_or(i64::MAX),
-        default_agent_id: readiness.default_agent_id,
+        default_agent_did: readiness.default_agent_did,
         last_reconcile_result: diagnostic.last_reconcile_result,
         last_reconcile_error: diagnostic.last_reconcile_error,
     })

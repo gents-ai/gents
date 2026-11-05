@@ -5,14 +5,14 @@ use axum::{
     Json,
 };
 use defra_http::ExtractIdentity;
-use gents_protocol::process_control::{OperatorProcessControlRequest, ProcessControlOutcome};
+use gents_protocol::process_control::{ProcessControlOutcome, ToolControlIntent};
 
 use super::router::RuntimeHttpState;
 
 pub(crate) async fn process_control_handler(
     State(state): State<RuntimeHttpState>,
     identity: ExtractIdentity,
-    Json(request): Json<OperatorProcessControlRequest>,
+    Json(request): Json<ToolControlIntent>,
 ) -> Response {
     let mut response = control(state, identity, request).await;
     response.headers_mut().insert(
@@ -25,7 +25,7 @@ pub(crate) async fn process_control_handler(
 async fn control(
     state: RuntimeHttpState,
     identity: ExtractIdentity,
-    request: OperatorProcessControlRequest,
+    request: ToolControlIntent,
 ) -> Response {
     let Some(actor) = identity.did() else {
         return failure(
@@ -33,17 +33,6 @@ async fn control(
             "Runtime operator authorization is required.",
         );
     };
-    if !gents::tools::background::job::control::operator_control_authorized(
-        &state.node_did,
-        &request.node_did,
-        &state.node_did,
-        Some(actor.as_ref()),
-    ) {
-        return failure(
-            StatusCode::FORBIDDEN,
-            "This identity cannot control that runtime process.",
-        );
-    }
     let Some(runtime) = state
         .activation_runtime
         .get()
@@ -55,11 +44,12 @@ async fn control(
         );
     };
     match runtime
-        .operator_process_control(Some(actor.as_ref()), &request)
+        .operator_process_control(actor.as_ref(), &request)
         .await
     {
         Ok(outcome) => {
             let status = match outcome {
+                ProcessControlOutcome::Queued { .. } => StatusCode::ACCEPTED,
                 ProcessControlOutcome::NotFound => StatusCode::NOT_FOUND,
                 ProcessControlOutcome::NotBackground
                 | ProcessControlOutcome::Lost
@@ -70,10 +60,20 @@ async fn control(
         }
         Err(error) => {
             tracing::warn!(error = %error, "native process control failed");
-            failure(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "The process could not be controlled. Refresh its state and try again.",
-            )
+            let status = match &error {
+                gents::tools::call::control::client::ClientControlError::WrongNode
+                | gents::tools::call::control::client::ClientControlError::NotAuthorized => {
+                    StatusCode::FORBIDDEN
+                }
+                gents::tools::call::control::client::ClientControlError::NotFound => {
+                    StatusCode::NOT_FOUND
+                }
+                gents::tools::call::control::client::ClientControlError::Unavailable(_)
+                | gents::tools::call::control::client::ClientControlError::Unconfirmed { .. } => {
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
+            };
+            failure(status, &error.to_string())
         }
     }
 }

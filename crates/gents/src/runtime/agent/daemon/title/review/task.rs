@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use crate::documents::Task;
 use crate::request::watcher::AgentRequest;
@@ -17,15 +17,19 @@ pub(super) async fn load(
     selection: &crate::plugin::approval::workspace::ReviewTaskSelection,
 ) -> Result<Policy> {
     let task_id = selection.task_id.as_str();
-    let definition = crate::session::message::load_configured_task(node, &parent.node_did, task_id)
-        .await?
-        .context("access review Task is not configured")?;
+    let definition = crate::session::message::load_configured_task(
+        &crate::ConfigAccess::local_as(node.clone(), identity::Did::new(&parent.agent_did)?),
+        &parent.node_did,
+        task_id,
+    )
+    .await?
+    .context("access review Task is not configured")?;
     anyhow::ensure!(
         crate::plugin::approval::workspace::review_task_matches_selection(
             &definition,
             selection,
             &parent.node_did,
-            &parent.agent_id,
+            &parent.agent_did,
         ),
         "The access review policy changed. Select Approve for me again to use the updated policy."
     );
@@ -33,7 +37,7 @@ pub(super) async fn load(
         &definition,
         &parent.node_did,
         task_id,
-        &parent.agent_id,
+        &parent.agent_did,
         &parent.session_id,
     )?;
     Ok(Policy { definition, text })
@@ -46,7 +50,7 @@ impl Policy {
         parent: &AgentRequest,
     ) -> Result<bool> {
         Ok(crate::session::message::load_configured_task(
-            node,
+            &crate::ConfigAccess::local_as(node.clone(), identity::Did::new(&parent.agent_did)?),
             &parent.node_did,
             &self.definition.task_id,
         )

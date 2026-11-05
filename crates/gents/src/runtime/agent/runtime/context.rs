@@ -17,7 +17,7 @@ use crate::turn::prompt::LayeredPromptBuilder;
 
 #[derive(Clone)]
 pub(super) struct RuntimeContext {
-    pub(super) node: Arc<defra_node::EmbeddedNode>,
+    pub(super) node: Arc<defra_node::Node>,
     pub(super) tool_runtime: ToolRuntimeContext,
     pub(super) admission_registry: AdmissionRegistry,
     pub(super) hook_failure_policy: crate::tools::call::hook::FailurePolicy,
@@ -37,7 +37,7 @@ pub(super) struct RuntimeContext {
 }
 
 pub(super) struct AgentResolution {
-    pub(super) agent_id: String,
+    pub(super) agent_did: String,
     pub(super) rejection_reason: Option<String>,
 }
 
@@ -50,7 +50,7 @@ impl StartupBarrier {
     pub(super) fn new(agents: &[Arc<crate::inference::resolved::ResolvedAgent>]) -> Self {
         let pending: BTreeSet<(String, u64)> = agents
             .iter()
-            .map(|agent_config| (agent_config.agent_id.clone(), 1))
+            .map(|agent_config| (agent_config.agent_did.clone(), 1))
             .collect();
         let (pending_count_tx, _) = watch::channel(pending.len());
         Self {
@@ -59,9 +59,9 @@ impl StartupBarrier {
         }
     }
 
-    async fn release(&self, agent_id: &str, generation: u64) -> bool {
+    async fn release(&self, agent_did: &str, generation: u64) -> bool {
         let mut pending = self.pending_standings.lock().await;
-        if pending.remove(&(agent_id.to_string(), generation)) {
+        if pending.remove(&(agent_did.to_string(), generation)) {
             let _ = self.pending_count_tx.send_replace(pending.len());
             true
         } else {
@@ -69,9 +69,9 @@ impl StartupBarrier {
         }
     }
 
-    pub async fn register_agent(&self, agent_id: &str, generation: u64) {
+    pub async fn register_agent(&self, agent_did: &str, generation: u64) {
         let mut pending = self.pending_standings.lock().await;
-        if pending.insert((agent_id.to_string(), generation)) {
+        if pending.insert((agent_did.to_string(), generation)) {
             self.pending_count_tx.send_replace(pending.len());
         }
     }
@@ -81,23 +81,23 @@ impl StartupBarrier {
         Self::new(&[])
     }
 
-    pub async fn mark_agent_ready(&self, agent_id: &str, generation: u64) -> bool {
-        self.release(agent_id, generation).await
+    pub async fn mark_agent_ready(&self, agent_did: &str, generation: u64) -> bool {
+        self.release(agent_did, generation).await
     }
 
-    pub async fn mark_agent_demoted(&self, agent_id: &str, generation: u64) -> bool {
-        self.release(agent_id, generation).await
+    pub async fn mark_agent_demoted(&self, agent_did: &str, generation: u64) -> bool {
+        self.release(agent_did, generation).await
     }
 
-    pub async fn mark_agent_superseded(&self, agent_id: &str, generation: u64) -> bool {
-        self.release(agent_id, generation).await
+    pub async fn mark_agent_superseded(&self, agent_did: &str, generation: u64) -> bool {
+        self.release(agent_did, generation).await
     }
 
-    pub async fn is_pending(&self, agent_id: &str, generation: u64) -> bool {
+    pub async fn is_pending(&self, agent_did: &str, generation: u64) -> bool {
         self.pending_standings
             .lock()
             .await
-            .contains(&(agent_id.to_string(), generation))
+            .contains(&(agent_did.to_string(), generation))
     }
 
     pub async fn pending_agents(&self) -> Vec<String> {
@@ -105,7 +105,7 @@ impl StartupBarrier {
             .lock()
             .await
             .iter()
-            .map(|(agent_id, generation)| format!("{agent_id}@{generation}"))
+            .map(|(agent_did, generation)| format!("{agent_did}@{generation}"))
             .collect()
     }
 
@@ -138,7 +138,8 @@ impl RuntimeContext {
             &allowed_targets,
         );
         let preamble = prompt_builder.preamble().to_string();
-        let mut loop_tools = tool_surface.build_tools(&self.tool_runtime).await?;
+        let tool_runtime = self.tool_runtime.for_agent(&agent_config);
+        let mut loop_tools = tool_surface.build_tools(&tool_runtime).await?;
         if tool_surface.includes_skills() && !agent_config.skills.is_empty() {
             let ceiling = crate::documents::skills::skill_tool_ceiling(
                 tool_surface.tool_names(),
@@ -152,11 +153,11 @@ impl RuntimeContext {
         }
         let loop_tools = std::sync::Arc::new(loop_tools);
         let background_tool_registry = BackgroundToolRegistry::from_config(
-            tool_surface.build_tools(&self.tool_runtime).await?,
+            tool_surface.build_tools(&tool_runtime).await?,
             tool_surface.background_tools(),
         );
         tracing::info!(
-            agent_id = %agent_config.agent_id,
+            agent_did = %agent_config.agent_did,
             did = %agent_config.node_did(),
             model = %agent_config.model_name,
             tools = ?tool_names,
@@ -282,12 +283,12 @@ impl RuntimeContext {
 mod startup_barrier_tests {
     use super::*;
 
-    fn agent_config(agent_id: &str) -> Arc<crate::inference::resolved::ResolvedAgent> {
+    fn agent_config(agent_did: &str) -> Arc<crate::inference::resolved::ResolvedAgent> {
         Arc::new(
-            crate::runtime::agent::PendingAgent::new(agent_id).build_with_identity_for_test(
+            crate::runtime::agent::PendingAgent::new(agent_did).build_with_identity_for_test(
                 crate::KeyIdentity::load_or_create(
                     std::env::temp_dir()
-                        .join(format!("barrier-{agent_id}-{}.key", uuid::Uuid::new_v4())),
+                        .join(format!("barrier-{agent_did}-{}.key", uuid::Uuid::new_v4())),
                     None,
                 )
                 .unwrap(),

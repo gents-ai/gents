@@ -56,7 +56,7 @@ fn session_investigation_eval_pack_validates_all_splits_and_shipped_checks() {
 }
 
 #[test]
-fn session_model_fixtures_expect_public_cross_agent_visibility() {
+fn session_model_fixtures_declare_cross_agent_visibility() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/configurator_evals/sessions/cases");
     let count: serde_json::Value =
@@ -75,7 +75,9 @@ fn session_model_fixtures_expect_public_cross_agent_visibility() {
         })
         .collect();
     assert_eq!(closed_release.len(), 3);
-    assert!(closed_release.iter().any(|doc| doc["node_did"] != "$trial"));
+    assert!(closed_release
+        .iter()
+        .any(|doc| doc["agent_did"] == "gents:agent-slot:partner"));
     assert_eq!(
         count["stages"][0]["checks"][0]["params"]["expect"][0]["equals"],
         closed_release.len()
@@ -101,7 +103,15 @@ fn session_model_fixtures_expect_public_cross_agent_visibility() {
     assert_eq!(cross["case_id"], "cross-agent-visible");
     let source = &cross["stages"][0]["capture"][0];
     assert_eq!(source["filter"]["session_id"]["_eq"], "partner-archive");
-    assert_ne!(source["filter"]["node_did"]["_eq"], "$trial");
+    assert_eq!(source["filter"]["node_did"]["_eq"], "$trial");
+    let shared = cross["fixtures"]["documents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["document"]["session_id"] == "partner-archive")
+        .unwrap();
+    assert_eq!(shared["document"]["agent_did"], "gents:agent-slot:partner");
+    assert_eq!(shared["session_readers"], serde_json::json!(["engineer"]));
 }
 
 #[tokio::test]
@@ -110,7 +120,7 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
     use std::sync::Arc;
 
     use anyhow::Context;
-    use gents::defra_node::EmbeddedNode;
+    use gents::defra_node::Node as EmbeddedNode;
     use gents::session::load_tool_call_presentation;
     use gents::store::config_client::ConfigAccess;
     use gents::{KeyIdentity, NodeIdentity};
@@ -188,7 +198,7 @@ async fn retained_tool_trace_uses_native_canonical_reader() -> anyhow::Result<()
     use std::sync::Arc;
 
     use anyhow::Context;
-    use gents::defra_node::EmbeddedNode;
+    use gents::defra_node::Node as EmbeddedNode;
     use gents::session::load_tool_call_presentation;
     use gents::store::config_client::ConfigAccess;
     use gents::store::graphql::escape_graphql_string;

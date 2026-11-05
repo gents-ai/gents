@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::job::{JobEffects, JobScratch, JobSpawn};
 use gents_protocol::request_admission::AgentRequestCreate;
 use sha2::{Digest, Sha256};
@@ -110,16 +110,18 @@ fn stays_under(cwd: &Path, path: &str) -> bool {
 
 pub async fn interrupt_slots(
     node: &Arc<EmbeddedNode>,
+    caller_agent_did: &str,
     caller: &SessionScope,
     slots: &[SessionScope],
 ) -> Result<()> {
     for target in slots {
         if let Some(reason) =
-            crate::session::message::interrupt_refusal(node, caller, target).await?
+            crate::session::message::interrupt_refusal(node, caller_agent_did, caller, target)
+                .await?
         {
             anyhow::bail!(reason);
         }
-        crate::session::message::interrupt_session(node, target).await?;
+        crate::session::message::interrupt_session(node, caller_agent_did, target).await?;
     }
     Ok(())
 }
@@ -242,14 +244,14 @@ async fn stage_spawn(
     job: &JobContext<'_>,
     spawn: &JobSpawn,
 ) -> Result<AgentRequestCreate> {
-    let (node_did, agent_id) = super::admit::resolve_target(job.ctx, &spawn.target)
+    let (node_did, agent_did) = super::admit::resolve_target(job.ctx, &spawn.target)
         .cloned()
         .context("spawn target is not a known AgentTarget id")?;
     let own = job
         .ctx
         .target_hops
         .iter()
-        .find(|(pair, _)| pair.0 == node_did && pair.1 == agent_id)
+        .find(|(pair, _)| pair.0 == node_did && pair.1 == agent_did)
         .map_or(0, |(_, hop)| *hop);
     let hop = next_request_hop(
         RequestHopCause::CrossSession {
@@ -273,7 +275,7 @@ async fn stage_spawn(
         txn,
         job.cause,
         &node_did,
-        &agent_id,
+        &agent_did,
         job_session_id(&job.row.root, &spawn.slot, spawn.attempt),
         &spawn.prompt,
         Some(spawn.title.as_str()),
@@ -308,7 +310,7 @@ async fn stage_request(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     cause: &SessionMessageCause,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     session_id: String,
     content: &str,
     title: Option<&str>,
@@ -334,7 +336,7 @@ async fn stage_request(
             txn,
             node_did,
             &session_id,
-            agent_id,
+            agent_did,
             Some(&cause.caller_node_did),
             input,
         )
@@ -359,7 +361,7 @@ async fn stage_request(
         cause,
         &SessionMessageTarget {
             node_did: node_did.to_owned(),
-            agent_id: agent_id.to_owned(),
+            agent_did: agent_did.to_owned(),
             session_id: session_id.clone(),
         },
         content,
@@ -419,7 +421,7 @@ async fn one_request(
 
 fn same_fingerprint(existing: &StoredRequest, create: &AgentRequestCreate) -> bool {
     existing.node_did.as_deref() == Some(create.node_did.as_str())
-        && existing.agent_id.as_deref() == Some(create.agent_id.as_str())
+        && existing.agent_did.as_deref() == Some(create.agent_did.as_str())
         && existing.session_id.as_deref() == Some(create.session_id.as_str())
         && existing.content.as_deref().map(body_digest) == Some(body_digest(&create.content))
         && existing.request_hop == Some(i64::from(create.request_hop))
@@ -445,7 +447,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use serde_json::json;
 
     use super::{admit_scratch, interrupt_slots, write_scratch};
@@ -600,9 +602,9 @@ mod tests {
     async fn descriptive_slot_provenance_cannot_grant_interrupt() {
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let parent = insert(&node, "AgentRequest", json!({"request_id":"parent","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"caller","agent_id":"configured","lifecycle_state":"processing"})).await;
-        insert(&node, "AgentSession", json!({"session_id":"child","node_did":"owner","requester_did":null,"agent_id":"configured","created_at":"2026-01-01T00:00:00Z","provenance":{"parent_request_doc_id":parent}})).await;
-        let child = insert(&node, "AgentRequest", json!({"request_id":"child","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"child","agent_id":"configured","lifecycle_state":"processing"})).await;
+        let parent = insert(&node, "AgentRequest", json!({"request_id":"parent","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"caller","agent_did":"configured","lifecycle_state":"processing"})).await;
+        insert(&node, "AgentSession", json!({"session_id":"child","node_did":"owner","requester_did":null,"agent_did":"configured","created_at":"2026-01-01T00:00:00Z","provenance":{"parent_request_doc_id":parent}})).await;
+        let child = insert(&node, "AgentRequest", json!({"request_id":"child","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"child","agent_did":"configured","lifecycle_state":"processing"})).await;
         let caller = SessionScope {
             node_did: "owner".into(),
             session_id: "caller".into(),
@@ -614,9 +616,13 @@ mod tests {
             requester_did: None,
         };
         assert!(stamp(&node, &child).await.is_none());
-        assert!(interrupt_slots(&node, &caller, &[target]).await.is_err());
+        assert!(
+            interrupt_slots(&node, "did:key:untrusted", &caller, &[target])
+                .await
+                .is_err()
+        );
         assert!(stamp(&node, &child).await.is_none());
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[test]
@@ -695,7 +701,7 @@ mod tests {
                 .unwrap();
         let cause = SessionMessageCause {
             caller_node_did: admission.node_did.clone(),
-            caller_agent_id: "caller-agent".to_owned(),
+            caller_agent_did: "caller-agent".to_owned(),
             caller_session_id: "caller-session".to_owned(),
             caller_requester_did: None,
             caller_request_id: caller.request_id,
@@ -718,7 +724,7 @@ mod tests {
 
     impl Harness {
         async fn close(self) {
-            self.node.shutdown().await;
+            self.node.shutdown().await.expect("shut down test node");
             std::fs::remove_dir_all(&self.path).unwrap();
         }
     }
@@ -950,7 +956,7 @@ mod tests {
     async fn signed_staged_slot_can_be_interrupted_only_by_its_caller() {
         let mut harness = harness("job-slot-authority").await;
         harness.cause.caller_session_id = "session-job-slot-authority".into();
-        harness.cause.caller_agent_id = "general".into();
+        harness.cause.caller_agent_did = "general".into();
         harness.row.root = harness.cause.tool_call_doc_id.clone();
         harness.row.row_doc_id = harness.row.root.clone();
         let mut job_pin = pin();
@@ -1017,20 +1023,33 @@ mod tests {
             session_id: "other-session".into(),
             ..caller.clone()
         };
-        assert!(
-            interrupt_slots(&harness.node, &foreign, std::slice::from_ref(&target))
-                .await
-                .is_err()
-        );
+        assert!(interrupt_slots(
+            &harness.node,
+            &harness.cause.caller_agent_did,
+            &foreign,
+            std::slice::from_ref(&target)
+        )
+        .await
+        .is_err());
         assert!(stamp(&harness.node, doc).await.is_none());
-        interrupt_slots(&harness.node, &caller, std::slice::from_ref(&target))
-            .await
-            .unwrap();
+        interrupt_slots(
+            &harness.node,
+            &harness.cause.caller_agent_did,
+            &caller,
+            std::slice::from_ref(&target),
+        )
+        .await
+        .unwrap();
         let latched = stamp(&harness.node, doc).await;
         assert!(latched.is_some());
-        interrupt_slots(&harness.node, &caller, &[target])
-            .await
-            .unwrap();
+        interrupt_slots(
+            &harness.node,
+            &harness.cause.caller_agent_did,
+            &caller,
+            &[target],
+        )
+        .await
+        .unwrap();
         assert_eq!(stamp(&harness.node, doc).await, latched);
         harness.close().await;
     }

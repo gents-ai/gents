@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 
 pub(super) type ContextOrder = (chrono::DateTime<chrono::Utc>, i64, String);
@@ -56,7 +56,7 @@ mod tests {
             .unwrap();
         let mut requests = Vec::new();
         for content in ["first", "second"] {
-            let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "same-label", node_did: "owner", requester_did: "requester", session_id: "session", agent_id: "behavior", content: "{content}", lifecycle_state: "pending"}}) {{_docID}} }}"#)).await;
+            let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "same-label", node_did: "owner", requester_did: "requester", session_id: "session", agent_did: "behavior", content: "{content}", lifecycle_state: "pending"}}) {{_docID}} }}"#)).await;
             ensure_no_errors(&response, "seed physical context request").unwrap();
             let doc = gents_protocol::graphql::extract_mutation_doc_id(
                 &json!({"data":response.data}),
@@ -96,6 +96,6 @@ mod tests {
             }
             assert!(load(&node, &foreign).await.unwrap().is_none(), "{field}");
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

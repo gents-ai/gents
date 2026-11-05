@@ -37,7 +37,9 @@ pub(crate) async fn record_plugin_store_change(
     let result =
         gents::pack::record_plugin_store_change(&access, &owner, home, coordinate, installed).await;
     if let Some(node) = access.local_node() {
-        node.shutdown().await;
+        if let Err(error) = node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+        }
     }
     result.map_err(Into::into)
 }
@@ -76,7 +78,9 @@ pub(super) async fn resolve_plugin_slot_owner(
     let result =
         gents::pack::preview_pack_inference_bindings(&access, manifest, &owner, requested).await;
     if let Some(node) = access.local_node() {
-        node.shutdown().await;
+        if let Err(error) = node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+        }
     }
     result?;
     Ok(Some(owner))

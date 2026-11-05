@@ -43,7 +43,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         let identity = crate::KeyIdentity::load_or_create(path.join("agent.key"), None).unwrap();
         let node_did = identity.did().to_owned();
         let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .data_path(&path)
                 .with_node_identity_did(&node_did)
                 .build()
@@ -125,7 +125,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         let escaped_agent = crate::store::graphql::escape_graphql_string(&node_did);
         for mutation in [
             format!(
-                r#"mutation {{ create_Task(input: {{ task_id: "task-1858", node_did: "{escaped_agent}", agent_id: "general", prompt_template: "tick" }}) {{ _docID }} }}"#
+                r#"mutation {{ create_Task(input: {{ task_id: "task-1858", node_did: "{escaped_agent}", agent_did: "general", prompt_template: "tick" }}) {{ _docID }} }}"#
             ),
             format!(
                 r#"mutation {{ create_Trigger(input: {{ trigger_id: "trigger-1858", node_did: "{escaped_agent}", task_id: "task-1858" }}) {{ _docID }} }}"#
@@ -153,11 +153,20 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 r#"lifecycle_state: "completed""#,
             )
             .await;
-            crate::session::stop_session(&node, &node_did, &session_id, tool.requester_did())
-                .await
-                .unwrap();
+            crate::session::stop_session(
+                &node,
+                node.node_identity_did()
+                    .expect("fixture has a registered signing principal"),
+                &node_did,
+                &session_id,
+                tool.requester_did(),
+            )
+            .await
+            .unwrap();
             let first_resume = crate::session::resume_session(
                 &node,
+                node.node_identity_did()
+                    .expect("fixture has a registered signing principal"),
                 &node_did,
                 &session_id,
                 tool.requester_did(),
@@ -204,6 +213,8 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         if session_stopped {
             crate::session::resume_session(
                 &node,
+                node.node_identity_did()
+                    .expect("fixture has a registered signing principal"),
                 &node_did,
                 &session_id,
                 tool.requester_did(),
@@ -248,7 +259,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         let reason = deleted.notification_reason.as_deref().unwrap();
         assert_eq!(notifications.len(), 1);
         assert!(notifications[0].contains(&format!("<reason>{reason}</reason>")));
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(path).unwrap();
     }
 }
@@ -320,6 +331,10 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     reservation_released_rx.await.unwrap();
     let stop = crate::session::stop_session(
         &admission.node,
+        admission
+            .node
+            .node_identity_did()
+            .expect("fixture has a registered signing principal"),
         &node_did,
         &session_id,
         tool.requester_did(),
@@ -354,6 +369,10 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     );
     let blocked = crate::session::resume_session(
         &admission.node,
+        admission
+            .node
+            .node_identity_did()
+            .expect("fixture has a registered signing principal"),
         &node_did,
         &session_id,
         tool.requester_did(),
@@ -377,6 +396,10 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         .unwrap();
     crate::session::resume_session(
         &admission.node,
+        admission
+            .node
+            .node_identity_did()
+            .expect("fixture has a registered signing principal"),
         &node_did,
         &other_session,
         None,
@@ -402,6 +425,10 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     );
     crate::session::resume_session(
         &admission.node,
+        admission
+            .node
+            .node_identity_did()
+            .expect("fixture has a registered signing principal"),
         &node_did,
         &session_id,
         tool.requester_did(),
@@ -421,6 +448,6 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         resumed.data.unwrap()["AgentSession"][0]["stopped_at"].is_string(),
         modeled["stopped_after_settlement"]
     );
-    admission.node.shutdown().await;
+    admission.node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }

@@ -177,7 +177,7 @@ fn assignment_status_reason(status: crate::goal::GoalStatus) -> &'static str {
 }
 
 pub(crate) async fn turn_assignment_handoff(
-    node: &Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     caused: &AgentRequestRow,
     terminal: &crate::tools::call::lifecycle::CausedRequestTerminal,
 ) -> TurnAssignmentHandoff {
@@ -195,7 +195,7 @@ pub(crate) async fn turn_assignment_handoff(
             (Some(node_did), Some(session_id))
                 if !node_did.trim().is_empty() && !session_id.trim().is_empty() =>
             {
-                match crate::goal::load_request_assignment(node, caused).await {
+                match crate::goal::load_request_assignment(access, caused).await {
                     Ok(crate::goal::RequestAssignmentObservation::Assigned(goal)) => goal
                         .parsed_status()
                         .map(AssignmentObservation::Assigned)
@@ -276,9 +276,11 @@ pub(crate) async fn settle_session_message_row(
         .doc_id
         .as_deref()
         .context("caused request lacks physical identity")?;
-    let Some(terminal) =
-        crate::tools::background::status::load_session_message_terminal(node, caused_doc_id)
-            .await?
+    let Some(terminal) = crate::tools::background::status::load_session_message_terminal(
+        &crate::ConfigAccess::local_as(node.clone(), lifecycle.actor().clone()),
+        caused_doc_id,
+    )
+    .await?
     else {
         return Ok(false);
     };
@@ -288,7 +290,12 @@ pub(crate) async fn settle_session_message_row(
     // non-complete handoff. Computing it first lets the reason persist as
     // part of the row's `completionPending:<reason>` settlement record, so
     // the completion redrive can re-render the same evidence.
-    let handoff = turn_assignment_handoff(node, &caused, &terminal).await;
+    let handoff = turn_assignment_handoff(
+        &crate::ConfigAccess::local_as(node.clone(), lifecycle.actor().clone()),
+        &caused,
+        &terminal,
+    )
+    .await;
     let handoff_reason = handoff.reason();
     if !lifecycle
         .settle_session_message(&terminal, handoff_reason)
@@ -487,7 +494,7 @@ mod turn_assignment_tests {
         let create = format!(
             r#"mutation {{ create_AgentRequest(input: {{
             request_id: "{}", purpose: "normal", node_did: "{}", requester_did: "{}",
-            agent_id: "general", session_id: "{}", content: "head", lifecycle_state: "pending",
+            agent_did: "general", session_id: "{}", content: "head", lifecycle_state: "pending",
             execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
         }}) {{ _docID }} }}"#,
             escape_graphql_string(&head_id),
@@ -546,7 +553,7 @@ mod turn_assignment_tests {
             })
             .unwrap();
         let foreign_accepted = crate::tools::background::status::load_session_message_terminal(
-            node,
+            &crate::ConfigAccess::local(node.clone()),
             &caused_request_doc_id,
         )
         .await
@@ -568,7 +575,7 @@ mod turn_assignment_tests {
                 &format!("request_id: \"{}\"", head_id),
                 "request_id: \"foreign-agent-head\"",
             )
-            .replace("agent_id: \"general\"", "agent_id: \"foreign-agent\"");
+            .replace("agent_did: \"general\"", "agent_did: \"foreign-agent\"");
         let foreign_agent = crate::store::config_client::ConfigAccess::write_local(
             node,
             "test.foreign_agent_head",
@@ -604,7 +611,7 @@ mod turn_assignment_tests {
             .unwrap();
         let foreign_agent_accepted =
             crate::tools::background::status::load_session_message_terminal(
-                node,
+                &crate::ConfigAccess::local(node.clone()),
                 &caused_request_doc_id,
             )
             .await
@@ -639,7 +646,7 @@ mod turn_assignment_tests {
             })
             .unwrap();
         let mismatch_accepted = crate::tools::background::status::load_session_message_terminal(
-            node,
+            &crate::ConfigAccess::local(node.clone()),
             &caused_request_doc_id,
         )
         .await
@@ -667,7 +674,7 @@ mod turn_assignment_tests {
             })
             .unwrap();
         let matching_accepted = crate::tools::background::status::load_session_message_terminal(
-            node,
+            &crate::ConfigAccess::local(node.clone()),
             &caused_request_doc_id,
         )
         .await
@@ -711,7 +718,7 @@ mod turn_assignment_tests {
             session_message_notifications(node, did, admission.tool.session_id()).await,
             notifications
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(&admission.path).unwrap();
     }
 
@@ -790,7 +797,7 @@ mod turn_assignment_tests {
             redrive.side_effects_converged, 0,
             "side effects already converged; the replay republishes nothing"
         );
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(&admission.path).expect("remove fixture");
     }
 
@@ -841,7 +848,7 @@ mod turn_assignment_tests {
             "first notice names the absent assignment: {}",
             notifications[0]
         );
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(&admission.path).expect("remove fixture");
     }
 
@@ -899,7 +906,7 @@ mod turn_assignment_tests {
             "a complete assignment stays reasonless: {}",
             notifications[0]
         );
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(&admission.path).expect("remove fixture");
     }
 
@@ -983,7 +990,12 @@ mod turn_assignment_tests {
         else {
             panic!("the completed child is a terminal observation");
         };
-        let handoff = turn_assignment_handoff(node, &caused, &terminal).await;
+        let handoff = turn_assignment_handoff(
+            &crate::ConfigAccess::local_as(node.clone(), lifecycle.actor().clone()),
+            &caused,
+            &terminal,
+        )
+        .await;
         let handoff_reason = handoff.reason();
         assert_eq!(handoff_reason, Some("assignment_active"));
         assert!(lifecycle
@@ -1033,7 +1045,7 @@ mod turn_assignment_tests {
         );
         let row = tool_call_row(node, &tool_doc_id).await;
         assert_eq!(row["status"], "completed", "side effects converged");
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(&admission.path).expect("remove fixture");
     }
 

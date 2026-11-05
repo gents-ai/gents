@@ -99,3 +99,6 @@ mod stream_waiter_conformance;
 
 #[cfg(test)]
 mod variable_tests;
+
+#[cfg(test)]
+mod relationship_tests;

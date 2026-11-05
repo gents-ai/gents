@@ -2,7 +2,7 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::{EmbeddedNode, HttpConfig};
+use gents::defra_node::{HttpConfig, Node as EmbeddedNode};
 use gents::goal::{
     claim_continuation, claim_retry_continuation, create_goal_for_session,
     delete_goals_for_session, load_canonical_goal, load_goals_for_session, session_token_usage,
@@ -25,6 +25,32 @@ use crate::support::{
 
 const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);
+
+async fn goal_creation_actors(db: &TestDb) -> (gents::KeyIdentity, Arc<dyn NodeIdentity>) {
+    let directory = tempfile::tempdir().expect("goal actor key directory");
+    let user = gents::KeyIdentity::load_or_create(directory.path().join("user.key"), None)
+        .expect("goal client identity");
+    let binding = gents::store::identity::provision_agent_identity(db.node_identity.as_ref())
+        .expect("goal agent binding");
+    let agent = gents::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .expect("goal agent identity");
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(user.did()).expect("goal client DID"),
+    );
+    let session = access.write("test.goal_creation_session", &format!(
+        "mutation {{ create_AgentSession(input: {{ node_did: \"{}\", session_id: \"{}\", requester_did: \"{}\", agent_did: \"{}\", created_at: \"2026-11-04T00:00:00Z\" }}) {{ _docID }} }}",
+        escape_graphql_string(db.node_identity.did()), escape_graphql_string(SESSION),
+        escape_graphql_string(user.did()), escape_graphql_string(agent.did()),
+    )).await.expect("create goal session");
+    let session_doc = gents::store::graphql::created_doc_id(&session, "AgentSession")
+        .expect("goal session document");
+    access.add_actor_relationship(
+        "AgentSession", &session_doc, "working_agent",
+        &identity::Did::new(agent.did()).expect("goal agent DID"),
+    ).await.expect("grant selected agent access to goal session");
+    (user, agent)
+}
 
 async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, content: &str) {
     use gents::defra_node::QueryRequest;
@@ -212,7 +238,7 @@ fn snapshot(local_did: &str) -> Arc<ActiveRuntimeSnapshot> {
         generation: 1,
         node: None,
         local_did: local_did.to_string(),
-        default_agent_id: crate::support::AGENT_NAME.to_string(),
+        default_agent_did: crate::support::AGENT_NAME.to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -242,9 +268,9 @@ async fn publish_node_readiness(
         process_state,
         active_generation: 1,
         router_generation: 1,
-        default_agent_id: crate::support::AGENT_NAME.to_string(),
+        default_agent_did: crate::support::AGENT_NAME.to_string(),
         agents: vec![AgentReadinessEntry {
-            agent_id: crate::support::AGENT_NAME.to_string(),
+            agent_did: crate::support::AGENT_NAME.to_string(),
             state: if behavior.is_some() {
                 AgentReadinessState::Unavailable
             } else {
@@ -420,8 +446,8 @@ async fn boot_goal_background_handoff_with_plans(
         crate::support::accepted_turn::AcceptedTurnSpec {
             backend_id: "goal-background-backend",
             model: "test-model",
-            parent_agent_id: behavior,
-            configured_agent_ids: &[behavior],
+            parent_agent_did: behavior,
+            configured_agent_dids: &[behavior],
             request_id,
             session_id: SESSION,
             prompt,
@@ -857,7 +883,7 @@ struct ChildRow {
     node_did: String,
     requester_did: Option<String>,
     session_id: String,
-    agent_id: Option<String>,
+    agent_did: Option<String>,
     caused_by_parent_request_id: Option<String>,
     caused_by_parent_request_doc_id: Option<String>,
     caused_by_trigger_id: Option<String>,
@@ -878,7 +904,7 @@ async fn goal_children(db: &TestDb) -> Vec<ChildRow> {
         .execute(
             r#"{
                 AgentRequest(filter: { caused_by_trigger_kind: { _eq: "goal" } }) {
-                    _docID request_id node_did requester_did session_id agent_id caused_by_parent_request_id caused_by_parent_request_doc_id
+                    _docID request_id node_did requester_did session_id agent_did caused_by_parent_request_id caused_by_parent_request_doc_id
                     caused_by_trigger_id caused_by_trigger_kind input lifecycle_state
                     retry_key request_hop workspace_id workspace_authority
                     workspace_owner_node_did workspace_seal_hash
@@ -1092,7 +1118,7 @@ async fn completed_request_materializes_exactly_one_same_session_goal_child() {
     assert_eq!(children.len(), 1);
     let child = &children[0];
     assert_eq!(child.session_id, SESSION);
-    assert_eq!(child.agent_id.as_deref(), Some(crate::support::AGENT_NAME));
+    assert_eq!(child.agent_did.as_deref(), Some(crate::support::AGENT_NAME));
     assert_eq!(
         child.caused_by_parent_request_id.as_deref(),
         Some("parent-complete")
@@ -1200,7 +1226,7 @@ async fn foreign_retry_key_collision_is_rejected_instead_of_reused() {
     let mutation = format!(
         r#"mutation {{ create_AgentRequest(input: {{
             request_id: "foreign-retry-collision", purpose: "normal", node_did: "did:key:foreign",
-            agent_id: "foreign", session_id: "foreign-session",
+            agent_did: "foreign", session_id: "foreign-session",
             retry_root_request: "foreign-retry-collision",
             retry_key: "{}",
             content: "foreign", lifecycle_state: "completed",
@@ -1272,9 +1298,14 @@ async fn restart_materializes_a_claimed_continuation_after_crash() {
     )
     .await
     .expect("set goal");
-    assert!(claim_continuation(&db.node, &goal, "parent-claimed")
-        .await
-        .expect("claim continuation"));
+    assert!(claim_continuation(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &goal,
+        "parent-claimed"
+    )
+    .await
+    .expect("claim continuation"));
     assert!(goal_children(&db).await.is_empty());
 
     let (mut restarted, _restart_tx) = source(&db).await;
@@ -1299,11 +1330,16 @@ async fn restart_materializes_claimed_retry_without_charging_it_twice() {
     )
     .await
     .expect("set goal");
-    assert!(
-        claim_retry_continuation(&db.node, &goal, "parent-claimed-retry", 1, "failed",)
-            .await
-            .expect("atomically charge and claim retry")
-    );
+    assert!(claim_retry_continuation(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &goal,
+        "parent-claimed-retry",
+        1,
+        "failed",
+    )
+    .await
+    .expect("atomically charge and claim retry"));
 
     let (mut restarted, _tx) = source(&db).await;
     tokio::time::timeout(Duration::from_secs(2), restarted.next_fire())
@@ -1332,11 +1368,16 @@ async fn restart_materializes_claimed_wrapup_retry_without_charging_it_twice() {
     )
     .await
     .expect("set budget-limited goal");
-    assert!(
-        claim_retry_continuation(&db.node, &goal, "parent-claimed-wrapup-retry", 1, "failed",)
-            .await
-            .expect("atomically charge and claim wrap-up retry")
-    );
+    assert!(claim_retry_continuation(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &goal,
+        "parent-claimed-wrapup-retry",
+        1,
+        "failed",
+    )
+    .await
+    .expect("atomically charge and claim wrap-up retry"));
 
     let (mut restarted, _tx) = source(&db).await;
     tokio::time::timeout(Duration::from_secs(2), restarted.next_fire())
@@ -1370,9 +1411,14 @@ async fn continuation_claim_rejects_a_stale_active_status_snapshot() {
     seed_goal_fields(db.node.as_ref(), &stale, r#"status: "paused""#)
         .await
         .expect("pause goal");
-    assert!(!claim_continuation(&db.node, &stale, "parent-stale")
-        .await
-        .expect("stale claim returns cleanly"));
+    assert!(!claim_continuation(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &stale,
+        "parent-stale"
+    )
+    .await
+    .expect("stale claim returns cleanly"));
 }
 
 #[tokio::test]
@@ -1393,6 +1439,7 @@ async fn controller_status_cas_never_overwrites_a_newer_completion() {
         .expect("complete goal");
     assert!(!update_goal_fields_if_status(
         &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
         &stale,
         GoalStatus::Active,
         r#"status: "paused", last_failure: "stale controller""#,
@@ -1419,9 +1466,14 @@ async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStat
     .await
     .expect("set active goal");
     assert_eq!(stale.continuation_sequence(), 0);
-    assert!(claim_continuation(&db.node, &stale, "newly-claimed-parent")
-        .await
-        .expect("claim newer continuation"));
+    assert!(claim_continuation(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &stale,
+        "newly-claimed-parent"
+    )
+    .await
+    .expect("claim newer continuation"));
     let claimed = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
         .await
         .expect("load claimed goal")
@@ -1437,9 +1489,15 @@ async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStat
         status.as_str()
     );
     assert!(
-        !update_goal_fields_if_status(&db.node, &stale, GoalStatus::Active, &fields,)
-            .await
-            .expect("stale controller mutation returns cleanly"),
+        !update_goal_fields_if_status(
+            &db.node,
+            &identity::Did::new(db.node_identity.did()).unwrap(),
+            &stale,
+            GoalStatus::Active,
+            &fields,
+        )
+        .await
+        .expect("stale controller mutation returns cleanly"),
         "same status must not authorize an older continuation snapshot"
     );
     let current = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
@@ -1456,11 +1514,15 @@ async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStat
         claimed.last_continued_from_request_id
     );
     assert_eq!(current.last_failure, claimed.last_failure);
-    assert!(
-        update_goal_fields_if_status(&db.node, &current, GoalStatus::Active, &fields,)
-            .await
-            .expect("current controller mutation")
-    );
+    assert!(update_goal_fields_if_status(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &current,
+        GoalStatus::Active,
+        &fields,
+    )
+    .await
+    .expect("current controller mutation"));
     let updated = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
         .await
         .expect("reload current update")
@@ -1482,8 +1544,10 @@ async fn controller_block_rejects_same_status_from_an_older_continuation() {
 #[tokio::test]
 async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
     let db = test_db("goal-model-create").await;
+    let (user, _agent) = goal_creation_actors(&db).await;
     let created = create_goal_for_session(
         &db.node,
+        user.did(),
         db.node_identity.did(),
         SESSION,
         "Ship the feature",
@@ -1495,6 +1559,7 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
 
     let duplicate = create_goal_for_session(
         &db.node,
+        user.did(),
         db.node_identity.did(),
         SESSION,
         " Ship the feature ",
@@ -1516,6 +1581,7 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
 
     let error = create_goal_for_session(
         &db.node,
+        user.did(),
         db.node_identity.did(),
         SESSION,
         "Different objective",
@@ -1535,8 +1601,10 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
 #[tokio::test]
 async fn clearing_a_goal_also_clears_its_creation_claim() {
     let db = test_db("goal-model-create-clear").await;
+    let (user, _agent) = goal_creation_actors(&db).await;
     create_goal_for_session(
         &db.node,
+        user.did(),
         db.node_identity.did(),
         SESSION,
         "First objective",
@@ -1552,6 +1620,7 @@ async fn clearing_a_goal_also_clears_its_creation_claim() {
     );
     let replacement = create_goal_for_session(
         &db.node,
+        user.did(),
         db.node_identity.did(),
         SESSION,
         "Replacement objective",
@@ -1568,6 +1637,7 @@ async fn clearing_a_goal_also_clears_its_creation_claim() {
 #[tokio::test]
 async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_spend() {
     let db = test_db("goal-baseline-prior-usage").await;
+    let (user, agent) = goal_creation_actors(&db).await;
     seed_completed_request(&db, "parent-baseline").await;
     seed_usage(
         &db.node,
@@ -1583,6 +1653,7 @@ async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_
     // pre-goal spend is never charged against the new goal.
     let created = create_goal_for_session(
         &db.node,
+        user.did(),
         db.node_identity.did(),
         SESSION,
         "Baseline prior usage",
@@ -1613,9 +1684,13 @@ async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_
         .expect("goal exists");
     assert_eq!(refreshed.token_usage_baseline, Some(1050));
     assert_eq!(refreshed.tokens_used, Some(0));
-    let tokens = gents::goal::refresh_goal_usage(&db.node, &refreshed)
-        .await
-        .expect("refresh usage");
+    let tokens = gents::goal::refresh_goal_usage(
+        &db.node,
+        &identity::Did::new(agent.did()).unwrap(),
+        &refreshed,
+    )
+    .await
+    .expect("refresh usage");
     assert_eq!(tokens, 450);
     let charged = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
         .await
@@ -1628,6 +1703,7 @@ async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_
 #[tokio::test]
 async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
     let db = test_db("goal-baseline-idempotent").await;
+    let (user, _agent) = goal_creation_actors(&db).await;
     seed_completed_request(&db, "parent-idempotent").await;
     seed_usage(
         &db.node,
@@ -1640,6 +1716,7 @@ async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
     .await;
     let created = create_goal_for_session(
         &db.node,
+        user.did(),
         db.node_identity.did(),
         SESSION,
         "Baseline prior usage",
@@ -1667,6 +1744,7 @@ async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
     .await;
     let duplicate = create_goal_for_session(
         &db.node,
+        user.did(),
         db.node_identity.did(),
         SESSION,
         " Baseline prior usage ",
@@ -1707,9 +1785,11 @@ async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
 #[tokio::test]
 async fn fresh_goal_with_zero_prior_usage_starts_charging_from_zero() {
     let db = test_db("goal-baseline-zero").await;
+    let (user, agent) = goal_creation_actors(&db).await;
     seed_completed_request(&db, "parent-zero").await;
     let created = create_goal_for_session(
         &db.node,
+        user.did(),
         db.node_identity.did(),
         SESSION,
         "Zero prior usage",
@@ -1736,9 +1816,13 @@ async fn fresh_goal_with_zero_prior_usage_starts_charging_from_zero() {
         .await
         .expect("load goal")
         .expect("goal exists");
-    let tokens = gents::goal::refresh_goal_usage(&db.node, &refreshed)
-        .await
-        .expect("refresh usage");
+    let tokens = gents::goal::refresh_goal_usage(
+        &db.node,
+        &identity::Did::new(agent.did()).unwrap(),
+        &refreshed,
+    )
+    .await
+    .expect("refresh usage");
     assert_eq!(tokens, 450);
     let charged = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
         .await
@@ -1836,7 +1920,7 @@ fn free_address() -> std::net::SocketAddr {
 }
 
 async fn seed_usage(
-    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<gents::defra_node::Node>,
     node_did: &str,
     request_id: &str,
     call_id: &str,
@@ -1858,7 +1942,7 @@ async fn seed_usage(
                 request_doc_id: "{request_doc_id}",
                 call_seq: 1,
                 backend_id: "backend-test",
-                agent_id: "test",
+                agent_did: "test",
                 node_did: "{node_did}",
                 call_kind: "inference",
                 attempt: 1,
@@ -2109,15 +2193,22 @@ async fn goal_backed_submission_discards_goal_when_request_staging_fails() {
 #[tokio::test]
 async fn concurrent_model_goal_create_converges_to_one_physical_goal() {
     let db = test_db("goal-model-create-concurrent").await;
+    let (user, _agent) = goal_creation_actors(&db).await;
     let left_node = db.node.clone();
     let right_node = db.node.clone();
     let did = db.node_identity.did().to_string();
     let left_did = did.clone();
+    let user_did = user.did().to_owned();
+    let left_user_did = user_did.clone();
     let left = tokio::spawn(async move {
-        create_goal_for_session(&left_node, &left_did, SESSION, "Concurrent objective", None).await
+        create_goal_for_session(
+            &left_node, &left_user_did, &left_did, SESSION, "Concurrent objective", None,
+        ).await
     });
     let right = tokio::spawn(async move {
-        create_goal_for_session(&right_node, &did, SESSION, "Concurrent objective", None).await
+        create_goal_for_session(
+            &right_node, &user_did, &did, SESSION, "Concurrent objective", None,
+        ).await
     });
     left.await.expect("left task").expect("left create");
     right.await.expect("right task").expect("right create");
@@ -2307,9 +2398,14 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             vec![hold_wrapup],
         )
         .await;
-        let prior_usage = session_token_usage(&db.node, db.node_identity.did(), SESSION)
-            .await
-            .unwrap();
+        let prior_usage = session_token_usage(
+            &db.node,
+            &identity::Did::new(db.node_identity.did()).unwrap(),
+            db.node_identity.did(),
+            SESSION,
+        )
+        .await
+        .unwrap();
         assert!(
             prior_usage < 100,
             "the held parent has not exhausted the Goal budget"
@@ -2340,9 +2436,14 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             .await
             .unwrap();
         assert_eq!(
-            session_token_usage(&db.node, db.node_identity.did(), SESSION)
-                .await
-                .unwrap(),
+            session_token_usage(
+                &db.node,
+                &identity::Did::new(db.node_identity.did()).unwrap(),
+                db.node_identity.did(),
+                SESSION
+            )
+            .await
+            .unwrap(),
             expected_usage,
         );
 
@@ -2555,7 +2656,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
             request_doc_id: "{usage_request_doc}",
             call_seq: 1,
             backend_id: "backend-test",
-            agent_id: "test",
+            agent_did: "test",
             node_did: "{}",
             call_kind: "inference",
             attempt: 1,
@@ -2578,7 +2679,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
             request_doc_id: "{usage_request_doc}",
             call_seq: 1,
             backend_id: "backend-test",
-            agent_id: "test",
+            agent_did: "test",
             node_did: "did:key:foreign-goal-owner",
             call_kind: "inference",
             attempt: 1,
@@ -2659,9 +2760,14 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     );
     let continuation_sequence = goal.continuation_sequence;
     assert_eq!(
-        session_token_usage(&db.node, db.node_identity.did(), SESSION)
-            .await
-            .expect("session usage before repeated recovery"),
+        session_token_usage(
+            &db.node,
+            &identity::Did::new(db.node_identity.did()).unwrap(),
+            db.node_identity.did(),
+            SESSION
+        )
+        .await
+        .expect("session usage before repeated recovery"),
         105,
     );
     drop(source);
@@ -2691,9 +2797,14 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
         assert_eq!(current.continuation_sequence, continuation_sequence);
         assert_eq!(current.wrapup_completed, Some(true));
         assert_eq!(
-            session_token_usage(&db.node, db.node_identity.did(), SESSION)
-                .await
-                .unwrap(),
+            session_token_usage(
+                &db.node,
+                &identity::Did::new(db.node_identity.did()).unwrap(),
+                db.node_identity.did(),
+                SESSION
+            )
+            .await
+            .unwrap(),
             105,
             "recovery must preserve the session charge, including cached input exactly once",
         );
@@ -2726,7 +2837,7 @@ async fn session_token_usage_charges_cached_input_as_part_of_the_total() {
             request_doc_id: "{usage_request_doc}",
             call_seq: 1,
             backend_id: "backend-test",
-            agent_id: "test",
+            agent_did: "test",
             node_did: "{}",
             call_kind: "inference",
             attempt: 1,
@@ -2748,9 +2859,14 @@ async fn session_token_usage_charges_cached_input_as_part_of_the_total() {
     let response = db.node.execute(&usage).await;
     assert!(!response.has_errors(), "seed usage: {:?}", response.errors);
 
-    let tokens = session_token_usage(&db.node, db.node_identity.did(), SESSION)
-        .await
-        .expect("session token usage");
+    let tokens = session_token_usage(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        db.node_identity.did(),
+        SESSION,
+    )
+    .await
+    .expect("session token usage");
     assert_eq!(tokens, 1050);
 }
 
@@ -2976,7 +3092,7 @@ async fn seed_a_passed_reset(db: &TestDb, opted_in: bool) {
                 }}) {{ _docID }}
                 add_InferenceCall(input: {{
                     call_id: "limited-call", request_id: "usage-limited-request", call_seq: 1,
-                    backend_id: "reset-backend", agent_id: "{agent}", node_did: "{did}",
+                    backend_id: "reset-backend", agent_did: "{agent}", node_did: "{did}",
                     call_kind: "inference", attempt: 1, call_state: "failed",
                     queued_at: "2026-07-15T00:00:05Z", started_at: "2026-07-15T00:00:05Z",
                     ended_at: "2026-07-15T00:00:10Z", failure_reason: "{RENDERED_LIMIT}"
@@ -3321,9 +3437,23 @@ async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() 
             .unwrap()
             .unwrap();
         let claimed = if retry {
-            claim_retry_continuation(&db.node, &before, "last-parent", 1, "failed").await
+            claim_retry_continuation(
+                &db.node,
+                &identity::Did::new(db.node_identity.did()).unwrap(),
+                &before,
+                "last-parent",
+                1,
+                "failed",
+            )
+            .await
         } else {
-            claim_continuation(&db.node, &before, "last-parent").await
+            claim_continuation(
+                &db.node,
+                &identity::Did::new(db.node_identity.did()).unwrap(),
+                &before,
+                "last-parent",
+            )
+            .await
         };
         assert!(claimed.expect("MAX-1 must permit one final sequence advance"));
         let exhausted = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
@@ -3339,6 +3469,7 @@ async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() 
         let rejected = if retry {
             claim_retry_continuation(
                 &db.node,
+                &identity::Did::new(db.node_identity.did()).unwrap(),
                 &exhausted,
                 "must-not-be-claimed",
                 2,
@@ -3346,7 +3477,13 @@ async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() 
             )
             .await
         } else {
-            claim_continuation(&db.node, &exhausted, "must-not-be-claimed").await
+            claim_continuation(
+                &db.node,
+                &identity::Did::new(db.node_identity.did()).unwrap(),
+                &exhausted,
+                "must-not-be-claimed",
+            )
+            .await
         };
         assert!(
             rejected.is_err(),
@@ -3413,9 +3550,13 @@ async fn stale_usage_refresh_preserves_completed_goal_time_accounting() {
     assert_eq!(completed.active_time_seconds, Some(73));
     assert!(completed.active_started_at.is_none());
 
-    gents::goal::refresh_goal_usage(&db.node, &stale)
-        .await
-        .expect("stale usage observation must safely skip obsolete accounting writes");
+    gents::goal::refresh_goal_usage(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &stale,
+    )
+    .await
+    .expect("stale usage observation must safely skip obsolete accounting writes");
     let after = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
         .await
         .unwrap()
@@ -3479,7 +3620,7 @@ async fn seed_operator_resume_parent(db: &TestDb, request_id: &str) -> String {
 async fn operator_resume_child_row(db: &TestDb, doc_id: &str) -> serde_json::Value {
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
-        _docID request_id node_did requester_did session_id agent_id lifecycle_state
+        _docID request_id node_did requester_did session_id agent_did lifecycle_state
         content created_at execution_origin retry_key input admission_kind admission_signer_did
         admission_signature runtime_issuer_did runtime_source_request_id runtime_source_kind
         caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind
@@ -3513,7 +3654,10 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     set_goal(&db.node, did, SESSION, None, Some(GoalStatus::Paused), None)
         .await
         .unwrap();
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let receipt = gents::goal::resume_goal_request(
         &access,
         db.node_identity.as_ref(),
@@ -3548,7 +3692,7 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
         assert_eq!(child[field], did, "{field}");
     }
     assert_eq!(child["session_id"], SESSION);
-    assert_eq!(child["agent_id"], crate::support::AGENT_NAME);
+    assert_eq!(child["agent_did"], crate::support::AGENT_NAME);
     assert_eq!(child["lifecycle_state"], "pending");
     assert_eq!(child["execution_origin"], "scheduled");
     assert_eq!(child["runtime_source_request_id"], "resume-parent");
@@ -3576,6 +3720,7 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     assert!(
         !update_goal_fields_if_status(
             &db.node,
+            &identity::Did::new(db.node_identity.did()).unwrap(),
             &stale_active,
             GoalStatus::Active,
             r#"status: "paused""#
@@ -3609,7 +3754,10 @@ async fn operator_resume_retry_after_goal_progress_returns_original_child_withou
     )
     .await
     .unwrap();
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let first = gents::goal::resume_goal_request(
         &access,
         db.node_identity.as_ref(),
@@ -3676,7 +3824,10 @@ async fn operator_resume_rejects_foreign_identity_even_with_target_key_registere
     )
     .await
     .unwrap();
-    let access = ConfigAccess::local(target.node.clone());
+    let access = ConfigAccess::local_as(
+        target.node.clone(),
+        ::identity::Did::new(target.node_identity.did().to_owned()).unwrap(),
+    );
     assert!(gents::goal::resume_goal_request(
         &access,
         foreign.node_identity.as_ref(),
@@ -3728,7 +3879,10 @@ async fn operator_resume_rejects_busy_session_and_old_predecessor() {
         )
         .await
         .unwrap();
-        let access = ConfigAccess::local(db.node.clone());
+        let access = ConfigAccess::local_as(
+            db.node.clone(),
+            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+        );
         assert!(gents::goal::resume_goal_request(
             &access,
             db.node_identity.as_ref(),
@@ -3769,7 +3923,10 @@ async fn resume_resets_blocked_audit_identity_and_count() {
     .unwrap();
     seed_goal_fields(db.node.as_ref(), &goal,
         r#"status: "blocked", consecutive_blocked_audits: 3, last_blocked_request_id: "request-3", last_blocked_reason: "needs approval", active_started_at: null"#).await.unwrap();
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let receipt = gents::goal::resume_goal_request(
         &access,
         db.node_identity.as_ref(),
@@ -3806,7 +3963,10 @@ async fn concurrent_operator_resumes_publish_one_child() {
     )
     .await
     .unwrap();
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let (left, right) = tokio::join!(
         gents::goal::resume_goal_request(
             &access,
@@ -3854,7 +4014,10 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
     )
     .await
     .unwrap();
-    let access = ConfigAccess::local(db.node.clone());
+    let access = ConfigAccess::local_as(
+        db.node.clone(),
+        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    );
     let first = gents::goal::resume_goal_request(
         &access,
         db.node_identity.as_ref(),
@@ -3870,7 +4033,7 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
         .unwrap();
     let original = db.node.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
-            request_id node_did requester_did admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind agent_id session_id retry_parent_request retry_parent_request_doc_id retry_root_request retry_key content max_total_tokens input execution_origin caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id created_at retry_count max_retries valid_until request_hop caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash lifecycle_state
+            request_id node_did requester_did admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind agent_did session_id retry_parent_request retry_parent_request_doc_id retry_root_request retry_key content max_total_tokens input execution_origin caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id created_at retry_count max_retries valid_until request_hop caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash lifecycle_state
         }} }}"#, gents::store::graphql::escape_graphql_string(&first.doc_id),
     )).await;
     assert!(!original.has_errors(), "{:?}", original.errors);
@@ -3964,7 +4127,10 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
         .await
         .unwrap();
         let error = gents::goal::resume_goal_request(
-            &ConfigAccess::local(db.node.clone()),
+            &ConfigAccess::local_as(
+                db.node.clone(),
+                ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+            ),
             db.node_identity.as_ref(),
             did,
             SESSION,
@@ -4015,7 +4181,10 @@ async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
     .await
     .unwrap();
     let receipt = gents::goal::resume_goal_request(
-        &ConfigAccess::local(db.node.clone()),
+        &ConfigAccess::local_as(
+            db.node.clone(),
+            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+        ),
         db.node_identity.as_ref(),
         did,
         SESSION,
@@ -4047,7 +4216,7 @@ async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
 }
 
 async fn seed_goal_fields(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     goal: &gents::goal::GoalDocument,
     fields: &str,
 ) -> anyhow::Result<()> {
@@ -4129,7 +4298,7 @@ async fn seed_same_second_canonical_goal_child(
         requester_did: None,
         request_id: child_id.clone(),
         node_did: did.to_owned(),
-        agent_id: crate::support::AGENT_NAME.to_owned(),
+        agent_did: crate::support::AGENT_NAME.to_owned(),
         session_id: SESSION.to_owned(),
         content: "The canonical continuation made durable progress".to_owned(),
         execution_origin: gents::request::lifecycle::ExecutionOrigin::Scheduled,
@@ -4245,7 +4414,10 @@ async fn operator_resume_accepts_same_second_child_that_sorts_before_root() {
         let (child_id, child_doc) =
             seed_same_second_canonical_goal_child(&db, parent_id, true).await;
         let receipt = gents::goal::resume_goal_request(
-            &ConfigAccess::local(db.node.clone()),
+            &ConfigAccess::local_as(
+                db.node.clone(),
+                ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+            ),
             db.node_identity.as_ref(),
             db.node_identity.did(),
             SESSION,
@@ -4381,7 +4553,7 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].session_id, SESSION);
     assert_eq!(
-        children[0].agent_id.as_deref(),
+        children[0].agent_did.as_deref(),
         Some(crate::support::AGENT_NAME)
     );
     assert_eq!(
@@ -4586,9 +4758,14 @@ async fn claimed_continuation_waits_for_readiness_before_materializing() {
     )
     .await
     .expect("set goal");
-    assert!(claim_continuation(&db.node, &goal, "parent-claimed-waits")
-        .await
-        .expect("claim continuation"));
+    assert!(claim_continuation(
+        &db.node,
+        &identity::Did::new(db.node_identity.did()).unwrap(),
+        &goal,
+        "parent-claimed-waits"
+    )
+    .await
+    .expect("claim continuation"));
     publish_node_readiness(&db, Process::Recovering, None).await;
     let claimed = canonical_goal_json(&db).await;
     let (mut source, _tx) = unready_source(&db);

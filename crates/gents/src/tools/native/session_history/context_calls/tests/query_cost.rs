@@ -49,7 +49,7 @@ async fn seed_unrelated_completed_requests(
         "purpose": "normal", "request_id": format!("unrelated-{i}"),
         "node_did": "did:test:accounting", "requester_did": null,
         "session_id": "session", "created_at": format!("2026-10-01T00:{:02}:{:02}Z", i / 60, i % 60),
-        "lifecycle_state": "completed", "agent_id": "default", "backend_id": "backend",
+        "lifecycle_state": "completed", "agent_did": "default", "backend_id": "backend",
         "content": "unrelated completed request",
     })).collect::<Vec<_>>();
     let input = gents_protocol::graphql::graphql_input_literal(&json!(inputs)).unwrap();

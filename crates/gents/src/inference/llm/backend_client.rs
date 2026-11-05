@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::resolved::ResolvedAgent;
@@ -180,7 +180,7 @@ pub(crate) async fn build_backend_client(
         BackendProviderKind::OpenAiCompatible => {
             let build_context = format!(
                 "building OpenAI-compatible completion client for agent {} against {}",
-                agent.agent_id, agent.backend_endpoint
+                agent.agent_did, agent.backend_endpoint
             );
             if agent.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
                 let client = crate::inference::clients::inference_http::build_openai_chat_completions_client(
@@ -215,7 +215,7 @@ pub(crate) async fn build_backend_client(
         BackendProviderKind::OpenRouter => {
             let build_context = format!(
                 "building OpenRouter completion client for agent {} against {}",
-                agent.agent_id, agent.backend_endpoint
+                agent.agent_did, agent.backend_endpoint
             );
             let client: rig::providers::openrouter::Client<
                 crate::inference::rendered_request::RenderedRequestCapturingHttpClient<
@@ -255,7 +255,7 @@ pub(crate) async fn build_backend_client(
             .with_context(|| {
                 format!(
                     "building ChatGPT Codex completion client for agent {} against {}",
-                    agent.agent_id, agent.backend_endpoint
+                    agent.agent_did, agent.backend_endpoint
                 )
             })?;
             Ok(BackendClient::ChatGptCodex(client))
@@ -263,7 +263,7 @@ pub(crate) async fn build_backend_client(
         BackendProviderKind::XaiGrokOAuth => {
             let build_context = format!(
                 "building Grok OAuth completion client for agent {} against {}",
-                agent.agent_id, agent.backend_endpoint
+                agent.agent_did, agent.backend_endpoint
             );
             let timeout_error = || {
                 anyhow::anyhow!(
@@ -336,7 +336,7 @@ pub(crate) async fn build_backend_client(
             .with_context(|| {
                 format!(
                     "building Claude subscription completion client for agent {}",
-                    agent.agent_id
+                    agent.agent_did
                 )
             })?;
             Ok(BackendClient::ClaudeSubscription(client))
@@ -460,7 +460,7 @@ pub(crate) async fn build_backend_client(
                 .with_context(|| {
                     format!(
                         "building the {kind} completion client for agent {}",
-                        agent.agent_id
+                        agent.agent_did
                     )
                 })?;
             Ok(BackendClient::AnthropicApiKey(

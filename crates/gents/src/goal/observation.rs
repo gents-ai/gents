@@ -138,6 +138,7 @@ async fn verified(
     if observation
         .validate_scope(
             &session.session.node_did,
+            &session.session.agent_did,
             &session.session.session_id,
             &session.doc_id,
             session.session.requester_did.as_deref(),
@@ -148,7 +149,7 @@ async fn verified(
     }
     if !identity
         .verify(
-            &observation.node_did,
+            &session.session.agent_did,
             &observation.signing_payload()?,
             &observation.signature,
         )
@@ -247,12 +248,12 @@ pub async fn prepare_goal_input(
 }
 
 /// Canonical reads require a locally owned destination. Remote destination
-/// capture uses its runtime-signed observation through the same transaction.
+/// capture uses its agent-signed observation through the same transaction.
 pub async fn prepare_goal_input_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
-    agent_id: &str,
+    agent_did: &str,
     requester_did: Option<&str>,
     input: gents_protocol::request_input::RequestInput,
 ) -> Result<gents_protocol::request_input::RequestInput> {
@@ -266,7 +267,7 @@ pub async fn prepare_goal_input_in_txn(
         return Ok(input);
     };
     anyhow::ensure!(
-        session.session.agent_id == agent_id,
+        session.session.agent_did == agent_did,
         "Goal input target Agent differs from its canonical session"
     );
     let reference = load_canonical_goal_in_txn(txn, node_did, session_id)
@@ -330,7 +331,12 @@ pub(crate) async fn project_session_goal(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<()> {
-    ConfigAccess::transact_local_write(node, None, "goal.project_observation", |txn| Box::pin(async move {
+    let actor = crate::session::load_session_agent_did(node, identity.did(), session_id).await?;
+    let signer =
+        crate::store::identity::RegisteredIdentity::from_registered_did(actor.to_string(), None)?;
+    ConfigAccess::transact_local_write(node, Some(actor), "goal.project_observation", |txn| {
+        let signer = &signer;
+        Box::pin(async move {
         crate::store::graphql::fence_arrivals(txn, "AgentSession").await?;
         crate::store::graphql::fence_arrivals(txn, "Goal").await?;
         crate::store::graphql::fence_arrivals(txn, "GoalObservation").await?;
@@ -366,14 +372,15 @@ pub(crate) async fn project_session_goal(
         }
         let mut observation = SessionGoalObservation {
             version: SESSION_GOAL_CONTROL_VERSION,
-            node_did: session.session.node_did.clone(), session_id: session.session.session_id.clone(),
+            node_did: session.session.node_did.clone(), agent_did: session.session.agent_did.clone(), session_id: session.session.session_id.clone(),
             session_doc_id: session.doc_id.clone(), requester_did: session.session.requester_did.clone(),
             observed_at: Utc::now().to_rfc3339(), goal, signature: Vec::new(),
         };
-        observation.signature = identity.sign(&observation.signing_payload()?).await?;
+        observation.signature = signer.sign(&observation.signing_payload()?).await?;
         let input = serde_json::json!({
             "node_did": observation.node_did, "session_id": observation.session_id,
             "session_doc_id": observation.session_doc_id, "requester_did": observation.requester_did,
+            "agent_did": observation.agent_did,
             "observation_json": serde_json::to_string(&observation)?,
         });
         let (document, variables, field) = match rows.first() {
@@ -393,5 +400,5 @@ pub(crate) async fn project_session_goal(
         crate::store::graphql::single_mutation_document(&response, field)?
             .context("goal observation write omitted its document")?;
         Ok(())
-    })).await
+    })}).await
 }

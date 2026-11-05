@@ -207,7 +207,7 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let default_agent_id = format!("{node_did}:default");
+    let default_agent_did = format!("{node_did}:default");
     let default_backend_id = default_backend_id(&node_did);
     let alt_model_name = format!("alt-model-{}", Uuid::new_v4().simple());
     let alt_model_selection = gents_model_selection_id(&default_backend_id, &alt_model_name);
@@ -234,7 +234,7 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
     let switch_profile = format!(
         r#"mutation {{
             update_InferenceProfile(
-                filter: {{ profile_id: {{ _eq: "{default_agent_id}-profile" }} }},
+                filter: {{ profile_id: {{ _eq: "{default_agent_did}-profile" }} }},
                 input: {{ model_name: "{alt_model_name}" }}
             ) {{ _docID }}
         }}"#
@@ -312,7 +312,7 @@ async fn codex_shim_config_value_write_model_mutates_agent() -> Result<()> {
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let default_agent_id = format!("{node_did}:default");
+    let default_agent_did = format!("{node_did}:default");
     let original_profile_id = format!("{node_did}:default-profile");
     let alt_model_name = format!("mock-codex-shim-alt-model-{}", Uuid::new_v4().simple());
     let alt_endpoint = MockChatEndpoint::start(&alt_model_name, "irrelevant")?;
@@ -420,7 +420,7 @@ async fn codex_shim_config_value_write_model_mutates_agent() -> Result<()> {
             &format!(
                 r#"{{
                 Agent(
-                    filter: {{ agent_id: {{ _eq: "{default_agent_id}" }} }},
+                    filter: {{ agent_did: {{ _eq: "{default_agent_did}" }} }},
                     limit: 1
                 ) {{ inference_profile_id }}
             }}"#
@@ -479,7 +479,7 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
-    let default_agent_id = format!("{node_did}:default");
+    let default_agent_did = format!("{node_did}:default");
     let original_backend_id = format!("{node_did}:backend");
     let original_profile_id = format!("{node_did}:default-profile");
 
@@ -553,7 +553,7 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
             &format!(
                 r#"{{
                 Agent(
-                    filter: {{ agent_id: {{ _eq: "{default_agent_id}" }} }},
+                    filter: {{ agent_did: {{ _eq: "{default_agent_did}" }} }},
                     limit: 1
                 ) {{ inference_profile_id }}
             }}"#

@@ -131,7 +131,7 @@ async fn create_owned_request_with_times_and_requester(
                 purpose: "normal",
                 node_did: "{escaped_node_did}",
                 {requester_field}
-                agent_id: "{AGENT_NAME}",
+                agent_did: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{escaped_request_id}",
@@ -203,7 +203,7 @@ async fn create_queue_request(
                 request_id: "{escaped_request_id}",
                 purpose: "normal",
                 node_did: "{escaped_node_did}",
-                agent_id: "{AGENT_NAME}",
+                agent_did: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{escaped_request_id}",
@@ -706,6 +706,7 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
 
     let survivor = reconcile_coalesced_pending_request(
         &db.node,
+        AGENT_NAME,
         session_id,
         owner.did(),
         QueueSource::BackgroundCompletion,

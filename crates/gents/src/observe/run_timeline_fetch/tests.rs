@@ -43,7 +43,7 @@ async fn timeline_canonical_messages_share_one_request_payload_scan() {
         scans, 1,
         "one timeline session pass scans a shared request once"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -52,7 +52,7 @@ async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let owner = "did:test:timeline-fork";
     crate::test_support::install_test_agent(&node, owner, "timeline-fork").await;
-    crate::session::create_session_with_agent_id(
+    crate::session::create_session_with_agent_did(
         &node,
         "timeline-fork-source",
         owner,
@@ -76,12 +76,13 @@ async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership
     }
     let outcome = crate::session::fork(
         &node,
+        &identity::Did::new(owner).unwrap(),
         crate::session::ForkParams {
             source_session_id: "timeline-fork-source",
             boundary: crate::session::ForkBoundary::UserTurn(3),
             caller_node_did: owner,
             caller_requester_did: None,
-            target_agent_id: None,
+            target_agent_did: None,
         },
     )
     .await
@@ -108,7 +109,7 @@ async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership
         scans, 3,
         "each unbound fork header resolves its own origin request"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -159,7 +160,7 @@ async fn timeline_batches_request_local_events_and_restores_request_sequence_ord
             .collect::<Vec<_>>(),
         vec!["reduction-a-1", "reduction-b-1", "reduction-b-2"]
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[test]
@@ -282,14 +283,14 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
                 create_AgentSession(input: {
                     session_id: "pending-tool-session"
                     node_did: "did:test:timeline"
-                    agent_id: "general"
+                    agent_did: "general"
                     created_at: "2026-09-22T00:00:00Z"
                 }) { _docID }
                 create_AgentRequest(input: {
                     request_id: "pending-tool-request"
                     purpose: "normal"
                     node_did: "did:test:timeline"
-                    agent_id: "general"
+                    agent_did: "general"
                     session_id: "pending-tool-session"
                     retry_parent_request: ""
                     retry_root_request: "pending-tool-request"
@@ -402,7 +403,7 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
     assert_eq!(tool.args, r#"{"path":"/tmp/pending-tool"}"#);
     assert!(tool.result.is_none());
 
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[test]
@@ -569,6 +570,6 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
     .is_empty());
 
     drop(owner);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     std::fs::remove_dir_all(admitted.path).unwrap();
 }

@@ -362,8 +362,8 @@ fn the_origin_decides_the_wire_mode_and_the_attribution() {
     assert!(header(&unattended).contains("cc_turn_origin=sdk;"));
 
     let identity = ClaudeAgentIdentity {
-        agent_id: "worker".to_owned(),
-        parent_agent_id: Some("lead".to_owned()),
+        agent_did: "worker".to_owned(),
+        parent_agent_did: Some("lead".to_owned()),
     };
     for cause in [Cause::AgentNew, Cause::PluginJob] {
         let subagent = plan_of(

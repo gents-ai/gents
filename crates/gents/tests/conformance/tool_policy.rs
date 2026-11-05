@@ -58,7 +58,7 @@ fn invocation(lean: LeanPluginDataInvocation) -> Invocation {
 
 fn stamp(lean: LeanPluginDataStamp) -> Stamp {
     match lean {
-        LeanPluginDataStamp::NodeDid => Stamp::NodeDid,
+        LeanPluginDataStamp::CallerDid => Stamp::CallerDid,
         LeanPluginDataStamp::SessionId => Stamp::SessionId,
         LeanPluginDataStamp::RequestDocId => Stamp::RequestDocId,
         LeanPluginDataStamp::ToolCallDocId => Stamp::ToolCallDocId,
@@ -109,7 +109,7 @@ fn write_facts(op: LeanPluginDataOperation, w: LeanPluginDataWriteFacts) -> Writ
 }
 
 /// Lean `PluginData.applicableStamps`, `admitted`, `refusal`, `queryAdmitted`,
-/// `substituteCallerNodeDid` and `insertNote` through the pure core
+/// `substituteCallerDid` and `insertNote` through the pure core
 /// `plugin::data::admit_write_observation` beside the frozen owner
 /// `plugin::data::admit_write`, and its siblings, which
 /// `plugin::application_write::apply_plugin_writes_in_txn` calls inside the output's
@@ -177,7 +177,7 @@ fn generated_plugin_data_cases_drive_admit_write() {
 
     for (index, row) in cases.filters.iter().enumerate() {
         assert_eq!(
-            plugin_data::substitute_caller_node_did(&row.filter, &row.host_node_did),
+            plugin_data::substitute_caller_did(&row.filter, &row.caller_did),
             row.expected,
             "filter {index}"
         );

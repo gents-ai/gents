@@ -27,6 +27,7 @@ struct RecoveryTrace {
 #[derive(Deserialize)]
 struct Scope {
     node: String,
+    agent: String,
     session: String,
     session_document: String,
     requester: Option<String>,
@@ -45,11 +46,11 @@ async fn fixture() -> Fixture {
         "latest_request":10,"children":[],"blocked_audits":0,"wrapup_requested":false,
         "wrapup_completed":false,"tokens_used":37,"token_budget":1000});
     let f = Fixture::new(&before).await;
-    crate::session::ensure_session_with_agent_id_and_requester_did(
+    crate::session::ensure_session_with_agent_did_and_requester_did(
         &f.node,
         SESSION,
         f.identity.did(),
-        "contract-behavior",
+        &f.parent.agent_did,
         Some(f.identity.did()),
     )
     .await
@@ -73,7 +74,7 @@ async fn session(f: &Fixture) -> SessionOwnerRow {
 #[tokio::test]
 async fn generated_goal_observations_drive_signature_and_scope_validation() {
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_observation_cases.len(), 288);
+    assert_eq!(contracts.goal_observation_cases.len(), 504);
     let f = fixture().await;
     let current = session(&f).await;
     let native = load_canonical_goal(&f.node, f.identity.did(), SESSION)
@@ -82,6 +83,7 @@ async fn generated_goal_observations_drive_signature_and_scope_validation() {
         .unwrap();
     let map = |value: &str| match value {
         "node" | "requester" => f.identity.did().to_owned(),
+        "agent" => f.parent.agent_did.clone(),
         "session" => SESSION.to_owned(),
         "session-document" => current.doc_id.clone(),
         other => other.to_owned(),
@@ -90,6 +92,7 @@ async fn generated_goal_observations_drive_signature_and_scope_validation() {
         let mut observation = SessionGoalObservation {
             version: SESSION_GOAL_CONTROL_VERSION,
             node_did: map(&case.scope.node),
+            agent_did: map(&case.scope.agent),
             session_id: map(&case.scope.session),
             session_doc_id: map(&case.scope.session_document),
             requester_did: case.scope.requester.as_deref().map(map),
@@ -109,11 +112,14 @@ async fn generated_goal_observations_drive_signature_and_scope_validation() {
             }),
             signature: Vec::new(),
         };
-        observation.signature = f
-            .identity
-            .sign(&observation.signing_payload().unwrap())
-            .await
-            .unwrap();
+        observation.signature = crate::store::identity::RegisteredIdentity::from_registered_did(
+            &f.parent.agent_did,
+            None,
+        )
+        .unwrap()
+        .sign(&observation.signing_payload().unwrap())
+        .await
+        .unwrap();
         if !case.verified {
             observation.signature[0] ^= 1;
         }
@@ -125,6 +131,29 @@ async fn generated_goal_observations_drive_signature_and_scope_validation() {
             requester_did: observation.requester_did.clone(),
             observation_json: Some(serde_json::to_string(&observation).unwrap()),
         };
+        if case.accepted {
+            let mut node_signed = observation.clone();
+            node_signed.signature = f
+                .identity
+                .sign(&node_signed.signing_payload().unwrap())
+                .await
+                .unwrap();
+            let node_row = ObservationRow {
+                doc_id: row.doc_id.clone(),
+                node_did: row.node_did.clone(),
+                session_id: row.session_id.clone(),
+                session_doc_id: row.session_doc_id.clone(),
+                requester_did: row.requester_did.clone(),
+                observation_json: Some(serde_json::to_string(&node_signed).unwrap()),
+            };
+            assert!(
+                verified(f.identity.as_ref(), &current, &node_row)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "node signature must not replace selected agent signature"
+            );
+        }
         assert_eq!(
             verified(f.identity.as_ref(), &current, &row)
                 .await
@@ -134,7 +163,7 @@ async fn generated_goal_observations_drive_signature_and_scope_validation() {
             "observation: {observation:?}"
         );
     }
-    f.node.shutdown().await;
+    f.node.shutdown().await.expect("node shutdown");
 }
 
 async fn durable_rows(f: &Fixture) -> Value {
@@ -190,7 +219,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
             let waiting = Arc::new(tokio::sync::Notify::new());
             let run = crate::runtime::agent::p2p_reconcile::session_commands::run_session_command_reconciler_observing(
                 f.node.clone(), identity, cancel.clone(), changes,
-                ObservedTicks { waiting: waiting.clone(), ticks },
+                ObservedTicks { waiting: waiting.clone(), ticks }, None,
             );
             tokio::pin!(run);
             tokio::select! {
@@ -284,7 +313,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
             cancel.cancel();
             run.await.unwrap();
             drop(changes_tx);
-            f.node.shutdown().await;
+            f.node.shutdown().await.expect("node shutdown");
         }
     }
 }
@@ -326,7 +355,7 @@ async fn invalid_session_does_not_starve_other_goal_observations() {
         .await
         .is_err());
     assert_eq!(durable_rows(&f).await, settled);
-    f.node.shutdown().await;
+    f.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -418,7 +447,7 @@ async fn goal_projection_is_signed_scoped_and_settles_without_writes() {
         .await
         .unwrap();
     assert_eq!(durable_rows(&f).await, settled);
-    f.node.shutdown().await;
+    f.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -457,11 +486,12 @@ async fn retained_signed_observation_refreshes_its_root_without_changing_goal_re
         .as_mut()
         .unwrap()
         .assignment_root_request_doc_id = None;
-    retained.signature = f
-        .identity
-        .sign(&retained.signing_payload().unwrap())
-        .await
-        .unwrap();
+    retained.signature =
+        crate::store::identity::RegisteredIdentity::from_registered_did(&f.parent.agent_did, None)
+            .unwrap()
+            .sign(&retained.signing_payload().unwrap())
+            .await
+            .unwrap();
     assert!(serde_json::to_value(retained.goal.as_ref().unwrap())
         .unwrap()
         .get("assignment_root_request_doc_id")
@@ -532,5 +562,5 @@ async fn retained_signed_observation_refreshes_its_root_without_changing_goal_re
     .await
     .unwrap()
     .is_none());
-    f.node.shutdown().await;
+    f.node.shutdown().await.expect("node shutdown");
 }

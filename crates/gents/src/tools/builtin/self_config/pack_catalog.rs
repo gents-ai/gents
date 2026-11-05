@@ -11,7 +11,10 @@ impl PackInstaller {
             Some(store) => store.names()?.into_iter().collect(),
             None => BTreeMap::new(),
         };
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            self.node.clone(),
+            self.core.identity()?.to_owned(),
+        );
         let installed =
             crate::pack::installed_catalog(&access, self.core.node_did(), self.home.as_deref())
                 .await?;
@@ -123,7 +126,10 @@ impl PackInstaller {
             expected_digest: None,
         };
         let distribution = self.resolve("get", &args).await?;
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            self.node.clone(),
+            self.core.identity()?.to_owned(),
+        );
         let inference = crate::pack::inspect_pack_inference_bindings(
             &access,
             distribution.manifest(),
@@ -177,7 +183,10 @@ impl PackInstaller {
                 anyhow::ensure!(!matches!(record.kind, crate::pack::PackKind::Assets | crate::pack::PackKind::Plugins), "native removal of home-installed plugin/assets packs is unavailable; the existing pack removal owner must release plugin and home records together. Current installation is unchanged");
             }
         }
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            self.node.clone(),
+            self.core.identity()?.to_owned(),
+        );
         let report = crate::pack::remove_pack(
             &access,
             self.core.node_did(),

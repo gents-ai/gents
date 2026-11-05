@@ -8,7 +8,7 @@ use gents_protocol::output::{
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use crate::session::canonical_rows::{
-    decode_scoped_request_output_segments, output_segment_create_variables,
+    decode_scoped_request_output_segments, output_segment_bound_variables,
     request_output_segments_filter, AGENT_OUTPUT_SEGMENT_FIELDS,
     CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
@@ -81,7 +81,7 @@ impl ToolCallLifecycle {
         let key = super::PluginEffectBinding::internal_id(&binding.tool_call_doc_id, ordinal);
         let internal_id = key.clone();
         let child = ConfigAccess::transact_local_idempotent(
-            &self.node, None, IdempotentTransactionRetry::Standard, "tool_call.admit_plugin_effect",
+            &self.node, Some(self.actor.clone()), IdempotentTransactionRetry::Standard, "tool_call.admit_plugin_effect",
             |txn| {
                 let binding = binding.clone(); let header = header.clone(); let generation = generation.clone();
                 let name = name.clone(); let arguments = arguments.clone();
@@ -113,7 +113,12 @@ impl ToolCallLifecycle {
                         anyhow::ensure!(stored == arguments, "plugin effect replay changed arguments");
                         return Ok(child.to_owned());
                     }
+                    let (session_doc_id, selected_agent) = crate::session::canonical_rows::agent_session_child_binding_in_txn(
+                        txn, &binding.node_did, &binding.session_id, binding.requester_did.as_deref()).await?;
+                    let session_doc_id = escape_graphql_string(&session_doc_id);
+                    let selected_agent = escape_graphql_string(&selected_agent);
                     let created = txn.execute(&format!(r#"mutation {{ create_AgentToolCall(input: {{
+                        session_doc_id: "{session_doc_id}", agent_did: "{selected_agent}", creator_did: "{selected_agent}", parent_linked: false,
                         tool_call_key: "{}", tool_call_id: "{}", tool_name: "{}", request_id: "{}",
                         request_doc_id: "{}", session_id: "{}", node_did: "{}", {}
                         message_sequence: {sequence}, deadline_at: "{}", status: "pending", lifecycle_state: "pending",
@@ -139,10 +144,17 @@ impl ToolCallLifecycle {
                         created_at: Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true),
                     };
                     txn.execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                        &output_segment_create_variables(&segment)?).await?;
+                        &output_segment_bound_variables(txn, &segment).await?).await?;
                     Ok(child)
                 })
             }).await?;
+        crate::session::child_ownership::publish_agent_session_child_relationships(
+            &self.node,
+            &self.node_did,
+            &self.actor,
+            &self.session_id,
+        )
+        .await?;
         Self::load_by_doc_id(
             self.node.clone(),
             &child,
@@ -160,6 +172,7 @@ impl ToolCallLifecycle {
             .as_ref()
             .context("plugin effect lacks provenance")?;
         Ok(super::delivery::ToolOutputBinding {
+            actor: self.actor.clone(),
             node: self.node.clone(),
             tool_call_doc_id: effect.parent_tool_call_doc_id.clone(),
             request_doc_id: self
@@ -199,7 +212,7 @@ impl ToolCallLifecycle {
         let internal_id = self.tool_call_id.clone();
         let name = self.tool_name.clone();
         let selected_tool_fields = self.selected_tool_fields_fragment();
-        let started = ConfigAccess::transact_local_idempotent(&self.node, None,
+        let started = ConfigAccess::transact_local_idempotent(&self.node, Some(self.actor.clone()),
             IdempotentTransactionRetry::Standard, "tool_call.start_plugin_effect", |txn| {
             let parent = parent.clone(); let child = child.clone(); let header = header.clone();
             let generation = generation.clone(); let internal_id = internal_id.clone(); let name = name.clone();
@@ -517,7 +530,7 @@ mod tests {
                 }
             }
             drop(owner);
-            node.shutdown().await;
+            node.shutdown().await.expect("shut down test node");
             let _ = std::fs::remove_dir_all(path);
         }
     }

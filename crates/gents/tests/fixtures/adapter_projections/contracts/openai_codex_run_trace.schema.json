@@ -34,7 +34,7 @@
                           }
                         ]
                       },
-                      "agent_id": {
+                      "agent_did": {
                         "anyOf": [
                           {
                             "type": "string"
@@ -507,7 +507,7 @@
         }
       ]
     },
-    "source_agent_id": {
+    "source_agent_did": {
       "anyOf": [
         {
           "type": "string"

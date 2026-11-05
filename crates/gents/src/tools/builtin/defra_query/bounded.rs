@@ -550,7 +550,7 @@ mod tests {
     use super::*;
     use crate::documents::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
     use crate::inference::llm::tool::Tool;
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
 
     #[tokio::test]
     async fn native_scalar_filters_match_lean_admission() {

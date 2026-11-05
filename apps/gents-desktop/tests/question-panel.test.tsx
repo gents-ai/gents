@@ -38,7 +38,7 @@ const ask = (
   requestId: "request-1",
   causeDocId: null,
   targetNodeDid: "did:key:node",
-  targetAgentId: "engineer",
+  targetAgentDid: "engineer",
   expectedCollection: null,
   parentItemId: null,
   deadlineAt: null,
@@ -57,7 +57,7 @@ const renderPanel = (items: MailboxItemView[], send = vi.fn(acceptedChatReply)) 
       node({
         nodeDid: "did:key:node",
         mailboxItems: items,
-        agents: [{ agentId: "engineer", displayName: "The Engineer" }],
+        agents: [{ agentDid: "engineer", displayName: "The Engineer" }],
         sessions: [{ sessionId: "session-1", title: "Release" }],
       }),
     ],

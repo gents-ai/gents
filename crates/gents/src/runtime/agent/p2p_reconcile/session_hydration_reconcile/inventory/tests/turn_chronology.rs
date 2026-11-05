@@ -244,31 +244,8 @@ async fn check_turn_chronology(retry: bool) {
     assert_modeled_resource_order(&contracts, "sequential_resource", &snapshot, &expected);
     assert_eq!(snapshot.binding.coverage.pending, 0);
     assert_eq!(snapshot.binding.coverage.unknown, 0);
-    let receipt = crate::file_inventory::sign_current_page(
-        &signer,
-        "turn-page",
-        snapshot.page(None).unwrap(),
-        || std::future::ready(Ok(true)),
-    )
-    .await
-    .unwrap();
-    let receiver = crate::file_inventory::FileInventoryReceiver {
-        admission: admission.clone(),
-        pages: vec![],
-    }
-    .receive("turn-page".into(), receipt, &signer)
-    .await
-    .unwrap();
-    let receiver: crate::file_inventory::FileInventoryReceiver =
-        serde_json::from_value(serde_json::to_value(receiver).unwrap()).unwrap();
-    assert!(receiver
-        .validated(&signer)
-        .await
-        .unwrap()
-        .unwrap()
-        .known_inventory());
     drop((first_request, successor, first_tool, second_tool));
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     drop(node);
     let reopened = Arc::new(
         EmbeddedNode::builder()
@@ -284,6 +261,6 @@ async fn check_turn_chronology(retry: bool) {
     assert_eq!(restored.binding, snapshot.binding);
     assert_eq!(restored.entries, snapshot.entries);
     assert_modeled_resource_order(&contracts, "sequential_resource", &restored, &expected);
-    reopened.shutdown().await;
+    reopened.shutdown().await.expect("node shutdown");
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }

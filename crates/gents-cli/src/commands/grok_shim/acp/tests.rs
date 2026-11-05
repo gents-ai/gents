@@ -38,7 +38,7 @@ async fn config() -> (tempfile::TempDir, AcpServiceConfig) {
         AcpServiceConfig {
             node,
             node_did: Arc::from("did:test:grok-shim"),
-            agent_id: Arc::from("did:test:grok-shim:default"),
+            agent_did: Arc::from("did:test:grok-shim:default"),
             current_model: bound_model(),
             grok_home: None,
             plugin_home,
@@ -69,7 +69,7 @@ async fn service_over(signing_node: bool) -> (tempfile::TempDir, AcpService) {
         super::super::turn::TurnManagerConfig {
             actor,
             node_did: config.node_did.to_string(),
-            agent_id: config.agent_id.to_string(),
+            agent_did: config.agent_did.to_string(),
             graphql: "http://127.0.0.1:8000/api/v0/graphql".to_string(),
         },
     ));

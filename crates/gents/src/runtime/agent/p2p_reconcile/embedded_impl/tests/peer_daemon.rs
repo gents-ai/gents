@@ -37,13 +37,20 @@ pub(super) fn test_agent(identity: Arc<dyn NodeIdentity>) -> Arc<ResolvedAgent> 
     let principal = Arc::new(RuntimeNode {
         node_did: identity.did().to_string(),
         identity,
-        default_agent_id: "behavior-1".to_string(),
+        default_agent_did: "behavior-1".to_string(),
         display_name: None,
         enabled: true,
     });
+    let binding =
+        crate::store::identity::provision_agent_identity(principal.identity.as_ref()).unwrap();
+    let agent_identity =
+        crate::store::identity::resolve_agent_identity(principal.identity.as_ref(), &binding)
+            .unwrap();
+    let agent_did = binding.agent_did;
     Arc::new(ResolvedAgent {
         profile_id: None,
-        agent_id: "behavior-1".to_string(),
+        agent_did,
+        agent_identity,
         node: principal,
         backend_id: Some("backend-behavior-1".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
@@ -84,7 +91,7 @@ pub(super) fn behavior_daemon(
 ) -> AgentDaemon<CountingReplyModel> {
     let prompt_builder = LayeredPromptBuilder::for_agent(
         &behavior.system_prompt,
-        &behavior.agent_id,
+        &behavior.agent_did,
         &[],
         false,
         &[],
@@ -167,7 +174,7 @@ pub(super) async fn seed_peer_session_message(
     .expect("adopt accepted agent_new");
     let cause = crate::request::lifecycle::SessionMessageCause {
         caller_node_did: lifecycle.request().node_did.clone(),
-        caller_agent_id: lifecycle.request().agent_id.clone(),
+        caller_agent_did: lifecycle.request().agent_did.clone(),
         caller_session_id: lifecycle.request().session_id.clone(),
         caller_requester_did: lifecycle.request().requester_did.clone(),
         caller_request_id: lifecycle.request().request_id.clone(),
@@ -179,7 +186,7 @@ pub(super) async fn seed_peer_session_message(
     };
     let target = crate::request::lifecycle::SessionMessageTarget {
         node_did: host_did.to_owned(),
-        agent_id: "behavior-1".to_owned(),
+        agent_did: "behavior-1".to_owned(),
         session_id: uuid::Uuid::new_v4().to_string(),
     };
     let plan = crate::session::message::plan(

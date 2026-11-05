@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::request::lifecycle::TriggerLineage;
 use gents::store::config_client::ConfigAccess;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
@@ -24,7 +24,7 @@ pub struct SubmittedRequest {
     pub request_id: String,
     pub session_id: String,
     pub node_did: String,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -52,7 +52,7 @@ pub async fn submit_request(
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     content: &str,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     options: SubmitRequestOptions,
 ) -> Result<SubmittedRequest> {
     let caller_intent = options.caller_intent.clone();
@@ -66,7 +66,7 @@ pub async fn submit_request(
         }
     }
     let (result, create) = prepare_request_submission(
-        node,
+        access,
         store,
         session_id,
         node_did,
@@ -74,7 +74,7 @@ pub async fn submit_request(
         signer,
         admission,
         content,
-        agent_id,
+        agent_did,
         options,
         caller_intent
             .as_ref()
@@ -106,7 +106,6 @@ pub async fn submit_request(
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub async fn submit_goal_backed_request(
-    node: &EmbeddedNode,
     store: &ClientStore,
     access: &ConfigAccess,
     session_id: &str,
@@ -115,7 +114,7 @@ pub async fn submit_goal_backed_request(
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     content: &str,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     mut options: SubmitRequestOptions,
     objective: &str,
     token_budget: Option<i64>,
@@ -127,7 +126,7 @@ pub async fn submit_goal_backed_request(
         ));
     }
     let (result, create) = prepare_request_submission(
-        node,
+        access,
         store,
         session_id,
         node_did,
@@ -135,7 +134,7 @@ pub async fn submit_goal_backed_request(
         signer,
         admission,
         content,
-        agent_id,
+        agent_did,
         options,
         None,
     )
@@ -154,7 +153,6 @@ pub async fn submit_goal_backed_request(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn submit_task_request(
-    node: &EmbeddedNode,
     store: &ClientStore,
     access: &ConfigAccess,
     fire: &gents_protocol::trigger_delivery::TriggerFire,
@@ -162,12 +160,12 @@ pub async fn submit_task_request(
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     content: &str,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     mut options: SubmitRequestOptions,
 ) -> Result<SubmittedRequest> {
     options.retry_key = Some(fire.fire_key.clone());
     let (result, create) = prepare_request_submission(
-        node,
+        access,
         store,
         &fire.session_id,
         &fire.identity.owner_did,
@@ -175,7 +173,7 @@ pub async fn submit_task_request(
         signer,
         admission,
         content,
-        agent_id,
+        agent_did,
         options,
         Some(&fire.request_id),
     )
@@ -196,7 +194,7 @@ fn build_add_agent_request_field(
     request_id: &str,
     node_did: &str,
     requester_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     session_id: &str,
     retry_parent_request: &str,
     retry_parent_request_doc_id: Option<&str>,
@@ -212,7 +210,7 @@ fn build_add_agent_request_field(
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_node_did = escape_graphql_string(node_did);
     let escaped_requester_did = escape_graphql_string(requester_did);
-    let escaped_agent_id = escape_graphql_string(agent_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_retry_parent = escape_graphql_string(retry_parent_request);
     let retry_parent_doc_field = retry_parent_request_doc_id
@@ -230,7 +228,7 @@ fn build_add_agent_request_field(
                 request_id: "{escaped_request_id}",
                 node_did: "{escaped_node_did}",
                 requester_did: "{escaped_requester_did}",
-                agent_id: "{escaped_agent_id}",
+                agent_did: "{escaped_agent_did}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "{escaped_retry_parent}",
                 {retry_parent_doc_field}
@@ -262,7 +260,7 @@ pub async fn resend_request(
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
 ) -> Result<SubmittedRequest> {
-    let stale = fetch_request_view(node, stale_request_id, node_did, requester_did).await?;
+    let stale = fetch_request_view(access, stale_request_id, node_did, requester_did).await?;
     if stale.lifecycle_state != Some(RequestLifecycleState::Dead)
         || stale.failure_reason.as_deref() != Some("Stale")
     {
@@ -289,11 +287,11 @@ pub async fn resend_request(
         access,
         &retry_session_id,
         stale_node_did,
-        requester_did,
+        signer.did(),
         signer,
         admission,
         stale_content,
-        stale.agent_id.as_deref(),
+        stale.agent_did.as_deref(),
         SubmitRequestOptions {
             caller_intent: None,
             valid_until: Some(Utc::now() + chrono::Duration::minutes(5)),
@@ -308,7 +306,7 @@ pub async fn resend_request(
 }
 
 async fn fetch_request_view(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     request_id: &str,
     node_did: &str,
     requester_did: &str,
@@ -328,7 +326,7 @@ async fn fetch_request_view(
             ) {{
                 request_id
                 node_did
-                agent_id
+                agent_did
                 content
                 input
                 lifecycle_state
@@ -336,12 +334,12 @@ async fn fetch_request_view(
             }}
         }}"#
     );
-    let resp = gents::store::graphql::graphql_with_transaction_retry(node, &query, "fetch_request")
+    let resp = access
+        .execute(&query)
         .await
         .with_context(|| format!("fetch_request({request_id})"))?;
     let row = resp
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|d| d.get("AgentRequest"))
         .and_then(|v| v.as_array())
         .and_then(|arr| arr.first())

@@ -5,8 +5,8 @@ use super::materialize_enrollment_desired_in_txn;
 use crate::runtime::agent::p2p_reconcile::EnrollmentEndpointEntry;
 use crate::store::config_client::ConfigAccess;
 
-async fn fixture() -> Arc<defra_node::EmbeddedNode> {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+async fn fixture() -> Arc<defra_node::Node> {
+    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
     // Deliberately omit the unique index: merge-parked twins remain scan-visible
     // even though local creation through the production index would reject them.
     node.add_collection(
@@ -34,7 +34,7 @@ fn authorized() -> EnrollmentEndpointEntry {
     }
 }
 
-async fn seed(node: &Arc<defra_node::EmbeddedNode>, peer: &str, ordinal: usize) {
+async fn seed(node: &Arc<defra_node::Node>, peer: &str, ordinal: usize) {
     ConfigAccess::write_local(
         node,
         "test.desired.seed",
@@ -51,7 +51,7 @@ async fn seed(node: &Arc<defra_node::EmbeddedNode>, peer: &str, ordinal: usize) 
     .unwrap();
 }
 
-async fn rows(node: &Arc<defra_node::EmbeddedNode>) -> Vec<serde_json::Value> {
+async fn rows(node: &Arc<defra_node::Node>) -> Vec<serde_json::Value> {
     let data = ConfigAccess::local(node.clone())
         .execute(
             r#"{ PeerPairingDesired {
@@ -127,7 +127,7 @@ async fn native_twins_reject_filter_upsert_but_repair_the_canonical_witness() {
         after.iter().find(|row| row["peer_id"] == "other"),
         before.iter().find(|row| row["peer_id"] == "other")
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -152,7 +152,7 @@ async fn conflicting_materialization_owners_leave_all_rows_unchanged() {
             .is_err()
         );
         assert_eq!(rows(&node).await, before);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -169,7 +169,7 @@ async fn expired_authority_rolls_back_the_whole_materialization_transaction() {
         })
     }).await.is_err());
     assert!(rows(&node).await.is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -234,6 +234,6 @@ async fn cached_generations_cannot_veto_the_current_verified_enrollment_request(
             after.iter().find(|row| row["_docID"] == parked),
             Some(&parked_before)
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

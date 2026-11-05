@@ -61,7 +61,7 @@ describe("switching node", () => {
             requestId: null,
             causeDocId: null,
             targetNodeDid: "did:key:z6MkJuno",
-            targetAgentId: null,
+            targetAgentDid: null,
             expectedCollection: null,
             parentItemId: null,
             deadlineAt: null,

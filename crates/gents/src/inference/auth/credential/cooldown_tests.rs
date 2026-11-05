@@ -1,4 +1,4 @@
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use std::sync::Arc;
 
 use super::test_support::{

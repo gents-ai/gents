@@ -199,7 +199,7 @@ fn snapshot_and_delta_preserve_the_same_markdown_bytes() {
         session_id: "session".into(),
         node_did: "node".into(),
         requester_did: None,
-        agent_id: "default".into(),
+        agent_did: "default".into(),
         created_at: "2026-10-07T12:00:00Z".into(),
         closed_at: None,
         archived_at: None,
@@ -286,7 +286,7 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
         session_id: "session".into(),
         node_did: node_did.clone(),
         requester_did: Some(node_did.clone()),
-        agent_id: "default".into(),
+        agent_did: "default".into(),
         created_at: "2026-10-07T12:00:00Z".into(),
         closed_at: None,
         archived_at: None,
@@ -377,6 +377,48 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     .await
     .unwrap();
     assert_eq!(missing.outcome, "snapshotRequired");
+    server.verify().await;
+    server.reset().await;
+    for (status, expected) in [(404, None), (500, Some("unavailable"))] {
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/inference/activity"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(status).set_body_string("private metadata"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let activity = super::super::inference_activity::read_activity(
+            &core,
+            &full.requests[0],
+            &node_did,
+            "session",
+            "logical",
+        )
+        .await
+        .unwrap();
+        assert_eq!(activity.as_deref(), expected);
+        server.verify().await;
+        server.reset().await;
+    }
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/inference/activity"))
+        .respond_with(wiremock::ResponseTemplate::new(403).set_body_string("private metadata"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = super::super::inference_activity::read_activity(
+        &core,
+        &full.requests[0],
+        &node_did,
+        "session",
+        "logical",
+    )
+    .await
+    .unwrap_err();
+    let denied = crate::error::BridgeError::classify_transport_error(error);
+    assert_eq!(denied.code, crate::error::BridgeErrorCode::PermissionDenied);
+    assert!(!denied.message.contains("private metadata"));
     server.verify().await;
     server.reset().await;
     body["data"]["AgentRequest"][0]["lifecycle_state"] = serde_json::json!("completed");

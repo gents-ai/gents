@@ -2,7 +2,7 @@ use super::*;
 use crate::runtime::status::{ReconcilePhase, ReconcileResult};
 use gents_protocol::row::{
     is_behavior_unavailable_rejection, project_node_readiness, AgentReadinessUnavailableReason,
-    AgentReadinessUnknownReason, AgentRequestRow, NodeReadinessRow, ProjectedAgentReadiness,
+    AgentReadinessUnknownReason, AgentRequestRow, ProjectedAgentReadiness,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,47 +265,38 @@ impl ObservedGoalAgent {
 }
 
 pub async fn observe_goal_agent(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     terminalized_at: Option<&str>,
 ) -> Result<ObservedGoalAgent> {
-    let escaped_did = escape_graphql_string(node_did);
-    let query = format!(
-        r#"{{
-            NodeReadiness(filter: {{ node_did: {{ _eq: "{escaped_did}" }} }}, limit: 1) {{
-                node_did snapshot_json updated_at
-            }}
-            NodeRuntime(filter: {{ node_did: {{ _eq: "{escaped_did}" }} }}, limit: 1) {{
-                reconcile_phase last_reconcile_result
-            }}
-        }}"#
+    anyhow::ensure!(
+        node.node_identity_did() == Some(node_did),
+        "goal readiness observation requires the local runtime identity"
     );
-    let response =
-        graphql_with_transaction_retry(node, &query, "query goal agent readiness").await?;
-    let readiness_row = rows::<NodeReadinessRow>(&response, "NodeReadiness")?
-        .into_iter()
-        .next();
-    let runtime = rows::<serde_json::Value>(&response, "NodeRuntime")?
-        .into_iter()
-        .next();
-    let settled = runtime.as_ref().is_some_and(|row| {
-        goal_reconcile_settled(
-            row.get("reconcile_phase").and_then(|value| value.as_str()),
-            row.get("last_reconcile_result")
-                .and_then(|value| value.as_str()),
-        )
-    });
+    let actor = identity::Did::new(node_did)?;
+    let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
+    let readiness_row = access
+        .transact_readonly("goal.observe_readiness", |txn| {
+            let actor = &actor;
+            Box::pin(async move {
+                crate::runtime::node_readiness_publisher::observe_published_readiness(txn, actor)
+                    .await
+            })
+        })
+        .await?;
+    // Settled state comes from the live runtime status owner in GoalSource.
+    let settled = false;
     let newer_than_terminal = goal_readiness_newer_than_terminal(
         readiness_row.as_ref().map(|row| row.updated_at.as_str()),
         terminalized_at,
     );
-    let agent_id = agent_id.map(str::trim).filter(|id| !id.is_empty());
-    let projected = match agent_id {
-        Some(agent_id) => {
-            project_node_readiness(readiness_row.as_ref(), node_did, [agent_id], None)
+    let agent_did = agent_did.map(str::trim).filter(|id| !id.is_empty());
+    let projected = match agent_did {
+        Some(agent_did) => {
+            project_node_readiness(readiness_row.as_ref(), node_did, [agent_did], None)
                 .agents
-                .remove(agent_id)
+                .remove(agent_did)
                 .unwrap_or(ProjectedAgentReadiness::Unknown(
                     AgentReadinessUnknownReason::AgentNotAssigned,
                 ))
@@ -313,7 +304,7 @@ pub async fn observe_goal_agent(
         None => ProjectedAgentReadiness::Unknown(AgentReadinessUnknownReason::AgentNotAssigned),
     };
     let observation = goal_agent_observation(&projected, newer_than_terminal);
-    let label = agent_id.unwrap_or("<none>");
+    let label = agent_did.unwrap_or("<none>");
     let reason = match projected {
         ProjectedAgentReadiness::Unavailable(reason) => {
             format!("agent {label} is unavailable: {}", reason.public_message())

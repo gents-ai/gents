@@ -74,7 +74,7 @@ pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {
                 limit: 2
             ) {{
                 _docID node_did requester_did session_id
-                request_id agent_id
+                request_id agent_did
                 lifecycle_state
                 failure_reason
                 superseded_by_request
@@ -528,9 +528,9 @@ pub(crate) async fn stream_turn_progress(
                         println!("[input applied to the active turn]");
                     } else if !error_message.is_empty() {
                         println!("[agent error] {error_message}");
-                        let agent_id = request.agent_id.as_deref();
+                        let agent_did = request.agent_did.as_deref();
                         for line in
-                            account_problems(graphql, submitted, agent_id, error_message).await
+                            account_problems(graphql, submitted, agent_did, error_message).await
                         {
                             println!("[account] {line}");
                         }
@@ -952,11 +952,11 @@ fn account_problem_lines(
 async fn account_problems(
     graphql: &GraphqlEndpoint,
     submitted: &SubmittedRequest,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     failure_reason: &str,
 ) -> Vec<String> {
-    let (Some(agent_id), true) = (
-        agent_id,
+    let (Some(agent_did), true) = (
+        agent_did,
         gents_protocol::node_readiness::is_behavior_unavailable_rejection(failure_reason.trim()),
     ) else {
         return Vec::new();
@@ -965,7 +965,7 @@ async fn account_problems(
         let access = gents::store::config_client::ConfigAccess::Graphql(graphql.clone());
         let did = submitted.node_did.as_str();
         anyhow::Ok((
-            gents::store::config_client::agent_accounts(&access, did, agent_id).await?,
+            gents::store::config_client::agent_accounts(&access, did, agent_did).await?,
             gents::inference::auth::credential::list_accounts(&access, did).await?,
         ))
     };
@@ -988,7 +988,7 @@ mod tests {
             request_id: "request-one".to_string(),
             session_id: "session-one".to_string(),
             node_did: "did:key:agent".to_string(),
-            agent_id: None,
+            agent_did: None,
             request_doc_id: "doc-one".to_string(),
             requester_did: Some("did:key:requester".to_string()),
             input: None,

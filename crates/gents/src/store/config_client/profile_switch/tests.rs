@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::Utc;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_loop::account_usage::{UsageReport, UsageSource, UsageWindow};
 use serde_json::{json, Value};
 
@@ -131,11 +131,11 @@ impl Fixture {
                 ),
                 (
                     Collection::Agent,
-                    json!({"node_did": did, "agent_id": "x", "context_id": "context-x", "inference_profile_id": "p"}),
+                    json!({"node_did": did, "agent_did": "x", "context_id": "context-x", "inference_profile_id": "p"}),
                 ),
                 (
                     Collection::Agent,
-                    json!({"node_did": did, "agent_id": "y", "inference_profile_id": "p"}),
+                    json!({"node_did": did, "agent_did": "y", "inference_profile_id": "p"}),
                 ),
             ])
             .await;
@@ -390,16 +390,16 @@ async fn next_turns_use_the_target_credentials() {
         })
         .await
         .unwrap();
-    for agent_id in ["x", "y"] {
-        let profile = &references.agent_profiles(agent_id)[0];
+    for agent_did in ["x", "y"] {
+        let profile = &references.agent_profiles(agent_did)[0];
         let (_, backend) = references.profile_with_backend(profile).unwrap().unwrap();
         let fields = backend.backend_fields();
         assert_eq!(
             fields.backend_id.as_deref(),
             Some(fixture.backends["b"].as_str()),
-            "{agent_id}"
+            "{agent_did}"
         );
-        let mut behavior = PendingAgent::new(agent_id)
+        let mut behavior = PendingAgent::new(agent_did)
             .build_with_identity_for_test(KeyIdentity::load_or_create(&key, None).unwrap());
         behavior.backend_id = fields.backend_id;
         behavior.backend_provider_kind = fields.backend_provider_kind;
@@ -414,11 +414,11 @@ async fn next_turns_use_the_target_credentials() {
             std::time::Duration::from_secs(5),
         )
         .await
-        .unwrap_or_else(|error| panic!("{agent_id}: {error:#}"));
+        .unwrap_or_else(|error| panic!("{agent_did}: {error:#}"));
         let bearer = crate::inference::auth::credential::test_support::bound_bearer(
             &fixture.credentials["b"].credential_id,
         )
-        .unwrap_or_else(|| panic!("{agent_id} did not bind B"));
+        .unwrap_or_else(|| panic!("{agent_did} did not bind B"));
         assert_eq!(bearer.current_bearer().await.unwrap(), "access-SECRET-b");
     }
     assert!(
@@ -455,7 +455,7 @@ async fn companions_are_the_other_profiles_of_the_same_behaviors_on_one_account(
             ),
             (
                 Collection::Agent,
-                json!({"node_did": did, "agent_id": "y", "context_id": "context-y", "inference_profile_id": "p"}),
+                json!({"node_did": did, "agent_did": "y", "context_id": "context-y", "inference_profile_id": "p"}),
             ),
             (
                 Collection::Compaction,
@@ -467,7 +467,7 @@ async fn companions_are_the_other_profiles_of_the_same_behaviors_on_one_account(
             ),
             (
                 Collection::Agent,
-                json!({"node_did": did, "agent_id": "z", "context_id": "context-z", "inference_profile_id": "m"}),
+                json!({"node_did": did, "agent_did": "z", "context_id": "context-z", "inference_profile_id": "m"}),
             ),
         ])
         .await;
@@ -618,7 +618,7 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
             ),
             (
                 Collection::Agent,
-                json!({"node_did": did, "agent_id": "reader", "inference_profile_id": "k"}),
+                json!({"node_did": did, "agent_did": "reader", "inference_profile_id": "k"}),
             ),
         ])
         .await;

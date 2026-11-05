@@ -82,7 +82,7 @@ it("binds plugin loading and message consent to the executable shell model", asy
     });
     const app = testApp({
       deployments: [node({ nodeDid: "did:a" })],
-      selection: { sessionId: "s1", nodeDid: "did:a", agentId: "a1" },
+      selection: { sessionId: "s1", nodeDid: "did:a", agentDid: "a1" },
     });
     const send = vi.spyOn(app.actions, "sendMessage").mockResolvedValue(null);
     const confirm = vi.spyOn(window, "confirm").mockImplementation(() => {

@@ -6,11 +6,15 @@
 # agent_new/agent_message call is a background row: the request it causes
 # names this row through caused_by_parent_tool_call_doc_id, and that request's
 # terminal output terminalizes the row and notifies this session.
-type AgentToolCall @branchable {
+type AgentToolCall @policy(id: "d23eb42a87668f3bd577087f604fd7919e24873705681fe9e3d1923d7d065c13", resource: "children") {
     tool_call_key: String @index(unique: true)
     request_id: String @index @immutable
     request_doc_id: String @index @immutable
     session_id: String @index
+    session_doc_id: String @immutable
+    agent_did: String @immutable
+    creator_did: String @index @immutable
+    parent_linked: Boolean @index
     node_did: String @index @immutable
     requester_did: String @index @immutable
     message_sequence: Int

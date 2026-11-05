@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use defra_p2p_adapter::{P2POperations, P2pDocumentRequest, ReplicationFilter, TransportPeerId};
 use gents_protocol::enrollment::{
     decode_offer, derive_enrollment_id, enrollment_schema_fingerprint, EnrollmentOfferRecord,
@@ -29,7 +29,7 @@ use super::enrollment_store::RequestRow;
 /// cannot keep the request or its replicator cleanup waiting indefinitely.
 pub const ENROLLMENT_P2P_TIMEOUT: Duration = Duration::from_secs(10);
 
-const REQUEST_FIELDS: &str = "_docID protocol_version request_id request_digest offer_id offer_token challenge network_id admin_did server_peer candidate_did candidate_peer candidate_ticket owner_agent profile client_nonce issued_at expires_at candidate_sig";
+const REQUEST_FIELDS: &str = "_docID protocol_version request_id request_digest offer_id offer_token challenge network_id admin_did server_peer candidate_did candidate_peer candidate_ticket owner_node_did profile client_nonce issued_at expires_at candidate_sig";
 
 /// Author (or reuse) this node's request for `offer_token` and deliver it to
 /// the offering server, whose operator then decides it.
@@ -212,7 +212,7 @@ pub async fn sign_enrollment_request(
         candidate_did: identity.did().to_string(),
         candidate_peer,
         candidate_ticket,
-        owner_agent: offer.owner_agent.clone(),
+        owner_node_did: offer.owner_node_did.clone(),
         profile: offer.profile.clone(),
         client_nonce,
         issued_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
@@ -365,7 +365,7 @@ pub fn enrollment_request_input(request: &EnrollmentRequestRecord) -> String {
             candidate_did: "{}",
             candidate_peer: "{}",
             candidate_ticket: "{}",
-            owner_agent: "{}",
+            owner_node_did: "{}",
             profile: "{}",
             client_nonce: "{}",
             issued_at: "{}",
@@ -384,7 +384,7 @@ pub fn enrollment_request_input(request: &EnrollmentRequestRecord) -> String {
         field(&request.candidate_did),
         field(&request.candidate_peer),
         field(&request.candidate_ticket),
-        field(&request.owner_agent),
+        field(&request.owner_node_did),
         field(&request.profile),
         field(&request.client_nonce),
         field(&request.issued_at),

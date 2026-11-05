@@ -4,7 +4,9 @@ mod load;
 mod snapshot;
 
 pub(crate) use apply::{apply_control_update, control_collection_names};
+#[cfg(test)]
 pub(crate) use load::load_document_runtime_view;
+pub(crate) use load::load_document_runtime_view_as;
 pub(crate) use snapshot::resolve_document_runtime_snapshot_from_view;
 
 use crate::documents::*;
@@ -97,7 +99,7 @@ impl DocumentRuntimeView {
 
     pub(crate) fn pending_visibility_details(&self) -> Vec<String> {
         let mut details = Vec::new();
-        if let Some(id) = self.node.value.default_agent_id.as_deref() {
+        if let Some(id) = self.node.value.default_agent_did.as_deref() {
             if !self.agents.contains_key(id) {
                 details.push(format!(
                     "principal {} references missing default agent {id}",

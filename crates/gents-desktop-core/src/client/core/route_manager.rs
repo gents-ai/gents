@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
 use gents::runtime::agent::p2p_reconcile::{
     client_route_id, desired_route_is_applied, reconcile_peer_tick,
@@ -541,7 +541,7 @@ impl ClientRouteManager {
         graphql: &str,
     ) -> gents::runtime::agent::p2p_reconcile::RemoteP2pAdminResult<HttpRemoteP2pAdmin> {
         let admin = HttpRemoteP2pAdmin::new_with_actor(graphql, Arc::clone(&self.actor))?;
-        Ok(match self.identity_interaction.endpoint(record) {
+        Ok(match self.identity_interaction.runtime_endpoint(record) {
             Some(endpoint) => admin.with_node_identity(endpoint),
             None => admin,
         })

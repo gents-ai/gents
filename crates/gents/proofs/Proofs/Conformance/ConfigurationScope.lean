@@ -61,9 +61,9 @@ private def defaultAgentJson : Json := toJson (defaultAgentCases.map
       agents := fun scope id => if scope = "alice" ∧ id = "coding"
         then some ⟨owner, ⟨contextId, "profile", enabled⟩⟩ else none }
     Json.mkObj [("name", toJson name), ("scope", toJson "alice"),
-      ("agent_owner", toJson owner), ("agent_id", toJson "coding"),
+      ("agent_owner", toJson owner), ("agent_did", toJson "coding"),
       ("enabled", toJson enabled), ("context_id", toJson contextId),
-      ("default_agent_id", toJson defaultId),
+      ("default_agent_did", toJson defaultId),
       ("publishable", toJson (defaultAgentPublishable reg "alice" defaultId)),
       ("context_resolves", toJson (resolveContext reg "alice" contextId).toBool)])
 
@@ -135,7 +135,7 @@ private def defaultReplacementJson : Json := toJson (
 def casesJson : String := (Json.mkObj
   [("documents", toJson (["alice", "bob"].map fun owner => Json.mkObj
       [("node_did", toJson owner), ("task_id", toJson "task"),
-       ("agent_id", toJson "coding"), ("context_id", toJson "context"),
+       ("agent_did", toJson "coding"), ("context_id", toJson "context"),
        ("profile_id", toJson "profile"), ("backend_id", toJson "backend"),
        ("instructions", toJson owner), ("model", toJson (owner ++ "-model")),
        ("enabled", toJson true)])),

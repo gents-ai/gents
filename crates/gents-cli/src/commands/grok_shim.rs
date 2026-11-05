@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 pub(crate) mod acp;
 mod binding;
@@ -35,7 +35,7 @@ pub(crate) struct GrokShimBindArgs {
     pub(crate) node: Arc<EmbeddedNode>,
     pub(crate) actor: identity::Did,
     pub(crate) graphql: String,
-    pub(crate) agent_id: Option<String>,
+    pub(crate) agent_did: Option<String>,
     pub(crate) node_did: String,
     pub(crate) node_name: String,
     pub(crate) socket_path: std::path::PathBuf,
@@ -48,19 +48,19 @@ pub(crate) struct GrokShimBindArgs {
 /// fails fast instead of serving a fabricated model catalog.
 pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandle> {
     let node = args.node.clone();
-    let agent_id =
-        resolve_grok_shim_agent_id(node.as_ref(), args.agent_id.as_deref(), &args.node_did).await?;
-    let bound = resolve_bound_model_context(&node, &args.node_did, &agent_id)
+    let agent_did =
+        resolve_grok_shim_agent_did(node.as_ref(), args.agent_did.as_deref(), &args.node_did).await?;
+    let bound = resolve_bound_model_context(&node, &args.node_did, &agent_did)
         .await
         .with_context(|| {
             format!(
-                "binding the Grok shim to agent {agent_id:?}; fix the agent with \
-                 `gents config agent set --agent-id {agent_id} ...`"
+                "binding the Grok shim to agent {agent_did:?}; fix the agent with \
+                 `gents config agent set --agent-did {agent_did} ...`"
             )
         })?;
     tracing::info!(
         node_name = %args.node_name,
-        agent_id = %agent_id,
+        agent_did = %agent_did,
         model_id = %bound.model_id,
         total_context_tokens = bound.total_context_tokens,
         socket = %args.socket_path.display(),
@@ -72,7 +72,7 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
         actor: args.actor.clone(),
         graphql: args.graphql.clone(),
         node_did: args.node_did.clone(),
-        agent_id: agent_id.clone(),
+        agent_did: agent_did.clone(),
         bound: bound.clone(),
         plugin_home: args.home.clone(),
     };
@@ -100,7 +100,7 @@ struct AcpDelegateFactoryInputs {
     actor: identity::Did,
     graphql: String,
     node_did: String,
-    agent_id: String,
+    agent_did: String,
     bound: crate::commands::grok_shim::projection::BoundModelContext,
     plugin_home: std::path::PathBuf,
 }
@@ -125,7 +125,7 @@ impl AcpDelegateFactoryInputs {
             crate::commands::grok_shim::turn::TurnManagerConfig {
                 actor: inputs.actor.clone(),
                 node_did: inputs.node_did.clone(),
-                agent_id: inputs.agent_id.clone(),
+                agent_did: inputs.agent_did.clone(),
                 graphql: inputs.graphql.clone(),
             },
         ));
@@ -140,7 +140,7 @@ impl AcpDelegateFactoryInputs {
             crate::commands::grok_shim::acp::AcpServiceConfig {
                 node: inputs.node.clone(),
                 node_did: Arc::from(inputs.node_did.as_str()),
-                agent_id: Arc::from(inputs.agent_id.as_str()),
+                agent_did: Arc::from(inputs.agent_did.as_str()),
                 current_model: crate::commands::grok_shim::acp::BoundModel {
                     model_id: inputs.bound.model_id.clone(),
                     name: inputs.bound.model_name.clone(),
@@ -157,4 +157,4 @@ impl AcpDelegateFactoryInputs {
     }
 }
 
-pub(crate) use crate::commands::inference_binding::resolve_bound_agent_id as resolve_grok_shim_agent_id;
+pub(crate) use crate::commands::inference_binding::resolve_bound_agent_did as resolve_grok_shim_agent_did;

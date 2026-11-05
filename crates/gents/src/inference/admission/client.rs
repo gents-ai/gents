@@ -136,7 +136,7 @@ pub(crate) struct AdmissionCallContext {
     pub(super) request_id: String,
     pub(super) request_doc_id: String,
     pub(super) backend_id: String,
-    pub(super) agent_id: String,
+    pub(super) agent_did: String,
     pub(super) node_did: String,
     pub(super) session_id: String,
     pub(super) call_kind: CallKind,
@@ -153,14 +153,14 @@ pub(crate) struct AdmissionCallContext {
 impl AdmissionCallContext {
     pub(crate) fn for_request(
         request: &AgentRequest,
-        agent_id: impl Into<String>,
+        agent_did: impl Into<String>,
         backend_id: impl Into<String>,
     ) -> Self {
         Self {
             request_id: request.request_id.clone(),
             request_doc_id: request.doc_id.clone(),
             backend_id: backend_id.into(),
-            agent_id: agent_id.into(),
+            agent_did: agent_did.into(),
             node_did: request.node_did.clone(),
             session_id: request.session_id.clone(),
             call_kind: CallKind::Inference,
@@ -189,7 +189,7 @@ impl AdmissionCallContext {
             profile_id: profile_id.map(str::to_owned),
             call_seq,
             backend_id: self.backend_id.clone(),
-            agent_id: self.agent_id.clone(),
+            agent_did: self.agent_did.clone(),
             node_did: self.node_did.clone(),
             call_kind: self.call_kind,
             attempt: self.attempt,

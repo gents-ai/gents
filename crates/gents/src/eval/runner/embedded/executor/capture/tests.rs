@@ -29,6 +29,7 @@ async fn schema_capture_reads_active_indexes_and_records_absent_collections() {
                 collections: vec!["NoSuchCollection".into()],
             },
         ],
+        CaptureBindings::default(),
     )
     .await;
     let CaptureResult::Schema { collections } = &captures["present"] else {
@@ -54,7 +55,7 @@ async fn delegation_case_capture_excludes_session_title_requests() {
         ConfigAccess::write_local(
             &home.node,
             "eval.test.normal_request_capture",
-            &format!(r#"mutation {{ create_AgentRequest(input: {{request_id: "{purpose}", purpose: "{purpose}", node_did: "{did}", agent_id: "{did}:research-helper", content: "TRAIN-111"}}) {{ _docID }} }}"#),
+            &format!(r#"mutation {{ create_AgentRequest(input: {{request_id: "{purpose}", purpose: "{purpose}", node_did: "{did}", agent_did: "{did}:research-helper", content: "TRAIN-111"}}) {{ _docID }} }}"#),
         )
         .await
         .unwrap();
@@ -73,7 +74,22 @@ async fn delegation_case_capture_excludes_session_title_requests() {
         .find(|capture| capture["name"] == "helper-request")
         .unwrap();
     let fields: Vec<String> = serde_json::from_value(capture["fields"].clone()).unwrap();
-    let mut all_purposes = capture["filter"].clone();
+    let role = BTreeMap::from([(
+        "role_agents".into(),
+        CaptureResult::Documents {
+            rows: vec![
+                json!({"display_name":"Research Helper", "agent_did":format!("{did}:research-helper")}),
+            ],
+        },
+    )]);
+    let bound = bind_capture_subject(
+        &capture["filter"],
+        "unused",
+        CaptureBindings::default(),
+        &role,
+    )
+    .unwrap();
+    let mut all_purposes = bound.clone();
     all_purposes.as_object_mut().unwrap().remove("purpose");
     let all = capture_documents(
         &home.node,
@@ -85,18 +101,12 @@ async fn delegation_case_capture_excludes_session_title_requests() {
     .await
     .unwrap();
     assert_eq!(all.len(), 2);
-    let normal = capture_documents(
-        &home.node,
-        "AgentRequest",
-        &capture["filter"],
-        &fields,
-        home.did(),
-    )
-    .await
-    .unwrap();
+    let normal = capture_documents(&home.node, "AgentRequest", &bound, &fields, home.did())
+        .await
+        .unwrap();
     assert_eq!(normal.len(), 1);
     assert_eq!(normal[0]["request_id"], "normal");
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -126,6 +136,7 @@ async fn document_capture_excludes_other_sessions_with_the_same_sequence() {
             filter: json!({"session_id": {"_eq": "$session"}, "sequence": {"_eq": 1}}),
             fields: vec!["session_id".into(), "sequence".into()],
         }],
+        CaptureBindings::default(),
     )
     .await;
     let CaptureResult::Documents { rows } = &captures["source_headers"] else {
@@ -139,7 +150,7 @@ async fn document_capture_excludes_other_sessions_with_the_same_sequence() {
         bind_capture_session(&json!("literal $session text"), session_id),
         json!("literal $session text")
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shutdown node");
 }
 
 #[test]
@@ -278,6 +289,7 @@ async fn l1_backend_capture_grades_metadata_without_retaining_auth() {
         "session-metadata",
         home.path(),
         &[capture],
+        CaptureBindings::default(),
     )
     .await;
     let CaptureResult::Documents { rows } = &evidence.captures["backends"] else {
@@ -302,7 +314,7 @@ async fn l1_backend_capture_grades_metadata_without_retaining_auth() {
         .unwrap()
         .evaluate(&check["params"], &evidence);
     assert_eq!(verdict.kind, OutcomeKind::Passed, "{:?}", verdict.raw);
-    home.node.shutdown().await;
+    home.node.shutdown().await.expect("shutdown node");
 }
 
 fn captured(workspace: &Path, glob: &str) -> (Vec<FileRef>, Vec<String>) {
@@ -390,4 +402,162 @@ fn a_file_capture_that_cannot_be_read_is_omitted() {
         ["locked.txt"]
     );
     assert!(outside.is_empty());
+}
+
+#[test]
+fn capture_filters_bind_only_the_selected_subject() {
+    use crate::eval::runner::subject_binding::SubjectAgent;
+    let subject = SubjectAgent {
+        slot: "engineer".into(),
+        agent_did: "did:key:actual-subject".into(),
+    };
+    let bindings = CaptureBindings {
+        subject: Some(&subject),
+        evaluator_did: Some("did:key:evaluator"),
+        request_id: None,
+    };
+    let filter = json!({"agent_did":{"_ne":"gents:agent-slot:engineer"}, "session_id":{"_eq":"$session"}, "requester_did":{"_eq":"$evaluator"}});
+    assert_eq!(
+        bind_capture_subject(&filter, "session", bindings, &BTreeMap::new()).unwrap(),
+        json!({"agent_did":{"_ne":"did:key:actual-subject"}, "session_id":{"_eq":"session"}, "requester_did":{"_eq":"did:key:evaluator"}})
+    );
+    assert!(bind_capture_subject(
+        &filter,
+        "session",
+        CaptureBindings::default(),
+        &BTreeMap::new()
+    )
+    .is_err());
+    assert!(bind_capture_subject(
+        &filter,
+        "session",
+        CaptureBindings {
+            subject: Some(&subject),
+            evaluator_did: None,
+            request_id: None
+        },
+        &BTreeMap::new()
+    )
+    .is_err());
+    assert!(bind_capture_subject(
+        &json!({"agent_did":{"_eq":"gents:agent-slot:foreign#engineer"}}),
+        "session",
+        bindings,
+        &BTreeMap::new()
+    )
+    .is_err());
+    assert_eq!(
+        bind_capture_subject(
+            &json!({"requester_did":{"_eq":"literal $evaluator"}}),
+            "session",
+            bindings,
+            &BTreeMap::new()
+        )
+        .unwrap(),
+        json!({"requester_did":{"_eq":"literal $evaluator"}})
+    );
+}
+
+#[tokio::test]
+async fn retained_capture_uses_the_evaluator_actor_for_document_access() {
+    use crate::store::config_client::NodePermission;
+    use crate::store::identity::{KeyIdentity, NodeIdentity};
+
+    let home = EmbeddedHome::create_trial_temp("capture-evaluator-acp")
+        .await
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let reader = KeyIdentity::load_or_create(directory.path().join("reader.key"), None).unwrap();
+    let owner =
+        ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(home.did()).unwrap());
+    owner.write("eval.test.capture_actor", &format!(
+        "mutation {{create_AgentRequest(input: {{request_id: \"owned\", node_did: \"{}\", agent_did: \"owned-agent\", purpose: \"normal\"}}) {{_docID}}}}",
+        escape_graphql_string(home.did()),
+    )).await.unwrap();
+    let reader_did = ::identity::Did::new(reader.did()).unwrap();
+    for permission in [NodePermission::CollectionGet, NodePermission::DocumentRead] {
+        owner
+            .grant_node_permission(&reader_did, permission)
+            .await
+            .unwrap();
+    }
+    let captures = [Capture::Documents {
+        name: "requests".into(),
+        collection: "AgentRequest".into(),
+        filter: json!({"request_id":{"_eq":"owned"}}),
+        fields: vec!["request_id".into()],
+    }];
+    let owner_rows = run_captures(
+        &home.node,
+        home.did(),
+        "s",
+        directory.path(),
+        &captures,
+        CaptureBindings {
+            subject: None,
+            evaluator_did: Some(home.did()),
+            request_id: None,
+        },
+    )
+    .await;
+    let CaptureResult::Documents { rows } = &owner_rows["requests"] else {
+        panic!("owner capture")
+    };
+    assert_eq!(rows.len(), 1);
+    let reader_rows = run_captures(
+        &home.node,
+        home.did(),
+        "s",
+        directory.path(),
+        &captures,
+        CaptureBindings {
+            subject: None,
+            evaluator_did: Some(reader.did()),
+            request_id: None,
+        },
+    )
+    .await;
+    let CaptureResult::Documents { rows } = &reader_rows["requests"] else {
+        panic!("reader capture")
+    };
+    assert!(rows.is_empty());
+    home.node.shutdown().await.unwrap();
+}
+
+#[test]
+fn capture_reference_requires_one_named_agent_and_its_actual_did() {
+    let filter = json!({"agent_did":{"_eq":{"$capture":{"capture":"agents", "source_match":{"field":"display_name","matches":"(?i)^research[ -]helper$"},"field":"agent_did"}}}});
+    let bind = |rows| {
+        bind_capture_subject(
+            &filter,
+            "s",
+            CaptureBindings::default(),
+            &BTreeMap::from([("agents".into(), CaptureResult::Documents { rows })]),
+        )
+    };
+    let role = json!({"display_name":"Research Helper","agent_did":"did:key:random"});
+    let decoy = json!({"display_name":"Wrong Helper","agent_did":"did:key:research-helper"});
+    assert_eq!(
+        bind(vec![role.clone(), decoy.clone()]).unwrap(),
+        json!({"agent_did":{"_eq":"did:key:random"}})
+    );
+    assert!(bind(vec![decoy]).is_err());
+    assert!(bind(vec![role.clone(), role]).is_err());
+    assert!(bind(vec![json!({"display_name":"Research Helper"})]).is_err());
+}
+
+#[test]
+fn capture_request_binding_requires_the_current_stage_request() {
+    let filter = json!({"request_id":{"_eq":"$request"}});
+    let bindings = CaptureBindings {
+        request_id: Some("current"),
+        ..Default::default()
+    };
+    assert_eq!(
+        bind_capture_subject(&filter, "s", bindings, &BTreeMap::new()).unwrap(),
+        json!({"request_id":{"_eq":"current"}})
+    );
+    assert!(
+        bind_capture_subject(&filter, "s", CaptureBindings::default(), &BTreeMap::new()).is_err()
+    );
 }

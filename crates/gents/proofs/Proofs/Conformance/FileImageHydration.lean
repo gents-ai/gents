@@ -175,9 +175,9 @@ def routeCasesJson := jsonArray (
      routeCaseJson direction "requester-\"quoted" "node-\\path" "FileInventoryRequest" "FileInventoryPage"])
 
 def subscriptionCasesJson := jsonArray (
-  (ScopeTemplates.explicitDeliveryCollections ++ ScopeTemplates.transcriptCollections).map fun collection =>
+  ScopeTemplates.transcriptCollections.map fun collection =>
     "{\"collection\":" ++ jsonString collection ++
-    ",\"explicit_delivery\":" ++ boolJson (ScopeTemplates.explicitDeliveryCollections.contains collection) ++ "}")
+    ",\"replicated\":" ++ boolJson false ++ "}")
 
 private def deliveryJson : DeliveryResult → String
   | .confirmed => "\"confirmed\"" | .indeterminate => "\"indeterminate\""

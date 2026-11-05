@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
@@ -10,7 +10,7 @@ use gents_protocol::output::{
 
 use crate::request::lifecycle::execution_policy::{authorize_output_append, LeaseObservation};
 use crate::session::canonical_rows::{
-    output_segment_create_variables, transcript_message_create_variables, OutputSegmentRow,
+    output_segment_bound_variables, transcript_message_bound_variables, OutputSegmentRow,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
@@ -27,17 +27,19 @@ use super::{
 
 pub(crate) async fn close_provider_attempt(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
     generation: &str,
     prepared: &OutputSegment,
     close: ProviderAttemptClose,
 ) -> Result<Option<String>> {
-    close_provider_attempt_at(node, generation, prepared, close, None, Utc::now()).await
+    close_provider_attempt_at(node, actor, generation, prepared, close, None, Utc::now()).await
 }
 
 /// Fenced to the writer generation, except a changed generation may acknowledge
 /// an already committed, exact auxiliary closure without authorizing another write.
 pub(crate) async fn close_provider_attempt_at(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
     generation: &str,
     prepared: &OutputSegment,
     close: ProviderAttemptClose,
@@ -67,9 +69,9 @@ pub(crate) async fn close_provider_attempt_at(
                 .is_none_or(|value| value.header.is_none()),
         "auxiliary audit closure cannot publish a transcript header"
     );
-    ConfigAccess::transact_local_idempotent(
+    let result = ConfigAccess::transact_local_idempotent(
         node,
-        None,
+        Some(actor.clone()),
         IdempotentTransactionRetry::Standard,
         "streaming.close_provider_attempt",
         move |txn| {
@@ -258,7 +260,7 @@ pub(crate) async fn close_provider_attempt_at(
                 let response = txn
                     .execute_with_variables(
                         CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                        &output_segment_create_variables(&closure)?,
+                        &output_segment_bound_variables(txn, &closure).await?,
                     )
                     .await?;
                 let close_doc_id = created_doc_id(&response, "AgentOutputSegment")?;
@@ -283,7 +285,15 @@ pub(crate) async fn close_provider_attempt_at(
             })
         },
     )
-    .await
+    .await?;
+    crate::session::child_ownership::publish_agent_session_child_relationships(
+        node,
+        &prepared.node_did,
+        &actor,
+        &prepared.session_id,
+    )
+    .await?;
+    Ok(result)
 }
 
 fn validate_closing_shape(prepared: &OutputSegment, closing: &OutputSegment) -> Result<()> {
@@ -455,7 +465,7 @@ async fn partial_header_in_txn(
     let response = txn
         .execute_with_variables(
             CREATE_AGENT_MESSAGE_MUTATION,
-            &transcript_message_create_variables(&message)?,
+            &transcript_message_bound_variables(txn, &message).await?,
         )
         .await?;
     let message_doc_id = created_doc_id(&response, "AgentMessage")?;

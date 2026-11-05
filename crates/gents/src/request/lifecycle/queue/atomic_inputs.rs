@@ -81,14 +81,14 @@ pub(crate) async fn persist_background_completion_with_message_canonical(
     let gate = background_completion_gate(node, &parent.session_id, &parent.node_did, &queue_key);
     let _guard = gate.lock().await;
 
-    let agent_id = parent_agent_id(parent)?;
+    let agent_did = parent_agent_did(parent)?;
     let queue_key_ref = &queue_key;
-    let agent_id = &agent_id;
+    let agent_did = &agent_did;
     let queue = &queue;
 
     let mut enqueued = crate::store::config_client::ConfigAccess::transact_local_idempotent(
         node,
-        None,
+        Some(identity::Did::new(parent.agent_did.clone())?),
         crate::store::config_client::IdempotentTransactionRetry::Standard,
         "lifecycle.enqueue_background_completion",
         move |txn| {
@@ -100,7 +100,7 @@ pub(crate) async fn persist_background_completion_with_message_canonical(
                         content: notification_content,
                         message_key,
                         queue_key: queue_key_ref,
-                        agent_id,
+                        agent_did,
                         wake_content,
                         queue,
                         existing_notification_doc_id,
@@ -114,6 +114,14 @@ pub(crate) async fn persist_background_completion_with_message_canonical(
     )
     .await?;
 
+    crate::session::child_ownership::publish_agent_session_child_relationships(
+        node,
+        &parent.node_did,
+        &identity::Did::new(parent.agent_did.clone())?,
+        &parent.session_id,
+    )
+    .await?;
+
     if let Some(created) = enqueued
         .request
         .as_ref()
@@ -122,6 +130,7 @@ pub(crate) async fn persist_background_completion_with_message_canonical(
         let created_request_doc_id = created.doc_id.clone();
         let active_request = super::coalescing::reconcile_coalesced_pending_request_for(
             node,
+            &parent.agent_did,
             &parent.session_id,
             &parent.node_did,
             QueueSource::BackgroundCompletion,
@@ -181,7 +190,7 @@ pub(crate) async fn persist_background_completion_with_message_waking(
     let (tool_call_doc_id, close_doc_id) =
         crate::store::config_client::ConfigAccess::transact_local_write(
             node,
-            None,
+            Some(identity::Did::new(parent.agent_did.clone())?),
             "test.canonical_background_notification_authority",
             |txn| {
                 let tool_key = tool_key.clone();
@@ -221,14 +230,25 @@ pub(crate) async fn persist_background_completion_with_message_waking(
                         return Ok((tool_doc, close.doc_id));
                     }
                     anyhow::ensure!(tools.is_empty(), "ambiguous fixture tool authority");
+                    let (session_doc_id, agent_did) =
+                        crate::session::canonical_rows::agent_session_child_binding_in_txn(
+                            txn,
+                            &parent.node_did,
+                            &parent.session_id,
+                            parent.requester_did.as_deref(),
+                        )
+                        .await?;
+                    let agent_did = escape_graphql_string(&agent_did);
                     let created = txn
                         .execute(&format!(
                             r#"mutation {{ create_AgentToolCall(input: {{
+                session_doc_id: "{}", agent_did: "{agent_did}", creator_did: "{agent_did}", parent_linked: false,
                 tool_call_key: "{}", tool_call_id: "{}", request_id: "{}",
                 request_doc_id: "{}", node_did: "{}", requester_did: {}, session_id: "{}",
                 tool_name: "fixture", message_sequence: 1, await_mode: "background",
                 status: "completed", lifecycle_state: "completed"
             }}) {{ _docID }} }}"#,
+                            escape_graphql_string(&session_doc_id),
                             escape_graphql_string(&tool_key),
                             escape_graphql_string(&tool_key),
                             escape_graphql_string(&parent.request_id),
@@ -276,9 +296,10 @@ pub(crate) async fn persist_background_completion_with_message_waking(
                     let created = txn
                         .execute_with_variables(
                             crate::session::canonical_rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                            &crate::session::canonical_rows::output_segment_create_variables(
-                                &segment,
-                            )?,
+                            &crate::session::canonical_rows::output_segment_bound_variables(
+                                txn, &segment,
+                            )
+                            .await?,
                         )
                         .await?;
                     Ok((
@@ -314,7 +335,7 @@ struct CompletionAttempt<'a> {
     content: &'a str,
     message_key: &'a str,
     queue_key: &'a str,
-    agent_id: &'a str,
+    agent_did: &'a str,
     wake_content: &'a str,
     queue: &'a RequestQueue,
     existing_notification_doc_id: Option<&'a str>,
@@ -333,7 +354,7 @@ async fn background_completion_transaction_attempt(
         content,
         message_key,
         queue_key,
-        agent_id,
+        agent_did,
         wake_content,
         queue,
         existing_notification_doc_id,
@@ -548,7 +569,7 @@ async fn background_completion_transaction_attempt(
                 parent,
                 wake_hop,
                 SessionRequestFields {
-                    agent_id,
+                    agent_did,
                     content: wake_content,
                     execution_origin: ExecutionOrigin::Scheduled,
                     input: wake_input,
@@ -628,7 +649,7 @@ async fn publish_native_tool_notification(
     native: &ToolNotificationPublication,
 ) -> Result<()> {
     use crate::session::canonical_rows::{
-        transcript_message_create_variables, CREATE_AGENT_MESSAGE_MUTATION,
+        transcript_message_bound_variables, CREATE_AGENT_MESSAGE_MUTATION,
     };
     use gents_protocol::output::{
         MessageBlock, MessagePublication, MessageRole, OutputSource, OutputWriter,
@@ -740,7 +761,7 @@ async fn publish_native_tool_notification(
     };
     txn.execute_with_variables(
         CREATE_AGENT_MESSAGE_MUTATION,
-        &transcript_message_create_variables(&message)?,
+        &transcript_message_bound_variables(txn, &message).await?,
     )
     .await?;
     Ok(())

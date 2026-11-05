@@ -212,7 +212,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         &node,
         "AgentTarget",
         json!({"target_id": "t-worker", "node_did": identity.did(), "target_node_did": identity.did(),
-               "agent_id": "worker", "name": "worker"}),
+               "agent_did": "worker", "name": "worker"}),
     )
     .await;
     let tools: crate::documents::Tools = serde_json::from_value(json!({
@@ -342,7 +342,7 @@ async fn job_ancestry(node: &Arc<EmbeddedNode>, depth: u32) -> (String, String) 
             "node_did": "owner",
             "requester_did": null,
             "session_id": session,
-            "agent_id": "configured",
+            "agent_did": "configured",
             "lifecycle_state": "processing",
         });
         if let Some((request_doc_id, call_doc_id)) = parent {
@@ -462,7 +462,7 @@ impl Step0 {
         let response = self
             .node
             .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{ _docID request_id session_id agent_id }} }}"#,
+                r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{ _docID request_id session_id agent_did }} }}"#,
                 job_spawn_key(root, slot, 0)
             ))
             .await;
@@ -482,7 +482,7 @@ impl Step0 {
     }
 
     async fn finish(self) {
-        self.node.shutdown().await;
+        self.node.shutdown().await.expect("shut down test node");
     }
 }
 
@@ -772,7 +772,7 @@ async fn adoption_commits_flip_pin_progress_effects_and_receipt_in_one_transacti
     );
     let child = step.child_request(doc, "s").await;
     assert_eq!(child["session_id"], job_session_id(doc, "s", 0));
-    assert_eq!(child["agent_id"], "worker");
+    assert_eq!(child["agent_did"], "worker");
     assert_eq!(answer["status"], "running", "{answer}");
     assert_eq!(step.stored_reply(&row).await, answer);
     step.finish().await;

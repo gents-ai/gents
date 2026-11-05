@@ -72,7 +72,7 @@ async fn create_session(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> R
         |txn| Box::pin(async move {
             let result = txn.execute(r#"mutation { create_AgentSession(input: {
                 session_id: "archive-session", node_did: "runtime", requester_did: "other-requester",
-                agent_id: "engineer", created_at: "2026-01-01T00:00:00Z",
+                agent_did: "engineer", created_at: "2026-01-01T00:00:00Z",
                 tags: ["keep"], title: {text: "Keep this title", source: "user"},
                 provenance: {task_id: "original-task"},
                 observation: {last_activity_at: "2026-01-02T00:00:00Z", preview: "working",
@@ -91,7 +91,7 @@ async fn create_work(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) {
             let value = txn.execute(r#"mutation { create_AgentRequest(input: {
                 request_id: "running", purpose: "normal", node_did: "runtime",
                 requester_did: "other-requester", session_id: "archive-session",
-                agent_id: "engineer", lifecycle_state: "processing", content: "Original input",
+                agent_did: "engineer", lifecycle_state: "processing", content: "Original input",
                 created_at: "2026-01-01T00:00:00Z"
             }) {_docID} }"#).await?;
             let physical = crate::store::graphql::created_doc_id(&value, "AgentRequest")?;
@@ -178,7 +178,7 @@ async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stoppin
     );
     assert_eq!(read_as(&node, &actor).await.unwrap(), expected);
     assert_eq!(work_rows(&node, &actor).await, work);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     drop(node);
     let node = Arc::new(
         EmbeddedNode::builder()
@@ -232,7 +232,7 @@ async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stoppin
     .is_err());
     assert_eq!(read_as(&node, &actor).await.unwrap(), expected);
     assert_eq!(work_rows(&node, &actor).await, work);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -244,8 +244,8 @@ async fn archive_authority_is_native_acp_and_never_requester_scope() {
     let denied = key(home.path(), "denied").await;
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     let policy = node
-        .add_dac_policy(
-            owner.did(),
+        .add_dac_policy_as(
+            &defra_core::RequestContext::default().with_identity(Some(owner.did().to_owned())),
             r#"
 name: Archive authority
 resources:
@@ -272,10 +272,23 @@ resources:
         .await
         .unwrap();
     let id = create_session(&node, &owner).await.unwrap();
-    node.add_dac_actor_relationship(owner.did(), "AgentSession", &id, "reader", reader.did())
+    let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(owner.did()).unwrap());
+    access
+        .add_actor_relationship(
+            "AgentSession",
+            &id,
+            "reader",
+            &::identity::Did::new(reader.did()).unwrap(),
+        )
         .await
         .unwrap();
-    node.add_dac_actor_relationship(owner.did(), "AgentSession", &id, "writer", writer.did())
+    access
+        .add_actor_relationship(
+            "AgentSession",
+            &id,
+            "writer",
+            &::identity::Did::new(writer.did()).unwrap(),
+        )
         .await
         .unwrap();
     let before = read_as(&node, &owner).await.unwrap();
@@ -299,7 +312,7 @@ resources:
         read_as(&node, &reader).await.unwrap().archived_at,
         result.archived_at
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -328,7 +341,7 @@ async fn concurrent_archive_calls_commit_one_revision() {
     );
     assert!(receipts.iter().all(|receipt| receipt.revision == "1"));
     assert_eq!(read_as(&node, &actor).await.unwrap().archive_revision, 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -367,5 +380,5 @@ async fn authenticated_http_archive_uses_the_same_durable_transaction_owner() {
         .unwrap();
     assert_eq!(receipt.outcome, SessionArchiveOutcome::Applied);
     assert_eq!(read_as(&node, &actor).await.unwrap().archive_revision, 2);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

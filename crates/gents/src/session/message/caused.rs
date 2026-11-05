@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use crate::store::graphql::escape_graphql_string;
 
@@ -18,8 +18,12 @@ pub(crate) async fn observe_caused_request(
     let tool_call_doc_id = lifecycle
         .doc_id()
         .context("session-message row lacks physical identity")?;
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        lifecycle.actor().clone(),
+    );
     let Some(receipt) = load_receipt(
-        node,
+        &access,
         tool_call_doc_id,
         lifecycle.node_did(),
         lifecycle.session_id(),
@@ -39,21 +43,13 @@ pub(crate) async fn observe_caused_request(
         }} }}"#,
         escape_graphql_string(&receipt.request_doc_id),
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "load the request a session-message row caused",
-    )
-    .await?;
-    let Some(caused) = crate::store::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
-        &response,
-        "AgentRequest",
-    )?
-    else {
+    let response = access.execute(&query).await?;
+    let Some(row) = response.pointer("/data/AgentRequest/0") else {
         return Ok(CausedObservation::NotVisible);
     };
-    let caller = lifecycle.node_did();
-    let session_message = caused.requester_did.as_deref() == Some(caller)
+    let caused: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone())?;
+    let caller = lifecycle.actor().to_string();
+    let session_message = caused.requester_did.as_deref() == Some(caller.as_str())
         && caused.caused_by_parent_tool_call_doc_id.as_deref() == Some(tool_call_doc_id)
         && caused.caused_by_parent_tool_call_id.as_deref() == Some(lifecycle.tool_call_id())
         && caused.caused_by_parent_request_doc_id.as_deref() == lifecycle.request_doc_id();
@@ -108,13 +104,23 @@ pub(crate) async fn kill_caused_request(
         .context("caused request lacks node_did")?;
     let local = node_did == lifecycle.node_did();
     if !terminal {
-        let interrupted = crate::request::interrupt::interrupt_request_by_doc_id(
-            node,
-            doc_id,
-            node_did,
-            caused.requester_did.as_deref(),
-        )
-        .await;
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            lifecycle.actor().clone(),
+        );
+        let interrupted = if local {
+            crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+                &access,
+                doc_id,
+                node_did,
+                caused.requester_did.as_deref(),
+            )
+            .await
+        } else {
+            Err(anyhow::anyhow!(
+                "remote caused-request interruption requires an authenticated target runtime route"
+            ))
+        };
         match interrupted {
             Ok(_) if local => {
                 return Ok(Some(KillOutcome::Interrupting {

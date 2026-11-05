@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::inference::llm::message::Message;
 use gents::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::inference::rendered_request::RenderedCompletionRequest;
@@ -22,7 +22,7 @@ use crate::support::test_db;
 
 const CAPTURE_MODEL: &str = "capture-model";
 const CAPTURE_BACKEND_ID: &str = "capture-backend";
-const CAPTURE_AGENT_ID: &str = "capture-behavior";
+const CAPTURE_AGENT_DID: &str = "capture-behavior";
 const CAPTURE_TOOL: &str = "capture_probe";
 
 const PROD_PARSE_400_BODY: &str = r#"{"object":"error","message":"BadRequestError: Error in processing prompt inputs: Expecting value: line 1 column 28 (char 27)","type":"BadRequestError","code":400}"#;
@@ -52,7 +52,7 @@ async fn attached_image_reaches_the_provider_and_survives_the_next_turn() {
     let first = crate::support::interrupt::create_runtime_request_with_input(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "image-first",
         "image-session",
         "",
@@ -63,7 +63,7 @@ async fn attached_image_reaches_the_provider_and_survives_the_next_turn() {
     let second = crate::support::interrupt::create_runtime_request_with_input(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "image-second",
         "image-session",
         "What was in the image?",
@@ -103,7 +103,7 @@ async fn attached_image_reaches_the_provider_and_survives_the_next_turn() {
     let unsupported = crate::support::interrupt::create_runtime_request_with_input(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "pdf-third",
         "image-session",
         "Read the PDF",
@@ -139,7 +139,7 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
     let doc_id = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "req-capture-1",
         "session-capture-1",
         "please capture-me",
@@ -250,7 +250,7 @@ async fn a_failing_capture_sink_issues_no_provider_request() {
     let doc_id = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "req-capture-fault-1",
         "session-capture-fault-1",
         "please must-not-send",
@@ -910,7 +910,7 @@ async fn insert_stored_capture(
     let mutation = format!(
         r#"mutation {{ create_RenderedRequest(input: {{
             capture_key:"{}", request_doc_id:"{}", request_commit_cid:"{}", request_id:"{}",
-            session_id:"{}", node_did:"{}", requester_did:"{}", agent_id:"{}",
+            session_id:"{}", node_did:"{}", requester_did:"{}", agent_did:"{}",
             capture_scope:"{}", turn_index:{}, attempt:{}, capture_version:{},
             model_name:"{}", source:"{}", request_json:"{}", provenance_json:"{}",
             created_at:"2026-10-07T00:00:00Z"
@@ -922,7 +922,7 @@ async fn insert_stored_capture(
         escape_graphql_string(&rendered.session_id),
         escape_graphql_string(&rendered.node_did),
         escape_graphql_string(&rendered.requester_did),
-        escape_graphql_string(&rendered.agent_id),
+        escape_graphql_string(&rendered.agent_did),
         escape_graphql_string(&rendered.capture_scope),
         rendered.turn_index,
         rendered.attempt,
@@ -1002,7 +1002,7 @@ async fn legacy_capture_remains_readable_and_idempotent_after_format_upgrade() {
         ("session_id", rendered.session_id.as_str()),
         ("node_did", rendered.node_did.as_str()),
         ("requester_did", rendered.requester_did.as_str()),
-        ("agent_id", rendered.agent_id.as_str()),
+        ("agent_did", rendered.agent_did.as_str()),
         ("capture_scope", rendered.capture_scope.as_str()),
         ("model_name", rendered.model_name.as_str()),
         ("source", source.as_str().unwrap()),
@@ -1105,7 +1105,7 @@ async fn a_retried_attempt_is_its_own_durable_fact() {
     let doc_id = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "req-capture-attempts",
         "session-capture-attempts",
         &format!("please recover {marker}"),
@@ -1223,7 +1223,7 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
     let parent = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "retry-parent",
         marker,
         &content,
@@ -1238,7 +1238,7 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
         "retry-successor",
         &agent.node_did,
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         marker,
         &content,
         "interactive",
@@ -1350,7 +1350,7 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
     let doc_id = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "req-capture-multi-turn",
         "session-capture-multi-turn",
         &format!("please use the tool {marker}"),
@@ -1505,7 +1505,7 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
     let doc_id = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "req-capture-repair",
         "session-capture-repair",
         &format!("please use the tool {marker}"),
@@ -1657,7 +1657,7 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
     let doc_id = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "req-capture-compaction",
         "session-capture-compaction",
         &format!("please use both tools {marker}"),
@@ -1825,7 +1825,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     let seed_doc = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "req-capture-seed",
         session_id,
         &format!("seed the transcript {SEED_MARKER}"),
@@ -1847,7 +1847,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     .unwrap()
     .expect("seed request commit");
     let boundary = gents::turn::provider_context_reduction::capture_source_boundary(
-        db.node.as_ref(),
+        &gents::store::config_client::ConfigAccess::local(db.node.clone()),
         session_id,
         &agent.node_did,
         None,
@@ -1921,7 +1921,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     let follow_up_doc = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "req-capture-summarized",
         session_id,
         "and now a short follow-up",
@@ -2072,7 +2072,7 @@ async fn run_serialized_threshold_probe(name: &str, threshold: f64) -> Threshold
     let seed_doc = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         seed_request_id,
         session_id,
         SEED_MARKER,
@@ -2098,7 +2098,7 @@ async fn run_serialized_threshold_probe(name: &str, threshold: f64) -> Threshold
     let follow_up_doc = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         follow_up_request_id,
         session_id,
         FOLLOW_UP_MARKER,
@@ -2353,7 +2353,7 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     let seed_doc = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "req-rolling-seed",
         session_id,
         "ROLLING_SEED_REQUEST",
@@ -2396,7 +2396,7 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     let failed_doc = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "req-rolling-failure",
         session_id,
         FAILURE_MARKER,
@@ -2422,7 +2422,7 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     let retry_doc = create_runtime_request(
         db.node.as_ref(),
         &agent.node_did,
-        CAPTURE_AGENT_ID,
+        CAPTURE_AGENT_DID,
         "req-rolling-retry",
         session_id,
         RETRY_MARKER,
@@ -2563,6 +2563,15 @@ fn parse_json(value: &Value) -> Value {
 }
 
 fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
+    static AGENT_DID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let agent_did = AGENT_DID.get_or_init(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let root =
+            gents::KeyIdentity::load_or_create(directory.path().join("root.key"), None).unwrap();
+        gents::store::identity::provision_agent_identity(&root)
+            .unwrap()
+            .agent_did
+    });
     let node_did = "did:key:z6MkCaptureIdempotency".to_string();
     let session_id = "session-idem".to_string();
     let request_doc_id = String::new();
@@ -2591,7 +2600,7 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
         attempt: 0,
         node_did,
         requester_did: String::new(),
-        agent_id: "behavior".to_string(),
+        agent_did: agent_did.clone(),
         session_id,
         model_name: "m".to_string(),
         source: gents::inference::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
@@ -2653,7 +2662,7 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> 
                 session_id
                 node_did
                 requester_did
-                agent_id
+                agent_did
                 capture_scope
                 turn_index
                 attempt
@@ -2857,13 +2866,13 @@ async fn boot_capture_agent_with(
     let mut builder = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
-        .default_agent_id(CAPTURE_AGENT_ID)
+        .default_agent_did(CAPTURE_AGENT_DID)
         .tool_ceiling(ToolCeiling::meta_only());
     if let Some(message) = capture_failure {
         builder = builder.fail_rendered_request_capture_for_test(message);
     }
     let behavior = builder
-        .agent(CAPTURE_AGENT_ID)
+        .agent(CAPTURE_AGENT_DID)
         .backend_id(CAPTURE_BACKEND_ID)
         .model_name(CAPTURE_MODEL)
         .stream_batch_ms(0)
@@ -2886,9 +2895,9 @@ async fn upsert_capture_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint:
     };
     gents::ensure_node(node, owner).await.unwrap();
     let value = serde_json::json!({"node_did":owner,"backend_id":CAPTURE_BACKEND_ID,"name":CAPTURE_BACKEND_ID,"provider_kind":"OpenAiCompatible","openai_wire_api":"chat_completions","endpoint":endpoint,"auth":{"kind":"unauthenticated"},"max_concurrent":4,"max_queue_depth":100});
-    let profile_id = format!("{CAPTURE_AGENT_ID}:inference");
+    let profile_id = format!("{CAPTURE_AGENT_DID}:inference");
     let profile = serde_json::json!({"node_did":owner,"profile_id":profile_id,"backend_id":CAPTURE_BACKEND_ID,"model_name":CAPTURE_MODEL});
-    let behavior = serde_json::json!({"node_did":owner,"agent_id":CAPTURE_AGENT_ID,"inference_profile_id":profile_id});
+    let behavior = serde_json::json!({"node_did":owner,"agent_did":CAPTURE_AGENT_DID,"inference_profile_id":profile_id});
     let plan = DesiredStateApplyPlan::new(
         [
             (gents::Collection::InferenceBackend, value),

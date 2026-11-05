@@ -91,8 +91,6 @@ pub(crate) async fn seed(args: PackSeedArgs) -> Result<()> {
     let manifest = load_manifest(&pack, &distribution)?;
 
     let port = args.http_port;
-    // The pack node refuses anonymous writes; the seed signs as the default
-    // home's node identity.
     let graphql = crate::resolve_graphql_endpoint(
         Some(&format!("http://127.0.0.1:{port}/api/v0/graphql")),
         None,
@@ -228,11 +226,11 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         .and_then(Value::as_str)
         .context("init did not return inference_profile_id")?
         .to_string();
-    let default_agent_id = init
-        .get("default_agent_id")
+    let default_agent_did = init
+        .get("default_agent_did")
         .and_then(Value::as_str)
         .filter(|id| !id.trim().is_empty())
-        .context("init did not return default_agent_id")?;
+        .context("init did not return default_agent_did")?;
     // Scenario homes are initialized with exactly one profile. Bind every
     // declared role explicitly for deterministic role binding.
     let staged_pack = stage_scenario_pack(
@@ -240,7 +238,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         &distribution,
         &node_did,
         &inference_profile_id,
-        default_agent_id,
+        default_agent_did,
     )?;
 
     for allowed in allow_scenario_folders(&pack, &manifest, &home)? {
@@ -278,8 +276,15 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         port,
         &log,
         staged_pack.path(),
-        tool_root.as_deref(),
-        manifest.init.tool_root_env_var.as_deref(),
+        tool_root
+            .as_deref()
+            .zip(manifest.init.tool_root_env_var.as_deref()),
+        &distribution
+            .metadata
+            .inference_slots
+            .iter()
+            .map(|slot| format!("{}={inference_profile_id}", slot.name))
+            .collect::<Vec<_>>(),
     )?;
     let outcome = async {
         wait_http(&format!("http://127.0.0.1:{port}/healthz"), &mut server).await?;

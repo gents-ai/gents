@@ -60,7 +60,7 @@ fn audit_item(
 async fn fixture(
     name: &str,
 ) -> (
-    Arc<defra_node::EmbeddedNode>,
+    Arc<defra_node::Node>,
     PathBuf,
     DefraSessionHook,
     RequestLifecycle,
@@ -111,7 +111,7 @@ async fn fixture(
 }
 
 async fn persisted(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     request_doc_id: &str,
     source: &OutputSource,
     writer: &OutputWriter,
@@ -248,7 +248,7 @@ async fn processor_stream(stream: Stream, end: End, chunks_per_second: u32) -> P
         execution_generation: generation,
     };
     let result = persisted(&node, &doc_id, &source, &output_writer).await;
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     let _ = std::fs::remove_dir_all(data_path);
     result
 }
@@ -329,7 +329,7 @@ async fn auxiliary_stream(end: End, chunks_per_second: u32) -> Persisted {
         execution_generation: generation,
     };
     let result = persisted(&node, &request.doc_id, &source, &output_writer).await;
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     let _ = std::fs::remove_dir_all(data_path);
     result
 }

@@ -160,19 +160,19 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
             .iter()
             .max_by_key(|view| view.created_at)
             .expect("a group has a run");
-        let agent_id = gents::session::origin::load_session(
+        let agent_did = gents::session::origin::load_session(
             &access,
             &latest.session_id,
             latest.scope.requester_did.as_deref(),
         )
         .await?
-        .map(|session| session.agent_id);
+        .map(|session| session.agent_did);
         workflows.push(serde_json::json!({
             "script_id": script_id,
             "handle": latest.handle,
             "runs": runs.len(),
             "last_run_at": latest.created_at,
-            "agent_id": agent_id,
+            "agent_did": agent_did,
             "latest_address": latest.address,
             "promoted_as": promoted_as(&promotions, script_id),
         }));

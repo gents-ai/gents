@@ -14,6 +14,7 @@ where
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
+#[cfg(test)]
 pub(super) fn default_display_name_for_did(node_did: &str) -> String {
     node_did
         .rsplit(':')

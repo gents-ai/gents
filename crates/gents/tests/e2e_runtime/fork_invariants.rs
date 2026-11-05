@@ -24,7 +24,7 @@ struct Imported {
 }
 
 async fn import_message(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     session: &str,
     sequence: u32,
     role: MessageRole,
@@ -35,7 +35,7 @@ async fn import_message(
 }
 
 async fn import_scoped_message(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     session: &str,
     sequence: u32,
     role: MessageRole,
@@ -144,7 +144,7 @@ fn created_id(response: &defra_node::QueryResponse, collection: &str) -> String 
 }
 
 async fn headers(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     session: &str,
 ) -> Vec<gents::session::canonical_rows::TranscriptMessageRow> {
     let session = escape_graphql_string(session);
@@ -158,7 +158,7 @@ async fn headers(
         .collect()
 }
 
-async fn setup(node: &defra_node::EmbeddedNode, session: &str) {
+async fn setup(node: &defra_node::Node, session: &str) {
     create_agent_session(node, session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent(node, AGENT_NAME, NODE_DID).await;
 }
@@ -169,7 +169,7 @@ fn params(session: &str, turn: u32) -> ForkParams<'_> {
         boundary: gents::session::ForkBoundary::UserTurn(turn),
         caller_node_did: NODE_DID,
         caller_requester_did: None,
-        target_agent_id: None,
+        target_agent_did: None,
     }
 }
 
@@ -190,7 +190,13 @@ async fn fork_copies_exact_header_prefix_by_reference() {
     let one = import_message(&db.node, "parent", 1, MessageRole::User, "u1", true).await;
     let two = import_message(&db.node, "parent", 2, MessageRole::Assistant, "a1", true).await;
     import_message(&db.node, "parent", 3, MessageRole::User, "u2", true).await;
-    let outcome = fork(&db.node, params("parent", 1)).await.unwrap();
+    let outcome = fork(
+        &db.node,
+        &identity::Did::new(NODE_DID).unwrap(),
+        params("parent", 1),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         (
             outcome.copied_messages,
@@ -261,7 +267,7 @@ async fn fork_via_http_uses_same_header_contract() {
     let identity =
         gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(gents::NodeIdentity::did(&identity))
             .with_http(defra_node::HttpConfig::with_addr(address))
             .build()
@@ -321,6 +327,7 @@ async fn fork_preserves_exact_requester_scope_and_denies_cross_requester_access(
     .await;
     let outcome = fork(
         &db.node,
+        &identity::Did::new(NODE_DID).unwrap(),
         ForkParams {
             caller_requester_did: Some(requester),
             ..params("requester-parent", 1)
@@ -351,6 +358,7 @@ async fn fork_preserves_exact_requester_scope_and_denies_cross_requester_access(
     );
     let denied = fork(
         &db.node,
+        &identity::Did::new(NODE_DID).unwrap(),
         ForkParams {
             caller_requester_did: Some("did:key:requester-b"),
             ..params("requester-parent", 1)
@@ -380,7 +388,13 @@ async fn fork_never_copies_executable_tool_rows() {
         "2026-04-21T10:00:02Z",
     )
     .await;
-    let outcome = fork(&db.node, params("parent-tools", 1)).await.unwrap();
+    let outcome = fork(
+        &db.node,
+        &identity::Did::new(NODE_DID).unwrap(),
+        params("parent-tools", 1),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         (outcome.copied_tool_calls, outcome.copied_tool_results),
         (0, 0)
@@ -440,9 +454,13 @@ async fn fork_copies_only_compaction_cursors_in_retained_prefix() {
         "2026-04-21T10:00:04Z",
     )
     .await;
-    let outcome = fork(&db.node, params("parent-compaction", 1))
-        .await
-        .unwrap();
+    let outcome = fork(
+        &db.node,
+        &identity::Did::new(NODE_DID).unwrap(),
+        params("parent-compaction", 1),
+    )
+    .await
+    .unwrap();
     let rows = fetch_compaction_entry_snapshots_for_session(&db.node, &outcome.session_id).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].summary, "early");
@@ -462,12 +480,20 @@ async fn fork_boundaries_and_provenance_are_exact() {
     ] {
         import_message(&db.node, "parent-boundaries", seq, role, "text", true).await;
     }
-    let empty = fork(&db.node, params("parent-boundaries", 0))
-        .await
-        .unwrap();
-    let full = fork(&db.node, params("parent-boundaries", 2))
-        .await
-        .unwrap();
+    let empty = fork(
+        &db.node,
+        &identity::Did::new(NODE_DID).unwrap(),
+        params("parent-boundaries", 0),
+    )
+    .await
+    .unwrap();
+    let full = fork(
+        &db.node,
+        &identity::Did::new(NODE_DID).unwrap(),
+        params("parent-boundaries", 2),
+    )
+    .await
+    .unwrap();
     assert_eq!(empty.copied_messages, 0);
     assert_eq!(full.copied_messages, 4);
     let session = fetch_session_snapshot(&db.node, &empty.session_id)
@@ -490,9 +516,13 @@ async fn fork_rejects_invalid_cut_and_rolls_back_invalid_reference() {
         true,
     )
     .await;
-    let range = fork(&db.node, params("parent-invalid", 2))
-        .await
-        .unwrap_err();
+    let range = fork(
+        &db.node,
+        &identity::Did::new(NODE_DID).unwrap(),
+        params("parent-invalid", 2),
+    )
+    .await
+    .unwrap_err();
     assert!(matches!(range, ForkError::ForkAtUserTurnOutOfRange(2, 1)));
     import_message(
         &db.node,
@@ -503,9 +533,13 @@ async fn fork_rejects_invalid_cut_and_rolls_back_invalid_reference() {
         false,
     )
     .await;
-    let missing = fork(&db.node, params("parent-invalid", 1))
-        .await
-        .unwrap_err();
+    let missing = fork(
+        &db.node,
+        &identity::Did::new(NODE_DID).unwrap(),
+        params("parent-invalid", 1),
+    )
+    .await
+    .unwrap_err();
     let ForkError::ForkCopyFailed(cause) = missing else {
         panic!("missing closure must reject the copy step: {missing:?}");
     };
@@ -535,33 +569,29 @@ async fn fork_rejects_invalid_cut_and_rolls_back_invalid_reference() {
 }
 
 #[tokio::test]
-async fn fork_accepts_same_principal_behavior_swap() {
+async fn fork_rejects_cross_agent_source_references() {
     let db = test_db("fork-behavior").await;
     setup(&db.node, "parent-behavior").await;
     create_agent(&db.node, "alternate", NODE_DID).await;
     create_agent(&db.node, "foreign", "did:key:foreign").await;
     import_message(&db.node, "parent-behavior", 1, MessageRole::User, "u", true).await;
-    let outcome = fork(
+    let error = fork(
         &db.node,
+        &identity::Did::new(NODE_DID).unwrap(),
         ForkParams {
-            target_agent_id: Some("alternate"),
+            target_agent_did: Some("alternate"),
             ..params("parent-behavior", 1)
         },
     )
     .await
-    .unwrap();
-    assert_eq!(
-        fetch_session_snapshot(&db.node, &outcome.session_id)
-            .await
-            .unwrap()
-            .agent_id,
-        "alternate"
-    );
+    .unwrap_err();
+    assert!(matches!(error, ForkError::CrossAgentForkUnavailable));
     assert!(matches!(
         fork(
             &db.node,
+            &identity::Did::new(NODE_DID).unwrap(),
             ForkParams {
-                target_agent_id: Some("missing"),
+                target_agent_did: Some("missing"),
                 ..params("parent-behavior", 1)
             }
         )
@@ -572,8 +602,9 @@ async fn fork_accepts_same_principal_behavior_swap() {
     assert!(matches!(
         fork(
             &db.node,
+            &identity::Did::new(NODE_DID).unwrap(),
             ForkParams {
-                target_agent_id: Some("foreign"),
+                target_agent_did: Some("foreign"),
                 ..params("parent-behavior", 1)
             }
         )
@@ -596,9 +627,10 @@ async fn concurrent_forks_are_disjoint() {
         true,
     )
     .await;
+    let actor = identity::Did::new(NODE_DID).unwrap();
     let (left, right) = tokio::join!(
-        fork(&db.node, params("parent-concurrent", 1)),
-        fork(&db.node, params("parent-concurrent", 1))
+        fork(&db.node, &actor, params("parent-concurrent", 1)),
+        fork(&db.node, &actor, params("parent-concurrent", 1))
     );
     let (left, right) = (left.unwrap(), right.unwrap());
     assert_ne!(left.session_id, right.session_id);
@@ -621,9 +653,21 @@ async fn fork_of_fork_names_immediate_origin_and_hydrates() {
         true,
     )
     .await;
-    let child = fork(&db.node, params("grandparent", 1)).await.unwrap();
+    let child = fork(
+        &db.node,
+        &identity::Did::new(NODE_DID).unwrap(),
+        params("grandparent", 1),
+    )
+    .await
+    .unwrap();
     let child_header = headers(&db.node, &child.session_id).await.remove(0);
-    let grandchild = fork(&db.node, params(&child.session_id, 1)).await.unwrap();
+    let grandchild = fork(
+        &db.node,
+        &identity::Did::new(NODE_DID).unwrap(),
+        params(&child.session_id, 1),
+    )
+    .await
+    .unwrap();
     let grandchild_header = headers(&db.node, &grandchild.session_id).await.remove(0);
     assert!(
         matches!(&grandchild_header.message.publication, MessagePublication::Fork { origin_message_doc_id } if origin_message_doc_id == &child_header.doc_id)
@@ -664,13 +708,18 @@ async fn fork_rejects_busy_wrong_principal_and_missing_source() {
     )
     .await;
     assert!(matches!(
-        fork(&db.node, params("parent-rejections", 0))
-            .await
-            .unwrap_err(),
+        fork(
+            &db.node,
+            &identity::Did::new(NODE_DID).unwrap(),
+            params("parent-rejections", 0)
+        )
+        .await
+        .unwrap_err(),
         ForkError::ForkSourceBusy
     ));
     let wrong = fork(
         &db.node,
+        &identity::Did::new(NODE_DID).unwrap(),
         ForkParams {
             caller_node_did: "did:key:foreign",
             ..params("parent-rejections", 0)
@@ -683,7 +732,13 @@ async fn fork_rejects_busy_wrong_principal_and_missing_source() {
         ForkError::ForkSourceNotFound(_) | ForkError::ForkNotSameAgent
     ));
     assert!(matches!(
-        fork(&db.node, params("absent", 0)).await.unwrap_err(),
+        fork(
+            &db.node,
+            &identity::Did::new(NODE_DID).unwrap(),
+            params("absent", 0)
+        )
+        .await
+        .unwrap_err(),
         ForkError::ForkSourceNotFound(_)
     ));
 }

@@ -120,7 +120,7 @@ pub async fn send_chat_message(
                 request.caused_by_source_doc_id.as_deref(),
                 request.session_id.as_deref(),
                 &node_did,
-                request.agent_id.as_deref(),
+                request.agent_did.as_deref(),
                 answer,
             )?
         }
@@ -130,8 +130,8 @@ pub async fn send_chat_message(
         bail!("content is required");
     }
 
-    let agent_id = request
-        .agent_id
+    let agent_did = request
+        .agent_did
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -168,7 +168,7 @@ pub async fn send_chat_message(
             &session_id,
             &node_did,
             &content,
-            agent_id.as_deref(),
+            agent_did.as_deref(),
             SubmitRequestOptions {
                 caller_intent: caller_intent.clone(),
                 caused_by_source_doc_id: request.caused_by_source_doc_id,

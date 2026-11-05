@@ -78,7 +78,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
     hook.on_completion_call(&user_text_message("fill background capacity"), &[])
         .await;
     let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_id(&node, &session, identity.did(), "general")
+    crate::session::create_session_with_agent_did(&node, &session, identity.did(), "general")
         .await
         .unwrap();
     let request_id = format!("budget-{}", uuid::Uuid::new_v4());
@@ -207,7 +207,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         executions.wait_for_completion(child).await;
     }
     hook_execution_fixtures().lock().await.remove(&request_id);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 struct NamedPendingTool(String);
@@ -277,7 +277,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
     hook.on_completion_call(&user_text_message("configured background"), &[])
         .await;
     let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_id(&node, &session, identity.did(), "general")
+    crate::session::create_session_with_agent_did(&node, &session, identity.did(), "general")
         .await
         .unwrap();
     let request_id = format!("timed-{}", uuid::Uuid::new_v4());
@@ -357,7 +357,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
         executions.wait_for_completion(child).await;
     }
     hook_execution_fixtures().lock().await.remove(&request_id);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 struct NoisyTool(String);
@@ -523,5 +523,5 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
     assert_eq!(notices, 1, "redrive must not publish a second notice");
 
     hook_execution_fixtures().lock().await.remove(&request_id);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

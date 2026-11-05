@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
@@ -109,24 +109,32 @@ impl RequestLifecycle {
 }
 
 async fn load_candidates(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
 ) -> Result<(
     Vec<AgentRequestRow>,
     Vec<AgentRequestRow>,
     Vec<AgentRequestRow>,
 )> {
+    let actors = super::recovery::configured_agent_actors(node, node_did).await?;
     let node_did = escape_graphql_string(node_did);
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &format!(
+    let mut failed = Vec::new();
+    let mut successors = Vec::new();
+    let mut pending = Vec::new();
+    let mut seen_failed = BTreeSet::new();
+    let mut seen_successors = BTreeSet::new();
+    let mut seen_pending = BTreeSet::new();
+    for actor in actors {
+        let agent_did = escape_graphql_string(actor.as_str());
+        let query = format!(
             r#"{{
                 failed: AgentRequest(filter: {{
                     node_did: {{ _eq: "{node_did}" }},
+                    agent_did: {{ _eq: "{agent_did}" }},
                     lifecycle_state: {{ _eq: "{failed}" }},
                     execution_origin: {{ _eq: "scheduled" }}
                 }}, order: [{{ terminalized_at: ASC }}, {{ request_id: ASC }}]) {{
-                    _docID request_id node_did requester_did agent_id session_id
+                    _docID request_id node_did requester_did agent_did session_id
                     retry_root_request input
                     request_hop retry_count max_retries
                     terminalized_at
@@ -134,29 +142,63 @@ async fn load_candidates(
                 successors: AgentRequest(filter: {{
                     node_did: {{ _eq: "{node_did}" }},
                     retry_parent_request_doc_id: {{ _neq: null }}
-                }}) {{ request_id retry_parent_request_doc_id }}
+                }}) {{ _docID request_id retry_parent_request_doc_id }}
                 pending: AgentRequest(filter: {{
                     node_did: {{ _eq: "{node_did}" }},
                     lifecycle_state: {{ _eq: "{pending}" }}
-                }}) {{ request_id session_id requester_did input }}
+                }}) {{ _docID request_id session_id requester_did input }}
             }}"#,
             failed = RequestLifecycleState::Failed.as_str(),
             pending = RequestLifecycleState::Pending.as_str()
-        ),
-        "load_candidates",
-    )
-    .await?;
-    let data = response.data.context("background wake query has no data")?;
-    let failed: Vec<AgentRequestRow> =
-        serde_json::from_value(data["failed"].clone()).context("decoding failed wakes")?;
+        );
+        let response = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor)
+            .execute(&query)
+            .await?;
+        let data = response
+            .get("data")
+            .context("background wake query has no data")?;
+        append_unique_rows(
+            &mut failed,
+            &mut seen_failed,
+            agent_request_rows(data, "failed")?,
+        )?;
+        append_unique_rows(
+            &mut successors,
+            &mut seen_successors,
+            agent_request_rows(data, "successors")?,
+        )?;
+        append_unique_rows(
+            &mut pending,
+            &mut seen_pending,
+            agent_request_rows(data, "pending")?,
+        )?;
+    }
+    failed.sort_by(|a, b| {
+        a.terminalized_at
+            .cmp(&b.terminalized_at)
+            .then_with(|| a.request_id.cmp(&b.request_id))
+    });
     for candidate in &failed {
         validate_failed_wake(candidate)?;
     }
-    Ok((
-        failed,
-        serde_json::from_value(data["successors"].clone()).context("decoding successors")?,
-        serde_json::from_value(data["pending"].clone()).context("decoding pending wakes")?,
-    ))
+    Ok((failed, successors, pending))
+}
+
+fn append_unique_rows(
+    target: &mut Vec<AgentRequestRow>,
+    seen: &mut BTreeSet<String>,
+    rows: Vec<AgentRequestRow>,
+) -> Result<()> {
+    for row in rows {
+        let doc_id = row
+            .doc_id
+            .as_ref()
+            .context("background wake request is missing _docID")?;
+        if seen.insert(doc_id.clone()) {
+            target.push(row);
+        }
+    }
+    Ok(())
 }
 
 fn required_str<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str> {
@@ -170,7 +212,7 @@ fn required_i64(value: Option<i64>, field: &str) -> Result<i64> {
 fn validate_failed_wake(candidate: &AgentRequestRow) -> Result<()> {
     required_str(candidate.doc_id.as_deref(), "_docID")?;
     required_str(candidate.node_did.as_deref(), "node_did")?;
-    required_str(candidate.agent_id.as_deref(), "agent_id")?;
+    required_str(candidate.agent_did.as_deref(), "agent_did")?;
     required_str(candidate.session_id.as_deref(), "session_id")?;
     required_i64(candidate.retry_count, "retry_count")?;
     required_i64(candidate.max_retries, "max_retries")?;
@@ -244,7 +286,12 @@ async fn redrive_one(
     let request_id = &request_id;
     crate::store::config_client::ConfigAccess::transact_local_idempotent(
         node,
-        None,
+        Some(identity::Did::new(
+            candidate
+                .agent_did
+                .clone()
+                .context("request is missing agent DID")?,
+        )?),
         crate::store::config_client::IdempotentTransactionRetry::Standard,
         "lifecycle.background_wake_redrive",
         move |txn| {
@@ -398,14 +445,14 @@ async fn redrive_mutation(
         .filter(|value| !value.is_empty())
         .unwrap_or(&candidate.request_id);
     let node_did = required_str(candidate.node_did.as_deref(), "node_did")?;
-    let agent_id = required_str(candidate.agent_id.as_deref(), "agent_id")?;
+    let agent_did = required_str(candidate.agent_did.as_deref(), "agent_did")?;
     let session_id = required_str(candidate.session_id.as_deref(), "session_id")?;
     let doc_id = required_str(candidate.doc_id.as_deref(), "_docID")?;
     let retry_count = required_i64(candidate.retry_count, "retry_count")?;
     let max_retries = required_i64(candidate.max_retries, "max_retries")?;
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
-            node_did,
+            agent_did,
             &candidate.request_id,
         );
     let parent_link = ParentLink {
@@ -418,7 +465,7 @@ async fn redrive_mutation(
         requester_did: candidate.requester_did.clone(),
         request_id: request_id.to_string(),
         node_did: node_did.to_string(),
-        agent_id: agent_id.to_string(),
+        agent_did: agent_did.to_string(),
         session_id: session_id.to_string(),
         content: BACKGROUND_COMPLETION_WAKE_PROMPT.to_string(),
         execution_origin: ExecutionOrigin::Scheduled,

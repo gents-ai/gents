@@ -27,25 +27,31 @@ pub(super) fn row_matches_coalesced_source_and_key(
 
 pub async fn reconcile_coalesced_pending_request(
     node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
     session_id: &str,
     node_did: &str,
     source: QueueSource,
     key: &str,
 ) -> Result<Option<EnqueuedAgentRequest>> {
-    reconcile_coalesced_pending_request_for(node, session_id, node_did, source, key, None).await
+    reconcile_coalesced_pending_request_for(
+        node, agent_did, session_id, node_did, source, key, None,
+    )
+    .await
 }
 
 pub(super) async fn reconcile_coalesced_pending_request_for(
     node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
     session_id: &str,
     node_did: &str,
     source: QueueSource,
     key: &str,
     anchor_doc: Option<&str>,
 ) -> Result<Option<EnqueuedAgentRequest>> {
-    let matching =
-        matching_coalesced_pending_requests(node, session_id, node_did, source, key, anchor_doc)
-            .await?;
+    let matching = matching_coalesced_pending_requests(
+        node, agent_did, session_id, node_did, source, key, anchor_doc,
+    )
+    .await?;
     let Some(survivor) = matching.first().and_then(queue_row_to_enqueued_request) else {
         return Ok(None);
     };
@@ -64,7 +70,12 @@ pub(super) async fn reconcile_coalesced_pending_request_for(
         );
         crate::store::config_client::ConfigAccess::transact_local_idempotent(
             node,
-            None,
+            Some(identity::Did::new(
+                duplicate
+                    .agent_did
+                    .clone()
+                    .context("queued request is missing agent DID")?,
+            )?),
             crate::store::config_client::IdempotentTransactionRetry::Standard,
             "reconcile_coalesced_pending_request",
             |txn| {
@@ -154,6 +165,7 @@ pub(crate) fn supersede_pending_mutation(
 
 async fn matching_coalesced_pending_requests(
     node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
     session_id: &str,
     node_did: &str,
     source: QueueSource,
@@ -173,7 +185,7 @@ async fn matching_coalesced_pending_requests(
     );
     crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
-        None,
+        Some(identity::Did::new(agent_did)?),
         "matching_coalesced_pending_requests",
         |txn| {
             let query = &query;
@@ -234,11 +246,11 @@ pub(super) fn queue_row_to_enqueued_request(row: &AgentRequestRow) -> Option<Enq
     })
 }
 
-pub(super) fn parent_agent_id(parent: &AgentRequest) -> Result<String> {
+pub(super) fn parent_agent_did(parent: &AgentRequest) -> Result<String> {
     anyhow::ensure!(
-        !parent.agent_id.trim().is_empty(),
-        "cannot enqueue same-session request: parent {} has no agent_id",
+        !parent.agent_did.trim().is_empty(),
+        "cannot enqueue same-session request: parent {} has no agent_did",
         parent.request_id
     );
-    Ok(parent.agent_id.clone())
+    Ok(parent.agent_did.clone())
 }

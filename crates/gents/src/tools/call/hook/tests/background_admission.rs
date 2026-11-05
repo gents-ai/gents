@@ -49,7 +49,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
         Some(harness._dir.path()),
         &key.node_did,
         Some(&key.requester_did),
-        &key.agent_id,
+        &key.agent_did,
         Some(&root),
     )
     .unwrap()
@@ -123,7 +123,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
             &harness.hook,
             &harness.request_id,
         ));
-    harness.node.shutdown().await;
+    harness.node.shutdown().await.expect("shut down test node");
 }
 
 #[cfg(unix)]
@@ -217,7 +217,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
             Some(harness._dir.path()),
             &key.node_did,
             Some(&key.requester_did),
-            &key.agent_id,
+            &key.agent_did,
             Some(&root),
         )
         .unwrap()
@@ -305,7 +305,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
                 &harness.hook,
                 &harness.request_id,
             ));
-        harness.node.shutdown().await;
+        harness.node.shutdown().await.expect("shut down test node");
     }
 }
 
@@ -380,6 +380,7 @@ impl DeniedTarget {
             Self::McpAllowlist => BackgroundToolRegistry::from_tools(
                 vec![Box::new(crate::tools::mcp::meta::CallToolTool::new(
                     crate::tools::mcp::meta::MetaToolContext {
+                        actor: identity::Did::new("did:test:actor").unwrap(),
                         node: node.clone(),
                         mcp_pool: crate::tools::mcp::pool::McpPool::new()
                             .for_agent("did:test:test"),
@@ -435,7 +436,7 @@ async fn admission_harness(
     hook.on_completion_call(&user_text_message("run in the background"), &[])
         .await;
     let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_id(&node, &session, identity.did(), "general")
+    crate::session::create_session_with_agent_did(&node, &session, identity.did(), "general")
         .await
         .unwrap();
     let request_id = format!("admission-{}", uuid::Uuid::new_v4());
@@ -542,7 +543,7 @@ async fn spawned_target_rejection_case(
         case.name,
         target.target()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -617,6 +618,6 @@ async fn spawn_process_rejects_unadvertised_arguments_before_spawned_admission()
             .lock()
             .await
             .remove(&hook_execution_fixture_key(&hook, &request_id));
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 }

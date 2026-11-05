@@ -26,7 +26,7 @@ pub fn default_catalog() -> Catalog {
     Catalog {
         variables: &[
             "node.node_did",
-            "node.agent_id",
+            "node.agent_did",
             "ctx.now",
             "session.session_id",
             "request.request_id",

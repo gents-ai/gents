@@ -2,12 +2,15 @@ import Proofs.Mailbox.State
 
 namespace Mailbox
 
+/-- Requester is immutable session provenance, separate from the authenticated
+reply signer. Native ACP authorizes the acting signer. An unbound envelope starts
+a new client-owned session; a bound envelope retains its original session scope. -/
 structure ReplyEvidence where
   requestDocId : String
   sourceDocId : String
   requesterDid : String
   nodeDid : String
-  agentId : String
+  agentDid : String
   sessionId : String
   authenticated : Bool
   interactive : Bool
@@ -17,7 +20,7 @@ structure ReplyEnvelope where
   docId : String
   handling : Handling
   targetNodeDid : String
-  agentId : String
+  agentDid : String
   sessionId : Option String
   deadlineValid : Bool
   questionCurrent : Bool := true
@@ -30,8 +33,9 @@ def replyMatches (item : Item) (envelope : ReplyEnvelope) (reply : ReplyEvidence
   (envelope.deadlineValid = true ∨
     (item.status = .acted ∧ item.resolvedDocId = reply.requestDocId)) ∧
   reply.requestDocId ≠ "" ∧ reply.requesterDid ≠ "" ∧
-  reply.requesterDid = item.identity.requesterDid ∧ reply.nodeDid = envelope.targetNodeDid ∧
-  envelope.agentId ≠ "" ∧ reply.agentId = envelope.agentId ∧
+  (envelope.sessionId = none ∨ reply.requesterDid = item.identity.requesterDid) ∧
+  reply.nodeDid = envelope.targetNodeDid ∧
+  envelope.agentDid ≠ "" ∧ reply.agentDid = envelope.agentDid ∧
   (envelope.sessionId = none ∨ envelope.sessionId = some reply.sessionId) ∧
   envelope.docId ≠ "" ∧ reply.sourceDocId = envelope.docId ∧ reply.nodeDid ≠ ""
 
@@ -96,7 +100,9 @@ theorem reply_claim_preserves_identity (item post : Item) (envelope : ReplyEnvel
 
 /-- Confirmation is a persisted, verified caller receipt. The observation is a
 native read of the exact item; filtered-list absence supplies no observation.
-Acknowledgement must complete before the local answer cache is retired. -/
+Acknowledgement must complete before the local answer cache is retired. The
+cache belongs to the acting client; an observed item's requester records session
+provenance and may name another user or the agent that created the session. -/
 structure AnswerCacheBinding where
   client : String
   node : String
@@ -127,7 +133,7 @@ def mayRetireAnswerCache (binding : AnswerCacheBinding)
     match observation with
     | none => false
     | some observed =>
-        observed.requester == binding.client && observed.node == binding.node &&
+        observed.node == binding.node &&
         observed.agent == binding.agent && observed.session == binding.session &&
         observed.item == binding.item && observed.kind == .ask &&
         observed.handling == .startRequest && observed.status.terminal

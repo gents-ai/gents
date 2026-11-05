@@ -57,6 +57,7 @@ pub(super) async fn current_local_endpoint(
         did: identity.did().to_string(),
         node_id: peer_id,
         address,
+        graphql_url: None,
         updated_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
         sig: Vec::new(),
     })
@@ -118,7 +119,7 @@ impl ClientCore {
             .context("server does not advertise authenticated status enrollment")?;
         let offer = decode_offer(offer_token).context("decoding server enrollment offer")?;
         self.sync_state
-            .compare_runtime_schema(&self.node, &offer.owner_agent, status)
+            .compare_runtime_schema(&self.node, &offer.owner_node_did, status)
             .await
             .context("refusing to enroll with an incompatible runtime")?;
         let _lifecycle = self.route_manager.lock().await;
@@ -164,7 +165,7 @@ impl ClientCore {
             self.sync_state
                 .remember_enrollment_endpoint(
                     &request.server_peer,
-                    &request.owner_agent,
+                    &request.owner_node_did,
                     &request.request_digest,
                     &request.expires_at,
                     endpoint,
@@ -182,7 +183,7 @@ impl ClientCore {
             network_id: request.network_id,
             admin_did: request.admin_did,
             server_peer: request.server_peer,
-            owner_node: request.owner_agent,
+            owner_node: request.owner_node_did,
             state: "pending_approval".to_string(),
             expires_at: request.expires_at,
             activation_error: None,
@@ -308,7 +309,7 @@ impl ClientCore {
                     let matching_peer = peers.iter().find(|peer| {
                         peer.is_enrollment()
                             && peer.peer_id == request.server_peer
-                            && peer.node_did == request.owner_agent
+                            && peer.node_did == request.owner_node_did
                             && peer.pairing_network_id.as_deref() == Some(&request.network_id)
                             && peer.pairing_template.as_deref() == Some(&request.profile)
                             && peer.enrollment_request_id.as_deref() == Some(&request.request_id)
@@ -368,7 +369,7 @@ impl ClientCore {
                     network_id: request.network_id,
                     admin_did: request.admin_did,
                     server_peer: request.server_peer,
-                    owner_node: request.owner_agent,
+                    owner_node: request.owner_node_did,
                     state: state.to_string(),
                     expires_at: request.expires_at,
                     activation_error,
@@ -394,7 +395,7 @@ impl ClientCore {
             r#"{{ NetworkEnrollmentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}) {{
                 _docID protocol_version request_id request_digest offer_id offer_token challenge
                 network_id admin_did server_peer candidate_did candidate_peer candidate_ticket
-                owner_agent profile client_nonce issued_at expires_at candidate_sig
+                owner_node_did profile client_nonce issued_at expires_at candidate_sig
             }} }}"#
         );
         let response = graphql_with_transaction_retry(
@@ -435,7 +436,7 @@ impl ClientCore {
             r#"{{ NetworkEnrollmentRequest(filter: {{ offer_id: {{ _eq: "{offer_id}" }} }}) {{
                 _docID protocol_version request_id request_digest offer_id offer_token challenge
                 network_id admin_did server_peer candidate_did candidate_peer candidate_ticket
-                owner_agent profile client_nonce issued_at expires_at candidate_sig
+                owner_node_did profile client_nonce issued_at expires_at candidate_sig
             }} }}"#
         );
         let response = graphql_with_transaction_retry(

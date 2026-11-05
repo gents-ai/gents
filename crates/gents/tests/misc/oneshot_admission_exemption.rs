@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::{ensure_runtime_schemas, run_openai_oneshot};
 
 use crate::support::fixtures::{bind_agent_backend, test_agent};
@@ -27,7 +27,7 @@ async fn oneshot_completes_without_backend_admission_reconciliation() -> Result<
     bind_agent_backend(
         &node,
         behavior.node_did(),
-        &behavior.agent_id,
+        &behavior.agent_did,
         "backend-oneshot-exempt",
         mock_endpoint.endpoint(),
         "default",

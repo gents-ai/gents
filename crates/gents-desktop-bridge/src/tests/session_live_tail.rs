@@ -32,7 +32,7 @@ async fn create(
 fn request(request_id: &str, state: &str, created_at: &str) -> Value {
     serde_json::json!({
         "purpose": "normal", "request_id": request_id, "node_did": OPERATOR,
-        "agent_id": "worker", "session_id": "sess_live",
+        "agent_did": "worker", "session_id": "sess_live",
         "content": format!("{request_id} text"), "lifecycle_state": state, "backend_id": "",
         "created_at": created_at, "retry_count": 0
     })
@@ -45,7 +45,7 @@ async fn a_queued_or_folded_submission_keeps_the_running_turns_streaming_text() 
         session_id: "sess_live".into(),
         node_did: OPERATOR.into(),
         requester_did: None,
-        agent_id: "worker".into(),
+        agent_did: "worker".into(),
         created_at: "2026-05-20T00:00:00Z".into(),
         closed_at: None,
         archived_at: None,

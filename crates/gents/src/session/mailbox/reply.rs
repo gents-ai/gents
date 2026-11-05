@@ -58,7 +58,7 @@ pub(crate) async fn claim_reply_in_txn(
     ensure!(
         signed_request.node_did == request.node_did
             && signed_request.requester_did == request.requester_did
-            && signed_request.agent_id == request.agent_id
+            && signed_request.agent_did == request.agent_did
             && signed_request.session_id == request.session_id,
         "mailbox reply changed during admission"
     );
@@ -109,10 +109,9 @@ pub(super) fn validate_reply_claim(
         "mailbox reply is missing its request document ID"
     );
     ensure!(
-        request
-            .requester_did
-            .as_deref()
-            .is_some_and(|did| !did.is_empty() && did == item.requester_did),
+        request.requester_did.as_deref().is_some_and(
+            |did| !did.is_empty() && (item.session_id.is_none() || did == item.requester_did)
+        ),
         "mailbox reply requester does not match"
     );
     ensure!(
@@ -120,7 +119,7 @@ pub(super) fn validate_reply_claim(
         "mailbox reply target node does not match"
     );
     ensure!(
-        !item.target_agent_id.is_empty() && request.agent_id == item.target_agent_id,
+        !item.target_agent_did.is_empty() && request.agent_did == item.target_agent_did,
         "mailbox reply target agent does not match"
     );
     ensure!(

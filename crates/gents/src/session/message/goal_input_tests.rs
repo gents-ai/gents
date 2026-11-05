@@ -67,11 +67,11 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
         let session_id = format!("target-{index}");
         let target = SessionMessageTarget {
             node_did: identity.did().into(),
-            agent_id: "agent".into(),
+            agent_did: "agent".into(),
             session_id: session_id.clone(),
         };
         if case["session_readable"] == true {
-            crate::session::ensure_session_with_agent_id_and_requester_did(
+            crate::session::ensure_session_with_agent_did_and_requester_did(
                 &node,
                 &session_id,
                 identity.did(),
@@ -159,7 +159,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
         }
         let cause = SessionMessageCause {
             caller_node_did: caller.did().into(),
-            caller_agent_id: "caller-agent".to_owned(),
+            caller_agent_did: "caller-agent".to_owned(),
             caller_session_id: "caller-session".to_owned(),
             caller_requester_did: None,
             caller_request_id: "caller".into(),
@@ -233,9 +233,12 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             );
             if let Some(expected) = &expected {
                 let crate::goal::RequestAssignmentObservation::Assigned(assigned) =
-                    crate::goal::load_request_assignment(&node, &stored)
-                        .await
-                        .unwrap()
+                    crate::goal::load_request_assignment(
+                        &crate::ConfigAccess::local(node.clone()),
+                        &stored,
+                    )
+                    .await
+                    .unwrap()
                 else {
                     panic!("{name}: persisted signed message lost its retained assignment")
                 };
@@ -267,5 +270,5 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             );
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

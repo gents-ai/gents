@@ -166,7 +166,7 @@ export function createSessionReads({
     }
   }
 
-  async function retrySessionHydration(
+  async function reloadSession(
     nextSessionId: string | null,
   ): Promise<DesktopSessionSnapshot | null> {
     if (!nextSessionId) return null;
@@ -183,7 +183,7 @@ export function createSessionReads({
         : null;
     try {
       setError(null);
-      await api.retrySessionHydration(nextSessionId, nodeDid);
+      await api.reloadSession(nextSessionId, nodeDid);
       if (!stillCurrent()) return null;
       return await refreshSession(nextSessionId, nodeDid);
     } catch (error) {
@@ -304,7 +304,7 @@ export function createSessionReads({
       liveSeq += 1;
     },
     refreshSession,
-    retrySessionHydration,
+    reloadSession,
     readSessionUpdate,
     loadSessionRows,
   };

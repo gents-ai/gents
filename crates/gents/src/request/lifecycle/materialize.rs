@@ -98,7 +98,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     content: &str,
     execution_origin: ExecutionOrigin,
     trigger_lineage: TriggerLineage,
@@ -121,7 +121,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let create = build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
         node_did,
-        agent_id,
+        agent_did,
         content,
         execution_origin,
         trigger_lineage,
@@ -167,7 +167,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
 #[allow(clippy::too_many_arguments)]
 pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     content: &str,
     execution_origin: ExecutionOrigin,
     trigger_lineage: TriggerLineage,
@@ -181,7 +181,7 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
     let spec = pending_agent_request_spec(
         node_did,
-        agent_id,
+        agent_did,
         content,
         execution_origin,
         trigger_lineage,
@@ -199,7 +199,7 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn pending_agent_request_spec(
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     content: &str,
     execution_origin: ExecutionOrigin,
     trigger_lineage: TriggerLineage,
@@ -252,14 +252,14 @@ pub(crate) fn pending_agent_request_spec(
     };
     let admission = match trigger_lineage.trigger_kind.as_deref() {
         Some("manual") | None => {
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did)
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did)
         }
         Some("event" | "schedule") => {
             let source = trigger_lineage.trigger_id.as_deref().ok_or_else(|| {
                 anyhow::anyhow!("runtime trigger request requires a durable trigger id")
             })?;
             gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_automated_trigger(
-                node_did, source,
+                agent_did, source,
             )
         }
         Some(kind) => anyhow::bail!("unsupported runtime request trigger kind {kind}"),
@@ -268,7 +268,7 @@ pub(crate) fn pending_agent_request_spec(
         requester_did: requester_did.map(str::to_owned),
         request_id: request_id.to_string(),
         node_did: node_did.to_string(),
-        agent_id: agent_id.to_string(),
+        agent_did: agent_did.to_string(),
         session_id: session_id.to_string(),
         content: content.to_string(),
         execution_origin,
@@ -294,7 +294,7 @@ pub struct RequestIdentity {
     pub requester_did: Option<String>,
     pub request_id: String,
     pub node_did: String,
-    pub agent_id: String,
+    pub agent_did: String,
     pub session_id: String,
     pub content: String,
     pub execution_origin: ExecutionOrigin,
@@ -380,14 +380,14 @@ pub(crate) fn build_request(
     } = spec;
 
     let request_id = identity.request_id.clone();
-    let node_did = identity.node_did.clone();
+    let acting_agent = identity.agent_did.clone();
 
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         purpose,
         identity.request_id,
         identity.node_did,
-        identity.requester_did.unwrap_or(node_did),
-        identity.agent_id,
+        identity.requester_did.unwrap_or(acting_agent),
+        identity.agent_did,
         identity.session_id,
         identity.content,
         identity.execution_origin.as_str(),
@@ -491,15 +491,15 @@ pub(crate) async fn write_pending_auxiliary_request(
     let identity = RequestIdentity {
         request_id: uuid::Uuid::new_v4().to_string(),
         node_did: parent.node_did.clone(),
-        requester_did: Some(parent.node_did.clone()),
-        agent_id: parent.agent_id.clone(),
+        requester_did: Some(parent.agent_did.clone()),
+        agent_did: parent.agent_did.clone(),
         session_id: parent.session_id.clone(),
         content,
         execution_origin: ExecutionOrigin::Interactive,
         created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     };
     let admission =
-        AgentRequestAdmissionRecord::runtime_local_control(&parent.node_did, &parent.request_id);
+        AgentRequestAdmissionRecord::runtime_local_control(&parent.agent_did, &parent.request_id);
     let spec = RequestSpec {
         valid_until,
         parent: Some(ParentLink {
@@ -513,14 +513,17 @@ pub(crate) async fn write_pending_auxiliary_request(
     let mutation = create
         .graphql_mutation_selecting(crate::request::watcher::AGENT_REQUEST_FIELDS)
         .map_err(anyhow::Error::msg)?;
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "lifecycle.materialize_auxiliary",
-        &mutation,
+    let response = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(parent.agent_did.clone())?,
     )
+    .write("lifecycle.materialize_auxiliary", &mutation)
     .await?;
-    crate::request::watcher::agent_request_from_mutation_response(&response, "create_AgentRequest")?
-        .context("auxiliary request creation omitted its exact durable request")
+    crate::request::watcher::agent_request_from_mutation_response(
+        &serde_json::from_value(response)?,
+        "create_AgentRequest",
+    )?
+    .context("auxiliary request creation omitted its exact durable request")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -546,7 +549,7 @@ pub fn request_hop_within_bound(max_request_hop: Option<u32>, hop: u32) -> bool 
 #[derive(Debug, Clone)]
 pub(crate) struct SessionMessageCause {
     pub(crate) caller_node_did: String,
-    pub(crate) caller_agent_id: String,
+    pub(crate) caller_agent_did: String,
     pub(crate) caller_session_id: String,
     pub(crate) caller_requester_did: Option<String>,
     pub(crate) caller_request_id: String,
@@ -560,7 +563,7 @@ pub(crate) struct SessionMessageCause {
 #[derive(Debug, Clone)]
 pub(crate) struct SessionMessageTarget {
     pub(crate) node_did: String,
-    pub(crate) agent_id: String,
+    pub(crate) agent_did: String,
     pub(crate) session_id: String,
 }
 
@@ -569,7 +572,7 @@ pub(crate) struct SessionMessageTarget {
 pub(crate) fn session_message_sender_header(cause: &SessionMessageCause, at: &str) -> String {
     super::session_message_presentation::sender_header(
         &cause.caller_node_did,
-        &cause.caller_agent_id,
+        &cause.caller_agent_did,
         &cause.caller_session_id,
         &cause.caller_request_id,
         at,
@@ -632,16 +635,16 @@ pub(crate) async fn build_session_message_request_with_input(
     );
     let prompt_selection = crate::documents::skills::prompt_slash_skill_selection(content);
     let admission = if target.node_did == cause.caller_node_did {
-        AgentRequestAdmissionRecord::local_self(&cause.caller_node_did)
+        AgentRequestAdmissionRecord::local_self(&cause.caller_agent_did)
     } else {
-        AgentRequestAdmissionRecord::peer(&cause.caller_node_did)
+        AgentRequestAdmissionRecord::peer(&cause.caller_agent_did)
     };
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let identity = RequestIdentity {
-        requester_did: Some(cause.caller_node_did.clone()),
+        requester_did: Some(cause.caller_agent_did.clone()),
         request_id: request_id.to_owned(),
         node_did: target.node_did.clone(),
-        agent_id: target.agent_id.clone(),
+        agent_did: target.agent_did.clone(),
         session_id: target.session_id.clone(),
         content: format!(
             "{}\n\n{}",
@@ -681,7 +684,7 @@ pub(crate) async fn build_session_message_request_with_input(
         ..RequestSpec::new(RequestPurpose::Normal, identity, admission)
     };
     let signer = crate::store::identity::RegisteredIdentity::from_registered_did(
-        cause.caller_node_did.clone(),
+        cause.caller_agent_did.clone(),
         None,
     )
     .context("load the caller's registered identity to sign its session message")?;
@@ -691,7 +694,9 @@ pub(crate) async fn build_session_message_request_with_input(
 pub async fn activate_workspace_bound_request(
     node: &std::sync::Arc<EmbeddedNode>,
     request_doc_id: &str,
+    actor: identity::Did,
 ) -> Result<()> {
+    let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
@@ -706,12 +711,9 @@ pub async fn activate_workspace_bound_request(
         workspace_binding_pending = RequestLifecycleState::WorkspaceBindingPending.as_str(),
         pending = RequestLifecycleState::Pending.as_str(),
     );
-    let response = crate::store::config_client::ConfigAccess::write_local(
-        node,
-        "lifecycle.activate_workspace_bound",
-        &mutation,
-    )
-    .await?;
+    let response = access
+        .write("lifecycle.activate_workspace_bound", &mutation)
+        .await?;
     let response: defra_node::QueryResponse = serde_json::from_value(response)?;
     if crate::store::graphql::single_mutation_document(&response, "update_AgentRequest")?.is_none()
     {
@@ -721,12 +723,7 @@ pub async fn activate_workspace_bound_request(
             }} }}"#,
             doc_id = escape_graphql_string(request_doc_id),
         );
-        let response = crate::store::graphql::graphql_with_transaction_retry(
-            node,
-            &query,
-            "recover workspace-bound request activation",
-        )
-        .await?;
+        let response = serde_json::from_value(access.execute(&query).await?)?;
         let row = crate::store::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
             &response,
             "AgentRequest",
@@ -759,14 +756,14 @@ impl RequestLifecycle {
 
     pub fn new_with_node_did(
         node: Arc<EmbeddedNode>,
-        agent_id: &str,
+        agent_did: &str,
         node_did: &str,
         request: AgentRequest,
         deadline_duration_secs: u64,
     ) -> Self {
         Self::new_with_execution_binding(
             node,
-            agent_id,
+            agent_did,
             node_did,
             request,
             deadline_duration_secs,
@@ -777,17 +774,17 @@ impl RequestLifecycle {
 
     pub fn new_with_execution_binding(
         node: Arc<EmbeddedNode>,
-        _agent_id: &str,
+        _agent_did: &str,
         _node_did: &str,
         request: AgentRequest,
         deadline_duration_secs: u64,
         execution_origin: ExecutionOrigin,
         backend_id: impl Into<String>,
     ) -> Self {
-        let agent_id = request.agent_id.clone();
+        let agent_did = request.agent_did.clone();
         Self {
             node,
-            agent_id,
+            agent_did,
             execution_origin,
             backend_id: backend_id.into(),
             failure_reason: None,
@@ -801,6 +798,7 @@ impl RequestLifecycle {
             valid_until_at_claim: None,
             execution_lease: None,
             renewal_task: None,
+            client_claim_admission: None,
             fold_admitted: Vec::new(),
             folded_selection: Vec::new(),
             natural_finish_allowed: false,
@@ -812,7 +810,7 @@ impl RequestLifecycle {
     #[allow(clippy::too_many_arguments)]
     pub async fn materialize_claimed_with_execution_binding(
         node: Arc<EmbeddedNode>,
-        agent_id: &str,
+        agent_did: &str,
         identity: Arc<dyn crate::store::identity::NodeIdentity>,
         content: &str,
         deadline_duration_secs: u64,
@@ -822,7 +820,7 @@ impl RequestLifecycle {
     ) -> Result<Self> {
         let mut lifecycle = Self::materialize_pending_with_execution_binding(
             node,
-            agent_id,
+            agent_did,
             identity,
             content,
             deadline_duration_secs,
@@ -842,7 +840,7 @@ impl RequestLifecycle {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn materialize_pending_with_execution_binding(
         node: Arc<EmbeddedNode>,
-        agent_id: &str,
+        agent_did: &str,
         identity: Arc<dyn crate::store::identity::NodeIdentity>,
         content: &str,
         deadline_duration_secs: u64,
@@ -852,18 +850,18 @@ impl RequestLifecycle {
     ) -> Result<Self> {
         let node_did = identity.did().to_string();
         let backend_id = backend_id.into();
-        let agent_id = agent_id.to_string();
+        let agent_did = agent_did.to_string();
         let request_id = uuid::Uuid::new_v4().to_string();
         let session_id = uuid::Uuid::new_v4().to_string();
         validate_trigger_provenance(&trigger_lineage)?;
         let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let admission =
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&node_did);
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did);
         let request_identity = RequestIdentity {
             requester_did: None,
             request_id: request_id.clone(),
             node_did: node_did.clone(),
-            agent_id: agent_id.clone(),
+            agent_did: agent_did.clone(),
             session_id: session_id.clone(),
             content: content.to_string(),
             execution_origin,
@@ -877,33 +875,40 @@ impl RequestLifecycle {
                 admission,
             )
         };
-        let create = build_signed_request(spec, RequestSigner::Identity(identity.as_ref())).await?;
-        let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-        let resp = crate::store::config_client::ConfigAccess::write_local(
-            &node,
-            "lifecycle.materialize_before_claim",
-            &mutation,
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(agent_did.clone())?,
+        );
+        let create = super::client::build_signed_client_request(
+            &access,
+            spec,
+            RequestSigner::RegisteredTarget,
         )
         .await?;
-        let resp: defra_node::QueryResponse = serde_json::from_value(resp)?;
-
-        let doc_id = resolve_created_agent_request_doc_id(
-            node.as_ref(),
-            &resp,
-            "create_AgentRequest",
-            &escape_graphql_string(&request_id),
-            "querying created AgentRequest doc id failed",
-            "create_AgentRequest returned no _docID",
-        )
-        .await?;
+        super::client::submit_client_request(&access, &create).await?;
+        let escaped_request = escape_graphql_string(&request_id);
+        let response = access.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request}" }} }}, limit: 2) {{ _docID }} }}"#,
+        )).await?;
+        let [row] = response["data"]["AgentRequest"]
+            .as_array()
+            .context("published AgentRequest query omitted rows")?
+            .as_slice()
+        else {
+            anyhow::bail!("published AgentRequest is missing or ambiguous");
+        };
+        let doc_id = row["_docID"]
+            .as_str()
+            .context("published AgentRequest omitted document identity")?
+            .to_owned();
         let queued_request = AgentRequest {
             retry_parent_request_doc_id: create.retry_parent_request_doc_id.clone(),
             purpose: create.purpose,
             doc_id,
             request_id,
             node_did: node_did.clone(),
-            requester_did: Some(node_did.clone()),
-            agent_id: agent_id.clone(),
+            requester_did: Some(agent_did.clone()),
+            agent_did: agent_did.clone(),
             session_id,
             content: content.to_string(),
             max_total_tokens: None,
@@ -933,12 +938,12 @@ impl RequestLifecycle {
             &node,
             identity.as_ref(),
             &queued_request,
-            &agent_id,
+            &agent_did,
         )
         .await?;
         let lifecycle = Self::new_with_execution_binding(
             node,
-            &agent_id,
+            &agent_did,
             &node_did,
             request,
             deadline_duration_secs,
@@ -963,8 +968,8 @@ impl RequestLifecycle {
         &self.backend_id
     }
 
-    pub fn agent_id(&self) -> &str {
-        &self.agent_id
+    pub fn agent_did(&self) -> &str {
+        &self.agent_did
     }
 }
 
@@ -1041,7 +1046,7 @@ fn task_for_opening<'a>(
         .then_some(fire.task)
 }
 
-async fn created_session_provenance_in_txn(
+pub(crate) async fn created_session_provenance_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
 ) -> Result<Option<gents_protocol::session::SessionProvenance>> {
@@ -1133,15 +1138,19 @@ pub(super) async fn apply_request_session_projection(
             }
             .into());
         }
-        if existing.session.agent_id != request.agent_id {
+        if existing.session.agent_did != request.agent_did {
             return Err(ClaimAdmissionError::SessionAgentMismatch {
                 session_id: request.session_id.clone(),
-                existing_agent_id: existing.session.agent_id.clone(),
-                requested_agent_id: request.agent_id.clone(),
+                existing_agent_did: existing.session.agent_did.clone(),
+                requested_agent_did: request.agent_did.clone(),
             }
             .into());
         }
     }
+    anyhow::ensure!(
+        !rows.decoded.is_empty() || !is_client_request_in_txn(txn, request).await?,
+        "Client request is missing its atomically created session"
+    );
     let provenance = if rows.decoded.is_empty() {
         created_session_provenance_in_txn(txn, request).await?
     } else {
@@ -1151,7 +1160,7 @@ pub(super) async fn apply_request_session_projection(
         txn,
         &request.session_id,
         &request.node_did,
-        &request.agent_id,
+        &request.agent_did,
         request.requester_did.as_deref(),
         request.input.initial_title.clone(),
         provenance,
@@ -1199,7 +1208,7 @@ pub(crate) async fn project_refused_request_session_in_txn(
     if request.purpose != gents_protocol::request_admission::RequestPurpose::Normal
         || request.node_did.trim().is_empty()
         || request.session_id.trim().is_empty()
-        || request.agent_id.trim().is_empty()
+        || request.agent_did.trim().is_empty()
     {
         return Ok(());
     }
@@ -1218,7 +1227,7 @@ pub(crate) async fn project_refused_request_session_in_txn(
     if let Some(existing) = rows.decoded.first() {
         if rows.decoded.len() > 1
             || existing.session.requester_did != request.requester_did
-            || existing.session.agent_id != request.agent_id
+            || existing.session.agent_did != request.agent_did
         {
             return Ok(());
         }
@@ -1232,6 +1241,9 @@ async fn project_refused_request_onto_session_in_txn(
     now: &str,
     new_session: bool,
 ) -> Result<()> {
+    if new_session && is_client_request_in_txn(txn, request).await? {
+        return Ok(());
+    }
     let provenance = if new_session {
         created_session_provenance_in_txn(txn, request).await?
     } else {
@@ -1241,7 +1253,7 @@ async fn project_refused_request_onto_session_in_txn(
         txn,
         &request.session_id,
         &request.node_did,
-        &request.agent_id,
+        &request.agent_did,
         request.requester_did.as_deref(),
         request.input.initial_title.clone(),
         provenance,
@@ -1299,7 +1311,7 @@ mod session_message_tests {
         let _identity = pin_fixed_signing_identity(tempdir.path());
         let cause = SessionMessageCause {
             caller_node_did: PIN_FIXED_DID.to_owned(),
-            caller_agent_id: "caller-agent".to_owned(),
+            caller_agent_did: "caller-agent".to_owned(),
             caller_session_id: "caller-session".to_owned(),
             caller_requester_did: None,
             caller_request_id: "caller-request".to_owned(),
@@ -1311,7 +1323,7 @@ mod session_message_tests {
         };
         let target = SessionMessageTarget {
             node_did: PIN_FIXED_DID.to_owned(),
-            agent_id: "agent-1".to_owned(),
+            agent_did: "agent-1".to_owned(),
             session_id: "session-1".to_owned(),
         };
         let build = |cwd: Option<String>| {
@@ -1340,7 +1352,7 @@ mod session_message_tests {
         let _identity = pin_fixed_signing_identity(tempdir.path());
         let cause = SessionMessageCause {
             caller_node_did: PIN_FIXED_DID.to_owned(),
-            caller_agent_id: format!("{PIN_FIXED_DID}:default"),
+            caller_agent_did: format!("{PIN_FIXED_DID}:default"),
             caller_session_id: "sender-s2".to_owned(),
             caller_requester_did: None,
             caller_request_id: "caller-request".to_owned(),
@@ -1352,7 +1364,7 @@ mod session_message_tests {
         };
         let target = SessionMessageTarget {
             node_did: PIN_FIXED_DID.to_owned(),
-            agent_id: "agent-1".to_owned(),
+            agent_did: "agent-1".to_owned(),
             session_id: "session-1".to_owned(),
         };
         let create = build_session_message_request(
@@ -1387,6 +1399,7 @@ pub fn task_fire_key(identity: &gents_protocol::trigger_delivery::FireIdentity) 
 pub struct TaskDeliveryAdmission {
     pub request: EnqueuedAgentRequest,
     pub duplicate: bool,
+    session_publication: Option<(String, String)>,
 }
 
 pub async fn write_task_delivery(
@@ -1395,11 +1408,13 @@ pub async fn write_task_delivery(
     continue_existing: bool,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<TaskDeliveryAdmission> {
-    access
+    let admission = access
         .transact_write("lifecycle.admit_task_delivery", |txn| {
             Box::pin(async move { stage_task_delivery(txn, fire, continue_existing, create).await })
         })
-        .await
+        .await?;
+    publish_task_session(access, create, &admission).await?;
+    Ok(admission)
 }
 
 pub async fn write_task_delivery_local(
@@ -1409,15 +1424,8 @@ pub async fn write_task_delivery_local(
     continue_existing: bool,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<TaskDeliveryAdmission> {
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        Some(actor),
-        "lifecycle.admit_task_delivery",
-        |txn| {
-            Box::pin(async move { stage_task_delivery(txn, fire, continue_existing, create).await })
-        },
-    )
-    .await
+    let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor);
+    write_task_delivery(&access, fire, continue_existing, create).await
 }
 
 pub(crate) async fn write_trigger_delivery(
@@ -1426,11 +1434,9 @@ pub(crate) async fn write_trigger_delivery(
     prepared: &crate::triggers::engine::durable::PreparedFire,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<TaskDeliveryAdmission> {
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        Some(actor),
-        "lifecycle.admit_trigger_delivery",
-        |txn| {
+    let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor);
+    let admitted = access
+        .transact_write("lifecycle.admit_trigger_delivery", |txn| {
             Box::pin(async move {
                 let fresh =
                     crate::triggers::engine::durable::stage_fire_receipt(txn, &prepared.receipt)
@@ -1442,7 +1448,7 @@ pub(crate) async fn write_trigger_delivery(
                             txn,
                             &create.node_did,
                             &create.session_id,
-                            &create.agent_id,
+                            &create.agent_did,
                             Some(&create.requester_did),
                             create.input,
                         )
@@ -1467,11 +1473,25 @@ pub(crate) async fn write_trigger_delivery(
                     )
                     .await?;
                 }
-                Ok(admitted)
+                Ok::<_, anyhow::Error>(admitted)
             })
-        },
-    )
-    .await
+        })
+        .await?;
+    publish_task_session(&access, create, &admitted).await?;
+    Ok(admitted)
+}
+
+async fn publish_task_session(
+    access: &crate::store::config_client::ConfigAccess,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+    admitted: &TaskDeliveryAdmission,
+) -> Result<()> {
+    if let Some((session, agent)) = &admitted.session_publication {
+        session::grant_created_session_relationships(access, session, agent, &create.agent_did)
+            .await
+            .context("Task delivery committed but session relationships are incomplete")?;
+    }
+    Ok(())
 }
 
 #[doc(hidden)]
@@ -1523,7 +1543,7 @@ pub async fn supersede_trigger_requests_in_txn(
     let response = txn.execute(&format!(r#"{{ AgentRequest(filter: {{
         node_did: {{ _eq: "{owner_gql}" }}, caused_by_trigger_id: {{ _eq: "{trigger_gql}" }}{excluded},
         lifecycle_state: {{ _in: {active} }}
-    }}) {{ _docID request_id node_did requester_did agent_id session_id lifecycle_state
+    }}) {{ _docID request_id node_did requester_did agent_did session_id lifecycle_state
         execution_generation execution_lease_expires_at }} }}"#)).await?;
     let active: Vec<gents_protocol::row::AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
@@ -1652,7 +1672,7 @@ async fn stage_task_delivery_with_receipt(
         }
         if let Some(session) = session {
             anyhow::ensure!(
-                session.session.agent_id == create.agent_id,
+                session.session.agent_did == create.agent_did,
                 "Task target session has a different agent"
             );
             anyhow::ensure!(
@@ -1660,12 +1680,24 @@ async fn stage_task_delivery_with_receipt(
                 "Task target session is closed"
             );
         }
+        if create.admission.kind
+            == gents_protocol::request_admission::AgentRequestAdmissionKind::Client
+        {
+            let mut resolved = create.clone();
+            super::bind_client_targets_in_txn(txn, &mut resolved).await?;
+            anyhow::ensure!(
+                create.session_doc_id == resolved.session_doc_id
+                    && create.agent_doc_id == resolved.agent_doc_id,
+                "Task request physical targets changed before publication"
+            );
+        }
         refuse_retired_reserved_cause(create)?;
         txn.execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
             .await?;
     }
-    let query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{ _docID session_id }} }}",
-        escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.request_id));
+    let query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{ {} }} }}",
+        escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.request_id),
+        crate::request::watcher::AGENT_REQUEST_FIELDS);
     let response = txn.execute(&query).await?;
     let rows = response
         .pointer("/data/AgentRequest")
@@ -1682,8 +1714,47 @@ async fn stage_task_delivery_with_receipt(
         !fresh || session_id == fire.session_id,
         "admitted request changed its fire's session"
     );
+    let mut session_publication = None;
+    if fresh {
+        let request = AgentRequest::try_from(serde_json::from_value::<
+            gents_protocol::row::AgentRequestRow,
+        >(rows[0].clone())?)?;
+        let provenance = created_session_provenance_in_txn(txn, &request).await?;
+        let created = session::ensure_session_in_txn(
+            txn,
+            &request.session_id,
+            &request.node_did,
+            &request.agent_did,
+            request.requester_did.as_deref(),
+            request.input.initial_title.clone(),
+            provenance,
+            &request.created_at,
+        )
+        .await?;
+        if created {
+            let session = session::load_agent_session_row_in_txn(
+                txn,
+                &request.node_did,
+                &request.session_id,
+                request.requester_did.as_deref(),
+            )
+            .await?
+            .context("created Task session disappeared")?
+            .doc_id;
+            let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                txn,
+                crate::Collection::Agent,
+                &request.node_did,
+                &request.agent_did,
+            )
+            .await?
+            .context("selected Task agent is unavailable")?;
+            session_publication = Some((session, agent));
+        }
+    }
     Ok(TaskDeliveryAdmission {
         duplicate: !fresh,
+        session_publication,
         request: EnqueuedAgentRequest {
             doc_id: rows[0]["_docID"]
                 .as_str()
@@ -1787,8 +1858,11 @@ mod task_delivery_tests {
 
     #[tokio::test]
     async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
+        use crate::store::identity::NodeIdentity;
         let identity_dir = tempfile::tempdir().unwrap();
-        let _identity = pin_fixed_signing_identity(identity_dir.path());
+        let runtime = pin_fixed_signing_identity(identity_dir.path());
+        let user =
+            crate::KeyIdentity::load_or_create(identity_dir.path().join("user.key"), None).unwrap();
         let node = Arc::new(
             EmbeddedNode::builder()
                 .with_node_identity_did(PIN_FIXED_DID)
@@ -1797,7 +1871,49 @@ mod task_delivery_tests {
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let access = crate::store::config_client::ConfigAccess::local(node.clone());
+        let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
+        let agent = crate::store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
+        let user_access = crate::ConfigAccess::local_as(node.clone(), user.did().parse().unwrap());
+        let (node_doc, agent_doc) = user_access.transact_write("test.task.agent", |txn| {
+            let binding = &binding;
+            Box::pin(async move {
+                let created = txn.execute_with_variables(
+                    "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                    &serde_json::json!({"input": {"node_did": PIN_FIXED_DID}}),
+                ).await?;
+                let node_doc = crate::store::graphql::created_doc_id(&created, "Node")?;
+                let created = txn.execute_with_variables(
+                    "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                    &serde_json::json!({"input": {"node_did": PIN_FIXED_DID,
+                        "agent_did": binding.agent_did, "creation_nonce": binding.creation_nonce}}),
+                ).await?;
+                let agent_doc = crate::store::graphql::created_doc_id(&created, "Agent")?;
+                Ok::<_, anyhow::Error>((node_doc, agent_doc))
+            })
+        }).await.unwrap();
+        user_access
+            .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
+            .await
+            .unwrap();
+        user_access
+            .add_actor_relationship(
+                "Agent",
+                &agent_doc,
+                "executor",
+                &identity::Did::new(&binding.agent_did).unwrap(),
+            )
+            .await
+            .unwrap();
+        user_access
+            .add_actor_relationship(
+                "Agent",
+                &agent_doc,
+                "administrator",
+                &identity::Did::new(user.did()).unwrap(),
+            )
+            .await
+            .unwrap();
+        let access = crate::ConfigAccess::local_as(node.clone(), agent.did().parse().unwrap());
         let identity = gents_protocol::trigger_delivery::FireIdentity {
             owner_did: PIN_FIXED_DID.into(),
             trigger_id: "manual:task:invocation-key".into(),
@@ -1830,7 +1946,7 @@ mod task_delivery_tests {
         let create =
             build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
                 PIN_FIXED_DID,
-                "agent",
+                agent.did(),
                 "complete assignment",
                 ExecutionOrigin::Interactive,
                 TriggerLineage {
@@ -1840,7 +1956,7 @@ mod task_delivery_tests {
                     correlation: None,
                     trigger_context: None,
                 },
-                None,
+                Some("task"),
                 None,
                 &fire.request_id,
                 &fire.session_id,
@@ -1854,11 +1970,12 @@ mod task_delivery_tests {
             .await
             .is_err());
         let before = access
-            .execute("{ TriggerFire { fire_key } AgentRequest { request_id } }")
+            .execute("{ TriggerFire { fire_key } AgentRequest { request_id } AgentSession { session_id } }")
             .await
             .unwrap();
         assert_eq!(before["data"]["TriggerFire"].as_array().unwrap().len(), 0);
         assert_eq!(before["data"]["AgentRequest"].as_array().unwrap().len(), 0);
+        assert_eq!(before["data"]["AgentSession"].as_array().unwrap().len(), 0);
         let first = write_task_delivery(&access, &fire, false, &create)
             .await
             .unwrap();
@@ -1880,6 +1997,98 @@ mod task_delivery_tests {
             "pending"
         );
         assert_eq!(after["data"]["Goal"].as_array().unwrap().len(), 0);
+        let session = access
+            .execute("{ AgentSession { _docID session_id title provenance } }")
+            .await
+            .unwrap();
+        assert_eq!(session["data"]["AgentSession"].as_array().unwrap().len(), 1);
+        let session = &session["data"]["AgentSession"][0];
+        let modeled = crate::lean_vocab_test::lean_contract_snapshot()
+            .session_document_cases
+            .projection
+            .iter()
+            .find(|case| {
+                case["operation"] == "atomic_admission"
+                    && case["name"] == "agent_unattended_creation"
+            })
+            .expect("modeled unattended admission");
+        assert_eq!(session["session_id"], session_id);
+        assert_eq!(session["title"], modeled["after"]["session"]["title"]);
+        assert_eq!(session["provenance"]["task_id"], "task");
+        assert_eq!(
+            session["provenance"]["opening_request_doc_id"],
+            first.request.doc_id
+        );
+        let owner = access
+            .transact_readonly("test.task.session_owner", |txn| {
+                Box::pin(async move {
+                    txn.document_owners(
+                        "AgentSession",
+                        &[session["_docID"].as_str().unwrap().to_owned()],
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            owner[0].owner.as_ref().map(identity::Did::as_str),
+            Some(agent.did())
+        );
+        let user_sessions = user_access
+            .execute("{ AgentSession { _docID relationships_pending } }")
+            .await
+            .unwrap();
+        assert_eq!(
+            user_sessions["data"]["AgentSession"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            user_sessions["data"]["AgentSession"][0]["_docID"],
+            session["_docID"]
+        );
+        assert_eq!(
+            user_sessions["data"]["AgentSession"][0]["relationships_pending"],
+            false
+        );
+        let session_doc = session["_docID"].as_str().unwrap();
+        let trace = crate::lean_vocab_test::lean_contract_snapshot()
+            .identity_publication_cases
+            .iter()
+            .find(|case| case["name"] == "interrupted_then_repaired")
+            .unwrap();
+        access
+            .delete_resource_relationship(
+                "AgentSession",
+                session_doc,
+                "parent",
+                "agents",
+                &agent_doc,
+            )
+            .await
+            .unwrap();
+        access.write("test.session.interrupted", &format!(
+            r#"mutation {{ update_AgentSession(docID: "{}", input: {{ relationships_pending: true }}) {{ _docID }} }}"#,
+            escape_graphql_string(session_doc),
+        )).await.unwrap();
+        let actor = identity::Did::new(agent.did()).unwrap();
+        assert_eq!(
+            crate::session::recover_agent_session_relationships(&node, PIN_FIXED_DID, &actor)
+                .await
+                .unwrap(),
+            1
+        );
+        let recovered = user_access
+            .execute("{ AgentSession { relationships_pending } }")
+            .await
+            .unwrap();
+        assert_eq!(
+            recovered["data"]["AgentSession"][0]["relationships_pending"],
+            trace["steps"][1]["after"]["pending"]
+        );
         let request_row = access
             .execute(&format!(
                 "{{ AgentRequest {{ {} }} }}",
@@ -2012,4 +2221,21 @@ mod task_delivery_tests {
         assert_eq!(after["data"]["TriggerFire"].as_array().unwrap().len(), 0);
         assert_eq!(after["data"]["AgentRequest"].as_array().unwrap().len(), 0);
     }
+}
+
+async fn is_client_request_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    request: &AgentRequest,
+) -> Result<bool> {
+    let response = txn.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ admission_kind }} }}"#,
+        escape_graphql_string(&request.doc_id),
+    )).await?;
+    let row = response
+        .pointer("/data/AgentRequest/0")
+        .context("session projection request disappeared")?;
+    Ok(row
+        .get("admission_kind")
+        .and_then(serde_json::Value::as_str)
+        == Some("client"))
 }

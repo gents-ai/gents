@@ -28,6 +28,26 @@ fn current_sdl(name: &str) -> &'static str {
         .unwrap_or_else(|| panic!("{name} is not in the protocol schema catalog"))
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn goal_controls_bind_agent_ownership_policy() {
+    let node = fresh_node().await;
+    node.add_collection(gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL)
+        .await
+        .expect("goal control schema");
+    let collection = node
+        .get_collection(gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL_NAME)
+        .expect("collection lookup")
+        .expect("goal control collection");
+    let policy = collection.policy.expect("goal control policy");
+    assert_eq!(
+        policy.id,
+        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+    );
+    assert_eq!(policy.resource_name, "goal_controls");
+    assert!(!collection.is_branchable);
+    assert_ne!(collection.collection_id, collection.version_id);
+}
+
 /// Precondition of the client model (see module doc): every client-authored
 /// SDL uses only scalar field types.
 #[test]
@@ -105,6 +125,6 @@ async fn client_authored_collections_stay_fresh_apply_compatible() {
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 
-    server.shutdown().await;
-    client.shutdown().await;
+    server.shutdown().await.expect("shut down test node");
+    client.shutdown().await.expect("shut down test node");
 }

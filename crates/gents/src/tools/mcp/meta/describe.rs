@@ -744,8 +744,9 @@ mod tests {
 
     #[tokio::test]
     async fn disallowed_service_returns_before_registry_lookup() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
         let tool = DescribeToolTool::new(MetaToolContext {
+            actor: identity::Did::new("did:test:actor").unwrap(),
             node,
             mcp_pool: McpPool::new(),
             health: ServiceHealthMap::new(),
@@ -780,6 +781,7 @@ mod tests {
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let tool = DescribeToolTool::new(MetaToolContext {
+            actor: identity::Did::new("did:test:actor").unwrap(),
             node,
             mcp_pool: McpPool::new(),
             health: ServiceHealthMap::new(),

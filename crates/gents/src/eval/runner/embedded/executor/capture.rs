@@ -6,12 +6,21 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node as EmbeddedNode;
+use crate::eval::checks::captured_fields_match::{test, Expectation};
 use crate::eval::runner::executor::{Capture, CaptureResult, FileRef};
+#[cfg(test)]
+use crate::store::graphql::graphql_with_transaction_retry;
 use crate::store::graphql::{
-    escape_graphql_string, graphql_with_transaction_retry, validate_collection_identifier,
-    validate_graphql_name,
+    escape_graphql_string, validate_collection_identifier, validate_graphql_name,
 };
+
+#[derive(Clone, Copy, Default)]
+pub(super) struct CaptureBindings<'a> {
+    pub subject: Option<&'a crate::eval::runner::subject_binding::SubjectAgent>,
+    pub evaluator_did: Option<&'a str>,
+    pub request_id: Option<&'a str>,
+}
 
 pub(super) async fn run_captures(
     node: &Arc<EmbeddedNode>,
@@ -19,12 +28,36 @@ pub(super) async fn run_captures(
     session_id: &str,
     workspace: &Path,
     captures: &[Capture],
+    bindings: CaptureBindings<'_>,
+) -> BTreeMap<String, CaptureResult> {
+    let access = match bindings.evaluator_did {
+        Some(did) => match ::identity::Did::new(did) {
+            Ok(actor) => crate::ConfigAccess::local_as(node.clone(), actor),
+            Err(error) => {
+                tracing::warn!(%error, "eval capture evaluator identity is invalid");
+                return BTreeMap::new();
+            }
+        },
+        None => crate::ConfigAccess::local(node.clone()),
+    };
+    run_captures_with_access(
+        &access, trial_did, session_id, workspace, captures, bindings,
+    )
+    .await
+}
+
+pub(super) async fn run_captures_with_access(
+    access: &crate::ConfigAccess,
+    trial_did: &str,
+    session_id: &str,
+    workspace: &Path,
+    captures: &[Capture],
+    bindings: CaptureBindings<'_>,
 ) -> BTreeMap<String, CaptureResult> {
     let mut results = BTreeMap::new();
     for capture in captures {
         match capture {
             Capture::Schema { name, collections } => {
-                let access = crate::store::config_client::ConfigAccess::local(node.clone());
                 let mut versions = Vec::new();
                 let mut failed = false;
                 for collection in collections {
@@ -53,10 +86,16 @@ pub(super) async fn run_captures(
                 collection,
                 filter,
                 fields,
-            } => match capture_documents(
-                node,
+            } => match capture_documents_with_access(
+                access,
                 collection,
-                &bind_capture_session(filter, session_id),
+                &match bind_capture_subject(filter, session_id, bindings, &results) {
+                    Ok(filter) => filter,
+                    Err(error) => {
+                        tracing::warn!(%error, capture = %name, "eval capture identity binding failed");
+                        continue;
+                    }
+                },
                 fields,
                 trial_did,
             )
@@ -81,6 +120,124 @@ pub(super) async fn run_captures(
     results
 }
 
+fn bind_capture_subject(
+    filter: &Value,
+    session_id: &str,
+    bindings: CaptureBindings<'_>,
+    captures: &BTreeMap<String, CaptureResult>,
+) -> Result<Value> {
+    let mut filter = bind_capture_session(filter, session_id);
+    bind_capture_evaluator(&mut filter, bindings.evaluator_did)?;
+    bind_capture_request(&mut filter, bindings.request_id)?;
+    crate::eval::runner::subject_binding::bind_subject_references(&mut filter, bindings.subject)?;
+    bind_capture_references(&mut filter, captures)?;
+    Ok(filter)
+}
+
+fn bind_capture_request(value: &mut Value, request_id: Option<&str>) -> Result<()> {
+    match value {
+        Value::String(text) if text == "$request" => {
+            *text = request_id
+                .filter(|id| !id.is_empty())
+                .context("eval stage request ID is not available")?
+                .to_owned();
+        }
+        Value::Array(values) => {
+            for value in values {
+                bind_capture_request(value, request_id)?;
+            }
+        }
+        Value::Object(fields) => {
+            for value in fields.values_mut() {
+                bind_capture_request(value, request_id)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CaptureReference {
+    capture: String,
+    source_match: Expectation,
+    field: String,
+}
+
+fn bind_capture_references(
+    value: &mut Value,
+    captures: &BTreeMap<String, CaptureResult>,
+) -> Result<()> {
+    if let Some(reference) = value.as_object().and_then(|object| {
+        (object.len() == 1)
+            .then(|| object.get("$capture"))
+            .flatten()
+    }) {
+        let reference: CaptureReference = serde_json::from_value(reference.clone())?;
+        let (field, matcher) = test(reference.source_match).map_err(anyhow::Error::msg)?;
+        let Some(CaptureResult::Documents { rows }) = captures.get(&reference.capture) else {
+            anyhow::bail!("referenced capture is unavailable: {}", reference.capture);
+        };
+        let lookup =
+            |row: &Value, path: &str| path.split('.').try_fold(row, |v, key| v.get(key)).cloned();
+        let mut matching = rows.iter().filter(|row| {
+            field
+                .resolve(|path| lookup(row, path))
+                .is_some_and(|actual| matcher.holds(&actual))
+        });
+        let row = matching
+            .next()
+            .context("capture reference has no matching row")?;
+        anyhow::ensure!(matching.next().is_none(), "capture reference is ambiguous");
+        let selected =
+            lookup(row, &reference.field).context("capture reference field is absent")?;
+        anyhow::ensure!(
+            selected.as_str().is_some_and(|s| !s.is_empty()),
+            "capture reference field is not a nonempty string"
+        );
+        *value = selected;
+    } else {
+        match value {
+            Value::Array(values) => {
+                for value in values {
+                    bind_capture_references(value, captures)?;
+                }
+            }
+            Value::Object(fields) => {
+                for value in fields.values_mut() {
+                    bind_capture_references(value, captures)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn bind_capture_evaluator(value: &mut Value, evaluator_did: Option<&str>) -> Result<()> {
+    match value {
+        Value::String(text) if text == "$evaluator" => {
+            *text = evaluator_did
+                .filter(|did| !did.is_empty())
+                .context("eval capture evaluator DID is not available")?
+                .to_owned();
+        }
+        Value::Array(values) => {
+            for value in values {
+                bind_capture_evaluator(value, evaluator_did)?;
+            }
+        }
+        Value::Object(fields) => {
+            for value in fields.values_mut() {
+                bind_capture_evaluator(value, evaluator_did)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn bind_capture_session(value: &Value, session_id: &str) -> Value {
     match value {
         Value::String(text) if text == "$session" => Value::String(session_id.into()),
@@ -100,6 +257,7 @@ fn bind_capture_session(value: &Value, session_id: &str) -> Value {
     }
 }
 
+#[cfg(test)]
 pub(super) async fn capture_documents(
     node: &EmbeddedNode,
     collection: &str,
@@ -112,6 +270,23 @@ pub(super) async fn capture_documents(
     Ok(response
         .data
         .as_ref()
+        .and_then(|data| data.get(collection))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default())
+}
+
+pub(super) async fn capture_documents_with_access(
+    access: &crate::ConfigAccess,
+    collection: &str,
+    filter: &Value,
+    fields: &[String],
+    trial_did: &str,
+) -> Result<Vec<Value>> {
+    let query = documents_capture_query(collection, filter, fields, trial_did)?;
+    let response = access.execute(&query).await?;
+    Ok(response
+        .get("data")
         .and_then(|data| data.get(collection))
         .and_then(Value::as_array)
         .cloned()

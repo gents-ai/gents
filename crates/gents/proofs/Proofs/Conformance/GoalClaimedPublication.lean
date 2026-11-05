@@ -224,4 +224,21 @@ def caseJson (c : PublicationCase) : String :=
 
 def casesJson : String := Conformance.Contracts.jsonArray (cases.map caseJson)
 
+def identityCases : List (String × String × String × String) :=
+  [("agent", "agent", "agent", "agent"),
+   ("agent", "node", "agent", "agent"),
+   ("agent", "agent", "node", "agent"),
+   ("agent", "agent", "agent", "node")]
+
+def identityCaseJson (c : String × String × String × String) : String :=
+  let (selected, signer, actor, parent) := c
+  "{\"selected\":" ++ Conformance.Contracts.jsonString selected ++
+  ",\"signer\":" ++ Conformance.Contracts.jsonString signer ++
+  ",\"actor\":" ++ Conformance.Contracts.jsonString actor ++
+  ",\"parent\":" ++ Conformance.Contracts.jsonString parent ++
+  ",\"allowed\":" ++ (if continuationIdentityValid selected signer actor parent then "true" else "false") ++
+  ",\"candidate_allowed\":" ++ (if goalCandidateInScope actor selected parent then "true" else "false") ++ "}"
+
+def identityCasesJson : String := Conformance.Contracts.jsonArray (identityCases.map identityCaseJson)
+
 end Conformance.GoalClaimedPublicationContracts

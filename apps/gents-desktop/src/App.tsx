@@ -170,7 +170,7 @@ function AppBody() {
               if (deployment) {
                 actions.selectNode(deployment.nodeDid);
                 const agent = defaultAgentOf(deployment) ?? deployment.agents[0];
-                if (agent) actions.selectAgent(agent.agentId);
+                if (agent) actions.selectAgent(agent.agentDid);
               }
               void actions.refreshSnapshot().then(() => {
                 navigate({ name: "session", sessionId: null });

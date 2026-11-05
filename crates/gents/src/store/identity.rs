@@ -6,11 +6,17 @@ use async_trait::async_trait;
 use defra_core::signing::{SigningConfig, SigningKeyType};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 
+mod agent;
 mod error;
 mod file_key;
 pub(crate) mod macos;
+mod provision_client;
 mod registered;
 
+pub use agent::{
+    derive_agent_identity, provision_agent_identity, provision_agent_identity_authorized,
+    resolve_agent_identity, AgentProvisionError,
+};
 pub use error::{identity_key_unavailable, IdentityError, IdentityKeyUnavailable};
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};
 pub(crate) use file_key::{publish_private_key_file, read_private_key_file};
@@ -18,6 +24,7 @@ pub use macos::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
 };
+pub use provision_client::provision as provision_agent_identity_remote;
 use registered::raw_identity_from_signing_config;
 pub use registered::RegisteredIdentity;
 
@@ -33,7 +40,7 @@ pub struct ServiceAccount {
 pub struct RuntimeNode {
     pub node_did: String,
     pub identity: Arc<dyn NodeIdentity>,
-    pub default_agent_id: String,
+    pub default_agent_did: String,
     pub display_name: Option<String>,
     pub enabled: bool,
 }
@@ -42,7 +49,7 @@ impl std::fmt::Debug for RuntimeNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RuntimeNode")
             .field("node_did", &self.node_did)
-            .field("default_agent_id", &self.default_agent_id)
+            .field("default_agent_did", &self.default_agent_did)
             .field("display_name", &self.display_name)
             .field("enabled", &self.enabled)
             .finish_non_exhaustive()
@@ -164,7 +171,7 @@ pub fn commit_signer_identity_for_did(did: &str) -> Result<String> {
 
 /// DefraDB tolerates up to 60s of clock skew and its bearers carry no nonce,
 /// so a replayed bearer stays usable for at most two minutes.
-const DEFRADB_BEARER_LIFETIME: std::time::Duration = std::time::Duration::from_secs(60);
+pub(crate) const DEFRADB_BEARER_LIFETIME: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Mint an `Authorization` header authenticating one DefraDB HTTP request as
 /// `did`. DefraDB verifies the JWT against the request's `Host` header, so
@@ -202,9 +209,7 @@ pub fn can_mint_defradb_bearer(did: &str) -> bool {
 }
 
 /// P2P administration must carry the node DID explicitly across worker boundaries.
-pub fn node_p2p(
-    node: &defra_node::EmbeddedNode,
-) -> Option<Arc<dyn defra_p2p_adapter::P2POperations>> {
+pub fn node_p2p(node: &defra_node::Node) -> Option<Arc<dyn defra_p2p_adapter::P2POperations>> {
     let context = defra_core::RequestContext::default()
         .with_identity(node.node_identity_did().map(ToOwned::to_owned));
     node.p2p_arc().and_then(|p2p| p2p.bind_request(&context))

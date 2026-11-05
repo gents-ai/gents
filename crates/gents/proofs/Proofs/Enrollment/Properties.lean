@@ -488,64 +488,6 @@ theorem receipt_route_growth_is_exact {s : State} {r : Request} {d : Decision}
     · exact False.elim (hold hpre)
   · exact False.elim (hold hnew)
 
-theorem enrollment_ready_refines_directional_hydration_admission
-    {s : State} {r : Request} {session : String} {direction : RouteDirection}
-    {sessions : Finset SessionHydration.SessionOwner}
-    (hready : enrollmentReady s r)
-    (howner : SessionHydration.ownedSession
-      (hydrationRequestForDirection r session direction) ∈ sessions) :
-    SessionHydration.admits (projectedHydrationCatalogFor s r.networkId direction sessions)
-      (hydrationRequestForDirection r session direction) := by
-  rcases hready with ⟨d, hd, hcurrent, hmembership, _, hclient, hserver⟩
-  have hrequest : r ∈ s.acceptedRequests := hcurrent.1
-  cases direction with
-  | clientToServer =>
-      refine ⟨?_, ?_, Or.inl howner⟩
-      · unfold projectedHydrationCatalogFor SessionHydration.appliedPairingRoute
-          hydrationRequestForDirection
-        simp only [Finset.mem_image, Finset.mem_filter]
-        exact ⟨clientToServerRoute r d,
-          ⟨hclient, rfl, rfl, rfl,
-            ⟨r, hrequest, d, hd, hcurrent, hmembership, rfl⟩⟩, rfl⟩
-      · unfold projectedHydrationCatalogFor SessionHydration.verifiedMembership
-          hydrationRequestForDirection
-        simp only [Finset.mem_image, Finset.mem_filter]
-        exact ⟨membershipFor r d,
-          ⟨hmembership, rfl, rfl, rfl, rfl,
-            ⟨r, hrequest, d, hd, hcurrent, rfl⟩⟩, rfl⟩
-  | serverToClient =>
-      refine ⟨?_, ?_, Or.inl howner⟩
-      · unfold projectedHydrationCatalogFor SessionHydration.appliedPairingRoute
-          hydrationRequestForDirection
-        simp only [Finset.mem_image, Finset.mem_filter]
-        exact ⟨serverToClientRoute r d,
-          ⟨hserver, rfl, rfl, rfl,
-            ⟨r, hrequest, d, hd, hcurrent, hmembership, rfl⟩⟩, rfl⟩
-      · unfold projectedHydrationCatalogFor SessionHydration.verifiedMembership
-          hydrationRequestForDirection
-        simp only [Finset.mem_image, Finset.mem_filter]
-        exact ⟨membershipFor r d,
-          ⟨hmembership, rfl, rfl, rfl, rfl,
-            ⟨r, hrequest, d, hd, hcurrent, rfl⟩⟩, rfl⟩
-
-theorem client_ready_refines_hydration_admission
-    {s : State} {r : Request} {session : String}
-    {sessions : Finset SessionHydration.SessionOwner}
-    (hready : enrollmentReady s r)
-    (howner : SessionHydration.ownedSession (hydrationRequestFor r session) ∈ sessions) :
-    SessionHydration.admits (projectedClientToServerHydrationCatalog s r.networkId sessions)
-      (hydrationRequestFor r session) := by
-  exact enrollment_ready_refines_directional_hydration_admission hready howner
-
-theorem server_ready_refines_hydration_admission
-    {s : State} {r : Request} {session : String}
-    {sessions : Finset SessionHydration.SessionOwner}
-    (hready : enrollmentReady s r)
-    (howner : SessionHydration.ownedSession (reverseHydrationRequestFor r session) ∈ sessions) :
-    SessionHydration.admits (projectedServerToClientHydrationCatalog s r.networkId sessions)
-      (reverseHydrationRequestFor r session) := by
-  exact enrollment_ready_refines_directional_hydration_admission hready howner
-
 theorem projected_hydration_admission_requires_exact_current_approval
     {s : State} {selectedNetwork : String} {direction : RouteDirection}
     {sessions : Finset SessionHydration.SessionOwner}

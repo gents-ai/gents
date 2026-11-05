@@ -11,7 +11,7 @@ use super::*;
 use crate::store::config_client::ConfigAccess;
 use crate::tools::builtin::defra_query::SchemaField;
 use anyhow::Context;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::json;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -129,7 +129,7 @@ async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_ow
         vec![tracing::Level::WARN, tracing::Level::WARN],
         "the generic desired-state owner warns for create/change, never an unchanged replay"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -187,7 +187,7 @@ async fn unchanged_desired_state_replay_does_not_add_document_commit() -> Result
         "an identical desired-state replay must not add a whole-document commit"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -390,7 +390,7 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
         read_queries, 2,
         "one page reads all expectations and one reads all planned documents"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -446,7 +446,7 @@ fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
         ),
         config(
             Collection::Agent,
-            json!({"node_did":owner,"agent_id":"behavior","inference_profile_id":"profile","context_id":"context"}),
+            json!({"node_did":owner,"agent_did":"behavior","inference_profile_id":"profile","context_id":"context"}),
         ),
         config(
             Collection::AgentContext,
@@ -458,7 +458,7 @@ fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
         ),
         config(
             Collection::AgentTarget,
-            json!({"node_did":owner,"target_id":"target","target_node_did":owner,"agent_id":"behavior","name":"worker"}),
+            json!({"node_did":owner,"target_id":"target","target_node_did":owner,"agent_did":"behavior","name":"worker"}),
         ),
     ]
 }
@@ -478,7 +478,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         let principal = |default: &Value, name: &str| {
             config(
                 Collection::Node,
-                json!({"node_did":owner,"default_agent_id":default,"display_name":name}),
+                json!({"node_did":owner,"default_agent_did":default,"display_name":name}),
             )
         };
         let mut documents = vec![
@@ -492,7 +492,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         for behavior in ["coding", "review"] {
             documents.push(config(
                 Collection::Agent,
-                json!({"node_did":owner,"agent_id":behavior,"inference_profile_id":"profile"}),
+                json!({"node_did":owner,"agent_did":behavior,"inference_profile_id":"profile"}),
             ));
         }
         apply(&access, documents).await?;
@@ -500,7 +500,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             "node_did":owner,"display_name":"Changed"
         }});
         if !case["candidate"].is_null() {
-            requested["node"]["default_agent_id"] = case["candidate"].clone();
+            requested["node"]["default_agent_did"] = case["candidate"].clone();
         }
         let pack: crate::documents::PackConfig = serde_json::from_value(requested)?;
         let mut replacement = DesiredStateApplyPlan::from_pack_config(&pack)?
@@ -508,7 +508,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             .first()
             .expect("pack principal")
             .clone();
-        replacement.add["default_agent_id"] = json!("coding");
+        replacement.add["default_agent_did"] = json!("coding");
         let plan = DesiredStateApplyPlan::new(vec![replacement])?;
         let before = access
             .transact_write("test.default.before", |txn| {
@@ -539,16 +539,16 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             .await?;
         if allowed {
             let (_, after) = after.expect("published principal");
-            assert_eq!(after["default_agent_id"], case["candidate"]);
+            assert_eq!(after["default_agent_did"], case["candidate"]);
             assert_eq!(after["display_name"], "Changed");
         } else {
             assert_eq!(after, before, "refused replacement changed the principal");
             let message = format!("{:#}", published.unwrap_err());
-            assert!(message.contains("default_agent_id"), "{message}");
+            assert!(message.contains("default_agent_did"), "{message}");
             assert!(message.contains("coding"), "{message}");
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1025,7 +1025,7 @@ fn rule_documents(
         source["correlation_field"] = json!("message");
     }
     let mut task = json!({
-        "node_did": owner, "task_id": "work", "agent_id": "behavior",
+        "node_did": owner, "task_id": "work", "agent_did": "behavior",
         "prompt_template": prompt_template, "emit_outcome": emit_outcome,
     });
     if let Some(goal_objective_template) = goal_objective_template {
@@ -1132,8 +1132,8 @@ fn obligation_surface(
 }
 
 async fn obligation_node() -> Result<Arc<EmbeddedNode>> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
-    register_config_schemas(&node).await?;
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    crate::ensure_runtime_schemas(&node).await?;
     node.add_collection(
         "type ObligationOutcome { text: String result: String expected_total: String total: Int ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID flag: Boolean tags: [String] required_total: Int! required_label: String! required_tags: [String!] }",
     )
@@ -1221,7 +1221,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
             .is_empty(),
         "a refused obligation publishes no surface"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1273,7 +1273,7 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
     let surfaces =
         crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner).await?;
     assert_eq!(surfaces.len(), count_fields.len() + 1, "{surfaces:?}");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1297,7 +1297,7 @@ async fn string_count_field_from_the_reported_failure_is_still_accepted() -> Res
     let surfaces =
         crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner).await?;
     assert_eq!(surfaces.len(), 1, "{surfaces:?}");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1386,7 +1386,7 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
         published_count_field(&access, owner, "created").await?,
         "total"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1448,7 +1448,7 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
         published_count_field(&access, owner, "replaced").await?,
         "amount"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1593,7 +1593,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
         published_event_sources(&node).await?.is_empty(),
         "a refused count field publishes no event source"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1665,7 +1665,7 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
         published_event_sources(&node).await?.len(),
         count_fields.len() + correlation_fields.len() + 1
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1713,7 +1713,7 @@ async fn event_source_correlation_field_must_be_a_string() -> Result<()> {
         published_event_sources(&node).await?.is_empty(),
         "a refused correlation field publishes no event source"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1797,7 +1797,7 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Re
     )
     .await?;
     assert_eq!(published_count_field_of(&node, "created").await?, "total");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1869,7 +1869,7 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
     )
     .await?;
     assert_eq!(published_count_field_of(&node, "replaced").await?, "amount");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -1893,7 +1893,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     let task = |emit_outcome: bool| {
         config(
             Collection::Task,
-            json!({"node_did":owner,"task_id":"handle","agent_id":"behavior","prompt_template":"Handle {{ doc.message }}","emit_outcome":emit_outcome}),
+            json!({"node_did":owner,"task_id":"handle","agent_did":"behavior","prompt_template":"Handle {{ doc.message }}","emit_outcome":emit_outcome}),
         )
     };
     let trigger = config(
@@ -1958,7 +1958,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     );
     apply(&access, vec![source("LaterPing")]).await?;
     assert_eq!(triggers().await, 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -2073,7 +2073,7 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
         ),
         config(
             Collection::Task,
-            json!({"node_did":owner,"task_id":"review","agent_id":"behavior","prompt_template":"Review {{ doc.work_unit_id }} after attempt {{ doc.attempt }}","goal_objective_template":"Seal {{ doc.attempt }}","emit_outcome":true}),
+            json!({"node_did":owner,"task_id":"review","agent_did":"behavior","prompt_template":"Review {{ doc.work_unit_id }} after attempt {{ doc.attempt }}","goal_objective_template":"Seal {{ doc.attempt }}","emit_outcome":true}),
         ),
         config(
             Collection::Trigger,
@@ -2095,6 +2095,6 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
         1,
         "an admitted trigger publishes"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }

@@ -66,9 +66,9 @@ impl ConfigCommandTool {
     pub(super) fn ensure_agent_catalog(
         &self,
         operation: &str,
-        agent_id: Option<&str>,
+        agent_did: Option<&str>,
     ) -> Result<()> {
-        let current_only = agent_id.is_some_and(|id| id == self.core.agent_id());
+        let current_only = agent_did.is_some_and(|id| id == self.core.agent_did());
         anyhow::ensure!(
             self.categories.contains("node") || current_only,
             "agent {operation} outside the current agent is not granted; the agent catalog grant (category node) is required"
@@ -79,10 +79,10 @@ impl ConfigCommandTool {
     pub(super) fn ensure_agent_operation(
         &self,
         operation: &str,
-        agent_id: Option<&str>,
+        agent_did: Option<&str>,
     ) -> Result<()> {
         let current_edit =
-            operation == "edit" && agent_id.is_some_and(|id| id == self.core.agent_id());
+            operation == "edit" && agent_did.is_some_and(|id| id == self.core.agent_did());
         anyhow::ensure!(
             self.categories.contains("node") || current_edit,
             "agent {operation} is not granted; only editing the current agent is allowed without the agent catalog grant (category node)"
@@ -93,10 +93,10 @@ impl ConfigCommandTool {
     pub(super) fn ensure_agent_stays_enabled(
         &self,
         operation: &str,
-        agent_id: Option<&str>,
+        agent_did: Option<&str>,
     ) -> Result<()> {
         anyhow::ensure!(
-            !(self.no_lockout && operation == "disable" && agent_id == Some(self.core.agent_id())),
+            !(self.no_lockout && operation == "disable" && agent_did == Some(self.core.agent_did())),
             "no-lockout guard: agent must remain enabled"
         );
         Ok(())

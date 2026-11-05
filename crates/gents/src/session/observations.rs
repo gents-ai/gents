@@ -16,7 +16,7 @@ pub struct SessionRequestFact {
     pub session_id: String,
     /// Exact requester scope; `None` is its own scope, not a wildcard.
     pub requester_did: Option<String>,
-    pub agent_id: String,
+    pub agent_did: String,
     pub created_at: String,
     pub hop: u32,
     pub observed: gents_protocol::session::SessionRequestObservation,
@@ -137,7 +137,7 @@ fn request_fact_query(filter: &str) -> String {
     format!(
         r#"{{
             AgentRequest({filter}) {{
-                _docID request_id node_did session_id requester_did agent_id created_at lifecycle_state
+                _docID request_id node_did session_id requester_did agent_did created_at lifecycle_state
                 request_hop
             }}
         }}"#
@@ -174,10 +174,10 @@ fn decode_request_facts(response: &serde_json::Value) -> Result<Vec<SessionReque
                     .get("requester_did")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string),
-                agent_id: row
-                    .get("agent_id")
+                agent_did: row
+                    .get("agent_did")
                     .and_then(serde_json::Value::as_str)
-                    .context("request row omitted agent_id")?
+                    .context("request row omitted agent_did")?
                     .to_string(),
                 created_at: row
                     .get("created_at")
@@ -241,13 +241,14 @@ pub(crate) async fn load_session_current_hop_in_txn(
 
 pub(crate) async fn load_session_current_hop(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: &::identity::Did,
     node_did: &str,
     session_id: &str,
 ) -> Result<u32> {
     let (node_did, session_id) = (node_did.to_owned(), session_id.to_owned());
     crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
-        None,
+        Some(actor.clone()),
         "session.current_hop",
         |txn| {
             let (node_did, session_id) = (node_did.clone(), session_id.clone());
@@ -349,7 +350,7 @@ fn validate_incoming_scope(
     anyhow::ensure!(
         incoming.node_did == session.node_did
             && incoming.session_id == session.session_id
-            && incoming.agent_id == session.agent_id
+            && incoming.agent_did == session.agent_did
             && incoming.requester_did == session.requester_did,
         "incoming request does not match the session owner/session/requester/agent scope"
     );
@@ -525,7 +526,7 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
                 }},
                 limit: 2
             ) {{
-                _docID request_id node_did session_id requester_did agent_id created_at lifecycle_state
+                _docID request_id node_did session_id requester_did agent_did created_at lifecycle_state
             }}
         }}"#
     );
@@ -560,8 +561,8 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
             == Some(session.session.session_id.as_str())
         && row.get("requester_did").and_then(serde_json::Value::as_str)
             == session.session.requester_did.as_deref()
-        && row.get("agent_id").and_then(serde_json::Value::as_str)
-            == Some(session.session.agent_id.as_str());
+        && row.get("agent_did").and_then(serde_json::Value::as_str)
+            == Some(session.session.agent_did.as_str());
     if !scope_ok {
         return Ok(false);
     }
@@ -587,6 +588,7 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
 
 pub(crate) async fn update_session_title_with_source(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: &identity::Did,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
@@ -597,7 +599,7 @@ pub(crate) async fn update_session_title_with_source(
     chrono::DateTime::parse_from_rfc3339(&now).context("invalid title update timestamp")?;
     crate::store::config_client::ConfigAccess::transact_local_write(
         node,
-        None,
+        Some(actor.clone()),
         "session.update_title",
         move |txn| {
             let title = title.to_string();

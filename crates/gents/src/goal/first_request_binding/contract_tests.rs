@@ -53,6 +53,9 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
     for case in cases {
         let temp = tempfile::tempdir().unwrap();
         let signer = KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap();
+        let user = KeyIdentity::load_or_create(temp.path().join("user.key"), None).unwrap();
+        let binding = crate::store::identity::provision_agent_identity(&signer).unwrap();
+        let agent = crate::store::identity::resolve_agent_identity(&signer, &binding).unwrap();
         let node = Arc::new(
             EmbeddedNode::builder()
                 .with_node_identity_did(signer.did())
@@ -61,20 +64,41 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::local(node.clone());
+        let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
+        let agent_document = access.write("test.first_binding.agent", &format!(
+            "mutation {{ create_Agent(input: {{ node_did: \"{}\", agent_did: \"{}\", creation_nonce: \"{}\", display_name: \"test agent\", inference_profile_id: \"test-profile\" }}) {{ _docID }} }}",
+            escape_graphql_string(signer.did()), escape_graphql_string(agent.did()), escape_graphql_string(&binding.creation_nonce),
+        )).await.unwrap();
+        let agent_doc = crate::store::graphql::created_doc_id(&agent_document, "Agent").unwrap();
+        let session = access.write("test.first_binding.session", &format!(
+            "mutation {{ create_AgentSession(input: {{ node_did: \"{}\", session_id: \"session\", requester_did: \"{}\", agent_did: \"{}\", created_at: \"2026-11-04T00:00:00Z\" }}) {{ _docID }} }}",
+            escape_graphql_string(signer.did()), escape_graphql_string(user.did()), escape_graphql_string(agent.did()),
+        )).await.unwrap();
+        let session_doc = crate::store::graphql::created_doc_id(&session, "AgentSession").unwrap();
+        access
+            .add_actor_relationship(
+                "AgentSession",
+                &session_doc,
+                "working_agent",
+                &identity::Did::new(agent.did()).unwrap(),
+            )
+            .await
+            .unwrap();
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "first",
             signer.did(),
-            signer.did(),
-            "agent",
+            user.did(),
+            agent.did(),
             "session",
             "Start work",
             "interactive",
             "2026-10-21T00:00:00Z",
-            AgentRequestAdmissionRecord::local_self(signer.did()),
+            AgentRequestAdmissionRecord::client(user.did()),
         );
-        crate::sign_agent_request_create(&signer, &mut create)
+        create.session_doc_id = Some(session_doc.clone());
+        create.agent_doc_id = Some(agent_doc);
+        crate::sign_agent_request_create(&user, &mut create)
             .await
             .unwrap();
         let response = access
@@ -85,9 +109,16 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             .await
             .unwrap();
         let physical = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
-        super::super::create_goal_for_session(&node, signer.did(), "session", "Start work", None)
-            .await
-            .unwrap();
+        super::super::create_goal_for_session(
+            &node,
+            user.did(),
+            signer.did(),
+            "session",
+            "Start work",
+            None,
+        )
+        .await
+        .unwrap();
         let mut goal = load_canonical_goal(&node, signer.did(), "session")
             .await
             .unwrap()
@@ -344,6 +375,6 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                 .iter()
                 .any(|row| row["session_id"] == task_session));
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }

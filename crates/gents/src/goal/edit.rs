@@ -46,9 +46,19 @@ pub(crate) async fn edit_active_goal(
     fields: &GoalEdit,
 ) -> Result<Option<GoalDocument>> {
     fields.validate()?;
-    crate::ConfigAccess::transact_local_write(node, None, "goal.edit_active", |txn| {
-        Box::pin(async move { stage_goal_edit(txn, observed, fields, GoalEditOrigin::Agent).await })
-    })
+    crate::ConfigAccess::transact_local_write(
+        node,
+        Some(
+            crate::session::load_session_agent_did(node, &observed.node_did, &observed.session_id)
+                .await?,
+        ),
+        "goal.edit_active",
+        |txn| {
+            Box::pin(
+                async move { stage_goal_edit(txn, observed, fields, GoalEditOrigin::Agent).await },
+            )
+        },
+    )
     .await
 }
 

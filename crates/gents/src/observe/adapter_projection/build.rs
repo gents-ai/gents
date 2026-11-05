@@ -52,7 +52,7 @@ pub fn build_external_adapter_projection(
                 push_participant(
                     &mut participants,
                     redact_option(participant.node_did.as_deref(), context),
-                    participant.agent_id.clone(),
+                    participant.agent_did.clone(),
                     &participant.role,
                 );
             }
@@ -60,7 +60,7 @@ pub fn build_external_adapter_projection(
                 push_participant(
                     &mut participants,
                     redact_option(view.request.node_did.as_deref(), context),
-                    view.request.agent_id.clone(),
+                    view.request.agent_did.clone(),
                     "owner",
                 );
             }
@@ -98,7 +98,7 @@ pub fn build_external_adapter_projection(
                             child_request_id: request.request_id.clone(),
                             parent_tool_call_id: request.caused_by_parent_tool_call_id.clone(),
                             node_did: redact_option(request.node_did.as_deref(), context),
-                            agent_id: request.agent_id.clone(),
+                            agent_did: request.agent_did.clone(),
                             status: request
                                 .lifecycle_state
                                 .map(|state| state.as_str().to_string()),
@@ -131,7 +131,7 @@ pub fn build_external_adapter_projection(
         source_request_doc_id: None,
         source_session_id: view.request.session_id.clone(),
         source_node_did: redact_option(view.request.node_did.as_deref(), context),
-        source_agent_id: view.request.agent_id.clone(),
+        source_agent_did: view.request.agent_did.clone(),
         redaction_mode: context.redaction_mode,
         provenance: ProjectionProvenance {
             runtime: "gents".to_string(),
@@ -158,7 +158,7 @@ pub fn build_adapter_projection(
         source_request_doc_id: timeline.request_doc_id.clone(),
         source_session_id: timeline.session_id.clone(),
         source_node_did: timeline.node_did.clone(),
-        source_agent_id: timeline.agent_id.clone(),
+        source_agent_did: timeline.agent_did.clone(),
         redaction_mode: context.redaction_mode,
         provenance: ProjectionProvenance {
             runtime: "gents".to_string(),
@@ -213,7 +213,7 @@ fn build_openai_codex_run_trace(
                     id: event.request_id.clone(),
                     status: event.lifecycle_state.clone(),
                     node_did: event.node_did.clone(),
-                    agent_id: event.agent_id.clone(),
+                    agent_did: event.agent_did.clone(),
                     parent_request_id: event.parent_request_id.clone(),
                     parent_tool_call_id: event.parent_tool_call_id.clone(),
                     input: timeline_request_input(timeline, event, context),
@@ -275,7 +275,7 @@ fn build_multi_agent_task(
     push_participant(
         &mut participants,
         timeline.node_did.clone(),
-        timeline.agent_id.clone(),
+        timeline.agent_did.clone(),
         "owner",
     );
     let mut messages = Vec::new();
@@ -288,7 +288,7 @@ fn build_multi_agent_task(
                 push_participant(
                     &mut participants,
                     request.node_did.clone(),
-                    request.agent_id.clone(),
+                    request.agent_did.clone(),
                     if request.request_id == timeline.request_id {
                         "owner"
                     } else {
@@ -302,7 +302,7 @@ fn build_multi_agent_task(
                             child_request_id: request.request_id.clone(),
                             parent_tool_call_id: request.parent_tool_call_id.clone(),
                             node_did: request.node_did.clone(),
-                            agent_id: request.agent_id.clone(),
+                            agent_did: request.agent_did.clone(),
                             status: request.lifecycle_state.clone(),
                             input: redact_option(request.content.as_deref(), context),
                         });
@@ -382,22 +382,22 @@ fn valid_header_timestamp(message: &TimelineMessageEvent) -> Option<String> {
 fn push_participant(
     participants: &mut Vec<MultiAgentParticipant>,
     node_did: Option<String>,
-    agent_id: Option<String>,
+    agent_did: Option<String>,
     role: &str,
 ) {
-    if node_did.is_none() && agent_id.is_none() {
+    if node_did.is_none() && agent_did.is_none() {
         return;
     }
     if participants.iter().any(|participant| {
         participant.node_did == node_did
-            && participant.agent_id == agent_id
+            && participant.agent_did == agent_did
             && participant.role == role
     }) {
         return;
     }
     participants.push(MultiAgentParticipant {
         node_did,
-        agent_id,
+        agent_did,
         role: role.to_string(),
     });
 }

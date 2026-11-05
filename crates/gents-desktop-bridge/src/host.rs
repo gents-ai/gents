@@ -190,7 +190,7 @@ impl ClientHost {
                     self.core
                         .select_agent_model(
                             &request.node_did,
-                            &request.agent_id,
+                            &request.agent_did,
                             &request.backend_id,
                             &request.model_name,
                             request.reasoning_effort,

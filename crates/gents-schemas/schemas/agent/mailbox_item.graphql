@@ -1,4 +1,4 @@
-type MailboxItem @branchable {
+type MailboxItem {
     item_key: String @index(unique: true) @immutable
     requester_did: String @index @immutable
     node_did: String @index @immutable
@@ -18,7 +18,7 @@ type MailboxItem @branchable {
     cause_doc_id: String @index @immutable
 
     target_node_did: String @index @immutable
-    target_agent_id: String @index @immutable
+    target_agent_did: String @index @immutable
     expected_collection: String @immutable
     parent_item_id: String @index @immutable
     deadline_at: DateTime @immutable

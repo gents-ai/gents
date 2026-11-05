@@ -29,7 +29,9 @@ pub(crate) async fn append_background_tool_completion(
         existing_tool_completion_notification(node, &parent_request, tool_call_doc_id).await?;
     let tool_call_id = load_tool_call_id(node, tool_call_doc_id).await?;
     let existing_text = match &existing {
-        Some(existing) => stored_notification_text(node, &parent_request, &existing.doc_id).await,
+        Some(existing) => {
+            Some(stored_notification_text(node, &parent_request, &existing.doc_id).await?)
+        }
         None => None,
     };
     let render = |budget: usize| {
@@ -44,7 +46,7 @@ pub(crate) async fn append_background_tool_completion(
         None => crate::tools::surface::configured_output_budget(
             node,
             &parent_request.node_did,
-            &parent_request.agent_id,
+            &parent_request.agent_did,
             tool_name,
         )
         .await
@@ -69,12 +71,18 @@ pub(crate) async fn append_background_tool_completion(
     .await?;
     mark_background_tool_notification_delivered(
         node,
+        identity::Did::new(parent_request.agent_did.clone())?,
         &parent_request.node_did,
         parent_request_id,
         tool_call_doc_id,
     )
     .await?;
-    mark_background_tool_completion_side_effects_done(node, tool_call_doc_id).await?;
+    mark_background_tool_completion_side_effects_done(
+        node,
+        identity::Did::new(parent_request.agent_did.clone())?,
+        tool_call_doc_id,
+    )
+    .await?;
     tracing::debug!(
         parent_session_id, parent_request_id, tool_call_doc_id,
         wake_request_id = ?effects.wake_request_id,
@@ -85,26 +93,25 @@ pub(crate) async fn append_background_tool_completion(
 }
 
 async fn stored_notification_text(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     parent: &crate::AgentRequest,
     notification_doc_id: &str,
-) -> Option<String> {
-    let (_, message) = crate::session::load_canonical_message_from_node(
-        node,
+) -> Result<String> {
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(&parent.agent_did)?,
+    );
+    let (_, message) = crate::session::load_canonical_message(
+        &access,
         notification_doc_id,
         &parent.node_did,
         parent.requester_did.as_deref(),
     )
     .await
-    .map_err(|error| {
-        tracing::warn!(
-            notification_doc_id,
-            error = %format!("{error:#}"),
-            "published background notification could not be read for replay"
-        )
-    })
-    .ok()?;
-    message.rag_text()
+    .with_context(|| format!("reading published background notification {notification_doc_id}"))?;
+    message
+        .rag_text()
+        .context("published background notification has no text")
 }
 
 fn published_notification_budget(
@@ -188,6 +195,7 @@ pub(super) async fn ensure_notification_delivery(
 
 async fn mark_background_tool_notification_delivered(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
     node_did: &str,
     parent_request_id: &str,
     tool_call_doc_id: &str,
@@ -211,17 +219,15 @@ async fn mark_background_tool_notification_delivered(
             ) {{ _docID }}
         }}"#
     );
-    crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "mark_background_tool_notification_delivered",
-        &mutation,
-    )
-    .await?;
+    crate::store::config_client::ConfigAccess::local_as(node.clone(), actor)
+        .write("mark_background_tool_notification_delivered", &mutation)
+        .await?;
     Ok(())
 }
 
 async fn mark_background_tool_completion_side_effects_done(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
     tool_call_doc_id: &str,
 ) -> Result<()> {
     let tool_call_doc_id = escape_graphql_string(tool_call_doc_id);
@@ -285,11 +291,8 @@ async fn mark_background_tool_completion_side_effects_done(
             ) {{ _docID }}
         }}"#
     );
-    crate::store::config_client::ConfigAccess::write_local_response(
-        node,
-        "mark_background_completion_side_effects_done",
-        &mutation,
-    )
-    .await?;
+    crate::store::config_client::ConfigAccess::local_as(node.clone(), actor)
+        .write("mark_background_completion_side_effects_done", &mutation)
+        .await?;
     Ok(())
 }

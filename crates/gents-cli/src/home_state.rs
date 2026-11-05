@@ -179,11 +179,23 @@ pub(crate) fn resolve_graphql_endpoint(
 ) -> Result<GraphqlEndpoint> {
     let home_dir = resolve_home_dir(home);
     if let Some(graphql) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
-        return Ok(home_graphql_endpoint(&home_dir, graphql));
+        let url = reqwest::Url::parse(graphql).context("invalid GraphQL endpoint")?;
+        anyhow::ensure!(
+            matches!(url.scheme(), "http" | "https")
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none(),
+            "GraphQL endpoint must be an HTTP URL without credentials, query or fragment"
+        );
+        let identity =
+            gents_desktop_core::client::PrincipalIdentity::load_existing(&cli_identity_paths()?)
+                .context("CLI client identity is unavailable; initialize the CLI client first")?;
+        return Ok(GraphqlEndpoint::as_principal(graphql, identity.did()));
     }
 
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
-        return Ok(home_graphql_endpoint(&home_dir, runtime_state.graphql));
+        return home_graphql_endpoint(&home_dir, runtime_state.graphql);
     }
 
     anyhow::ensure!(
@@ -193,39 +205,54 @@ pub(crate) fn resolve_graphql_endpoint(
         home_dir.display()
     );
 
-    Ok(home_graphql_endpoint(
+    home_graphql_endpoint(
         &home_dir,
         format!("http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql"),
+    )
+}
+
+/// Client document access retains the user's identity. Credentials remain bound to
+/// this home's endpoint or loopback; loading a runtime key never grants client access.
+pub(crate) fn home_graphql_endpoint(
+    home_dir: &Path,
+    url: impl Into<String>,
+) -> Result<GraphqlEndpoint> {
+    home_graphql_endpoint_with_paths(home_dir, url, &cli_identity_paths()?)
+}
+
+fn home_graphql_endpoint_with_paths(
+    home_dir: &Path,
+    url: impl Into<String>,
+    paths: &gents_desktop_core::client::DesktopPaths,
+) -> Result<GraphqlEndpoint> {
+    let url = url.into();
+    anyhow::ensure!(
+        endpoint_serves_home(home_dir, &url),
+        "endpoint is not this home's runtime"
+    );
+    let identity = gents_desktop_core::client::PrincipalIdentity::load_existing(paths)
+        .context("CLI client identity is unavailable; initialize the CLI client first")?;
+    Ok(GraphqlEndpoint::as_principal(url, identity.did()))
+}
+
+/// The CLI is a separate client principal, even when desktop and CLI share a user home.
+pub(crate) fn cli_identity_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
+    Ok(cli_identity_paths_under(
+        &gents_desktop_core::client::DesktopPaths::discover()?,
     ))
 }
 
-/// `url` acts as the home's principal only when it is this home's own runtime
-/// endpoint or a loopback address and this process can load the principal's
-/// signing key; otherwise anonymous. Bearers carry no nonce and their
-/// audience is the sender-chosen `Host`, so they are refused for any other
-/// host, where they could be replayed against any trusting node until expiry.
-pub(crate) fn home_graphql_endpoint(home_dir: &Path, url: impl Into<String>) -> GraphqlEndpoint {
-    let url = url.into();
-    let principal = match read_init_config(home_dir) {
-        Ok(Some(config)) if endpoint_serves_home(home_dir, &url) => {
-            load_initialized_home_identity(home_dir, &config)
-                .map(|identity| identity.did().to_string())
-                .map_err(|error| format!("{error:#}"))
-                .and_then(|did| {
-                    gents::store::identity::can_mint_defradb_bearer(&did)
-                        .then_some(did)
-                        .ok_or_else(|| "identity has no exportable signing key".to_string())
-                })
-        }
-        _ => Err("the endpoint is not this initialized home's runtime".to_string()),
-    };
-    match principal {
-        Ok(did) => GraphqlEndpoint::as_principal(url, did),
-        Err(reason) => {
-            tracing::debug!(%url, %reason, "reaching the runtime anonymously");
-            GraphqlEndpoint::anonymous(url)
-        }
-    }
+fn cli_identity_paths_under(
+    desktop: &gents_desktop_core::client::DesktopPaths,
+) -> gents_desktop_core::client::DesktopPaths {
+    gents_desktop_core::client::DesktopPaths::from_root(desktop.root().join("cli"))
+}
+
+pub(crate) async fn load_client_identity() -> Result<gents_desktop_core::client::PrincipalIdentity>
+{
+    let paths = cli_identity_paths()?;
+    paths.ensure_root_dirs().await?;
+    gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths).await
 }
 
 fn endpoint_serves_home(home_dir: &Path, url: &str) -> bool {
@@ -274,6 +301,50 @@ pub(crate) fn display_host(host: IpAddr) -> String {
 mod tests {
     use super::endpoint_serves_home;
 
+    #[tokio::test]
+    async fn cli_and_desktop_keep_distinct_stable_identities() {
+        let home = tempfile::tempdir().unwrap();
+        let desktop = gents_desktop_core::client::DesktopPaths::from_root(home.path());
+        let cli = super::cli_identity_paths_under(&desktop);
+        desktop.ensure_root_dirs().await.unwrap();
+        cli.ensure_root_dirs().await.unwrap();
+        let desktop_identity =
+            gents_desktop_core::client::PrincipalIdentity::load_or_create(&desktop)
+                .await
+                .unwrap();
+        let cli_identity = gents_desktop_core::client::PrincipalIdentity::load_or_create(&cli)
+            .await
+            .unwrap();
+        assert_ne!(desktop_identity.did(), cli_identity.did());
+        assert_eq!(
+            cli_identity.did(),
+            gents_desktop_core::client::PrincipalIdentity::load_existing(&cli)
+                .unwrap()
+                .did()
+        );
+    }
+
+    #[tokio::test]
+    async fn home_endpoint_requires_and_uses_the_cli_principal() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = gents_desktop_core::client::DesktopPaths::from_root(home.path().join("cli"));
+        let url = "http://127.0.0.1:9191/api/v0/graphql";
+        assert!(super::home_graphql_endpoint_with_paths(home.path(), url, &paths).is_err());
+        paths.ensure_root_dirs().await.unwrap();
+        let identity = gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths)
+            .await
+            .unwrap();
+        let endpoint = super::home_graphql_endpoint_with_paths(home.path(), url, &paths).unwrap();
+        let access = gents::store::config_client::ConfigAccess::Graphql(endpoint);
+        assert_eq!(access.actor_did().as_deref(), Some(identity.did()));
+        assert!(super::home_graphql_endpoint_with_paths(
+            home.path(),
+            "https://unrelated.example/api/v0/graphql",
+            &paths
+        )
+        .is_err());
+    }
+
     #[test]
     fn bearers_go_only_to_the_homes_runtime_or_loopback() {
         let home = tempfile::tempdir().unwrap();
@@ -305,7 +376,7 @@ mod tests {
                 "graphql": "http://100.69.4.79:9191/api/v0/graphql",
                 "node_name": "a",
                 "node_did": "did:key:z6Mk",
-                "default_agent_id": "b",
+                "default_agent_did": "b",
             }))
             .unwrap(),
         )

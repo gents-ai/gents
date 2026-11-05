@@ -1,7 +1,7 @@
-type ProjectionAcpBinding @branchable @index(fields: ["node_did", "binding_id"], unique: true) {
+type ProjectionAcpBinding @index(fields: ["node_did", "binding_id"], unique: true) {
     binding_id: String @index
     node_did: String @index
-    agent_id: String @index
+    agent_did: String @index
     projection_id: String @index
     policy_id: String @index
     staged_policy_id: String @index

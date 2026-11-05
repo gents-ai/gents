@@ -24,12 +24,12 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     std::fs::write(workspace.path().join("profile.json"), SEED).unwrap();
 
-    let (node_did, agent_id) = bind_target(&db.node, identity.as_ref(), &target).await;
+    let (node_did, agent_did) = bind_target(&db.node, identity.as_ref(), &target).await;
 
     configure_agent_tools(
         &db.node,
         &node_did,
-        &agent_id,
+        &agent_did,
         None,
         Tools {
             tools_id: "edit-live-tools".to_string(),
@@ -67,7 +67,7 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
     create_runtime_request(
         &db.node,
         &node_did,
-        &agent_id,
+        &agent_did,
         request_id,
         "edit-file-live-session-1",
         "In profile.json, change max_turns from 20 to 250. Use read_file first, \

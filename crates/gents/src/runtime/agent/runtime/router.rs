@@ -102,7 +102,7 @@ impl RuntimeAdmissionGate {
 }
 
 pub(super) async fn run_router(
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     node_did: String,
     active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     mut shutdown: watch::Receiver<bool>,
@@ -116,7 +116,7 @@ pub(super) async fn run_router(
     if !admission_gate.wait_open(&mut shutdown).await {
         return Ok(());
     }
-    let watcher = DefraWatcher::new(node.clone(), &node_did)?;
+    let watcher = DefraWatcher::for_agents(node.clone(), &node_did, Vec::new())?;
     let result = run_router_with_watcher(RouterInputs {
         node,
         node_did,
@@ -137,7 +137,7 @@ pub(super) async fn run_router(
 }
 
 pub(in crate::runtime::agent) struct RouterInputs<W> {
-    pub(in crate::runtime::agent) node: Arc<defra_node::EmbeddedNode>,
+    pub(in crate::runtime::agent) node: Arc<defra_node::Node>,
     pub(in crate::runtime::agent) node_did: String,
     pub(in crate::runtime::agent) watcher: W,
     pub(in crate::runtime::agent) active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
@@ -195,12 +195,24 @@ where
             return Ok(());
         };
 
-        let resolution = resolve_agent_for_request(node.as_ref(), &request).await?;
+        let resolution = match resolve_agent_for_request(&node, &request).await {
+            Ok(Some(resolution)) => resolution,
+            Ok(None) => {
+                tracing::warn!(request_id = %request.request_id, session_id = %request.session_id,
+                    agent_did = %request.agent_did, "session selection unavailable; leaving request pending");
+                continue;
+            }
+            Err(error) => {
+                tracing::warn!(request_id = %request.request_id, session_id = %request.session_id,
+                    agent_did = %request.agent_did, error = %error, "session selection lookup failed; leaving request pending");
+                continue;
+            }
+        };
         if let Some(reason) = resolution.rejection_reason.as_deref() {
             tracing::warn!(
                 request_id = %request.request_id,
                 session_id = %request.session_id,
-                agent_id = %resolution.agent_id,
+                agent_did = %resolution.agent_did,
                 reason = %reason,
                 "rejecting request before dispatch"
             );
@@ -208,30 +220,32 @@ where
                 node.clone(),
                 node_did.as_str(),
                 request,
-                resolution.agent_id.as_str(),
+                resolution.agent_did.as_str(),
                 reason,
             )
             .await?;
             continue;
         }
 
-        let startup_diagnostic = admission_observation.demotion_reason(&resolution.agent_id);
+        let startup_diagnostic = admission_observation.demotion_reason(&resolution.agent_did);
         match effective_agent_admission(
             routed_snapshot
                 .dispatchers
-                .contains_key(&resolution.agent_id),
-            routed_snapshot.unavailable_agents.get(&resolution.agent_id),
+                .contains_key(&resolution.agent_did),
+            routed_snapshot
+                .unavailable_agents
+                .get(&resolution.agent_did),
             startup_diagnostic,
         ) {
             EffectiveAgentAdmission::Ready => {
                 let dispatcher = routed_snapshot
                     .dispatchers
-                    .get(&resolution.agent_id)
+                    .get(&resolution.agent_did)
                     .expect("effective admission verified the dispatcher");
                 tracing::info!(
                     request_id = %request.request_id,
                     session_id = %request.session_id,
-                    agent_id = %resolution.agent_id,
+                    agent_did = %resolution.agent_did,
                     "dispatching request to agent executor"
                 );
                 #[cfg(test)]
@@ -266,7 +280,7 @@ where
                 let permit = permit.map_err(|_| {
                     anyhow!(
                         "executor queue for agent {} closed unexpectedly",
-                        resolution.agent_id
+                        resolution.agent_did
                     )
                 })?;
                 if active_snapshot_rx.has_changed().unwrap_or(false) {
@@ -282,7 +296,7 @@ where
                 tracing::warn!(
                     request_id = %request.request_id,
                     session_id = %request.session_id,
-                    agent_id = %resolution.agent_id,
+                    agent_did = %resolution.agent_did,
                     public_reason = ?public_reason,
                     diagnostic = %diagnostic,
                     "agent unavailable for request"
@@ -291,7 +305,7 @@ where
                     node.clone(),
                     node_did.as_str(),
                     request,
-                    resolution.agent_id.as_str(),
+                    resolution.agent_did.as_str(),
                     public_reason.public_message(),
                 )
                 .await?;
@@ -300,7 +314,7 @@ where
                 tracing::warn!(
                     request_id = %request.request_id,
                     session_id = %request.session_id,
-                    agent_id = %resolution.agent_id,
+                    agent_did = %resolution.agent_did,
                     node_did = %node_did,
                     "agent is not assigned to the active runtime"
                 );
@@ -308,7 +322,7 @@ where
                     node.clone(),
                     node_did.as_str(),
                     request,
-                    resolution.agent_id.as_str(),
+                    resolution.agent_did.as_str(),
                     gents_protocol::row::BEHAVIOR_NOT_ASSIGNED_MESSAGE,
                 )
                 .await?;
@@ -355,6 +369,7 @@ where
     } = wait_state;
     loop {
         let routed_snapshot = active_snapshot_rx.borrow_and_update().clone();
+        watcher.set_agent_identities(routed_snapshot.watcher_identities()?)?;
         let readiness_observation = readiness_changed.borrow_and_update().clone();
         *active_snapshot = routed_snapshot.clone();
         let readiness_aligned =
@@ -404,6 +419,9 @@ where
             }
         }
         if let Some(request) = pending_request.take() {
+            if !watcher.retains_agent(&request.agent_did) {
+                continue;
+            }
             return Ok(Some((request, routed_snapshot, readiness_observation)));
         }
         let request = tokio::select! {
@@ -445,41 +463,39 @@ where
 }
 
 pub(super) async fn resolve_agent_for_request(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::Node>,
     request: &AgentRequest,
-) -> Result<AgentResolution> {
-    let agent_id = request.agent_id.clone();
-    let session_agent_id = crate::session::load_session_agent_id(
+) -> Result<Option<AgentResolution>> {
+    let agent_did = request.agent_did.clone();
+    let actor = identity::Did::new(&agent_did)?;
+    let Some(session_agent_did) = crate::session::load_session_agent_selection(
         node,
+        &actor,
         &request.node_did,
         &request.session_id,
         request.requester_did.as_deref(),
     )
-    .await?;
-    let rejection_reason = if agent_id.trim().is_empty() {
-        Some("request must select an agent".to_string())
-    } else {
-        session_agent_id
-            .filter(|existing| existing != &agent_id)
-            .map(|existing| {
-                format!(
-                    "session {} is pinned to agent {} and cannot switch to {}",
-                    request.session_id, existing, agent_id
-                )
-            })
+    .await?
+    else {
+        return Ok(None);
     };
-
-    Ok(AgentResolution {
-        agent_id,
+    let rejection_reason = (session_agent_did != agent_did).then(|| {
+        format!(
+            "session {} is pinned to agent {} and cannot switch to {}",
+            request.session_id, session_agent_did, agent_did
+        )
+    });
+    Ok(Some(AgentResolution {
+        agent_did,
         rejection_reason,
-    })
+    }))
 }
 
 pub(super) async fn fail_routed_request(
-    node: Arc<defra_node::EmbeddedNode>,
+    node: Arc<defra_node::Node>,
     node_did: &str,
     request: AgentRequest,
-    agent_id: &str,
+    agent_did: &str,
     error_message: &str,
 ) -> Result<()> {
     let execution_origin =
@@ -487,19 +503,27 @@ pub(super) async fn fail_routed_request(
             Ok(origin) => origin,
             Err(error) => {
                 let reason = format!("request admission denied: {error:#}");
-                return crate::request::admission::terminalize_pending_request_rejection(
+                let outcome = crate::request::admission::terminalize_pending_request_rejection(
                     &node,
                     &request.doc_id,
                     node_did,
+                    agent_did,
                     &reason,
                     "terminalize_invalid_execution_origin_before_route_rejection",
                 )
-                .await;
+                .await?;
+                if outcome == crate::request::admission::PendingRejectionOutcome::NotMatched {
+                    tracing::warn!(
+                        request_id = %request.request_id,
+                        "request rejection did not match a visible pending request"
+                    );
+                }
+                return Ok(());
             }
         };
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        agent_id,
+        agent_did,
         node_did,
         request.clone(),
         Duration::from_secs(30).as_secs(),

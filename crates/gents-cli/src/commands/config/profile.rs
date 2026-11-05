@@ -90,12 +90,12 @@ async fn list_candidates(
     node_did: &str,
     profile_id: &str,
     plugin_slots: &[String],
-    home: Option<&std::path::Path>,
+    _home: Option<&std::path::Path>,
 ) -> Result<Value> {
     let observations = if let ConfigAccess::Graphql(graphql) = access {
-        let identity = crate::commands::p2p::enrollment_admin::resolve_home_identity(home)?;
+        let identity = crate::load_client_identity().await?;
         crate::commands::accounts::request_usage_reads(
-            identity.as_ref(),
+            &identity,
             graphql,
             gents::inference::usage_observation::UsageTrigger::Cached,
             None,
@@ -869,11 +869,11 @@ mod tests {
             ),
             (
                 gents::Collection::Agent,
-                json!({"node_did": DID, "agent_id": "x", "context_id": "context-x", "inference_profile_id": "p-original"}),
+                json!({"node_did": DID, "agent_did": "x", "context_id": "context-x", "inference_profile_id": "p-original"}),
             ),
             (
                 gents::Collection::Agent,
-                json!({"node_did": DID, "agent_id": "y", "inference_profile_id": "p-original"}),
+                json!({"node_did": DID, "agent_did": "y", "inference_profile_id": "p-original"}),
             ),
         ]
         .into_iter()

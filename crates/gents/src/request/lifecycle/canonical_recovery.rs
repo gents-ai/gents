@@ -15,7 +15,7 @@ use gents_protocol::row::AgentRequestRow;
 
 use crate::session;
 use crate::session::canonical_rows::{
-    output_segment_create_variables, transcript_message_create_variables, OutputSegmentRow,
+    output_segment_bound_variables, transcript_message_bound_variables, OutputSegmentRow,
     TranscriptMessageRow, CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
@@ -179,7 +179,7 @@ fn selection_from_choice(
 }
 
 pub(super) async fn recover_expired_generation(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     observed: &AgentRequestRow,
     expected_generation: &str,
     expected_expiry: &str,
@@ -202,7 +202,7 @@ pub(super) async fn recover_expired_generation(
     reason = "called from the lean_vocab_test native adapter with this shape"
 )]
 pub(crate) async fn recover_expired_generation_with_facts(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     observed: &AgentRequestRow,
     expected_generation: &str,
     expected_expiry: &str,
@@ -216,9 +216,25 @@ pub(crate) async fn recover_expired_generation_with_facts(
         .as_deref()
         .context("missing request document")?
         .to_owned();
-    ConfigAccess::transact_local_idempotent(
+    let actor = identity::Did::new(
+        observed
+            .agent_did
+            .clone()
+            .context("request is missing agent DID")?,
+    )?;
+    let node_did = observed
+        .node_did
+        .as_deref()
+        .context("request is missing node DID")?
+        .to_owned();
+    let session_id = observed
+        .session_id
+        .as_deref()
+        .context("request is missing session ID")?
+        .to_owned();
+    let result = ConfigAccess::transact_local_idempotent(
         node,
-        None,
+        Some(actor.clone()),
         IdempotentTransactionRetry::Standard,
         "lifecycle.recover_expired_generation",
         move |txn| {
@@ -367,7 +383,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                             source: source.clone(), writer: writer.clone(), ordinal: None, runs: Vec::new(), payload: String::new(),
                             close: Some(plan.close.clone()), created_at: timestamp.clone(),
                         };
-                        let response = txn.execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &output_segment_create_variables(&closing)?).await?;
+                        let response = txn.execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &output_segment_bound_variables(txn, &closing).await?).await?;
                         let id = created_doc_id(&response, "AgentOutputSegment")?;
                         let blocks = plan.retained_blocks(&id)?;
                         segments.push(OutputSegmentRow { doc_id: id.clone(), segment: closing });
@@ -402,7 +418,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     blocks, created_at: timestamp.clone(),
                 };
                 *next_sequence = next_sequence.checked_add(1).context("recovery transcript sequence overflow")?;
-                let response = txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &transcript_message_create_variables(&message)?).await?;
+                let response = txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &transcript_message_bound_variables(txn, &message).await?).await?;
                 let doc_id = created_doc_id(&response, "AgentMessage")?;
                 published.push(TranscriptMessageRow { doc_id, message });
             }
@@ -513,5 +529,13 @@ pub(crate) async fn recover_expired_generation_with_facts(
             }
             Ok(RecoveryResult::Won { published: published.len() })
         })},
-    ).await
+    ).await?;
+    crate::session::child_ownership::publish_agent_session_child_relationships(
+        node,
+        &node_did,
+        &actor,
+        &session_id,
+    )
+    .await?;
+    Ok(result)
 }

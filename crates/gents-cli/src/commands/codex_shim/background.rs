@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use gents::defra_node::EmbeddedNode;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents::CancelBackgroundToolCallOutcome;
@@ -255,7 +254,11 @@ struct BackgroundTerminalRow {
 }
 
 pub(super) async fn clean_background_terminals(state: &ShimState, thread_id: &str) -> Result<()> {
-    let rows = load_running_background_terminal_rows(state.node.as_ref(), thread_id).await?;
+    let access = ConfigAccess::local_as(
+        state.node.clone(),
+        identity::Did::new(state.agent_did.as_ref())?,
+    );
+    let rows = load_running_background_terminal_rows(&access, thread_id).await?;
     for row in rows {
         cancel_projected_background_tool_key(state, &row.tool_call_key).await?;
     }
@@ -270,11 +273,15 @@ pub(super) async fn cancel_projected_background_tool_key(
     let outcome = gents::cancel_background_tool_call(
         state.node.clone(),
         &state.background_execution_registry,
+        &state.agent_did,
         &session_id,
         &tool_call_id,
     )
     .await?;
     match &outcome {
+        CancelBackgroundToolCallOutcome::Queued { intent_doc_id } => anyhow::bail!(
+            "GENTS control `{intent_doc_id}` is queued; termination is not yet confirmed"
+        ),
         CancelBackgroundToolCallOutcome::Cancelled { .. }
         | CancelBackgroundToolCallOutcome::AlreadyTerminal { .. } => Ok(outcome),
         CancelBackgroundToolCallOutcome::Lost => anyhow::bail!(
@@ -303,7 +310,11 @@ async fn background_tool_address(
     let query = format!(
         r#"{{ AgentToolCall(filter: {{ tool_call_key: {{ _eq: "{escaped_key}" }} }}, limit: 1) {{ session_id tool_call_id }} }}"#
     );
-    let response = query_node_json(state.node.as_ref(), &query).await?;
+    let access = ConfigAccess::local_as(
+        state.node.clone(),
+        identity::Did::new(state.agent_did.as_ref())?,
+    );
+    let response = access.execute(&query).await?;
     if let Some(row) = response.pointer("/data/AgentToolCall/0") {
         if let (Some(session_id), Some(tool_call_id)) = (
             row.get("session_id").and_then(Value::as_str),
@@ -319,7 +330,7 @@ async fn background_tool_address(
 }
 
 async fn load_running_background_terminal_rows(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     thread_id: &str,
 ) -> Result<Vec<BackgroundTerminalRow>> {
     let escaped_thread_id = escape_graphql_string(thread_id);
@@ -338,7 +349,7 @@ async fn load_running_background_terminal_rows(
             }}
         }}"#
     );
-    let response = query_node_json(node, &query).await?;
+    let response = access.execute(&query).await?;
     let rows = response
         .pointer("/data/AgentToolCall")
         .and_then(Value::as_array)
@@ -362,6 +373,7 @@ fn decode_background_terminal_row(row: &Value) -> Option<BackgroundTerminalRow> 
 
 #[cfg(test)]
 mod tests {
+    use gents::defra_node::Node as EmbeddedNode;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicU64;
@@ -448,7 +460,7 @@ mod tests {
                 "http://127.0.0.1/graphql",
             ),
             node_did: Arc::from("did:test:background-watcher"),
-            agent_id: Arc::from("did:test:background-watcher:default"),
+            agent_did: Arc::from("did:test:background-watcher:default"),
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),
             poll_interval,
@@ -933,13 +945,16 @@ mod tests {
         let state = job_test_state(dir.path()).await;
         seed_running_job(&state, "codex-job", "call-a").await;
 
-        let rows = load_running_background_terminal_rows(state.node.as_ref(), "codex-job")
-            .await
-            .unwrap();
+        let rows = load_running_background_terminal_rows(
+            &ConfigAccess::local(state.node.clone()),
+            "codex-job",
+        )
+        .await
+        .unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].tool_call_key, "codex-job:call-a");
-        state.node.shutdown().await;
+        state.node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -962,7 +977,7 @@ mod tests {
         );
         let stopped = job_state(&state, "codex-job", "call-a").await;
         assert_eq!(stopped, JobState::Cancelled);
-        state.node.shutdown().await;
+        state.node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -983,7 +998,7 @@ mod tests {
         }
         let other = job_state(&state, "codex-other", "call-c").await;
         assert_eq!(other, JobState::Running);
-        state.node.shutdown().await;
+        state.node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -1010,7 +1025,7 @@ mod tests {
         assert_eq!(ended, "completed");
         let still = job_state(&state, "codex-job", "call-a").await;
         assert_eq!(still, JobState::Completed);
-        state.node.shutdown().await;
+        state.node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -1026,6 +1041,6 @@ mod tests {
             err.to_string(),
             "unknown GENTS background tool `codex-none:call-none`"
         );
-        state.node.shutdown().await;
+        state.node.shutdown().await.expect("node shutdown");
     }
 }

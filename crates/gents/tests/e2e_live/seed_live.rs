@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::documents::{AgentContext, CompactionConfig, InferenceSampling};
 use gents::store::graphql::escape_graphql_string;
 use gents::{default_inference_profile_id_for_agent, Collection, CompactionStrategy, NodeIdentity};
@@ -31,16 +31,16 @@ async fn live_seeds_reach_the_provider() {
 
     let db = test_db("live-seed").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("live-seed"));
-    let (node_did, agent_id) = bind_target(&db.node, identity.as_ref(), &target).await;
+    let (node_did, agent_did) = bind_target(&db.node, identity.as_ref(), &target).await;
 
-    let profile_id = default_inference_profile_id_for_agent(&agent_id);
-    configure_seed_and_compaction(&db.node, &node_did, &agent_id, &profile_id).await;
+    let profile_id = default_inference_profile_id_for_agent(&agent_did);
+    configure_seed_and_compaction(&db.node, &node_did, &agent_did, &profile_id).await;
 
     let profile_request_id = "req-live-profile-seed";
     create_runtime_request(
         &db.node,
         &node_did,
-        &agent_id,
+        &agent_did,
         profile_request_id,
         "session-live-profile-seed",
         "Reply with the single lowercase word: profile",
@@ -51,7 +51,7 @@ async fn live_seeds_reach_the_provider() {
     create_runtime_request(
         &db.node,
         &node_did,
-        &agent_id,
+        &agent_did,
         second_request_id,
         "session-live-second-profile-seed",
         "Reply with the single lowercase word: second",
@@ -63,7 +63,7 @@ async fn live_seeds_reach_the_provider() {
     create_runtime_request(
         &db.node,
         &node_did,
-        &agent_id,
+        &agent_did,
         compaction_request_id,
         compaction_session_id,
         "Use the retained context and reply with the single lowercase word: compacted",
@@ -136,7 +136,7 @@ async fn live_seeds_reach_the_provider() {
 async fn configure_seed_and_compaction(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     profile_id: &str,
 ) {
     use gents::store::config_client::{
@@ -159,14 +159,14 @@ async fn configure_seed_and_compaction(
                 }
                 None => InferenceSampling::default(),
             };
-            let (_, behavior) = read(txn, Collection::Agent, node_did, agent_id)
+            let (_, behavior) = read(txn, Collection::Agent, node_did, agent_did)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("default behavior is missing"))?;
             let mut behavior: gents::documents::Agent = serde_json::from_value(behavior)?;
             let context_id = behavior
                 .context_id
                 .clone()
-                .unwrap_or_else(|| format!("{agent_id}:context"));
+                .unwrap_or_else(|| format!("{agent_did}:context"));
             let mut context = read(txn, Collection::AgentContext, node_did, &context_id)
                 .await?
                 .map(|(_, value)| serde_json::from_value::<AgentContext>(value))
@@ -183,7 +183,7 @@ async fn configure_seed_and_compaction(
                     tags: Vec::new(),
                 });
             let sampling_id = format!("{profile_id}:sampling");
-            let compaction_id = format!("{agent_id}:compaction");
+            let compaction_id = format!("{agent_did}:compaction");
             profile.sampling_id = Some(sampling_id.clone());
             profile.context_window = Some(64_000);
             profile.max_output_tokens =

@@ -225,7 +225,7 @@ async fn operational_failures_stay_internal_errors() {
                 session_id: "s-internal-op",
                 node_did: "did:test:foreign-agent",
                 requester_did: "did:test:foreign-agent",
-                agent_id: "did:test:grok-shim:default",
+                agent_did: "did:test:grok-shim:default",
                 created_at: "2026-08-31T22:46:45Z",
                 closed_at: "2026-08-31T22:46:46Z"
             }) { _docID }

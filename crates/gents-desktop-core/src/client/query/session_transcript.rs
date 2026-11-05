@@ -76,7 +76,7 @@ pub(super) async fn read_request_documents(
 async fn read_legacy_question_sources<'a>(
     access: TranscriptAccess<'_>,
     requests: impl Iterator<Item = &'a AgentRequestRow>,
-) -> (Vec<MailboxItemRow>, u64) {
+) -> Result<(Vec<MailboxItemRow>, u64)> {
     let ids = requests
         .filter_map(|request| {
             let input = request.input.as_ref();
@@ -115,11 +115,52 @@ async fn read_legacy_question_sources<'a>(
                 }
                 Err(error) => tracing::debug!(%error, "question reply sources unavailable"),
             },
+            Ok(Err(error)) if is_permission_denied(&error) => return Err(error),
             Ok(Err(error)) => tracing::debug!(%error, "question reply sources unavailable"),
             Err(_) => tracing::debug!("question reply sources timed out"),
         }
     }
-    (rows, query_count)
+    Ok((rows, query_count))
+}
+
+#[cfg(test)]
+mod question_source_tests {
+    use super::*;
+    use gents::store::config_client::ConfigAccess;
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn hidden_question_source_is_empty_but_explicit_denial_is_returned() {
+        let request = AgentRequestRow {
+            request_id: "request".into(),
+            caused_by_source_doc_id: Some("question".into()),
+            ..Default::default()
+        };
+        for denied in [false, true] {
+            let server = MockServer::start().await;
+            let body = if denied {
+                serde_json::json!({"errors":[{"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}}]})
+            } else {
+                serde_json::json!({"data":{"MailboxItem":[]}})
+            };
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let access = ConfigAccess::graphql(format!("{}/api/v0/graphql", server.uri()));
+            let result = read_legacy_question_sources(
+                TranscriptAccess::Config(&access),
+                [&request].into_iter(),
+            )
+            .await;
+            if denied {
+                assert!(is_permission_denied(&result.unwrap_err()));
+            } else {
+                assert!(result.unwrap().0.is_empty());
+            }
+        }
+    }
 }
 
 fn scope_filter(node_did: &str, requester_did: Option<&str>) -> String {
@@ -542,68 +583,14 @@ async fn resolve_transcript_cursor_sequence(
 
 pub fn session_transcript_requester_scope(
     session: Option<&AgentSession>,
-    node_did: Option<&str>,
+    _node_did: Option<&str>,
     requester_scope: Option<&str>,
-    operator: bool,
+    _operator: bool,
 ) -> Option<String> {
-    let node_own_scope = match (session, node_did) {
-        (Some(session), Some(node_did)) => {
-            session.node_did == node_did && session.requester_did.as_deref() == Some(node_did)
-        }
-        _ => false,
-    };
-    if operator && node_own_scope {
-        return node_did.map(str::to_owned);
+    match session {
+        Some(session) => session.requester_did.clone(),
+        None => requester_scope.map(str::to_owned),
     }
-    requester_scope.map(str::to_owned)
-}
-
-pub fn session_unreadable_reason(
-    session: &AgentSession,
-    requester_scope: Option<&str>,
-    operator: bool,
-) -> Option<&'static str> {
-    let scope = session_transcript_requester_scope(
-        Some(session),
-        Some(&session.node_did),
-        requester_scope,
-        operator,
-    );
-    if scope.as_deref() == session.requester_did.as_deref() {
-        return None;
-    }
-    Some(match session.requester_did.as_deref() {
-        Some(requester) if requester == session.node_did => {
-            "Started by the agent itself and owned by its node, so this client cannot read it."
-        }
-        Some(_) => "Started by another requester, so this client cannot read it.",
-        None => "This session has no requester this client can read under.",
-    })
-}
-
-/// Why a send from `sender_did` into `session` would be refused, when it would.
-///
-/// Core admits a request only from the requester that owns its session (Lean
-/// `requesterMatchesSessionScope`). Applying the same check here keeps the
-/// client from offering, or submitting, a send that core will refuse.
-pub fn session_unsendable_reason(session: &AgentSession, sender_did: &str) -> Option<&'static str> {
-    if session.requester_did.as_deref() == Some(sender_did) {
-        return None;
-    }
-    let started_by_a_session = session
-        .provenance
-        .as_ref()
-        .is_some_and(|provenance| provenance.parent_request_doc_id.is_some());
-    Some(match session.requester_did.as_deref() {
-        Some(requester) if requester == session.node_did && started_by_a_session => {
-            "Read-only. Message the session that started it."
-        }
-        Some(requester) if requester == session.node_did => {
-            "Read-only. This session belongs to the node."
-        }
-        Some(_) => "Read-only. This session belongs to someone else.",
-        None => "Read-only.",
-    })
 }
 
 /// The stretch of a session's message order a transcript read covers: the
@@ -976,7 +963,7 @@ async fn load_session_transcript_window_with_access(
             .iter()
             .chain(&canonical_dependencies.origin_requests),
     )
-    .await;
+    .await?;
     let source_exhausted = messages_exhausted && tools_exhausted;
     let queried_rows = queried_messages
         .len()
@@ -1213,6 +1200,36 @@ pub async fn load_session_diagnostics_store(
     node_did: Option<&str>,
     requester_did: Option<&str>,
 ) -> Result<ClientStore> {
+    load_session_diagnostics_store_with_access(
+        TranscriptAccess::Local(node),
+        session_id,
+        node_did,
+        requester_did,
+    )
+    .await
+}
+
+pub async fn load_session_diagnostics_store_on(
+    access: &gents::store::config_client::ConfigAccess,
+    session_id: &str,
+    node_did: Option<&str>,
+    requester_did: Option<&str>,
+) -> Result<ClientStore> {
+    load_session_diagnostics_store_with_access(
+        TranscriptAccess::Config(access),
+        session_id,
+        node_did,
+        requester_did,
+    )
+    .await
+}
+
+async fn load_session_diagnostics_store_with_access(
+    access: TranscriptAccess<'_>,
+    session_id: &str,
+    node_did: Option<&str>,
+    requester_did: Option<&str>,
+) -> Result<ClientStore> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
         bail!("session diagnostics query requires a session id");
@@ -1242,7 +1259,7 @@ pub async fn load_session_diagnostics_store(
 }}"#
     );
     let started = std::time::Instant::now();
-    let data = execute_local_graphql_query(node, &query, "session diagnostics").await?;
+    let data = access.execute(&query, "session diagnostics").await?;
     let messages = parse_canonical_rows(&data, AGENT_MESSAGE_NAME, decode_transcript_message_row)?;
     let tool_calls: Vec<AgentToolCallRow> = parse_query_rows(&data, AGENT_TOOL_CALL_NAME)?;
     let output_segments =
@@ -1302,7 +1319,7 @@ mod dependency_identity_tests {
             assert_eq!(store.compaction_entries.len(), 1);
             assert_eq!(store.compaction_entries[0].compaction_key, expected);
         }
-        node.shutdown().await;
+        node.shutdown().await.unwrap();
         Ok(())
     }
 

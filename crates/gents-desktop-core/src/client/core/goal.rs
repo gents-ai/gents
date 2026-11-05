@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::Utc;
 #[cfg(test)]
 use gents::goal::bind_goal_input;
@@ -25,20 +25,15 @@ impl ClientCore {
         if input.goal_assignment.is_some() {
             return Ok(input);
         }
-        let requester_did = self
-            .sync_state
-            .records()
-            .iter()
-            .find(|record| record.node_did == node_did)
-            .map(|record| self.requester_did(record))
-            .unwrap_or_else(|| self.node_identity.did().to_owned());
+        let requester_did = gents::session::client_requester_scope(
+            &self.session_queue_access(node_did)?,
+            node_did,
+            session_id,
+            self.node_identity.did(),
+        )
+        .await?;
         gents::goal::prepare_goal_input(
-            &self
-                .operator_observation_graphql(node_did)
-                .map(gents::store::config_client::ConfigAccess::Graphql)
-                .unwrap_or_else(|| {
-                    gents::store::config_client::ConfigAccess::local(self.node_arc())
-                }),
+            &self.session_queue_access(node_did)?,
             &self.node_identity,
             node_did,
             session_id,
@@ -48,32 +43,24 @@ impl ClientCore {
         .await
     }
 
-    /// DefraDB returns successful empty data for an anonymous NAC denial. A cold
-    /// operator identity therefore leaves observation on the authorized replica;
-    /// it does not establish that the session has no Goal or unlock the identity.
     pub async fn session_goal_observation(
         &self,
         node_did: &str,
         session_id: &str,
     ) -> Result<Option<SessionGoalObservation>> {
-        let record = self
-            .sync_state
-            .records()
-            .into_iter()
-            .find(|record| record.node_did == node_did)
-            .context("no saved deployment route owns this node")?;
+        let requester_did = gents::session::client_requester_scope(
+            &self.session_queue_access(node_did)?,
+            node_did,
+            session_id,
+            self.node_identity.did(),
+        )
+        .await?;
         gents::goal::load_session_goal_observation(
-            &self
-                .operator_observation_graphql(node_did)
-                .filter(|endpoint| !endpoint.is_anonymous())
-                .map(gents::store::config_client::ConfigAccess::Graphql)
-                .unwrap_or_else(|| {
-                    gents::store::config_client::ConfigAccess::local(self.node_arc())
-                }),
+            &self.session_queue_access(node_did)?,
             &self.node_identity,
             node_did,
             session_id,
-            Some(&self.requester_did(&record)),
+            Some(&requester_did),
         )
         .await
     }
@@ -86,7 +73,7 @@ impl ClientCore {
         session_doc_id: Option<String>,
         expected: Option<GoalRevision>,
         operation: GoalOperation,
-        agent_id: Option<&str>,
+        agent_did: Option<&str>,
         input: RequestInput,
     ) -> Result<SessionGoalControlReceipt> {
         let (signer, command) = self
@@ -96,13 +83,13 @@ impl ClientCore {
                 session_doc_id,
                 expected,
                 operation,
-                agent_id,
+                agent_did,
                 input,
                 uuid::Uuid::new_v4().to_string(),
             )
             .await?;
         gents::goal::submit_prepared_session_goal_control(
-            &self.session_queue_access(node_did),
+            &self.session_queue_access(node_did)?,
             signer.as_ref(),
             &command,
         )
@@ -117,7 +104,7 @@ impl ClientCore {
         session_doc_id: Option<String>,
         expected: Option<GoalRevision>,
         operation: GoalOperation,
-        agent_id: Option<&str>,
+        agent_did: Option<&str>,
         mut input: RequestInput,
         command_id: String,
     ) -> Result<(
@@ -136,6 +123,14 @@ impl ClientCore {
         crate::local_runtime::ensure_request_input_supported(peer.as_ref(), &input).await?;
         let (signer, admission, requester_did) =
             self.request_authority(node_did, peer.as_ref()).await?;
+        let requester_did = gents::session::client_requester_scope(
+            &self.session_queue_access(node_did)?,
+            node_did,
+            session_id,
+            &requester_did,
+        )
+        .await?;
+        let mut session_doc_id = session_doc_id;
         let initial_request = if let GoalOperation::Create { objective, .. } = &operation {
             let goal_id = if expected.is_some() {
                 gents::goal::replacement_goal_identity(node_did, session_id, &command_id).goal_id
@@ -156,7 +151,7 @@ impl ClientCore {
                 .await?;
             let snapshot = self.store.snapshot();
             let (_, request) = prepare_request_submission(
-                self.node.as_ref(),
+                &self.session_queue_access(node_did)?,
                 snapshot.as_ref(),
                 session_id,
                 node_did,
@@ -164,7 +159,7 @@ impl ClientCore {
                 signer.as_ref(),
                 admission,
                 objective,
-                agent_id,
+                agent_did,
                 SubmitRequestOptions {
                     input,
                     retry_key: Some(format!("session-goal:{command_id}")),
@@ -173,17 +168,44 @@ impl ClientCore {
                 None,
             )
             .await?;
+            if session_doc_id.is_none() {
+                anyhow::ensure!(expected.is_none(), "replacing a goal requires its observed session");
+                session_doc_id = Some(gents::request::lifecycle::reserve_goal_session(
+                    &self.session_queue_access(node_did)?,
+                    &request,
+                ).await?);
+            }
             Some(Box::new(request))
         } else {
             None
         };
+        let access = self.session_queue_access(node_did)?;
+        let (session, agent_doc_id) = access.transact_readonly("goal.command.selected_session", |txn| {
+            Box::pin(async move {
+                let session = gents::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+                    .await?.ok_or_else(|| anyhow::anyhow!("selected session is not available"))?;
+                let (agent_doc_id, _) = gents::store::config_client::read_desired_state_record_in_txn(
+                    txn, gents::Collection::Agent, node_did, &session.session.agent_did,
+                ).await?.ok_or_else(|| anyhow::anyhow!("selected agent is not available"))?;
+                Ok::<_, anyhow::Error>((session, agent_doc_id))
+            })
+        }).await?;
+        anyhow::ensure!(session_doc_id.as_deref() == Some(session.doc_id.as_str()),
+            "session changed; refresh before changing its goal");
+        anyhow::ensure!(initial_request.as_ref().is_none_or(|request|
+            request.agent_did == session.session.agent_did
+                && request.agent_doc_id.as_deref() == Some(agent_doc_id.as_str())
+                && request.session_doc_id.as_deref() == Some(session.doc_id.as_str())),
+            "goal request targets changed; refresh before starting its goal");
         let now = Utc::now();
         let command = SessionGoalControl {
             version: SESSION_GOAL_CONTROL_VERSION,
             command_id,
-            requester_did,
-            requester_peer_id: (signer.did() != node_did).then(|| self.local_peer_id().to_owned()),
+            requester_did: signer.did().to_owned(),
+            requester_peer_id: None,
             node_did: node_did.to_owned(),
+            agent_did: session.session.agent_did,
+            agent_doc_id,
             session_id: session_id.to_owned(),
             session_doc_id,
             issued_at: now.to_rfc3339(),
@@ -218,6 +240,7 @@ mod tests {
         SessionGoalObservation {
             version: SESSION_GOAL_CONTROL_VERSION,
             node_did: "did:key:source".into(),
+            agent_did: "did:key:agent".into(),
             session_id: "chat".into(),
             session_doc_id: "session-document".into(),
             requester_did: Some("did:key:source".into()),
@@ -358,7 +381,7 @@ mod tests {
                 .and(body_string_contains("AgentSession"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":{"AgentSession":[{
                     "_docID":"session-document", "session_id":"chat", "node_did":source.did(),
-                    "requester_did":source.did(), "agent_id":"engineer", "created_at":"2026-10-21T00:00:00Z"
+                    "requester_did":source.did(), "agent_did":"engineer", "created_at":"2026-10-21T00:00:00Z"
                 }]}})))
                 .mount(&server).await;
             let mut signed = observation((mode != "absent").then(|| expected.clone()));

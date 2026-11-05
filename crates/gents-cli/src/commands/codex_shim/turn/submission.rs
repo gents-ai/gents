@@ -18,7 +18,7 @@ pub(super) async fn create_agent_request_with_retry(
         state.node_did.as_ref(),
         content,
         session_id,
-        Some(state.agent_id.as_ref()),
+        Some(state.agent_did.as_ref()),
         Some(request_id.clone()),
         options,
     )

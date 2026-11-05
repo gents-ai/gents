@@ -16,7 +16,7 @@
               "tools": "tools",
               "expect": [
                 {
-                  "agent_id": "delegate",
+                  "agent_did": "delegate",
                   "agent": [
                     {
                       "field": "display_name",
@@ -58,10 +58,14 @@
                       "field": "datastore.datastore_tool_surface_ids",
                       "matches": "^(null|\\[\\])$"
                     }
-                  ]
+                  ],
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^delegate$"
+                  }
                 },
                 {
-                  "agent_id": "engineer",
+                  "agent_did": "gents:agent-slot:engineer",
                   "agent": [
                     {
                       "field": "display_name",
@@ -173,7 +177,7 @@
             }
           },
           "fields": [
-            "agent_id",
+            "agent_did",
             "display_name",
             "context_id",
             "enabled",

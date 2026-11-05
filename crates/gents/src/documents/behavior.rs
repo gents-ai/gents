@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
@@ -14,7 +14,8 @@ use super::serde_helpers::{
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct Agent {
-    pub agent_id: String,
+    pub agent_did: String,
+    pub creation_nonce: String,
     pub node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -46,6 +47,13 @@ pub struct Agent {
 }
 
 impl Agent {
+    pub fn identity_binding(&self) -> gents_protocol::agent_identity::AgentIdentityBinding {
+        gents_protocol::agent_identity::AgentIdentityBinding {
+            agent_did: self.agent_did.clone(),
+            creation_nonce: self.creation_nonce.clone(),
+        }
+    }
+
     pub fn reference_violations(&self, refs: &ConfigReferences) -> Vec<String> {
         self.validate_references(refs)
             .err()
@@ -59,25 +67,26 @@ impl Agent {
     }
 }
 
-pub async fn load_agent(node: &EmbeddedNode, agent_id: &str) -> Result<Option<Agent>> {
-    Ok(load_agent_record(node, agent_id)
+pub async fn load_agent(node: &EmbeddedNode, agent_did: &str) -> Result<Option<Agent>> {
+    Ok(load_agent_record(node, agent_did)
         .await?
         .map(|(_, behavior)| behavior))
 }
 
 pub(crate) async fn load_agent_record(
     node: &EmbeddedNode,
-    agent_id: &str,
+    agent_did: &str,
 ) -> Result<Option<(String, Agent)>> {
-    let escaped_agent_id = escape_graphql_string(agent_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
             Agent(
-                filter: {{ agent_id: {{ _eq: "{escaped_agent_id}" }} }},
+                filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
                 limit: 1
             ) {{
                 _docID
-                agent_id
+                agent_did
+                creation_nonce
                 node_did
                 display_name
                 description
@@ -115,7 +124,8 @@ pub(crate) async fn list_agent_records(
                 order: {{ created_at: ASC }}
             ) {{
                 _docID
-                agent_id
+                agent_did
+                creation_nonce
                 node_did
                 display_name
                 description

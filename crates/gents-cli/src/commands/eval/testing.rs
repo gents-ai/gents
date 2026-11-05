@@ -60,7 +60,9 @@ impl Fixture {
             owner: owner.clone(),
             runtime: test_runtime_handle(),
         };
-        install(&ctx.access, documents(&owner)).await;
+        let binding =
+            gents::store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
+        install(&ctx.access, documents(&owner, &binding)).await;
         Self {
             ctx,
             pack,
@@ -87,7 +89,7 @@ impl Fixture {
                     cell_id: cell_id.into(),
                     label: cell_id.into(),
                     source: CellSource::Directory(self.pack.clone()),
-                    agent_id: "monitor".into(),
+                    agent_slot: "monitor".into(),
                     inference_profile_id: "local".into(),
                 })
                 .collect(),
@@ -209,7 +211,10 @@ pub(crate) fn row<'a>(output: &'a str, first: &str, width: usize) -> Vec<&'a str
         .unwrap_or_else(|| panic!("no {width}-column row for {first} in\n{output}"))
 }
 
-fn documents(owner: &str) -> Vec<(Collection, Value)> {
+fn documents(
+    owner: &str,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+) -> Vec<(Collection, Value)> {
     let case = |case_id: &str, split: &str| {
         json!({
             "case_id": case_id,
@@ -289,7 +294,8 @@ fn documents(owner: &str) -> Vec<(Collection, Value)> {
         (
             Collection::Agent,
             json!({
-                "agent_id": "monitor",
+                "agent_did": binding.agent_did,
+                "creation_nonce": binding.creation_nonce,
                 "node_did": owner,
                 "display_name": "Monitor",
                 "context_id": "monitor-context",
@@ -355,7 +361,7 @@ fn write_pack(root: &Path) {
     let config = json!({
         "node": {},
         "agents": [{
-            "agent_id": "monitor",
+            "agent_slot": "monitor",
             "display_name": "Monitor",
             "context_id": "monitor-context",
             "inference_profile_id": "gents:inference-slot:primary",

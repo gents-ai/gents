@@ -179,7 +179,7 @@ describe("canonical tool selections", () => {
     expect(pack.agent_targets[0]).toMatchObject({
       node_did: deployment.nodeDid,
       target_node_did: deployment.nodeDid,
-      agent_id: "ops",
+      agent_did: "ops",
       name: "Ops",
     });
     expect(pack.tools[0].agents).toEqual({

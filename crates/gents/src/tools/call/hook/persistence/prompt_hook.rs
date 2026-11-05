@@ -101,6 +101,30 @@ impl DefraSessionHook {
             HookOwnedTool::CreateGoal => self.goal_creation_enabled,
             _ => true,
         });
+        if owned == Some(HookOwnedTool::SessionMessage) {
+            let result = Box::pin(self.persist_session_message_tool_call(
+                tool_name,
+                tool_call_id,
+                internal_call_id,
+                args,
+            ))
+            .instrument(tracing::info_span!(
+                "tool.call",
+                tool_name = %tool_name,
+                tool_call_id = %internal_call_id,
+            ))
+            .await;
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(error) => self.on_tool_persistence_error(
+                    HookOwnedTool::SessionMessage.persistence_context(),
+                    &error,
+                ),
+            };
+        }
         if let Some(route) = owned {
             let result = async {
                 match route {
@@ -125,15 +149,7 @@ impl DefraSessionHook {
                         )
                         .await
                     }
-                    HookOwnedTool::SessionMessage => {
-                        self.persist_session_message_tool_call(
-                            tool_name,
-                            tool_call_id,
-                            internal_call_id,
-                            args,
-                        )
-                        .await
-                    }
+                    HookOwnedTool::SessionMessage => unreachable!("session messages are handled above"),
                     HookOwnedTool::SpawnProcess => {
                         self.persist_background_tool_call(tool_call_id, internal_call_id, args)
                             .await

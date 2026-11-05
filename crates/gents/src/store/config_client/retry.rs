@@ -77,8 +77,15 @@ where
     error.config_client_error()?.transaction_conflict()
 }
 
+/// The pinned DefraDB mutation adapter reports an inaccessible or missing
+/// document with this shared GraphQL message and no structured error code.
+/// Both cases are permanent for this attempted write, not storage failures.
 pub(super) fn transaction_storage_failure(error: ConfigClientError) -> ConfigClientError {
-    if error.transaction_conflict().is_some() {
+    let missing_or_denied = matches!(&error,
+        ConfigClientError::EmbeddedGraphqlErrors { errors }
+        if !errors.is_empty() && errors.iter().all(|item|
+            item.message == "document not found: document not found or not authorized to access"));
+    if error.transaction_conflict().is_some() || missing_or_denied {
         error
     } else {
         ConfigClientError::StorageFailure(Box::new(error))

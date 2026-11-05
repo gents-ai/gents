@@ -50,7 +50,7 @@ pub(crate) async fn publish(
     .await?
     .ok_or(RuntimeNoticeScopeError::MissingSession)?;
     let response = crate::store::config_client::ConfigAccess::local(node.clone()).execute(&format!(
-        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}) {{ session_id agent_id requester_did }} }}"#,
+        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}) {{ session_id agent_did requester_did }} }}"#,
         escape_graphql_string(node_did), escape_graphql_string(&notice.request_id),
     )).await.map_err(anyhow::Error::new)?;
     let requests = response["data"]["AgentRequest"]
@@ -61,7 +61,7 @@ pub(crate) async fn publish(
     }
     let request = &requests[0];
     if request["session_id"].as_str() != Some(session_id)
-        || request["agent_id"].as_str() != Some(owner.session.agent_id.as_str())
+        || request["agent_did"].as_str() != Some(owner.session.agent_did.as_str())
         || request["requester_did"].as_str() != owner.session.requester_did.as_deref()
     {
         return Err(RuntimeNoticeScopeError::ScopeMismatch.into());
@@ -72,7 +72,7 @@ pub(crate) async fn publish(
             .requester_did
             .unwrap_or_else(|| node_did.to_owned()),
         node_did: node_did.to_owned(),
-        agent_id: owner.session.agent_id,
+        agent_did: owner.session.agent_did,
         session_id: Some(notice.session_id.clone()),
     };
     let kind = if notice.failed {
@@ -138,7 +138,7 @@ mod tests {
         let access = crate::store::config_client::ConfigAccess::local(node.clone());
         access.write("test.runtime_notice.request", r#"mutation { create_AgentRequest(input: {
             request_id: "original-request", purpose: "normal", node_did: "did:test:agent",
-            agent_id: "operator", session_id: "original-session", content: "update",
+            agent_did: "operator", session_id: "original-session", content: "update",
             lifecycle_state: "completed", execution_origin: "interactive", created_at: "2026-01-01T00:00:00Z"
         }) { _docID } }"#).await.unwrap();
         let mut notice = RuntimeNotice {
@@ -172,11 +172,11 @@ mod tests {
         let access = crate::store::config_client::ConfigAccess::local(node.clone());
         access.write("test.runtime_notice.desktop_session", r#"mutation { create_AgentSession(input: {
             session_id: "desktop-session", node_did: "did:test:agent", requester_did: "did:test:owner",
-            agent_id: "operator", created_at: "2026-01-01T00:00:00Z"
+            agent_did: "operator", created_at: "2026-01-01T00:00:00Z"
         }) { _docID } }"#).await.unwrap();
         access.write("test.runtime_notice.desktop_request", r#"mutation { create_AgentRequest(input: {
             request_id: "desktop-request", purpose: "normal", node_did: "did:test:agent", requester_did: "did:test:owner",
-            agent_id: "operator", session_id: "desktop-session", content: "update",
+            agent_did: "operator", session_id: "desktop-session", content: "update",
             lifecycle_state: "completed", execution_origin: "interactive", created_at: "2026-01-01T00:00:00Z"
         }) { _docID } }"#).await.unwrap();
         let item = publish(

@@ -1,7 +1,16 @@
+mod client;
+pub(crate) use client::{
+    bind_client_targets_in_txn, complete_client_request_relationships,
+    recover_delegated_client_request_relationships,
+};
+pub use client::{
+    build_signed_client_request, build_signed_client_request_in_txn, reconcile_client_request,
+    reconcile_client_retry, reserve_goal_session, submit_client_request, ClientSubmissionError,
+};
 use std::sync::Arc;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use crate::request::watcher::AgentRequest;
@@ -322,17 +331,19 @@ pub enum ClaimOutcome {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ClaimAdmissionError {
+    #[error("request authorization denied")]
+    AuthorizationDenied,
     #[error("mailbox reply {item_id} rejected: {reason}")]
     MailboxReplyRejected { item_id: String, reason: String },
     #[error("session {session_id} requester scope mismatch: {reason}")]
     SessionScopeMismatch { session_id: String, reason: String },
     #[error(
-        "session {session_id} is pinned to agent {existing_agent_id} and cannot switch to {requested_agent_id}"
+        "session {session_id} is pinned to agent {existing_agent_did} and cannot switch to {requested_agent_did}"
     )]
     SessionAgentMismatch {
         session_id: String,
-        existing_agent_id: String,
-        requested_agent_id: String,
+        existing_agent_did: String,
+        requested_agent_did: String,
     },
 }
 
@@ -522,7 +533,7 @@ impl TriggerExecutionContext {
 
 pub struct RequestLifecycle {
     node: Arc<EmbeddedNode>,
-    agent_id: String,
+    agent_did: String,
     execution_origin: ExecutionOrigin,
     backend_id: String,
     failure_reason: Option<String>,
@@ -537,12 +548,17 @@ pub struct RequestLifecycle {
     execution_lease: Option<RequestExecutionLease>,
     execution_lease_duration_secs: u64,
     renewal_task: Option<execution_renewal::RenewalTask>,
+    client_claim_admission: Option<crate::request::admission::ClientClaimAdmission>,
     fold_admitted: Vec<String>,
     folded_selection: Vec<queue::FoldedInput>,
     natural_finish_allowed: bool,
 }
 
 impl RequestLifecycle {
+    pub(crate) fn actor_did(&self) -> Result<identity::Did> {
+        identity::Did::new(self.agent_did.clone()).map_err(Into::into)
+    }
+
     pub(crate) fn allow_natural_finish(&mut self, allowed: bool) {
         self.natural_finish_allowed = allowed;
     }
@@ -551,6 +567,14 @@ impl RequestLifecycle {
     }
     pub(crate) fn natural_finish_completed(&self) -> bool {
         self.natural_finish_allowed && self.state == LocalLifecycleState::Completed
+    }
+
+    pub(crate) fn set_client_claim_admission(
+        &mut self,
+        admission: Option<crate::request::admission::ClientClaimAdmission>,
+    ) {
+        assert_eq!(self.state, LocalLifecycleState::Pending);
+        self.client_claim_admission = admission;
     }
 
     /// Pending requests whose signed admission the caller verified for this

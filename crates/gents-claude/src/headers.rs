@@ -72,10 +72,10 @@ pub const CUSTOM_AGENT_TYPE: &str = "custom";
 /// The identity of a subagent making the request.
 #[derive(Debug, Clone, Copy)]
 pub struct AgentHeaders<'a> {
-    /// The subagent id, sent as `x-claude-code-agent-id`.
-    pub agent_id: &'a str,
-    /// The spawning agent's id, sent as `x-claude-code-parent-agent-id`.
-    pub parent_agent_id: Option<&'a str>,
+    /// The subagent id, sent as `x-claude-code-agent-did`.
+    pub agent_did: &'a str,
+    /// The spawning agent's id, sent as `x-claude-code-parent-agent-did`.
+    pub parent_agent_did: Option<&'a str>,
 }
 
 /// What a request is for, sent as `x-claude-code-request-class`.
@@ -316,10 +316,10 @@ pub fn request_headers(ctx: &HeaderContext<'_>) -> Vec<(&'static str, HeaderValu
     if let Some(app) = ctx.client_app.filter(|app| !app.is_empty()) {
         push("x-client-app", app.into());
     }
-    if let Some(agent) = ctx.agent.filter(|agent| !agent.agent_id.is_empty()) {
-        push("x-claude-code-agent-id", escape_agent_value(agent.agent_id));
-        if let Some(parent) = agent.parent_agent_id.filter(|parent| !parent.is_empty()) {
-            push("x-claude-code-parent-agent-id", escape_agent_value(parent));
+    if let Some(agent) = ctx.agent.filter(|agent| !agent.agent_did.is_empty()) {
+        push("x-claude-code-agent-did", escape_agent_value(agent.agent_did));
+        if let Some(parent) = agent.parent_agent_did.filter(|parent| !parent.is_empty()) {
+            push("x-claude-code-parent-agent-did", escape_agent_value(parent));
         }
     }
     if ctx.hint_headers {

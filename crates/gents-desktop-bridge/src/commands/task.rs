@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Result};
 use gents::documents::{Schedule, Task};
-use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::AgentRequestRow;
 
@@ -53,28 +53,12 @@ async fn load_agent_request_by_request_id(
                 _docID
                 request_id
                 node_did
-                agent_id
+                agent_did
                 session_id
                 lifecycle_state
             }}
         }}"#
     );
-    let response =
-        graphql_with_transaction_retry(core.node(), &query, "query manual task run request")
-            .await?;
-    let local_row = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|rows| rows.as_array())
-        .and_then(|rows| rows.first())
-        .cloned();
-    if let Some(row) = local_row {
-        return serde_json::from_value(row).map_err(Into::into);
-    }
-
-    // Goal-backed manual runs are committed on the managed runtime; resolve
-    // the document ID there rather than racing its P2P projection.
     let response = core.operator_access(node_did)?.execute(&query).await?;
     let row = response
         .pointer("/data/AgentRequest/0")
@@ -118,7 +102,7 @@ pub async fn run_schedule_config(
         request_id: row.request_id,
         session_id: row.session_id.unwrap_or_default(),
         node_did: row.node_did.unwrap_or_default(),
-        agent_id: row.agent_id.unwrap_or_default(),
+        agent_did: row.agent_did.unwrap_or_default(),
         lifecycle_state: row.lifecycle_state,
     })
 }
@@ -152,7 +136,7 @@ pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Resu
         request_id: row.request_id,
         session_id: row.session_id.unwrap_or_default(),
         node_did: row.node_did.unwrap_or_default(),
-        agent_id: row.agent_id.unwrap_or_default(),
+        agent_did: row.agent_did.unwrap_or_default(),
         lifecycle_state: row.lifecycle_state,
     })
 }

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::data::{Invocation, StampContext};
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node as EmbeddedNode;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::tools::background::job::input::derive_children;
@@ -428,19 +428,19 @@ mod tests {
     fn result_offer_is_false_only_for_callbacks() {
         let node_did = "node".to_owned();
         assert!(result_offer(&StampContext::ToolOutput {
-            node_did: node_did.clone(),
+            caller_did: node_did.clone(),
             session_id: "s".to_owned(),
             request_doc_id: "r".to_owned(),
             tool_call_doc_id: "t".to_owned(),
         }));
         assert!(result_offer(&StampContext::JobStep {
-            node_did: node_did.clone(),
+            caller_did: node_did.clone(),
             session_id: "s".to_owned(),
             request_doc_id: "r".to_owned(),
             tool_call_doc_id: "t".to_owned(),
             job_row_doc_id: "j".to_owned(),
             chain_root_doc_id: "c".to_owned(),
         }));
-        assert!(!result_offer(&StampContext::Callback { node_did }));
+        assert!(!result_offer(&StampContext::Callback { caller_did: node_did }));
     }
 }

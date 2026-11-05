@@ -66,7 +66,7 @@ async fn agent_set_rejects_missing_context() -> Result<()> {
             &graphql,
             "--node-did",
             &owner,
-            "--agent-id",
+            "--agent-did",
             "broken",
             "--context-id",
             "missing-context",

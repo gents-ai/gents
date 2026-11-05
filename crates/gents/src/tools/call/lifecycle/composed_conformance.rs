@@ -3,7 +3,7 @@ use crate::store::config_client::ConfigAccess;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 async fn lifecycle_row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
     let response = node
@@ -66,7 +66,7 @@ async fn interrupt_request(admission: &PublishedAdmission, request_doc_id: &str)
 }
 
 async fn teardown(admission: PublishedAdmission) {
-    admission.node.shutdown().await;
+    admission.node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 

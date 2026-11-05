@@ -10,7 +10,7 @@ use crate::store::graphql::escape_graphql_string;
 use crate::tools::surface::AgentToolConfig;
 use anyhow::Result;
 #[cfg(test)]
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 #[cfg(test)]
 use std::sync::Arc;
@@ -44,7 +44,9 @@ pub use interrupt::{agent_interrupt_allowed, interrupt_refusal, interrupt_sessio
 #[cfg(test)]
 pub(crate) use plan::plan;
 pub(crate) use plan::{plan_with_delivery, Plan};
-pub(crate) use target::{agent_list, load_caller_session_tools, resolve_send_target, target_scope};
+pub(crate) use target::{
+    agent_list, load_caller_session_tools, resolve_send_target, target_agent_exists, target_scope,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

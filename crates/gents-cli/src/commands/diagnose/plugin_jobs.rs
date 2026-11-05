@@ -39,7 +39,7 @@ pub(super) fn diagnose_plugin_jobs(home: &Path, bundle: Option<&ConfigExportBund
                 .config
                 .agents
                 .iter()
-                .map(|agent| (agent.agent_id.as_str(), agent_rows(home, bundle, agent)))
+                .map(|agent| (agent.agent_did.as_str(), agent_rows(home, bundle, agent)))
         })
         .collect();
     let ok = agents
@@ -49,7 +49,7 @@ pub(super) fn diagnose_plugin_jobs(home: &Path, bundle: Option<&ConfigExportBund
         "ok": ok,
         "agents": agents
             .iter()
-            .map(|(agent_id, rows)| json!({"agent_id": agent_id, "checks": rows}))
+            .map(|(agent_did, rows)| json!({"agent_did": agent_did, "checks": rows}))
             .collect::<Vec<_>>(),
     })
 }
@@ -71,7 +71,7 @@ fn agent_rows(home: &Path, bundle: &ConfigExportBundle, agent: &Agent) -> Vec<Ro
             "tools_unreadable",
             "fail",
             error.to_string(),
-            format!("gents tools explain --agent {}", agent.agent_id),
+            format!("gents tools explain --agent {}", agent.agent_did),
         )),
     }
     rows
@@ -101,7 +101,7 @@ fn plugin_rows(
         }
     };
     let owner = record.owner_pack_coordinate.as_deref();
-    let wire = format!("gents pack wire {plugin} --agent {}", agent.agent_id);
+    let wire = format!("gents pack wire {plugin} --agent {}", agent.agent_did);
     let Some(block) = &entry.job else {
         if record.declaration.job.0 {
             rows.push(row(
@@ -132,7 +132,7 @@ fn plugin_rows(
             .config
             .agents
             .iter()
-            .find(|a| a.node_did == target.target_node_did && a.agent_id == target.agent_id);
+            .find(|a| a.node_did == target.target_node_did && a.agent_did == target.agent_did);
         let problem = if target.target_node_did == target.node_did && destination.is_none() {
             Some("names an agent that is not configured")
         } else if destination.is_some_and(|a| !a.enabled) {
@@ -177,7 +177,7 @@ fn plugin_rows(
             find_target(bundle, agent, id)
                 .and_then(|target| {
                     bundle.config.agents.iter().find(|a| {
-                        a.node_did == target.target_node_did && a.agent_id == target.agent_id
+                        a.node_did == target.target_node_did && a.agent_did == target.agent_did
                     })
                 })
                 .and_then(|a| agent_tools_document(bundle, &a.node_did, a).ok())
@@ -210,7 +210,7 @@ fn plugin_rows(
                 "{plugin}: {} are also reachable by agent_new",
                 widened.join(", ")
             ),
-            format!("gents tools explain --agent {}", agent.agent_id),
+            format!("gents tools explain --agent {}", agent.agent_did),
         ));
     }
 }
@@ -263,7 +263,7 @@ fn inference_rows(
             "fail",
             format!(
                 "{plugin}: target agent {} has no usable inference: {problem}",
-                destination.agent_id
+                destination.agent_did
             ),
             "gents config profile / gents config backend".into(),
         ));
@@ -332,9 +332,9 @@ mod tests {
         json!({
             "node": {"node_did": NODE},
             "agents": [
-                {"agent_id": "caller", "node_did": NODE, "context_id": "ctx", "inference_profile_id": "p"},
-                {"agent_id": "worker", "node_did": NODE, "inference_profile_id": "p"},
-                {"agent_id": "web", "node_did": NODE, "context_id": "ctx-web", "inference_profile_id": "p"},
+                {"agent_did": "caller", "node_did": NODE, "context_id": "ctx", "inference_profile_id": "p"},
+                {"agent_did": "worker", "node_did": NODE, "inference_profile_id": "p"},
+                {"agent_did": "web", "node_did": NODE, "context_id": "ctx-web", "inference_profile_id": "p"},
             ],
             "contexts": [
                 {"context_id": "ctx", "node_did": NODE, "tools_id": "tools"},
@@ -366,9 +366,9 @@ mod tests {
             ],
             "agent_targets": [
                 {"target_id": "wf-read-only", "node_did": NODE, "target_node_did": NODE,
-                 "agent_id": "worker", "name": "wf-read-only"},
+                 "agent_did": "worker", "name": "wf-read-only"},
                 {"target_id": "wf-read-only-web", "node_did": NODE, "target_node_did": NODE,
-                 "agent_id": "web", "name": "wf-read-only-web"},
+                 "agent_did": "web", "name": "wf-read-only-web"},
             ],
             "inference_backends": [{
                 "backend_id": "b", "node_did": NODE, "name": "b",
@@ -432,7 +432,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|agent| agent["agent_id"] == "caller")
+            .find(|agent| agent["agent_did"] == "caller")
             .unwrap();
         let rows = caller["checks"]
             .as_array()

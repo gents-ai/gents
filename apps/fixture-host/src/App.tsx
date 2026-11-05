@@ -118,7 +118,7 @@ export function App() {
     void run("chat_send", () =>
       bridge.chatSend({
         nodeDid: selectedDeployment.nodeDid,
-        agentId: selectedDeployment.node.defaultAgentId ?? null,
+        agentDid: selectedDeployment.node.defaultAgentDid ?? null,
         sessionId: selectedSession?.sessionId ?? null,
         content,
       }),
@@ -218,7 +218,7 @@ export function App() {
           }
           approxSerializedBytes={runtime?.approxSerializedBytes ?? 0}
           agentLabel={
-            selectedDeployment?.node.defaultAgentId ?? null
+            selectedDeployment?.node.defaultAgentDid ?? null
           }
           canSend={Boolean(selectedDeployment) && Boolean(draft.trim())}
           draft={draft}

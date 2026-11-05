@@ -398,15 +398,17 @@ export function ToolsEditor({
             ),
           ],
         }}
-        onCreateTarget={(agentId) => {
-          const agent = deployment.agentConfigs.find((row) => row.agent_id === agentId);
+        onCreateTarget={(agentDid) => {
+          const agent = deployment.agentConfigs.find(
+            (row) => row.agent_did === agentDid,
+          );
           if (!agent) return;
           const target: AgentTargetDocument = {
             target_id: newId("target"),
             node_did: deployment.nodeDid,
             target_node_did: deployment.nodeDid,
-            agent_id: agentId,
-            name: agent.display_name ?? agentId,
+            agent_did: agentDid,
+            name: agent.display_name ?? agentDid,
             description: agent.description ?? null,
           };
           d.set("pendingTargets", [...d.draft.pendingTargets, target]);

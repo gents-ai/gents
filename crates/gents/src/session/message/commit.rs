@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 
@@ -31,6 +31,12 @@ pub(crate) enum CommitError {
     Access(#[from] crate::store::config_client::ConfigClientError),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+    #[error("session-message commit is unconfirmed")]
+    Unconfirmed(#[source] Box<CommitError>),
+    #[error("session-message tool became {state:?} before dispatch")]
+    ObservedTerminal {
+        state: crate::tools::call::lifecycle::ToolCallState,
+    },
 }
 
 impl crate::store::config_client::TransactionFailure for CommitError {
@@ -41,6 +47,10 @@ impl crate::store::config_client::TransactionFailure for CommitError {
                 crate::store::config_client::TransactionFailure::config_client_error(error)
             }
             Self::Steer(_) => None,
+            Self::Unconfirmed(error) => {
+                crate::store::config_client::TransactionFailure::config_client_error(error.as_ref())
+            }
+            Self::ObservedTerminal { .. } => None,
         }
     }
 }
@@ -52,16 +62,33 @@ pub(crate) async fn commit(
     plan: Plan,
     report_delivery: bool,
 ) -> std::result::Result<SessionMessageReceipt, CommitError> {
+    let new_child = agent_new_create(&plan).cloned();
+    let mut changes = new_child
+        .as_ref()
+        .map(|_| crate::subscribe_collections(node, ["AgentToolCall"]))
+        .transpose()?;
     let error = match commit_once(node, cause, lifecycle, plan, report_delivery).await {
-        Ok(receipt) => return Ok(receipt),
+        Ok(receipt) => {
+            if new_child.is_some() {
+                complete_new_child_relationships(node, lifecycle, &receipt).await;
+            }
+            return Ok(receipt);
+        }
         Err(error) => error,
     };
+    if let (CommitError::Unconfirmed(_), Some(expected)) = (&error, new_child.as_ref()) {
+        let changes = changes
+            .as_mut()
+            .expect("new child subscribed before publication");
+        return observe_unconfirmed_child(node, cause, lifecycle, expected, changes).await;
+    }
     let doc_id = lifecycle
         .doc_id()
         .context("session-message row lacks physical identity")?
         .to_owned();
-    let durable = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
+    let durable = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
+        lifecycle.actor().clone(),
         &doc_id,
         lifecycle.node_did(),
         lifecycle.session_id(),
@@ -73,7 +100,10 @@ pub(crate) async fn commit(
         return Err(error);
     }
     let receipt = load_receipt(
-        node,
+        &crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            lifecycle.actor().clone(),
+        ),
         &doc_id,
         lifecycle.node_did(),
         lifecycle.session_id(),
@@ -82,8 +112,204 @@ pub(crate) async fn commit(
     .await?
     .filter(|_| durable.is_running())
     .with_context(|| format!("session-message commit outcome is unknown after: {error:#}"))?;
+    if let Some(expected) = new_child {
+        if receipt.request_id != expected.request_id || receipt.session_id != expected.session_id {
+            return Err(anyhow::anyhow!(
+                "committed child receipt differs from the planned request"
+            )
+            .into());
+        }
+        complete_new_child_relationships(node, lifecycle, &receipt).await;
+    }
     *lifecycle = durable;
     Ok(receipt)
+}
+
+async fn observe_unconfirmed_child(
+    node: &Arc<EmbeddedNode>,
+    cause: &SessionMessageCause,
+    lifecycle: &mut crate::tools::call::lifecycle::ToolCallLifecycle,
+    expected: &gents_protocol::request_admission::AgentRequestCreate,
+    changes: &mut events::DocumentChangeSubscription,
+) -> std::result::Result<SessionMessageReceipt, CommitError> {
+    enum Observation {
+        Receipt(
+            Box<crate::tools::call::lifecycle::ToolCallLifecycle>,
+            SessionMessageReceipt,
+        ),
+        Terminal(crate::tools::call::lifecycle::ToolCallState),
+    }
+    let access = crate::ConfigAccess::local_as(node.clone(), lifecycle.actor().clone());
+    let tool_doc_id = lifecycle
+        .doc_id()
+        .context("unconfirmed session-message lacks its tool document")?
+        .to_owned();
+    loop {
+        let observed: anyhow::Result<_> = async {
+            let durable = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
+                node.clone(),
+                lifecycle.actor().clone(),
+                &tool_doc_id,
+                lifecycle.node_did(),
+                lifecycle.session_id(),
+                lifecycle.requester_did(),
+            )
+            .await?;
+            let Some(durable) = durable else {
+                return Ok(None);
+            };
+            if durable.started_at().is_none()
+                && matches!(durable.state(),
+                    crate::tools::call::lifecycle::ToolCallState::Failed
+                        | crate::tools::call::lifecycle::ToolCallState::Cancelled
+                        | crate::tools::call::lifecycle::ToolCallState::TimedOut)
+            {
+                return Ok(Some(Observation::Terminal(durable.state())));
+            }
+            let Some(receipt) = load_receipt(
+                &access,
+                &tool_doc_id,
+                lifecycle.node_did(),
+                lifecycle.session_id(),
+                lifecycle.requester_did(),
+            )
+            .await?
+            else {
+                return Ok(None);
+            };
+            if durable.started_at().is_none()
+                || receipt.request_id != expected.request_id
+                || receipt.session_id != expected.session_id
+                || receipt.tool_call_id != lifecycle.tool_call_id()
+            {
+                return Ok(None);
+            }
+            let doc = escape_graphql_string(&receipt.request_doc_id);
+            let response = access.execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, limit: 2) {{ {} }} }}"#,
+                crate::SIGNED_REQUEST_FIELDS,
+            )).await?;
+            let Some([row]) = response["data"]["AgentRequest"].as_array().map(Vec::as_slice) else {
+                return Ok(None);
+            };
+            let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone())?;
+            if row.doc_id.as_deref() != Some(receipt.request_doc_id.as_str())
+                || row.request_id != expected.request_id
+                || row.node_did.as_deref() != Some(cause.caller_node_did.as_str())
+                || row.session_id.as_deref() != Some(expected.session_id.as_str())
+                || row.agent_did.as_deref() != Some(expected.agent_did.as_str())
+                || row.requester_did.as_deref() != Some(cause.caller_agent_did.as_str())
+                || row.admission_signer_did.as_deref() != Some(cause.caller_agent_did.as_str())
+                || row.admission_kind.as_deref() != Some("client")
+                || row.caused_by_parent_request_doc_id.as_deref() != Some(cause.caller_request_doc_id.as_str())
+                || row.caused_by_parent_tool_call_doc_id.as_deref() != Some(tool_doc_id.as_str())
+                || row.session_doc_id.as_deref().is_none_or(str::is_empty)
+                || row.agent_doc_id.as_deref().is_none_or(str::is_empty)
+            {
+                return Ok(None);
+            }
+            let mut bound = expected.clone();
+            bound.admission = gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
+                &cause.caller_agent_did,
+            );
+            bound.session_doc_id.clone_from(&row.session_doc_id);
+            bound.agent_doc_id.clone_from(&row.agent_doc_id);
+            if !crate::request::admission::signed_request_matches_create(&row, &bound)? {
+                return Ok(None);
+            }
+            let session_doc = row.session_doc_id.as_deref().expect("nonempty session binding");
+            let agent_doc = row.agent_doc_id.as_deref().expect("nonempty agent binding");
+            let exact_targets = access.transact_readonly("session_message.observe_unconfirmed_targets", |txn| {
+                let request_doc = receipt.request_doc_id.as_str();
+                Box::pin(async move {
+                    let request_owners = txn.document_owners("AgentRequest", &[request_doc.to_owned()]).await?;
+                    let session_owners = txn.document_owners("AgentSession", &[session_doc.to_owned()]).await?;
+                    let owned = |owners: &[query::owners::DocumentOwnerObservation], doc: &str| {
+                        owners.len() == 1 && owners[0].doc_id == doc && owners[0].visible
+                            && owners[0].owner.as_ref().is_some_and(|owner| owner.as_str() == cause.caller_agent_did)
+                    };
+                    if !owned(&request_owners, request_doc) || !owned(&session_owners, session_doc) {
+                        return Ok::<_, anyhow::Error>(false);
+                    }
+                    let session = crate::session::load_agent_session_owner_in_txn(txn, &expected.node_did, &expected.session_id).await?;
+                    let agent = crate::store::config_client::read_desired_state_record_in_txn(
+                        txn, crate::Collection::Agent, &expected.node_did, &expected.agent_did,
+                    ).await?;
+                    Ok(session.is_some_and(|session| session.doc_id == session_doc
+                        && session.session.requester_did.as_deref() == Some(expected.requester_did.as_str())
+                        && session.session.agent_did == expected.agent_did)
+                        && agent.is_some_and(|(doc, _)| doc == agent_doc))
+                })
+            }).await?;
+            if !exact_targets {
+                return Ok(None);
+            }
+            let Some(source) = expected.input.started_by.as_ref() else {
+                return Ok(None);
+            };
+            let target = crate::session::origin::SessionScope {
+                node_did: expected.node_did.clone(),
+                session_id: expected.session_id.clone(),
+                requester_did: Some(expected.requester_did.clone()),
+            };
+            if !crate::session::origin::verified_agent_new_creation_for_opening(
+                &access,
+                &target,
+                &crate::session::origin::SessionScope::from(source),
+                &receipt.request_doc_id,
+            ).await? {
+                return Ok(None);
+            }
+            Ok(Some(Observation::Receipt(Box::new(durable), receipt)))
+        }
+        .await;
+        match observed {
+            Ok(Some(Observation::Receipt(durable, receipt))) => {
+                complete_new_child_relationships(node, lifecycle, &receipt).await;
+                *lifecycle = *durable;
+                return Ok(receipt);
+            }
+            Ok(Some(Observation::Terminal(state))) => {
+                return Err(CommitError::ObservedTerminal { state });
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%error, tool_call_doc_id = %tool_doc_id, "unconfirmed child receipt observation failed")
+            }
+        }
+        if let Err(error) = crate::request::watcher::wait_for_change_or_resubscribe(changes, || {
+            crate::subscribe_collections(node, ["AgentToolCall"])
+        })
+        .await
+        {
+            tracing::warn!(%error, "unconfirmed child change subscription unavailable");
+        }
+    }
+}
+
+fn agent_new_create(plan: &Plan) -> Option<&gents_protocol::request_admission::AgentRequestCreate> {
+    let create = match &plan.write {
+        PlannedWrite::Request { create, .. } | PlannedWrite::Goal { create, .. } => create,
+    };
+    (create.input.session_creation
+        == Some(gents_protocol::request_input::SessionCreationIntent::AgentNew))
+    .then_some(create)
+}
+
+async fn complete_new_child_relationships(
+    node: &Arc<EmbeddedNode>,
+    lifecycle: &crate::tools::call::lifecycle::ToolCallLifecycle,
+    receipt: &SessionMessageReceipt,
+) {
+    let access = crate::ConfigAccess::local_as(node.clone(), lifecycle.actor().clone());
+    if let Err(error) = crate::request::lifecycle::complete_client_request_relationships(
+        &access,
+        &receipt.request_doc_id,
+    )
+    .await
+    {
+        tracing::warn!(request_doc_id = %receipt.request_doc_id, %error, "committed child relationships need recovery");
+    }
 }
 
 async fn commit_once(
@@ -109,38 +335,145 @@ async fn commit_once(
     let binding = lifecycle.background_receipt_binding()?;
     let start = lifecycle.dispatch_start()?;
     let (start, binding, plan, receipt_for) = (&start, &binding, &plan, &receipt_for);
-    let (actor, label) = match &plan.write {
-        PlannedWrite::Request { .. } => (None, "session_message.commit_request"),
-        PlannedWrite::Goal { .. } => (
-            Some(
-                ::identity::Did::new(cause.caller_node_did.clone())
-                    .context("caller DID is not ACP-addressable")?,
-            ),
-            "session_message.commit_goal",
-        ),
+    let actor = Some(
+        ::identity::Did::new(cause.caller_agent_did.clone())
+            .context("caller agent DID is not ACP-addressable")?,
+    );
+    let label = match &plan.write {
+        PlannedWrite::Request { .. } => "session_message.commit_request",
+        PlannedWrite::Goal { .. } => "session_message.commit_goal",
     };
-    let (receipt, started_at) = crate::store::config_client::ConfigAccess::transact_local_write(
+    let (receipt, started_at) =
+        crate::store::config_client::ConfigAccess::transact_local_write_with_finality(
+            node,
+            actor,
+            label,
+            move |txn| {
+                Box::pin(async move {
+                    let started_at = start_dispatch(txn, start).await?;
+                    let (enqueued, new_child) = if agent_new_create(plan).is_some() {
+                        let (enqueued, create) = stage_agent_new_in_txn(txn, cause, plan).await?;
+                        (enqueued, Some(create))
+                    } else {
+                        (stage_planned_write_in_txn(txn, cause, plan).await?, None)
+                    };
+                    let receipt = receipt_for(&enqueued);
+                    crate::tools::call::lifecycle::publish_background_receipt_in_txn(
+                        txn,
+                        binding,
+                        &serde_json::to_string(&receipt).map_err(anyhow::Error::from)?,
+                    )
+                    .await?;
+                    if let Some(create) = &new_child {
+                        crate::session::finalize_agent_new_session_in_txn(
+                            txn,
+                            create,
+                            create
+                                .session_doc_id
+                                .as_deref()
+                                .context("new child lacks session binding")?,
+                            &enqueued.doc_id,
+                        )
+                        .await?;
+                    }
+                    Ok::<_, CommitError>((receipt, started_at))
+                })
+            },
+        )
+        .await
+    .map_err(|failure| {
+        let post_commit_or_unknown = matches!(
+            crate::store::config_client::TransactionFailure::config_client_error(&failure.error),
+            Some(crate::store::config_client::ConfigClientError::CommittedRelationshipsIncomplete { .. }
+                | crate::store::config_client::ConfigClientError::ClientAgentPublicationUnconfirmed(_))
+        );
+        if failure.unconfirmed || post_commit_or_unknown {
+                CommitError::Unconfirmed(Box::new(failure.error))
+            } else {
+                failure.error
+            }
+        })?;
+    lifecycle.mark_started(started_at);
+    crate::session::child_ownership::publish_agent_session_child_relationships(
         node,
-        actor,
-        label,
-        move |txn| {
-            Box::pin(async move {
-                let started_at = start_dispatch(txn, start).await?;
-                let enqueued = stage_planned_write_in_txn(txn, cause, plan).await?;
-                let receipt = receipt_for(&enqueued);
-                crate::tools::call::lifecycle::publish_background_receipt_in_txn(
-                    txn,
-                    binding,
-                    &serde_json::to_string(&receipt).map_err(anyhow::Error::from)?,
-                )
-                .await?;
-                Ok::<_, CommitError>((receipt, started_at))
-            })
-        },
+        lifecycle.node_did(),
+        lifecycle.actor(),
+        lifecycle.session_id(),
     )
     .await?;
-    lifecycle.mark_started(started_at);
     Ok(receipt)
+}
+
+async fn stage_agent_new_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    cause: &SessionMessageCause,
+    plan: &Plan,
+) -> anyhow::Result<(
+    crate::request::lifecycle::EnqueuedAgentRequest,
+    gents_protocol::request_admission::AgentRequestCreate,
+)> {
+    let mut create = agent_new_create(plan)
+        .context("new child plan is missing its request")?
+        .clone();
+    anyhow::ensure!(
+        create.node_did == cause.caller_node_did && create.requester_did == cause.caller_agent_did,
+        "new child is not authored by its local parent agent"
+    );
+    let session_doc = crate::session::stage_agent_new_session_in_txn(txn, &create).await?;
+    create.admission = gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
+        &cause.caller_agent_did,
+    );
+    crate::request::lifecycle::bind_client_targets_in_txn(txn, &mut create).await?;
+    anyhow::ensure!(
+        create.session_doc_id.as_deref() == Some(session_doc.as_str()),
+        "new child session binding changed before signing"
+    );
+    let signer = crate::store::identity::RegisteredIdentity::from_registered_did(
+        &cause.caller_agent_did,
+        None,
+    )
+    .map_err(anyhow::Error::from)?;
+    crate::sign_agent_request_create(&signer, &mut create).await?;
+    ensure_planned_hop_current(txn, &create).await?;
+    let enqueued = match &plan.write {
+        PlannedWrite::Request { .. } => {
+            let mutation = create
+                .graphql_client_publication_mutation()
+                .map_err(anyhow::Error::msg)?;
+            let response = txn.execute(&mutation).await?;
+            crate::request::lifecycle::EnqueuedAgentRequest {
+                doc_id: crate::store::graphql::created_doc_id(&response, "AgentRequest")
+                    .map_err(anyhow::Error::from)?,
+                request_id: create.request_id.clone(),
+                session_id: create.session_id.clone(),
+            }
+        }
+        PlannedWrite::Goal {
+            objective,
+            token_budget,
+            ..
+        } => {
+            let enqueued = crate::goal::stage_goal_backed_request_in_txn(
+                txn,
+                &create.node_did,
+                &create.session_id,
+                objective,
+                *token_budget,
+                &create,
+            )
+            .await?;
+            let doc = escape_graphql_string(&enqueued.doc_id);
+            let response = txn.execute(&format!(r#"mutation {{ update_AgentRequest(docID: "{doc}", input: {{ relationships_pending: true }}) {{ _docID }} }}"#)).await?;
+            anyhow::ensure!(
+                response["data"]["update_AgentRequest"]
+                    .as_array()
+                    .is_some_and(|rows| rows.len() == 1),
+                "new child relationship marker was not staged"
+            );
+            enqueued
+        }
+    };
+    Ok((enqueued, create))
 }
 
 /// Create the planned request, or stage the Goal with it, in the caller's
@@ -274,14 +607,14 @@ async fn start_dispatch(
 }
 
 pub(crate) async fn load_receipt(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::store::config_client::ConfigAccess,
     tool_call_doc_id: &str,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<SessionMessageReceipt>> {
     let read = crate::tools::call::lifecycle::query::load_tool_call_read(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        access,
         tool_call_doc_id,
         node_did,
         session_id,

@@ -1,4 +1,4 @@
-type DatastoreToolSurface @branchable @index(fields: ["node_did", "surface_id"], unique: true) {
+type DatastoreToolSurface @index(fields: ["node_did", "surface_id"], unique: true) {
     surface_id: String @index
     node_did: String @index
     display_name: String

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use super::documents::{update_invocation, CallbackInvocationDoc};
 use super::{
@@ -29,6 +29,19 @@ pub async fn claim_invocation(
     node_did: &str,
     invocation: &CallbackInvocationDoc,
 ) -> Result<Option<CallbackInvocationDoc>> {
+    identity::Did::new(invocation.agent_did.clone())?;
+    anyhow::ensure!(
+        invocation.agent_did != invocation.owner_node_did,
+        "callback agent cannot be its routing node"
+    );
+    anyhow::ensure!(
+        node.node_identity_did() != Some(invocation.agent_did.as_str()),
+        "callback agent cannot be the runtime node"
+    );
+    crate::store::identity::RegisteredIdentity::from_registered_did(
+        invocation.agent_did.clone(),
+        None,
+    )?;
     if invocation.owner_node_did != node_did {
         return Ok(None);
     }
@@ -57,6 +70,7 @@ pub async fn claim_invocation(
         node,
         &invocation.invocation_id,
         &invocation.owner_node_did,
+        &invocation.agent_did,
     )
     .await?;
     Ok(current.filter(|row| invocation_is_claimable(node_did, row)))

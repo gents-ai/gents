@@ -1,6 +1,66 @@
 use super::*;
 
 #[tokio::test]
+async fn event_source_reads_seed_and_group_as_selected_agent() {
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    node.add_collection("type SelectionProbe { kind: String @index message: String }")
+        .await
+        .unwrap();
+    let response = crate::ConfigAccess::local(node.clone())
+        .write("test.event_selection_probe", r#"mutation { create_SelectionProbe(input: {kind: "ready", message: "hello"}) { _docID } }"#)
+        .await;
+    let id = crate::store::graphql::created_doc_id(&response.unwrap(), "SelectionProbe").unwrap();
+    let agent_did = "did:key:z6MkhfKM8cN5hVhu5B4msjSKmz2zPPaTF7s8q5VVt57Uoz6f";
+    let task = ResolvedTask {
+        agent_did: agent_did.to_owned(),
+        ..resolved_task("handle")
+    };
+    let mut trigger = resolved_event_trigger_with_filter(
+        "selection-probe",
+        "SelectionProbe",
+        task,
+        r#"{kind: {_eq: "ready"}}"#,
+    );
+    let snapshot = snapshot_with_event_triggers(1, RapidHashMap::default());
+    let (_tx, rx) = watch::channel(snapshot);
+    let source = EventSource::new(rx, node.clone(), CancellationToken::new());
+
+    assert!(event_delivery::probe_document(
+        &node,
+        &trigger.source_collection,
+        &id,
+        trigger.filter.as_deref(),
+        Some(identity::Did::new(agent_did).unwrap()),
+    )
+    .await
+    .unwrap()
+    .is_some());
+    assert_eq!(
+        source
+            .read_source_doc("SelectionProbe", &id, agent_did)
+            .await
+            .unwrap()
+            .unwrap()["message"],
+        "hello"
+    );
+
+    trigger.fire_mode = crate::runtime::snapshot::EventTriggerFireMode::PerGroup;
+    trigger.correlation_field = Some("kind".to_owned());
+    trigger.expected_count = Some(1);
+    let delivery = event_delivery::Delivery::Trigger {
+        node_did: agent_did,
+        trigger: &trigger,
+    };
+    assert!(matches!(
+        event_delivery::evaluate_group(&node, &Default::default(), delivery, "missing")
+            .await
+            .unwrap(),
+        event_delivery::GroupOutcome::Empty
+    ));
+    node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
@@ -27,7 +87,7 @@ async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
         ids.len(),
         "startup seeding must cover the full source collection"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 use events::{
@@ -413,12 +473,12 @@ fn snapshot_with_event_triggers(
 }
 
 async fn persist_event_bindings(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     snapshot: &ActiveRuntimeSnapshot,
 ) {
     let access = crate::store::config_client::ConfigAccess::local(node.clone());
     for trigger in snapshot.active_event_triggers().values() {
-        let behavior = snapshot.agent(&trigger.task.agent_id).unwrap();
+        let behavior = snapshot.agent(&trigger.task.agent_did).unwrap();
         let owner = behavior.node_did();
         access.transact_write("test.event_binding", |txn| Box::pin(async move {
             txn.execute_with_variables(
@@ -439,7 +499,7 @@ async fn persist_event_bindings(
 }
 
 async fn admit_observed_event(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     intent: &FireIntent,
 ) -> FireResult {
     use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
@@ -470,7 +530,7 @@ async fn admit_observed_event(
         attempt: None,
         created_at: "2030-01-01T00:00:00Z".into(),
     };
-    let mutation = format!("mutation {{create_AgentRequest(input: {{request_id: \"{}\", node_did: \"{}\", session_id: \"{}\", agent_id: \"general\", content: \"fixture delivery\", purpose: \"normal\", lifecycle_state: \"pending\", created_at: \"2030-01-01T00:00:00Z\"}}) {{_docID}}}}",
+    let mutation = format!("mutation {{create_AgentRequest(input: {{request_id: \"{}\", node_did: \"{}\", session_id: \"{}\", agent_did: \"general\", content: \"fixture delivery\", purpose: \"normal\", lifecycle_state: \"pending\", created_at: \"2030-01-01T00:00:00Z\"}}) {{_docID}}}}",
         escape_graphql_string(&fire.request_id), escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.session_id));
     crate::store::config_client::ConfigAccess::local(node.clone())
         .transact_write("test.event_admission", |txn| {
@@ -625,10 +685,12 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
 async fn a_callback_result_fires_its_bindings_event_source_once() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    crate::triggers::callback::seed_test_agent(&node, "did:key:zWriter").await;
 
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: "task-after-callback".to_string(),
+        agent_did: crate::triggers::callback::test_agent_did(),
         ..resolved_task("continue after the callback")
     };
     let trigger = resolved_event_trigger_with_filter(
@@ -659,6 +721,7 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
                     result_id: format!("res-{invocation_id}"),
                     invocation_id: invocation_id.to_string(),
                     binding_id: Some(binding_id.to_string()),
+                    agent_did: crate::triggers::callback::test_agent_did(),
                     owner_node_did: "did:key:zWriter".to_string(),
                     workspace_id: None,
                     work_unit_id: None,
@@ -1476,7 +1539,7 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
 }
 
 async fn create_event_trigger_doc(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     trigger_id: &str,
     task_id: &str,
     source_collection: &str,
@@ -1545,7 +1608,7 @@ async fn concurrent_trigger_fire_count_updates_are_not_lost() {
     assert_eq!(trigger["fire_count"].as_i64(), Some(committed));
 }
 
-async fn observed_trigger(node: &defra_node::EmbeddedNode, id: &str) -> serde_json::Value {
+async fn observed_trigger(node: &defra_node::Node, id: &str) -> serde_json::Value {
     let query = format!(
         "{{Trigger(filter:{{node_did:{{_eq:\"{}\"}},trigger_id:{{_eq:\"{}\"}}}},limit:2){{task_id source enabled concurrency last_status last_error last_attempt_at last_fired_source_doc_id fire_count}}}}",
         escape_graphql_string(event_test_behavior().node_did()),

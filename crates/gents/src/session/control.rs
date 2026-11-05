@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -12,6 +12,7 @@ pub struct SessionStopReceipt {
 
 pub async fn stop_session(
     node: &Arc<EmbeddedNode>,
+    caller_agent_did: &str,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -27,7 +28,7 @@ pub async fn stop_session(
     let node_did = node_did.to_owned();
     let session_id = session_id.to_owned();
     let requester_did = requester_did.map(str::to_owned);
-    let actor = ::identity::Did::new(node_did.clone())?;
+    let actor = identity::Did::new(caller_agent_did)?;
     crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         Some(actor),
@@ -107,6 +108,7 @@ pub async fn stop_session(
 /// node operating convention while process and job ownership is checked with the session latch.
 pub async fn resume_session(
     node: &Arc<EmbeddedNode>,
+    caller_agent_did: &str,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -124,9 +126,10 @@ pub async fn resume_session(
     let node_did = node_did.to_owned();
     let session_id = session_id.to_owned();
     let requester_did = requester_did.map(str::to_owned);
-    let identity =
-        Arc::new(crate::store::identity::RegisteredIdentity::from_registered_did(&node_did, None)?);
-    let actor = ::identity::Did::new(node_did.clone())?;
+    let actor = identity::Did::new(caller_agent_did)?;
+    let identity = Arc::new(
+        crate::store::identity::RegisteredIdentity::from_registered_did(actor.to_string(), None)?,
+    );
     crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         Some(actor),

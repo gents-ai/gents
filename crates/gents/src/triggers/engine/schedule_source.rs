@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
@@ -63,7 +63,7 @@ impl TriggerSource for ScheduleSource {
                     .iter()
                     .filter_map(|(trigger_id, resolved)| {
                         snapshot
-                            .agent(&resolved.task.agent_id)
+                            .agent(&resolved.task.agent_did)
                             .map(|behavior| (trigger_id, resolved, behavior.node_did()))
                     })
                     .collect::<Vec<_>>();

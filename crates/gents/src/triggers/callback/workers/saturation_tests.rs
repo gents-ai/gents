@@ -131,11 +131,16 @@ async fn create_inputs(access: &ConfigAccess, items: impl Iterator<Item = usize>
         .unwrap();
 }
 
-async fn snapshot(node: &defra_node::EmbeddedNode, row: &Value) -> CallbackInvocationDoc {
-    load_invocation(node, row["invocation_id"].as_str().unwrap(), OWNER)
-        .await
-        .unwrap()
-        .unwrap()
+async fn snapshot(node: &Arc<defra_node::Node>, row: &Value) -> CallbackInvocationDoc {
+    load_invocation(
+        node,
+        row["invocation_id"].as_str().unwrap(),
+        OWNER,
+        &crate::triggers::callback::test_agent_did(),
+    )
+    .await
+    .unwrap()
+    .unwrap()
 }
 
 async fn result_rows(access: &ConfigAccess) -> Vec<Value> {
@@ -211,8 +216,8 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
     let plugins = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::local(node.clone());
-    access
+    crate::triggers::callback::seed_test_agent(&node, OWNER).await;
+    ConfigAccess::local(node.clone())
         .add_collection(
             "type SaturationInput { item: Int correlation: String }
              type SaturationOutput { item: Int correlation: String http_calls: Boolean
@@ -220,6 +225,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         )
         .await
         .unwrap();
+    let access = crate::triggers::callback::test_agent_access(&node);
     let documents = [
         (
             crate::Collection::Callback,
@@ -239,7 +245,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         ),
         (
             crate::Collection::CallbackBinding,
-            json!({"binding_id": "saturation", "event_source_id": "saturation",
+            json!({"binding_id": "saturation", "agent_did":crate::triggers::callback::test_agent_did(),"event_source_id": "saturation",
                 "callback_id": CALLBACK, "input_fields": ["item", "correlation"]}),
         ),
     ]
@@ -415,7 +421,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
     if stopped.is_err() {
         server.abort();
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     if let Err(panic) = outcome {
         std::panic::resume_unwind(panic);
     }

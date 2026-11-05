@@ -108,9 +108,9 @@ pub async fn configure(access: &ConfigAccess, node: &str, agent: &str) -> Result
             let targets: Vec<_> = (0..2).map(|index| format!("related-worker-{index}")).collect();
             for target in &targets {
                 let mut worker = base.clone();
-                worker["agent_id"] = json!(format!("{agent}-{target}"));
+                worker["agent_did"] = json!(format!("{agent}-{target}"));
                 documents.push((Collection::Agent, worker));
-                documents.push((Collection::AgentTarget, json!({"node_did":node,"target_id":target,"name":target,"target_node_did":node,"agent_id":format!("{agent}-{target}")})));
+                documents.push((Collection::AgentTarget, json!({"node_did":node,"target_id":target,"name":target,"target_node_did":node,"agent_did":format!("{agent}-{target}")})));
             }
             tools.agents = Some(AgentTools { enabled: Some(true), target_ids: targets });
             documents.push((Collection::Tools, serde_json::to_value(tools)?));

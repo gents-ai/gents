@@ -281,15 +281,18 @@ pub(super) fn spawn_server_with_pack(
     port: u16,
     log: &Path,
     pack: &Path,
-    tool_root: Option<&Path>,
-    tool_root_env_var: Option<&str>,
+    tool_root_env: Option<(&Path, &str)>,
+    inference_bindings: &[String],
 ) -> Result<tokio::process::Child> {
     let root = path_arg(pack);
-    let environment = tool_root
-        .zip(tool_root_env_var)
+    let environment = tool_root_env
         .map(|(path, name)| vec![(name, path.to_string_lossy().into_owned())])
         .unwrap_or_default();
-    spawn_server_with_args_and_env(bin, home, port, log, &["--apply-root", &root], &environment)
+    let mut args = vec!["--apply-root", &root];
+    for binding in inference_bindings {
+        args.extend(["--apply-inference-slot", binding]);
+    }
+    spawn_server_with_args_and_env(bin, home, port, log, &args, &environment)
 }
 
 pub(super) fn stage_scenario_pack(
@@ -297,38 +300,41 @@ pub(super) fn stage_scenario_pack(
     distribution: &gents::pack::PackManifest,
     node_did: &str,
     inference_profile_id: &str,
-    initialized_default_agent_id: &str,
+    initialized_default_agent_did: &str,
 ) -> Result<tempfile::TempDir> {
-    let (mut authored, mut report) = crate::desired_state::load_manifest_root(pack);
-    if authored.is_none() {
-        (authored, report) =
-            crate::desired_state::load_manifest_root_for_owner(pack, Some(node_did));
+    let staged = tempfile::tempdir().context("staging authored scenario pack")?;
+    for path in
+        std::iter::once("manifest.json".to_owned()).chain(gents::pack::declared_paths(distribution))
+    {
+        let destination = staged.path().join(&path);
+        std::fs::create_dir_all(destination.parent().context("scenario asset parent")?)?;
+        std::fs::copy(pack.join(&path), &destination)
+            .with_context(|| format!("staging scenario asset {path}"))?;
     }
-    anyhow::ensure!(
-        authored.is_some(),
-        "invalid scenario pack configuration: {:?}",
-        report.errors
-    );
-    let mut authored = authored.expect("checked scenario pack configuration");
-    super::super::super::config::binding::rebind_manifest_to_node(&mut authored, node_did, true)?;
-    authored.node.default_agent_id = Some(initialized_default_agent_id.to_owned());
-    let bindings = distribution
-        .metadata
-        .inference_slots
-        .iter()
-        .map(|slot| (slot.name.clone(), inference_profile_id.to_owned()))
-        .collect();
-    let bound = gents::pack::bind_pack_install_config(distribution, &authored, &bindings)?;
-    let staged = tempfile::tempdir().context("staging bound scenario pack")?;
-    std::fs::write(
-        staged.path().join("pack_config.json"),
-        serde_json::to_vec_pretty(&bound)?,
+    let config_path = distribution
+        .config
+        .as_deref()
+        .context("scenario pack requires configuration")?;
+    let authored = gents::pack::load_pack_authoring_config(
+        distribution,
+        &gents::pack::PackInstallOptions {
+            node_did: node_did.to_owned(),
+        },
+        &|path| Ok(std::fs::read(pack.join(path))?),
+        &|name| std::env::var(name).ok(),
     )?;
-    for schema in &distribution.schemas {
-        let destination = staged.path().join(schema);
-        std::fs::create_dir_all(destination.parent().context("scenario schema parent")?)?;
-        std::fs::copy(pack.join(schema), &destination)
-            .with_context(|| format!("staging scenario schema {schema}"))?;
-    }
+    let value = authored.value;
+    anyhow::ensure!(
+        !initialized_default_agent_did.is_empty(),
+        "scenario requires an initialized default agent"
+    );
+    anyhow::ensure!(
+        !inference_profile_id.is_empty(),
+        "scenario inference profile must not be blank"
+    );
+    std::fs::write(
+        staged.path().join(config_path),
+        serde_json::to_vec_pretty(&value)?,
+    )?;
     Ok(staged)
 }

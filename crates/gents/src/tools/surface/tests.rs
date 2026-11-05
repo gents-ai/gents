@@ -1,5 +1,16 @@
 use super::*;
 
+fn agent_tool_runtime(node: std::sync::Arc<defra_node::Node>) -> ToolRuntimeContext {
+    let node_did = node.node_identity_did().unwrap().to_owned();
+    let identity =
+        crate::store::identity::RegisteredIdentity::from_registered_did(&node_did, None).unwrap();
+    let mut runtime = ToolRuntimeContext::oneshot_with_node_did(node, node_did);
+    let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+    runtime.agent_identity =
+        Some(crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap());
+    runtime
+}
+
 #[test]
 fn empty_mcp_tool_selection_explains_why_no_tools_are_attached() {
     for style in [
@@ -1230,7 +1241,7 @@ async fn context_budget_tool_gated_by_selection() {
         .tool_names()
         .contains(&"context_budget".to_string()));
 
-    let runtime = ToolRuntimeContext::oneshot(node);
+    let runtime = agent_tool_runtime(node);
     let built = disabled.build_tools(&runtime).await.unwrap();
     assert!(!built.iter().any(|tool| tool.name() == "context_budget"));
 }
@@ -1277,7 +1288,7 @@ async fn write_tools_register_under_declared_names() {
         "declared write tool should be advertised under its tool_name; got {names:?}"
     );
 
-    let runtime = ToolRuntimeContext::oneshot(node);
+    let runtime = agent_tool_runtime(node);
     let built = surface.build_tools(&runtime).await.unwrap();
     assert!(
         built.iter().any(|tool| tool.name() == "request_action"),
@@ -1329,10 +1340,7 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
     .await
     .unwrap();
 
-    let error = match surface
-        .build_tools(&ToolRuntimeContext::oneshot(node))
-        .await
-    {
+    let error = match surface.build_tools(&agent_tool_runtime(node)).await {
         Ok(_) => panic!("a relation-typed count field must not reach a registered tool"),
         Err(error) => error,
     };
@@ -1414,7 +1422,7 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
         .tool_names()
         .contains(&crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
     assert!(granted.source_fill_fields().contains("requester_did"));
-    let runtime = ToolRuntimeContext::oneshot_with_node_did(node, "did:key:z-test-agent");
+    let runtime = agent_tool_runtime(node);
     let built = granted.build_tools(&runtime).await.unwrap();
     assert!(built
         .iter()
@@ -1441,7 +1449,7 @@ async fn query_tool_is_advertised_and_registered() {
     );
     let node_did = crate::store::identity::NodeIdentity::did(&*identity).to_owned();
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&node_did)
             .build()
             .await
@@ -1486,11 +1494,21 @@ async fn query_tool_is_advertised_and_registered() {
 
     let mut runtime = ToolRuntimeContext::oneshot_with_node_did(node, node_did);
     let error = match surface.build_tools(&runtime).await {
-        Ok(_) => panic!("query requires its node identity"),
+        Ok(_) => panic!("query requires its selected agent identity"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("node identity"));
-    runtime.identity = Some(identity);
+    assert!(error.to_string().contains("selected agent identity"));
+    runtime.agent_identity = Some(identity.clone());
+    let error = match surface.build_tools(&runtime).await {
+        Ok(_) => panic!("node identity cannot substitute for selected agent identity"),
+        Err(error) => error,
+    };
+    assert!(error
+        .to_string()
+        .contains("cannot use the runtime node identity"));
+    let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+    runtime.agent_identity =
+        Some(crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap());
     let built = surface.build_tools(&runtime).await.unwrap();
     assert!(built
         .iter()
@@ -1639,7 +1657,7 @@ async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
     assert!(!names.contains(&crate::goal::GET_GOAL_TOOL_NAME.to_string()));
     assert!(!names.contains(&crate::goal::UPDATE_GOAL_TOOL_NAME.to_string()));
 
-    let runtime = ToolRuntimeContext::oneshot(node);
+    let runtime = agent_tool_runtime(node);
     let built_names = surface
         .build_tools(&runtime)
         .await
@@ -1720,7 +1738,7 @@ async fn goal_creation_requires_its_separate_capability() {
         .tool_names()
         .contains(&crate::goal::CREATE_GOAL_TOOL_NAME.to_string()));
     let built_names = with_create
-        .build_tools(&ToolRuntimeContext::oneshot(node))
+        .build_tools(&agent_tool_runtime(node))
         .await
         .unwrap()
         .into_iter()
@@ -2056,7 +2074,7 @@ async fn tool_construction_rechecks_current_workspace_root_policy() {
         .resolve(&node, "did:test:test", &Default::default())
         .await
         .unwrap();
-    let runtime = ToolRuntimeContext::oneshot(node.clone());
+    let runtime = agent_tool_runtime(node.clone());
     surface
         .build_tools(&runtime)
         .await
@@ -2108,10 +2126,7 @@ async fn normal_load_rejects_active_blank_root_under_explicit_policy_without_cei
         .resolve(&node, "did:test:test", &Default::default())
         .await
         .unwrap();
-    let error = match surface
-        .build_tools(&ToolRuntimeContext::oneshot(node))
-        .await
-    {
+    let error = match surface.build_tools(&agent_tool_runtime(node)).await {
         Ok(_) => panic!("active legacy Tools must not bypass explicit WorkspaceRoot policy"),
         Err(error) => error,
     };
@@ -2312,7 +2327,7 @@ fn explain_complex_document_combination_filters_agents_and_groups_surface() {
     .map(|(name, destination, agent, description)| {
         serde_json::from_value(serde_json::json!({
             "target_id":name,"node_did":own_node_did,"target_node_did":destination,
-            "agent_id":agent,"name":name,"description":description
+            "agent_did":agent,"name":name,"description":description
         }))
         .unwrap()
     })
@@ -2335,11 +2350,11 @@ fn explain_complex_document_combination_filters_agents_and_groups_surface() {
         &["observability".to_string(), "registry".to_string()]
     );
 
-    let active_agent_ids = rapidhash::RapidHashSet::from_iter(["worker".to_string()]);
+    let active_agent_dids = rapidhash::RapidHashSet::from_iter(["worker".to_string()]);
     let surface = config.resolve_with_available_agent_targets_for_mcp_presence(
         true,
         own_node_did,
-        &active_agent_ids,
+        &active_agent_dids,
     );
     assert_eq!(
         resolve_agent_target_descriptions(&surface),

@@ -345,7 +345,7 @@ Examples:
 const TOOLS_AFTER_HELP: &str = "\
 Examples:
   gents tools explain
-  gents tools explain --agent-id AGENT_ID
+  gents tools explain --agent-did AGENT_DID
   gents tools explain --graphql http://127.0.0.1:9191/api/v0/graphql
 
 The explain output separates model-callable tools from operator HTTP/MCP surfaces
@@ -366,7 +366,7 @@ pub(crate) const CONFIG_EXPORT_FORMAT: &str = "gents-config/v2";
 
 pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("Node", "node_did"),
-    ("Agent", "agent_id"),
+    ("Agent", "agent_did"),
     ("AgentContext", "context_id"),
     ("NodeRuntime", "node_did"),
     ("Tools", "tools_id"),
@@ -445,6 +445,38 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         }
     }
 
+    // Client-facing commands create their own principal before resolving an
+    // endpoint; runtime entry points never load this client key.
+    if matches!(
+        &command,
+        Command::Chat(_)
+            | Command::P2p { .. }
+            | Command::Schema { .. }
+            | Command::Trace { .. }
+            | Command::Status(_)
+            | Command::Query(_)
+            | Command::Export(_)
+            | Command::Write(_)
+            | Command::Document { .. }
+            | Command::Background { .. }
+            | Command::Mcp { .. }
+            | Command::Fleet { .. }
+            | Command::Task { .. }
+            | Command::Pack { .. }
+            | Command::Plugin { .. }
+            | Command::Ux { .. }
+            | Command::Diagnose(_)
+            | Command::Tools { .. }
+            | Command::Config { .. }
+            | Command::Request { .. }
+            | Command::Response { .. }
+            | Command::Session { .. }
+            | Command::Goal { .. }
+            | Command::Job { .. }
+            | Command::Mailbox { .. }
+    ) {
+        load_client_identity().await?;
+    }
     let telemetry = telemetry::init(DEFAULT_LOG_FILTER)?;
     let result = match command {
         Command::Version => {
@@ -625,6 +657,7 @@ pub(crate) async fn resolve_config_access(
     explicit_graphql: Option<&str>,
 ) -> Result<(ConfigAccess, PathBuf)> {
     let home_dir = resolve_home_dir(home);
+    let client_identity = load_client_identity().await?;
     if let Some(graphql) = explicit_graphql
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -634,7 +667,7 @@ pub(crate) async fn resolve_config_access(
     }
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
         if graphql_endpoint_available(&runtime_state.graphql).await {
-            let endpoint = home_graphql_endpoint(&home_dir, runtime_state.graphql);
+            let endpoint = home_graphql_endpoint(&home_dir, runtime_state.graphql)?;
             return Ok((ConfigAccess::Graphql(endpoint), home_dir));
         }
     }
@@ -653,7 +686,11 @@ pub(crate) async fn resolve_config_access(
             })?,
     );
     let migration_node = node.clone();
-    let access = ConfigAccess::claimed_local(node, claim)?;
+    let access = ConfigAccess::claimed_local_as(
+        node,
+        claim,
+        identity::Did::new(client_identity.did().to_owned())?,
+    )?;
     gents::store::schema::migration::ensure_all_runtime_migrations(migration_node)
         .await
         .map_err(|error| {
@@ -916,14 +953,14 @@ mod tests {
             gents_protocol::error_chain::ErrorChain(&error)
         );
 
-        access.local_node().unwrap().shutdown().await;
+        access.local_node().unwrap().shutdown().await.expect("node shutdown");
         drop(access);
         assert_eq!(node.strong_count(), 0, "the access held the only node");
         let (reopened, _) = resolve_config_access(Some(&home), None)
             .await
             .expect("a shut down and dropped access releases the store");
         assert_eq!(reopened.mode(), "local");
-        reopened.local_node().unwrap().shutdown().await;
+        reopened.local_node().unwrap().shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]

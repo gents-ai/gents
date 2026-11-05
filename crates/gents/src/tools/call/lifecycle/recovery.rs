@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -293,6 +293,12 @@ impl super::ToolCallLifecycle {
             let task_deleted = owner_task_deleted(node, node_did, &parent).await?;
             let session_stopped = crate::session::session_is_stopped(
                 node,
+                &identity::Did::new(
+                    parent
+                        .agent_did
+                        .as_deref()
+                        .context("parent request has no agent DID")?,
+                )?,
                 node_did,
                 &row.session_id,
                 row.requester_did.as_deref(),
@@ -1205,7 +1211,7 @@ async fn lookup_parent_request(
     };
     let query = format!(
         r#"{{ AgentRequest(filter: {{ {filter} }}, limit: 2) {{
-            _docID request_id node_did requester_did session_id lifecycle_state
+            _docID request_id node_did requester_did session_id agent_did lifecycle_state
             caused_by_trigger_id request_hop workspace_id workspace_authority
             workspace_owner_node_did workspace_seal_hash
         }} }}"#

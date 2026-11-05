@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{Duration, SecondsFormat, Utc};
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use gents::NodeIdentity;
 use gents_protocol::enrollment::{
@@ -94,8 +94,9 @@ impl EnrollmentDecisionService {
                     "network_id": pending.request.network_id,
                     "candidate_did": pending.request.candidate_did,
                     "candidate_peer": pending.request.candidate_peer,
-                    "owner_agent": pending.request.owner_agent,
+                    "owner_node_did": pending.request.owner_node_did,
                     "expires_at": pending.request.expires_at,
+                    "signed_request": pending.request,
                 })
             })
             .collect())
@@ -103,7 +104,7 @@ impl EnrollmentDecisionService {
 }
 
 impl EnrollmentDecisionService {
-    pub(crate) async fn authenticate_signed(
+    pub(crate) async fn authenticate_node_reader(
         &self,
         signer_did: &str,
         payload: &[u8],
@@ -111,12 +112,24 @@ impl EnrollmentDecisionService {
         nonce: &str,
     ) -> Result<()> {
         anyhow::ensure!(
-            signer_did == self.identity.did(),
-            "operator command signer does not own this runtime"
-        );
-        anyhow::ensure!(
             self.identity.verify(signer_did, payload, sig).await?,
             "operator command signature is invalid"
+        );
+        let access = gents::store::config_client::ConfigAccess::local_as(
+            self.node.clone(),
+            identity::Did::new(signer_did)?,
+        );
+        let response = access
+            .execute(&format!(
+                "{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
+                gents::store::graphql::escape_graphql_string(self.identity.did()),
+            ))
+            .await?;
+        anyhow::ensure!(
+            response["data"]["Node"]
+                .as_array()
+                .is_some_and(|rows| rows.len() == 1),
+            "the client cannot read this Node"
         );
         consume_operator_nonce(&self.node, signer_did, nonce, Utc::now()).await
     }
@@ -347,7 +360,7 @@ pub async fn ensure_enrollment_network(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::defra_node::{EmbeddedNode, StorageBackend};
+    use gents::defra_node::{Node as EmbeddedNode, StorageBackend};
     use gents::store::graphql::ensure_no_errors;
     use gents_protocol::enrollment::ENROLLMENT_PROTOCOL_VERSION;
     use gents_protocol::enrollment::{
@@ -440,7 +453,7 @@ mod tests {
         let duplicate = first.err().or_else(|| second.err()).unwrap();
         assert!(duplicate.to_string().contains("already consumed"));
 
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         drop(node);
         let restarted = nonce_test_node(&node_path).await;
         let replay = consume_operator_nonce(&restarted, "did:key:admin", "nonce-concurrent", now)

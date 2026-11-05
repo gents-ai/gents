@@ -98,8 +98,12 @@ where
                             return Ok(None);
                         }
                         let policy = task::load(&worker.node, &parent, &invocation.task).await?;
-                        let history = crate::session::load_sequenced_history_projection(
-                            &worker.node,
+                        let access = crate::store::config_client::ConfigAccess::local_as(
+                            worker.node.clone(),
+                            identity::Did::new(&parent.agent_did)?,
+                        );
+                        let history = crate::session::load_sequenced_history_projection_on(
+                            &access,
                             &parent.session_id,
                             &parent.node_did,
                             parent.requester_did.as_deref(),

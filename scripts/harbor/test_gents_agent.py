@@ -344,7 +344,7 @@ with (home / "invocations.jsonl").open("a") as invocations:
 if args[:1] == ["init"]:
     print(json.dumps({
         "node_did": "did:key:fake",
-        "default_agent_id": "did:key:fake:default",
+        "default_agent_did": "did:key:fake:default",
         "inference_profile_id": "profile-1",
         "tools_id": "did:key:fake:tools",
     }, indent=2))

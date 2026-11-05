@@ -18,10 +18,10 @@ async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_de
         let config: PackConfig = serde_json::from_value(json!({
             "node": {
                 "node_did": owner, "display_name": "Explicit configuration",
-                "default_agent_id": "general", "tags": ["authored"]
+                "default_agent_did": "general", "tags": ["authored"]
             },
             "agents": [{
-                "node_did": owner, "agent_id": "general",
+                "node_did": owner, "agent_did": "general",
                 "context_id": "context", "inference_profile_id": "balanced"
             }],
             "contexts": [{
@@ -140,7 +140,7 @@ async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_de
         );
     }
     let rows = access
-        .execute("{ Node { node_did } Agent { agent_id } InferenceProfile { model_name } }")
+        .execute("{ Node { node_did } Agent { agent_did } InferenceProfile { model_name } }")
         .await
         .unwrap();
     for collection in ["Node", "Agent", "InferenceProfile"] {
@@ -163,7 +163,7 @@ async fn session_create_returns_its_physical_receipt() {
         Box::pin(async move {
             let response = txn.execute_with_variables(
                 "mutation($input:AgentSessionMutationInputArg!){create_AgentSession(input:$input){_docID}}",
-                &json!({"input":{"session_id":"receipt-session","node_did":"did:test:receipt","requester_did":null,"agent_id":"general","created_at":"2026-01-01T00:00:00Z","title":null,"provenance":{"fork":{"source_session_id":"parent","at_user_turn":0}}}}),
+                &json!({"input":{"session_id":"receipt-session","node_did":"did:test:receipt","requester_did":null,"agent_did":"general","created_at":"2026-01-01T00:00:00Z","title":null,"provenance":{"fork":{"source_session_id":"parent","at_user_turn":0}}}}),
             ).await?;
             let response = gents::defra_node::QueryResponse::success(response["data"].clone());
             let created = gents::store::graphql::single_mutation_document(&response, "create_AgentSession")?.expect("create must return a physical document");

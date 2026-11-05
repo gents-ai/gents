@@ -2,6 +2,8 @@
 async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_reminder() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let actor =
+        identity::Did::new("did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76").unwrap();
     let model = ScriptedModel::new_turns(vec![
         vec![
             RawStreamingChoice::Message("premature answer".to_string()),
@@ -16,15 +18,18 @@ async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_remi
     loop_config.output_obligation_gate = Some(Arc::new(
         crate::runtime::agent::output_obligation::OutputObligationGate::new(
             node.clone(),
+            actor,
             "request-doc-unmet",
-            vec![crate::runtime::agent::output_obligation::ActiveOutputObligation {
-                tool_name: "write_result".to_string(),
-                contract: crate::documents::WriteToolOutputObligation {
-                    scope: crate::documents::WriteToolOutputObligationScope::Request,
-                    minimum_writes: 1,
-                    expected_count_field: None,
+            vec![
+                crate::runtime::agent::output_obligation::ActiveOutputObligation {
+                    tool_name: "write_result".to_string(),
+                    contract: crate::documents::WriteToolOutputObligation {
+                        scope: crate::documents::WriteToolOutputObligationScope::Request,
+                        minimum_writes: 1,
+                        expected_count_field: None,
+                    },
                 },
-            }],
+            ],
         ),
     )
         as Arc<dyn gents_loop::output_obligation::OutputObligationCheck>);
@@ -57,7 +62,7 @@ async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_remi
     let histories = model.seen_histories().await;
     assert_eq!(histories.len(), 2);
     assert!(format!("{:?}", histories[1]).contains("configured output obligation is unmet"));
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -182,7 +187,9 @@ async fn unavailable_goal_attribution_stops_the_provider_before_another_turn() {
         gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
     )
     .await;
-    let error = collected.error.expect("unavailable attribution must terminate");
+    let error = collected
+        .error
+        .expect("unavailable attribution must terminate");
     assert!(error.contains("PromptCancelled"), "{error}");
     assert!(error.contains("attribution"), "{error}");
     assert_eq!(model.seen_histories().await.len(), 1);
@@ -250,7 +257,7 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
             request_id: "retry-input".into(),
             node_did: "did:key:agent".into(),
             requester_did: String::new(),
-            agent_id: "general".into(),
+            agent_did: "general".into(),
             session_id: "retry-session".into(),
             model_name: "test-model".into(),
             provider_family: None,
@@ -259,10 +266,11 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
             context,
             Arc::new(|_| Box::pin(async { Ok(()) })),
         );
-        loop_config.on_rendered_request =
-            Some(crate::inference::rendered_request::scope::ambient_arming_sink(
+        loop_config.on_rendered_request = Some(
+            crate::inference::rendered_request::scope::ambient_arming_sink(
                 crate::inference::rendered_request::scope::CaptureScopeKind::Inference,
-            ));
+            ),
+        );
         let authored = crate::inference::rendered_request::scope::scope_request(scope, async {
             let stream = run_loop_stream(
                 model,

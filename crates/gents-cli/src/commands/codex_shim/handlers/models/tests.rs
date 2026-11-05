@@ -1,6 +1,6 @@
 use super::*;
 use crate::config_writes::write_agent_document;
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::documents::AdvertisedModel;
 use gents::documents::BackendAuth;
 use gents::store::config_client::{
@@ -14,9 +14,10 @@ use gents_protocol::row::{
 };
 use std::sync::Arc;
 
-fn agent(agent_id: &str, profile_id: &str) -> gents::AgentDocument {
+fn agent(agent_did: &str, profile_id: &str) -> gents::AgentDocument {
     gents::AgentDocument {
-        agent_id: agent_id.to_string(),
+        creation_nonce: "a".repeat(64),
+            agent_did: agent_did.to_string(),
         node_did: "did:test:codex-shim".to_string(),
         display_name: None,
         description: None,
@@ -78,7 +79,7 @@ fn advertised(model_name: &str) -> AdvertisedModel {
 
 fn readiness_row(
     node_did: &str,
-    default_agent_id: &str,
+    default_agent_did: &str,
     entries: Vec<(&str, bool)>,
     updated_at: &str,
 ) -> NodeReadinessRow {
@@ -89,11 +90,11 @@ fn readiness_row(
             process_state: NodeReadinessProcessState::Ready,
             active_generation: 1,
             router_generation: 1,
-            default_agent_id: default_agent_id.to_string(),
+            default_agent_did: default_agent_did.to_string(),
             agents: entries
                 .into_iter()
-                .map(|(agent_id, ready)| AgentReadinessEntry {
-                    agent_id: agent_id.to_string(),
+                .map(|(agent_did, ready)| AgentReadinessEntry {
+                    agent_did: agent_did.to_string(),
                     state: if ready {
                         AgentReadinessState::Ready
                     } else {

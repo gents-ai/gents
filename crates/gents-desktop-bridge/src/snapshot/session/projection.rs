@@ -542,14 +542,14 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     let resolved_node_did = session_row
         .map(|row| row.node_did.clone())
         .or_else(|| latest_request.and_then(|row| normalize_optional(row.node_did.as_deref())));
-    let resolved_agent_id = session_row
-        .and_then(|row| normalize_optional(Some(row.agent_id.as_str())))
-        .or_else(|| latest_request.and_then(|row| normalize_optional(row.agent_id.as_deref())));
+    let resolved_agent_did = session_row
+        .and_then(|row| normalize_optional(Some(row.agent_did.as_str())))
+        .or_else(|| latest_request.and_then(|row| normalize_optional(row.agent_did.as_deref())));
     let context = build_session_context_from_stores(
         store,
         context_store,
         resolved_node_did.as_deref(),
-        resolved_agent_id.as_deref(),
+        resolved_agent_did.as_deref(),
         session_id,
         context_totals_exact,
     );
@@ -723,7 +723,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         live_cursor,
         session_id: session_id.to_string(),
         node_did: resolved_node_did,
-        agent_id: resolved_agent_id,
+        agent_did: resolved_agent_did,
         title: session_row.and_then(|row| {
             row.title.as_ref().and_then(|title| {
                 normalize_optional(Some(&gents::session::display_session_title(title)))
@@ -753,7 +753,6 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         folded_inputs,
         context,
         timeline_items,
-        hydration: None,
         timeline_page: None,
         projection_revision: None,
         read_through_operator: None,
@@ -2169,7 +2168,7 @@ pub(crate) async fn render_transcript_rows_with_provenance(
     page: &gents_desktop_core::client::SessionTranscriptQueryPage,
     node_did: &str,
     session_id: &str,
-) -> Vec<RenderedTimelineItem> {
+) -> anyhow::Result<Vec<RenderedTimelineItem>> {
     let (mut messages, tools) = transcript_row_parts(store, page, session_id);
     super::goal_provenance::attach_messages(
         access,
@@ -2179,8 +2178,12 @@ pub(crate) async fn render_transcript_rows_with_provenance(
         (node_did, session_id),
         &mut messages,
     )
-    .await;
-    super::super::timeline::build_rendered_timeline(&messages, &tools, &[])
+    .await?;
+    Ok(super::super::timeline::build_rendered_timeline(
+        &messages,
+        &tools,
+        &[],
+    ))
 }
 
 #[cfg(test)]

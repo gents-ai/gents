@@ -44,24 +44,6 @@ async fn read_authorized(
         );
     };
     match runtime
-        .inference_observation_authorized(actor.as_ref())
-        .await
-    {
-        Ok(true) => {}
-        Ok(false) => {
-            return failure(
-                StatusCode::FORBIDDEN,
-                "This client is no longer authorized.",
-            )
-        }
-        Err(_) => {
-            return failure(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Client authorization is unavailable.",
-            )
-        }
-    }
-    match runtime
         .read_inference_observation(actor.clone(), &key)
         .await
     {

@@ -8,10 +8,12 @@ use gents_protocol::transcript::present_message;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::defra_node::EmbeddedNode;
+use crate::defra_node::Node as EmbeddedNode;
 use crate::observe::run_timeline::{RunTimelineRows, TimelineToolCallRow};
 use crate::store::config_client::ConfigAccess;
-use crate::store::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry};
+use crate::store::graphql::escape_graphql_string;
+#[cfg(test)]
+use crate::store::graphql::{first_row, graphql_with_transaction_retry};
 
 #[async_trait::async_trait]
 pub trait ObservationHook: Send + Sync {
@@ -100,13 +102,25 @@ pub async fn await_terminal_with(
     grace: Duration,
     hook: &dyn ObservationHook,
 ) -> Result<TerminalObservation> {
+    let access = ConfigAccess::local(node.clone());
+    await_terminal_with_access(node, &access, request_id, deadline, grace, hook).await
+}
+
+pub(crate) async fn await_terminal_with_access(
+    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
+    request_id: &str,
+    deadline: Option<Duration>,
+    grace: Duration,
+    hook: &dyn ObservationHook,
+) -> Result<TerminalObservation> {
     let mut changes = crate::subscribe_collections(node, ["AgentRequest"])?;
     let started = std::time::Instant::now();
     let mut interrupted_on_deadline = false;
     let mut session_id = None;
     let mut last_progress: Option<(String, Option<String>)> = None;
     loop {
-        let row = poll_request(node, request_id).await?;
+        let row = poll_request_with_access(access, request_id).await?;
         let observed_state = row
             .as_ref()
             .and_then(|row| row.lifecycle_state.clone())
@@ -135,9 +149,21 @@ pub async fn await_terminal_with(
         hook.on_tick(elapsed).await;
         if !interrupted_on_deadline && deadline.is_some_and(|deadline| elapsed >= deadline) {
             hook.on_interrupt_requested().await;
-            crate::request::interrupt::interrupt_request(node, request_id)
-                .await
-                .context("interrupt request after evaluation deadline")?;
+            let row = row
+                .as_ref()
+                .context("request is unavailable at evaluation deadline")?;
+            crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+                access,
+                row.doc_id
+                    .as_deref()
+                    .context("request has no physical identity")?,
+                row.node_did
+                    .as_deref()
+                    .context("request has no node identity")?,
+                row.requester_did.as_deref(),
+            )
+            .await
+            .context("interrupt request after evaluation deadline")?;
             interrupted_on_deadline = true;
         }
         let boundary = deadline.map(|deadline| {
@@ -179,17 +205,22 @@ pub async fn collect_request_evidence(
     node: &Arc<EmbeddedNode>,
     request_id: &str,
 ) -> Result<RequestEvidence> {
+    collect_request_evidence_with_access(&ConfigAccess::local(node.clone()), request_id).await
+}
+
+pub(crate) async fn collect_request_evidence_with_access(
+    access: &ConfigAccess,
+    request_id: &str,
+) -> Result<RequestEvidence> {
     let query = evidence_query(request_id);
-    let response = graphql_with_transaction_retry(node, &query, "collect request evidence").await?;
+    let response = access.execute(&query).await?;
     let data = response
-        .data
+        .get("data")
+        .cloned()
         .context("collect request evidence returned no data")?;
-    let timeline = crate::observe::run_timeline_fetch::load_run_timeline_rows(
-        &ConfigAccess::local(node.clone()),
-        request_id,
-    )
-    .await
-    .context("load request run timeline")?;
+    let timeline = crate::observe::run_timeline_fetch::load_run_timeline_rows(access, request_id)
+        .await
+        .context("load request run timeline")?;
     Ok(request_evidence_from_sources(&data, &timeline))
 }
 
@@ -355,12 +386,19 @@ pub fn classify_request_outcome(
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RequestPollRow {
+    #[serde(default, rename = "_docID")]
+    pub(crate) doc_id: Option<String>,
+    #[serde(default)]
+    pub(crate) node_did: Option<String>,
+    #[serde(default)]
+    pub(crate) requester_did: Option<String>,
     #[serde(default)]
     pub(crate) lifecycle_state: Option<String>,
     #[serde(default)]
     pub(crate) session_id: Option<String>,
 }
 
+#[cfg(test)]
 pub(crate) async fn poll_request(
     node: &EmbeddedNode,
     request_id: &str,
@@ -370,10 +408,23 @@ pub(crate) async fn poll_request(
     Ok(first_row(&response, "AgentRequest")?)
 }
 
+pub(crate) async fn poll_request_with_access(
+    access: &ConfigAccess,
+    request_id: &str,
+) -> Result<Option<RequestPollRow>> {
+    let response = access.execute(&poll_query(request_id)).await?;
+    response
+        .pointer("/data/AgentRequest/0")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(Into::into)
+}
+
 fn poll_query(request_id: &str) -> String {
     let escaped = escape_graphql_string(request_id);
     format!(
-        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state session_id }} }}"#
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ _docID node_did requester_did lifecycle_state session_id }} }}"#
     )
 }
 
@@ -541,7 +592,7 @@ mod tests {
             let response = home.node.execute(&query).await;
             assert!(response.errors.is_empty(), "{query}: {:?}", response.errors);
         }
-        home.node.shutdown().await;
+        home.node.shutdown().await.expect("shutdown node");
     }
 
     async fn insert_request(home: &EmbeddedHome, request_id: &str, lifecycle_state: &str) {
@@ -549,7 +600,7 @@ mod tests {
         let node_did = crate::store::graphql::escape_graphql_string(home.did());
         let lifecycle_state = crate::store::graphql::escape_graphql_string(lifecycle_state);
         let mutation = format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "observe", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "{lifecycle_state}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", node_did: "{node_did}", requester_did: "{node_did}", agent_did: "observe", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "{lifecycle_state}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
         );
         let response = home.node.execute(&mutation).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
@@ -703,7 +754,7 @@ mod tests {
             classify_request_outcome(Some(RequestLifecycleState::Failed), false, &evidence),
             Some("tool")
         );
-        home.node.shutdown().await;
+        home.node.shutdown().await.expect("shutdown node");
     }
 
     #[tokio::test]
@@ -818,7 +869,7 @@ mod tests {
                 case["outcome"].as_str()
             );
         }
-        home.node.shutdown().await;
+        home.node.shutdown().await.expect("shutdown node");
     }
 
     #[tokio::test]

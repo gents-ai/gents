@@ -8,8 +8,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::{
-    cli_tool, default_agent_id_for_node, default_inference_profile_id_for_agent,
-    DocumentRuntimeOptions, Gents, InferenceBackend, NodeIdentity, ToolCeiling,
+    cli_tool, default_inference_profile_id_for_agent, DocumentRuntimeOptions, Gents,
+    InferenceBackend, NodeIdentity, ToolCeiling,
 };
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
@@ -23,8 +23,8 @@ use super::DEFAULT_DEPLOYMENT_LABEL;
 
 #[derive(Debug, Clone)]
 pub(crate) struct LiveAgentDocs {
-    pub(crate) agent_id: String,
-    pub(crate) target_agent_id: String,
+    pub(crate) agent_did: String,
+    pub(crate) target_agent_did: String,
     pub(crate) target_id: String,
     pub(crate) tools_id: String,
     pub(crate) target_tools_id: String,
@@ -47,6 +47,7 @@ impl RunningNode {
 
 pub(super) async fn spawn_live_node(
     node_owner: Arc<ClientCore>,
+    config_actor_did: &str,
     agent_root: PathBuf,
     name: &str,
     backend: &LiveBackendConfig,
@@ -61,6 +62,7 @@ pub(super) async fn spawn_live_node(
     let node_did = identity.did().to_string();
     let docs = seed_live_agent_documents(
         node_owner.as_ref(),
+        config_actor_did,
         &node_did,
         name,
         backend,
@@ -100,6 +102,7 @@ pub(super) async fn spawn_live_node(
 
 async fn seed_live_agent_documents(
     core: &ClientCore,
+    config_actor_did: &str,
     node_did: &str,
     agent_name: &str,
     backend: &LiveBackendConfig,
@@ -112,30 +115,32 @@ async fn seed_live_agent_documents(
     };
     use serde_json::json;
     let inference = inference::LiveInferenceSettings::from_env()?;
-    let agent_id = default_agent_id_for_node(node_did);
-    let target_agent_id = format!("{node_did}:live-repo-audit");
+    let binding = gents::store::identity::provision_agent_identity(core.node_identity())?;
+    let target_binding = gents::store::identity::provision_agent_identity(core.node_identity())?;
+    let agent_did = binding.agent_did;
+    let target_agent_did = target_binding.agent_did;
     let backend_id = format!("{agent_name}-backend");
     let target_backend_id = if target_backend.is_some() {
         format!("{agent_name}-target-backend")
     } else {
         backend_id.clone()
     };
-    let tools_id = format!("{agent_id}-tools");
-    let target_tools_id = format!("{target_agent_id}-tools");
-    let inference_profile_id = default_inference_profile_id_for_agent(&agent_id);
-    let target_profile_id = default_inference_profile_id_for_agent(&target_agent_id);
-    let context_id = format!("{agent_id}-context");
-    let target_context_id = format!("{target_agent_id}-context");
-    let execution_id = format!("{agent_id}-execution");
-    let sampling_id = format!("{agent_id}-sampling");
-    let compaction_id = format!("{agent_id}-compaction");
-    let target_id = format!("{agent_id}-target");
+    let tools_id = format!("{agent_did}-tools");
+    let target_tools_id = format!("{target_agent_did}-tools");
+    let inference_profile_id = default_inference_profile_id_for_agent(&agent_did);
+    let target_profile_id = default_inference_profile_id_for_agent(&target_agent_did);
+    let context_id = format!("{agent_did}-context");
+    let target_context_id = format!("{target_agent_did}-context");
+    let execution_id = format!("{agent_did}-execution");
+    let sampling_id = format!("{agent_did}-sampling");
+    let compaction_id = format!("{agent_did}-compaction");
+    let target_id = format!("{agent_did}-target");
     let target = target_backend.unwrap_or(backend);
     let mut config = json!({
-        "node":{"node_did":node_did,"display_name":agent_name,"default_agent_id":agent_id},
+        "node":{"node_did":node_did,"display_name":agent_name,"default_agent_did":agent_did,"created_by":config_actor_did},
         "agents":[
-            {"agent_id":agent_id,"node_did":node_did,"display_name":"Live Repo Audit Default","context_id":context_id,"inference_profile_id":inference_profile_id},
-            {"agent_id":target_agent_id,"node_did":node_did,"display_name":"Live Repo Audit","context_id":target_context_id,"inference_profile_id":target_profile_id}
+            {"agent_did":agent_did,"creation_nonce":binding.creation_nonce,"node_did":node_did,"display_name":"Live Repo Audit Default","context_id":context_id,"inference_profile_id":inference_profile_id},
+            {"agent_did":target_agent_did,"creation_nonce":target_binding.creation_nonce,"node_did":node_did,"display_name":"Live Repo Audit","context_id":target_context_id,"inference_profile_id":target_profile_id}
         ],
         "contexts":[
             {"node_did":node_did,"context_id":context_id,"system_prompt":"You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local repo audit agent, call agent_new with agent \"repo-audit\" and the requested prompt; its result arrives later as a message, so say that it has started and reply again when that message arrives. When the user explicitly asks you to launch a native background process, call spawn_process with tool_name \"bash_unrestricted\" and the exact requested arguments. Do not call wait_process, read_process, list_processes, or cancel_process unless the user explicitly asks.","tools_id":tools_id,"compaction_id":compaction_id},
@@ -149,7 +154,7 @@ async fn seed_live_agent_documents(
             {"node_did":node_did,"tools_id":target_tools_id,"display_name":"Live Repo Audit Target Tools",
              "host":{"files":{"mode":"ReadOnly"}},"built_ins":{"enable_context_budget":true}}
         ],
-        "agent_targets":[{"node_did":node_did,"target_id":target_id,"target_node_did":node_did,"agent_id":target_agent_id,"name":"repo-audit","description":"Local repository audit agent for the desktop live fixture"}],
+        "agent_targets":[{"node_did":node_did,"target_id":target_id,"target_node_did":node_did,"agent_did":target_agent_did,"name":"repo-audit","description":"Local repository audit agent for the desktop live fixture"}],
         "inference_profiles":[
             {"node_did":node_did,"profile_id":inference_profile_id,"display_name":"Live Repo Audit Profile","backend_id":backend_id,"model_name":backend.model_name,"context_window":131072,"sampling_id":sampling_id,"execution_id":execution_id},
             {"node_did":node_did,"profile_id":target_profile_id,"display_name":"Live Repo Audit Target Profile","backend_id":target_backend_id,"model_name":target.model_name,"context_window":131072,"sampling_id":sampling_id,"execution_id":execution_id}
@@ -159,37 +164,39 @@ async fn seed_live_agent_documents(
         "compactions":[{"node_did":node_did,"compaction_id":compaction_id,"strategy":"StripThenSummarize","threshold":0.95}]
     });
     inference.apply(&mut config);
-    ConfigAccess::transact_local_write(&core.node_arc(), None, "desktop.fixture.config", |txn| {
-        let mut config = config.clone();
-        let backend_id = &backend_id;
-        let target_backend_id = &target_backend_id;
-        Box::pin(async move {
-            let existing = load_inference_backend_in_txn(txn, node_did, backend_id).await?;
-            let mut backends = vec![live_backend_candidate(
-                existing, node_did, backend_id, backend,
-            )?];
-            if target_backend.is_some() {
-                let existing =
-                    load_inference_backend_in_txn(txn, node_did, target_backend_id).await?;
-                backends.push(live_backend_candidate(
-                    existing,
-                    node_did,
-                    target_backend_id,
-                    target,
-                )?);
-            }
-            config["inference_backends"] = serde_json::to_value(backends)?;
-            let config: PackConfig = serde_json::from_value(config)?;
-            let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
-            apply_desired_state_plan(txn, &plan).await?;
-            Ok::<_, anyhow::Error>(())
+    let access = ConfigAccess::local_as(core.node_arc(), config_actor_did.parse()?);
+    access
+        .transact_write("desktop.fixture.config", |txn| {
+            let mut config = config.clone();
+            let backend_id = &backend_id;
+            let target_backend_id = &target_backend_id;
+            Box::pin(async move {
+                let existing = load_inference_backend_in_txn(txn, node_did, backend_id).await?;
+                let mut backends = vec![live_backend_candidate(
+                    existing, node_did, backend_id, backend,
+                )?];
+                if target_backend.is_some() {
+                    let existing =
+                        load_inference_backend_in_txn(txn, node_did, target_backend_id).await?;
+                    backends.push(live_backend_candidate(
+                        existing,
+                        node_did,
+                        target_backend_id,
+                        target,
+                    )?);
+                }
+                config["inference_backends"] = serde_json::to_value(backends)?;
+                let config: PackConfig = serde_json::from_value(config)?;
+                let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
+                apply_desired_state_plan(txn, &plan).await?;
+                Ok::<_, anyhow::Error>(())
+            })
         })
-    })
-    .await?;
+        .await?;
     core.refresh_store().await?;
     Ok(LiveAgentDocs {
-        agent_id,
-        target_agent_id,
+        agent_did,
+        target_agent_did,
         target_id,
         tools_id,
         target_tools_id,
@@ -242,7 +249,7 @@ fn live_backend_candidate(
 }
 
 async fn wait_for_runtime_process_state(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &gents::defra_node::Node,
     node_did: &str,
     expected_process_state: &str,
 ) -> Result<()> {

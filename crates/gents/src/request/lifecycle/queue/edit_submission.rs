@@ -21,14 +21,16 @@ pub async fn submit_pending_user_edit(
     session_id: &str,
     edit: PendingQueueEdit,
 ) -> Result<SessionInputEditReceipt> {
-    let requester_did = signer.did();
+    ensure_client_edit_supported(&admission)?;
+    let requester_did =
+        crate::session::client_requester_scope(access, node_did, session_id, signer.did()).await?;
     let replacements = super::prepare_pending_user_edit(
         access,
         signer,
         admission,
         node_did,
         session_id,
-        requester_did,
+        &requester_did,
         &edit,
     )
     .await?;
@@ -73,13 +75,16 @@ pub async fn submit_pending_user_steer(
             }
         })
         .collect::<Vec<_>>();
+    ensure_client_edit_supported(&admission)?;
+    let requester_did =
+        crate::session::client_requester_scope(access, node_did, session_id, signer.did()).await?;
     let replacements = super::management::prepare_pending_user_edit_with_deliveries(
         access,
         signer,
         admission,
         node_did,
         session_id,
-        signer.did(),
+        &requester_did,
         &edit,
         Some(&deliveries),
         request_id,
@@ -97,6 +102,14 @@ pub async fn submit_pending_user_steer(
     .await
 }
 
+fn ensure_client_edit_supported(admission: &AgentRequestAdmissionRecord) -> Result<()> {
+    anyhow::ensure!(
+        admission.kind != gents_protocol::request_admission::AgentRequestAdmissionKind::Client,
+        "Pending queue edits require native client authorization, which is unavailable."
+    );
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn submit_prepared_edit(
     access: &ConfigAccess,
@@ -107,6 +120,11 @@ async fn submit_prepared_edit(
     edit: PendingQueueEdit,
     replacements: Vec<gents_protocol::request_admission::AgentRequestCreate>,
 ) -> Result<SessionInputEditReceipt> {
+    anyhow::ensure!(
+        !replacements.iter().any(|create| create.admission.kind
+            == gents_protocol::request_admission::AgentRequestAdmissionKind::Client),
+        "Pending queue edits require native client authorization, which is unavailable."
+    );
     let requester_did = signer.did();
     let now = chrono::Utc::now();
     let mut command = SessionInputEdit {

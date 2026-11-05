@@ -46,7 +46,7 @@ theorem identity_fields_preserved
     {pre post : CallbackInvocation}
     (h : Transition pre post) :
     post.invocationId = pre.invocationId ∧
-    post.ownerNodeDid = pre.ownerNodeDid := by
+    post.ownerNodeDid = pre.ownerNodeDid ∧ post.agentDid = pre.agentDid := by
   cases h <;> simp_all
 
 theorem frozen_input_preserved {pre post : CallbackInvocation}

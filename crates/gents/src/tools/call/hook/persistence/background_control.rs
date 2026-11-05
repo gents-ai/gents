@@ -44,8 +44,15 @@ impl DefraSessionHook {
         caller: &ProcessControlScope,
         tool_call_id: &str,
     ) -> anyhow::Result<ToolCallLifecycle> {
-        let Some(lifecycle) =
-            ToolCallLifecycle::load(self.node.clone(), &caller.session_id, tool_call_id).await?
+        let Some(lifecycle) = ToolCallLifecycle::load_as(
+            self.node.clone(),
+            self.actor
+                .clone()
+                .context("hook has no selected agent identity")?,
+            &caller.session_id,
+            tool_call_id,
+        )
+        .await?
         else {
             anyhow::bail!("background tool call {tool_call_id} was not found");
         };
@@ -118,13 +125,14 @@ impl DefraSessionHook {
 
             // Waiting is observational; ending this caller's turn must not
             // revoke the separately budgeted background job.
-            let interruption = crate::request::interrupt::observe_interrupt_requested_at_scoped(
-                &self.node,
-                &caller.request_id,
-                &caller.node_did,
-                caller.requester_did.as_deref(),
-            )
-            .await?;
+            let interruption =
+                crate::request::interrupt::observe_interrupt_requested_at_with_access(
+                    &self.actor_access()?,
+                    &caller.request_id,
+                    &caller.node_did,
+                    caller.requester_did.as_deref(),
+                )
+                .await?;
             if interruption.requested_at.is_some() {
                 return self
                     .background_tool_envelope(lifecycle, "caller_interrupted")
@@ -182,8 +190,8 @@ impl DefraSessionHook {
         let result = if lifecycle.is_spawned_background()
             || crate::tools::native::is_bash_tool_name(lifecycle.tool_name())
         {
-            crate::tools::background::status::canonical_tool_output(
-                self.node.as_ref(),
+            crate::tools::background::status::observe_canonical_tool_output_with_access(
+                &self.actor_access()?,
                 tool_doc_id,
                 lifecycle
                     .request_doc_id()
@@ -193,9 +201,10 @@ impl DefraSessionHook {
                 lifecycle.requester_did(),
             )
             .await?
+            .into_text()
         } else {
             let message = load_tool_call_result(
-                &crate::store::config_client::ConfigAccess::local(self.node.clone()),
+                &self.actor_access()?,
                 tool_doc_id,
                 lifecycle.node_did(),
                 lifecycle.session_id(),

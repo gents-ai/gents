@@ -149,10 +149,10 @@ pub(crate) struct TraceProjectArgs {
     )]
     pub(crate) scope_node_did: Option<String>,
     #[arg(
-        long = "scope-agent-id",
+        long = "scope-agent-did",
         help = "Require the root request to match this agent id and omit content-bearing events for other agents"
     )]
-    pub(crate) scope_agent_id: Option<String>,
+    pub(crate) scope_agent_did: Option<String>,
     #[arg(
         long = "scope-session-id",
         help = "Require the root request to belong to this session id"

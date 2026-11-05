@@ -109,7 +109,7 @@ impl CallbackWorkers {
 
     pub(super) fn dispatch(
         &self,
-        node: Arc<defra_node::EmbeddedNode>,
+        node: Arc<defra_node::Node>,
         invocation: &CallbackInvocationDoc,
         callback: &crate::documents::Callback,
         ceiling: Option<std::path::PathBuf>,
@@ -117,11 +117,12 @@ impl CallbackWorkers {
     ) {
         let id = invocation.invocation_id.clone();
         let owner = invocation.owner_node_did.clone();
+        let agent = invocation.agent_did.clone();
         let callback = callback.clone();
         self.schedule(id.clone(), callback.callback_id.clone(), async move {
             let result = async {
                 // A queued snapshot can finish before its slot opens.
-                if let Some(current) = load_invocation(&node, &id, &owner).await? {
+                if let Some(current) = load_invocation(&node, &id, &owner, &agent).await? {
                     run_owned_invocation(
                         &node,
                         &current,

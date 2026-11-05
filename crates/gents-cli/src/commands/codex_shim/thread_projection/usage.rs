@@ -16,7 +16,7 @@ use super::CodexThreadRecord;
 #[derive(Clone, Copy)]
 struct UsageScope<'a> {
     node_did: &'a str,
-    agent_id: &'a str,
+    agent_did: &'a str,
     requester_did: Option<&'a str>,
 }
 
@@ -74,8 +74,8 @@ pub(in crate::commands::codex_shim) async fn submitted_token_usage(
     let scope = UsageScope {
         node_did: &request.node_did,
         requester_did: request.requester_did.as_deref(),
-        agent_id: request
-            .agent_id
+        agent_did: request
+            .agent_did
             .as_deref()
             .context("committed request missing agent")?,
     };
@@ -149,13 +149,13 @@ async fn session_request_ids(
     let session_scope =
         gents::session::session_scope_filter(scope.node_did, session_id, scope.requester_did);
     let session_scope = gents::session::public_request_filter(&session_scope);
-    let escaped_agent_id = escape_graphql_string(scope.agent_id);
+    let escaped_agent_did = escape_graphql_string(scope.agent_did);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
                     {session_scope},
-                    agent_id: {{ _eq: "{escaped_agent_id}" }}
+                    agent_did: {{ _eq: "{escaped_agent_did}" }}
                 }},
                 order: {{ created_at: ASC }}
             ) {{
@@ -187,13 +187,13 @@ async fn scoped_request_doc_ids(
         .collect::<Vec<_>>()
         .join(",");
     let owner = escape_graphql_string(scope.node_did);
-    let agent = escape_graphql_string(scope.agent_id);
+    let agent = escape_graphql_string(scope.agent_did);
     let requester = scope
         .requester_did
         .map(|did| format!("\"{}\"", escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
     let scope = gents::session::public_request_filter(&format!(
-        r#"request_id:{{_in:[{logical}]}},node_did:{{_eq:"{owner}"}},agent_id:{{_eq:"{agent}"}},requester_did:{{_eq:{requester}}}"#
+        r#"request_id:{{_in:[{logical}]}},node_did:{{_eq:"{owner}"}},agent_did:{{_eq:"{agent}"}},requester_did:{{_eq:{requester}}}"#
     ));
     let response = query_node_json(
         &state.node,
@@ -247,14 +247,14 @@ async fn gather_request_usage(
         .collect::<Vec<_>>()
         .join(", ");
     let escaped_node_did = escape_graphql_string(scope.node_did);
-    let escaped_agent_id = escape_graphql_string(scope.agent_id);
+    let escaped_agent_did = escape_graphql_string(scope.agent_did);
     let query = format!(
         r#"{{
             InferenceCall(
                 filter: {{
                     request_doc_id: {{ _in: [{id_list}] }},
                     node_did: {{ _eq: "{escaped_node_did}" }},
-                    agent_id: {{ _eq: "{escaped_agent_id}" }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
                     call_kind: {{ _in: ["inference", "compaction", "oneoff"] }},
                     call_state: {{ _in: ["completed", "failed", "cancelled"] }}
                 }}
@@ -299,14 +299,14 @@ async fn latest_requests_token_usage_scoped(
         .collect::<Vec<_>>()
         .join(", ");
     let escaped_node_did = escape_graphql_string(scope.node_did);
-    let escaped_agent_id = escape_graphql_string(scope.agent_id);
+    let escaped_agent_did = escape_graphql_string(scope.agent_did);
     let query = format!(
         r#"{{
             InferenceCall(
                 filter: {{
                     request_doc_id: {{ _in: [{id_list}] }},
                     node_did: {{ _eq: "{escaped_node_did}" }},
-                    agent_id: {{ _eq: "{escaped_agent_id}" }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
                     call_kind: {{ _eq: "inference" }},
                     call_state: {{ _in: ["completed", "failed", "cancelled"] }}
                 }}
@@ -365,7 +365,7 @@ fn coherent_usage(rows: Vec<InferenceCallUsageRow>) -> Result<Vec<InferenceCallU
 fn root_usage_scope(state: &ShimState) -> UsageScope<'_> {
     UsageScope {
         node_did: state.node_did.as_ref(),
-        agent_id: state.agent_id.as_ref(),
+        agent_did: state.agent_did.as_ref(),
         requester_did: Some(state.local_requester_did()),
     }
 }
@@ -376,7 +376,7 @@ fn record_usage_scope<'a>(state: &'a ShimState, record: &'a CodexThreadRecord) -
         .as_ref()
         .map(|link| UsageScope {
             node_did: &link.node_did,
-            agent_id: &link.agent_id,
+            agent_did: &link.agent_did,
             requester_did: link.requester_did.as_deref(),
         })
         .unwrap_or_else(|| root_usage_scope(state))

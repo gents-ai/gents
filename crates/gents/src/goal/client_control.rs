@@ -11,6 +11,30 @@ mod start_tests;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::identity::NodeIdentity;
 
+#[cfg(test)]
+pub(crate) async fn agent_document_for_test(
+    access: &crate::store::config_client::ConfigAccess,
+    node: &str,
+    agent: &str,
+) -> String {
+    access
+        .transact_readonly("test.goal.agent_document", |txn| {
+            Box::pin(async move {
+                crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Agent,
+                    node,
+                    agent,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap()
+        .0
+}
+
 pub(crate) enum PreparedGoalControl {
     Create {
         objective: String,
@@ -47,14 +71,19 @@ pub(crate) async fn prepare_goal_control(
         &command.session_id,
     )
     .await?;
-    if session.as_ref().map(|session| session.doc_id.as_str()) != command.session_doc_id.as_deref()
-        || session.as_ref().is_some_and(|session| {
-            session.session.requester_did.as_deref() != Some(command.requester_did.as_str())
-        })
-    {
+    let Some(session) = session else {
+        return Ok(Err("create the session before starting its goal".into()));
+    };
+    if command.session_doc_id.is_none() {
+        return Ok(Err("create the session before starting its goal".into()));
+    }
+    if Some(session.doc_id.as_str()) != command.session_doc_id.as_deref() {
         return Ok(Err(
             "session changed; refresh before changing its goal".into()
         ));
+    }
+    if session.session.agent_did != command.agent_did {
+        return Ok(Err("permission denied or session unavailable".into()));
     }
     let goal = load_canonical_goal_in_txn(txn, &command.node_did, &command.session_id).await?;
     let requests = if matches!(
@@ -101,10 +130,10 @@ pub(crate) async fn prepare_goal_control(
                     &command.command_id,
                 );
                 let response = txn.execute(&format!(r#"{{
-                    Goal(filter: {{node_did: {{_eq: "{}"}}, goal_id: {{_eq: "{}"}}}}, showDeleted: true) {{_docID}}
-                    GoalCreationClaim(filter: {{creation_key: {{_eq: "{}"}}}}, showDeleted: true) {{_docID}}
-                }}"#, escape_graphql_string(&command.node_did), escape_graphql_string(&identity.goal_id),
-                    escape_graphql_string(&identity.creation_key))).await?;
+                    Goal(filter: {{session_doc_id: {{_eq: "{}"}}, goal_id: {{_eq: "{}"}}}}, showDeleted: true) {{_docID}}
+                    GoalCreationClaim(filter: {{session_doc_id: {{_eq: "{}"}}, creation_key: {{_eq: "{}"}}}}, showDeleted: true) {{_docID}}
+                }}"#, escape_graphql_string(&session.doc_id), escape_graphql_string(&identity.goal_id),
+                    escape_graphql_string(&session.doc_id), escape_graphql_string(&identity.creation_key))).await?;
                 if ["Goal", "GoalCreationClaim"].into_iter().any(|collection| {
                     response["data"][collection]
                         .as_array()
@@ -173,7 +202,13 @@ pub(crate) async fn prepare_goal_control(
         };
         if request.node_did != command.node_did
             || request.session_id != command.session_id
-            || request.requester_did != command.requester_did
+            || request.requester_did
+                != session
+                    .session
+                    .requester_did
+                    .as_deref()
+                    .unwrap_or(&command.requester_did)
+            || request.admission.signer_did != command.requester_did
             || request.purpose != RequestPurpose::Normal
             || request.execution_origin != "interactive"
             || request.input.goal_continuation.is_some()
@@ -192,9 +227,7 @@ pub(crate) async fn prepare_goal_control(
             || request.caused_by_parent_tool_call_doc_id.is_some()
             || request.retry_key.as_deref()
                 != Some(format!("session-goal:{}", command.command_id).as_str())
-            || session
-                .as_ref()
-                .is_some_and(|session| session.session.agent_id != request.agent_id)
+            || session.session.agent_did != request.agent_did
         {
             return Ok(Err(
                 "initial goal request does not match its session and author".into(),
@@ -298,18 +331,6 @@ pub(crate) async fn stage_goal_control(
     identity: &dyn NodeIdentity,
     prepared: PreparedGoalControl,
 ) -> Result<GoalControlOutcome> {
-    let node_did = match &prepared {
-        PreparedGoalControl::Create { request, .. } => &request.node_did,
-        PreparedGoalControl::Edit { goal, .. }
-        | PreparedGoalControl::Pause(goal)
-        | PreparedGoalControl::Stop(goal)
-        | PreparedGoalControl::ResumeCurrent(goal)
-        | PreparedGoalControl::ResumeIdle { goal, .. } => &goal.node_did,
-    };
-    anyhow::ensure!(
-        identity.did() == node_did,
-        "goal control requires its node signing identity"
-    );
     let (goal_id, request_id) = match prepared {
         PreparedGoalControl::Create {
             objective,
@@ -321,7 +342,7 @@ pub(crate) async fn stage_goal_control(
                 txn,
                 &request.session_id,
                 &request.node_did,
-                &request.agent_id,
+                &request.agent_did,
                 Some(&request.requester_did),
                 request.input.initial_title.clone(),
                 None,

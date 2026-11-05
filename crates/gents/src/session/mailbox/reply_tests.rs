@@ -309,7 +309,7 @@ async fn modern_questions_require_correlated_replies_and_preserve_skip_claims() 
         assert!(claim(&node, &replay, false).await.is_err());
         assert_eq!(stored_lifecycle(&node, &replay).await, "pending");
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -473,13 +473,13 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
         Some(reply.doc_id.as_str())
     );
     assert!(modeled.linked_reply_accepted);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[test]
 fn generated_reply_cases_drive_claim_validation() {
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().mailbox_reply_cases;
-    assert_eq!(cases.len(), 228);
+    assert_eq!(cases.len(), 240);
     assert!(cases
         .iter()
         .any(|case| case["variant"] == "expired-deadline"
@@ -494,7 +494,7 @@ fn generated_reply_cases_drive_claim_validation() {
             "kind": "gate", "action": text("handling"), "title": "Repair",
             "source_kind": "session", "source_id": "source",
             "target_node_did": text("target_node_did"),
-            "target_agent_id": text("target_agent_id"),
+            "target_agent_did": text("target_agent_did"),
             "session_id": case["bound_session_id"],
             "resolved_doc_id": text("resolved_doc_id"), "created_at": "2026-01-01T00:00:00Z"
         }))
@@ -504,7 +504,7 @@ fn generated_reply_cases_drive_claim_validation() {
                 "_docID": text("request_doc_id"), "request_id": "request",
                 "purpose": "normal",
                 "node_did": text("node_did"), "requester_did": text("requester_did"),
-                "agent_id": text("agent_id"), "session_id": text("session_id"),
+                "agent_did": text("agent_did"), "session_id": text("session_id"),
                 "caused_by_source_doc_id": text("source_doc_id"),
                 "execution_origin": if case["interactive"] == true { "interactive" } else { "event" },
                 "content": "Approved", "created_at": "2026-01-01T00:00:00Z"

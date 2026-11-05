@@ -236,7 +236,7 @@ fn agent_catalog(inputs: &LeanAgentDecisionInputs) -> AgentCatalogView {
         agents: inputs
             .agents
             .iter()
-            .map(|agent| (agent.agent_id.clone(), agent.enabled))
+            .map(|agent| (agent.agent_did.clone(), agent.enabled))
             .collect(),
         protected_ids: inputs.protected_ids.iter().cloned().collect(),
         default_id: inputs.default_id.clone(),
@@ -304,13 +304,13 @@ fn decode_candidate(candidate: &LeanAgentCandidate) -> AgentCandidate {
             .iter()
             .map(|agent| {
                 serde_json::from_value(serde_json::json!({
-                    "agent_id": agent.agent_id,
+                    "agent_did": agent.agent_did,
                     "node_did": node_did,
                     "context_id": agent.context_id,
                     "inference_profile_id": agent.inference_profile_id,
                     "enabled": agent.enabled,
                 }))
-                .unwrap_or_else(|error| panic!("{}: Agent: {error}", agent.agent_id))
+                .unwrap_or_else(|error| panic!("{}: Agent: {error}", agent.agent_did))
             })
             .collect(),
         contexts: candidate

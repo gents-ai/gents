@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_admission::RequestPurpose;
 use tokio::sync::watch;
@@ -229,10 +229,10 @@ where
         let Ok(_service_work) = self.service_admission.admit() else {
             return Ok(None);
         };
-        let Some(request) = super::verify_request_at_claim_boundary(
+        let Some((request, client_claim)) = super::verify_request_at_claim_boundary(
             &self.verifier,
             Arc::clone(&self.node),
-            &self.agent_config.agent_id,
+            &self.agent_config.agent_did,
             request,
         )
         .await
@@ -245,13 +245,14 @@ where
         .context("admitted auxiliary request is missing execution origin")?;
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             Arc::clone(&self.node),
-            &self.agent_config.agent_id,
+            &self.agent_config.agent_did,
             self.agent_config.node_did(),
             request.clone(),
             self.agent_config.deadline_duration.as_secs(),
             origin,
             self.agent_config.backend_id.clone().unwrap_or_default(),
         );
+        lifecycle.set_client_claim_admission(client_claim);
         lifecycle.set_execution_lease_duration(self.agent_config.stream_liveness_timeout);
         lifecycle.set_configured_max_total_tokens(self.agent_config.max_total_tokens);
         match lifecycle.claim_with_identity().await {
@@ -267,7 +268,7 @@ where
         }
         let writer = DefraStreamWriter::new(
             Arc::clone(&self.node),
-            self.agent_config.node_did(),
+            self.agent_config.agent_did(),
             Duration::from_millis(self.agent_config.stream_batch_ms),
         );
         let title_request = lifecycle.request().clone();
@@ -337,6 +338,7 @@ where
             if let Some((title, parent_requester_did)) = title {
                 if let Err(error) = session::update_session_title_with_source(
                     &self.node,
+                    &identity::Did::new(&title_request.agent_did)?,
                     &title_request.node_did,
                     parent_requester_did.as_deref(),
                     &title_request.session_id,
@@ -399,7 +401,7 @@ where
             ));
         let admission_context = AdmissionCallContext::for_request(
             &request,
-            &self.agent_config.agent_id,
+            &self.agent_config.agent_did,
             self.agent_config.backend_id.clone().unwrap_or_default(),
         );
         admission::scope_request(
@@ -604,7 +606,7 @@ async fn load_auxiliary_parent(
             && request.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
             && parent.node_did == request.node_did
             && parent.session_id == request.session_id
-            && parent.agent_id == request.agent_id,
+            && parent.agent_did == request.agent_did,
         "request parent receipt does not match signed provenance"
     );
     Ok(parent)

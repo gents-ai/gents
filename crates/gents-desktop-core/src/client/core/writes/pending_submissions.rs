@@ -86,15 +86,10 @@ impl ClientCore {
                     if super::ensure_peer_chat_ready_at(&intent.node_did, Some(&peer), now)
                         .is_ok() =>
                 {
-                    Some(
-                        self.options
-                            .operator_identity_interaction
-                            .endpoint(&peer)
-                            .map(gents::store::config_client::ConfigAccess::Graphql)
-                            .unwrap_or_else(|| {
-                                gents::store::config_client::ConfigAccess::local(self.node_arc())
-                            }),
-                    )
+                    self.options
+                        .operator_identity_interaction
+                        .endpoint(&peer, self.node_identity.did())
+                        .map(gents::store::config_client::ConfigAccess::Graphql)
                 }
                 _ => None,
             }
@@ -203,7 +198,7 @@ impl ClientCore {
                     pending.accepts_composer_content(content),
                     "unresolved submission {request_id} is a different message"
                 );
-                let access = self.session_queue_access(&pending.node_did);
+                let access = self.session_queue_access(&pending.node_did)?;
                 match resolve_unresolved_submission(&access, &pending).await {
                     Ok(receipt) => {
                         super::super::super::mutations::submission_journal::forget(
@@ -235,12 +230,12 @@ impl ClientCore {
                     request_id: request_id.to_string(),
                     session_id: session_id.to_string(),
                     node_did: node_did.to_string(),
-                    agent_id: None,
+                    agent_did: None,
                 })
             }
             None => Some(
                 reconcile_unretained_submission(
-                    &self.session_queue_access(node_did),
+                    &self.session_queue_access(node_did)?,
                     node_did,
                     session_id,
                     request_id,

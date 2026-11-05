@@ -1,0 +1,16 @@
+type AgentToolControl @policy(id: "d23eb42a87668f3bd577087f604fd7919e24873705681fe9e3d1923d7d065c13", resource: "children") {
+    client_did: String @index @immutable
+    intent_id: String @index @immutable
+    intent_json: String @immutable
+    agent_did: String @index @immutable
+    node_did: String @index @immutable
+    session_id: String @immutable
+    session_doc_id: String @immutable
+    requester_did: String @immutable
+    request_doc_id: String @immutable
+    tool_call_id: String @immutable
+    tool_call_doc_id: String @immutable
+    action: String @immutable
+    state: String @index
+    outcome_json: String
+}

@@ -13,7 +13,7 @@ where
 
 #[test]
 fn task_hooks_are_compact_explicit_and_preserve_order() {
-    let authored = json!({"task_id":"code", "node_did":"did:key:test", "agent_id":"coder",
+    let authored = json!({"task_id":"code", "node_did":"did:key:test", "agent_did":"coder",
     "prompt_template":"Do {{args.work}}", "hooks":[
         {"hook_id":"prepare", "command":["./prepare.sh"], "phase":"before"},
         {"hook_id":"verify", "command":["./verify.sh"], "phase":"after_success"},
@@ -52,7 +52,7 @@ fn task_hook_skip_codes_round_trip_and_old_records_remain_readable() {
 #[test]
 fn null_defaults_are_compact_but_explicit_disable_and_tags_survive() {
     let task: Task = serde_json::from_value(json!({"task_id":"code", "node_did":"did:key:test",
-        "agent_id":"coder", "prompt_template":"work", "enabled":null,"hooks":null,"tags":null}))
+        "agent_did":"coder", "prompt_template":"work", "enabled":null,"hooks":null,"tags":null}))
     .unwrap();
     assert!(task.enabled);
     assert!(task.hooks.is_empty());
@@ -60,23 +60,23 @@ fn null_defaults_are_compact_but_explicit_disable_and_tags_survive() {
     assert_eq!(
         serde_json::to_value(task).unwrap(),
         json!({"task_id":"code", "node_did":"did:key:test",
-        "agent_id":"coder", "prompt_template":"work"})
+        "agent_did":"coder", "prompt_template":"work"})
     );
     round_trip::<AgentContext>(
         json!({"context_id":"code", "node_did":"did:key:test", "tags":["coding"]}),
     );
-    round_trip::<Agent>(json!({"agent_id":"coder", "node_did":"did:key:test",
+    round_trip::<Agent>(json!({"agent_did":"coder", "node_did":"did:key:test",
         "inference_profile_id":"fast", "enabled":false, "tags":["coding"]}));
 }
 
 #[test]
 fn required_scope_and_inference_selection_do_not_default() {
     assert!(serde_json::from_value::<Task>(
-        json!({"task_id":"code", "agent_id":"coder", "prompt_template":"work"})
+        json!({"task_id":"code", "agent_did":"coder", "prompt_template":"work"})
     )
     .is_err());
     assert!(serde_json::from_value::<Agent>(
-        json!({"agent_id":"coder", "node_did":"did:key:test"})
+        json!({"agent_did":"coder", "node_did":"did:key:test"})
     )
     .is_err());
     assert!(serde_json::from_value::<InferenceProfile>(
@@ -92,7 +92,7 @@ fn required_scope_and_inference_selection_do_not_default() {
 fn config_rejects_typos_wrong_tag_types_and_removed_fields() {
     assert!(
         serde_json::from_value::<Task>(json!({"task_id":"code", "node_did":"did:key:test",
-        "agent_id":"coder", "prompt_template":"work", "hook":[]}))
+        "agent_did":"coder", "prompt_template":"work", "hook":[]}))
         .is_err()
     );
     assert!(serde_json::from_value::<AgentContext>(
@@ -100,7 +100,7 @@ fn config_rejects_typos_wrong_tag_types_and_removed_fields() {
     )
     .is_err());
     assert!(
-        serde_json::from_value::<Agent>(json!({"agent_id":"coder", "node_did":"did:key:test",
+        serde_json::from_value::<Agent>(json!({"agent_did":"coder", "node_did":"did:key:test",
         "inference_profile_id":"fast", "model_name":"old-override"}))
         .is_err()
     );
@@ -113,7 +113,7 @@ fn config_rejects_typos_wrong_tag_types_and_removed_fields() {
 #[test]
 fn storage_identity_is_unwrapped_before_strict_config_deserialization() {
     let data = json!({"Task":[{"_docID":"stored-id", "task_id":"code", "node_did":"did:key:test",
-        "agent_id":"coder", "prompt_template":"work"}]});
+        "agent_did":"coder", "prompt_template":"work"}]});
     let rows = serde_helpers::rows_with_doc_id::<Task>(Some(&data), "Task");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0, "stored-id");

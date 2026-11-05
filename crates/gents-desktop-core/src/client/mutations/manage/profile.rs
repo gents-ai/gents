@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 #[cfg(test)]
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::store::collection::Collection;
 use gents::store::config_client::{
     apply_desired_state_plan, list_inference_profiles_in_txn, read_desired_state_record_in_txn,
@@ -16,7 +16,7 @@ use std::sync::Arc;
 pub async fn select_agent_model_on(
     access: &ConfigAccess,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     backend_id: &str,
     model_name: &str,
     reasoning_effort: Option<gents::inference::resolved::ReasoningEffort>,
@@ -27,7 +27,7 @@ pub async fn select_agent_model_on(
         .transact_write("desktop.agent.model", |txn| {
             Box::pin(async move {
                 let (_, mut agent) =
-                    read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_id)
+                    read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_did)
                         .await?
                         .context("The selected agent no longer exists.")?;
                 let profile_id = agent["inference_profile_id"]
@@ -177,7 +177,7 @@ mod tests {
         upsert_inference_profile_on(&access, &original).await?;
         for id in ["first", "second"] {
             let agent = serde_json::from_value(json!({
-                "node_did":owner,"agent_id":id,"inference_profile_id":"shared",
+                "node_did":owner,"agent_did":id,"inference_profile_id":"shared",
                 "display_name":id,"tags":["preserved"]
             }))?;
             super::super::upsert_agent_on(&access, &agent).await?;

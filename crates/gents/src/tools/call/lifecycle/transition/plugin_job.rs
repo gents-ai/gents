@@ -53,7 +53,7 @@ impl ToolCallLifecycle {
     ) -> Result<bool> {
         let terminal = ConfigAccess::transact_local_idempotent(
             &self.node,
-            None,
+            Some(self.actor.clone()),
             IdempotentTransactionRetry::Standard,
             "tool_call.settle_plugin_job",
             |txn| {

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::session::{AgentSession, SessionArchiveOutcome, SessionArchiveReceipt};
 use std::sync::Arc;
 

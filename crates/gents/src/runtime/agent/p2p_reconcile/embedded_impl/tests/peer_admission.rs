@@ -36,7 +36,7 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
             r#"mutation {{ create_AgentRequest(input: {{
                 request_id: "{parent_request_id}", node_did: "{coordinator_did}",
                 purpose: "normal",
-                requester_did: "{coordinator_did}", agent_id: "parent-behavior",
+                requester_did: "{coordinator_did}", agent_did: "parent-behavior",
                 session_id: "remote-session", retry_root_request: "{parent_request_id}",
                 content: "remote parent", lifecycle_state: "pending",
                 execution_origin: "interactive", created_at: "2026-08-30T00:00:00Z",
@@ -124,7 +124,7 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
     }))
     .unwrap();
     let behavior: crate::documents::Agent = serde_json::from_value(serde_json::json!({
-        "agent_id":"behavior-1","node_did":host_did,"context_id":"host-context",
+        "agent_did":"behavior-1","node_did":host_did,"context_id":"host-context",
         "inference_profile_id":"host-profile"
     }))
     .unwrap();
@@ -261,7 +261,7 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
     let caller = parent_lifecycle.request();
     let cause = crate::request::lifecycle::SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
-        caller_agent_id: caller.agent_id.clone(),
+        caller_agent_did: caller.agent_did.clone(),
         caller_session_id: caller.session_id.clone(),
         caller_requester_did: caller.requester_did.clone(),
         caller_request_id: caller.request_id.clone(),
@@ -273,7 +273,7 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
     };
     let target = crate::request::lifecycle::SessionMessageTarget {
         node_did: host_did.clone(),
-        agent_id: active.agent_id.clone(),
+        agent_did: active.agent_did.clone(),
         session_id: active.session_id.clone(),
     };
     let plan = crate::session::message::plan_with_delivery(
@@ -436,6 +436,6 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
         .await
         .expect("join enrollment authority")
         .expect("enrollment authority shutdown");
-    coordinator.shutdown().await;
-    host.shutdown().await;
+    coordinator.shutdown().await.expect("node shutdown");
+    host.shutdown().await.expect("node shutdown");
 }

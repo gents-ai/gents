@@ -4,7 +4,8 @@ use std::time::Duration;
 use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents::NodeIdentity as _;
 use gents_protocol::process_control::{
-    OperatorProcessControlRequest, ProcessControlOutcome, PROCESS_CONTROL_PATH,
+    OperatorProcessControlRequest, ProcessControlOutcome, ToolControlIntent,
+    ToolControlReceiptOutcome, PROCESS_CONTROL_PATH,
 };
 use serde_json::Value;
 use tokio_util::task::AbortOnDropHandle;
@@ -21,11 +22,13 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     let dir = tempfile::tempdir().unwrap();
     let owner =
         Arc::new(gents::KeyIdentity::load_or_create(dir.path().join("owner.key"), None).unwrap());
+    let user = gents::KeyIdentity::load_or_create(dir.path().join("user.key"), None).unwrap();
     let foreign = gents::KeyIdentity::load_or_create(dir.path().join("foreign.key"), None).unwrap();
     let did = owner.did().to_owned();
-    let agent_id = gents::default_agent_id_for_node(&did);
+    let binding = gents::store::identity::provision_agent_identity(owner.as_ref()).unwrap();
+    let agent_did = binding.agent_did.clone();
     let node = Arc::new(
-        gents::defra_node::EmbeddedNode::builder()
+        gents::defra_node::Node::builder()
             .data_path(dir.path().join("node"))
             .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
             .with_node_identity_did(&did)
@@ -35,6 +38,49 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
             .unwrap(),
     );
     gents::ensure_runtime_schemas(&node).await.unwrap();
+    let admin = ConfigAccess::local_as(node.clone(), did.parse().unwrap());
+    for actor in [user.did(), foreign.did(), agent_did.as_str()] {
+        for permission in [
+            gents::store::config_client::NodePermission::DocumentRead,
+            gents::store::config_client::NodePermission::DocumentUpdate,
+            gents::store::config_client::NodePermission::DacRelationAdd,
+        ] {
+            admin
+                .grant_node_permission(&actor.parse().unwrap(), permission)
+                .await
+                .unwrap();
+        }
+    }
+    let user_access = ConfigAccess::local_as(node.clone(), user.did().parse().unwrap());
+    let (node_doc, agent_doc) = user_access.transact_write("test.process_control.identities", |txn| {
+        Box::pin(async {
+            let node_row = txn.execute_with_variables(
+                "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                &serde_json::json!({"input": {"node_did": did}}),
+            ).await?;
+            let agent_row = txn.execute_with_variables(
+                "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                &serde_json::json!({"input": {"node_did": did, "agent_did": agent_did,
+                    "creation_nonce": binding.creation_nonce, "inference_profile_id": "fixture", "enabled": true}}),
+            ).await?;
+            Ok::<_, anyhow::Error>((
+                gents::store::graphql::created_doc_id(&node_row, "Node")?,
+                gents::store::graphql::created_doc_id(&agent_row, "Agent")?,
+            ))
+        })
+    }).await.unwrap();
+    user_access
+        .add_actor_relationship("Node", &node_doc, "runtime_reader", &did.parse().unwrap())
+        .await
+        .unwrap();
+    user_access
+        .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
+        .await
+        .unwrap();
+    user_access
+        .add_actor_relationship("Agent", &agent_doc, "executor", &agent_did.parse().unwrap())
+        .await
+        .unwrap();
     let prompt = "start two background processes";
     let args = r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#;
     let backend = MockStreamingBackend::start_with_plans(
@@ -57,7 +103,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     configure_runtime_agent(
         &node,
         &did,
-        &agent_id,
+        &binding,
         "process-control-backend",
         backend.endpoint(),
         "control-model",
@@ -97,37 +143,28 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
         .await
         .unwrap();
 
-    let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let escaped_did = gents::store::graphql::escape_graphql_string(&did);
-    let escaped_agent = gents::store::graphql::escape_graphql_string(&agent_id);
     let session = "process-control-session";
-    let mutation = format!(
-        r#"mutation {{create_AgentSession(input: {{session_id: "{session}", node_did: "{escaped_did}", requester_did: "{escaped_did}", agent_id: "{escaped_agent}", created_at: "{created_at}", title: {{text: "fixture", source: "generated"}}}}) {{_docID}}}}"#
-    );
-    ConfigAccess::local(node.clone())
-        .write("test.process_control.session", &mutation)
-        .await
-        .unwrap();
-    let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        "process-control-request",
-        &did,
-        &did,
-        &agent_id,
-        session,
-        prompt,
-        "interactive",
-        created_at,
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
-    );
-    gents::sign_agent_request_create(owner.as_ref(), &mut request)
-        .await
-        .unwrap();
-    ConfigAccess::local(node.clone())
-        .write(
-            "test.process_control.request",
-            &request.graphql_mutation().unwrap(),
-        )
+    let request = gents::request::lifecycle::build_signed_client_request(
+        &user_access,
+        gents::RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            gents::RequestIdentity {
+                request_id: "process-control-request".into(),
+                node_did: did.clone(),
+                requester_did: Some(user.did().into()),
+                agent_did: agent_did.clone(),
+                session_id: session.into(),
+                content: prompt.into(),
+                execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+        ),
+        gents::RequestSigner::Identity(&user),
+    )
+    .await
+    .unwrap();
+    gents::request::lifecycle::submit_client_request(&user_access, &request)
         .await
         .unwrap();
 
@@ -159,22 +196,54 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
         tool_call_id: row["tool_call_id"].as_str().unwrap().into(),
         tool_call_doc_id: row["_docID"].as_str().unwrap().into(),
     };
-    let target = command(&workers[0].0);
-    let sibling = command(&workers[1].0);
+    let target_call = command(&workers[0].0);
+    let sibling_call = command(&workers[1].0);
+    let target = gents::tools::call::control::client::prepare(
+        &user_access,
+        &user,
+        &did,
+        &target_call.tool_call_doc_id,
+        Some((&target_call.session_id, &target_call.tool_call_id)),
+        "process_stop",
+    )
+    .await
+    .unwrap();
+    let sibling = gents::tools::call::control::client::prepare(
+        &user_access,
+        &user,
+        &did,
+        &sibling_call.tool_call_doc_id,
+        Some((&sibling_call.session_id, &sibling_call.tool_call_id)),
+        "process_stop",
+    )
+    .await
+    .unwrap();
     let url = format!("http://{addr}{PROCESS_CONTROL_PATH}");
     let graphql = format!("http://{addr}/api/v0/graphql");
     let client = reqwest::Client::new();
-    let owner_access = GraphqlEndpoint::as_principal(&graphql, &did);
+    let owner_access = GraphqlEndpoint::as_principal(&graphql, user.did());
     let foreign_access = GraphqlEndpoint::as_principal(&graphql, foreign.did());
-    let post = |endpoint: &GraphqlEndpoint, request: &OperatorProcessControlRequest| {
+    let post = |endpoint: &GraphqlEndpoint, request: &ToolControlIntent| {
         endpoint.authorize(client.post(&url)).unwrap().json(request)
     };
     let anonymous = client.post(&url).json(&target).send().await.unwrap();
     assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
-    let denied = post(&foreign_access, &target).send().await.unwrap();
-    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let mismatch = post(&foreign_access, &target).send().await.unwrap();
+    assert_eq!(mismatch.status(), StatusCode::FORBIDDEN);
+    let mut foreign_intent = target.clone();
+    foreign_intent.client_did = foreign.did().into();
+    foreign_intent.signature = foreign
+        .sign(&foreign_intent.signing_payload().unwrap())
+        .await
+        .unwrap();
+    let denied = post(&foreign_access, &foreign_intent).send().await.unwrap();
+    assert_eq!(denied.status(), StatusCode::NOT_FOUND);
     let mut foreign_node = target.clone();
     foreign_node.node_did = foreign.did().to_owned();
+    foreign_node.signature = user
+        .sign(&foreign_node.signing_payload().unwrap())
+        .await
+        .unwrap();
     assert_eq!(
         post(&owner_access, &foreign_node)
             .send()
@@ -185,17 +254,43 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     );
     let mut wrong = target.clone();
     wrong.tool_call_doc_id = sibling.tool_call_doc_id.clone();
+    wrong.signature = user.sign(&wrong.signing_payload().unwrap()).await.unwrap();
     let wrong_response = post(&owner_access, &wrong).send().await.unwrap();
     assert_eq!(wrong_response.status(), StatusCode::NOT_FOUND);
     assert!(process_alive(workers[0].1));
     assert!(process_alive(workers[1].1));
+    let mut changes = gents::subscribe_collections(&node, ["AgentToolControl"]).unwrap();
     let response = post(&owner_access, &target).send().await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response.json::<ProcessControlOutcome>().await.unwrap(),
-        ProcessControlOutcome::Cancelled {
-            live_execution_cancelled: true
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let ProcessControlOutcome::Queued { intent_doc_id } = response.json().await.unwrap() else {
+        panic!("control must return a durable intent");
+    };
+    let receipt = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if let Some(receipt) = gents::tools::call::control::client::read_receipt(
+                &user_access,
+                &did,
+                &intent_doc_id,
+                &target.tool_call_doc_id,
+                "process_stop",
+            )
+            .await
+            .unwrap()
+            {
+                break receipt;
+            }
+            changes.recv().await.expect("control observation closed");
         }
+    })
+    .await
+    .expect("selected agent must confirm control");
+    assert_eq!(receipt.agent_did, agent_did);
+    assert_eq!(receipt.client_did, user.did());
+    assert_eq!(
+        receipt.outcome,
+        ToolControlReceiptOutcome::Process(ProcessControlOutcome::Cancelled {
+            live_execution_cancelled: true
+        })
     );
     assert!(!process_alive(workers[0].1));
     assert!(process_alive(workers[1].1));
@@ -207,14 +302,42 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     assert!(rows.iter().any(
         |row| row["_docID"] == sibling.tool_call_doc_id && row["lifecycle_state"] == "running"
     ));
+    let sibling_response = post(&owner_access, &sibling).send().await.unwrap();
+    assert_eq!(sibling_response.status(), StatusCode::ACCEPTED);
+    let ProcessControlOutcome::Queued { intent_doc_id } = sibling_response.json().await.unwrap()
+    else {
+        panic!("sibling control must return a durable intent");
+    };
+    let receipt = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if let Some(receipt) = gents::tools::call::control::client::read_receipt(
+                &user_access,
+                &did,
+                &intent_doc_id,
+                &sibling.tool_call_doc_id,
+                "process_stop",
+            )
+            .await
+            .unwrap()
+            {
+                break receipt;
+            }
+            changes.recv().await.expect("control observation closed");
+        }
+    })
+    .await
+    .expect("selected agent must confirm sibling control");
     assert_eq!(
-        post(&owner_access, &sibling).send().await.unwrap().status(),
-        StatusCode::OK
+        receipt.outcome,
+        ToolControlReceiptOutcome::Process(ProcessControlOutcome::Cancelled {
+            live_execution_cancelled: true
+        })
     );
+    assert!(!process_alive(workers[1].1));
     shutdown.send(true).unwrap();
     running.await.unwrap().unwrap();
     drop(server);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[cfg(unix)]

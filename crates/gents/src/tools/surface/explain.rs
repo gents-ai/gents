@@ -115,13 +115,13 @@ impl AgentToolSurfaceConfig {
         &self,
         mcp_services_online: bool,
         own_node_did: &str,
-        active_agent_ids: &RapidHashSet<String>,
+        active_agent_dids: &RapidHashSet<String>,
     ) -> ToolSurfaceExplanation {
         let availability = RuntimeToolAvailability::for_mcp_presence(mcp_services_online);
         let surface = self.resolve_with_available_agent_targets_for_runtime_availability(
             availability.clone(),
             own_node_did,
-            active_agent_ids,
+            active_agent_dids,
         );
         ToolSurfaceExplanation::from_resolved_with_runtime(self, &availability, &surface)
     }
@@ -130,11 +130,11 @@ impl AgentToolSurfaceConfig {
         &self,
         availability: RuntimeToolAvailability,
         own_node_did: &str,
-        active_agent_ids: &RapidHashSet<String>,
+        active_agent_dids: &RapidHashSet<String>,
     ) -> ToolSurface {
         let mut agent_tools = self.agent_tools().clone();
         agent_tools.targets.retain(|target| {
-            target.target_node_did != own_node_did || active_agent_ids.contains(&target.agent_id)
+            target.target_node_did != own_node_did || active_agent_dids.contains(&target.agent_did)
         });
         self.resolve_with_agent_tools_for_runtime_availability(availability, agent_tools)
     }
@@ -143,12 +143,12 @@ impl AgentToolSurfaceConfig {
         &self,
         availability: RuntimeToolAvailability,
         own_node_did: &str,
-        active_agent_ids: &RapidHashSet<String>,
+        active_agent_dids: &RapidHashSet<String>,
     ) -> ToolSurfaceExplanation {
         let surface = self.resolve_with_available_agent_targets_for_runtime_availability(
             availability.clone(),
             own_node_did,
-            active_agent_ids,
+            active_agent_dids,
         );
         ToolSurfaceExplanation::from_resolved_with_runtime(self, &availability, &surface)
     }

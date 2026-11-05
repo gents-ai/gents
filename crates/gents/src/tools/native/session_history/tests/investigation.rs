@@ -6,6 +6,10 @@ async fn sessions_get_reports_timeline_tools_usage_and_compactions() {
     let tool = SessionHistoryTool::new(
         node,
         "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+        identity::Did::new(
+            ("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7").to_string(),
+        )
+        .unwrap(),
     );
 
     let parsed = load_session_investigation(&tool.node, &tool.node_did, "session-a")

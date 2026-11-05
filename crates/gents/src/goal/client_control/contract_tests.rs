@@ -26,26 +26,40 @@ pub(super) async fn persist_command(
     access: &crate::ConfigAccess,
     command: &SessionGoalControl,
 ) -> String {
+    try_persist_command(access, command).await.unwrap()
+}
+
+pub(super) async fn try_persist_command(
+    access: &crate::ConfigAccess,
+    command: &SessionGoalControl,
+) -> anyhow::Result<String> {
     let peer = command
         .requester_peer_id
         .as_deref()
         .map(|peer| format!(r#""{}""#, escape_graphql_string(peer)))
         .unwrap_or_else(|| "null".into());
+    let session_doc = command
+        .session_doc_id
+        .as_deref()
+        .map(|id| format!("\"{}\"", escape_graphql_string(id)))
+        .unwrap_or_else(|| "null".into());
     let response = access.write("test.goal_control", &format!(r#"mutation {{ create_AgentSessionGoalControl(input: {{
-        command_id: "{}", requester_did: "{}", requester_peer_id: {peer}, node_did: "{}", session_id: "{}", intent_json: "{}"
+        command_id: "{}", requester_did: "{}", requester_peer_id: {peer}, node_did: "{}", agent_did: "{}", session_id: "{}", session_doc_id: {session_doc}, intent_json: "{}"
     }}) {{ _docID }} }}"#, escape_graphql_string(&command.command_id), escape_graphql_string(&command.requester_did),
-        escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id),
-        escape_graphql_string(&serde_json::to_string(command).unwrap()))).await.unwrap();
-    crate::store::graphql::created_doc_id(&response, "AgentSessionGoalControl").unwrap()
+        escape_graphql_string(&command.node_did), escape_graphql_string(&command.agent_did), escape_graphql_string(&command.session_id),
+        escape_graphql_string(&serde_json::to_string(command)?))).await?;
+    let document = crate::store::graphql::created_doc_id(&response, "AgentSessionGoalControl")?;
+    crate::goal::client_submission::grant_command_relationships(access, command, &document).await?;
+    Ok(document)
 }
 
 pub(super) async fn receipt(
     access: &crate::ConfigAccess,
     doc_id: &str,
 ) -> Option<SessionGoalControlReceipt> {
-    let response = access.execute(&format!(r#"{{ AgentSessionGoalControl(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ receipt_json }} }}"#,
+    let response = access.execute(&format!(r#"{{ AgentSessionGoalReceipt(filter: {{ command_doc_id: {{ _eq: "{}" }} }}) {{ receipt_json }} }}"#,
         escape_graphql_string(doc_id))).await.unwrap();
-    response["data"]["AgentSessionGoalControl"][0]["receipt_json"]
+    response["data"]["AgentSessionGoalReceipt"][0]["receipt_json"]
         .as_str()
         .map(|raw| serde_json::from_str(raw).unwrap())
 }
@@ -60,18 +74,12 @@ async fn generated_goal_client_controls_drive_signed_commands() {
             case.facts["unfinished_request"] == false,
         )
         .await;
-        execute(&fixture.node, &format!(r#"mutation {{ update_Goal(docID: "{}", input: {{ objective: "{}" }}) {{ _docID }} }}"#,
+        execute(&fixture.user_access(), &format!(r#"mutation {{ update_Goal(docID: "{}", input: {{ objective: "{}" }}) {{ _docID }} }}"#,
             escape_graphql_string(&fixture.goal.doc_id), escape_graphql_string(case.before["objective"].as_str().unwrap()))).await;
-        crate::session::ensure_session_with_agent_id_and_requester_did(
-            &fixture.node,
-            SESSION,
-            fixture.identity.did(),
-            "contract-behavior",
-            Some(fixture.identity.did()),
-        )
-        .await
-        .unwrap();
-        let access = crate::ConfigAccess::local(fixture.node.clone());
+        let access = crate::ConfigAccess::local_as(
+            fixture.node.clone(),
+            ::identity::Did::new(fixture.user.did()).unwrap(),
+        );
         let session = access
             .transact_readonly("test.goal_session", |txn| {
                 Box::pin(async {
@@ -104,9 +112,16 @@ async fn generated_goal_client_controls_drive_signed_commands() {
         let mut command = SessionGoalControl {
             version: SESSION_GOAL_CONTROL_VERSION,
             command_id: uuid::Uuid::new_v4().to_string(),
-            requester_did: fixture.identity.did().into(),
+            requester_did: fixture.user.did().into(),
             requester_peer_id: None,
             node_did: fixture.identity.did().into(),
+            agent_did: session.session.agent_did.clone(),
+            agent_doc_id: super::agent_document_for_test(
+                &access,
+                fixture.identity.did(),
+                &session.session.agent_did,
+            )
+            .await,
             session_id: SESSION.into(),
             session_doc_id: Some(session.doc_id),
             issued_at: now.to_rfc3339(),
@@ -131,7 +146,7 @@ async fn generated_goal_client_controls_drive_signed_commands() {
             signature: Vec::new(),
         };
         command.signature = fixture
-            .identity
+            .user
             .sign(&command.signing_payload().unwrap())
             .await
             .unwrap();
@@ -141,34 +156,29 @@ async fn generated_goal_client_controls_drive_signed_commands() {
         let doc_id = persist_command(&access, &command).await;
         let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
         assert_eq!(
-            process_command(&fixture.node, &identity, &doc_id)
-                .await
-                .unwrap(),
+            process_command(
+                &fixture.node,
+                &identity,
+                &doc_id,
+                &::identity::Did::new(&command.agent_did).unwrap()
+            )
+            .await
+            .unwrap(),
             None,
             "{}",
             case.name
         );
-        let result = access.execute(&format!(r#"{{ AgentSessionGoalControl(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ receipt_json }} }}"#,
-            escape_graphql_string(&doc_id))).await.unwrap();
-        let receipt: SessionGoalControlReceipt = serde_json::from_str(
-            result["data"]["AgentSessionGoalControl"][0]["receipt_json"]
-                .as_str()
-                .unwrap(),
-        )
-        .unwrap();
+        let receipt = receipt(&access, &doc_id).await.unwrap();
         receipt.validate_for(&command).unwrap();
         assert!(identity
             .verify(
-                &receipt.node_did,
+                &receipt.agent_did,
                 &receipt.signing_payload().unwrap(),
                 &receipt.signature
             )
             .await
             .unwrap());
-        let current = load_canonical_goal(&fixture.node, identity.did(), SESSION)
-            .await
-            .unwrap()
-            .unwrap();
+        let current = fixture.current_goal().await;
         match case.expected {
             Some(expected) => {
                 assert!(
@@ -225,22 +235,86 @@ async fn generated_goal_client_controls_drive_signed_commands() {
             }
         }
         let first_receipt = serde_json::to_value(receipt).unwrap();
-        process_command(&fixture.node, &identity, &doc_id)
-            .await
-            .unwrap();
-        let replay = access.execute(&format!(r#"{{ AgentSessionGoalControl(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ receipt_json }} }}"#,
-            escape_graphql_string(&doc_id))).await.unwrap();
+        process_command(
+            &fixture.node,
+            &identity,
+            &doc_id,
+            &::identity::Did::new(&command.agent_did).unwrap(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
-            serde_json::from_str::<Value>(
-                replay["data"]["AgentSessionGoalControl"][0]["receipt_json"]
-                    .as_str()
-                    .unwrap()
-            )
-            .unwrap(),
+            serde_json::to_value(self::receipt(&access, &doc_id).await.unwrap()).unwrap(),
             first_receipt,
             "{} receipt replay",
             case.name
         );
-        fixture.node.shutdown().await;
+        fixture.node.shutdown().await.expect("node shutdown");
     }
+}
+
+#[tokio::test]
+async fn goal_command_signature_binds_modeled_physical_targets() {
+    let directory = tempfile::tempdir().unwrap();
+    let user = crate::store::identity::KeyIdentity::load_or_create(
+        directory.path().join("user.key"),
+        None,
+    )
+    .unwrap();
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().cross_actor_authorization_cases;
+    let baseline = cases
+        .iter()
+        .find(|case| case.name == "committed_claim")
+        .unwrap();
+    let mut command = SessionGoalControl {
+        version: SESSION_GOAL_CONTROL_VERSION,
+        command_id: baseline.intent.document.clone(),
+        requester_did: user.did().into(),
+        requester_peer_id: None,
+        node_did: "node".into(),
+        agent_did: baseline.intent.selected_agent.clone(),
+        agent_doc_id: baseline.intent.agent_document.clone(),
+        session_id: "session".into(),
+        session_doc_id: Some(baseline.intent.session.clone()),
+        issued_at: "2026-11-04T00:00:00Z".into(),
+        expires_at: "2026-11-04T00:01:00Z".into(),
+        expected: Some(GoalRevision {
+            document: "goal".into(),
+            composite: "revision".into(),
+        }),
+        operation: GoalOperation::Pause {},
+        initial_request: None,
+        signature: Vec::new(),
+    };
+    command.signature = user
+        .sign(&command.signing_payload().unwrap())
+        .await
+        .unwrap();
+    for name in ["wrong_session", "wrong_agent_document"] {
+        let case = cases.iter().find(|case| case.name == name).unwrap();
+        let mut changed = command.clone();
+        changed.session_doc_id = Some(case.observation.session.clone());
+        changed.agent_doc_id = case.observation.agent_document.clone();
+        let verified = user
+            .verify(
+                user.did(),
+                &changed.signing_payload().unwrap(),
+                &command.signature,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            verified,
+            case.decision == crate::lean_vocab_test::LeanCrossActorDecision::Claimed,
+            "{name}"
+        );
+    }
+    assert!(user
+        .verify(
+            user.did(),
+            &command.signing_payload().unwrap(),
+            &command.signature
+        )
+        .await
+        .unwrap());
 }

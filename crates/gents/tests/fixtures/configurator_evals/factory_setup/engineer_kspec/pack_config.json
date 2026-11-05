@@ -2,7 +2,7 @@
   "node": {},
   "agents": [
     {
-      "agent_id": "engineer",
+      "agent_slot": "engineer",
       "display_name": "The Engineer",
       "description": "Walks you through configuring Gents for the work you want to do.",
       "context_id": "engineer-context",

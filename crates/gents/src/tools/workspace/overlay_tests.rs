@@ -520,7 +520,7 @@ fn principal_and_placement_identity_mismatches_fail_closed() {
 pub(crate) struct ArtifactTestFixture {
     pub grant: crate::tools::workspace::ArtifactGrant,
     pub owner: crate::request::lifecycle::RequestLifecycle,
-    pub node: std::sync::Arc<defra_node::EmbeddedNode>,
+    pub node: std::sync::Arc<defra_node::Node>,
     pub _dir: tempfile::TempDir,
 }
 
@@ -546,7 +546,7 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
         );
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
-    async fn execute(node: &defra_node::EmbeddedNode, query: &str) {
+    async fn execute(node: &defra_node::Node, query: &str) {
         let result = node.execute(query).await;
         assert!(!result.has_errors(), "{query}: {:?}", result.errors);
     }
@@ -574,7 +574,7 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     let workspace_owner = workspace_identity.did().to_owned();
     assert_ne!(workspace_owner, did);
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .data_path(root.join("db"))
             .with_node_identity_did(&did)
             .build()
@@ -846,7 +846,7 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
     };
     use crate::tools::native::{CommandConstraints, CommandNetworkMode};
 
-    async fn execute(node: &defra_node::EmbeddedNode, mutation: &str) {
+    async fn execute(node: &defra_node::Node, mutation: &str) {
         let result = node.execute(mutation).await;
         assert!(!result.has_errors(), "{mutation}: {:?}", result.errors);
     }
@@ -1028,6 +1028,7 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
     assert!(!result.has_errors(), "{:?}", result.errors);
     let error = crate::tools::workspace::cleanup_workspace(
         &node,
+        &owner.request().agent_did,
         owner.request().workspace_owner_node_did.as_deref().unwrap(),
         "artifact-workspace",
         Some(&root),
@@ -1049,6 +1050,7 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
         .unwrap();
     crate::tools::workspace::cleanup_workspace(
         &node,
+        &owner.request().agent_did,
         owner.request().workspace_owner_node_did.as_deref().unwrap(),
         "artifact-workspace",
         Some(&root),

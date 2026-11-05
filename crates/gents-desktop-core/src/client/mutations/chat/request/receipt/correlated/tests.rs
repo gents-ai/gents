@@ -78,7 +78,7 @@ impl Facts {
                 request_id,
                 session_id: session,
                 node_did: node,
-                agent_id: Some("fixture-agent".into()),
+                agent_did: Some("fixture-agent".into()),
             },
         )?;
         self.payloads
@@ -365,7 +365,7 @@ async fn generated_receipt_traces_survive_durable_journal_roundtrips() -> Result
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     result
 }
 
@@ -385,7 +385,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
     let proposal = facts.proposal(&first["intent"], &first["proposal"]).await?;
     let home = tempfile::tempdir()?;
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&proposal.intent.node_did)
             .data_path(home.path())
             .build()
@@ -401,11 +401,11 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
     let right = right?;
     assert_eq!(left.reference, right.reference);
     assert_eq!(facts.decision_json(left.result())?, trace[0]["output"]);
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     drop(node);
 
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&proposal.intent.node_did)
             .data_path(home.path())
             .build()
@@ -432,12 +432,12 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     drop(node);
     result?;
 
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(&proposal.intent.node_did)
             .data_path(home.path())
             .build()
@@ -461,7 +461,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     result
 }
 
@@ -637,7 +637,7 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
             Ok::<(), anyhow::Error>(())
         }
         .await;
-        node.shutdown().await;
+        node.shutdown().await.unwrap();
         result?;
     }
     Ok(())
@@ -809,7 +809,7 @@ async fn first_submission_uses_the_caller_identity_and_freezes_goal_assignment()
     };
     let command = serde_json::to_vec(
         &json!({"nodeDid":intent.node_did, "requestId":intent.request_id,
-        "sessionId":session, "agentId":"fixture-agent", "content":"authored submission", "input":input}),
+        "sessionId":session, "agentDid":"fixture-agent", "content":"authored submission", "input":input}),
     )?;
     intent = Intent::new(
         intent.client_did,
@@ -899,6 +899,6 @@ async fn first_submission_uses_the_caller_identity_and_freezes_goal_assignment()
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     result
 }

@@ -8,7 +8,7 @@ use crate::lean_vocab_test::{
 };
 use crate::store::graphql::escape_graphql_string;
 use anyhow::Context;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
 use serde_json::{json, Value};
 
@@ -240,7 +240,11 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
         "{}: completion changed Goal",
         case.name
     );
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -311,7 +315,7 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
             .unwrap();
     let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
-        request_id: "{}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_id: "general",
+        request_id: "{}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_did: "general",
         session_id: "{}", content: "background input", input: {input},
         execution_origin: "scheduled", lifecycle_state: "failed",
         failure_reason: "backend admission failed", terminalized_at: "2026-07-15T00:00:00Z",
@@ -404,7 +408,11 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         "{}: redrive changed Goal",
         case.name
     );
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -605,7 +613,7 @@ pub(crate) async fn selected_background_wake_with_successor(
             .unwrap(),
         TerminalizeResult::Won
     );
-    let mut watcher = DefraWatcher::new(node.clone(), did).expect("request watcher");
+    let mut watcher = DefraWatcher::new_legacy(node.clone(), did).expect("request watcher");
     let selected = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             let selected = watcher
@@ -649,7 +657,7 @@ async fn generated_r6_notification_precedes_continuation_claim() {
     } = selected_background_wake().await;
     let node = &admission.node;
     let did = &admission.node_did;
-    let behavior = selected.agent_id.clone();
+    let behavior = selected.agent_did.clone();
     let mut continuation = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         &behavior,
@@ -676,7 +684,7 @@ async fn generated_r6_notification_precedes_continuation_claim() {
         "claim preserves the preceding assistant wait"
     );
     drop(continuation);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -731,7 +739,7 @@ async fn a_retried_over_bound_wake_is_refused_again() {
             .unwrap();
     let deadline = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
     let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
-        request_id: "{refused_wake}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_id: "general",
+        request_id: "{refused_wake}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_did: "general",
         session_id: "{}", content: "background input", input: {input},
         execution_origin: "scheduled", lifecycle_state: "failed",
         failure_reason: "AgentRequest causal hop exceeds the target node's max_request_hop",
@@ -766,6 +774,10 @@ async fn a_retried_over_bound_wake_is_refused_again() {
         Some(bound),
         hop
     ));
-    admission.node.shutdown().await;
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }

@@ -104,7 +104,7 @@ pub async fn doc_id_for_tools(graphql: &str, tools_id: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("Tools row missing _docID for {tools_id}"))
 }
 
-pub async fn exec(node: &gents::defra_node::EmbeddedNode, query: &str) -> Result<()> {
+pub async fn exec(node: &gents::defra_node::Node, query: &str) -> Result<()> {
     let response = node.execute(query).await;
     if response.has_errors() {
         bail!("GraphQL mutation failed: {:?}", response.errors);

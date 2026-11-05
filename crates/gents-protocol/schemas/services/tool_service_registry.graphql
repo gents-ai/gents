@@ -1,4 +1,4 @@
-type ToolServiceRegistry @branchable @index(fields: ["node_did", "service_id"], unique: true) {
+type ToolServiceRegistry @index(fields: ["node_did", "service_id"], unique: true) {
     service_id: String @index
     node_did: String @index
     display_name: String

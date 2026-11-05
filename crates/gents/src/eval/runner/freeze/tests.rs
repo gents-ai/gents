@@ -4,7 +4,7 @@ use tempfile::TempDir;
 
 use super::snapshot::DEFINITION_FILE;
 use super::*;
-use crate::documents::{ensure_node, EvalSplit};
+use crate::documents::EvalSplit;
 use crate::eval::invalidate_run;
 use crate::eval::runner::embedded::EmbeddedHome;
 use crate::eval::scoring::PILOT_PURPOSE;
@@ -24,15 +24,21 @@ pub(crate) struct Launching {
 impl Launching {
     pub(crate) async fn new() -> Self {
         let home = EmbeddedHome::create_temp("freeze").await.unwrap();
-        let access = ConfigAccess::local(home.node.clone());
-        ensure_node(&home.node, OWNER).await.unwrap();
-        let launching = Self {
-            home,
-            access,
-            dirs: tempfile::tempdir().unwrap(),
-        };
+        let dirs = tempfile::tempdir().unwrap();
+        let evaluator = crate::store::identity::KeyIdentity::load_or_create(
+            dirs.path().join("evaluator.key"),
+            None,
+        )
+        .unwrap();
+        let access = ConfigAccess::local_as(
+            home.node.clone(),
+            ::identity::Did::new(crate::store::identity::NodeIdentity::did(&evaluator).to_owned())
+                .unwrap(),
+        );
+        let launching = Self { home, access, dirs };
         launching
             .install(vec![
+                (Collection::Node, json!({"node_did": OWNER})),
                 (Collection::EvalDefinition, definition()),
                 (
                     Collection::InferenceBackend,
@@ -103,7 +109,11 @@ impl Launching {
     }
 
     pub(crate) fn evaluator_did(&self) -> String {
-        self.home.did().to_string()
+        self.access.actor_did().unwrap()
+    }
+
+    pub(crate) fn provision_agent(&self) -> gents_protocol::agent_identity::AgentIdentityBinding {
+        crate::store::identity::provision_agent_identity(self.home.identity.as_ref()).unwrap()
     }
 
     pub(crate) fn pack(&self, name: &str, bash_mode: &str) -> PathBuf {
@@ -124,7 +134,7 @@ impl Launching {
                 cell_id: "baseline".into(),
                 label: "baseline".into(),
                 source: CellSource::Directory(pack.to_path_buf()),
-                agent_id: "monitor".into(),
+                agent_slot: "monitor".into(),
                 inference_profile_id: "local".into(),
             }],
             trials_per_case: 2,
@@ -259,7 +269,7 @@ pub(crate) fn write_fixture_pack(root: &Path, bash_mode: &str) {
     let config = json!({
         "node": {},
         "agents": [{
-            "agent_id": "monitor",
+            "agent_slot": "monitor",
             "display_name": "Monitor",
             "context_id": "monitor-context",
             "inference_profile_id": "gents:inference-slot:primary",
@@ -316,7 +326,7 @@ async fn freeze_writes_the_run_materializes_the_pack_and_is_idempotent() {
     assert_eq!(frozen.definition.definition_id, "monitor-findings");
 
     let cell = &frozen.cells[0];
-    assert_eq!(cell.spec.subject.agent_id, "monitor");
+    assert_eq!(cell.spec.subject.agent_slot, "monitor");
     assert!(cell.spec.subject.pack_digest.starts_with("sha256:"));
     assert_eq!(
         frozen.record.origin.cells[0].subject.pack_digest,

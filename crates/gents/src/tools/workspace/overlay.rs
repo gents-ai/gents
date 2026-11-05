@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use anyhow::{anyhow, bail, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -490,9 +490,9 @@ async fn ensure_request_binding(
         AdmitBinding::Reuse(_) => Ok(()),
         AdmitBinding::Create { binding, release } => {
             for released in release {
-                persist_workspace_binding_doc(node, &released).await?;
+                persist_workspace_binding_doc(node, &request.agent_did, &released).await?;
             }
-            persist_workspace_binding_doc(node, &binding).await
+            persist_workspace_binding_doc(node, &request.agent_did, &binding).await
         }
     }
 }
@@ -619,13 +619,15 @@ pub(super) async fn load_workspace_bindings_for(
 
 pub(super) async fn persist_workspace_binding_doc(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor_did: &str,
     doc: &WorkspaceBindingDoc,
 ) -> Result<()> {
-    persist_workspace_binding_docs(node, std::slice::from_ref(doc)).await
+    persist_workspace_binding_docs(node, actor_did, std::slice::from_ref(doc)).await
 }
 
 pub(super) async fn persist_workspace_binding_docs(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor_did: &str,
     docs: &[WorkspaceBindingDoc],
 ) -> Result<()> {
     if docs.is_empty() {
@@ -636,11 +638,11 @@ pub(super) async fn persist_workspace_binding_docs(
     } else {
         workspace_bindings_upsert_mutation(docs)
     };
-    crate::store::config_client::ConfigAccess::write_local(
-        node,
-        "workspace.upsert_binding",
-        &mutation,
+    crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(actor_did.to_owned())?,
     )
+    .write("workspace.upsert_binding", &mutation)
     .await
     .with_context(|| {
         format!(

@@ -53,7 +53,7 @@ pub(super) async fn load_thread_state(
             else {
                 return Ok(None);
             };
-            if row.session.agent_id != state.agent_id.as_ref() || is_started(&row.session) {
+            if row.session.agent_did != state.agent_did.as_ref() || is_started(&row.session) {
                 return Ok(None);
             }
             let head = load_head_in_txn(txn, state, session_id).await?;
@@ -89,7 +89,7 @@ async fn load_head_in_txn(
         return Ok(None);
     };
     anyhow::ensure!(
-        head.agent_id == state.agent_id.as_ref(),
+        head.agent_did == state.agent_did.as_ref(),
         "thread request head conflicts with bound session agent"
     );
     let doc_id = escape_graphql_string(&head.observed.request_doc_id);
@@ -102,7 +102,7 @@ async fn load_head_in_txn(
         .execute(&format!(
             r#"{{
         AgentRequest(filter:{{{scope},_docID:{{_eq:"{doc_id}"}}}}) {{
-            _docID request_id node_did requester_did session_id agent_id created_at lifecycle_state
+            _docID request_id node_did requester_did session_id agent_did created_at lifecycle_state
             retry_parent_request superseded_by_request failure_reason content input
         }}
     }}"#
@@ -122,15 +122,15 @@ async fn load_head_in_txn(
 
 pub(super) async fn list_scoped_sessions(state: &ShimState) -> Result<Vec<AgentSession>> {
     let owner = escape_graphql_string(&state.node_did);
-    let agent = escape_graphql_string(&state.agent_id);
+    let agent = escape_graphql_string(&state.agent_did);
     ConfigAccess::transact_local_write(&state.node,None,"codex.thread.list",|txn| {
-        let query = format!(r#"{{AgentSession(filter:{{node_did:{{_eq:"{owner}"}},requester_did:{{_eq:"{owner}"}},agent_id:{{_eq:"{agent}"}}}},order:{{created_at:DESC}}){{{AGENT_SESSION_FIELDS}}}}}"#);
+        let query = format!(r#"{{AgentSession(filter:{{node_did:{{_eq:"{owner}"}},requester_did:{{_eq:"{owner}"}},agent_did:{{_eq:"{agent}"}}}},order:{{created_at:DESC}}){{{AGENT_SESSION_FIELDS}}}}}"#);
         Box::pin(async move {
             let response = txn.execute(&query).await?;
             let mut identities = rapidhash::RapidHashSet::default();
             rows(&response,"AgentSession")?.iter().map(|row| {
                 let session = decode_session_row(row)?.session;
-                anyhow::ensure!(session.node_did==state.node_did.as_ref() && session.requester_did.as_deref()==Some(state.local_requester_did()) && session.agent_id==state.agent_id.as_ref(),"thread list crossed owner/requester/agent scope");
+                anyhow::ensure!(session.node_did==state.node_did.as_ref() && session.requester_did.as_deref()==Some(state.local_requester_did()) && session.agent_did==state.agent_did.as_ref(),"thread list crossed owner/requester/agent scope");
                 anyhow::ensure!(identities.insert(session.session_id.clone()),"thread list has duplicate canonical session identity");
                 Ok(session)
             }).filter(|session| !matches!(session, Ok(session) if is_started(session))).collect()

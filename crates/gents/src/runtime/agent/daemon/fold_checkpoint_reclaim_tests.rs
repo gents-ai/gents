@@ -1,5 +1,5 @@
 async fn create_user_message(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     agent_config: &ResolvedAgent,
     session_id: &str,
     content: &str,
@@ -11,7 +11,7 @@ async fn create_user_message(
         uuid::Uuid::new_v4().to_string(),
         agent_config.node_did(),
         agent_config.node_did(),
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         session_id,
         content,
         "interactive",
@@ -47,7 +47,7 @@ async fn create_user_message(
 }
 
 async fn authored_user_entries(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     request: &AgentRequest,
 ) -> Vec<(String, crate::inference::llm::message::Message)> {
     let response = node
@@ -90,15 +90,15 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         crate::test_support::install_test_agent(
             &node,
             agent_config.node_did(),
-            &agent_config.agent_id,
+            &agent_config.agent_did,
         )
         .await;
         let session_id = uuid::Uuid::new_v4().to_string();
-        crate::session::ensure_session_with_agent_id_and_requester_did(
+        crate::session::ensure_session_with_agent_did_and_requester_did(
             &node,
             &session_id,
             agent_config.node_did(),
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             Some(agent_config.node_did()),
         )
         .await
@@ -128,7 +128,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         );
         let mut first = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             agent_config.node_did(),
             head.clone(),
             30,
@@ -145,14 +145,21 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         ];
         for (key, content) in input.iter().take(published_before_crash) {
             writer
-                .publish_authored_message(&first, key, &crate::inference::llm::message::Message::user(content))
+                .publish_authored_message(
+                    &first,
+                    key,
+                    &crate::inference::llm::message::Message::user(content),
+                )
                 .await
                 .unwrap();
         }
         if persist_checkpoint {
             let commit_cid = first.request_commit_cid().unwrap().to_owned();
             let boundary = crate::turn::provider_context_reduction::capture_source_boundary(
-                node.as_ref(),
+                &crate::ConfigAccess::local_as(
+                    node.clone(),
+                    ::identity::Did::new(&agent_config.agent_did).unwrap(),
+                ),
                 &session_id,
                 agent_config.node_did(),
                 Some(agent_config.node_did()),
@@ -176,6 +183,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             crate::turn::provider_context_reduction::persist(
                 &node,
                 crate::turn::provider_context_reduction::NewProviderContextReduction {
+                    agent_did: &agent_config.agent_did,
                     node_did: agent_config.node_did(),
                     requester_did: Some(agent_config.node_did()),
                     session_id: &session_id,
@@ -190,11 +198,12 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                     compacted_prefix: &prefix,
                     retained_suffix: &suffix,
                     checkpoint_messages: &suffix,
-                    replay_associations: &crate::turn::provider_context_reduction::ReplayAssociations {
-                        required: Vec::new(),
-                        prefix_rows: prefix.iter().map(row).collect(),
-                        retained_rows: suffix.iter().map(row).collect(),
-                    },
+                    replay_associations:
+                        &crate::turn::provider_context_reduction::ReplayAssociations {
+                            required: Vec::new(),
+                            prefix_rows: prefix.iter().map(row).collect(),
+                            retained_rows: suffix.iter().map(row).collect(),
+                        },
                     summary: "",
                     original_tokens: 100,
                     compacted_tokens: 20,
@@ -229,7 +238,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
 
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             &[],
             false,
             &[],
@@ -252,7 +261,9 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+                crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                    node.clone(),
+                ),
             ),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -321,13 +332,13 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                 "{case}: the restored checkpoint was the dispatched projection"
             );
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         let _ = std::fs::remove_dir_all(data_path);
     }
 }
 
 async fn create_retry(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     agent_config: &ResolvedAgent,
     parent: &AgentRequest,
 ) -> AgentRequest {
@@ -337,7 +348,7 @@ async fn create_retry(
         uuid::Uuid::new_v4().to_string(),
         agent_config.node_did(),
         agent_config.node_did(),
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &parent.session_id,
         &parent.content,
         "interactive",
@@ -367,13 +378,13 @@ async fn create_retry(
 }
 
 async fn scripted_daemon(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     agent_config: &Arc<ResolvedAgent>,
     provider_inputs: &Arc<std::sync::Mutex<Vec<String>>>,
 ) -> AgentDaemon<WakeInputModel> {
     let prompt_builder = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -394,7 +405,9 @@ async fn scripted_daemon(
         prompt_builder,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                node.clone(),
+            ),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -439,15 +452,15 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
         crate::test_support::install_test_agent(
             &node,
             agent_config.node_did(),
-            &agent_config.agent_id,
+            &agent_config.agent_did,
         )
         .await;
         let session_id = uuid::Uuid::new_v4().to_string();
-        crate::session::ensure_session_with_agent_id_and_requester_did(
+        crate::session::ensure_session_with_agent_did_and_requester_did(
             &node,
             &session_id,
             agent_config.node_did(),
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             Some(agent_config.node_did()),
         )
         .await
@@ -467,7 +480,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
         );
         let mut failed = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
-            &agent_config.agent_id,
+            &agent_config.agent_did,
             agent_config.node_did(),
             parent.clone(),
             30,
@@ -589,7 +602,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             );
             assert!(inputs[1].contains(&queued.content), "{}", case.name);
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         let _ = std::fs::remove_dir_all(data_path);
     }
 }

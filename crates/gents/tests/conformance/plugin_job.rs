@@ -740,26 +740,26 @@ fn by_retry_key(mut kills: Vec<(String, KillAction)>) -> Vec<(String, KillAction
 /// Lean `PluginData.Invocation` as the native call context that carries the
 /// stamp values available there. The values are placeholders.
 fn stamp_context(invocation: &str) -> StampContext {
-    let node_did = "did:key:node".to_owned();
+    let caller_did = "did:key:node".to_owned();
     let session_id = "session".to_owned();
     let request_doc_id = "request".to_owned();
     let tool_call_doc_id = "tool-call".to_owned();
     match invocation {
         "tool_call" => StampContext::ToolOutput {
-            node_did,
+            caller_did,
             session_id,
             request_doc_id,
             tool_call_doc_id,
         },
         "job_step" => StampContext::JobStep {
-            node_did,
+            caller_did,
             session_id,
             request_doc_id,
             tool_call_doc_id,
             job_row_doc_id: "job-row".to_owned(),
             chain_root_doc_id: "chain-root".to_owned(),
         },
-        "callback" => StampContext::Callback { node_did },
+        "callback" => StampContext::Callback { caller_did },
         other => panic!("unknown Lean invocation {other}"),
     }
 }
@@ -1385,7 +1385,7 @@ fn plugin_job_protocol_field_names_are_secret_free() {
         serde_json::to_value(PluginDataDeclaration {
             collections: vec!["c".to_owned()],
             ops: vec!["query".to_owned()],
-            stamped: BTreeMap::from([("f".to_owned(), StampedField::NodeDid)]),
+            stamped: BTreeMap::from([("f".to_owned(), StampedField::CallerDid)]),
         }),
     ] {
         collect_field_names(&constructed.expect("constructed value encodes"), &mut names);

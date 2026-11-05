@@ -12,7 +12,7 @@ use crate::tools::call::lifecycle::admission_fixture::{
 use crate::tools::call::lifecycle::SpawnedBackgroundToolAdmission;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, OutputOutcome, OutputSource, SourceClose,
@@ -128,7 +128,7 @@ async fn spawn_receipt_survives_modeled_publication_contention() {
         tool_delivery_rows(&node, &tool.session_id).await.len(),
         before + 1
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -178,7 +178,7 @@ async fn terminal_point_selection_retains_state_and_tool_identity_fences() {
             tool_delivery_rows(&node, &tool.session_id).await.len(),
             before
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
 }
@@ -282,7 +282,7 @@ async fn failed_streaming_tool_preserves_raw_prefix_and_publishes_terminal_failu
         1
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -476,7 +476,7 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
             "terminal replay added raw output"
         );
 
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
 }
@@ -598,7 +598,7 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
             assert!(!replay.timeout().await.unwrap(), "{name}: replay");
             assert_eq!(interrupted_presentation(&node, &tool).await, presented);
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
 }
@@ -653,7 +653,7 @@ async fn completed_streaming_tool_still_rejects_a_non_extension() {
     );
     assert_eq!(tool.state, ToolCallState::Running);
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -780,7 +780,7 @@ async fn spawned_background_replays_parent_provenance_and_never_authors_a_child_
         "spawned terminal output is read from its physical ToolOutput source, not a fabricated provider reply"
     );
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -807,7 +807,7 @@ async fn spawned_background_admission_rejects_a_stale_parent_generation() {
         .as_array()
         .unwrap()
         .is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -841,7 +841,7 @@ async fn background_bridge_receipt_is_authored_once_and_keeps_bridge_running() {
         response.data.as_ref().unwrap()["AgentToolCall"][0]["lifecycle_state"],
         "running"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -977,7 +977,7 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
         .unwrap()
         .contains(final_bytes));
 
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -1054,6 +1054,6 @@ async fn concurrent_background_bridge_completion_replays_one_exact_closure() {
         })
         .count();
     assert_eq!(closures, 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }

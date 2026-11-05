@@ -113,7 +113,7 @@ pub(super) fn data_plane_desired_from_pairing_row(
             peer_id = %signed_endpoint.peer_id,
             signed_address = %signed_endpoint.address,
             row_addresses = ?row_addresses,
-            "DataPlanePairingDesired address did not match signed PeerEndpoint; using signed endpoint address"
+            "DataPlanePairingDesired address did not match signed PeerRegistry; using signed endpoint address"
         );
     }
 
@@ -165,7 +165,7 @@ pub(super) fn data_plane_desired_from_pairing_row(
     if data_plane_scope_requires_signed_peer_did(&template.scope) && peer_did.is_empty() {
         anyhow::bail!(
             "DataPlanePairingDesired for peer {} uses template {template_id:?} but the signed \
-             PeerEndpoint has a blank node_did",
+             PeerRegistry has a blank node_did",
             signed_endpoint.peer_id
         );
     }
@@ -314,7 +314,7 @@ pub fn merge_layered_desired(
         (Some(desired), None) | (None, Some(desired)) => Some(desired),
         (Some(mut left), Some(right)) => {
             left.collections.extend(right.collections);
-            // The data-plane layer comes from the verified PeerEndpoint.
+            // The data-plane layer comes from the verified PeerRegistry.
             if !right.replicator_addresses.is_empty() {
                 left.replicator_addresses = right.replicator_addresses;
             }

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::row::AgentRequestRow;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -318,7 +318,7 @@ pub(crate) async fn load_parent_inclusive_budget_usage(
         request_id: request.request_id.clone(),
         node_did: Some(request.node_did.clone()),
         requester_did: request.requester_did.clone(),
-        agent_id: Some(request.agent_id.clone()),
+        agent_did: Some(request.agent_did.clone()),
         session_id: Some(request.session_id.clone()),
         ..Default::default()
     };
@@ -360,7 +360,7 @@ async fn load_parent_catalog(
             && parent.node_did.as_deref() == Some(agent)
             && parent.session_id.as_deref() == Some(session)
             && parent.requester_did == exact_parent.requester_did
-            && parent.agent_id == exact_parent.agent_id
+            && parent.agent_did == exact_parent.agent_did
             && parent.purpose == Some(RequestPurpose::Normal),
         "audit usage parent crossed its exact normal request scope"
     );

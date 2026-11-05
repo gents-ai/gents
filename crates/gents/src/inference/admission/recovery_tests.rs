@@ -19,26 +19,30 @@ async fn seed_call(
     node_did: &str,
     request_doc_id: &str,
 ) -> StaleInferenceCallRow {
+    let agent_did = crate::test_support::agent_did(node);
     let state = escape_graphql_string(initial_state);
     let owner = escape_graphql_string(node_did);
     let request_doc = escape_graphql_string(request_doc_id);
-    crate::store::config_client::ConfigAccess::local(node.clone())
-        .write(
-            "test.recovery_call",
-            &format!(
-                r#"mutation {{ add_InferenceCall(input: {{
+    crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(agent_did.clone()).unwrap(),
+    )
+    .write(
+        "test.recovery_call",
+        &format!(
+            r#"mutation {{ add_InferenceCall(input: {{
             call_id: "recovery-cas-call", runtime_instance_id: "recovery-cas-runtime",
             request_id: "recovery-cas-request", request_doc_id: "{request_doc}", call_seq: 1,
-            backend_id: "recovery-cas-backend", agent_id: "test", node_did: "{owner}",
+            backend_id: "recovery-cas-backend", agent_did: "{agent_did}", node_did: "{owner}",
             call_kind: "inference", attempt: 1, call_state: "{state}",
             queued_at: "2026-09-01T00:00:00Z", priority: 0,
             queue_depth_at_enqueue: 0, controller_generation: 0,
             backend_config_fingerprint: "test"
         }}) {{ _docID }} }}"#
-            ),
-        )
-        .await
-        .unwrap();
+        ),
+    )
+    .await
+    .unwrap();
     let mut snapshots = load_stale_inference_calls(node, node_did).await.unwrap();
     assert_eq!(snapshots.len(), 1);
     snapshots.remove(0)
@@ -117,7 +121,7 @@ async fn stale_queued_recovery_cannot_cancel_a_running_call() {
     assert_eq!(stored_call(&node).await, running);
 }
 
-fn pending_call(call_id: &str) -> super::super::controller::PendingCallMetadata {
+fn pending_call(call_id: &str, agent_did: &str) -> super::super::controller::PendingCallMetadata {
     super::super::controller::PendingCallMetadata {
         session_id: "session-test".to_string(),
         model_name: None,
@@ -128,7 +132,7 @@ fn pending_call(call_id: &str) -> super::super::controller::PendingCallMetadata 
         request_doc_id: "recovery-cas-request-doc".into(),
         call_seq: 1,
         backend_id: "recovery-cas-backend".into(),
-        agent_id: "test".into(),
+        agent_did: agent_did.into(),
         node_did: NODE_DID.into(),
         call_kind: super::super::CallKind::Inference,
         attempt: 1,
@@ -147,6 +151,7 @@ async fn recovery_winner_rejects_late_running_persistence() {
     let terminal = stored_call(&node).await;
     let call = super::super::controller::InferenceCallRecord::without_controller(pending_call(
         "recovery-cas-call",
+        &snapshot.agent_did,
     ));
     assert!(super::super::persistence::persist_existing_call_running(
         node.clone(),
@@ -167,8 +172,12 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
     use gents_loop::rig_compat::CachedInputTokensObservation;
 
     let (node, snapshot) = fixture("queued").await;
-    let call = InferenceCallRecord::without_controller(pending_call("recovery-cas-call"));
-    let other = InferenceCallRecord::without_controller(pending_call("other-call"));
+    let call = InferenceCallRecord::without_controller(pending_call(
+        "recovery-cas-call",
+        &snapshot.agent_did,
+    ));
+    let other =
+        InferenceCallRecord::without_controller(pending_call("other-call", &snapshot.agent_did));
     let other_doc = persist_call_queued(node.clone(), &other).await.unwrap();
     assert!(
         persist_existing_call_running(node.clone(), &call, &other_doc)
@@ -190,6 +199,17 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
     persist_existing_call_running(node.clone(), &call, &snapshot.doc_id)
         .await
         .unwrap();
+    persist_existing_call_terminal(
+        node.clone(),
+        &call,
+        &snapshot.doc_id,
+        "completed",
+        None,
+        None,
+        CachedInputTokensObservation::NotAvailable,
+    )
+    .await
+    .unwrap();
     persist_existing_call_terminal(
         node.clone(),
         &call,
@@ -246,11 +266,12 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
         },
         super::super::controller::CapacityPool::open(1),
     );
+    let agent_did = crate::test_support::agent_did(&node);
     let mut holder = controller
         .clone()
         .acquire(
             node.clone(),
-            pending_call("holder-call"),
+            pending_call("holder-call", &agent_did),
             "recovery-cas",
             None,
             None,
@@ -263,7 +284,7 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
         waiting_controller
             .acquire(
                 waiting_node,
-                pending_call("waiting-call"),
+                pending_call("waiting-call", &agent_did),
                 "recovery-cas",
                 None,
                 None,
@@ -374,11 +395,12 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
         },
         super::super::controller::CapacityPool::open(1),
     );
+    let agent_did = crate::test_support::agent_did(&node);
     let permit = controller
         .clone()
         .acquire(
             node.clone(),
-            pending_call("aborted-finalizer-call"),
+            pending_call("aborted-finalizer-call", &agent_did),
             "recovery-cas",
             None,
             None,
@@ -537,7 +559,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
             .unwrap()
     );
     let terminal = stored_call(&node).await;
-    let mut metadata = pending_call("recovery-cas-call");
+    let mut metadata = pending_call("recovery-cas-call", &snapshot.agent_did);
     metadata.request_doc_id = request.doc_id.clone();
     metadata.node_did = request.node_did.clone();
     let call = super::super::controller::InferenceCallRecord::without_controller(metadata);
@@ -596,4 +618,90 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
             .unwrap()
             .unwrap();
     assert_eq!(budget.snapshot().unwrap().remaining(), 74);
+}
+
+#[tokio::test]
+async fn parent_recovery_lookup_uses_agent_native_authority() {
+    use crate::store::config_client::{ConfigAccess, NodePermission};
+    use crate::store::identity::{KeyIdentity, NodeIdentity};
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = KeyIdentity::load_or_create(dir.path().join("runtime.key"), None).unwrap();
+    let user = KeyIdentity::load_or_create(dir.path().join("user.key"), None).unwrap();
+    let agent = KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_enabled()
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
+    let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
+    for did in [user.did(), agent.did()] {
+        for permission in [
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::DacRelationAdd,
+        ] {
+            admin
+                .grant_node_permission(&did.parse().unwrap(), permission)
+                .await
+                .unwrap();
+        }
+    }
+    let owner = ConfigAccess::local_as(node.clone(), user.did().parse().unwrap());
+    let created = owner.write("test.inference_recovery.request", &format!(
+        r#"mutation {{ create_AgentRequest(input: {{ request_id: "private-recovery", node_did: "{}", agent_did: "{}", lifecycle_state: "{}" }}) {{ _docID }} }}"#,
+        runtime.did(), agent.did(), RequestLifecycleState::Processing.as_str())).await.unwrap();
+    let request_doc = crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
+    owner
+        .add_actor_relationship(
+            "AgentRequest",
+            &request_doc,
+            "working_agent",
+            &agent.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+    let row = StaleInferenceCallRow {
+        doc_id: "call-doc".into(),
+        call_id: "call".into(),
+        request_id: "private-recovery".into(),
+        request_doc_id: request_doc,
+        agent_did: agent.did().into(),
+        call_state: "running".into(),
+    };
+    let found = lookup_parent_request(&node, runtime.did(), &row)
+        .await
+        .unwrap_or_else(|error| panic!("authorized parent lookup failed: {error:#}"));
+    let parent = found.unwrap();
+    assert_eq!(parent.request_id, "private-recovery");
+    assert!(recovery_outcome(&row, &parent).is_none());
+    owner.write("test.inference_recovery.terminal", &format!(
+        r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "{}" }}) {{ _docID }} }}"#,
+        row.request_doc_id, RequestLifecycleState::Failed.as_str())).await.unwrap();
+    let terminal = lookup_parent_request(&node, runtime.did(), &row)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        recovery_outcome(&row, &terminal),
+        Some(InferenceRecoveryOutcome::Failed)
+    ));
+    admin
+        .revoke_node_permission(&agent.did().parse().unwrap(), NodePermission::DocumentRead)
+        .await
+        .unwrap();
+    assert!(
+        lookup_parent_request(&node, runtime.did(), &row)
+            .await
+            .is_err(),
+        "revoked agent must not look like an absent parent"
+    );
+    node.shutdown().await.unwrap();
 }

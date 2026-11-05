@@ -102,7 +102,7 @@ async fn generated_notification_cases_drive_durable_writes() {
             .source_id(
                 "did:test:agent",
                 "did:test:owner",
-                &context.agent_id,
+                &context.agent_did,
                 &format!("event-{index}"),
             )
             .unwrap();
@@ -176,7 +176,7 @@ async fn generated_notification_cases_drive_durable_writes() {
             serde_json::to_value(Some(terminal)).unwrap()
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[test]
@@ -221,7 +221,7 @@ async fn notification_updates_reject_route_policy_and_terminal_races() {
         .source_id(
             "did:test:agent",
             "did:test:owner",
-            &context.agent_id,
+            &context.agent_did,
             "request",
         )
         .unwrap();
@@ -262,7 +262,7 @@ async fn notification_updates_reject_route_policy_and_terminal_races() {
         .unwrap();
     assert_eq!(terminal.title, first.title);
     assert_eq!(terminal.parsed_status(), Some(MailboxStatus::Dismissed));
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -289,7 +289,7 @@ async fn content_tool_stamps_current_request_and_reuses_configured_condition() {
         ("two", "Disk 82%, Docker unavailable", "updated"),
     ] {
         let result = node.execute(&format!(
-            "mutation {{ create_AgentRequest(input: {{request_id: \"{request}\", purpose: \"normal\", node_did: \"did:test:agent\", requester_did: \"did:test:owner\", agent_id: \"operator\", caused_by_source_doc_id: \"input-{request}\"}}) {{_docID}} }}"
+            "mutation {{ create_AgentRequest(input: {{request_id: \"{request}\", purpose: \"normal\", node_did: \"did:test:agent\", requester_did: \"did:test:owner\", agent_did: \"operator\", caused_by_source_doc_id: \"input-{request}\"}}) {{_docID}} }}"
         )).await;
         assert!(!result.has_errors(), "{:?}", result.errors);
         let args = MailboxContentArgs {
@@ -301,7 +301,7 @@ async fn content_tool_stamps_current_request_and_reuses_configured_condition() {
         let receipt = scope_tool_request_identity(
             Some(context.requester_did.clone()),
             Some(context.node_did.clone()),
-            Some(context.agent_id.clone()),
+            Some(context.agent_did.clone()),
             Some(request.into()),
             scope_request_tool_execution(
                 None,
@@ -328,7 +328,7 @@ async fn content_tool_stamps_current_request_and_reuses_configured_condition() {
     assert!(notification::request_provenance(&node, "one", &wrong)
         .await
         .is_err());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -341,7 +341,7 @@ async fn concurrent_notifications_converge_without_cross_requester_collisions() 
     for owner in ["did:test:alice", "did:test:bob"] {
         let context = tests::context(owner);
         let source = identity
-            .source_id("did:test:agent", owner, &context.agent_id, "request")
+            .source_id("did:test:agent", owner, &context.agent_did, "request")
             .unwrap();
         let args = tests::args(MailboxAction::Ack, &source);
         let receipts = futures::future::join_all((0..4).map(|_| {
@@ -375,7 +375,7 @@ async fn concurrent_notifications_converge_without_cross_requester_collisions() 
         item_ids.push(first.doc_id.clone());
     }
     assert_ne!(item_ids[0], item_ids[1]);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -394,7 +394,7 @@ async fn provenance_keeps_execution_owner_resolved_selection() {
             .await
             .is_err()
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -409,7 +409,7 @@ async fn question_files_an_ask_whatever_the_surface_policy_and_refuses_invalid_p
     let node = tests::test_node().await;
     let context = tests::context("did:test:owner");
     let result = node.execute(
-        "mutation { create_AgentRequest(input: {request_id: \"ask\", purpose: \"normal\", node_did: \"did:test:agent\", requester_did: \"did:test:owner\", agent_id: \"operator\"}) {_docID} }"
+        "mutation { create_AgentRequest(input: {request_id: \"ask\", purpose: \"normal\", node_did: \"did:test:agent\", requester_did: \"did:test:owner\", agent_did: \"operator\"}) {_docID} }"
     ).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
     let tool = MailboxCreateTool::new(node.clone(), MailboxNotificationPolicy::default());
@@ -434,7 +434,7 @@ async fn question_files_an_ask_whatever_the_surface_policy_and_refuses_invalid_p
         scope_tool_request_identity(
             Some(context.requester_did.clone()),
             Some(context.node_did.clone()),
-            Some(context.agent_id.clone()),
+            Some(context.agent_did.clone()),
             Some("ask".into()),
             scope_request_tool_execution(
                 None,
@@ -511,5 +511,5 @@ async fn question_files_an_ask_whatever_the_surface_policy_and_refuses_invalid_p
         serde_json::from_str(&call(content("Note", Some("fyi"), None)).await.unwrap()).unwrap();
     assert_eq!(flag["item"]["kind"], "flag");
     assert_eq!(flag["item"]["action"], "ack");
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }

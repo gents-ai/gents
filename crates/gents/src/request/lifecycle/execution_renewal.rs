@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 
 use super::execution_policy::{authorize_renewal, is_live, renewable_lifecycle, LeaseObservation};
@@ -23,6 +23,7 @@ impl Drop for RenewalTask {
 impl RenewalTask {
     pub(super) fn start(
         node: Arc<EmbeddedNode>,
+        actor: identity::Did,
         request_doc_id: String,
         generation: String,
         duration_ms: u64,
@@ -46,7 +47,7 @@ impl RenewalTask {
                     );
                 }
                 let started = std::time::Instant::now();
-                let outcome = renew_once(&node, &request_doc_id, &generation).await;
+                let outcome = renew_once(&node, actor.clone(), &request_doc_id, &generation).await;
                 let elapsed = started.elapsed();
                 if elapsed >= poll_interval {
                     tracing::warn!(
@@ -89,11 +90,12 @@ pub(crate) enum RenewalAttemptOutcome {
 
 async fn renew_once(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: identity::Did,
     request_doc_id: &str,
     generation: &str,
 ) -> Result<bool> {
     Ok(!matches!(
-        renew_once_with_time(node, request_doc_id, generation, None, None).await?,
+        renew_once_with_time(node, Some(actor), request_doc_id, generation, None, None).await?,
         RenewalAttemptOutcome::Lost
     ))
 }
@@ -108,6 +110,7 @@ pub(crate) async fn renew_once_at(
 ) -> Result<RenewalAttemptOutcome> {
     renew_once_with_time(
         node,
+        None,
         request_doc_id,
         generation,
         Some(expected_deadline),
@@ -154,20 +157,25 @@ fn renewal_recheck_time(fixture_now: Option<DateTime<Utc>>) -> DateTime<Utc> {
 
 async fn renew_once_with_time(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor: Option<identity::Did>,
     request_doc_id: &str,
     generation: &str,
     expected_deadline: Option<DateTime<Utc>>,
     fixture_now: Option<DateTime<Utc>>,
 ) -> Result<RenewalAttemptOutcome> {
-    match crate::store::config_client::ConfigAccess::renew_execution_lease(node, move |txn| {
-        Box::pin(renew_in_transaction(
-            txn,
-            request_doc_id,
-            generation,
-            expected_deadline,
-            fixture_now,
-        ))
-    })
+    match crate::store::config_client::ConfigAccess::renew_execution_lease(
+        node,
+        actor,
+        move |txn| {
+            Box::pin(renew_in_transaction(
+                txn,
+                request_doc_id,
+                generation,
+                expected_deadline,
+                fixture_now,
+            ))
+        },
+    )
     .await
     {
         Err(error) if error.is::<RenewalAdmissionExpired>() => Ok(RenewalAttemptOutcome::Lost),

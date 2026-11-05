@@ -214,14 +214,14 @@ async fn claim_rejects_an_agent_change_without_mutating_the_session() {
             session: create_AgentSession(input: {{
                 session_id: "session-pinned",
                 node_did: "{NODE_DID}",
-                agent_id: "general",
+                agent_did: "general",
                 created_at: "2026-03-23T00:00:00Z"
             }}) {{ _docID }}
             request: create_AgentRequest(input: {{
                 request_id: "req-switch",
                 purpose: "normal",
                 node_did: "{NODE_DID}",
-                agent_id: "code",
+                agent_did: "code",
                 session_id: "session-pinned",
                 retry_root_request: "req-switch",
                 content: "switch agent",
@@ -279,7 +279,7 @@ async fn claim_rejects_an_agent_change_without_mutating_the_session() {
         .node
         .execute(
             r#"{
-                AgentSession(filter: { session_id: { _eq: "session-pinned" } }) { agent_id }
+                AgentSession(filter: { session_id: { _eq: "session-pinned" } }) { agent_did }
             }"#,
         )
         .await;
@@ -291,7 +291,7 @@ async fn claim_rejects_an_agent_change_without_mutating_the_session() {
         .expect("session rows");
     assert_eq!(rows.len(), 1);
     assert_eq!(
-        rows[0].get("agent_id").and_then(serde_json::Value::as_str),
+        rows[0].get("agent_did").and_then(serde_json::Value::as_str),
         Some("general")
     );
 }
@@ -309,7 +309,7 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
                 request_id: "{request_id}",
                 purpose: "normal",
                 node_did: "{NODE_DID}",
-                agent_id: "{AGENT_NAME}",
+                agent_did: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{request_id}",

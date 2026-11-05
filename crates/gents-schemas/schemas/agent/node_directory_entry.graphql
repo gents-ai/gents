@@ -17,9 +17,9 @@ type NodeDirectoryEntry @branchable {
     # Agent display names and ids (index-aligned) for the picker; emitted as
     # null, never [], when empty.
     agents: [String]
-    agent_ids: [String]
-    # Resolved from Node.default_agent_id; empty when the node has none.
-    default_agent_id: String
+    agent_dids: [String]
+    # Resolved from Node.default_agent_did; empty when the node has none.
+    default_agent_did: String
     runtime_state: String @index
     last_seen: DateTime
     updated_at: DateTime @index(direction: DESC)

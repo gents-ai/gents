@@ -202,6 +202,7 @@ export function validateGoalReceipt(draft: GoalDraft, receipt: GoalSubmissionRec
   if (
     !identifier(receipt.reference.commandDigest) ||
     !identifier(receipt.reference.requesterDid) ||
+    !identifier(receipt.reference.agentDid) ||
     !(
       receipt.reference.initialRequestId === null ||
       identifier(receipt.reference.initialRequestId)
@@ -216,7 +217,8 @@ export function validateGoalReceipt(draft: GoalDraft, receipt: GoalSubmissionRec
     previous &&
     (previous.commandDigest !== receipt.reference.commandDigest ||
       previous.initialRequestId !== receipt.reference.initialRequestId ||
-      previous.requesterDid !== receipt.reference.requesterDid)
+      previous.requesterDid !== receipt.reference.requesterDid ||
+      previous.agentDid !== receipt.reference.agentDid)
   )
     throw new Error("The Goal receipt changed its original signed preparation.");
 }

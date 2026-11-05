@@ -171,7 +171,7 @@ async fn boot_agent(db: &support::TestDb, endpoint: &str) -> BootedAgent {
     let agent = gents::Gents::builder()
         .node(db.node.clone())
         .identity(identity)
-        .default_agent_id(AGENT_NAME)
+        .default_agent_did(AGENT_NAME)
         .tool_ceiling(gents::ToolCeiling::meta_only())
         .agent(AGENT_NAME)
         .backend_id(BACKEND_ID)

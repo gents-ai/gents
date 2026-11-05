@@ -73,7 +73,7 @@ fn rendered_in_scope(
         attempt,
         node_did,
         requester_did: "did:key:z6Mk-requester".to_string(),
-        agent_id: "agent-1".to_string(),
+        agent_did: "agent-1".to_string(),
         session_id,
         model_name: "test-model".to_string(),
         source: RenderedRequestSource::OpenAiChatCompletions,

@@ -59,7 +59,7 @@ export function OpenSessionComposer({
   stop,
   stopping,
   goal,
-  agentId,
+  agentDid,
 }: {
   roomRef: RefCallback<HTMLDivElement>;
   atBottom: boolean;
@@ -67,7 +67,7 @@ export function OpenSessionComposer({
   stop: () => void;
   stopping: boolean;
   goal: DesktopSessionSnapshot["goal"];
-  agentId: string | null;
+  agentDid: string | null;
 }) {
   const { drafts, stores, actions } = useApp();
   const activityStatus = useView((view) => view.shellProjection.activityStatus);
@@ -76,11 +76,17 @@ export function OpenSessionComposer({
   const sending = stores.chat.use.sending();
   const inFlight = useInterruptVisible();
   const deployment = useSelectedNode();
-  const { draft, setDraft, send, setGoal, error: sendError } = useComposerSend(agentId);
+  const {
+    draft,
+    setDraft,
+    send,
+    setGoal,
+    error: sendError,
+  } = useComposerSend(agentDid);
   const textarea = useRef<HTMLDivElement | null>(null);
   const attachmentRoot = useRef<HTMLDivElement | null>(null);
   const { queue, onEdit } = useSessionQueue();
-  const agent = agentOf(deployment, agentId);
+  const agent = agentOf(deployment, agentDid);
   const editSlash = useSlashMenu(
     deployment?.skills ?? [],
     deployment?.contexts.find((c) => c.context_id === agent?.contextId),
@@ -152,7 +158,7 @@ export function OpenSessionComposer({
   const covered = blocked && loadingStatus !== null;
   /* what nothing typed could get past stands in the input's place */
   const reason =
-    blocked && !covered ? composerReason(deployment, agentId, sendStatus) : null;
+    blocked && !covered ? composerReason(deployment, agentDid, sendStatus) : null;
   /* an open question takes the composer's place until it is answered, or
      until the person chooses to write instead; a new question asks again */
   const questionScope = useSelectedSessionFields((session) =>

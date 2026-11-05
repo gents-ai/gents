@@ -87,7 +87,7 @@ fn request_mutation(receipt: &TriggerFire) -> String {
     format!(
         r#"mutation {{ create_AgentRequest(input: {{
         request_id: "{}", node_did: "{}", session_id: "{}",
-        agent_id: "general", content: "contract task", purpose: "normal", lifecycle_state: "pending",
+        agent_did: "did:test:agent", content: "contract task", purpose: "normal", lifecycle_state: "pending",
         created_at: "{}"
     }}) {{ _docID }} }}"#,
         escape_graphql_string(&receipt.request_id),
@@ -228,7 +228,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
             let allowed = case["destination_allowed"].as_bool().unwrap();
             let task = resolved_task("replace work");
             if allowed {
-                crate::session::ensure_session_with_agent_id_and_requester_did(
+                crate::session::ensure_session_with_agent_did_and_requester_did(
                     &node,
                     &next.session,
                     &owner,
@@ -255,7 +255,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
                             &serde_json::json!({"input": {
                                 "request_id": fire.request_id, "node_did": owner,
                                 "requester_did": owner, "session_id": fire.session_id,
-                                "agent_id": "general", "purpose": "normal", "content": "prior work",
+                                "agent_did": "general", "purpose": "normal", "content": "prior work",
                                 "lifecycle_state": pending_state.as_str(), "caused_by_trigger_id": fire.identity.trigger_id,
                                 "caused_by_trigger_kind": "schedule", "created_at": fire.created_at
                             }}),
@@ -532,7 +532,9 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                 }
                 OutcomeAction::Recover { commit } => {
                     if commit {
-                        durable::recover_outcomes(&node, "owner-a").await.unwrap();
+                        durable::recover_outcomes(&node, "owner-a", "did:test:agent")
+                            .await
+                            .unwrap();
                     } else {
                         let result: anyhow::Result<()> = access
                             .transact_write("test.outcome_publication_rollback", |txn| {
@@ -920,7 +922,7 @@ fn handoff_binding() -> gents_protocol::event_delivery::EventConsumer {
 }
 
 async fn admit_callback_arrival(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     doc_id: &str,
     version: &str,
 ) {
@@ -929,6 +931,7 @@ async fn admit_callback_arrival(
         &crate::triggers::callback::CallbackInvocationDoc {
             input: serde_json::json!({}),
             invocation_id: uuid::Uuid::new_v4().to_string(),
+            agent_did: crate::triggers::callback::test_agent_did(),
             owner_node_did: "owner-a".into(),
             callback_id: "callback".into(),
             origin: crate::documents::CallbackInvocationOrigin::Event {
@@ -959,6 +962,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         let name = &case["name"];
         let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
+        crate::triggers::callback::seed_test_agent(&node, "owner-a").await;
         let access = ConfigAccess::local(node.clone());
         access
             .add_collection("type Work { label: String eligible: Boolean }")
@@ -991,7 +995,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
             ).await?;
             txn.execute_with_variables(
                 "mutation($input:CallbackBindingMutationInputArg!){create_CallbackBinding(input:$input){_docID}}",
-                &serde_json::json!({"input":{"node_did":"owner-a","binding_id":"handoff",
+                &serde_json::json!({"input":{"node_did":"owner-a","binding_id":"handoff","agent_did":crate::triggers::callback::test_agent_did(),
                     "event_source_id":"source","callback_id":"callback","enabled":binding_enabled}}),
             ).await?;
             event_source_cursor::load_or_seed(txn, "owner-a", &handoff_binding()).await?;
@@ -1122,7 +1126,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
             .map(|entry| documents[&entry.identity.source_doc_id].clone())
             .collect::<Vec<_>>();
         assert_eq!(actual, expected, "{name}");
-        let invocations = access
+        let invocations = crate::triggers::callback::test_agent_access(&node)
             .execute("{ CallbackInvocation { origin } }")
             .await
             .unwrap();
@@ -1134,7 +1138,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
             case["post_receipts"].as_array().unwrap().len(),
             "{name}"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 }
 

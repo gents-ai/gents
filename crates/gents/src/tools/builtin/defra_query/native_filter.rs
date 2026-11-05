@@ -167,7 +167,7 @@ mod tests {
     #[tokio::test]
     async fn native_input_shapes_preserve_compounds_relationships_literals_and_aliases() {
         let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .build()
                 .await
                 .unwrap(),
@@ -208,7 +208,7 @@ mod tests {
         for field in ["access_token", "refresh_token", "id_token"] {
             assert!(!diagnostic.contains(field), "{diagnostic}");
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 
     #[tokio::test]
@@ -217,7 +217,7 @@ mod tests {
             .with_env_filter("gents::tools::builtin::defra_query::native_filter=info")
             .try_init();
         let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .build()
                 .await
                 .unwrap(),
@@ -246,6 +246,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result["total_count"], 2);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
     }
 }

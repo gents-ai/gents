@@ -1,13 +1,77 @@
 use super::*;
 
-pub(crate) async fn load_goal_creation_claim_fingerprint(
-    node: &EmbeddedNode,
+/// Finish only this actor's incomplete Goal publications. The native ACP
+/// relationship operation authorizes the actor; row metadata is a selector,
+/// not proof of ownership. A completed marker prevents ordinary replay from
+/// restoring a later revocation, but ACP1 cannot fence an in-flight grant.
+pub(crate) async fn finish_goal_relationships(
+    access: &crate::ConfigAccess,
     node_did: &str,
     session_id: &str,
-) -> Result<Option<GoalCreationFingerprint>> {
-    let query = goal_creation_claim_query(node_did, session_id);
-    let response = graphql_with_transaction_retry(node, &query, "load goal creation claim").await?;
-    goal_creation_claim_fingerprint(&response)
+) -> Result<()> {
+    let actor = access
+        .actor_did()
+        .context("Goal publication requires an authenticated actor")?;
+    let (session_doc, agent_did, pending) = access.transact_readonly("goal.pending_relationships", |txn| {
+        let actor = &actor;
+        Box::pin(async move {
+            let session = crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+                .await?.context("Goal publication session is unavailable")?;
+            let parent = escape_graphql_string(&session.doc_id);
+            let creator = escape_graphql_string(actor);
+            let response = txn.execute(&format!(r#"{{
+                Goal(filter: {{session_doc_id: {{_eq: "{parent}"}}, creator_did: {{_eq: "{creator}"}}, parent_linked: {{_eq: false}}}}) {{_docID agent_did}}
+                GoalCreationClaim(filter: {{session_doc_id: {{_eq: "{parent}"}}, creator_did: {{_eq: "{creator}"}}, parent_linked: {{_eq: false}}}}) {{_docID agent_did}}
+            }}"#)).await?;
+            let mut pending = Vec::new();
+            for collection in ["Goal", "GoalCreationClaim"] {
+                let rows = response["data"][collection].as_array().context("Goal relationship recovery omitted rows")?;
+                for row in rows {
+                    anyhow::ensure!(row["agent_did"] == session.session.agent_did,
+                        "Goal relationship selects another agent");
+                    pending.push((collection, row["_docID"].as_str().context("Goal has no document ID")?.to_owned()));
+                }
+            }
+            Ok::<_, anyhow::Error>((session.doc_id, session.session.agent_did, pending))
+        })
+    }).await?;
+    for (collection, doc) in pending {
+        access
+            .add_resource_relationship(collection, &doc, "parent", "sessions", &session_doc)
+            .await?;
+        access
+            .add_actor_relationship(
+                collection,
+                &doc,
+                "working_agent",
+                &identity::Did::new(&agent_did)?,
+            )
+            .await?;
+        let doc = escape_graphql_string(&doc);
+        let creator = escape_graphql_string(&actor);
+        let parent = escape_graphql_string(&session_doc);
+        let response = access.write("goal.mark_relationships", &format!(
+            r#"mutation {{ update_{collection}(docID: "{doc}", filter: {{creator_did: {{_eq: "{creator}"}}, session_doc_id: {{_eq: "{parent}"}}, parent_linked: {{_eq: false}}}}, input: {{parent_linked: true}}) {{_docID}} }}"#,
+        )).await?;
+        let rows = response["data"][format!("update_{collection}")]
+            .as_array()
+            .context("Goal relationship marker omitted rows")?;
+        if rows.is_empty() {
+            let current = access.execute(&format!(r#"{{ {collection}(filter: {{_docID: {{_eq: "{doc}"}}, creator_did: {{_eq: "{creator}"}}, session_doc_id: {{_eq: "{parent}"}}, parent_linked: {{_eq: true}}}}, limit: 2) {{_docID}} }}"#)).await?;
+            anyhow::ensure!(
+                current["data"][collection]
+                    .as_array()
+                    .is_some_and(|rows| rows.len() == 1),
+                "Goal relationship marker lost its binding"
+            );
+        } else {
+            anyhow::ensure!(
+                rows.len() == 1 && rows[0]["_docID"] == doc,
+                "Goal relationship marker updated another document"
+            );
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn load_goal_creation_claim_fingerprint_in_txn(
@@ -15,16 +79,24 @@ pub(crate) async fn load_goal_creation_claim_fingerprint_in_txn(
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalCreationFingerprint>> {
+    let session = crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+        .await?
+        .context("goal claim requires a visible physical session")?;
     let response = txn
-        .execute_local_response(&goal_creation_claim_query(node_did, session_id))
+        .execute_local_response(&goal_creation_claim_query(
+            node_did,
+            session_id,
+            &session.doc_id,
+        ))
         .await?;
     goal_creation_claim_fingerprint(&response)
 }
 
-fn goal_creation_claim_query(node_did: &str, session_id: &str) -> String {
+fn goal_creation_claim_query(node_did: &str, session_id: &str, session_doc_id: &str) -> String {
     let key = escape_graphql_string(&deterministic_goal_creation_key(node_did, session_id));
+    let session_doc_id = escape_graphql_string(session_doc_id);
     format!(
-        r#"{{ GoalCreationClaim(filter: {{ creation_key: {{ _eq: "{key}" }} }}, limit: 2) {{
+        r#"{{ GoalCreationClaim(filter: {{ session_doc_id: {{ _eq: "{session_doc_id}" }}, creation_key: {{ _eq: "{key}" }} }}, limit: 2) {{
             node_did session_id objective token_budget
         }} }}"#
     )
@@ -163,17 +235,29 @@ pub(super) async fn stage_goal_and_claim(
         .unwrap_or_else(|| deterministic_goal_creation_key(node_did, session_id));
     let escaped_did = escape_graphql_string(node_did);
     let escaped_session = escape_graphql_string(session_id);
+    let session = crate::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+        .await?
+        .context("goal creation requires a visible physical session")?;
+    let creator = escape_graphql_string(
+        txn.actor_did()
+            .context("goal creation requires an authenticated actor")?,
+    );
+    let requester_field =
+        optional_string_graphql_field("requester_did", session.session.requester_did.as_deref());
     let response = txn
         .execute(&format!(
             r#"{{
                 Goal(filter: {{
                     node_did: {{ _eq: "{escaped_did}" }},
-                    session_id: {{ _eq: "{escaped_session}" }}
+                    session_id: {{ _eq: "{escaped_session}" }},
+                    session_doc_id: {{ _eq: "{}" }}
                 }}) {{ {GOAL_FIELDS} }}
-                GoalCreationClaim(filter: {{ creation_key: {{ _eq: "{}" }} }}) {{
+                GoalCreationClaim(filter: {{ session_doc_id: {{ _eq: "{}" }}, creation_key: {{ _eq: "{}" }} }}) {{
                     goal_id node_did session_id objective token_budget
                 }}
             }}"#,
+            escape_graphql_string(&session.doc_id),
+            escape_graphql_string(&session.doc_id),
             escape_graphql_string(&creation_key),
         ))
         .await?;
@@ -228,10 +312,14 @@ pub(super) async fn stage_goal_and_claim(
             r#"mutation {{ create_GoalCreationClaim(input: {{
                 creation_key: "{}", goal_id: "{}",
                 node_did: "{escaped_did}", session_id: "{escaped_session}",
+                session_doc_id: "{}", agent_did: "{}", creator_did: "{creator}", parent_linked: false,
+                {requester_field}
                 objective: "{}", {budget_field} created_at: "{}"
             }}) {{ _docID }} }}"#,
             escape_graphql_string(&creation_key),
             escape_graphql_string(&goal_id),
+            escape_graphql_string(&session.doc_id),
+            escape_graphql_string(&session.session.agent_did),
             escape_graphql_string(objective),
             escape_graphql_string(now),
         ))
@@ -260,6 +348,8 @@ pub(super) async fn stage_goal_and_claim(
         r#"mutation {{ create_Goal(input: {{
             goal_id: "{}", creation_key: "{}",
             session_id: "{escaped_session}", node_did: "{escaped_did}",
+            session_doc_id: "{}", agent_did: "{}", creator_did: "{creator}", parent_linked: false,
+            {requester_field}
             objective: "{}", status: "{}", {}
             tokens_used: 0, token_usage_baseline: {baseline}, active_time_seconds: 0, {active_started_field}
             consecutive_blocked_audits: {}, continuation_sequence: 0,
@@ -268,6 +358,8 @@ pub(super) async fn stage_goal_and_claim(
         }}) {{ _docID }} }}"#,
         escape_graphql_string(&goal_id),
         escape_graphql_string(&creation_key),
+        escape_graphql_string(&session.doc_id),
+        escape_graphql_string(&session.session.agent_did),
         escape_graphql_string(objective),
         status.as_str(),
         optional_int_graphql_field("token_budget", token_budget),
@@ -316,12 +408,22 @@ pub(super) async fn stage_goal_and_claim(
 /// from the authenticated session hook.
 pub async fn create_goal_for_session(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor_did: &str,
     node_did: &str,
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
 ) -> std::result::Result<CreateGoalForSessionOutcome, CreateGoalForSessionError> {
-    create_goal_for_session_inner(node, node_did, session_id, objective, token_budget, None).await
+    create_goal_for_session_inner(
+        node,
+        actor_did,
+        node_did,
+        session_id,
+        objective,
+        token_budget,
+        None,
+    )
+    .await
 }
 
 pub(crate) async fn create_goal_for_request(
@@ -336,11 +438,26 @@ pub(crate) async fn create_goal_for_request(
     let session = caller.session_id.as_deref().ok_or_else(|| {
         CreateGoalForSessionError::Storage(anyhow::anyhow!("Goal tool caller has no session"))
     })?;
-    create_goal_for_session_inner(node, owner, session, objective, token_budget, Some(caller)).await
+    let actor = caller.agent_did.as_deref().ok_or_else(|| {
+        CreateGoalForSessionError::Storage(anyhow::anyhow!(
+            "Goal tool caller has no selected agent"
+        ))
+    })?;
+    create_goal_for_session_inner(
+        node,
+        actor,
+        owner,
+        session,
+        objective,
+        token_budget,
+        Some(caller),
+    )
+    .await
 }
 
 async fn create_goal_for_session_inner(
     node: &std::sync::Arc<EmbeddedNode>,
+    actor_did: &str,
     node_did: &str,
     session_id: &str,
     objective: &str,
@@ -369,9 +486,11 @@ async fn create_goal_for_session_inner(
     let requested_fingerprint = goal_creation_fingerprint(&create_request);
     let objective = requested_fingerprint.objective.as_str();
 
+    let actor = identity::Did::new(actor_did.to_owned())
+        .map_err(|error| CreateGoalForSessionError::Storage(error.into()))?;
     let result = crate::store::config_client::ConfigAccess::transact_local_write(
         node,
-        None,
+        Some(actor.clone()),
         "goal.create_for_session",
         move |txn| {
             Box::pin(async move {
@@ -426,15 +545,14 @@ async fn create_goal_for_session_inner(
 
     match result {
         Ok(outcome) => {
-            let goal = if caller.is_some() {
-                outcome.goal
-            } else {
-                load_canonical_goal(node, node_did, session_id)
-                    .await
-                    .map_err(CreateGoalForSessionError::Storage)?
-                    .context("committed Goal row not found")
-                    .map_err(CreateGoalForSessionError::Storage)?
-            };
+            finish_goal_relationships(
+                &crate::ConfigAccess::local_as(node.clone(), actor.clone()),
+                node_did,
+                session_id,
+            )
+            .await
+            .map_err(CreateGoalForSessionError::Storage)?;
+            let goal = outcome.goal;
             Ok(match outcome.disposition {
                 StagedGoalDisposition::Created => CreateGoalForSessionOutcome::Created(goal),
                 StagedGoalDisposition::Idempotent => CreateGoalForSessionOutcome::Idempotent(goal),
@@ -445,17 +563,37 @@ async fn create_goal_for_session_inner(
             Err(error) => Err(CreateGoalForSessionError::Storage(error)),
         },
         Err(error) => {
-            if let Some(existing) = load_canonical_goal(node, node_did, session_id)
+            let (existing, claim) =
+                crate::store::config_client::ConfigAccess::transact_local_readonly(
+                    node,
+                    Some(actor.clone()),
+                    "goal.reconcile_creation",
+                    |txn| {
+                        Box::pin(async move {
+                            Ok::<_, anyhow::Error>((
+                                load_canonical_goal_in_txn(txn, node_did, session_id).await?,
+                                load_goal_creation_claim_fingerprint_in_txn(
+                                    txn, node_did, session_id,
+                                )
+                                .await?,
+                            ))
+                        })
+                    },
+                )
                 .await
-                .map_err(CreateGoalForSessionError::Storage)?
-            {
+                .map_err(CreateGoalForSessionError::Storage)?;
+            if let Some(existing) = existing {
                 if existing.objective.trim() == objective
                     && existing.token_budget == token_budget
-                    && load_goal_creation_claim_fingerprint(node, node_did, session_id)
-                        .await
-                        .map_err(CreateGoalForSessionError::Storage)?
-                        == Some(requested_fingerprint.clone())
+                    && claim == Some(requested_fingerprint.clone())
                 {
+                    finish_goal_relationships(
+                        &crate::ConfigAccess::local_as(node.clone(), actor),
+                        node_did,
+                        session_id,
+                    )
+                    .await
+                    .map_err(CreateGoalForSessionError::Storage)?;
                     return Ok(CreateGoalForSessionOutcome::Idempotent(existing));
                 }
                 return Err(CreateGoalForSessionError::Conflict);

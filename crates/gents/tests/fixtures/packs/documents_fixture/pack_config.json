@@ -2,11 +2,11 @@
   "node": {},
   "agents": [
     {
-      "agent_id": "fixture-worker",
       "display_name": "Fixture worker",
       "description": "Reads the read-only host workspace and processes the fixture job.",
       "context_id": "fixture-worker-context",
-      "inference_profile_id": "gents:inference-slot:worker"
+      "inference_profile_id": "gents:inference-slot:worker",
+      "agent_slot": "fixture-worker"
     }
   ],
   "contexts": [
@@ -36,7 +36,7 @@
     {
       "task_id": "fixture-worker-task",
       "display_name": "fixture-worker-task",
-      "agent_id": "fixture-worker",
+      "agent_did": "gents:agent-slot:fixture-worker",
       "prompt_template": "./tasks/fixture_worker_task/prompt.md"
     }
   ],

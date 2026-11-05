@@ -196,7 +196,7 @@ async fn project_background_continuation(
         request_id: request.request_id,
         session_id: session_id.clone(),
         node_did,
-        agent_id: request.agent_id,
+        agent_did: request.agent_did,
         request_doc_id: request
             .doc_id
             .context("continuation has no physical request")?,
@@ -265,11 +265,11 @@ async fn load_background_continuation_requests(
     thread_id: &str,
 ) -> Result<Vec<AgentRequestRow>> {
     let request_scope = gents::session::public_request_filter(&format!(
-        r#"session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}, agent_id: {{ _eq: "{}" }}"#,
+        r#"session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }}"#,
         escape_graphql_string(thread_id),
         escape_graphql_string(state.node_did.as_ref()),
         escape_graphql_string(state.node_did.as_ref()),
-        escape_graphql_string(state.agent_id.as_ref()),
+        escape_graphql_string(state.agent_did.as_ref()),
     ));
     let query = format!(
         r#"{{
@@ -282,7 +282,7 @@ async fn load_background_continuation_requests(
                 request_id
                 session_id
                 node_did
-                agent_id
+                agent_did
                 input
                 lifecycle_state
                 created_at

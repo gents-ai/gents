@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -20,8 +20,8 @@ use crate::tools::workspace::{
 pub(crate) const SUCCEEDED_REPAIR_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) const SUCCEEDED_REPAIR_LIMIT: u32 = 256;
 
-const INVOCATION_FIELDS: &str = "invocation_id owner_node_did callback_id origin input idempotency_key caused_by_correlation lifecycle_state attempts action_plan action_journal error claimed_at created_at";
-const RESULT_FIELDS: &str = "result_id invocation_id binding_id owner_node_did workspace_id work_unit_id caused_by_correlation created_at";
+const INVOCATION_FIELDS: &str = "invocation_id owner_node_did agent_did callback_id origin input idempotency_key caused_by_correlation lifecycle_state attempts action_plan action_journal error claimed_at created_at";
+const RESULT_FIELDS: &str = "result_id invocation_id binding_id owner_node_did agent_did workspace_id work_unit_id caused_by_correlation created_at";
 
 const ISOLATED_WORKSPACE_FIELDS: &str = r#"
     workspace_id
@@ -74,6 +74,7 @@ pub struct CallbackInvocationDoc {
     pub input: serde_json::Value,
     pub invocation_id: String,
     pub owner_node_did: String,
+    pub agent_did: String,
     pub callback_id: String,
     pub origin: crate::documents::CallbackInvocationOrigin,
     pub idempotency_key: String,
@@ -141,6 +142,7 @@ pub struct CallbackResultDoc {
     #[serde(default)]
     pub binding_id: Option<String>,
     pub owner_node_did: String,
+    pub agent_did: String,
     #[serde(default)]
     pub workspace_id: Option<String>,
     #[serde(default)]
@@ -154,6 +156,8 @@ pub struct CallbackResultDoc {
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct CallbackResultInvocationRow {
     pub invocation_id: String,
+    #[serde(default)]
+    pub parent_linked: bool,
 }
 
 /// One per-document event invocation per binding and arrival; an edit after
@@ -189,6 +193,7 @@ pub fn validate_callback_binding(binding: &CallbackBindingDoc) -> Result<()> {
     for (name, value) in [
         ("binding_id", &binding.binding_id),
         ("node_did", &binding.node_did),
+        ("agent_did", &binding.agent_did),
         ("callback_id", &binding.callback_id),
         ("event_source_id", &binding.event_source_id),
     ] {
@@ -197,6 +202,11 @@ pub fn validate_callback_binding(binding: &CallbackBindingDoc) -> Result<()> {
             "CallbackBinding {name} must be non-empty"
         );
     }
+    identity::Did::new(binding.agent_did.clone())?;
+    anyhow::ensure!(
+        binding.agent_did != binding.node_did,
+        "callback agent cannot be its routing node"
+    );
     let mut unique = RapidHashSet::new();
     for field in &binding.input_fields {
         crate::store::graphql::validate_graphql_name(field)?;
@@ -397,9 +407,10 @@ pub async fn load_trusted_callback_signers(node: &EmbeddedNode) -> Result<BTreeS
 }
 
 pub async fn load_invocation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation_id: &str,
     owner: &str,
+    agent_did: &str,
 ) -> Result<Option<CallbackInvocationDoc>> {
     let query = format!(
         r#"{{
@@ -411,7 +422,7 @@ pub async fn load_invocation(
         id = escape_graphql_string(invocation_id),
         owner = escape_graphql_string(owner),
     );
-    let response = graphql_with_transaction_retry(node, &query, "query CallbackInvocation")
+    let response = callback_query_as(node, agent_did, &query, "callback.read_invocation")
         .await
         .with_context(|| format!("query CallbackInvocation {invocation_id}"))?;
     anyhow::ensure!(
@@ -422,23 +433,24 @@ pub async fn load_invocation(
 }
 
 pub async fn load_invocation_by_key(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     key: &str,
     owner: &str,
+    agent_did: &str,
 ) -> Result<Option<CallbackInvocationDoc>> {
     let query = format!(
         r#"{{
             CallbackInvocation(
-                filter: {{ idempotency_key: {{ _eq: "{key}" }}, owner_node_did: {{ _eq: "{owner}" }} }},
+                filter: {{ idempotency_key: {{ _eq: "{key}" }}, owner_node_did: {{ _eq: "{owner}" }}, agent_did: {{ _eq: "{agent}" }} }},
                 limit: 2
             ) {{ {INVOCATION_FIELDS} }}
         }}"#,
         key = escape_graphql_string(key),
         owner = escape_graphql_string(owner),
+        agent = escape_graphql_string(agent_did),
     );
     let response =
-        graphql_with_transaction_retry(node, &query, "query CallbackInvocation by idempotency_key")
-            .await?;
+        callback_query_as(node, agent_did, &query, "callback.read_invocation_by_key").await?;
     anyhow::ensure!(
         rows::<Value>(&response, "CallbackInvocation").map(|rows| rows.len())? <= 1,
         "ambiguous node-scoped callback/workspace document"
@@ -447,19 +459,85 @@ pub async fn load_invocation_by_key(
 }
 
 pub async fn list_recoverable_invocations(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     owner_node_did: &str,
 ) -> Result<Vec<CallbackInvocationDoc>> {
-    let mut invocations =
-        query_owner_invocations(node, owner_node_did, r#"["pending", "claimed", "running"]"#)
-            .await?;
-    invocations.extend(list_recent_succeeded_missing_result(node, owner_node_did).await?);
+    let mut invocations = Vec::new();
+    for agent in callback_agents(node, owner_node_did).await? {
+        if let Err(error) =
+            crate::store::identity::RegisteredIdentity::from_registered_did(&agent, None)
+        {
+            tracing::warn!(agent_did = %agent, %error, "callback recovery agent identity unavailable");
+            continue;
+        }
+        let mut repair_failed = false;
+        for collection in ["CallbackInvocation", "CallbackResult"] {
+            if let Err(error) =
+                repair_unlinked_children(node, owner_node_did, &agent, collection).await
+            {
+                tracing::warn!(agent_did = %agent, %collection, %error, "callback parent repair remains pending");
+                repair_failed = true;
+                break;
+            }
+        }
+        if repair_failed {
+            continue;
+        }
+        invocations.extend(
+            query_owner_invocations(
+                node,
+                owner_node_did,
+                &agent,
+                r#"["pending", "claimed", "running"]"#,
+            )
+            .await?,
+        );
+        invocations
+            .extend(list_recent_succeeded_missing_result(node, owner_node_did, &agent).await?);
+    }
     Ok(invocations)
 }
 
+async fn repair_unlinked_children(
+    node: &std::sync::Arc<EmbeddedNode>,
+    owner: &str,
+    agent_did: &str,
+    collection: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        matches!(collection, "CallbackInvocation" | "CallbackResult"),
+        "invalid callback child collection"
+    );
+    let mut after = String::new();
+    loop {
+        let query = format!(
+            "{{ {collection}(filter: {{owner_node_did: {{_eq: \"{}\"}}, agent_did: {{_eq: \"{}\"}}, parent_linked: {{_eq: false}}, _docID: {{_gt: \"{}\"}}}}, order: {{_docID: ASC}}, limit: 256) {{_docID invocation_id}} }}",
+            escape_graphql_string(owner), escape_graphql_string(agent_did), escape_graphql_string(&after),
+        );
+        let response = callback_query_as(node, agent_did, &query, "callback.list_unlinked").await?;
+        let rows: Vec<Value> = rows(&response, collection)?;
+        for row in &rows {
+            let doc_id = row["_docID"]
+                .as_str()
+                .filter(|id| *id > after.as_str())
+                .context("callback parent repair did not advance")?;
+            let invocation_id = row["invocation_id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .context("callback parent repair lacks invocation ID")?;
+            ensure_callback_parent(node, collection, invocation_id, owner, agent_did).await?;
+            after = doc_id.to_owned();
+        }
+        if rows.len() < 256 {
+            return Ok(());
+        }
+    }
+}
+
 async fn list_recent_succeeded_missing_result(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     owner_node_did: &str,
+    agent_did: &str,
 ) -> Result<Vec<CallbackInvocationDoc>> {
     let cutoff = succeeded_repair_cutoff(chrono::Utc::now());
     let query = format!(
@@ -467,6 +545,7 @@ async fn list_recent_succeeded_missing_result(
             CallbackInvocation(
                 filter: {{
                     owner_node_did: {{ _eq: "{owner}" }},
+                    agent_did: {{ _eq: "{agent}" }},
                     lifecycle_state: {{ _eq: "succeeded" }},
                     created_at: {{ _ge: "{cutoff}" }}
                 }},
@@ -475,12 +554,11 @@ async fn list_recent_succeeded_missing_result(
             ) {{ {INVOCATION_FIELDS} }}
         }}"#,
         owner = escape_graphql_string(owner_node_did),
+        agent = escape_graphql_string(agent_did),
         cutoff = escape_graphql_string(&cutoff),
         limit = SUCCEEDED_REPAIR_LIMIT,
     );
-    let response =
-        graphql_with_transaction_retry(node, &query, "query recent succeeded CallbackInvocation")
-            .await?;
+    let response = callback_query_as(node, agent_did, &query, "callback.recent_succeeded").await?;
     let succeeded: Vec<CallbackInvocationDoc> = rows(&response, "CallbackInvocation")?;
     if succeeded.is_empty() {
         return Ok(Vec::new());
@@ -489,21 +567,31 @@ async fn list_recent_succeeded_missing_result(
         node,
         succeeded.iter().map(|row| row.invocation_id.as_str()),
         owner_node_did,
+        agent_did,
     )
     .await?;
     Ok(succeeded_missing_result(succeeded, &results))
 }
 
 pub async fn list_recent_failed(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     owner_node_did: &str,
 ) -> Result<Vec<CallbackInvocationDoc>> {
     let cutoff = succeeded_repair_cutoff(chrono::Utc::now());
-    let query = format!(
-        r#"{{
+    let mut failed = Vec::new();
+    for agent in callback_agents(node, owner_node_did).await? {
+        if let Err(error) =
+            crate::store::identity::RegisteredIdentity::from_registered_did(&agent, None)
+        {
+            tracing::warn!(agent_did = %agent, %error, "callback retry agent identity unavailable");
+            continue;
+        }
+        let query = format!(
+            r#"{{
             CallbackInvocation(
                 filter: {{
                     owner_node_did: {{ _eq: "{owner}" }},
+                    agent_did: {{ _eq: "{agent}" }},
                     lifecycle_state: {{ _eq: "failed" }},
                     created_at: {{ _ge: "{cutoff}" }}
                 }},
@@ -511,15 +599,18 @@ pub async fn list_recent_failed(
                 limit: {limit}
             ) {{ {INVOCATION_FIELDS} }}
         }}"#,
-        owner = escape_graphql_string(owner_node_did),
-        cutoff = escape_graphql_string(&cutoff),
-        limit = SUCCEEDED_REPAIR_LIMIT,
-    );
-    let response =
-        crate::store::graphql::graphql_with_transaction_retry(node, &query, "callback.list_failed")
-            .await
-            .context("query recent failed CallbackInvocation")?;
-    Ok(rows(&response, "CallbackInvocation")?)
+            owner = escape_graphql_string(owner_node_did),
+            agent = escape_graphql_string(&agent),
+            cutoff = escape_graphql_string(&cutoff),
+            limit = SUCCEEDED_REPAIR_LIMIT,
+        );
+        let response = callback_query_as(node, &agent, &query, "callback.list_failed").await?;
+        failed.extend(rows::<CallbackInvocationDoc>(
+            &response,
+            "CallbackInvocation",
+        )?);
+    }
+    Ok(failed)
 }
 
 pub(crate) fn succeeded_repair_cutoff(now: chrono::DateTime<chrono::Utc>) -> String {
@@ -540,9 +631,10 @@ pub(crate) fn succeeded_missing_result(
 }
 
 async fn load_callback_results_for_invocations(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation_ids: impl IntoIterator<Item = &str>,
     owner: &str,
+    agent_did: &str,
 ) -> Result<RapidHashSet<String>> {
     let ids: Vec<String> = invocation_ids
         .into_iter()
@@ -554,27 +646,33 @@ async fn load_callback_results_for_invocations(
     let query = format!(
         r#"{{
             CallbackResult(
-                filter: {{ invocation_id: {{ _in: [{ids}] }}, owner_node_did: {{ _eq: "{owner}" }} }},
+                filter: {{ invocation_id: {{ _in: [{ids}] }}, owner_node_did: {{ _eq: "{owner}" }}, agent_did: {{ _eq: "{agent}" }} }},
                 limit: {limit}
-            ) {{ invocation_id }}
+            ) {{ invocation_id parent_linked }}
         }}"#,
         ids = ids.join(", "),
         owner = escape_graphql_string(owner),
+        agent = escape_graphql_string(agent_did),
         limit = SUCCEEDED_REPAIR_LIMIT,
     );
-    let response = graphql_with_transaction_retry(
-        node,
-        &query,
-        "query CallbackResult batch for succeeded repair",
-    )
-    .await?;
+    let response =
+        callback_query_as(node, agent_did, &query, "callback.results_for_repair").await?;
     let rows: Vec<CallbackResultInvocationRow> = rows(&response, "CallbackResult")?;
-    Ok(rows.into_iter().map(|row| row.invocation_id).collect())
+    let mut complete = RapidHashSet::new();
+    for row in rows {
+        if !row.parent_linked {
+            ensure_callback_parent(node, "CallbackResult", &row.invocation_id, owner, agent_did)
+                .await?;
+        }
+        complete.insert(row.invocation_id);
+    }
+    Ok(complete)
 }
 
 async fn query_owner_invocations(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     owner_node_did: &str,
+    agent_did: &str,
     states: &str,
 ) -> Result<Vec<CallbackInvocationDoc>> {
     let query = format!(
@@ -582,38 +680,75 @@ async fn query_owner_invocations(
             CallbackInvocation(
                 filter: {{
                     owner_node_did: {{ _eq: "{owner}" }},
+                    agent_did: {{ _eq: "{agent}" }},
                     lifecycle_state: {{ _in: {states} }}
                 }},
                 order: {{ created_at: ASC }}
             ) {{ {INVOCATION_FIELDS} }}
         }}"#,
         owner = escape_graphql_string(owner_node_did),
+        agent = escape_graphql_string(agent_did),
         states = states,
     );
-    let response = graphql_with_transaction_retry(node, &query, "query CallbackInvocation states")
+    let response = callback_query_as(node, agent_did, &query, "callback.list_invocations")
         .await
         .with_context(|| format!("query CallbackInvocation states {states}"))?;
     Ok(rows(&response, "CallbackInvocation")?)
 }
 
+async fn callback_agents(node: &EmbeddedNode, owner: &str) -> Result<Vec<String>> {
+    let query = format!(
+        "{{ Agent(filter: {{ node_did: {{ _eq: \"{}\" }} }}) {{ agent_did }} }}",
+        escape_graphql_string(owner)
+    );
+    let response = graphql_with_transaction_retry(node, &query, "callback.list_agents").await?;
+    rows::<Value>(&response, "Agent")?
+        .into_iter()
+        .map(|row| {
+            row["agent_did"]
+                .as_str()
+                .filter(|did| !did.is_empty())
+                .map(str::to_owned)
+                .context("callback Agent has no DID")
+        })
+        .collect()
+}
+
+async fn callback_query_as(
+    node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
+    query: &str,
+    operation: &'static str,
+) -> Result<defra_node::QueryResponse> {
+    crate::store::identity::RegisteredIdentity::from_registered_did(agent_did, None)?;
+    crate::store::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        Some(identity::Did::new(agent_did.to_owned())?),
+        operation,
+        |txn| Box::pin(async move { txn.execute_local_response(query).await }),
+    )
+    .await
+    .map_err(Into::into)
+}
+
 pub async fn load_callback_result(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation_id: &str,
     owner: &str,
+    agent_did: &str,
 ) -> Result<Option<CallbackResultDoc>> {
     let query = format!(
         r#"{{
             CallbackResult(
-                filter: {{ invocation_id: {{ _eq: "{id}" }}, owner_node_did: {{ _eq: "{owner}" }} }},
+                filter: {{ invocation_id: {{ _eq: "{id}" }}, owner_node_did: {{ _eq: "{owner}" }}, agent_did: {{ _eq: "{agent}" }} }},
                 limit: 2
             ) {{ {RESULT_FIELDS} }}
         }}"#,
         id = escape_graphql_string(invocation_id),
         owner = escape_graphql_string(owner),
+        agent = escape_graphql_string(agent_did),
     );
-    let response = graphql_with_transaction_retry(node, &query, "query CallbackResult")
-        .await
-        .with_context(|| format!("query CallbackResult for {invocation_id}"))?;
+    let response = callback_query_as(node, agent_did, &query, "callback.read_result").await?;
     anyhow::ensure!(
         rows::<Value>(&response, "CallbackResult").map(|rows| rows.len())? <= 1,
         "ambiguous node-scoped callback/workspace document"
@@ -629,9 +764,18 @@ pub async fn create_pending_invocation(
         node,
         &invocation.idempotency_key,
         &invocation.owner_node_did,
+        &invocation.agent_did,
     )
     .await?
     {
+        ensure_callback_parent(
+            node,
+            "CallbackInvocation",
+            &existing.invocation_id,
+            &existing.owner_node_did,
+            &existing.agent_did,
+        )
+        .await?;
         return Ok(existing);
     }
     let now = invocation
@@ -640,31 +784,42 @@ pub async fn create_pending_invocation(
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     let input = serde_json::json!({
         "invocation_id": invocation.invocation_id, "owner_node_did": invocation.owner_node_did,
+        "agent_did": invocation.agent_did,
         "callback_id": invocation.callback_id, "origin": invocation.origin,
         "input": callback_input_for_storage(&invocation.input),
         "idempotency_key": invocation.idempotency_key,
         "caused_by_correlation": invocation.caused_by_correlation,
         "lifecycle_state": "pending", "attempts": 0,
         "action_plan": null, "action_journal": "[]", "error": null, "claimed_at": null,
-        "created_at": now
+        "created_at": now, "parent_linked": false
     });
-    let variables = serde_json::json!({"input": input});
     let mutation = "mutation($input: CallbackInvocationMutationInputArg!) { create_CallbackInvocation(input: $input) { _docID } }";
     let written = crate::store::config_client::ConfigAccess::transact_local_write(
         node,
-        None,
+        Some(identity::Did::new(invocation.agent_did.clone())?),
         "callback.create_invocation",
         |txn| {
-            let variables = &variables;
-            Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
+            let input = &input;
+            Box::pin(async move {
+                let parent = callback_agent_parent_in_txn(
+                    txn,
+                    &invocation.owner_node_did,
+                    &invocation.agent_did,
+                )
+                .await?;
+                let mut variables = serde_json::json!({"input": input});
+                variables["input"]["agent_doc_id"] = parent.into();
+                Ok::<_, anyhow::Error>(txn.execute_with_variables(mutation, &variables).await?)
+            })
         },
     )
     .await;
-    match written {
+    let stored = match written {
         Ok(_) => load_invocation_by_key(
             node,
             &invocation.idempotency_key,
             &invocation.owner_node_did,
+            &invocation.agent_did,
         )
         .await?
         .ok_or_else(|| anyhow!("created CallbackInvocation missing after write")),
@@ -673,14 +828,121 @@ pub async fn create_pending_invocation(
                 node,
                 &invocation.idempotency_key,
                 &invocation.owner_node_did,
+                &invocation.agent_did,
             )
             .await?
             {
+                ensure_callback_parent(
+                    node,
+                    "CallbackInvocation",
+                    &existing.invocation_id,
+                    &existing.owner_node_did,
+                    &existing.agent_did,
+                )
+                .await?;
                 return Ok(existing);
             }
             Err(error).context("create_CallbackInvocation")
         }
+    }?;
+    ensure_callback_parent(
+        node,
+        "CallbackInvocation",
+        &stored.invocation_id,
+        &stored.owner_node_did,
+        &stored.agent_did,
+    )
+    .await?;
+    Ok(stored)
+}
+
+/// Resolve the configured Agent while writing as its runtime-managed actor.
+pub(super) async fn callback_agent_parent_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    agent_did: &str,
+) -> Result<String> {
+    anyhow::ensure!(
+        txn.actor_did() == Some(agent_did),
+        "callback creation requires the selected agent as its authenticated actor"
+    );
+    let query = format!(
+        "{{ Agent(filter: {{ node_did: {{ _eq: \"{}\" }}, agent_did: {{ _eq: \"{}\" }} }}, limit: 2) {{ _docID }} }}",
+        escape_graphql_string(node_did), escape_graphql_string(agent_did),
+    );
+    let response = txn.execute(&query).await?;
+    let rows = response["data"]["Agent"]
+        .as_array()
+        .context("callback Agent lookup omitted its result")?;
+    let [agent] = rows.as_slice() else {
+        anyhow::bail!("callback requires one visible physical Agent");
+    };
+    Ok(agent["_docID"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .context("callback Agent has no physical document ID")?
+        .to_owned())
+}
+
+/// ACP1 creates the document before its owner grants the parent relation.
+/// The marker schedules idempotent repair after interruption; authorization is
+/// always decided by DefraDB. This trial assumes node-admitted writers are
+/// trusted because ACP1 does not bind the creator to the authored agent field.
+pub(super) async fn ensure_callback_parent(
+    node: &std::sync::Arc<EmbeddedNode>,
+    collection: &str,
+    invocation_id: &str,
+    owner: &str,
+    agent_did: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        matches!(collection, "CallbackInvocation" | "CallbackResult"),
+        "invalid callback child collection"
+    );
+    let query = format!(
+        "{{ {collection}(filter: {{invocation_id: {{_eq: \"{}\"}}, owner_node_did: {{_eq: \"{}\"}}, agent_did: {{_eq: \"{}\"}}}}, limit: 2) {{_docID agent_doc_id parent_linked}} }}",
+        escape_graphql_string(invocation_id), escape_graphql_string(owner), escape_graphql_string(agent_did),
+    );
+    let response = callback_query_as(node, agent_did, &query, "callback.read_parent_link").await?;
+    let rows: Vec<Value> = rows(&response, collection)?;
+    let [row] = rows.as_slice() else {
+        anyhow::bail!("callback child is missing or ambiguous");
+    };
+    if row["parent_linked"].as_bool() == Some(true) {
+        return Ok(());
     }
+    let doc_id = row["_docID"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .context("callback child has no document ID")?;
+    let parent = row["agent_doc_id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .context("callback child has no Agent parent")?;
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(agent_did)?,
+    );
+    let expected = access
+        .transact_readonly("callback.validate_parent", |txn| {
+            Box::pin(async move { callback_agent_parent_in_txn(txn, owner, agent_did).await })
+        })
+        .await?;
+    anyhow::ensure!(parent == expected, "callback Agent parent changed");
+    access
+        .add_resource_relationship(collection, doc_id, "parent", "agents", parent)
+        .await?;
+    let marked = access.write("callback.mark_parent_linked", &format!(
+        "mutation {{ update_{collection}(docID: \"{}\", input: {{parent_linked: true}}) {{ _docID }} }}",
+        escape_graphql_string(doc_id),
+    )).await?;
+    anyhow::ensure!(
+        marked["data"][format!("update_{collection}")]
+            .as_array()
+            .is_some_and(|rows| rows.len() == 1),
+        "callback child disappeared before parent repair was recorded"
+    );
+    Ok(())
 }
 
 pub(super) fn update_invocation_mutation(
@@ -701,7 +963,8 @@ pub(super) fn update_invocation_mutation(
             update_CallbackInvocation(
                 filter: {{
                     invocation_id: {{ _eq: "{id}" }},
-                    owner_node_did: {{ _eq: "{owner}" }}
+                    owner_node_did: {{ _eq: "{owner}" }},
+                    agent_did: {{ _eq: "{agent}" }}
                     {state_filter}
                 }},
                 input: {{
@@ -716,6 +979,7 @@ pub(super) fn update_invocation_mutation(
         }}"#,
         id = escape_graphql_string(&invocation.invocation_id),
         owner = escape_graphql_string(&invocation.owner_node_did),
+        agent = escape_graphql_string(&invocation.agent_did),
         state = escape_graphql_string(&invocation.lifecycle_state),
         attempts = invocation.attempts.unwrap_or(0),
         plan = optional_graphql_string_field("action_plan", invocation.action_plan.as_deref()),
@@ -736,11 +1000,16 @@ pub async fn update_invocation(
     invocation: &CallbackInvocationDoc,
     expected_state: Option<&str>,
 ) -> Result<bool> {
+    crate::store::identity::RegisteredIdentity::from_registered_did(&invocation.agent_did, None)?;
     let mutation = update_invocation_mutation(invocation, expected_state);
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::transact_local_write(
         node,
+        Some(identity::Did::new(invocation.agent_did.clone())?),
         "callback.update_invocation",
-        &mutation,
+        |txn| {
+            let mutation = &mutation;
+            Box::pin(async move { txn.execute_local_response(mutation).await })
+        },
     )
     .await?;
     Ok(
@@ -749,7 +1018,10 @@ pub async fn update_invocation(
     )
 }
 
-pub(super) fn create_callback_result_mutation(result: &CallbackResultDoc) -> String {
+pub(super) fn create_callback_result_mutation(
+    result: &CallbackResultDoc,
+    agent_doc_id: &str,
+) -> String {
     let now = result
         .created_at
         .clone()
@@ -761,6 +1033,9 @@ pub(super) fn create_callback_result_mutation(result: &CallbackResultDoc) -> Str
                 invocation_id: "{invocation_id}",
                 {binding_id}
                 owner_node_did: "{owner}",
+                agent_did: "{agent}",
+                agent_doc_id: "{agent_doc_id}",
+                parent_linked: false,
                 {workspace}
                 {work_unit_id}
                 {correlation}
@@ -771,6 +1046,8 @@ pub(super) fn create_callback_result_mutation(result: &CallbackResultDoc) -> Str
         invocation_id = escape_graphql_string(&result.invocation_id),
         binding_id = optional_graphql_string_field("binding_id", result.binding_id.as_deref()),
         owner = escape_graphql_string(&result.owner_node_did),
+        agent = escape_graphql_string(&result.agent_did),
+        agent_doc_id = escape_graphql_string(agent_doc_id),
         workspace = optional_graphql_string_field("workspace_id", result.workspace_id.as_deref()),
         work_unit_id =
             optional_graphql_string_field("work_unit_id", result.work_unit_id.as_deref()),
@@ -786,31 +1063,81 @@ pub async fn create_callback_result(
     node: &std::sync::Arc<EmbeddedNode>,
     result: &CallbackResultDoc,
 ) -> Result<CallbackResultDoc> {
-    if let Some(existing) =
-        load_callback_result(node, &result.invocation_id, &result.owner_node_did).await?
+    if let Some(existing) = load_callback_result(
+        node,
+        &result.invocation_id,
+        &result.owner_node_did,
+        &result.agent_did,
+    )
+    .await?
     {
+        ensure_callback_parent(
+            node,
+            "CallbackResult",
+            &existing.invocation_id,
+            &existing.owner_node_did,
+            &existing.agent_did,
+        )
+        .await?;
         return Ok(existing);
     }
-    let mutation = create_callback_result_mutation(result);
-    match crate::store::config_client::ConfigAccess::write_local_response(
+    let stored = match crate::store::config_client::ConfigAccess::transact_local_write(
         node,
+        Some(identity::Did::new(result.agent_did.clone())?),
         "callback.create_result",
-        &mutation,
+        |txn| {
+            Box::pin(async move {
+                let parent =
+                    callback_agent_parent_in_txn(txn, &result.owner_node_did, &result.agent_did)
+                        .await?;
+                Ok::<_, anyhow::Error>(
+                    txn.execute(&create_callback_result_mutation(result, &parent))
+                        .await?,
+                )
+            })
+        },
     )
     .await
     {
-        Ok(_) => load_callback_result(node, &result.invocation_id, &result.owner_node_did)
-            .await?
-            .ok_or_else(|| anyhow!("created CallbackResult missing after write")),
+        Ok(_) => load_callback_result(
+            node,
+            &result.invocation_id,
+            &result.owner_node_did,
+            &result.agent_did,
+        )
+        .await?
+        .ok_or_else(|| anyhow!("created CallbackResult missing after write")),
         Err(error) => {
-            if let Some(existing) =
-                load_callback_result(node, &result.invocation_id, &result.owner_node_did).await?
+            if let Some(existing) = load_callback_result(
+                node,
+                &result.invocation_id,
+                &result.owner_node_did,
+                &result.agent_did,
+            )
+            .await?
             {
+                ensure_callback_parent(
+                    node,
+                    "CallbackResult",
+                    &existing.invocation_id,
+                    &existing.owner_node_did,
+                    &existing.agent_did,
+                )
+                .await?;
                 return Ok(existing);
             }
             Err(error).context("create_CallbackResult")
         }
-    }
+    }?;
+    ensure_callback_parent(
+        node,
+        "CallbackResult",
+        &stored.invocation_id,
+        &stored.owner_node_did,
+        &stored.agent_did,
+    )
+    .await?;
+    Ok(stored)
 }
 
 pub async fn load_repository_placement(
@@ -834,15 +1161,16 @@ pub async fn load_repository_placement(
 }
 
 pub async fn load_memory_workspace_docs(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     workspace_id: &str,
     owner: &str,
+    agent_did: &str,
 ) -> Result<MemoryWorkspaceDocuments> {
     let mut docs = MemoryWorkspaceDocuments::default();
-    if let Some(workspace) = load_isolated_workspace(node, workspace_id, owner).await? {
+    if let Some(workspace) = load_isolated_workspace(node, workspace_id, owner, agent_did).await? {
         docs.write_isolated_workspace(workspace)?;
     }
-    if let Some(placement) = load_workspace_placement(node, workspace_id, owner).await? {
+    if let Some(placement) = load_workspace_placement(node, workspace_id, owner, agent_did).await? {
         docs.write_placement(placement)?;
     }
     Ok(docs)
@@ -851,25 +1179,26 @@ pub async fn load_memory_workspace_docs(
 pub async fn flush_workspace_docs(
     node: &std::sync::Arc<EmbeddedNode>,
     docs: &MemoryWorkspaceDocuments,
+    agent_did: &str,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     for workspace in docs.workspaces.values() {
         let mutation = isolated_workspace_upsert_mutation(workspace);
-        crate::store::config_client::ConfigAccess::write_local_response(
-            node,
-            "callback.upsert_isolated_workspace",
-            &mutation,
+        crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(agent_did.to_owned())?,
         )
+        .write("callback.upsert_isolated_workspace", &mutation)
         .await
         .with_context(|| format!("persist IsolatedWorkspace {}", workspace.workspace_id))?;
     }
     for placement in docs.placements.values() {
         let mutation = workspace_placement_upsert_mutation(placement, &now);
-        crate::store::config_client::ConfigAccess::write_local_response(
-            node,
-            "callback.upsert_workspace_placement",
-            &mutation,
+        crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(agent_did.to_owned())?,
         )
+        .write("callback.upsert_workspace_placement", &mutation)
         .await
         .with_context(|| format!("persist WorkspacePlacement {}", placement.workspace_id))?;
     }
@@ -877,9 +1206,10 @@ pub async fn flush_workspace_docs(
 }
 
 pub(crate) async fn load_isolated_workspace(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     workspace_id: &str,
     owner: &str,
+    agent_did: &str,
 ) -> Result<Option<IsolatedWorkspaceDoc>> {
     let query = format!(
         r#"{{
@@ -891,9 +1221,16 @@ pub(crate) async fn load_isolated_workspace(
         id = escape_graphql_string(workspace_id),
         owner = escape_graphql_string(owner),
     );
-    let response = graphql_with_transaction_retry(node, &query, "query IsolatedWorkspace")
-        .await
-        .with_context(|| format!("query IsolatedWorkspace {workspace_id}"))?;
+    let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        Some(identity::Did::new(agent_did.to_owned())?),
+        "callback.read_workspace",
+        |txn| {
+            let query = &query;
+            Box::pin(async move { txn.execute_local_response(query).await })
+        },
+    )
+    .await?;
     anyhow::ensure!(
         rows::<Value>(&response, "IsolatedWorkspace").map(|rows| rows.len())? <= 1,
         "ambiguous node-scoped callback/workspace document"
@@ -902,9 +1239,10 @@ pub(crate) async fn load_isolated_workspace(
 }
 
 pub(crate) async fn load_workspace_placement(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     workspace_id: &str,
     owner: &str,
+    agent_did: &str,
 ) -> Result<Option<WorkspacePlacementDoc>> {
     let query = format!(
         r#"{{
@@ -916,9 +1254,16 @@ pub(crate) async fn load_workspace_placement(
         id = escape_graphql_string(workspace_id),
         owner = escape_graphql_string(owner),
     );
-    let response = graphql_with_transaction_retry(node, &query, "query WorkspacePlacement")
-        .await
-        .with_context(|| format!("query WorkspacePlacement {workspace_id}"))?;
+    let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        Some(identity::Did::new(agent_did.to_owned())?),
+        "callback.read_workspace",
+        |txn| {
+            let query = &query;
+            Box::pin(async move { txn.execute_local_response(query).await })
+        },
+    )
+    .await?;
     anyhow::ensure!(
         rows::<Value>(&response, "WorkspacePlacement").map(|rows| rows.len())? <= 1,
         "ambiguous node-scoped callback/workspace document"

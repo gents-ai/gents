@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::runtime::agent::p2p_reconcile::{
     equality_filter, EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
 };
@@ -15,7 +15,7 @@ use crate::support::test_p2p_db;
 
 const OWNER_DID: &str = "did:test:convergence-p2p-owner";
 const PEER_DID: &str = "did:test:convergence-p2p-peer";
-const AGENT_ID: &str = "convergence-p2p-behavior";
+const AGENT_DID: &str = "convergence-p2p-behavior";
 
 async fn install_one_way_replicator(
     sender: &Arc<EmbeddedNode>,
@@ -166,7 +166,7 @@ async fn create_request(
                 purpose: "normal",
                 node_did: "{node_did}",
                 requester_did: "{PEER_DID}",
-                agent_id: "{AGENT_ID}",
+                agent_did: "{AGENT_DID}",
                 session_id: "{session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{request_id}",
@@ -370,8 +370,8 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     );
     assert_eq!(final_peer.node_did.as_deref(), Some(OWNER_DID));
 
-    owner.node.shutdown().await;
-    peer.node.shutdown().await;
+    owner.node.shutdown().await.expect("node shutdown");
+    peer.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -428,8 +428,8 @@ async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
         .expect("redrive remains exhausted after peer replay");
     assert!(still_exhausted.is_noop());
 
-    owner.node.shutdown().await;
-    peer.node.shutdown().await;
+    owner.node.shutdown().await.expect("node shutdown");
+    peer.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -495,6 +495,6 @@ async fn p2p_terminal_redrive_pushes_once_per_routed_request() {
         "request wave-volume reduction must be at least 5x; former={former_pushes}, current={measured_pushes}"
     );
 
-    owner.node.shutdown().await;
-    peer.node.shutdown().await;
+    owner.node.shutdown().await.expect("node shutdown");
+    peer.node.shutdown().await.expect("node shutdown");
 }

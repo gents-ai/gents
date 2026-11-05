@@ -275,4 +275,113 @@ theorem drained_poisoned_transaction_cannot_restart_or_commit :
       committed.cleanupPending = false := by
   decide
 
+/-- A proposed per-node local admission and drain owner. It must cover every
+Gents-owned local node use, including detached work and transaction cleanup.
+This is a contract to implement, not a claim about the current adapter. Native
+HTTP transactions, P2P, and callers holding a raw Node are outside this model;
+their quiescence is an independent premise for starting node shutdown. -/
+structure ShutdownState where
+  accepting : Bool := true
+  transactionAlive : Bool := false
+  otherTransactions : Nat := 0
+  transactionNative : Nat := 0
+  cleanupPending : Bool := false
+  detachedNative : Nat := 0
+  rejected : Nat := 0
+  waiterCancelled : Bool := false
+  shutdownStarted : Bool := false
+  shutdownReturned : Bool := false
+  deriving DecidableEq, Repr
+
+inductive ShutdownEvent where
+  | admitTransaction | admitOtherTransaction | commitOtherTransaction
+  | admitDetached | beginClosing | startStatement | returnStatement
+  | cancelTransaction | finishCleanup | commitTransaction | returnDetached
+  | cancelShutdownWaiter | startShutdown | finishShutdown
+  deriving DecidableEq, Repr
+
+def shutdownStep (s : ShutdownState) : ShutdownEvent → ShutdownState
+  | .admitTransaction =>
+      if s.accepting && !s.transactionAlive then { s with transactionAlive := true }
+      else { s with rejected := s.rejected + 1 }
+  | .admitOtherTransaction =>
+      if s.accepting then { s with otherTransactions := s.otherTransactions + 1 }
+      else { s with rejected := s.rejected + 1 }
+  | .commitOtherTransaction =>
+      if 0 < s.otherTransactions then { s with otherTransactions := s.otherTransactions - 1 }
+      else s
+  | .admitDetached =>
+      if s.accepting then { s with detachedNative := s.detachedNative + 1 }
+      else { s with rejected := s.rejected + 1 }
+  | .beginClosing => { s with accepting := false }
+  | .startStatement =>
+      if s.transactionAlive && !s.cleanupPending then
+        { s with transactionNative := s.transactionNative + 1 }
+      else s
+  | .returnStatement =>
+      if 0 < s.transactionNative then { s with transactionNative := s.transactionNative - 1 }
+      else s
+  | .cancelTransaction =>
+      if s.transactionAlive then { s with cleanupPending := true } else s
+  | .finishCleanup =>
+      if s.cleanupPending && s.transactionNative == 0 then
+        { s with cleanupPending := false, transactionAlive := false }
+      else s
+  | .commitTransaction =>
+      if s.transactionAlive && !s.cleanupPending && s.transactionNative == 0 then
+        { s with transactionAlive := false }
+      else s
+  | .returnDetached =>
+      if 0 < s.detachedNative then { s with detachedNative := s.detachedNative - 1 }
+      else s
+  | .cancelShutdownWaiter => { s with waiterCancelled := true }
+  | .startShutdown =>
+      if !s.accepting && !s.transactionAlive && s.otherTransactions == 0 && !s.cleanupPending &&
+          s.transactionNative == 0 && s.detachedNative == 0 then
+        { s with shutdownStarted := true }
+      else s
+  | .finishShutdown =>
+      if s.shutdownStarted then { s with shutdownReturned := true } else s
+
+def shutdownRun (s : ShutdownState) (events : List ShutdownEvent) : ShutdownState :=
+  events.foldl shutdownStep s
+
+theorem closing_refuses_new_local_admission :
+    let closed := shutdownStep {} .beginClosing
+    let denied := shutdownRun closed [.admitTransaction, .admitDetached]
+    denied.rejected = 2 ∧ denied.transactionAlive = false ∧ denied.detachedNative = 0 := by
+  decide
+
+theorem open_transaction_blocks_shutdown_even_between_statements :
+    let pending := shutdownRun {} [.admitTransaction, .beginClosing, .startShutdown]
+    pending.transactionAlive = true ∧ pending.transactionNative = 0 ∧
+      pending.shutdownStarted = false := by
+  decide
+
+theorem cancelled_transaction_drains_before_shutdown :
+    let pending := shutdownRun {}
+      [.admitTransaction, .startStatement, .beginClosing, .cancelTransaction,
+        .finishCleanup, .startShutdown]
+    let drained := shutdownRun pending [.returnStatement, .finishCleanup, .startShutdown]
+    pending.cleanupPending = true ∧ pending.shutdownStarted = false ∧
+      drained.transactionAlive = false ∧ drained.shutdownStarted = true := by
+  decide
+
+theorem every_concurrent_transaction_must_finish_before_shutdown :
+    let pending := shutdownRun {}
+      [.admitTransaction, .admitOtherTransaction, .beginClosing, .commitTransaction,
+        .startShutdown]
+    let drained := shutdownRun pending [.commitOtherTransaction, .startShutdown]
+    pending.otherTransactions = 1 ∧ pending.shutdownStarted = false ∧
+      drained.shutdownStarted = true := by
+  decide
+
+theorem detached_read_and_cancelled_shutdown_waiter_do_not_end_shutdown_early :
+    let pending := shutdownRun {}
+      [.admitDetached, .beginClosing, .cancelShutdownWaiter, .startShutdown]
+    let done := shutdownRun pending [.returnDetached, .startShutdown, .finishShutdown]
+    pending.waiterCancelled = true ∧ pending.shutdownStarted = false ∧
+      done.shutdownReturned = true := by
+  decide
+
 end NativeClaimLifetime

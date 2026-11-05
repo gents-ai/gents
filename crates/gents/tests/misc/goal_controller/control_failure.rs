@@ -81,7 +81,10 @@ async fn goal_control_failures_pause_after_two_retries_even_with_generated_text(
             );
             assert_eq!(goal_children(&db).await.len() as i64, retry);
             let recovered = gents::goal::resume_goal_request(
-                &ConfigAccess::local(db.node.clone()),
+                &ConfigAccess::local_as(
+                    db.node.clone(),
+                    ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+                ),
                 db.node_identity.as_ref(),
                 db.node_identity.did(),
                 SESSION,

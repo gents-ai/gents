@@ -94,7 +94,7 @@ async fn generated_kill_cases_drive_the_session_message_kill() {
             }
             other => panic!("unknown Lean kill action {other}"),
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(admission.path).unwrap();
     }
 }

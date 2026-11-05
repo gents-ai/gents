@@ -1,57 +1,51 @@
 use super::*;
 
-pub(super) async fn node_default_agent(
-    node: &EmbeddedNode,
-    node_did: &str,
-) -> Result<Option<String>> {
+pub(super) async fn node_default_agent(core: &SelfConfigCore) -> Result<Option<String>> {
     let query = format!(
-        r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{ default_agent_id }} }}"#,
-        escape_graphql_string(node_did)
+        r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{ default_agent_did }} }}"#,
+        escape_graphql_string(core.node_did())
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "self_config.default_agent",
-    )
-    .await?;
+    let access =
+        crate::store::config_client::ConfigAccess::local_as(core.node_handle(), core.identity()?);
+    let response = access.execute(&query).await?;
     let rows = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("Node"))
         .and_then(Value::as_array)
         .context("Node query returned no rows")?;
     anyhow::ensure!(rows.len() <= 1, "ambiguous node identity");
     Ok(rows
         .first()
-        .and_then(|row| row.get("default_agent_id"))
+        .and_then(|row| row.get("default_agent_did"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned))
 }
 
 async fn agent_snapshot(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
-    agent_id: &str,
-    process_ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
+    core: &SelfConfigCore,
+    agent_did: &str,
     protected: bool,
-    default_agent_id: Option<&str>,
+    default_agent_did: Option<&str>,
 ) -> Result<Value> {
-    let effective = SelfConfigCore::new(node.clone(), node_did.to_owned(), agent_id.to_owned())?
-        .with_process_ceiling(process_ceiling.clone())
-        .read_effective_config(&BTreeSet::new(), false, false)
-        .await?;
+    let effective = SelfConfigCore::new(
+        core.node_handle(),
+        core.node_did().to_owned(),
+        agent_did.to_owned(),
+    )?
+    .with_lockout_agent_did(core.identity()?.to_string())
+    .with_process_ceiling(core.process_ceiling().clone())
+    .read_effective_config(&BTreeSet::new(), false, false)
+    .await?;
     Ok(json!({
-        "agent_id": agent_id,
+        "agent_did": agent_did,
         "protected": protected,
-        "is_default": default_agent_id == Some(agent_id),
+        "is_default": default_agent_did == Some(agent_did),
         "effective_config": effective,
     }))
 }
 
 pub(super) async fn agent_list(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
-    process_ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
+    core: &SelfConfigCore,
     limit: usize,
     cursor: Option<&str>,
 ) -> Result<String> {
@@ -59,37 +53,35 @@ pub(super) async fn agent_list(
         (1..=50).contains(&limit),
         "--limit must be between 1 and 50"
     );
-    let catalog = load_agent_catalog(node, node_did).await?;
-    let default_agent_id = node_default_agent(node, node_did).await?;
+    let catalog = load_agent_catalog(core).await?;
+    let default_agent_did = node_default_agent(core).await?;
     let total = catalog.agents.len();
     let selected = catalog
         .agents
         .iter()
-        .filter(|(agent_id, _)| cursor.is_none_or(|cursor| agent_id.as_str() > cursor))
+        .filter(|(agent_did, _)| cursor.is_none_or(|cursor| agent_did.as_str() > cursor))
         .take(limit + 1)
         .collect::<Vec<_>>();
     let truncated = selected.len() > limit;
     let mut agents = Vec::new();
-    for (agent_id, reference) in selected.into_iter().take(limit) {
+    for (agent_did, reference) in selected.into_iter().take(limit) {
         let snapshot = match agent_snapshot(
-            node,
-            node_did,
-            agent_id,
-            process_ceiling,
-            catalog.protected_ids.contains(agent_id),
-            default_agent_id.as_deref(),
+            core,
+            agent_did,
+            catalog.protected_ids.contains(agent_did),
+            default_agent_did.as_deref(),
         )
         .await
         {
             Ok(snapshot) => {
                 let effective = &snapshot["effective_config"];
                 json!({
-                    "agent_id": agent_id,
+                    "agent_did": agent_did,
                     "display_name": effective.pointer("/agent/display_name"),
                     "description": effective.pointer("/agent/description"),
                     "enabled": *reference,
-                    "protected": catalog.protected_ids.contains(agent_id),
-                    "is_default": default_agent_id.as_deref() == Some(agent_id.as_str()),
+                    "protected": catalog.protected_ids.contains(agent_did),
+                    "is_default": default_agent_did.as_deref() == Some(agent_did.as_str()),
                     "context_id": effective.pointer("/agent/context_id"),
                     "profile_id": effective.pointer("/agent/inference_profile_id"),
                     "backend_id": effective.pointer("/inference_profile/backend_id"),
@@ -99,10 +91,10 @@ pub(super) async fn agent_list(
                 })
             }
             Err(error) => json!({
-                "agent_id": agent_id,
+                "agent_did": agent_did,
                 "enabled": *reference,
-                "protected": catalog.protected_ids.contains(agent_id),
-                "is_default": default_agent_id.as_deref() == Some(agent_id.as_str()),
+                "protected": catalog.protected_ids.contains(agent_did),
+                "is_default": default_agent_did.as_deref() == Some(agent_did.as_str()),
                 "configuration_error": format!("{error:#}"),
             }),
         };
@@ -112,7 +104,7 @@ pub(super) async fn agent_list(
         .then(|| {
             agents
                 .last()?
-                .get("agent_id")?
+                .get("agent_did")?
                 .as_str()
                 .map(ToOwned::to_owned)
         })
@@ -125,10 +117,10 @@ pub(super) async fn agent_list(
             "truncated": truncated,
             "next_cursor": next_cursor,
         },
-        "process_ceiling": process_ceiling,
+        "process_ceiling": core.process_ceiling(),
         "permission_presets": builtin_preset_names(),
         "available_profile_ids": catalog.published_profiles,
-        "default_agent_id": default_agent_id,
+        "default_agent_did": default_agent_did,
         "agents": agents,
         "activation": {
             "durable_config": "after the admitted transaction commits",
@@ -140,24 +132,17 @@ pub(super) async fn agent_list(
     serde_json::to_string_pretty(&snapshot).map_err(|error| anyhow!("serialize catalog: {error}"))
 }
 
-pub(super) async fn agent_inspect(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
-    agent_id: &str,
-    process_ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
-) -> Result<String> {
-    let catalog = load_agent_catalog(node, node_did).await?;
-    let _ = catalog.agents.get(agent_id).with_context(|| {
-        format!("unknown agent_id {agent_id:?}; copy an exact ID from [\"agent\",\"list\"]")
+pub(super) async fn agent_inspect(core: &SelfConfigCore, agent_did: &str) -> Result<String> {
+    let catalog = load_agent_catalog(core).await?;
+    let _ = catalog.agents.get(agent_did).with_context(|| {
+        format!("unknown agent_did {agent_did:?}; copy an exact ID from [\"agent\",\"list\"]")
     })?;
-    let default_agent_id = node_default_agent(node, node_did).await?;
+    let default_agent_did = node_default_agent(core).await?;
     let snapshot = agent_snapshot(
-        node,
-        node_did,
-        agent_id,
-        process_ceiling,
-        catalog.protected_ids.contains(agent_id),
-        default_agent_id.as_deref(),
+        core,
+        agent_did,
+        catalog.protected_ids.contains(agent_did),
+        default_agent_did.as_deref(),
     )
     .await?;
     let Value::Object(mut snapshot) = snapshot else {
@@ -166,7 +151,7 @@ pub(super) async fn agent_inspect(
     let effective = snapshot.remove("effective_config").unwrap_or_default();
     let mut result = Ordered::reading_order(
         Value::Object(snapshot),
-        &["agent_id", "is_default", "protected"],
+        &["agent_did", "is_default", "protected"],
     );
     result.push(Ordered::entry(
         "effective_config",
@@ -186,7 +171,7 @@ pub(super) async fn guard_agent_profile_choice(
         return Ok(());
     };
     let current_profile = match current_agent {
-        Some(agent_id) => ops::read_owned_doc(txn, SelfConfigTarget::Agent, node_did, agent_id)
+        Some(agent_did) => ops::read_owned_doc(txn, SelfConfigTarget::Agent, node_did, agent_did)
             .await?
             .and_then(|(_, doc)| {
                 doc.get("inference_profile_id")?

@@ -34,13 +34,13 @@ async fn config_apply_reconciles_canonical_event_source_and_trigger() -> Result<
     )?;
     let path = root.join("pack_config.json");
     let mut config = read_json_file(&path)?;
-    let agent_id = config["node"]["default_agent_id"]
+    let agent_did = config["node"]["default_agent_did"]
         .as_str()
         .context("default agent")?
         .to_string();
     config["tasks"] = json!([{
         "task_id": "event-task",
-        "agent_id": agent_id,
+        "agent_did": agent_did,
         "prompt_template": "Observe {{ doc.backend_id }}",
         "enabled": false
     }]);

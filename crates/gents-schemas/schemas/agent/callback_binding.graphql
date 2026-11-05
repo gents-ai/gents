@@ -1,6 +1,7 @@
-type CallbackBinding @branchable @index(fields: ["node_did", "binding_id"], unique: true) {
+type CallbackBinding @index(fields: ["node_did", "binding_id"], unique: true) {
     binding_id: String
     node_did: String @index
+    agent_did: String @index
     event_source_id: String @index
     callback_id: String @index
     input_fields: [String!]

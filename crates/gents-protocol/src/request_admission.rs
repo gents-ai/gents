@@ -13,6 +13,8 @@ pub enum RequestAdmissionError {
     Canonical(#[from] CanonicalError),
     #[error(transparent)]
     Attachment(#[from] crate::request_input::AttachmentError),
+    #[error("client request requires physical session and agent document IDs")]
+    ClientTargetsRequired,
     #[error("execution_origin is required")]
     ExecutionOriginRequired,
     #[error("workspace reference requires id, owner node and authority together")]
@@ -68,6 +70,7 @@ impl TryFrom<&str> for RequestPurpose {
 #[serde(rename_all = "kebab-case")]
 pub enum AgentRequestAdmissionKind {
     Enrollment,
+    Client,
     LocalSelf,
     RuntimeInternal,
     /// A request authored by another node's agent. The requester signs, the
@@ -81,6 +84,7 @@ impl AgentRequestAdmissionKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Enrollment => "enrollment",
+            Self::Client => "client",
             Self::LocalSelf => "local-self",
             Self::RuntimeInternal => "runtime-internal",
             Self::Peer => "peer",
@@ -94,6 +98,7 @@ impl TryFrom<&str> for AgentRequestAdmissionKind {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "enrollment" => Ok(Self::Enrollment),
+            "client" => Ok(Self::Client),
             "local-self" => Ok(Self::LocalSelf),
             "runtime-internal" => Ok(Self::RuntimeInternal),
             "peer" => Ok(Self::Peer),
@@ -154,8 +159,9 @@ pub struct AgentRequestAdmissionObservation {
     pub trigger_config_document_binding_current: bool,
     pub source_document_binding_current: bool,
     pub target_policy_allows: bool,
-    /// The target's `PeerAdmissionAuthority` ACP authorizes the requester DID.
-    pub peer_authority_allows: bool,
+    /// The request was committed under the pinned native target-bound create
+    /// rule, owned by its signer, with the selected agent able to execute it.
+    pub native_create_authorized: bool,
     /// The target node's configured causal-hop cap admits this request, if set.
     pub hop_within_bound: bool,
 }
@@ -194,13 +200,15 @@ pub fn project_agent_request_admission(observation: AgentRequestAdmissionObserva
                 && observation.exact_generation
                 && observation.authorization_fresh
         }
+        AgentRequestAdmissionKind::Client => observation.requester_matches_session_scope,
         AgentRequestAdmissionKind::LocalSelf => {
-            observation.signer_matches_requester && observation.requester_matches_target
+            observation.signer_matches_requester
+                && (observation.requester_matches_target || observation.source_binding_current)
         }
         AgentRequestAdmissionKind::Peer => {
             observation.signer_matches_requester
                 && !observation.requester_matches_target
-                && observation.peer_authority_allows
+                && observation.native_create_authorized
         }
         AgentRequestAdmissionKind::RuntimeInternal => {
             let common = observation.runtime_evidence_present
@@ -243,8 +251,10 @@ pub struct AgentRequestSigningFields<'a> {
     pub purpose: RequestPurpose,
     pub node_did: &'a str,
     pub requester_did: Option<&'a str>,
-    pub agent_id: &'a str,
+    pub agent_did: &'a str,
     pub session_id: &'a str,
+    pub session_doc_id: Option<&'a str>,
+    pub agent_doc_id: Option<&'a str>,
     pub retry_parent_request: Option<&'a str>,
     pub retry_parent_request_doc_id: Option<&'a str>,
     pub retry_root_request: Option<&'a str>,
@@ -283,9 +293,11 @@ pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> Resul
     ] {
         require_identifier(name, value)?;
     }
-    require_identifier("agent_id", request.agent_id)?;
+    require_identifier("agent_did", request.agent_did)?;
     for (name, value) in [
         ("requester_did", request.requester_did),
+        ("session_doc_id", request.session_doc_id),
+        ("agent_doc_id", request.agent_doc_id),
         ("retry_parent_request", request.retry_parent_request),
         (
             "retry_parent_request_doc_id",
@@ -371,6 +383,13 @@ impl AgentRequestAdmissionRecord {
             runtime_issuer_did: None,
             runtime_source_request_id: None,
             runtime_source_kind: None,
+        }
+    }
+
+    pub fn client(signer_did: impl Into<String>) -> Self {
+        Self {
+            kind: AgentRequestAdmissionKind::Client,
+            ..Self::local_self(signer_did)
         }
     }
 
@@ -534,7 +553,9 @@ impl AgentRequestAdmissionRecord {
             && self.runtime_source_kind.is_none();
         match self.kind {
             AgentRequestAdmissionKind::Enrollment if enrollment_present && runtime_absent => Ok(()),
-            AgentRequestAdmissionKind::LocalSelf | AgentRequestAdmissionKind::Peer
+            AgentRequestAdmissionKind::Client
+            | AgentRequestAdmissionKind::LocalSelf
+            | AgentRequestAdmissionKind::Peer
                 if enrollment_absent && runtime_absent =>
             {
                 Ok(())
@@ -579,7 +600,7 @@ impl AgentRequestAdmissionRecord {
         push_text(&mut fields, request.purpose.as_str());
         push_text(&mut fields, request.node_did);
         push_option(&mut fields, request.requester_did);
-        push_text(&mut fields, request.agent_id);
+        push_text(&mut fields, request.agent_did);
         push_text(&mut fields, request.session_id);
         push_option(&mut fields, request.retry_parent_request);
         push_option(&mut fields, request.retry_parent_request_doc_id);
@@ -607,6 +628,10 @@ impl AgentRequestAdmissionRecord {
         push_option(&mut fields, request.workspace_owner_node_did);
         push_option(&mut fields, request.workspace_authority);
         push_option(&mut fields, request.workspace_seal_hash);
+        if self.kind == AgentRequestAdmissionKind::Client {
+            push_option(&mut fields, request.session_doc_id);
+            push_option(&mut fields, request.agent_doc_id);
+        }
         push_text(&mut fields, self.kind.as_str());
         push_text(&mut fields, &self.signer_did);
         push_option(&mut fields, self.enrollment_request_id.as_deref());
@@ -887,8 +912,12 @@ pub struct AgentRequestCreate {
     pub purpose: RequestPurpose,
     pub node_did: String,
     pub requester_did: String,
-    pub agent_id: String,
+    pub agent_did: String,
     pub session_id: String,
+    #[serde(default)]
+    pub session_doc_id: Option<String>,
+    #[serde(default)]
+    pub agent_doc_id: Option<String>,
     pub retry_parent_request: Option<String>,
     pub retry_parent_request_doc_id: Option<String>,
     pub retry_root_request: Option<String>,
@@ -927,7 +956,7 @@ impl AgentRequestCreate {
         request_id: impl Into<String>,
         node_did: impl Into<String>,
         requester_did: impl Into<String>,
-        agent_id: impl Into<String>,
+        agent_did: impl Into<String>,
         session_id: impl Into<String>,
         content: impl Into<String>,
         execution_origin: impl Into<String>,
@@ -941,8 +970,10 @@ impl AgentRequestCreate {
             purpose,
             node_did: node_did.into(),
             requester_did: requester_did.into(),
-            agent_id: agent_id.into(),
+            agent_did: agent_did.into(),
             session_id: session_id.into(),
+            session_doc_id: None,
+            agent_doc_id: None,
             retry_parent_request: None,
             retry_parent_request_doc_id: None,
             retry_key: None,
@@ -979,8 +1010,10 @@ impl AgentRequestCreate {
             purpose: self.purpose,
             node_did: &self.node_did,
             requester_did: Some(&self.requester_did),
-            agent_id: &self.agent_id,
+            agent_did: &self.agent_did,
             session_id: &self.session_id,
+            session_doc_id: self.session_doc_id.as_deref(),
+            agent_doc_id: self.agent_doc_id.as_deref(),
             retry_parent_request: self.retry_parent_request.as_deref(),
             retry_parent_request_doc_id: self.retry_parent_request_doc_id.as_deref(),
             retry_root_request: self.retry_root_request.as_deref(),
@@ -1010,6 +1043,15 @@ impl AgentRequestCreate {
         }
     }
 
+    pub fn validate_client_targets(&self) -> Result<()> {
+        if self.admission.kind == AgentRequestAdmissionKind::Client
+            && (self.session_doc_id.is_none() || self.agent_doc_id.is_none())
+        {
+            return Err(RequestAdmissionError::ClientTargetsRequired);
+        }
+        Ok(())
+    }
+
     pub fn signing_payload(&self) -> Vec<u8> {
         self.admission.signing_payload(&self.signing_fields())
     }
@@ -1017,6 +1059,8 @@ impl AgentRequestCreate {
     pub fn graphql_input_fields(&self) -> Result<String, &'static str> {
         validate_signing_fields(&self.signing_fields())
             .map_err(|_| "AgentRequest signed semantic field is non-canonical")?;
+        self.validate_client_targets()
+            .map_err(|_| "AgentRequest client targets are missing")?;
         self.admission.validate_branch_fields()?;
         self.admission
             .validate_canonical_fields()
@@ -1038,8 +1082,14 @@ impl AgentRequestCreate {
         text(&mut fields, "purpose", self.purpose.as_str());
         text(&mut fields, "node_did", &self.node_did);
         text(&mut fields, "requester_did", &self.requester_did);
-        text(&mut fields, "agent_id", &self.agent_id);
+        text(&mut fields, "agent_did", &self.agent_did);
         text(&mut fields, "session_id", &self.session_id);
+        optional_text(
+            &mut fields,
+            "session_doc_id",
+            self.session_doc_id.as_deref(),
+        );
+        optional_text(&mut fields, "agent_doc_id", self.agent_doc_id.as_deref());
         optional_text(
             &mut fields,
             "retry_parent_request",
@@ -1202,6 +1252,14 @@ impl AgentRequestCreate {
 
     pub fn graphql_mutation(&self) -> Result<String, &'static str> {
         self.graphql_mutation_selecting("_docID")
+    }
+
+    /// Client-created requests begin with detached ACP1 grants pending.
+    pub fn graphql_client_publication_mutation(&self) -> Result<String, &'static str> {
+        Ok(format!(
+            "mutation {{ create_AgentRequest(input: {{ {}, relationships_pending: true }}) {{ _docID }} }}",
+            self.graphql_input_fields()?
+        ))
     }
 
     /// Keep signed create input canonical while an owner requests additional

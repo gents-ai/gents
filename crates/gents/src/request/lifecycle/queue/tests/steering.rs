@@ -4,10 +4,9 @@ use crate::lean_vocab_test::LeanQueuedSteeringAction as Action;
 #[tokio::test]
 async fn steering_admission_keeps_signed_content_queued_without_transcript_publication() {
     let db = test_db("steering-admission-only").await;
-    let mut parent = parent_request(db.node_did(), "steering-session");
+    let mut parent = parent_request(db.node_did(), db.agent_did(), "steering-session");
     parent.doc_id = insert_raw_queue_request(
-        &db.node,
-        db.node_did(),
+        &db,
         &parent.request_id,
         &parent.session_id,
         &RequestInput::default(),
@@ -79,10 +78,10 @@ async fn generated_pending_steering_terminals_retain_signed_admission_without_ou
         assert!(case.entry.queued_after.is_some(), "{}", case.name);
 
         let db = test_db("generated-steering-terminal").await;
-        let mut parent = parent_request(db.node_did(), "generated-steering-session");
+        let mut parent =
+            parent_request(db.node_did(), db.agent_did(), "generated-steering-session");
         parent.doc_id = insert_raw_queue_request(
-            &db.node,
-            db.node_did(),
+            &db,
             &parent.request_id,
             &parent.session_id,
             &RequestInput::default(),
@@ -131,7 +130,7 @@ async fn generated_pending_steering_terminals_retain_signed_admission_without_ou
                 .unwrap();
         let mut lifecycle = RequestLifecycle::new_with_node_did(
             db.node.clone(),
-            TEST_AGENT_ID,
+            db.agent_did(),
             db.node_did(),
             request,
             60,
@@ -216,11 +215,11 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
         assert_eq!(case.queue_active, None, "{}", case.name);
 
         let db = test_db("generated-owned-steering-terminal").await;
-        crate::session::ensure_session_with_agent_id_and_requester_did(
+        crate::session::ensure_session_with_agent_did_and_requester_did(
             &db.node,
             "generated-owned-steering-session",
             db.node_did(),
-            TEST_AGENT_ID,
+            db.agent_did(),
             Some(db.node_did()),
         )
         .await
@@ -229,17 +228,17 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
             gents_protocol::request_admission::RequestPurpose::Normal,
             "parent-request",
             db.node_did(),
-            db.node_did(),
-            TEST_AGENT_ID,
+            db.agent_did(),
+            db.agent_did(),
             "generated-owned-steering-session",
             "parent input",
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                db.node_did(),
+                db.agent_did(),
             ),
         );
-        crate::sign_agent_request_create(db.identity.as_ref(), &mut parent_create)
+        crate::sign_agent_request_create(db.agent_identity.as_ref(), &mut parent_create)
             .await
             .unwrap();
         let created_parent = db
@@ -301,7 +300,7 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
                 .expect("parent queue fixture");
         let mut parent_lifecycle = RequestLifecycle::new_with_node_did(
             db.node.clone(),
-            TEST_AGENT_ID,
+            db.agent_did(),
             db.node_did(),
             parent_row,
             60,
@@ -318,7 +317,7 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
                 .expect("signed queued steering request");
         let mut lifecycle = RequestLifecycle::new_with_node_did(
             db.node.clone(),
-            TEST_AGENT_ID,
+            db.agent_did(),
             db.node_did(),
             request,
             60,
@@ -329,7 +328,7 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
             "{}",
             case.name
         );
-        let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
+        let writer = DefraStreamWriter::new(db.node.clone(), db.agent_did(), Duration::ZERO);
         lifecycle.begin_owned_execution(&writer).await.unwrap();
 
         if outcome == crate::request::lifecycle::RequestTerminalOutcome::Interrupted {

@@ -1,5 +1,6 @@
-type GoalObservation @branchable {
+type GoalObservation {
     session_doc_id: String @index(unique: true) @immutable
+    agent_did: String @immutable
     node_did: String @index @immutable
     session_id: String @index @immutable
     requester_did: String @index @immutable

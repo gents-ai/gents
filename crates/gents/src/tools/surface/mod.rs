@@ -103,7 +103,7 @@ pub struct ToolSurface {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SelfConfigToolConfig {
     pub enabled: bool,
-    pub agent_id: String,
+    pub agent_did: String,
     pub categories: std::collections::BTreeSet<String>,
     pub no_lockout: bool,
     pub preview: bool,
@@ -234,11 +234,11 @@ impl ToolSurface {
     pub(crate) fn retain_agent_targets(
         &mut self,
         own_node_did: &str,
-        active_agent_ids: &RapidHashSet<String>,
+        active_agent_dids: &RapidHashSet<String>,
     ) {
         self.agent_tools.targets.retain(|target| {
             if target.target_node_did == own_node_did {
-                active_agent_ids.contains(&target.agent_id)
+                active_agent_dids.contains(&target.agent_did)
             } else {
                 true
             }
@@ -348,6 +348,13 @@ impl ToolSurface {
                     runtime.local_hostname.clone(),
                     runtime.local_subnet.clone(),
                     runtime.node_did.clone(),
+                    identity::Did::new(
+                        runtime
+                            .agent_identity
+                            .as_ref()
+                            .context("MCP tools require the selected agent identity")?
+                            .did(),
+                    )?,
                     self.allowed_mcp_service_ids.clone(),
                     self.remote_tools.clone().unwrap_or_default(),
                 )
@@ -364,6 +371,13 @@ impl ToolSurface {
             tools.push(build_memory_tool(
                 runtime.node.clone(),
                 runtime.node_did.clone(),
+                identity::Did::new(
+                    runtime
+                        .agent_identity
+                        .as_ref()
+                        .context("model tools require the selected agent identity")?
+                        .did(),
+                )?,
             ));
         }
         if self.enable_context_budget_tool {
@@ -373,8 +387,19 @@ impl ToolSurface {
             ));
         }
         if self.enable_schema_tool {
+            let agent = runtime
+                .agent_identity
+                .as_ref()
+                .context("schema tools require the selected agent identity")?;
+            anyhow::ensure!(
+                agent.did() != runtime.node_did,
+                "schema tools cannot use the runtime node identity"
+            );
             tools.push(Box::new(
-                crate::tools::builtin::schema_help::SchemaTool::new(runtime.node.clone()),
+                crate::tools::builtin::schema_help::SchemaTool::for_actor(
+                    runtime.node.clone(),
+                    identity::Did::new(agent.did())?,
+                ),
             ));
         }
         if self.enable_p2p_tool {
@@ -389,19 +414,27 @@ impl ToolSurface {
             tools.push(build_session_history_tool(
                 runtime.node.clone(),
                 runtime.node_did.clone(),
+                identity::Did::new(
+                    runtime
+                        .agent_identity
+                        .as_ref()
+                        .context("model tools require the selected agent identity")?
+                        .did(),
+                )?,
             ));
         }
         let datastore_actor = if self.enable_defra_query
             || !self.application_write_collections.is_empty()
             || !self.query_tools.is_empty()
+            || !self.write_tools.is_empty()
         {
             let identity = runtime
-                .identity
+                .agent_identity
                 .as_ref()
-                .context("datastore tools require the node identity")?;
+                .context("datastore tools require the selected agent identity")?;
             anyhow::ensure!(
-                identity.did() == runtime.node_did,
-                "datastore identity differs from node DID"
+                identity.did() != runtime.node_did,
+                "datastore tools cannot use the runtime node identity"
             );
             Some(identity::Did::new(identity.did().to_owned())?)
         } else {
@@ -416,7 +449,10 @@ impl ToolSurface {
         }
         if !self.application_write_collections.is_empty() {
             tools.push(Box::new(crate::plugin::application_write::WriteTool::new(
-                crate::store::config_client::ConfigAccess::local(runtime.node.clone()),
+                crate::store::config_client::ConfigAccess::local_as(
+                    runtime.node.clone(),
+                    datastore_actor.clone().expect("write actor was validated"),
+                ),
                 self.application_write_collections.iter().cloned().collect(),
                 datastore_actor.clone(),
             )));
@@ -434,7 +470,7 @@ impl ToolSurface {
             runtime.usage_cache.clone(),
             runtime.node.clone(),
             runtime.node_did.clone(),
-            runtime.identity.clone(),
+            runtime.agent_identity.clone(),
             &self.self_config,
             runtime.plugins.clone(),
         ));
@@ -463,7 +499,10 @@ impl ToolSurface {
                 )) as Box<dyn ToolDyn>);
             } else {
                 let tool = BoundedWriteTool::new(
-                    crate::store::config_client::ConfigAccess::local(runtime.node.clone()),
+                    crate::store::config_client::ConfigAccess::local_as(
+                        runtime.node.clone(),
+                        datastore_actor.clone().expect("write actor was validated"),
+                    ),
                     decl.clone(),
                 )
                 .declared_by(self.surface_of_tool.get(&decl.tool_name).cloned());
@@ -478,7 +517,10 @@ impl ToolSurface {
         }
         for decl in &self.query_tools {
             let tool = BoundedQueryTool::new(
-                crate::store::config_client::ConfigAccess::local(runtime.node.clone()),
+                crate::store::config_client::ConfigAccess::local_as(
+                    runtime.node.clone(),
+                    datastore_actor.clone().expect("query actor was validated"),
+                ),
                 decl.clone(),
             )
             .with_actor(datastore_actor.clone().expect("query actor was validated"))
@@ -505,7 +547,14 @@ impl ToolSurface {
                     .read_root()
                     .map(std::path::Path::to_path_buf),
             )?
-            .with_data_node(runtime.node.clone());
+            .with_agent_data(
+                runtime.node.clone(),
+                &runtime.node_did,
+                runtime
+                    .agent_identity
+                    .as_ref()
+                    .map(|identity| identity.did()),
+            )?;
             if !registered_names.insert(tool.name()) {
                 anyhow::bail!(
                     "plugin tool `{}` has the same name as another tool; rename one of them",

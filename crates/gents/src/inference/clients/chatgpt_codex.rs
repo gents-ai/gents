@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_loop::provider_patches::patch_instructions_body;
 use rig::http_client::{
     self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, Request, ReqwestClient, Response,

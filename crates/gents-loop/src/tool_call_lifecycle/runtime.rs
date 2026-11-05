@@ -172,7 +172,7 @@ struct ToolRuntimeScope {
     source_fields: std::collections::BTreeMap<String, String>,
     requester_did: Option<String>,
     node_did: Option<String>,
-    agent_id: Option<String>,
+    agent_did: Option<String>,
     request_id: Option<String>,
 }
 
@@ -188,7 +188,7 @@ pub struct CurrentToolRuntimeContext {
     pub source_fields: std::collections::BTreeMap<String, String>,
     pub requester_did: Option<String>,
     pub node_did: Option<String>,
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     pub request_id: Option<String>,
 }
 
@@ -196,7 +196,7 @@ pub struct CurrentToolRuntimeContext {
 struct ToolRequestIdentityScope {
     requester_did: Option<String>,
     node_did: Option<String>,
-    agent_id: Option<String>,
+    agent_did: Option<String>,
     request_id: Option<String>,
 }
 
@@ -221,7 +221,7 @@ fn current_request_identity() -> ToolRequestIdentityScope {
                 .try_with(|scope| ToolRequestIdentityScope {
                     requester_did: scope.requester_did.clone(),
                     node_did: scope.node_did.clone(),
-                    agent_id: scope.agent_id.clone(),
+                    agent_did: scope.agent_did.clone(),
                     request_id: scope.request_id.clone(),
                 })
                 .ok()
@@ -232,7 +232,7 @@ fn current_request_identity() -> ToolRequestIdentityScope {
 pub async fn scope_tool_request_identity<F, T>(
     requester_did: Option<String>,
     node_did: Option<String>,
-    agent_id: Option<String>,
+    agent_did: Option<String>,
     request_id: Option<String>,
     future: F,
 ) -> T
@@ -244,7 +244,7 @@ where
             ToolRequestIdentityScope {
                 requester_did: normalized_identity(requester_did),
                 node_did: normalized_identity(node_did),
-                agent_id: normalized_identity(agent_id),
+                agent_did: normalized_identity(agent_did),
                 request_id: normalized_identity(request_id),
             },
             future,
@@ -322,7 +322,7 @@ where
                     .unwrap_or_default(),
                 requester_did: identity.requester_did,
                 node_did: identity.node_did,
-                agent_id: identity.agent_id,
+                agent_did: identity.agent_did,
                 request_id: identity.request_id,
             },
             future,
@@ -365,7 +365,7 @@ where
                 source_fields,
                 requester_did: identity.requester_did,
                 node_did: identity.node_did,
-                agent_id: identity.agent_id,
+                agent_did: identity.agent_did,
                 request_id: identity.request_id,
             },
             future,
@@ -433,7 +433,7 @@ pub fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext> {
             source_fields: scope.source_fields,
             requester_did: scope.requester_did,
             node_did: scope.node_did,
-            agent_id: scope.agent_id,
+            agent_did: scope.agent_did,
             request_id: scope.request_id,
         })
 }

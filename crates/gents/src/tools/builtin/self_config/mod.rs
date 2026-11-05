@@ -54,8 +54,7 @@ use crate::store::graphql::escape_graphql_string;
 use crate::tools::surface::presets::{builtin_preset_names, preset_fields};
 use crate::tools::surface::SelfConfigToolConfig;
 use crate::NodeIdentity;
-use agent::derive_agent_id;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use ops::{decode_merged, validate_merged_selection, ApplyRequest};
 
 pub const ENGINEER_AGENT_TAG: &str = "gents:engineer";
@@ -73,7 +72,7 @@ pub(crate) use crate::tools::output::{ordered, Ordered};
 
 const EFFECTIVE_ORDER: &[&str] = &[
     "execution_settings",
-    "agent_id",
+    "agent_did",
     "agent",
     "context",
     "inference_profile",
@@ -151,6 +150,8 @@ impl StringUpdate {
 pub struct ConfigureAgentParams {
     pub action: String,
     #[serde(default)]
+    pub identity_binding: Option<gents_protocol::agent_identity::AgentIdentityBinding>,
+    #[serde(default)]
     pub operation: Option<String>,
     #[serde(default)]
     pub display_name: StringUpdate,
@@ -159,7 +160,7 @@ pub struct ConfigureAgentParams {
     #[serde(default)]
     pub system_prompt: StringUpdate,
     #[serde(default)]
-    pub agent_id: Option<String>,
+    pub agent_did: Option<String>,
     #[serde(default)]
     pub clone_from: Option<String>,
     #[serde(default)]
@@ -187,7 +188,7 @@ pub fn build_self_config_tools(
     if !config.enabled {
         return Vec::new();
     }
-    let core = match SelfConfigCore::new(node.clone(), node_did.clone(), config.agent_id.clone()) {
+    let core = match SelfConfigCore::new(node.clone(), node_did.clone(), config.agent_did.clone()) {
         Ok(core) => core
             .with_no_lockout(config.no_lockout)
             .with_process_ceiling(config.process_ceiling.clone())
@@ -197,7 +198,7 @@ pub fn build_self_config_tools(
             }),
         Err(error) => {
             tracing::warn!(
-                agent_id = %config.agent_id,
+                agent_did = %config.agent_did,
                 %error,
                 "self-config tools requested but not registrable; failing closed"
             );

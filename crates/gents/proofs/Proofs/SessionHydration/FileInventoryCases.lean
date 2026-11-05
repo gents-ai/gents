@@ -7,7 +7,7 @@ open ToolExecution
 def admission : Request := ⟨"inventory-1", "peer-1", "reader-1", "node-1", "session-1", 2⟩
 def scope : FileImages.Scope := ⟨admission.requester, admission.node, admission.session⟩
 
-def tool (id : Nat) : Tool := ⟨id, 1000 + id, scope, true, .completed⟩
+def tool (id : Nat) : Tool := ⟨id, 1000 + id, scope, "agent-1", true, .completed⟩
 def change (id : Nat) : CapturedChange :=
   ⟨"workspace", "src/" ++ toString id ++ ".rs", .file "before" "old bytes",
     .file "after" "new bytes"⟩
@@ -16,9 +16,9 @@ def observation (id : Nat) : Observation :=
 def unchangedObservation (id : Nat) : Observation :=
   { observation id with id := none, changes := [], verifiedUnchanged := true }
 
-def unchangedProjection (id : Nat) : Projection := (unchangedObservation id).metadata (3000 + id)
+def unchangedProjection (id : Nat) : Projection := (unchangedObservation id).metadata (3000 + id) (tool id).agentDid
 
-def projection (id : Nat) : Projection := (observation id).metadata (3000 + id)
+def projection (id : Nat) : Projection := (observation id).metadata (3000 + id) (tool id).agentDid
 
 def input (ids : List Nat) : ClosureInput :=
   { request := admission, bases := ids.map (.toolCall ·), roots := [], requirements := []
@@ -206,7 +206,7 @@ def partialObservation : Observation :=
 
 theorem cancellation_preserves_unavailable_after_image :
     publish running (.cancelDuringRun .userCancelled) true .committed {tool 1 with state := .running} partialObservation 3001 =
-      some (partialObservation.metadata 3001) := by native_decide
+      some (partialObservation.metadata 3001 (tool 1).agentDid) := by native_decide
 
 def forkRequest : Request := {admission with session := "fork-session", nativeSession := 3}
 def originDelivery := CanonicalOutput.Hydration.Examples.parentDelivery
@@ -224,7 +224,7 @@ def forkInput : ClosureInput :=
       ⟨.agentToolCall, 300⟩, ⟨.agentOutputSegment, 301⟩].map fun key =>
         ⟨forkRequest.authorizationScope, key, .authorized⟩ }
 def forkSource : SourceInput :=
-  let originTool : Tool := ⟨300, 10, scope, true, .completed⟩
+  let originTool : Tool := ⟨300, 10, scope, "agent-1", true, .completed⟩
   let retained := {(projection 300) with request := 10}
   { source 0 with
     tools := [originTool, tool 99]
@@ -291,81 +291,6 @@ theorem cursor_scope_cannot_be_replayed :
 theorem cursor_cannot_skip_partial_page :
     page large.model admission (.metadata largeSnapshot) (some ⟨largeSnapshot, 1⟩) = .rejected := by
   native_decide
-
-def firstEnvelope : PageEnvelope :=
-  ⟨.fileInventoryV2, "page-0", admission.node, true, firstPage.toWire "snapshot-digest"⟩
-def secondEnvelope : PageEnvelope :=
-  ⟨.fileInventoryV2, "page-1", admission.node, true, secondPage.toWire "snapshot-digest"⟩
-def receiving : Receiver := ⟨admission, []⟩
-def receivedFirst : Receiver := ⟨admission, [⟨"page-0", firstEnvelope⟩]⟩
-def receivedBoth : Option Receiver := do
-  let state ← receive receiving "page-0" firstEnvelope
-  receive state "page-1" secondEnvelope
-
-def unknownSnapshot : Snapshot := getSnapshot {source 1 with projections := []}
-def unknownEnvelope : PageEnvelope :=
-  ⟨.fileInventoryV2, "unknown-page", admission.node, true,
-    (makePage unknownSnapshot 0).toWire "unknown-digest"⟩
-
-structure ReceiverInput where
-  name : String
-  state : Receiver := receiving
-  requestKey : String := "page-0"
-  envelope : PageEnvelope := firstEnvelope
-  expected : Bool := false
-
-def receiverInputs : List ReceiverInput :=
-  [ {name := "first_page", expected := true}
-  , {name := "cannot_skip_prefix", requestKey := "page-1", envelope := secondEnvelope}
-  , {name := "truncated_page", envelope := {firstEnvelope with page :=
-      {firstEnvelope.page with entries := firstEnvelope.page.entries.take 1}}}
-  , {name := "corrupt_retained_prefix", state := ⟨admission, [⟨"page-0",
-      {firstEnvelope with page := {firstEnvelope.page with entries := firstEnvelope.page.entries.reverse}}⟩]⟩,
-      requestKey := "page-1", envelope := secondEnvelope}
-  , {name := "complete_contiguous_inventory", state := receivedFirst,
-      requestKey := "page-1", envelope := secondEnvelope, expected := true}
-  , {name := "unknown_survives_complete_page", requestKey := "unknown-page",
-      envelope := unknownEnvelope, expected := true}
-  , {name := "unverified_page", envelope := {firstEnvelope with signatureVerified := false}}
-  , {name := "transcript_v1_not_metadata", envelope := {firstEnvelope with purpose := .transcriptV1}}
-  , {name := "foreign_signer", envelope := {firstEnvelope with signer := "foreign-node"}}
-  , {name := "wrong_demand_nonce", envelope := {firstEnvelope with requestKey := "other-demand"}}
-  , {name := "changed_snapshot_digest", state := receivedFirst, requestKey := "page-1",
-      envelope := {secondEnvelope with page := {secondEnvelope.page with binding :=
-        {secondEnvelope.page.binding with digest := "different-digest"}}}}
-  , {name := "contradictory_coverage", state := receivedFirst, requestKey := "page-1",
-      envelope := {secondEnvelope with page := {secondEnvelope.page with binding :=
-        {secondEnvelope.page.binding with coverage := ⟨66, 0, 0⟩}}}}
-  , {name := "incorrect_next_cursor", envelope :=
-      {firstEnvelope with page := {firstEnvelope.page with next := none}}}
-  , {name := "duplicate_entry_identity", envelope := {firstEnvelope with page :=
-      {firstEnvelope.page with entries := List.replicate 64 ⟨1, (tool 1).request, scope, (projection 1).id, (observation 1).id.getD 0, (change 1).metadata, .unresolved, none⟩}}}
-  , {name := "contradictory_projection_binding", state := receivedFirst, requestKey := "page-1",
-      envelope := {secondEnvelope with page := {secondEnvelope.page with entries :=
-        (secondEnvelope.page.entries.map fun entry => {entry with projection := (projection 1).id})}}}
-  , {name := "contradictory_observation_binding", state := receivedFirst, requestKey := "page-1",
-      envelope := {secondEnvelope with page := {secondEnvelope.page with entries :=
-        (secondEnvelope.page.entries.map fun entry => {entry with observation := (observation 1).id.getD 0})}}}
-  , {name := "empty_digest", envelope := {firstEnvelope with page :=
-      {firstEnvelope.page with binding := {firstEnvelope.page.binding with digest := ""}}}}
-  , {name := "oversized_page", envelope := {firstEnvelope with page :=
-      {firstEnvelope.page with entries := largeSnapshot.entries}}}
-  , {name := "reused_demand_nonce", state := receivedFirst,
-      envelope := {secondEnvelope with requestKey := "page-0"}}
-  , {name := "cross_scope_page", envelope := {firstEnvelope with page :=
-      {firstEnvelope.page with binding := {firstEnvelope.page.binding with admission := forkRequest}}}} ]
-
-theorem receiver_regressions : receiverInputs.all (fun value =>
-    (receive value.state value.requestKey value.envelope).isSome == value.expected) = true := by
-  native_decide
-
-theorem receiver_completes_exact_inventory : receivedBoth.any (fun state =>
-    state.complete && knownInventory state &&
-      state.validated.any (fun prior => prior.entries == largeSnapshot.entries)) = true := by
-  native_decide
-
-theorem unknown_capture_survives_end_of_pages :
-    (receive receiving "unknown-page" unknownEnvelope).map knownInventory = some false := by native_decide
 
 theorem owner_change_invalidates_continuation :
     page ({large with projections := large.projections.map fun value =>

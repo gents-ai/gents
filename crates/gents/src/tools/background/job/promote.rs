@@ -33,7 +33,7 @@ pub struct DynamicRun {
     pub owners: Vec<String>,
     /// The ceiling recorded on the run's pin.
     pub ceiling: JobCeiling,
-    pub caller_agent_id: String,
+    pub caller_agent_did: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,12 +155,12 @@ pub async fn load_dynamic_run(
         PromoteRefusal::Unreadable(format!("session {} does not exist", view.session_id))
     })?;
     let owner = view.scope.node_did.clone();
-    let agent_id = session.agent_id.clone();
+    let agent_did = session.agent_did.clone();
     let tools = access
         .transact_readonly("plugin_job.promote.caller_tools", move |txn| {
-            let (owner, agent_id) = (owner.clone(), agent_id.clone());
+            let (owner, agent_did) = (owner.clone(), agent_did.clone());
             Box::pin(async move {
-                crate::documents::load_agent_tools_in_txn(txn, &owner, &agent_id).await
+                crate::documents::load_agent_tools_in_txn(txn, &owner, &agent_did).await
             })
         })
         .await
@@ -205,7 +205,7 @@ pub async fn load_dynamic_run(
         targets,
         owners,
         ceiling,
-        caller_agent_id: session.agent_id,
+        caller_agent_did: session.agent_did,
     })
 }
 
@@ -647,7 +647,7 @@ mod tests {
                 result_bytes: 65536,
                 max_wall_secs: 1800,
             },
-            caller_agent_id: "caller".into(),
+            caller_agent_did: "caller".into(),
         }
     }
 

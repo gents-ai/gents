@@ -1,11 +1,10 @@
-//! Reads and writes use the node identity installed on
-//! `EmbeddedNode`; the `node_did` column is application data, not proof of
-//! authorship.
+//! Captures, shared payload blocks and inference accounting use the selected agent
+//! actor. Routing and requester columns do not confer document authority.
 
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 
 use super::{
@@ -30,17 +29,28 @@ impl DefraRenderedRequestSink {
         Self { node }
     }
 
-    async fn stored_fact(&self, capture_key: &str) -> Result<Option<Value>> {
-        let query = format!(
+    async fn stored_fact(&self, rendered: &RenderedCompletionRequest) -> Result<Option<Value>> {
+        let capture_key = &rendered.capture_key;
+        let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
+            &self.node,
+            Some(identity::Did::new(rendered.agent_did.clone())?),
+            "rendered_request::lookup",
+            |txn| {
+                Box::pin(async move {
+                    let (session_doc_id, _) = crate::session::canonical_rows::agent_session_child_binding_in_txn(
+                        txn, &rendered.node_did, &rendered.session_id,
+                        (!rendered.requester_did.is_empty()).then_some(rendered.requester_did.as_str()),
+                    ).await?;
+                    let query = format!(
             r#"query {{
-                {collection}(filter: {{ capture_key: {{ _eq: "{capture_key}" }} }}, limit: 2) {{
+                {collection}(filter: {{ session_doc_id: {{ _eq: "{session_doc_id}" }}, capture_key: {{ _eq: "{capture_key}" }} }}, limit: 2) {{
                     request_doc_id
                     request_commit_cid
                     request_id
                     session_id
                     node_did
                     requester_did
-                    agent_id
+                    agent_did
                     capture_scope
                     turn_index
                     attempt
@@ -52,12 +62,12 @@ impl DefraRenderedRequestSink {
                 }}
             }}"#,
             collection = RENDERED_REQUEST_COLLECTION,
+            session_doc_id = escape_graphql_string(&session_doc_id),
             capture_key = escape_graphql_string(capture_key),
         );
-        let response = crate::store::graphql::graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "rendered_request::lookup",
+                    txn.execute_local_response(&query).await.map_err(anyhow::Error::from)
+                })
+            },
         )
         .await?;
         let data = response
@@ -81,6 +91,7 @@ impl DefraRenderedRequestSink {
     async fn create_in_txn(
         txn: &crate::store::config_client::ConfigApplyTxn<'_>,
         rendered: &RenderedCompletionRequest,
+        session_doc_id: &str,
         request_json: &str,
         provenance_json: &str,
     ) -> Result<()> {
@@ -102,9 +113,10 @@ impl DefraRenderedRequestSink {
                     request_commit_cid: "{request_commit_cid}",
                     request_id: "{request_id}",
                     session_id: "{session_id}",
+                    session_doc_id: "{session_doc_id}",
                     node_did: "{node_did}",
                     requester_did: "{requester_did}",
-                    agent_id: "{agent_id}",
+                    agent_did: "{agent_did}",
                     capture_scope: "{capture_scope}",
                     turn_index: {turn_index},
                     attempt: {attempt},
@@ -122,9 +134,10 @@ impl DefraRenderedRequestSink {
             request_commit_cid = escape_graphql_string(&rendered.request_commit_cid),
             request_id = escape_graphql_string(&rendered.request_id),
             session_id = escape_graphql_string(&rendered.session_id),
+            session_doc_id = escape_graphql_string(session_doc_id),
             node_did = escape_graphql_string(&rendered.node_did),
             requester_did = escape_graphql_string(&rendered.requester_did),
-            agent_id = escape_graphql_string(&rendered.agent_id),
+            agent_did = escape_graphql_string(&rendered.agent_did),
             capture_scope = escape_graphql_string(&rendered.capture_scope),
             turn_index = rendered.turn_index,
             attempt = rendered.attempt,
@@ -248,14 +261,30 @@ impl DefraRenderedRequestSink {
         let provenance_json = canonical_json_string(&rendered.provenance_json)?;
         crate::store::config_client::ConfigAccess::transact_local_write(
             &self.node,
-            None,
+            Some(identity::Did::new(rendered.agent_did.clone())?),
             "rendered_request.create_stored_for_test",
             |txn| {
                 let rendered = rendered.clone();
                 let request_json = request_json.to_owned();
                 let provenance_json = provenance_json.clone();
                 Box::pin(async move {
-                    Self::create_in_txn(txn, &rendered, &request_json, &provenance_json).await
+                    let (session_doc_id, _) =
+                        crate::session::canonical_rows::agent_session_child_binding_in_txn(
+                            txn,
+                            &rendered.node_did,
+                            &rendered.session_id,
+                            (!rendered.requester_did.is_empty())
+                                .then_some(rendered.requester_did.as_str()),
+                        )
+                        .await?;
+                    Self::create_in_txn(
+                        txn,
+                        &rendered,
+                        &session_doc_id,
+                        &request_json,
+                        &provenance_json,
+                    )
+                    .await
                 })
             },
         )
@@ -283,18 +312,44 @@ impl DefraRenderedRequestSink {
 
         let capture_container = crate::store::config_client::ConfigAccess::transact_local_write(
             &self.node,
-            None,
+            Some(identity::Did::new(rendered.agent_did.clone())?),
             "rendered_request.capture",
             |txn| {
                 let (request_chunks, provenance_chunks) = (&request_chunks, &provenance_chunks);
                 let (blocks, rendered, provenance_json) = (&blocks, &rendered, &provenance_json);
                 let context_accounting = &context_accounting;
                 Box::pin(async move {
-                    let mut pins = pin_blocks_in_txn(txn, blocks).await?;
-                    let request = encode_payload_tree(txn, request_chunks, &mut pins).await?;
-                    let provenance = encode_payload_tree(txn, provenance_chunks, &mut pins).await?;
+                    let (session_doc_id, agent_did) =
+                        crate::session::canonical_rows::agent_session_child_binding_in_txn(
+                            txn,
+                            &rendered.node_did,
+                            &rendered.session_id,
+                            (!rendered.requester_did.is_empty())
+                                .then_some(rendered.requester_did.as_str()),
+                        )
+                        .await?;
+                    anyhow::ensure!(
+                        agent_did == rendered.agent_did,
+                        "capture agent differs from session agent"
+                    );
+                    let scope = BlockScope {
+                        session_doc_id,
+                        agent_did,
+                    };
+                    let mut pins = pin_blocks_in_txn(txn, &scope, blocks).await?;
+                    let request =
+                        encode_payload_tree(txn, &scope, request_chunks, &mut pins).await?;
+                    let provenance =
+                        encode_payload_tree(txn, &scope, provenance_chunks, &mut pins).await?;
                     let container = super::encoding::encode_container(&request, &provenance)?;
-                    Self::create_in_txn(txn, rendered, &container, provenance_json).await?;
+                    Self::create_in_txn(
+                        txn,
+                        rendered,
+                        &scope.session_doc_id,
+                        &container,
+                        provenance_json,
+                    )
+                    .await?;
                     if let Some((call_id, accounting_json)) = context_accounting {
                         Self::persist_inference_call_context_accounting_in_txn(
                             txn,
@@ -322,7 +377,7 @@ impl DefraRenderedRequestSink {
                 );
                 Ok(())
             }
-            Err(create_error) => match self.stored_fact(&rendered.capture_key).await {
+            Err(create_error) => match self.stored_fact(&rendered).await {
                 Ok(Some(stored)) => {
                     self.reconcile_existing(&rendered, stored, "create_conflict")
                         .await?;
@@ -331,7 +386,7 @@ impl DefraRenderedRequestSink {
                     };
                     crate::store::config_client::ConfigAccess::transact_local_write(
                         &self.node,
-                        None,
+                        Some(identity::Did::new(rendered.agent_did.clone())?),
                         "rendered_request.reconcile_context_accounting",
                         |txn| {
                             Box::pin(Self::persist_inference_call_context_accounting_in_txn(
@@ -355,7 +410,9 @@ impl DefraRenderedRequestSink {
         via: &str,
     ) -> Result<()> {
         let incoming = canonical_capture_fact(rendered)?;
-        let stored = self.canonical_stored_fact(stored).await?;
+        let stored = self
+            .canonical_stored_fact(stored, &rendered.agent_did)
+            .await?;
         if stored == incoming {
             tracing::debug!(
                 capture_key = %rendered.capture_key,
@@ -390,7 +447,7 @@ impl DefraRenderedRequestSink {
         ))
     }
 
-    async fn canonical_stored_fact(&self, mut stored: Value) -> Result<Value> {
+    async fn canonical_stored_fact(&self, mut stored: Value, agent_did: &str) -> Result<Value> {
         let version = stored
             .get("capture_version")
             .and_then(Value::as_u64)
@@ -407,7 +464,10 @@ impl DefraRenderedRequestSink {
             .and_then(Value::as_str)
             .context("stored RenderedRequest request_json was not a string")?
             .to_owned();
-        let access = crate::store::config_client::ConfigAccess::local(Arc::clone(&self.node));
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            Arc::clone(&self.node),
+            identity::Did::new(agent_did.to_owned())?,
+        );
         let decoded_pair = if version == 1 {
             None
         } else {
@@ -462,7 +522,7 @@ fn canonical_capture_fact(rendered: &RenderedCompletionRequest) -> Result<Value>
         "session_id": rendered.session_id,
         "node_did": rendered.node_did,
         "requester_did": rendered.requester_did,
-        "agent_id": rendered.agent_id,
+        "agent_did": rendered.agent_did,
         "capture_scope": rendered.capture_scope,
         "turn_index": rendered.turn_index,
         "attempt": rendered.attempt,
@@ -502,8 +562,20 @@ const CREATE_RENDERED_REQUEST_BLOCKS_MUTATION: &str = "mutation($input: \
 
 const CAPTURE_BLOCK_CREATE_BATCH: usize = 32;
 
+pub(crate) struct BlockScope {
+    pub(crate) session_doc_id: String,
+    pub(crate) agent_did: String,
+}
+
+impl BlockScope {
+    fn key<'a>(&'a self, content_key: &'a str) -> (&'a str, &'a str) {
+        (&self.session_doc_id, content_key)
+    }
+}
+
 async fn stored_block_doc_ids_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    scope: &BlockScope,
     keys: &[&str],
 ) -> Result<std::collections::BTreeMap<String, String>> {
     let mut stored = std::collections::BTreeMap::new();
@@ -512,14 +584,15 @@ async fn stored_block_doc_ids_in_txn(
     }
     let rendered_keys = keys
         .iter()
-        .map(|key| format!("\"{}\"", escape_graphql_string(key)))
+        .map(|key| format!("\"{}\"", escape_graphql_string(scope.key(key).1)))
         .collect::<Vec<_>>()
         .join(", ");
     let query = format!(
-        r#"{{ {collection}(filter: {{ content_key: {{ _in: [{rendered_keys}] }} }}) {{
+        r#"{{ {collection}(filter: {{ session_doc_id: {{ _eq: "{session_doc_id}" }}, content_key: {{ _in: [{rendered_keys}] }} }}) {{
             _docID content_key
         }} }}"#,
         collection = RENDERED_REQUEST_BLOCK_COLLECTION,
+        session_doc_id = escape_graphql_string(scope.key("").0),
     );
     let response = txn.execute(&query).await?;
     let rows = response
@@ -545,6 +618,7 @@ async fn stored_block_doc_ids_in_txn(
 /// where the existence read decides the winner.
 async fn create_blocks_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    scope: &BlockScope,
     blocks: &[&super::encoding::ChunkedBlock],
 ) -> Result<std::collections::BTreeMap<String, String>> {
     let mut created = std::collections::BTreeMap::new();
@@ -556,6 +630,8 @@ async fn create_blocks_in_txn(
                     "capture block bytes must be valid UTF-8; chunk boundaries land on character boundaries",
                 )?;
                 Ok(serde_json::json!({
+                    "session_doc_id": scope.session_doc_id,
+                    "agent_did": scope.agent_did,
                     "content_key": block.content_key,
                     "payload": payload,
                 }))
@@ -605,6 +681,7 @@ async fn create_blocks_in_txn(
 
 async fn pin_blocks_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    scope: &BlockScope,
     blocks: &[&super::encoding::ChunkedBlock],
 ) -> Result<std::collections::BTreeMap<String, BlockPin>> {
     let mut pins = std::collections::BTreeMap::new();
@@ -612,13 +689,13 @@ async fn pin_blocks_in_txn(
         .iter()
         .map(|block| block.content_key.as_str())
         .collect::<Vec<_>>();
-    let mut doc_ids = stored_block_doc_ids_in_txn(txn, &keys).await?;
+    let mut doc_ids = stored_block_doc_ids_in_txn(txn, scope, &keys).await?;
     let missing = blocks
         .iter()
         .copied()
         .filter(|block| !doc_ids.contains_key(&block.content_key))
         .collect::<Vec<_>>();
-    doc_ids.extend(create_blocks_in_txn(txn, &missing).await?);
+    doc_ids.extend(create_blocks_in_txn(txn, scope, &missing).await?);
     let witness_docs = blocks
         .iter()
         .map(|block| doc_ids[&block.content_key].clone())
@@ -662,6 +739,7 @@ fn payload_entries(
 
 async fn encode_payload_tree(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    scope: &BlockScope,
     chunks: &[super::encoding::ChunkedBlock],
     pins: &mut std::collections::BTreeMap<String, BlockPin>,
 ) -> Result<super::encoding::EncodedJson> {
@@ -689,7 +767,7 @@ async fn encode_payload_tree(
             })
             .collect::<Result<Vec<_>>>()?;
         let blocks = unique_blocks(&[&nodes]);
-        pins.extend(pin_blocks_in_txn(txn, &blocks).await?);
+        pins.extend(pin_blocks_in_txn(txn, scope, &blocks).await?);
         entries = payload_entries(&nodes, pins)?;
         height += 1;
     }
@@ -702,6 +780,7 @@ async fn encode_payload_tree(
 
 pub(crate) async fn store_shared_json_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    scope: &BlockScope,
     json: &str,
 ) -> Result<String> {
     if json.len() < super::encoding::MIN_COMPRESSION_BYTES {
@@ -712,8 +791,10 @@ pub(crate) async fn store_shared_json_in_txn(
         return Ok(json.to_owned());
     }
     let blocks = unique_blocks(&[&chunks]);
-    let mut pins = pin_blocks_in_txn(txn, &blocks).await?;
-    Ok(encode_payload_tree(txn, &chunks, &mut pins).await?.stored)
+    let mut pins = pin_blocks_in_txn(txn, scope, &blocks).await?;
+    Ok(encode_payload_tree(txn, scope, &chunks, &mut pins)
+        .await?
+        .stored)
 }
 
 fn single_mutation_result(data: &Value) -> Option<&Value> {

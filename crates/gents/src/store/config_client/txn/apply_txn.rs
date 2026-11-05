@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use identity::Did;
 use query::TransactionHandle;
 
@@ -12,6 +12,8 @@ use super::rollback::RollbackDropCleanupPause;
 use super::rollback::{begin_embedded_owned, begin_http_owned, RollbackOnDrop};
 use super::{ConfigClientError, GraphqlEndpoint, Result};
 use crate::store::config_client::write_telemetry::WriteOperation;
+use crate::store::config_client::AgentPublicationObserver;
+use crate::store::config_client::ConfigRelationshipGrant;
 
 pub(super) enum TxnBackend<'a> {
     Http {
@@ -36,6 +38,8 @@ pub struct ConfigApplyTxn<'a> {
     pub(super) affected_documents: AtomicU64,
     pub(super) operation: Option<&'static str>,
     pub(super) contends_with_request_siblings: AtomicBool,
+    pub(super) relationship_grants: Mutex<Vec<ConfigRelationshipGrant>>,
+    pub(super) publication_observer: Option<Arc<dyn AgentPublicationObserver>>,
 }
 
 pub(super) enum EmbeddedTransactionPurpose {
@@ -45,6 +49,14 @@ pub(super) enum EmbeddedTransactionPurpose {
 }
 
 impl<'a> ConfigApplyTxn<'a> {
+    /// The explicitly selected transaction actor, never an implicit runtime DID.
+    pub fn actor_did(&self) -> Option<&str> {
+        match &self.backend {
+            TxnBackend::Embedded { identity, .. } => identity.as_ref().map(identity::Did::as_str),
+            TxnBackend::Http { endpoint, .. } => endpoint.principal_did.as_deref(),
+        }
+    }
+
     pub(super) fn embedded_poisoned(&self) -> bool {
         matches!(
             &self.backend,
@@ -95,6 +107,8 @@ impl<'a> ConfigApplyTxn<'a> {
             rollback_on_drop: Some(rollback_on_drop),
             affected_documents: AtomicU64::new(0),
             contends_with_request_siblings: AtomicBool::new(false),
+            relationship_grants: Mutex::new(Vec::new()),
+            publication_observer: None,
             operation: Some(operation.as_str()),
         })
     }
@@ -166,6 +180,8 @@ impl<'a> ConfigApplyTxn<'a> {
             rollback_on_drop: Some(rollback_on_drop),
             affected_documents: AtomicU64::new(0),
             contends_with_request_siblings: AtomicBool::new(false),
+            relationship_grants: Mutex::new(Vec::new()),
+            publication_observer: None,
             operation: None,
         };
         Ok(txn)
@@ -173,6 +189,124 @@ impl<'a> ConfigApplyTxn<'a> {
 
     pub(super) fn affected_documents(&self) -> u64 {
         self.affected_documents.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn queue_relationship_grant(&self, grant: ConfigRelationshipGrant) -> Result<()> {
+        if self.actor_did().is_none() {
+            return Err(ConfigClientError::RelationshipActorRequired);
+        }
+        self.relationship_grants
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(grant);
+        Ok(())
+    }
+
+    pub(super) async fn complete_relationship_grants(&self) -> Result<()> {
+        let grants = std::mem::take(
+            &mut *self
+                .relationship_grants
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
+        if grants.is_empty() {
+            return Ok(());
+        }
+        let creator = self
+            .actor_did()
+            .ok_or(ConfigClientError::RelationshipActorRequired)?;
+        let access = match &self.backend {
+            TxnBackend::Http { endpoint, .. } => super::ConfigAccess::Graphql((*endpoint).clone()),
+            TxnBackend::Embedded {
+                node,
+                identity: Some(actor),
+                ..
+            } => super::ConfigAccess::local_as(Arc::clone(node), actor.clone()),
+            TxnBackend::Embedded { identity: None, .. } => {
+                return Err(ConfigClientError::RelationshipActorRequired)
+            }
+        };
+        if let Some(observer) = &self.publication_observer {
+            for grant in &grants {
+                observer.before_grant(grant).await.map_err(|error| {
+                    ConfigClientError::ClientAgentPublicationUnconfirmed(Box::new(error))
+                })?;
+                if let Err(error) = access
+                    .complete_relationship_grants(creator, std::slice::from_ref(grant))
+                    .await
+                {
+                    return Err(ConfigClientError::ClientAgentPublicationUnconfirmed(
+                        Box::new(error),
+                    ));
+                }
+                if let Err(error) = observer.granted(grant).await {
+                    return Err(ConfigClientError::ClientAgentPublicationUnconfirmed(
+                        Box::new(error),
+                    ));
+                }
+            }
+            Ok(())
+        } else {
+            access.complete_relationship_grants(creator, &grants).await
+        }
+    }
+
+    pub(super) async fn observe_before_commit(&self) -> Result<()> {
+        if let Some(observer) = &self.publication_observer {
+            let grants = self
+                .relationship_grants
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if !grants.is_empty() {
+                let creator = self
+                    .actor_did()
+                    .ok_or(ConfigClientError::RelationshipActorRequired)?;
+                observer.before_commit(creator, &grants).await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) async fn observe_committed(&self) -> Result<()> {
+        if self.has_relationship_grants() {
+            if let Some(observer) = &self.publication_observer {
+                observer.committed().await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) async fn observe_commit_failed(&self, definitely_not_committed: bool) -> Result<()> {
+        if self.has_relationship_grants() {
+            if let Some(observer) = &self.publication_observer {
+                observer.commit_failed(definitely_not_committed).await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn unconfirmed_relationships(&self, source: ConfigClientError) -> ConfigClientError {
+        ConfigClientError::UnconfirmedRelationships {
+            creator: self
+                .actor_did()
+                .expect("queued grants require an actor")
+                .to_owned(),
+            pending: self
+                .relationship_grants
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+            source: Box::new(source),
+        }
+    }
+
+    pub(super) fn has_relationship_grants(&self) -> bool {
+        !self
+            .relationship_grants
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
     }
 
     /// Marks this attempt as writing a key that every concurrent sibling of

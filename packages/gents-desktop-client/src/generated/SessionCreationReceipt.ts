@@ -2,4 +2,4 @@
 import type { SessionCreationCause } from "./SessionCreationCause.js";
 import type { SessionCreationStarter } from "./SessionCreationStarter.js";
 
-export type SessionCreationReceipt = { node_did: string, session_id: string, session_doc_id: string, requester_did: string | null, agent_id: string, opening_request_doc_id: string, cause: SessionCreationCause, cause_binding: string, starter?: SessionCreationStarter | null, signature: Array<number>, };
+export type SessionCreationReceipt = { node_did: string, session_id: string, session_doc_id: string, requester_did: string | null, agent_did: string, opening_request_doc_id: string, cause: SessionCreationCause, cause_binding: string, starter?: SessionCreationStarter | null, signature: Array<number>, };

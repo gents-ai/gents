@@ -47,7 +47,7 @@ export function createMailboxActions({
       selection.openMailboxRoute(store, {
         itemId: item.itemId,
         nodeDid: item.targetNodeDid,
-        agentId: item.targetAgentId,
+        agentDid: item.targetAgentDid,
         sessionId: item.sessionId ?? null,
       });
       writeSession(stores.session, null);
@@ -129,7 +129,7 @@ export function createMailboxActions({
       if (earlier) {
         const sent = await api.sendChatMessage({
           nodeDid: item.targetNodeDid,
-          agentId: item.targetAgentId,
+          agentDid: item.targetAgentDid,
           sessionId: earlier.sessionId,
           content: "",
           causedBySourceDocId: item.itemId,
@@ -179,7 +179,7 @@ export function createMailboxActions({
         {
           clientDid,
           nodeDid: item.targetNodeDid,
-          agentId: item.targetAgentId,
+          agentDid: item.targetAgentDid,
           sessionId: item.sessionId,
           content: "",
           causedBySourceDocId: item.itemId,
@@ -188,7 +188,7 @@ export function createMailboxActions({
         item.sessionId,
         false,
         (result, draft) => applyAnswer(result, draft, intent, acceptsView),
-        { itemId: item.itemId, summary },
+        { nodeDid: item.nodeDid, itemId: item.itemId, summary },
       );
       if (sent.outcome) {
         reportFailure(

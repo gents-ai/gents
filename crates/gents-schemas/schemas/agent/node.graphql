@@ -1,7 +1,7 @@
-type Node @branchable {
+type Node @policy(id: "d23eb42a87668f3bd577087f604fd7919e24873705681fe9e3d1923d7d065c13", resource: "nodes") {
     node_did: String @index(unique: true)
     display_name: String
-    default_agent_id: String @index
+    default_agent_did: String @index
     enabled: Boolean @index
     created_at: String
     updated_at: DateTime @index(direction: DESC)

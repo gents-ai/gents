@@ -5,7 +5,7 @@ pub(crate) use support::canonical_presentation::native_adapter::native_presentat
 pub(crate) use support::*;
 
 pub(crate) async fn native_queue_image(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    node: &std::sync::Arc<defra_node::Node>,
     node_did: &str,
     session_id: &str,
     selection: &[crate::request::lifecycle::queue::FoldedInput],

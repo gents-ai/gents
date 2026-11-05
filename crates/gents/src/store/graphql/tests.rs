@@ -299,7 +299,7 @@ async fn concurrent_mutations_share_the_node_write_path() {
         .await
         .unwrap();
     assert_eq!(rows::<Value>(&response, "GateWrite").unwrap().len(), WRITES);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -326,5 +326,5 @@ async fn public_graphql_read_helpers_reject_mutations_before_execution() {
         response.data.unwrap()["ReadBoundaryFact"],
         serde_json::json!([])
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

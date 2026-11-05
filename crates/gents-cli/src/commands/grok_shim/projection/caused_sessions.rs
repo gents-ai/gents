@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents::session::origin::load_session;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
@@ -280,7 +280,7 @@ pub(super) async fn project_caused_sessions(
             parent_session_id: session.caused_by_scope.session_id.clone(),
             parent_prompt_id: parent_prompt_id.map(ToOwned::to_owned),
             child_session_id: id.clone(),
-            subagent_type: session.agent_id.clone(),
+            subagent_type: session.agent_did.clone(),
             description,
             workflow_run_id: job_run.filter(|run| delivered_runs.contains(*run)).cloned(),
             context_normalized: true,
@@ -385,14 +385,29 @@ async fn cancel(
     session: &CausedSession,
     context_window: u64,
 ) -> Result<Value> {
-    if let Some(refusal) =
-        gents::session::message::interrupt_refusal(node, caller, &session.scope).await?
+    if let Some(refusal) = gents::session::message::interrupt_refusal(
+        node,
+        caller
+            .requester_did
+            .as_deref()
+            .context("missing caller identity")?,
+        caller,
+        &session.scope,
+    )
+    .await?
     {
         anyhow::bail!(refusal);
     }
-    if gents::session::message::interrupt_session(node, &session.scope)
-        .await?
-        .is_some()
+    if gents::session::message::interrupt_session(
+        node,
+        caller
+            .requester_did
+            .as_deref()
+            .context("missing caller identity")?,
+        &session.scope,
+    )
+    .await?
+    .is_some()
     {
         return Ok(json!({"subagentId": id, "cancelled": true, "outcome": {"kind": "cancelled"}}));
     }
@@ -436,7 +451,7 @@ async fn snapshot(
         "subagentId": session.scope.session_id,
         "parentSessionId": session.caused_by_scope.session_id,
         "childSessionId": session.scope.session_id,
-        "subagentType": session.agent_id,
+        "subagentType": session.agent_did,
         "description": description(session),
         "startedAtEpochMs": started,
         "durationMs": duration,
@@ -782,7 +797,7 @@ mod tests {
             .collect::<Vec<_>>();
         started.sort();
         assert_eq!(started, ["child-a", "child-b"]);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     const DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
@@ -831,7 +846,7 @@ mod tests {
             node,
             "AgentRequest",
             &format!(
-                r#"purpose: "normal", request_id: "parent-request", node_did: "{DID}", requester_did: "{DID}", agent_id: "worker", session_id: "parent", content: "run it", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:00Z", retry_count: 0, max_retries: 3"#
+                r#"purpose: "normal", request_id: "parent-request", node_did: "{DID}", requester_did: "{DID}", agent_did: "worker", session_id: "parent", content: "run it", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:00Z", retry_count: 0, max_retries: 3"#
             ),
         )
         .await;
@@ -847,7 +862,7 @@ mod tests {
             node,
             "AgentRequest",
             &format!(
-                r#"purpose: "normal", request_id: "child-request", node_did: "{DID}", requester_did: "{DID}", agent_id: "worker", session_id: "child", caused_by_parent_request_id: "parent-request", caused_by_parent_request_doc_id: "{parent}", caused_by_parent_tool_call_id: "call-run", caused_by_parent_tool_call_doc_id: "{call}", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:01Z", retry_count: 0, max_retries: 3"#
+                r#"purpose: "normal", request_id: "child-request", node_did: "{DID}", requester_did: "{DID}", agent_did: "worker", session_id: "child", caused_by_parent_request_id: "parent-request", caused_by_parent_request_doc_id: "{parent}", caused_by_parent_tool_call_id: "call-run", caused_by_parent_tool_call_doc_id: "{call}", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:01Z", retry_count: 0, max_retries: 3"#
             ),
         )
         .await;
@@ -913,7 +928,7 @@ mod tests {
             projection.updates[0].to_payload()["workflow_run_id"],
             "call-run"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -931,7 +946,7 @@ mod tests {
                 .get("workflow_run_id")
                 .is_none());
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -962,7 +977,7 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(spawned(&projection).workflow_run_id, None);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -973,7 +988,7 @@ mod tests {
         let projection = project(&node, &parent, &["call-run"]).await;
         assert_eq!(spawned(&projection).description, "Audit the repo");
         assert!(!finished(&projection).will_wake);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -991,7 +1006,7 @@ mod tests {
         );
         assert!(finished(&projection).will_wake);
         assert_eq!(projection.updates.len(), 2);
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -1004,7 +1019,7 @@ mod tests {
             &node,
             "AgentSession",
             &format!(
-                r#"session_id: "child", node_did: "did:test:other", requester_did: "{DID}", agent_id: "worker", created_at: "2026-09-26T00:00:02Z", title: {{ text: "Duplicate", source: "task" }}, provenance: {{ parent_request_doc_id: "{}" }}"#,
+                r#"session_id: "child", node_did: "did:test:other", requester_did: "{DID}", agent_did: "worker", created_at: "2026-09-26T00:00:02Z", title: {{ text: "Duplicate", source: "task" }}, provenance: {{ parent_request_doc_id: "{}" }}"#,
                 parent.doc_id.as_deref().unwrap()
             ),
         )
@@ -1015,7 +1030,7 @@ mod tests {
             spawned(&projection).workflow_run_id.as_deref(),
             Some("call-run")
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -1086,7 +1101,7 @@ mod tests {
                     expected.into_iter().map(|(session, _)| session).collect();
                 assert_eq!(cards, sessions, "{}: {cause}", case["name"]);
             }
-            node.shutdown().await;
+            node.shutdown().await.expect("node shutdown");
         }
     }
 }

@@ -191,7 +191,7 @@ async fn bounded_task_history_preserves_physical_twins_at_the_cutoff() {
         docs[..8],
         "same top eight as complete history, including physical ties"
     );
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
 }
 
 #[test]
@@ -731,7 +731,7 @@ fn node_runtime_queries_cannot_reintroduce_readiness_authority() {
         "process_state",
         "active_generation",
         "router_generation",
-        "default_agent_id",
+        "default_agent_did",
         "runnable_agent_count",
         "unavailable_agent_count",
     ] {
@@ -926,14 +926,14 @@ async fn load_node_scoped_snapshot_excludes_other_nodes() {
         alpha: create_AgentSession(input: {
             session_id: "alpha-1",
             node_did: "did:alpha",
-            agent_id: "default",
+            agent_did: "default",
             title: { text: "alpha", source: "user" },
             created_at: "2026-05-07T00:00:00Z"
         }) { _docID }
         beta: create_AgentSession(input: {
             session_id: "beta-1",
             node_did: "did:beta",
-            agent_id: "default",
+            agent_did: "default",
             title: { text: "beta", source: "user" },
             created_at: "2026-05-07T00:00:00Z"
         }) { _docID }

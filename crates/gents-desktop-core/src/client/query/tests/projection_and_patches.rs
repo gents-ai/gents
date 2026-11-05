@@ -6,9 +6,7 @@ use std::sync::Arc;
 fn visible(read: SelectedSessionRead) -> ClientStore {
     match read {
         SelectedSessionRead::Visible(patch) => *patch,
-        SelectedSessionRead::Absent(submitted) => {
-            panic!("expected the canonical session row, found {submitted:?}")
-        }
+        SelectedSessionRead::Absent => panic!("expected the canonical session row"),
     }
 }
 
@@ -33,7 +31,7 @@ async fn pending_edit_request_patch_reads_only_selected_and_replacement_document
                     purpose: "normal",
                     node_did: "did:test:agent",
                     requester_did: "did:test:requester",
-                    agent_id: "default",
+                    agent_did: "default",
                     session_id: "edit-session",
                     content: "old text",
                     lifecycle_state: "superseded",
@@ -45,7 +43,7 @@ async fn pending_edit_request_patch_reads_only_selected_and_replacement_document
                     purpose: "normal",
                     node_did: "did:test:agent",
                     requester_did: "did:test:requester",
-                    agent_id: "default",
+                    agent_did: "default",
                     session_id: "edit-session",
                     content: "new text",
                     lifecycle_state: "pending",
@@ -57,7 +55,7 @@ async fn pending_edit_request_patch_reads_only_selected_and_replacement_document
                     purpose: "normal",
                     node_did: "did:test:agent",
                     requester_did: "did:test:requester",
-                    agent_id: "default",
+                    agent_did: "default",
                     session_id: "other-session",
                     content: "unrelated",
                     lifecycle_state: "pending",
@@ -310,7 +308,7 @@ async fn fetch_doc_patch_hydrates_mailbox_live_updates() {
                     source_kind: "session",
                     source_id: "wait-live",
                     target_node_did: "did:test:agent",
-                    target_agent_id: "operator",
+                    target_agent_did: "operator",
                     created_at: "2026-08-25T00:00:00Z",
                     updated_at: "2026-08-25T00:00:00Z"
                 }) { _docID }
@@ -364,7 +362,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
             session_id: "sess-selected",
             node_did: "did:test:agent",
             requester_did: "did:test:requester",
-            agent_id: "default",
+            agent_did: "default",
             created_at: "2026-07-24T00:00:00Z"
         }) { _docID }
         first_request: create_AgentRequest(input: {
@@ -372,7 +370,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
             purpose: "normal",
             node_did: "did:test:agent",
             requester_did: "did:test:requester",
-            agent_id: "default",
+            agent_did: "default",
             session_id: "sess-selected",
             content: "selected",
             lifecycle_state: "processing",
@@ -384,7 +382,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
             purpose: "normal",
             node_did: "did:test:agent",
             requester_did: "did:test:foreign-requester",
-            agent_id: "default",
+            agent_did: "default",
             session_id: "sess-selected",
             content: "foreign twin",
             lifecycle_state: "processing",
@@ -396,7 +394,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
             purpose: "normal",
             node_did: "did:test:agent",
             requester_did: "did:test:requester",
-            agent_id: "default",
+            agent_did: "default",
             session_id: "sess-unrelated",
             content: "unrelated",
             lifecycle_state: "completed",
@@ -602,100 +600,59 @@ fn selected_request_lookup_rejects_mixed_valid_and_malformed_rows() {
     assert!(error.downcast_ref::<crate::error::BridgeError>().is_none());
 }
 
-/// Signals 1, 3 and 4 come from one read: no row and the request as this
-/// database holds it, including the node's replicated claim.
+#[test]
+fn direct_session_read_matches_the_lean_model() {
+    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let cases = contract["client_direct_session_read_cases"]
+        .as_array()
+        .unwrap();
+    assert!(!cases.is_empty());
+    let row = serde_json::json!({"node_did":"node", "session_id":"session", "agent_did":"agent", "created_at":"now"});
+    for case in cases {
+        let rows = match case["session_row"].as_str().unwrap() {
+            "absent" => vec![],
+            "canonical" => vec![row.clone()],
+            "duplicate" => vec![row.clone(), row.clone()],
+            "out_of_scope" => vec![
+                serde_json::json!({"node_did":"other", "session_id":"session", "agent_did":"agent", "created_at":"now"}),
+            ],
+            other => panic!("unknown modeled observation {other}"),
+        };
+        let result = selected_session_from_data(
+            &serde_json::json!({"AgentSession":rows}),
+            "node",
+            "session",
+        );
+        let actual = match result {
+            Ok(None) => "empty",
+            Ok(Some(_)) => "visible",
+            Err(_) => "integrity_fault",
+        };
+        assert_eq!(actual, case["expected"].as_str().unwrap(), "{case}");
+    }
+}
+
 #[tokio::test]
-async fn load_chat_patch_reports_the_submitted_request_while_the_session_row_is_absent() {
-    let node = Arc::new(
-        crate::test_support::node_builder()
-            .build()
-            .await
-            .expect("node"),
-    );
-    ensure_runtime_schemas(node.as_ref())
-        .await
-        .expect("schemas");
+async fn absent_session_is_empty_even_when_a_request_is_visible() {
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
     let access = gents::ConfigAccess::local(node.clone());
-    let absent = |read: SelectedSessionRead| match read {
-        SelectedSessionRead::Absent(submitted) => submitted,
-        SelectedSessionRead::Visible(patch) => panic!("no session row exists: {patch:?}"),
-    };
-
-    let read = load_chat_patch(&access, "did:test:agent", "sess-new", None, None, &[])
-        .await
-        .expect("an empty session read is not a failure");
-    assert_eq!(absent(read), None);
-
     let response = node
         .execute(
-            r#"mutation {
-                create_AgentRequest(input: {
-                    request_id: "req-new",
-                    purpose: "normal",
-                    node_did: "did:test:agent",
-                    requester_did: "did:test:requester",
-                    agent_id: "default",
-                    session_id: "sess-new",
-                    content: "hello",
-                    lifecycle_state: "pending",
-                    created_at: "2026-07-24T00:00:00Z"
-                }) { _docID }
-            }"#,
+            r#"mutation { create_AgentRequest(input: {
+        request_id: "request", purpose: "normal", node_did: "node", agent_did: "agent",
+        session_id: "missing", content: "hello", lifecycle_state: "pending", created_at: "now"
+    }) { _docID } }"#,
         )
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let submitted = absent(
-        load_chat_patch(&access, "did:test:agent", "sess-new", None, None, &[])
+    assert!(matches!(
+        load_chat_patch(&access, "node", "missing", Some("request"), None, &[])
             .await
-            .expect("submitted request read"),
-    )
-    .expect("the local request is the sending signal");
-    assert_eq!(submitted.attempt.request.request_id, "req-new");
-    assert!(!submitted.claimed);
-    assert!(!submitted.node_has_it());
-
-    let response = node
-        .execute(
-            r#"mutation {
-                update_AgentRequest(
-                    filter: { request_id: { _eq: "req-new" } }
-                    input: { claimed_at: "2026-07-24T00:00:01Z" }
-                ) { _docID }
-            }"#,
-        )
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let submitted = absent(
-        load_chat_patch(
-            &access,
-            "did:test:agent",
-            "sess-new",
-            Some("req-new"),
-            None,
-            &[],
-        )
-        .await
-        .expect("claimed request read"),
-    )
-    .expect("tracked request");
-    assert!(submitted.claimed);
-    assert!(submitted.node_has_it());
-    assert_eq!(
-        absent(
-            load_chat_patch(
-                &access,
-                "did:test:agent",
-                "sess-new",
-                Some("req-other"),
-                None,
-                &[]
-            )
-            .await
-            .expect("untracked request read"),
-        ),
-        None,
-        "a tracked request this database lacks is not another request's signal"
-    );
+            .unwrap(),
+        SelectedSessionRead::Absent
+    ));
+    node.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -717,7 +674,7 @@ async fn load_chat_patch_uses_the_canonical_nullable_session_requester() {
                     session_id: "sess-public",
                     node_did: "did:test:agent",
                     requester_did: null,
-                    agent_id: "default",
+                    agent_did: "default",
                     created_at: "2026-07-24T00:00:00Z"
                 }) { _docID }
                 request: create_AgentRequest(input: {
@@ -725,7 +682,7 @@ async fn load_chat_patch_uses_the_canonical_nullable_session_requester() {
                     purpose: "normal",
                     node_did: "did:test:agent",
                     requester_did: null,
-                    agent_id: "default",
+                    agent_did: "default",
                     session_id: "sess-public",
                     content: "public session",
                     lifecycle_state: "completed",
@@ -775,7 +732,7 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
                     caused_by_parent_tool_call_doc_id: "parent-tool-physical",
                     purpose: "normal",
                     node_did: "did:test:agent",
-                    agent_id: "default",
+                    agent_did: "default",
                     session_id: "patch-session",
                     content: "normal request",
                     lifecycle_state: "completed",
@@ -786,7 +743,7 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
                     request_id: "patch-title",
                     purpose: "title-audit",
                     node_did: "did:test:agent",
-                    agent_id: "default",
+                    agent_did: "default",
                     session_id: "patch-session",
                     content: "title audit",
                     lifecycle_state: "completed",
@@ -921,6 +878,6 @@ async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers(
         );
         assert_eq!(store.inference_backends.len(), 1);
     }
-    node.shutdown().await;
+    node.shutdown().await.unwrap();
     Ok(())
 }

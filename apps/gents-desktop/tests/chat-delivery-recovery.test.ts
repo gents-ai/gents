@@ -72,7 +72,7 @@ it("saves the full authored input and caller identity before the first effect", 
   selection.openMailboxRoute(f.stores.selection, {
     itemId: "source",
     nodeDid: "node",
-    agentId: "agent",
+    agentDid: "agent",
     sessionId: "session",
   });
   const actions = f.actions();
@@ -83,7 +83,7 @@ it("saves the full authored input and caller identity before the first effect", 
       clientDid: "client",
       requestId: expect.any(String),
       sessionId: "session",
-      agentId: "agent",
+      agentDid: "agent",
       content: "Original message",
       cwd: "/original",
       delivery: "steer",
@@ -186,7 +186,7 @@ it.each(["node", "request", "session", "Agent", "receipt", "signature"])(
     if (field === "node") reply.result.nodeDid = "other";
     if (field === "request") reply.result.requestId = "other";
     if (field === "session") reply.result.sessionId = "other";
-    if (field === "Agent") reply.result.agentId = "other";
+    if (field === "Agent") reply.result.agentDid = "other";
     if (field === "receipt") reply.result.submissionReceipt = null;
     if (field === "signature") {
       f.read.mockResolvedValueOnce(prepared(request, "deliveryUnknown"));
@@ -323,7 +323,7 @@ it("resolves an already retained request without allocating a replacement identi
     nodeDid: "node",
     sessionId: "session",
     requestId: "earlier",
-    agentId: "agent",
+    agentDid: "agent",
   });
   await f.actions().sendMessage("Original message");
   expect(f.send).toHaveBeenCalledWith(

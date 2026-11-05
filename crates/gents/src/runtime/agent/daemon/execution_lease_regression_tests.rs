@@ -90,7 +90,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
     };
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -128,7 +128,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         session_id: request.session_id.clone(),
         node_did: node_did.clone(),
         requester_did: request.requester_did.clone(),
-        agent_id: agent_config.agent_id.clone(),
+        agent_did: agent_config.agent_did.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
         archived_at: None,
@@ -250,7 +250,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             after_rows, before_rows,
             "old execution must neither retain its buffered chunk nor claim a new close"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         return;
     }
 
@@ -321,7 +321,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             closed_ids(&before_rows),
             "failed drain must not add a claimed source close"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
         return;
     }
 
@@ -393,7 +393,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         assert_eq!(content.declaration.part_index, u32::try_from(part).unwrap());
         assert_eq!(content.text, text);
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -502,7 +502,7 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
     let identity = agent_config.node_identity().clone();
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -542,7 +542,7 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         session_id: request.session_id.clone(),
         node_did: node_did.clone(),
         requester_did: request.requester_did.clone(),
-        agent_id: agent_config.agent_id.clone(),
+        agent_did: agent_config.agent_did.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
         archived_at: None,
@@ -705,7 +705,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
     };
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -744,7 +744,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
             session_id: request.session_id.clone(),
             node_did: node_did.clone(),
             requester_did: request.requester_did.clone(),
-            agent_id: agent_config.agent_id.clone(),
+            agent_did: agent_config.agent_did.clone(),
             created_at: request.created_at.clone(),
             closed_at: None,
             archived_at: None,
@@ -923,7 +923,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
             "provider emitted traffic after its last semantic progress"
         );
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -947,7 +947,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
     let tool_entered = Arc::new(AtomicBool::new(false));
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -989,7 +989,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         session_id: session_id.clone(),
         node_did: node_did.clone(),
         requester_did: requester_did.clone(),
-        agent_id: agent_config.agent_id.clone(),
+        agent_did: agent_config.agent_did.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
         archived_at: None,
@@ -1073,7 +1073,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         "node_did": node_did.clone(),
         "requester_did": requester_did.clone(),
         "session_id": session_id.clone(),
-        "agent_id": agent_config.agent_id.clone(),
+        "agent_did": agent_config.agent_did.clone(),
         "lifecycle_state": "pending",
         "execution_origin": "scheduled",
         "input": {"queue": {
@@ -1122,7 +1122,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         "interrupted"
     );
     assert!(!result["data"]["AgentRequestParent"][0]["terminal_output"].is_null());
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -1157,7 +1157,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     };
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -1198,7 +1198,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         session_id: request.session_id.clone(),
         node_did: node_did.clone(),
         requester_did: request.requester_did.clone(),
-        agent_id: agent_config.agent_id.clone(),
+        agent_did: agent_config.agent_did.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
         archived_at: None,
@@ -1268,7 +1268,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         "final output was truncated: {data}"
     );
     assert_eq!(model.stream_calls.load(Ordering::SeqCst), 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
@@ -1297,7 +1297,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
     };
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
-        &agent_config.agent_id,
+        &agent_config.agent_did,
         &[],
         false,
         &[],
@@ -1335,7 +1335,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         session_id: request.session_id.clone(),
         node_did: node_did.clone(),
         requester_did: request.requester_did.clone(),
-        agent_id: agent_config.agent_id.clone(),
+        agent_did: agent_config.agent_did.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
         archived_at: None,
@@ -1430,5 +1430,5 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         .is_ok_and(|content| content.text == "received deadline reasoning")
     }));
     assert_eq!(model.stream_calls.load(Ordering::SeqCst), 1);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }

@@ -136,10 +136,18 @@ impl Fixture {
         let home = EmbeddedHome::create_temp("optimization-live")
             .await
             .unwrap();
-        let access = ConfigAccess::local(home.node.clone());
-        let owner = home.did().to_string();
-        gents::ensure_node(&home.node, &owner).await.unwrap();
         let dirs = tempfile::tempdir().unwrap();
+        let evaluator = gents::store::identity::KeyIdentity::load_or_create(
+            dirs.path().join("evaluator.key"),
+            None,
+        )
+        .unwrap();
+        let evaluator_did = gents::store::identity::NodeIdentity::did(&evaluator).to_owned();
+        let access = ConfigAccess::local_as(
+            home.node.clone(),
+            ::identity::Did::new(evaluator_did.clone()).unwrap(),
+        );
+        let owner = home.did().to_string();
 
         let golden = materialize_pack(
             &pack,
@@ -174,6 +182,7 @@ impl Fixture {
         install(
             &access,
             vec![
+                (Collection::Node, json!({"node_did": owner})),
                 (
                     Collection::EvalDefinition,
                     serde_json::to_value(definition).unwrap(),
@@ -201,18 +210,16 @@ impl Fixture {
                     })
                     .unwrap(),
                 ),
-            ]
-            .into_iter()
-            .chain(live_subject(&baseline_pack, &owner, &behavior))
-            .collect(),
+            ],
         )
         .await;
 
+        live_subject(&access, &baseline_pack, &owner, &behavior).await;
         let request = JobRequest {
             job_id: job_id.into(),
             owner: owner.clone(),
-            evaluator_did: owner,
-            agent_id: behavior,
+            evaluator_did,
+            agent_slot: behavior,
             target: JobTarget::Context,
             definition_id,
             inference_profile_id: "live".into(),
@@ -312,30 +319,41 @@ async fn install(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
         .unwrap();
 }
 
-fn live_subject(pack: &Path, owner: &str, behavior: &str) -> Vec<(Collection, Value)> {
+async fn live_subject(access: &ConfigAccess, pack: &Path, owner: &str, behavior: &str) {
     let subject = materialize_pack(pack, owner, behavior, &JobTarget::Context).unwrap();
-    let bindings = subject
+    let requested = subject
         .manifest
         .metadata
         .inference_slots
         .iter()
         .map(|slot| (slot.name.clone(), "live".to_owned()))
         .collect();
-    let bound =
-        gents::pack::bind_pack_install_config(&subject.manifest, &subject.config, &bindings)
-            .unwrap();
-    DesiredStateApplyPlan::from_pack_config(&bound)
-        .unwrap()
-        .documents()
-        .iter()
-        .filter(|document| {
-            !matches!(
-                document.collection,
-                Collection::Node | Collection::EvalDefinition
-            )
-        })
-        .map(|document| (document.collection, document.add.clone()))
-        .collect()
+    let bound = gents::pack::load_pack_install_config(
+        access,
+        &subject.manifest,
+        &gents::pack::PackInstallOptions {
+            node_did: owner.to_owned(),
+        },
+        &|path| Ok(std::fs::read(pack.join(path))?),
+        &|name| std::env::var(name).ok(),
+        gents::pack::InstalledVia::Operator,
+    )
+    .await
+    .unwrap();
+    let config = bound.bind_inference(&subject.manifest, &requested).unwrap();
+    let mut identity =
+        gents::pack::PackIdentity::new(&subject.manifest, subject.digest, Vec::new());
+    identity.installation_doc_id = bound.installation_doc_id;
+    identity.agent_bindings = bound.agent_bindings;
+    gents::pack::install_pack_documents(
+        access,
+        owner,
+        &identity,
+        &config,
+        gents::pack::DriftPolicy::Overwrite,
+    )
+    .await
+    .unwrap();
 }
 
 fn copy_tree(source: &Path, destination: &Path) {

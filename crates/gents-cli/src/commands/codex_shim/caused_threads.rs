@@ -22,7 +22,7 @@ pub(super) struct CausedThread {
     pub(super) session_id: String,
     pub(super) node_did: String,
     pub(super) requester_did: Option<String>,
-    pub(super) agent_id: String,
+    pub(super) agent_did: String,
     pub(super) parent_session_id: String,
     pub(super) root_session_id: String,
     pub(super) depth: u32,
@@ -51,7 +51,7 @@ pub(super) async fn load_caused_thread(
     else {
         return Ok(None);
     };
-    let model = bound_model(state, &session.scope.node_did, &session.agent_id).await;
+    let model = bound_model(state, &session.scope.node_did, &session.agent_did).await;
     Ok(Some(caused_thread(session, model)))
 }
 
@@ -125,7 +125,7 @@ pub(super) async fn load_caused_threads_for_root_ids(
             continue;
         }
         labels.insert(session.scope.session_id.clone(), session.scope.clone());
-        let key = (session.scope.node_did.clone(), session.agent_id.clone());
+        let key = (session.scope.node_did.clone(), session.agent_did.clone());
         if !models.contains_key(&key) {
             let model = bound_model(state, &key.0, &key.1).await;
             models.insert(key.clone(), model);
@@ -136,14 +136,14 @@ pub(super) async fn load_caused_threads_for_root_ids(
     Ok(threads)
 }
 
-async fn bound_model(state: &ShimState, node_did: &str, agent_id: &str) -> Option<String> {
-    match load_bound_model_selection_id(&state.node, node_did, agent_id).await {
+async fn bound_model(state: &ShimState, node_did: &str, agent_did: &str) -> Option<String> {
+    match load_bound_model_selection_id(&state.node, node_did, agent_did).await {
         Ok(model) => Some(model),
         Err(error) => {
             tracing::debug!(
                 error = format!("{error:#}"),
                 node_did,
-                agent_id,
+                agent_did,
                 "Codex caused thread has no locally bound model"
             );
             None
@@ -156,8 +156,8 @@ fn caused_thread(session: CausedSession, model: Option<String>) -> CausedThread 
         session_id: session.scope.session_id.clone(),
         node_did: session.scope.node_did.clone(),
         requester_did: session.scope.requester_did.clone(),
-        nickname: session.agent_id.clone(),
-        agent_id: session.agent_id.clone(),
+        nickname: session.agent_did.clone(),
+        agent_did: session.agent_did.clone(),
         parent_session_id: session.caused_by_scope.session_id.clone(),
         root_session_id: session.root_session_id.clone(),
         depth: session.depth,
@@ -201,7 +201,7 @@ mod tests {
             .collect::<Vec<_>>();
         threads.sort();
         assert_eq!(threads, ["child-a", "child-b"]);
-        state.node.shutdown().await;
+        state.node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -265,7 +265,7 @@ mod tests {
             expected.sort();
             expected.dedup();
             assert_eq!(actual, expected, "{}", case["name"]);
-            state.node.shutdown().await;
+            state.node.shutdown().await.expect("node shutdown");
         }
     }
 }

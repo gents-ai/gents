@@ -55,7 +55,7 @@ impl ConfigCommandTool {
             );
             let target = cleanup_target(resource)?;
             let id = if target == SelfConfigTarget::Agent {
-                self.resolve_agent_id(id).await?
+                self.resolve_agent_did(id).await?
             } else {
                 id.to_owned()
             };

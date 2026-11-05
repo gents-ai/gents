@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tracing::{instrument::WithSubscriber, Instrument};
 
 #[cfg(test)]
@@ -34,12 +34,26 @@ pub(super) struct StoreClaim {
 pub struct LocalConfigAccess {
     pub(super) node: Arc<EmbeddedNode>,
     pub(super) gate: Arc<MutationWriteGate>,
+    pub(super) identity: Option<identity::Did>,
 }
 
 impl LocalConfigAccess {
     pub(crate) fn new(node: Arc<EmbeddedNode>) -> Self {
         let gate = mutation_write_gate(&node);
-        Self { node, gate }
+        Self {
+            node,
+            gate,
+            identity: None,
+        }
+    }
+
+    pub(crate) fn with_identity(mut self, identity: identity::Did) -> Self {
+        self.identity = Some(identity);
+        self
+    }
+
+    pub(crate) fn identity(&self) -> Option<&identity::Did> {
+        self.identity.as_ref()
     }
 
     pub(crate) fn claimed(
@@ -48,7 +62,11 @@ impl LocalConfigAccess {
     ) -> Result<Self> {
         let gate = mutation_write_gate(&node);
         gate.attach_store_claim(Arc::clone(&node), lock)?;
-        Ok(Self { node, gate })
+        Ok(Self {
+            node,
+            gate,
+            identity: None,
+        })
     }
 
     pub(crate) fn node(&self) -> &Arc<EmbeddedNode> {

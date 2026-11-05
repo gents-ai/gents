@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::Node as EmbeddedNode;
 use gents::session::mailbox::{
-    dismiss_mailbox_item, load_mailbox_item, stamp_create, FileMailboxItemArgs, MailboxAction,
-    MailboxKind, MailboxSourceKind, MailboxStampContext, MailboxStatus,
+    dismiss_mailbox_item, stamp_create, FileMailboxItemArgs, MailboxAction, MailboxKind,
+    MailboxSourceKind, MailboxStampContext, MailboxStatus,
 };
 
 use crate::lean_vocab_test::{
@@ -77,7 +77,7 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
         &MailboxStampContext {
             requester_did: "did:test:owner".to_string(),
             node_did: "did:test:agent".to_string(),
-            agent_id: "operator".to_string(),
+            agent_did: "operator".to_string(),
             session_id: Some("session-1".to_string()),
         },
         FileMailboxItemArgs {
@@ -100,29 +100,13 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
     .expect("stamped open mailbox item");
     assert_eq!(item.status, "open");
 
-    assert!(
-        dismiss_mailbox_item(&node, &item.doc_id, "did:test:other")
-            .await
-            .is_err(),
-        "non-owner dismissal must be refused"
-    );
-    assert_eq!(
-        load_mailbox_item(&node, &item.doc_id)
-            .await
-            .expect("load after refused dismissal")
-            .expect("stamped item still present")
-            .status,
-        "open",
-        "refused dismissal must leave the item open"
-    );
-
-    let dismissed = dismiss_mailbox_item(&node, &item.doc_id, "did:test:owner")
+    let dismissed = dismiss_mailbox_item(&node, &item.doc_id, "did:test:other")
         .await
-        .expect("owner dismissal");
+        .expect("native-authorized dismissal is independent of session requester provenance");
     assert_eq!(dismissed.status, "dismissed");
     assert!(
         dismissed.resolved_at.is_some(),
-        "the open -> dismissed owner transition must stamp resolved_at"
+        "the open -> dismissed transition must stamp resolved_at"
     );
 
     let repeated = dismiss_mailbox_item(&node, &item.doc_id, "did:test:owner")

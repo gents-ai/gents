@@ -86,10 +86,12 @@ def schemaPublicationCasesJson : String := Id.run do
   for grant in [false, true] do
     for artifact in [false, true] do
       for compatible in [false, true] do
-        rows := rows ++ ["{\"grant\":" ++ scBool grant
-          ++ ",\"artifact\":" ++ scBool artifact
-          ++ ",\"compatible\":" ++ scBool compatible
-          ++ ",\"accepted\":" ++ scBool (SelfConfig.schemaPublicationAllowed grant artifact compatible) ++ "}"]
+        for nativeAllowed in [false, true] do
+          rows := rows ++ ["{\"grant\":" ++ scBool grant
+            ++ ",\"artifact\":" ++ scBool artifact
+            ++ ",\"compatible\":" ++ scBool compatible
+            ++ ",\"native_allowed\":" ++ scBool nativeAllowed
+            ++ ",\"accepted\":" ++ scBool (SelfConfig.schemaPublicationAllowed grant artifact compatible nativeAllowed) ++ "}"]
   return jsonArray rows
 
 end Conformance.Contracts

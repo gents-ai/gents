@@ -9,9 +9,11 @@
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
-use gents::store::config_client::{ConfigAccess, ReceiptWriteError};
+use gents::request::lifecycle::ClientSubmissionError;
+use gents::store::config_client::ConfigAccess;
 use gents_protocol::graphql::{escape_graphql_string, GraphqlRequestOptions};
 use gents_protocol::request_admission::AgentRequestCreate;
+#[cfg(test)]
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 
@@ -128,7 +130,11 @@ impl UnresolvedSubmission {
                 && self.result.request_id == self.request_id
                 && self.result.node_did == self.node_did
                 && self.result.session_id == self.session_id
-                && self.mutation == self.create.graphql_mutation().map_err(anyhow::Error::msg)?,
+                && self.mutation
+                    == self
+                        .create
+                        .graphql_client_publication_mutation()
+                        .map_err(anyhow::Error::msg)?,
             "retained submission is inconsistent with its signed request"
         );
         Ok(())
@@ -146,7 +152,9 @@ impl UnresolvedSubmission {
 
     /// Retain a prepared signed create and the identity it will produce.
     pub(crate) fn new(create: AgentRequestCreate, result: SubmittedRequest) -> Result<Self> {
-        let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
+        let mutation = create
+            .graphql_client_publication_mutation()
+            .map_err(anyhow::Error::msg)?;
         Ok(Self {
             request_id: create.request_id.clone(),
             session_id: create.session_id.clone(),
@@ -181,15 +189,14 @@ impl UnresolvedSubmission {
 /// the prepared admission signature; a row that matches the identity but not
 /// the signature is an error, never an absence. Local access reads the same
 /// receipt from the embedded owner.
-pub(super) async fn owner_receipt(
-    access: &ConfigAccess,
-    create: &AgentRequestCreate,
-) -> Result<bool> {
+#[cfg(test)]
+async fn owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) -> Result<bool> {
     read_owner_receipt(access, create)
         .await
         .context(RECEIPT_READ_CONTEXT)
 }
 
+#[cfg(test)]
 async fn read_owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) -> Result<bool> {
     let scope = gents::session::session_scope_filter(
         &create.node_did,
@@ -257,11 +264,7 @@ pub(super) async fn commit_signed_submission(
     access: &ConfigAccess,
     pending: UnresolvedSubmission,
 ) -> Result<SubmittedRequest> {
-    let written = access
-        .write_with_receipt("desktop.chat.submit", &pending.mutation, || {
-            owner_receipt(access, &pending.create)
-        })
-        .await;
+    let written = gents::request::lifecycle::submit_client_request(access, &pending.create).await;
     let Err(error) = written else {
         return Ok(pending.result);
     };
@@ -271,21 +274,18 @@ pub(super) async fn commit_signed_submission(
 async fn reconcile_commit_failure(
     access: &ConfigAccess,
     pending: UnresolvedSubmission,
-    error: ReceiptWriteError,
+    error: ClientSubmissionError,
 ) -> Result<SubmittedRequest> {
     if gents::store::graphql::is_storage_full(&error) {
         return Err(pending.outcome_unknown(Some(error.into())));
     }
-    // The owner processed the mutation and answered with GraphQL errors; an
-    // unreadable receipt proves nothing about delivery.
-    if matches!(&error, ReceiptWriteError::Write(write) if write.is_graphql_rejection()) {
-        match owner_receipt(access, &pending.create).await {
-            Ok(true) => return Ok(pending.result),
-            Ok(false) if !reports_existing_request(&error) => return Err(error.into()),
-            _ => {}
+    match gents::request::lifecycle::reconcile_client_request(access, &pending.create).await {
+        Ok(true) => Ok(pending.result),
+        Ok(false) if !error.is_unconfirmed() && !reports_existing_request(&error) => {
+            Err(error.into())
         }
+        _ => Err(pending.outcome_unknown(Some(error.into()))),
     }
-    Err(pending.outcome_unknown(Some(error.into())))
 }
 
 /// A rejection that implies the owner already holds a request with this id.
@@ -300,7 +300,7 @@ fn reports_existing_request(error: &(dyn std::error::Error + 'static)) -> bool {
 
 /// Reconcile an earlier unknown send whose signed payload is no longer retained.
 ///
-/// A visible owner request with this identity proves delivery. Absence, or an
+/// A visible owner request with a completed publication marker proves delivery. Absence, or an
 /// unreadable lookup, proves nothing: the original write may still be in
 /// flight. Both return [`DeliveryUnconfirmed`] so the identity stays
 /// unresolved and no fresh request is minted.
@@ -315,7 +315,7 @@ pub async fn reconcile_unretained_submission(
             request_id: request_id.to_string(),
             session_id: session_id.to_string(),
             node_did: node_did.to_string(),
-            agent_id: None,
+            agent_did: None,
         }),
         Ok(false) | Err(_) => Err(DeliveryUnconfirmed {
             request_id: request_id.to_string(),
@@ -348,7 +348,7 @@ async fn submitted_request_exists(
     let response = gents::store::config_client::query_graphql_with_options(
         endpoint,
         &format!(
-            "{{AgentRequest(filter:{{{scope},request_id:{{_eq:\"{logical}\"}}}}){{request_id}}}}"
+            "{{AgentRequest(filter:{{{scope},request_id:{{_eq:\"{logical}\"}}}}){{request_id relationships_pending}}}}"
         ),
         GraphqlRequestOptions {
             timeout: Duration::from_secs(30),
@@ -363,7 +363,9 @@ async fn submitted_request_exists(
         .and_then(Value::as_array)
         .context("request receipt query omitted rows")?;
     ensure!(rows.len() <= 1, "ambiguous scoped submission receipt");
-    Ok(!rows.is_empty())
+    Ok(rows
+        .first()
+        .is_some_and(|row| row["relationships_pending"] == false))
 }
 
 /// Resolve an earlier unknown submission outcome without re-preparing it.
@@ -376,10 +378,10 @@ pub async fn resolve_unresolved_submission(
     access: &ConfigAccess,
     pending: &UnresolvedSubmission,
 ) -> Result<SubmittedRequest> {
-    match owner_receipt(access, &pending.create).await {
+    match gents::request::lifecycle::reconcile_client_request(access, &pending.create).await {
         Ok(true) => Ok(pending.result.clone()),
         Ok(false) => commit_signed_submission(access, pending.clone()).await,
-        Err(error) => Err(pending.outcome_unknown(Some(error))),
+        Err(error) => Err(pending.outcome_unknown(Some(error.into()))),
     }
 }
 
@@ -392,7 +394,7 @@ fn test_access(url: &str) -> ConfigAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use serde_json::json;
     use wiremock::matchers::{body_string_contains, method, path};
@@ -401,7 +403,7 @@ mod tests {
     const SIGNER_DID: &str = "did:key:z6MkownerReceiptTest";
     const REQUEST_ID: &str = "request-receipt-1";
     const SESSION_ID: &str = "session-receipt-1";
-    const AGENT_ID: &str = "agent-receipt-1";
+    const AGENT_DID: &str = "agent-receipt-1";
 
     fn test_create() -> AgentRequestCreate {
         let mut create = AgentRequestCreate::base(
@@ -409,7 +411,7 @@ mod tests {
             REQUEST_ID,
             SIGNER_DID,
             SIGNER_DID,
-            AGENT_ID,
+            AGENT_DID,
             SESSION_ID,
             "receipt reconciliation",
             "interactive",
@@ -422,7 +424,7 @@ mod tests {
 
     fn test_mutation(create: &AgentRequestCreate) -> String {
         create
-            .graphql_mutation()
+            .graphql_client_publication_mutation()
             .expect("test create renders a canonical mutation")
     }
 
@@ -431,7 +433,7 @@ mod tests {
             request_id: REQUEST_ID.to_string(),
             session_id: SESSION_ID.to_string(),
             node_did: SIGNER_DID.to_string(),
-            agent_id: Some(AGENT_ID.to_string()),
+            agent_did: Some(AGENT_DID.to_string()),
         }
     }
 
@@ -474,7 +476,7 @@ mod tests {
             .unwrap();
         let pending = test_pending();
         journal::save(&node, &pending).await.unwrap();
-        node.shutdown().await;
+        node.shutdown().await.unwrap();
         drop(node);
 
         let reopened = std::sync::Arc::new(
@@ -512,7 +514,7 @@ mod tests {
             .await
             .unwrap()
             .is_none());
-        reopened.shutdown().await;
+        reopened.shutdown().await.unwrap();
     }
 
     fn receipt_row(create: &AgentRequestCreate) -> Value {
@@ -800,7 +802,7 @@ mod tests {
         let mut different_signature = pending.create.clone();
         different_signature.admission.signature[0] ^= 1;
         assert!(owner_receipt(&access, &different_signature).await.is_err());
-        node.shutdown().await;
+        node.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -819,8 +821,8 @@ mod tests {
         let error = reconcile_commit_failure(
             &access,
             pending.clone(),
-            ReceiptWriteError::Write(
-                gents::store::config_client::ConfigClientError::StoreClaimHeld,
+            ClientSubmissionError::Unconfirmed(
+                gents::store::config_client::ConfigClientError::StoreClaimHeld.into(),
             ),
         )
         .await
@@ -831,7 +833,7 @@ mod tests {
             .expect("local non-GraphQL errors remain uncertain");
         assert_eq!(unknown.request_id, pending.request_id);
         assert_eq!(unknown.pending.mutation, pending.mutation);
-        node.shutdown().await;
+        node.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -925,7 +927,11 @@ mod tests {
     async fn unretained_present_receipt_resolves_to_original_identity() {
         let server = MockServer::start().await;
         let result = test_result();
-        mount_receipt(&server, vec![json!({"request_id": result.request_id})]).await;
+        mount_receipt(
+            &server,
+            vec![json!({"request_id": result.request_id, "relationships_pending": false})],
+        )
+        .await;
         let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
 
         let resolved = reconcile_unretained_submission(

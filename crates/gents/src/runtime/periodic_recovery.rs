@@ -1,5 +1,5 @@
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 
 use crate::inference::admission::{InferenceCall, InferenceCallRecoveryReport};
 use crate::inference::llm::tool::BoxFuture;
@@ -163,7 +163,7 @@ pub async fn run_periodic_recovery_sweeps(
                 tracing::warn!(
                     sweep_ids = ?metadata.sweep_ids,
                     rust_function = metadata.rust_function,
-                    error = %error,
+                    error = %gents_protocol::error_chain::ErrorChain(error.as_ref()),
                     "periodic recovery sweep failed; continuing remaining sweeps and retrying next tick"
                 );
             }

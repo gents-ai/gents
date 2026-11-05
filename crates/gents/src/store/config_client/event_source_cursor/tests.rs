@@ -45,7 +45,7 @@ async fn publish(access: &ConfigAccess, docs: Vec<DesiredStateApplyDocument>) ->
         .await
 }
 
-async fn fixture(enabled: bool) -> Result<(Arc<defra_node::EmbeddedNode>, ConfigAccess)> {
+async fn fixture(enabled: bool) -> Result<(Arc<defra_node::Node>, ConfigAccess)> {
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
@@ -57,8 +57,8 @@ async fn fixture(enabled: bool) -> Result<(Arc<defra_node::EmbeddedNode>, Config
     publish(&access, vec![
         document(Collection::InferenceBackend, json!({"backend_id":"backend", "name":"Test", "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:8000/v1", "auth":{"kind":"unauthenticated"}})),
         document(Collection::InferenceProfile, json!({"profile_id":"profile", "backend_id":"backend", "model_name":"model"})),
-        document(Collection::Agent, json!({"agent_id":"behavior", "inference_profile_id":"profile"})),
-        document(Collection::Task, json!({"task_id":"task", "agent_id":"behavior", "prompt_template":"work"})),
+        document(Collection::Agent, json!({"agent_did":"behavior", "inference_profile_id":"profile"})),
+        document(Collection::Task, json!({"task_id":"task", "agent_did":"behavior", "prompt_template":"work"})),
         source("WorkA"), trigger(enabled),
     ]).await?;
     Ok((node, access))
@@ -193,7 +193,7 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
         })
         .await?;
     assert_eq!(cursor(&access, "WorkA").await?, "1");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -221,7 +221,7 @@ async fn source_only_replacement_seeds_disabled_consumers_before_later_arrivals(
     publish(&access, vec![source("WorkA")]).await?;
     assert_eq!(cursor(&access, "WorkA").await?, "0");
     assert_eq!(cursor(&access, "WorkB").await?, "1");
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }
 
@@ -241,6 +241,6 @@ async fn source_registered_before_collection_retains_its_first_arrival() -> Resu
         page["data"]["_documentArrivals"]["entries"],
         json!([{"docID":first,"cursor":"1"}])
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
     Ok(())
 }

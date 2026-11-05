@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadPresentation, PayloadRef,
@@ -212,6 +212,12 @@ async fn claim_fixture_request(
     if processing {
         crate::request::lifecycle::RequestLifecycle::begin_owned_execution_durable_with_clock(
             &node,
+            identity::Did::new(
+                node.node_identity_did()
+                    .expect("fixture node identity")
+                    .to_owned(),
+            )
+            .unwrap(),
             &request_doc_id,
             &generation,
             || now,
@@ -1266,6 +1272,7 @@ impl NativeCanonicalExecution {
         self.physical_tool_request = physical_tool_request;
         let compaction = crate::session::load_prompt_compaction_state(
             &self.node,
+            &self.node_did,
             &self.session_id,
             &self.node_did,
             Some(&self.node_did),
@@ -1395,13 +1402,13 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     .await?,
             );
             crate::ensure_runtime_schemas(&node).await?;
-            crate::test_support::install_test_agent(&node, &node_did, "general").await;
+            crate::test_support::install_test_agent(&node, &node_did, &node_did).await;
             let request_identity =
                 |logical_id: String| crate::request::lifecycle::RequestIdentity {
                     requester_did: None,
                     request_id: logical_id,
                     node_did: node_did.clone(),
-                    agent_id: "general".to_owned(),
+                    agent_did: node_did.clone(),
                     session_id: initial_session_id.clone(),
                     content: "lean native execution".to_owned(),
                     execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
@@ -1561,7 +1568,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 );
             }
             let scoped_session = node.execute(&format!(
-                r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}, limit: 2) {{ session_id node_did requester_did agent_id created_at observation }} }}"#,
+                r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}, limit: 2) {{ session_id node_did requester_did agent_did created_at observation }} }}"#,
                 crate::store::graphql::escape_graphql_string(&session_id),
                 crate::store::graphql::escape_graphql_string(&node_did),
                 crate::store::graphql::escape_graphql_string(&node_did),
@@ -1580,7 +1587,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 session.session_id == session_id
                     && session.node_did == node_did
                     && session.requester_did.as_deref() == Some(node_did.as_str())
-                    && session.agent_id == "general"
+                    && session.agent_did == "general"
                     && session
                         .observation
                         .as_ref()
@@ -1673,6 +1680,14 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     let prepared = native.provider_segment(record, *generation)?;
                     let doc_id = crate::request::streaming::canonical::append_provider_segment_at(
                         &native.node,
+                        identity::Did::new(
+                            native
+                                .node
+                                .node_identity_did()
+                                .expect("fixture node identity")
+                                .to_owned(),
+                        )
+                        .unwrap(),
                         &symbolic_generation(*generation),
                         &prepared,
                         native.fixture_time(*now)?,
@@ -1757,7 +1772,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                             let node = Arc::clone(&nested_node);
                             Box::pin(async move {
                                 crate::request::streaming::canonical::append_provider_segment_at(
-                                    &node,
+                                    &node, identity::Did::new(node.node_identity_did().expect("fixture node identity").to_owned()).unwrap(),
                                     &generation,
                                     &prepared,
                                     now,
@@ -2101,6 +2116,13 @@ impl NativeCanonicalExecution {
         };
         let result = crate::request::streaming::canonical::close_provider_attempt_at(
             &self.node,
+            identity::Did::new(
+                self.node
+                    .node_identity_did()
+                    .expect("fixture node identity")
+                    .to_owned(),
+            )
+            .unwrap(),
             &symbolic_generation(generation),
             &prepared,
             close,
@@ -2218,6 +2240,13 @@ impl NativeCanonicalExecution {
         });
         let result = crate::request::streaming::canonical::close_provider_attempt_at(
             &self.node,
+            identity::Did::new(
+                self.node
+                    .node_identity_did()
+                    .expect("fixture node identity")
+                    .to_owned(),
+            )
+            .unwrap(),
             &symbolic_generation(generation),
             &closing,
             crate::request::streaming::canonical::ProviderAttemptClose::Partial,
@@ -2394,6 +2423,13 @@ impl NativeCanonicalExecution {
             .to_rfc3339();
         let published = crate::request::streaming::canonical::publish_provider_turn_at(
             &self.node,
+            identity::Did::new(
+                self.node
+                    .node_identity_did()
+                    .expect("fixture node identity")
+                    .to_owned(),
+            )
+            .unwrap(),
             &symbolic_generation(generation),
             crate::request::streaming::canonical::ProviderPublicationPlan {
                 final_flush: Some(final_flush),
@@ -3122,7 +3158,7 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
             "{label} deadline must leave exact canonical output records unchanged"
         );
     }
-    native.node.shutdown().await;
+    native.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -3267,7 +3303,7 @@ async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
         native.observe(false).await.unwrap(),
         *expected_after_recovery
     );
-    native.node.shutdown().await;
+    native.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -3320,7 +3356,7 @@ async fn conflicting_spawned_child_document_is_an_adapter_gap_not_a_native_rejec
             .contains("native spawned child maps to symbolic document"),
         "unexpected adapter error: {error}"
     );
-    native.node.shutdown().await;
+    native.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
@@ -3370,7 +3406,7 @@ async fn terminal_request_without_tool_handoff_still_reports_in_flight() {
     assert_eq!(after.tool_state.as_deref(), Some("running"));
     assert_eq!(after.tool_stuck_since, None);
     assert!(after.in_flight);
-    native.node.shutdown().await;
+    native.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]

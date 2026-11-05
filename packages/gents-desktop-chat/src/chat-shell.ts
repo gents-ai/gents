@@ -60,6 +60,7 @@ export type ChatBlockedReason =
   | "clientOffline"
   | "nodeNotSelected"
   | "routeNotReady"
+  | "runtimeNotConnected"
   | "agentUnavailable"
   | "composerEmpty"
   | "submittingRequest"
@@ -205,6 +206,8 @@ function hintFor(reason: ChatBlockedReason) {
       return "Select a node before sending";
     case "routeNotReady":
       return "Secure route to the node is not ready";
+    case "runtimeNotConnected":
+      return "The runtime connection is not ready";
     case "agentUnavailable":
       return "The selected agent is unavailable";
     case "composerEmpty":
@@ -310,6 +313,7 @@ function activityStatusFor(
     case "clientOffline":
     case "nodeNotSelected":
     case "routeNotReady":
+    case "runtimeNotConnected":
     case "agentUnavailable":
       return admissionStatus ? chatActivity(admissionStatus) : null;
     case "submittingRequest":
@@ -484,10 +488,11 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
           ? "clientOffline"
           : admissionStatus.layer === "selection"
             ? "nodeNotSelected"
-            : admissionStatus.layer === "p2p" ||
-                admissionStatus.layer === "route"
-              ? "routeNotReady"
-              : "agentUnavailable";
+            : admissionStatus === input.operationalState?.connection
+              ? "runtimeNotConnected"
+              : admissionStatus.layer === "p2p" || admissionStatus.layer === "route"
+                ? "routeNotReady"
+                : "agentUnavailable";
       return {
         kind: "disabled",
         reason,

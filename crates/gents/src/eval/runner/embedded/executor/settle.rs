@@ -1,14 +1,12 @@
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
 
-use super::evidence::session_requests;
-use crate::defra_node::EmbeddedNode;
-use crate::eval::runner::embedded::observe::{collect_request_evidence, RequestEvidence};
-use crate::store::graphql::graphql_with_transaction_retry;
+use super::evidence::session_requests_with_access;
+use crate::eval::runner::embedded::observe::RequestEvidence;
+use crate::ConfigAccess;
 
 /// How long every request must stay terminal before the home counts as quiet:
 /// a trigger fire, a queued delivery or a goal continuation writes its request
@@ -23,11 +21,11 @@ pub(super) fn remaining_of(deadline: Option<Duration>, started: Instant) -> Opti
 }
 
 /// Absent `budget` waits until the home is quiet.
-pub(super) async fn settle_home(node: &EmbeddedNode, budget: Option<Duration>) -> Result<bool> {
+pub(super) async fn settle_home(access: &ConfigAccess, budget: Option<Duration>) -> Result<bool> {
     let started = Instant::now();
     let mut quiet: Option<(Instant, usize)> = None;
     loop {
-        let (total, running) = request_counts(node).await?;
+        let (total, running) = request_counts(access).await?;
         let now = Instant::now();
         quiet = match quiet {
             Some((since, seen)) if running == 0 && seen == total => Some((since, seen)),
@@ -44,16 +42,12 @@ pub(super) async fn settle_home(node: &EmbeddedNode, budget: Option<Duration>) -
         tokio::time::sleep(left.map_or(SETTLE_POLL, |left| SETTLE_POLL.min(left))).await;
     }
 }
-async fn request_counts(node: &EmbeddedNode) -> Result<(usize, usize)> {
-    let response = graphql_with_transaction_retry(
-        node,
-        "{ AgentRequest { lifecycle_state } }",
-        "eval trial settle",
-    )
-    .await?;
+async fn request_counts(access: &ConfigAccess) -> Result<(usize, usize)> {
+    let response = access
+        .execute("{ AgentRequest { lifecycle_state } }")
+        .await?;
     let rows = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("AgentRequest"))
         .and_then(Value::as_array)
         .map(Vec::as_slice)
@@ -71,18 +65,22 @@ async fn request_counts(node: &EmbeddedNode) -> Result<(usize, usize)> {
 }
 
 pub(super) async fn extend_with_later_requests(
-    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
     session_id: &str,
     request_id: &str,
     evidence: &mut RequestEvidence,
 ) -> Result<()> {
-    let requests = session_requests(node, session_id).await?;
+    let requests = session_requests_with_access(access, session_id).await?;
     let later = requests
         .iter()
         .skip_while(|request| request.request_id != request_id)
         .skip(1);
     for request in later {
-        let more = collect_request_evidence(node, &request.request_id).await?;
+        let more = crate::eval::runner::embedded::observe::collect_request_evidence_with_access(
+            access,
+            &request.request_id,
+        )
+        .await?;
         evidence.messages.extend(more.messages);
         evidence.tool_calls.extend(more.tool_calls);
         evidence.inference_calls.extend(more.inference_calls);

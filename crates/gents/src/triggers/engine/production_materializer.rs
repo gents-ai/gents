@@ -2,7 +2,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use tokio::sync::watch;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -30,23 +30,32 @@ impl ProductionMaterializer {
         Self { node, snapshot_rx }
     }
 
-    fn runtime_actor(&self) -> Result<::identity::Did> {
+    fn trigger_actor(&self, trigger_id: &str) -> Result<::identity::Did> {
         let snapshot = self.snapshot_rx.borrow();
-        let node = snapshot
-            .node
-            .as_ref()
-            .context("active runtime snapshot has no node ACP actor")?;
-        ::identity::Did::new(node.identity.did().to_owned())
-            .context("runtime node DID is not ACP-addressable")
+        let task = snapshot
+            .active_event_triggers
+            .get(trigger_id)
+            .map(|trigger| &trigger.task)
+            .or_else(|| {
+                snapshot
+                    .active_schedules
+                    .get(trigger_id)
+                    .map(|schedule| &schedule.task)
+            })
+            .with_context(|| format!("trigger {trigger_id} has no configured agent"))?;
+        let agent = snapshot
+            .agent(&task.agent_did)
+            .with_context(|| format!("trigger agent {} is not loaded", task.agent_did))?;
+        ::identity::Did::new(agent.agent_did().to_owned()).context("trigger agent DID is invalid")
     }
 
     fn resolve_agent(&self, task: &ResolvedTask) -> Result<(String, String, u64, String)> {
         let snapshot = self.snapshot_rx.borrow().clone();
-        let agent = snapshot.agent(&task.agent_id).ok_or_else(|| {
+        let agent = snapshot.agent(&task.agent_did).ok_or_else(|| {
             let reason = snapshot
-                .unavailable_public_message(&task.agent_id)
+                .unavailable_public_message(&task.agent_did)
                 .map(ToOwned::to_owned)
-                .unwrap_or_else(|| format!("agent {} is not loaded", task.agent_id));
+                .unwrap_or_else(|| format!("agent {} is not loaded", task.agent_did));
             anyhow!("resolving agent for task {}: {reason}", task.task_id)
         })?;
         let backend_id = agent
@@ -56,11 +65,11 @@ impl ProductionMaterializer {
             .ok_or_else(|| {
                 anyhow!(
                     "agent {} has no backend binding; scheduled fires require a backend",
-                    agent.agent_id
+                    agent.agent_did
                 )
             })?;
         Ok((
-            agent.agent_id.clone(),
+            agent.agent_did.clone(),
             agent.node_did().to_string(),
             agent.deadline_duration.as_secs(),
             backend_id,
@@ -81,6 +90,7 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
                 _docID
                 request_id
                 node_did
+                agent_did
                 workspace_id
                 workspace_owner_node_did
                 workspace_authority
@@ -132,8 +142,17 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
         .await
         {
             Ok(()) => {
-                crate::request::lifecycle::activate_workspace_bound_request(node, request_doc_id)
-                    .await?;
+                crate::request::lifecycle::activate_workspace_bound_request(
+                    node,
+                    request_doc_id,
+                    identity::Did::new(
+                        request
+                            .agent_did
+                            .clone()
+                            .context("staged request is missing agent DID")?,
+                    )?,
+                )
+                .await?;
                 recovered += 1;
             }
             Err(error) => tracing::warn!(
@@ -212,7 +231,6 @@ impl MaterializerHandle for ProductionMaterializer {
             prepared_ids.map(|(request, session)| (request.to_owned(), session.to_owned()));
         let delivery = delivery.cloned();
         let resolved = self.resolve_agent(task);
-        let runtime_actor = self.runtime_actor();
         let node = self.node.clone();
         let task_id = task.task_id.clone();
         let task_label = task.display_label().to_string();
@@ -230,8 +248,8 @@ impl MaterializerHandle for ProductionMaterializer {
         let execution_origin = execution_origin_for_trigger_kind(trigger_kind);
 
         Box::pin(async move {
-            let (agent_id, node_did, _deadline_secs, _backend_id) = resolved?;
-            let runtime_actor = runtime_actor?;
+            let (agent_did, node_did, _deadline_secs, _backend_id) = resolved?;
+            let agent_actor = identity::Did::new(agent_did.clone())?;
             crate::request::lifecycle::TriggerExecutionContext::parse(trigger_context.as_deref())?;
             let explicit = WorkspaceLineage::from_trigger_context(trigger_context.as_deref())?;
             let mut workspace = explicit;
@@ -270,9 +288,10 @@ impl MaterializerHandle for ProductionMaterializer {
                     && matches!(trigger_kind, TriggerKind::Event | TriggerKind::Schedule)
                 {
                     crate::session::load_session_requester_scope(
-                        node.as_ref(),
+                        &node,
                         &node_did,
                         &fire.session_id,
+                        &agent_did,
                     )
                     .await?
                 } else {
@@ -285,7 +304,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 };
                 let mut spec = crate::request::lifecycle::materialize::pending_agent_request_spec(
                     &node_did,
-                    &agent_id,
+                    &agent_did,
                     &rendered_prompt,
                     execution_origin,
                     lineage,
@@ -306,7 +325,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 let create = crate::request::lifecycle::materialize::build_request(spec)?;
                 let admission = crate::request::lifecycle::write_trigger_delivery(
                     &node,
-                    runtime_actor,
+                    agent_actor,
                     &prepared,
                     &create,
                 )
@@ -319,7 +338,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 let conversation_title = task_goal_session_title(&task_label, &identity.retry_key);
                 let mut spec = crate::request::lifecycle::materialize::pending_agent_request_spec(
                     &node_did,
-                    &agent_id,
+                    &agent_did,
                     &rendered_prompt,
                     execution_origin,
                     lineage,
@@ -346,7 +365,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 .await?;
                 let enqueued = crate::goal::submit_goal_backed_request_local(
                     &node,
-                    runtime_actor,
+                    agent_actor,
                     &node_did,
                     &identity.session_id,
                     objective,
@@ -374,9 +393,9 @@ impl MaterializerHandle for ProductionMaterializer {
                 let enqueued =
                     write_pending_agent_request_with_lineage_workspace_and_conversation_title(
                         &node,
-                        runtime_actor,
+                        agent_actor,
                         &node_did,
-                        &agent_id,
+                        &agent_did,
                         &rendered_prompt,
                         execution_origin,
                         lineage,
@@ -402,6 +421,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 crate::request::lifecycle::activate_workspace_bound_request(
                     &node,
                     &enqueued.doc_id,
+                    identity::Did::new(agent_did.clone())?,
                 )
                 .await?;
             }
@@ -430,6 +450,7 @@ impl MaterializerHandle for ProductionMaterializer {
         trigger_id: &str,
         excluded_request_id: Option<&str>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<bool>> + Send + '_>> {
+        let actor = self.trigger_actor(trigger_id);
         let node = self.node.clone();
         let escaped_node_did = escape_graphql_string(node_did);
         let escaped_trigger_id = escape_graphql_string(trigger_id);
@@ -460,12 +481,10 @@ impl MaterializerHandle for ProductionMaterializer {
                 trigger_id = escaped_trigger_id,
                 request_exclusion_filter = request_exclusion_filter,
             );
-            let resp = graphql_with_transaction_retry(
-                &node,
-                &query,
-                "query for active runtime AgentRequest by trigger",
-            )
-            .await?;
+            let response = crate::store::config_client::ConfigAccess::local_as(node, actor?)
+                .execute(&query)
+                .await?;
+            let resp = serde_json::from_value(response)?;
             let now = chrono::Utc::now();
             let rows = rows::<AgentRequestRow>(&resp, "AgentRequest")?;
             let found = rows.iter().any(|row| row_gates_serial_fire(row, now));
@@ -479,14 +498,16 @@ impl MaterializerHandle for ProductionMaterializer {
         trigger_id: &str,
         excluded_request_id: Option<&str>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<usize>> + Send + '_>> {
+        let actor = self.trigger_actor(trigger_id);
         let node = self.node.clone();
         let owner = node_did.to_owned();
         let trigger_id = trigger_id.to_owned();
         let excluded = excluded_request_id.map(str::to_owned);
         Box::pin(async move {
+            let actor = actor?;
             crate::store::config_client::ConfigAccess::transact_local_write(
                 &node,
-                None,
+                Some(actor),
                 "trigger.supersede_requests",
                 |txn| {
                     let owner = &owner;
@@ -512,7 +533,7 @@ impl MaterializerHandle for ProductionMaterializer {
         Box::pin(async move {
             let key = crate::triggers::engine::durable::fire_key(&identity);
             crate::store::config_client::ConfigAccess::transact_local_readonly(
-                &self.node, Some(self.runtime_actor()?), "trigger.recover_admitted_fire",
+                &self.node, Some(self.trigger_actor(&identity.trigger_id)?), "trigger.recover_admitted_fire",
                 |txn| { let key = key.clone(); let identity = identity.clone(); Box::pin(async move {
                     let result = txn.execute(&format!(
                         "{{ TriggerFire(filter: {{fire_key: {{_eq: \"{}\"}}}}, limit: 2) {{request_id}} }}",
@@ -545,19 +566,19 @@ impl MaterializerHandle for ProductionMaterializer {
         let task_id = task.task_id.clone();
         let durable_fire_key = durable_fire_key.to_string();
         Box::pin(async move {
-            let (agent_id, node_did, _, _) = resolved?;
+            let (agent_did, node_did, _, _) = resolved?;
             let identity =
                 crate::goal::task_goal_fire_identity(&node_did, &task_id, &durable_fire_key);
             let expected = crate::goal::TaskGoalRequestBinding {
                 node_did: node_did.clone(),
-                agent_id,
+                agent_did,
                 session_id: identity.session_id,
                 request_id: identity.request_id,
                 retry_key: identity.retry_key,
             };
             let query = format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{
-                    request_id node_did agent_id session_id retry_key
+                    request_id node_did agent_did session_id retry_key
                 }} }}"#,
                 escape_graphql_string(&expected.request_id),
             );

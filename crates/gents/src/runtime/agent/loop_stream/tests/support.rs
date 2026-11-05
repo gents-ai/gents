@@ -571,7 +571,7 @@ where
     let session_id = request.session_id.clone();
     let requester_did = request.requester_did.clone();
     let node_did = request.node_did.clone();
-    let agent_id = request.agent_id.clone();
+    let agent_did = request.agent_did.clone();
     let request_id = request.request_id.clone();
     let inherited =
         crate::tools::call::lifecycle::runtime::current_tool_runtime_context().is_some();
@@ -622,7 +622,7 @@ where
         crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
             requester_did,
             Some(node_did),
-            Some(agent_id),
+            Some(agent_did),
             Some(request_id),
             crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_session(
                 deadline,
@@ -638,7 +638,7 @@ where
 }
 
 pub(super) async fn owned_test_hook() -> (
-    Arc<defra_node::EmbeddedNode>,
+    Arc<defra_node::Node>,
     DefraSessionHook,
     crate::request::streaming::DefraStreamWriter,
     crate::request::lifecycle::RequestLifecycle,
@@ -649,7 +649,7 @@ pub(super) async fn owned_test_hook() -> (
 pub(super) async fn owned_test_hook_with_policy(
     policy: FailurePolicy,
 ) -> (
-    Arc<defra_node::EmbeddedNode>,
+    Arc<defra_node::Node>,
     DefraSessionHook,
     crate::request::streaming::DefraStreamWriter,
     crate::request::lifecycle::RequestLifecycle,
@@ -662,7 +662,7 @@ pub(super) async fn owned_test_hook_with_policy(
 pub(super) async fn owned_test_hook_with_identity(
     identity: Arc<dyn crate::NodeIdentity>,
 ) -> (
-    Arc<defra_node::EmbeddedNode>,
+    Arc<defra_node::Node>,
     DefraSessionHook,
     crate::request::streaming::DefraStreamWriter,
     crate::request::lifecycle::RequestLifecycle,
@@ -675,7 +675,7 @@ pub(super) async fn owned_test_hook_with_identity(
 pub(super) async fn owned_test_hook_with_folded_case(
     case: &crate::lean_vocab_test::LeanFoldTurnInputCase,
 ) -> (
-    Arc<defra_node::EmbeddedNode>,
+    Arc<defra_node::Node>,
     DefraSessionHook,
     crate::request::streaming::DefraStreamWriter,
     crate::request::lifecycle::RequestLifecycle,
@@ -697,7 +697,7 @@ async fn owned_test_hook_with_identity_policy(
     policy: FailurePolicy,
     folded_case: Option<&crate::lean_vocab_test::LeanFoldTurnInputCase>,
 ) -> (
-    Arc<defra_node::EmbeddedNode>,
+    Arc<defra_node::Node>,
     DefraSessionHook,
     crate::request::streaming::DefraStreamWriter,
     crate::request::lifecycle::RequestLifecycle,
@@ -709,16 +709,14 @@ async fn owned_test_hook_with_identity_policy(
     let requester_did = identity.as_ref().map(|_| node_did);
     let data_path = std::env::temp_dir().join(format!("agent-owned-loop-{}", uuid::Uuid::new_v4()));
     let builder = match identity.as_ref() {
-        Some(identity) => {
-            defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
-        }
+        Some(identity) => defra_node::Node::builder().with_node_identity_did(identity.did()),
         None => crate::test_support::node_builder(),
     };
     let node = Arc::new(builder.data_path(&data_path).build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let session_id = uuid::Uuid::new_v4().to_string();
     let request_id = uuid::Uuid::new_v4().to_string();
-    crate::session::ensure_session_with_agent_id_and_requester_did(
+    crate::session::ensure_session_with_agent_did_and_requester_did(
         &node,
         &session_id,
         node_did,
@@ -736,7 +734,7 @@ async fn owned_test_hook_with_identity_policy(
                     requester_did: requester_did.map(str::to_owned),
                     request_id: request_id.clone(),
                     node_did: node_did.to_owned(),
-                    agent_id: "general".to_owned(),
+                    agent_did: "general".to_owned(),
                     session_id: session_id.clone(),
                     content: "owned loop test".to_owned(),
                     execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
@@ -754,7 +752,7 @@ async fn owned_test_hook_with_identity_policy(
         .unwrap()
     } else {
         format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "did:test:test", agent_id: "general", session_id: "{}", request_hop: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "did:test:test", agent_did: "general", session_id: "{}", request_hop: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
             crate::store::graphql::escape_graphql_string(&request_id),
             crate::store::graphql::escape_graphql_string(&session_id),
             crate::store::graphql::escape_graphql_string(&request_id),
@@ -782,7 +780,7 @@ async fn owned_test_hook_with_identity_policy(
                     requester_did: Some(node_did.to_owned()),
                     request_id: id.clone(),
                     node_did: node_did.to_owned(),
-                    agent_id: "general".into(),
+                    agent_did: "general".into(),
                     session_id: session_id.clone(),
                     content: folded.content.clone(),
                     execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,

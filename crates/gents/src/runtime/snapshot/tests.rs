@@ -39,7 +39,7 @@ fn readiness_source_validation_rejects_noncanonical_or_unassigned_defaults() {
     let mut resolved = ResolvedRuntimeSnapshot {
         node: None,
         local_did: String::new(),
-        default_agent_id: "missing".to_string(),
+        default_agent_did: "missing".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -58,10 +58,10 @@ fn readiness_source_validation_rejects_noncanonical_or_unassigned_defaults() {
     };
     assert!(resolved.validate_node_readiness_source().is_err());
 
-    resolved.default_agent_id = " general".to_string();
+    resolved.default_agent_did = " general".to_string();
     assert!(resolved.validate_node_readiness_source().is_err());
 
-    resolved.default_agent_id = "general".to_string();
+    resolved.default_agent_did = "general".to_string();
     assert!(resolved.validate_node_readiness_source().is_ok());
 }
 
@@ -70,7 +70,7 @@ fn configuration_fingerprint_reflects_schedule_set() {
     let base = ResolvedRuntimeSnapshot {
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -87,7 +87,7 @@ fn configuration_fingerprint_reflects_schedule_set() {
         emit_outcome: false,
         task_id: "t1".to_string(),
         name: None,
-        agent_id: "general".to_string(),
+        agent_did: "general".to_string(),
         prompt_template: "do the thing".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -124,7 +124,7 @@ fn configuration_fingerprint_reflects_lsp_configuration() {
     let base = ResolvedRuntimeSnapshot {
         node: None,
         local_did: String::new(),
-        default_agent_id: "general".to_string(),
+        default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::from_iter([(
             "general".to_string(),

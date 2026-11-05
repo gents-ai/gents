@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::embedded::EmbeddedExecutor;
 use gents::eval::runner::{RunOptions, TrialExecutor};
@@ -31,6 +31,41 @@ impl EvalContext {
             owner,
             runtime,
         })
+    }
+
+    pub(crate) async fn default_inference_profile(&self) -> Result<String> {
+        self.access
+            .transact_readonly("eval.default_inference_profile", |txn| {
+                Box::pin(async move {
+                    let (_, node) = gents::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        gents::Collection::Node,
+                        &self.owner,
+                        &self.owner,
+                    )
+                    .await?
+                    .context("node configuration is missing; select --profile explicitly")?;
+                    let node: gents::documents::Node = serde_json::from_value(node)?;
+                    let did = node
+                        .default_agent_did
+                        .context("node has no default agent; select --profile explicitly")?;
+                    let (_, agent) = gents::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        gents::Collection::Agent,
+                        &self.owner,
+                        &did,
+                    )
+                    .await?
+                    .context("default agent is unavailable; select --profile explicitly")?;
+                    let agent: gents::AgentDocument = serde_json::from_value(agent)?;
+                    anyhow::ensure!(
+                        agent.enabled,
+                        "default agent is disabled; select --profile explicitly"
+                    );
+                    Ok(agent.inference_profile_id)
+                })
+            })
+            .await
     }
 
     pub(crate) fn runs_dir(&self) -> PathBuf {

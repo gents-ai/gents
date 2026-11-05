@@ -23,6 +23,11 @@ pub const AGENT_MESSAGE_NAME: &str = "AgentMessage";
 pub const AGENT_MESSAGE: &str = include_str!("../schemas/agent/agent_message.graphql");
 pub const AGENT_SESSION_NAME: &str = "AgentSession";
 pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.graphql");
+pub const AGENT_OWNERSHIP_POLICY: &str =
+    include_str!("../schemas/agent/agent_ownership_policy.yaml");
+pub const AGENT_OWNERSHIP_POLICY_ID: &str =
+    "d23eb42a87668f3bd577087f604fd7919e24873705681fe9e3d1923d7d065c13";
+pub const SESSION_POLICY_RESOURCE: &str = "sessions";
 pub const GOAL_NAME: &str = "Goal";
 pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
 pub const PACK_INSTALLATION_NAME: &str = "PackInstallation";
@@ -33,6 +38,11 @@ pub const MAILBOX_ITEM_NAME: &str = "MailboxItem";
 pub const MAILBOX_ITEM: &str = include_str!("../schemas/agent/mailbox_item.graphql");
 pub const AGENT_TOOL_CALL_NAME: &str = "AgentToolCall";
 pub const AGENT_TOOL_CALL: &str = include_str!("../schemas/agent/agent_tool_call.graphql");
+pub const AGENT_TOOL_CONTROL_NAME: &str = "AgentToolControl";
+pub const AGENT_TOOL_CONTROL: &str = include_str!("../schemas/agent/agent_tool_control.graphql");
+pub const AGENT_TOOL_CONTROL_CLAIM_NAME: &str = "AgentToolControlClaim";
+pub const AGENT_TOOL_CONTROL_CLAIM: &str =
+    include_str!("../schemas/agent/agent_tool_control_claim.graphql");
 pub const TOOL_FILE_CHANGE_NAME: &str = "ToolFileChange";
 pub const TOOL_FILE_CONTENT_NAME: &str = "ToolFileContent";
 pub const TOOL_FILE_CHANGE: &str = include_str!("../schemas/agent/tool_file_change.graphql");
@@ -132,8 +142,6 @@ pub const PEER_REGISTRY_NAME: &str = "PeerRegistry";
 pub const PEER_REGISTRY: &str = include_str!("../schemas/agent/peer_registry.graphql");
 pub const NETWORK_NAME: &str = "Network";
 pub const NETWORK: &str = include_str!("../schemas/agent/network.graphql");
-pub const PEER_ENDPOINT_NAME: &str = "PeerEndpoint";
-pub const PEER_ENDPOINT: &str = include_str!("../schemas/agent/peer_endpoint.graphql");
 pub const NETWORK_ADMIN_PIN_NAME: &str = "NetworkAdminPin";
 pub const NETWORK_ADMIN_PIN: &str = include_str!("../schemas/agent/network_admin_pin.graphql");
 pub const NETWORK_ENROLLMENT_REQUEST_NAME: &str = "NetworkEnrollmentRequest";
@@ -182,6 +190,9 @@ pub const AGENT_SESSION_INPUT_EDIT: &str =
 pub const AGENT_SESSION_GOAL_CONTROL_NAME: &str = "AgentSessionGoalControl";
 pub const AGENT_SESSION_GOAL_CONTROL: &str =
     include_str!("../schemas/agent/agent_session_goal_control.graphql");
+pub const AGENT_SESSION_GOAL_RECEIPT_NAME: &str = "AgentSessionGoalReceipt";
+pub const AGENT_SESSION_GOAL_RECEIPT: &str =
+    include_str!("../schemas/agent/agent_session_goal_receipt.graphql");
 pub const GOAL_OBSERVATION_NAME: &str = "GoalObservation";
 pub const GOAL_OBSERVATION: &str = include_str!("../schemas/agent/goal_observation.graphql");
 
@@ -239,7 +250,6 @@ pub const ALL: &[&str] = &[
     PEER_PAIRING_APPLIED,
     PEER_REGISTRY,
     NETWORK,
-    PEER_ENDPOINT,
     NETWORK_ADMIN_PIN,
     NETWORK_ENROLLMENT_REQUEST,
     NETWORK_ENROLLMENT_DECISION,
@@ -256,6 +266,9 @@ pub const ALL: &[&str] = &[
     FILE_IMAGE_HYDRATION_RECEIPT,
     AGENT_SESSION_INPUT_EDIT,
     AGENT_SESSION_GOAL_CONTROL,
+    AGENT_SESSION_GOAL_RECEIPT,
+    AGENT_TOOL_CONTROL,
+    AGENT_TOOL_CONTROL_CLAIM,
     GOAL_OBSERVATION,
     EVAL_DEFINITION,
     EVAL_RUN,
@@ -319,7 +332,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     PEER_PAIRING_APPLIED_NAME,
     PEER_REGISTRY_NAME,
     NETWORK_NAME,
-    PEER_ENDPOINT_NAME,
     NETWORK_ADMIN_PIN_NAME,
     NETWORK_ENROLLMENT_REQUEST_NAME,
     NETWORK_ENROLLMENT_DECISION_NAME,
@@ -336,6 +348,9 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     FILE_IMAGE_HYDRATION_RECEIPT_NAME,
     AGENT_SESSION_INPUT_EDIT_NAME,
     AGENT_SESSION_GOAL_CONTROL_NAME,
+    AGENT_SESSION_GOAL_RECEIPT_NAME,
+    AGENT_TOOL_CONTROL_NAME,
+    AGENT_TOOL_CONTROL_CLAIM_NAME,
     GOAL_OBSERVATION_NAME,
     EVAL_DEFINITION_NAME,
     EVAL_RUN_NAME,
@@ -345,42 +360,22 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     PACK_INSTALLATION_NAME,
 ];
 
-pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
+/// Only discovery and enrollment protocol documents may cross a runtime boundary.
+pub const REPLICATED_PROTOCOL_COLLECTION_NAMES: &[&str] = &[
+    PEER_REGISTRY_NAME,
     NODE_DIRECTORY_ENTRY_NAME,
-    NODE_MEMORY_NAME,
-    AGENT_REQUEST_NAME,
-    AGENT_OUTPUT_SEGMENT_NAME,
-    AGENT_SESSION_NAME,
-    GOAL_NAME,
-    GOAL_CREATION_CLAIM_NAME,
-    MAILBOX_ITEM_NAME,
-    AGENT_MESSAGE_NAME,
-    AGENT_TOOL_CALL_NAME,
-    COMPACTION_ENTRY_NAME,
-    TASK_NAME,
-    SCHEDULE_NAME,
-    EVENT_GROUP_STATE_NAME,
-    ISOLATED_WORKSPACE_NAME,
-    WORKSPACE_BINDING_NAME,
-    WORKSPACE_RECEIPT_NAME,
-    CALLBACK_RESULT_NAME,
+    NETWORK_NAME,
+    NETWORK_ENROLLMENT_REQUEST_NAME,
+    NETWORK_ENROLLMENT_DECISION_NAME,
+    NETWORK_AUTHORIZATION_REVISION_NAME,
+    NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
 ];
 
-/// Whole-collection subscriptions would bypass the file-review selection
-/// boundary. These records use filtered control routes or document-scoped push.
-pub const EXPLICIT_DELIVERY_COLLECTION_NAMES: &[&str] = &[
-    FILE_INVENTORY_REQUEST_NAME,
-    FILE_INVENTORY_PAGE_NAME,
-    TOOL_FILE_CHANGE_NAME,
-    TOOL_FILE_CONTENT_NAME,
-    TOOL_FILE_INVENTORY_NAME,
-    FILE_IMAGE_HYDRATION_REQUEST_NAME,
-    FILE_INVENTORY_IMAGE_REQUEST_NAME,
-];
-
-pub fn requires_explicit_delivery(name: &str) -> bool {
-    EXPLICIT_DELIVERY_COLLECTION_NAMES.contains(&name)
+pub fn is_replicated_protocol_collection(name: &str) -> bool {
+    REPLICATED_PROTOCOL_COLLECTION_NAMES.contains(&name)
 }
+
+pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = REPLICATED_PROTOCOL_COLLECTION_NAMES;
 
 /// Sensitive runtime facts that stay on the runtime node; every broad
 /// replication catalog filters these names explicitly.
@@ -393,8 +388,12 @@ pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] = &[
     OPTIMIZATION_JOB_NAME,
 ];
 
-/// Local trust state that must never be learned from peers.
+/// Representative local families; the positive protocol allowlist is exhaustive.
 pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] = &[
+    AGENT_NAME,
+    CALLBACK_BINDING_NAME,
+    CALLBACK_INVOCATION_NAME,
+    CALLBACK_RESULT_NAME,
     NETWORK_ADMIN_PIN_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
     FILE_INVENTORY_REPLY_NAME,
@@ -408,5 +407,5 @@ pub fn is_local_audit_collection(name: &str) -> bool {
 }
 
 pub fn is_local_only_collection(name: &str) -> bool {
-    LOCAL_ONLY_COLLECTION_NAMES.contains(&name)
+    !is_replicated_protocol_collection(name)
 }

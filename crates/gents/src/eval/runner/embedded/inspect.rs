@@ -48,7 +48,9 @@ pub async fn inspect_retained_requests(
         let result = std::panic::AssertUnwindSafe(read_requests(&home))
             .catch_unwind()
             .await;
-        home.node.shutdown().await;
+        if let Err(error) = home.node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down trial node");
+        }
         match result {
             Ok(result) => result,
             Err(panic) => std::panic::resume_unwind(panic),
@@ -97,7 +99,7 @@ async fn read_requests(home: &EmbeddedHome) -> Result<Vec<RetainedRequest>> {
             filter: {{ node_did: {{ _eq: "{}" }} }},
             order: {{ created_at: ASC }}, limit: {}
         ) {{
-            _docID request_id purpose node_did requester_did agent_id session_id
+            _docID request_id purpose node_did requester_did agent_did session_id
             content input lifecycle_state failure_reason created_at execution_origin
             runtime_source_request_id runtime_source_kind
             retry_parent_request retry_parent_request_doc_id retry_root_request
@@ -157,7 +159,7 @@ mod tests {
     }
 
     async fn close(home: EmbeddedHome) {
-        home.node.shutdown().await;
+        home.node.shutdown().await.expect("shutdown node");
     }
 
     #[tokio::test]
@@ -168,7 +170,7 @@ mod tests {
         let identity = KeyIdentity::load_or_create(path.join("node.key"), None).unwrap();
         let did = identity.did().to_owned();
         let node = std::sync::Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .data_path(&path)
                 .with_regolith_options(crate::store::local::storage_backend::regolith_options())
                 .with_node_identity_did(&did)
@@ -177,8 +179,8 @@ mod tests {
                 .unwrap(),
         );
         let policy = node
-            .add_dac_policy(
-                &did,
+            .add_dac_policy_as(
+                &defra_core::RequestContext::default().with_identity(Some(did.clone())),
                 r#"
 name: Retained request reader test
 resources:
@@ -237,7 +239,7 @@ resources:
             .as_array()
             .unwrap()
             .is_empty());
-        node.shutdown().await;
+        node.shutdown().await.expect("shutdown node");
         drop(node);
         let key = std::fs::read(path.join("node.key")).unwrap();
         let at = locator(&did, "trial");
@@ -333,14 +335,14 @@ resources:
             "{missing:#}"
         );
         assert!(!path.join("MANIFEST").exists());
-        let node = crate::defra_node::EmbeddedNode::builder()
+        let node = crate::defra_node::Node::builder()
             .data_path(&path)
             .with_regolith_options(crate::store::local::storage_backend::regolith_options())
             .with_node_identity_did(identity.did())
             .build()
             .await
             .unwrap();
-        node.shutdown().await;
+        node.shutdown().await.expect("shutdown node");
         drop(node);
         for _ in 0..2 {
             let error =

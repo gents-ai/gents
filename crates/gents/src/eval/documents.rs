@@ -20,7 +20,7 @@ pub struct DefinitionRef {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubjectRef {
     pub pack_digest: String,
-    pub agent_id: String,
+    pub agent_slot: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -588,7 +588,7 @@ pub async fn load_verdicts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::defra_node::EmbeddedNode;
+    use crate::defra_node::Node as EmbeddedNode;
     use crate::eval::TAXONOMY_VERSION;
     use std::sync::Arc;
 
@@ -620,7 +620,7 @@ mod tests {
                 label: "baseline".into(),
                 subject: SubjectRef {
                     pack_digest: "sha256:pack".into(),
-                    agent_id: "monitor".into(),
+                    agent_slot: "monitor".into(),
                 },
                 inference_profile_id: "local".into(),
             }],

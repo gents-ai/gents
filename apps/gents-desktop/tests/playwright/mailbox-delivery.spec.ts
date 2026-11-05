@@ -34,14 +34,18 @@ for (const colorScheme of ["light", "dark"] as const) {
         nodeDid: "did:key:z6MkBombadilAgent",
         requestId: "original-answer",
         sessionId: "session-intro",
-        agentId: "default",
+        agentDid: "default",
         content: "",
         causedBySourceDocId: "mailbox-question",
         answer: { option_ids: ["local"], free_text: "Keep this local" },
       },
       "session-intro",
       false,
-      { itemId: "mailbox-question", summary: "This computer\nKeep this local" },
+      {
+        nodeDid: "did:key:z6MkBombadilAgent",
+        itemId: "mailbox-question",
+        summary: "This computer\nKeep this local",
+      },
     );
     await page.evaluate(({ key, value }) => localStorage.setItem(key, value), {
       key: chatDraftKey(draft),

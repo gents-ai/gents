@@ -61,7 +61,7 @@ function session(overrides: Partial<DesktopSessionSnapshot>): DesktopSessionSnap
   return {
     sessionId: "session-1",
     nodeDid: "did:test:node",
-    agentId: "agent-default",
+    agentDid: "agent-default",
     title: "Session",
     previewText: null,
     status: "processing",

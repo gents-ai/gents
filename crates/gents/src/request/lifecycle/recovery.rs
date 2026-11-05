@@ -25,7 +25,6 @@ impl RequestLifecycle {
         node_did: &str,
     ) -> Result<RecoveryReport> {
         let active = recover_active_requests(node, node_did).await?;
-        crate::triggers::engine::durable::recover_outcomes(node, node_did).await?;
         let background_wakes_redriven = Self::redrive_failed_background_wakeups(node, node_did)
             .await?
             .redriven;
@@ -74,11 +73,16 @@ impl RequestLifecycle {
     ) -> Result<TerminalRedriveReport> {
         let escaped_node_did = escape_graphql_string(node_did);
         let terminal_states = RequestLifecycleState::terminal_graphql_list();
-        let query = format!(
-            r#"{{
+        let mut rows = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for actor in configured_agent_actors(node, node_did).await? {
+            let escaped_agent_did = escape_graphql_string(actor.as_str());
+            let query = format!(
+                r#"{{
                 AgentRequest(
                     filter: {{
                         node_did: {{ _eq: "{escaped_node_did}" }},
+                        agent_did: {{ _eq: "{escaped_agent_did}" }},
                         _and: [
                             {{ requester_did: {{ _neq: null }} }},
                             {{ requester_did: {{ _neq: "{escaped_node_did}" }} }}
@@ -94,22 +98,45 @@ impl RequestLifecycle {
                     requester_did
                     lifecycle_state
                     terminal_redrive_attempts
+                    terminalized_at
+                    agent_did
                 }}
             }}"#,
-            limit = TERMINAL_REDRIVE_BATCH_LIMIT,
-            cap = TERMINAL_REDRIVE_CAP,
-        );
+                limit = TERMINAL_REDRIVE_BATCH_LIMIT,
+                cap = TERMINAL_REDRIVE_CAP,
+            );
 
-        let resp = crate::store::graphql::graphql_with_transaction_retry(
-            node,
-            &query,
-            "querying terminal requests to re-drive",
-        )
-        .await?;
+            let response = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor)
+                .execute(&query)
+                .await?;
+            let agent_rows: Vec<AgentRequestRow> =
+                serde_json::from_value(response["data"]["AgentRequest"].clone())
+                    .context("decoding terminal requests to re-drive")?;
+            for row in agent_rows {
+                let doc_id = row
+                    .doc_id
+                    .as_ref()
+                    .context("terminal AgentRequest is missing _docID")?;
+                if seen.insert(doc_id.clone()) {
+                    rows.push(row);
+                }
+            }
+        }
+        rows.sort_by(|a, b| {
+            a.terminalized_at
+                .cmp(&b.terminalized_at)
+                .then_with(|| a.request_id.cmp(&b.request_id))
+        });
+        rows.truncate(TERMINAL_REDRIVE_BATCH_LIMIT);
 
-        let rows: Vec<AgentRequestRow> = crate::store::graphql::rows(&resp, "AgentRequest")?;
-
-        let mut candidates: Vec<(String, String, String, RequestLifecycleState, u32)> = Vec::new();
+        let mut candidates: Vec<(
+            String,
+            String,
+            String,
+            RequestLifecycleState,
+            u32,
+            identity::Did,
+        )> = Vec::new();
         for row in rows {
             let doc_id = row
                 .doc_id
@@ -133,6 +160,10 @@ impl RequestLifecycle {
                 requester_did,
                 lifecycle_state,
                 attempts,
+                identity::Did::new(
+                    row.agent_did
+                        .context("terminal request is missing agent DID")?,
+                )?,
             ));
         }
 
@@ -141,7 +172,7 @@ impl RequestLifecycle {
         } else {
             let documents = candidates
                 .iter()
-                .map(|(doc_id, _, requester_did, _, _)| (doc_id.clone(), requester_did.clone()))
+                .map(|(doc_id, _, requester_did, _, _, _)| (doc_id.clone(), requester_did.clone()))
                 .collect::<Vec<_>>();
             crate::runtime::agent::p2p_reconcile::EmbeddedRemoteP2pAdmin::new(std::sync::Arc::clone(node))
                 .requester_acknowledged("AgentRequest", &documents)
@@ -156,7 +187,7 @@ impl RequestLifecycle {
             scanned: candidates.len(),
             ..Default::default()
         };
-        for (doc_id, request_id, _, lifecycle_state, attempts) in &candidates {
+        for (doc_id, request_id, _, lifecycle_state, attempts, actor) in &candidates {
             let is_acknowledged = acknowledged.contains(doc_id);
             let next_attempts = if is_acknowledged {
                 TERMINAL_REDRIVE_CAP
@@ -183,12 +214,10 @@ impl RequestLifecycle {
                 }}"#,
             );
 
-            let resp = crate::store::config_client::ConfigAccess::write_local(
-                node,
-                "lifecycle.redrive_terminal",
-                &mutation,
-            )
-            .await;
+            let resp =
+                crate::store::config_client::ConfigAccess::local_as(node.clone(), actor.clone())
+                    .write("lifecycle.redrive_terminal", &mutation)
+                    .await;
             let resp = match resp {
                 Ok(resp) => resp,
                 Err(error) => {
@@ -238,11 +267,16 @@ async fn recover_active_requests(
         RequestLifecycleState::Processing,
     ]);
     let escaped_node_did = escape_graphql_string(node_did);
-    let query = format!(
-        r#"{{
+    let mut rows = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for actor in configured_agent_actors(node, node_did).await? {
+        let escaped_agent_did = escape_graphql_string(actor.as_str());
+        let query = format!(
+            r#"{{
             AgentRequest(
                 filter: {{
                     node_did: {{ _eq: "{escaped_node_did}" }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }},
                     lifecycle_state: {{ _in: {active_states} }}
                 }}
             ) {{
@@ -250,21 +284,30 @@ async fn recover_active_requests(
                 request_id
                 node_did
                 requester_did
-                agent_id
+                agent_did
                 session_id
                 interrupt_requested_at
                 execution_generation
                 execution_lease_expires_at
             }}
         }}"#
-    );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "querying active requests for recovery",
-    )
-    .await?;
-    let rows: Vec<AgentRequestRow> = crate::store::graphql::rows(&response, "AgentRequest")?;
+        );
+        let response = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor)
+            .execute(&query)
+            .await?;
+        let agent_rows: Vec<AgentRequestRow> =
+            serde_json::from_value(response["data"]["AgentRequest"].clone())
+                .context("decoding active requests for recovery")?;
+        for row in agent_rows {
+            let doc_id = row
+                .doc_id
+                .as_ref()
+                .context("active AgentRequest is missing _docID")?;
+            if seen.insert(doc_id.clone()) {
+                rows.push(row);
+            }
+        }
+    }
     let now = chrono::Utc::now();
     let mut report = ActiveRequestRecoveryReport {
         requests: TerminalRepairReport {
@@ -424,4 +467,24 @@ fn definitive_output_corruption(error: &anyhow::Error) -> bool {
                 | ReconstructionError::InvalidStructure { .. }
         )
     )
+}
+
+/// Configured agents are the only actors whose requests this runtime may recover.
+pub(super) async fn configured_agent_actors(
+    node: &std::sync::Arc<EmbeddedNode>,
+    node_did: &str,
+) -> Result<Vec<identity::Did>> {
+    let agents = crate::documents::list_agents(node, node_did).await?;
+    let mut actors = std::collections::BTreeSet::new();
+    for agent in agents {
+        anyhow::ensure!(
+            agent.agent_did != node_did,
+            "runtime identity cannot recover agent work"
+        );
+        actors.insert(agent.agent_did);
+    }
+    actors
+        .into_iter()
+        .map(|did| identity::Did::new(did).map_err(Into::into))
+        .collect()
 }

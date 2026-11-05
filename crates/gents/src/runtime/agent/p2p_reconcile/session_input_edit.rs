@@ -2,14 +2,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::session_input_edit::{
     SessionInputEdit, SessionInputEditOutcome, SessionInputEditReceipt, SESSION_INPUT_EDIT_VERSION,
 };
 
 use super::enrollment_store::GraphqlEnrollmentStore;
 #[cfg(test)]
-use super::session_commands::run_session_command_reconciler;
+use super::session_commands::run_session_command_reconciler_with_agents;
 use super::session_commands::{CommandRow, FIELDS};
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::store::graphql::escape_graphql_string;
@@ -104,10 +104,19 @@ async fn authority_rejection(
     let sessions = response["data"]["AgentSession"]
         .as_array()
         .context("missing session scope")?;
-    if sessions.len() != 1
-        || sessions[0]["requester_did"].as_str() != Some(command.requester_did.as_str())
+    if sessions.len() != 1 {
+        return Ok(Some("edit does not identify one canonical session".into()));
+    }
+    let requester = sessions[0]["requester_did"].as_str();
+    if requester.is_none()
+        || command
+            .replacements
+            .iter()
+            .any(|replacement| Some(replacement.requester_did.as_str()) != requester)
     {
-        return Ok(Some("session ownership does not match edit author".into()));
+        return Ok(Some(
+            "replacement changed canonical session provenance".into(),
+        ));
     }
     Ok(None)
 }
@@ -154,8 +163,31 @@ pub(crate) async fn process_command(
     identity: &Arc<dyn NodeIdentity>,
     doc_id: &str,
 ) -> Result<Option<DateTime<Utc>>> {
+    let actor_query = format!(
+        r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ node_did session_id }} }}"#,
+        escape_graphql_string(doc_id)
+    );
+    let response = crate::store::graphql::graphql_with_transaction_retry(
+        node,
+        &actor_query,
+        "input_edit.resolve_agent",
+    )
+    .await?;
+    let rows =
+        crate::store::graphql::rows::<serde_json::Value>(&response, "AgentSessionInputEdit")?;
+    let row = rows.first().context("session command is missing")?;
+    let node_did = row["node_did"]
+        .as_str()
+        .context("session command has no node DID")?;
+    if node_did != identity.did() {
+        return Ok(None);
+    }
+    let session_id = row["session_id"]
+        .as_str()
+        .context("session command has no session ID")?;
+    let actor = crate::session::load_session_agent_did(node, node_did, session_id).await?;
     let store = GraphqlEnrollmentStore::new(node.clone(), identity.clone());
-    ConfigAccess::transact_local_idempotent(node, None, IdempotentTransactionRetry::Standard,
+    ConfigAccess::transact_local_idempotent(node, Some(actor), IdempotentTransactionRetry::Standard,
         "queue.apply_signed_edit", |txn| {
         let store = &store;
         Box::pin(async move {
@@ -180,6 +212,9 @@ pub(crate) async fn process_command(
             }
             let (outcome, reason, request_doc_ids) = match intrinsic_rejection(identity.as_ref(), &command).await {
                 Some(reason) => (SessionInputEditOutcome::Rejected, reason, Vec::new()),
+                None if txn.actor_did() != Some(command.requester_did.as_str()) || command.replacements.iter().any(|create| create.admission.kind
+                    == gents_protocol::request_admission::AgentRequestAdmissionKind::Client) =>
+                    (SessionInputEditOutcome::Rejected, "Pending queue edits require native client authorization, which is unavailable.".into(), Vec::new()),
                 None => match crate::request::lifecycle::queue::persisted_replacements_in_txn(txn, &command.node_did, &command.replacements).await? {
                     crate::request::lifecycle::queue::PersistedReplacements::Exact(ids) => {
                         (SessionInputEditOutcome::Applied, String::new(), ids)
@@ -197,11 +232,15 @@ pub(crate) async fn process_command(
                         };
                         match rejection {
                             Some(reason) => (SessionInputEditOutcome::Rejected, reason, Vec::new()),
-                            None => match crate::request::lifecycle::queue::validate_pending_user_edit_in_txn(txn, &command.node_did, &command.session_id,
-                                &command.requester_did, &command.edit, &command.replacements).await? {
+                            None => {
+                                let session = crate::session::load_agent_session_owner_in_txn(txn, &command.node_did, &command.session_id).await?.context("validated session disappeared")?;
+                                let requester = session.session.requester_did.context("validated session lacks requester provenance")?;
+                                match crate::request::lifecycle::queue::validate_pending_user_edit_in_txn(txn, &command.node_did, &command.session_id,
+                                &requester, &command.requester_did, &command.edit, &command.replacements).await? {
                                 Err(reason) => (SessionInputEditOutcome::Rejected, reason, Vec::new()),
                                 Ok(validated) => (SessionInputEditOutcome::Applied, String::new(),
                                     crate::request::lifecycle::queue::apply_pending_user_edit_in_txn(txn, validated).await?.request_doc_ids),
+                                }
                             },
                         }
                     }

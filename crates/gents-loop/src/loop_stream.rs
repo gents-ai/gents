@@ -123,8 +123,75 @@ where
     M: rig_compat::ProviderModel,
     H: SessionHook + 'static,
 {
-    owned_loop_stream(model, hook, prompt, history, tools, config)
+    drive_admissions(owned_loop_stream(
+        model, hook, prompt, history, tools, config,
+    ))
 }
+
+struct AdmissionWork {
+    future: crate::tool::BoxFuture<'static, ToolCallHookAction>,
+    reply: tokio::sync::oneshot::Sender<ToolCallHookAction>,
+}
+
+enum OwnedLoopItem {
+    Output(LoopStreamItem),
+    Admission(AdmissionWork),
+}
+
+fn admission_work<H>(
+    hook: Arc<H>,
+    name: String,
+    call_id: Option<String>,
+    internal_id: String,
+    arguments: String,
+) -> (
+    AdmissionWork,
+    tokio::sync::oneshot::Receiver<ToolCallHookAction>,
+)
+where
+    H: SessionHook + 'static,
+{
+    let (reply, receiver) = tokio::sync::oneshot::channel();
+    let future = Box::pin(async move {
+        hook.on_tool_call(&name, call_id, &internal_id, &arguments)
+            .await
+    });
+    (AdmissionWork { future, reply }, receiver)
+}
+
+fn drive_admissions<S>(stream: S) -> impl Stream<Item = Result<LoopStreamItem, LoopStreamError>>
+where
+    S: Stream<Item = Result<OwnedLoopItem, LoopStreamError>>,
+{
+    async_stream::stream! {
+        futures::pin_mut!(stream);
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(OwnedLoopItem::Output(item)) => yield Ok(item),
+                Ok(OwnedLoopItem::Admission(work)) => {
+                    let action = work.future.await;
+                    // Return control to the owning select at each handoff boundary.
+                    tokio::task::yield_now().await;
+                    if work.reply.send(action).is_err() {
+                        yield Err(LoopStreamError::new(
+                            crate::error::LoopFailureCause::Tool,
+                            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "tool admission reply receiver closed"),
+                        ));
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                Err(error) => {
+                    yield Err(error);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod admission_tests;
 
 fn owned_loop_stream<M, H>(
     model: M,
@@ -133,7 +200,7 @@ fn owned_loop_stream<M, H>(
     history: Vec<TaggedMessage>,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     config: LoopConfig,
-) -> impl Stream<Item = Result<LoopStreamItem, LoopStreamError>>
+) -> impl Stream<Item = Result<OwnedLoopItem, LoopStreamError>>
 where
     M: CompletionModel + 'static,
     M::StreamingResponse: 'static,
@@ -210,7 +277,7 @@ where
                     folded: config.folded_prompts.clone(),
                 });
                 let (reply, committed) = tokio::sync::oneshot::channel();
-                yield LoopStreamItem::AuthoredInputReady {
+                yield OwnedLoopItem::Output(LoopStreamItem::AuthoredInputReady {
                     context: authored.context,
                     prompt: authored.prompt,
                     folded: authored
@@ -219,12 +286,12 @@ where
                         .map(|folded| (folded.key, folded.message))
                         .collect(),
                     reply,
-                };
+                });
                 new_messages.extend(receive_steering(committed).await?.into_iter().map(|row| TaggedMessage::unassociated(row.message)));
             }
             if hook.is_some() {
                 let (reply, committed) = tokio::sync::oneshot::channel();
-                yield LoopStreamItem::SteeringBoundary { reply };
+                yield OwnedLoopItem::Output(LoopStreamItem::SteeringBoundary { reply });
                 new_messages.extend(receive_steering(committed).await?.into_iter().map(|row| TaggedMessage::unassociated(row.message)));
             }
             let preparation_started = std::time::Instant::now();
@@ -375,13 +442,13 @@ where
                             } = failure;
                             match directive {
                                 PreStreamDirective::RetryAfter { delay, kind } => {
-                                    yield LoopStreamItem::AttemptFailed {
+                                    yield OwnedLoopItem::Output(LoopStreamItem::AttemptFailed {
                                         turn: turn_index,
                                         attempt,
                                         error: classified,
                                         will_retry: true,
                                         backoff: delay,
-                                    };
+                                    });
                                     tracing::warn!(
                                         turn = turn_index,
                                         attempt,
@@ -407,13 +474,13 @@ where
                                         });
                                     }
                                     retry.mark_repair_used();
-                                    yield LoopStreamItem::AttemptFailed {
+                                    yield OwnedLoopItem::Output(LoopStreamItem::AttemptFailed {
                                         turn: turn_index,
                                         attempt,
                                         error: classified,
                                         will_retry: true,
                                         backoff: std::time::Duration::ZERO,
-                                    };
+                                    });
                                     request = repair_and_rebuild_request(
                                         &model,
                                         &mut history,
@@ -434,13 +501,13 @@ where
                                             attempt,
                                         });
                                     }
-                                    yield LoopStreamItem::AttemptFailed {
+                                    yield OwnedLoopItem::Output(LoopStreamItem::AttemptFailed {
                                         turn: turn_index,
                                         attempt,
                                         error: classified,
                                         will_retry: planned.is_ok(),
                                         backoff: std::time::Duration::ZERO,
-                                    };
+                                    });
                                     if let Err(terminal_reason) = planned {
                                         Err(StreamingError::Completion(
                                             CompletionError::ProviderError(terminal_reason),
@@ -471,13 +538,13 @@ where
                                 PreStreamDirective::Fail { reason } => {
                                     let terminal_reason =
                                         terminal_pre_stream_retry_reason(&classified, attempt, reason);
-                                    yield LoopStreamItem::AttemptFailed {
+                                    yield OwnedLoopItem::Output(LoopStreamItem::AttemptFailed {
                                         turn: turn_index,
                                         attempt,
                                         error: classified,
                                         will_retry: false,
                                         backoff: std::time::Duration::ZERO,
-                                    };
+                                    });
                                     Err(StreamingError::Completion(
                                         CompletionError::ProviderError(terminal_reason),
                                     ))?;
@@ -497,11 +564,11 @@ where
                         format!("invalid rendered-request capture scope: {error}"),
                     ))
                 })?;
-                yield LoopStreamItem::ProviderAttemptStarted {
+                yield OwnedLoopItem::Output(LoopStreamItem::ProviderAttemptStarted {
                     turn: turn_index,
                     attempt,
                     capture_scope,
-                };
+                });
                 Some(capture_scope)
             } else if hook.is_some() {
                 Err(StreamingError::Completion(CompletionError::ProviderError(
@@ -555,7 +622,7 @@ where
                                         CompletionError::ProviderError(error.to_string())
                                     ))?;
                             }
-                            yield LoopStreamItem::ProviderAudit(observation);
+                            yield OwnedLoopItem::Output(LoopStreamItem::ProviderAudit(observation));
                         }
                         (Some(None), _) => audit_receiver = None,
                         (_, Some(item)) => break item.map_or_else(
@@ -579,7 +646,7 @@ where
                                     CompletionError::ProviderError(error.to_string())
                                 ))?;
                         }
-                        yield LoopStreamItem::ProviderAudit(observation);
+                        yield OwnedLoopItem::Output(LoopStreamItem::ProviderAudit(observation));
                     }
                 }
                 let Some(item) = item else { break; };
@@ -612,13 +679,13 @@ where
                         if let Some(directive) = directive {
                             match directive {
                                 PreStreamDirective::RetryAfter { delay, kind } => {
-                                    yield LoopStreamItem::AttemptFailed {
+                                    yield OwnedLoopItem::Output(LoopStreamItem::AttemptFailed {
                                         turn: turn_index,
                                         attempt,
                                         error: classified,
                                         will_retry: true,
                                         backoff: delay,
-                                    };
+                                    });
                                     tracing::warn!(
                                         turn = turn_index,
                                         attempt,
@@ -645,13 +712,13 @@ where
                                         });
                                     }
                                     retry.mark_repair_used();
-                                    yield LoopStreamItem::AttemptFailed {
+                                    yield OwnedLoopItem::Output(LoopStreamItem::AttemptFailed {
                                         turn: turn_index,
                                         attempt,
                                         error: classified,
                                         will_retry: true,
                                         backoff: std::time::Duration::ZERO,
-                                    };
+                                    });
                                     request = repair_and_rebuild_request(
                                         &model,
                                         &mut history,
@@ -673,13 +740,13 @@ where
                                             attempt,
                                         });
                                     }
-                                    yield LoopStreamItem::AttemptFailed {
+                                    yield OwnedLoopItem::Output(LoopStreamItem::AttemptFailed {
                                         turn: turn_index,
                                         attempt,
                                         error: classified,
                                         will_retry: planned.is_ok(),
                                         backoff: std::time::Duration::ZERO,
-                                    };
+                                    });
                                     if let Err(terminal_reason) = planned {
                                         Err(StreamingError::Completion(
                                             CompletionError::ProviderError(terminal_reason),
@@ -714,13 +781,13 @@ where
                                         attempt,
                                         reason,
                                     );
-                                    yield LoopStreamItem::AttemptFailed {
+                                    yield OwnedLoopItem::Output(LoopStreamItem::AttemptFailed {
                                         turn: turn_index,
                                         attempt,
                                         error: classified,
                                         will_retry: false,
                                         backoff: std::time::Duration::ZERO,
-                                    };
+                                    });
                                     Err(StreamingError::Completion(
                                         CompletionError::ProviderError(terminal_reason),
                                     ))?;
@@ -743,11 +810,11 @@ where
                         }
                         match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
                             MidStreamDirective::RetractAndResample { delay } => {
-                                yield LoopStreamItem::TurnRetracted {
+                                yield OwnedLoopItem::Output(LoopStreamItem::TurnRetracted {
                                     turn: turn_index,
                                     attempt,
                                     backoff: delay,
-                                };
+                                });
                                 tracing::warn!(
                                     turn = turn_index,
                                     attempt,
@@ -786,7 +853,7 @@ where
                     StreamedAssistantContent::Text(text) => {
                         turn_text.push_str(&text.text);
                         accumulator.push_text(&text.text);
-                        yield LoopStreamItem::Text(text.text);
+                        yield OwnedLoopItem::Output(LoopStreamItem::Text(text.text));
                     }
                     StreamedAssistantContent::Reasoning(reasoning) => {
                         let reasoning = rig_compat::from_rig_reasoning(&reasoning);
@@ -798,11 +865,11 @@ where
                                     error.to_string(),
                                 ))),
                             ))?;
-                        yield LoopStreamItem::Reasoning(reasoning);
+                        yield OwnedLoopItem::Output(LoopStreamItem::Reasoning(reasoning));
                     }
                     StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
                         accumulator.push_reasoning_delta(id.clone(), &reasoning);
-                        yield LoopStreamItem::ReasoningDelta { id, reasoning };
+                        yield OwnedLoopItem::Output(LoopStreamItem::ReasoningDelta { id, reasoning });
                     }
                     StreamedAssistantContent::ToolCall { mut tool_call, internal_call_id } => {
                         if let Some(definition) = advertised_tools.iter().find(|tool| tool.name == tool_call.function.name) {
@@ -827,10 +894,10 @@ where
                         }
                         let native_call = rig_compat::from_rig_tool_call(&tool_call);
                         accumulator.push_tool_call(native_call.clone());
-                        yield LoopStreamItem::ToolCall {
+                        yield OwnedLoopItem::Output(LoopStreamItem::ToolCall {
                             tool_call: native_call,
                             internal_call_id: internal_call_id.clone(),
-                        };
+                        });
 
                         pending_calls.push((tool_call, internal_call_id));
                     }
@@ -909,7 +976,7 @@ where
                     None,
                     pending_results,
                 ) {
-                    yield item;
+                    yield OwnedLoopItem::Output(item);
                 }
                 Err(StreamingError::Completion(CompletionError::ProviderError(reason)))?;
                 unreachable!("Err(..)? above ends the stream");
@@ -919,7 +986,7 @@ where
                 for item in close_streaming_turn(
                     &mut new_messages, &mut accumulator, turn_ids.clone(), None, pending_results,
                 ) {
-                    yield item;
+                    yield OwnedLoopItem::Output(item);
                 }
                 Err(StreamingError::Completion(CompletionError::ProviderError(
                     "provider stream ended without an explicit terminal response".to_string(),
@@ -952,7 +1019,7 @@ where
                     None,
                     pending_results,
                 ) {
-                    yield item;
+                    yield OwnedLoopItem::Output(item);
                 }
                 let ledger = aggregate_token_budget
                     .as_ref()
@@ -975,11 +1042,11 @@ where
             if pending_calls.is_empty() && turn_text.trim().is_empty() {
                 match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
                     MidStreamDirective::RetractAndResample { delay } => {
-                        yield LoopStreamItem::TurnRetracted {
+                        yield OwnedLoopItem::Output(LoopStreamItem::TurnRetracted {
                             turn: turn_index,
                             attempt,
                             backoff: delay,
-                        };
+                        });
                         tracing::warn!(
                             turn = turn_index,
                             attempt,
@@ -1035,11 +1102,11 @@ where
                 }
                 match directive {
                     MidStreamDirective::RetractAndResample { delay } => {
-                        yield LoopStreamItem::TurnRetracted {
+                        yield OwnedLoopItem::Output(LoopStreamItem::TurnRetracted {
                             turn: turn_index,
                             attempt,
                             backoff: delay,
-                        };
+                        });
                         tracing::warn!(
                             turn = turn_index,
                             attempt,
@@ -1087,11 +1154,11 @@ where
                     crate::claude_messages_body::reasoning_witness(content),
                 _ => Vec::new(),
             };
-            yield LoopStreamItem::ProviderTurnReady {
+            yield OwnedLoopItem::Output(LoopStreamItem::ProviderTurnReady {
                 turn: turn_index,
                 attempt,
                 message: accepted_message,
-            };
+            });
             let accepted_source = match (hook.is_some(), replay.request_doc_id.as_ref(), attempt_capture_scope) {
                 (true, Some(request_doc_id), Some(scope)) => {
                     let turn_index = u32::try_from(turn_index).map_err(|_| {
@@ -1143,7 +1210,15 @@ where
                 } else { 0 };
                 if batch_len > 1 {
                     let batch = (0..batch_len).map(|_| pending_calls.pop_front().expect("batch prefix exists")).collect();
-                    let (results, termination) = parallel::run_batch(batch, tools.clone(), hook.clone(), tool_scope.clone(), activity.as_ref().is_some_and(|activity| activity.token_limit_reached())).await;
+                    let (admission_tx, mut admission_rx) = tokio::sync::mpsc::unbounded_channel();
+                    let batch_work = parallel::run_batch(batch, tools.clone(), hook.clone(), tool_scope.clone(), activity.as_ref().is_some_and(|activity| activity.token_limit_reached()), Some(admission_tx));
+                    tokio::pin!(batch_work);
+                    let (results, termination) = loop {
+                        tokio::select! {
+                            Some(work) = admission_rx.recv() => yield OwnedLoopItem::Admission(work),
+                            result = &mut batch_work => break result,
+                        }
+                    };
                     if let Some(reason) = termination {
                         Err(StreamingError::Prompt(Box::new(PromptError::PromptCancelled {
                             chat_history: rig_compat::to_rig_messages(&error_chat_history(&history, &new_messages)),
@@ -1165,7 +1240,7 @@ where
                         pending_results.push((rig_compat::from_rig_tool_call(&result.call), result.internal_id, bounded));
                     }
                     if invalid_tool_progress.exhausted() {
-                        for item in close_streaming_turn(&mut new_messages, &mut accumulator, turn_ids.clone(), accepted_source.clone(), pending_results) { yield item; }
+                        for item in close_streaming_turn(&mut new_messages, &mut accumulator, turn_ids.clone(), accepted_source.clone(), pending_results) { yield OwnedLoopItem::Output(item); }
                         Err(StreamingError::Completion(CompletionError::ProviderError(invalid_tool_progress.exhaustion_reason())))?;
                         unreachable!("invalid tool budget exhaustion ends the stream");
                     }
@@ -1183,7 +1258,7 @@ where
                         accepted_source.clone(),
                         pending_results,
                     ) {
-                        yield item;
+                        yield OwnedLoopItem::Output(item);
                     }
                     Err(StreamingError::Completion(CompletionError::ProviderError(
                         repeated_tool_failure.stop_reason(),
@@ -1236,7 +1311,7 @@ where
                             accepted_source.clone(),
                             pending_results,
                         ) {
-                            yield item;
+                            yield OwnedLoopItem::Output(item);
                         }
                         Err(StreamingError::Completion(CompletionError::ProviderError(
                             invalid_tool_progress.exhaustion_reason(),
@@ -1247,13 +1322,14 @@ where
                 }
                 let call_action = match hook.as_ref() {
                     Some(hook) => {
-                        hook.on_tool_call(
-                            &tool_name,
-                            tool_call.call_id.clone(),
-                            &internal_call_id,
-                            &tool_args,
-                        )
-                        .await
+                        let (work, reply) = admission_work(
+                            Arc::clone(hook), tool_name.clone(), tool_call.call_id.clone(),
+                            internal_call_id.clone(), tool_args.clone(),
+                        );
+                        yield OwnedLoopItem::Admission(work);
+                        reply.await.map_err(|_| StreamingError::Completion(
+                            CompletionError::ProviderError("tool admission handoff closed".to_owned()),
+                        ))?
                     }
                     None => ToolCallHookAction::Continue,
                 };
@@ -1357,7 +1433,7 @@ where
                         accepted_source.clone(),
                         pending_results,
                     ) {
-                        yield item;
+                        yield OwnedLoopItem::Output(item);
                     }
                     Err(StreamingError::Completion(CompletionError::ProviderError(
                         invalid_tool_progress.exhaustion_reason(),
@@ -1369,7 +1445,7 @@ where
             if pending_results.is_empty() {
                 if hook.is_some() {
                     let (reply, committed) = tokio::sync::oneshot::channel();
-                    yield LoopStreamItem::SteeringBoundary { reply };
+                    yield OwnedLoopItem::Output(LoopStreamItem::SteeringBoundary { reply });
                     let committed = receive_steering(committed).await?;
                     if !committed.is_empty() {
                         if let Some(mut message) = accumulator.take_message() {
@@ -1403,17 +1479,17 @@ where
                             crate::output_obligation::continuation_message(&unmet),
                         );
                         new_messages.push(TaggedMessage::unassociated(reminder.clone()));
-                        yield LoopStreamItem::OutputObligationPending { reminder };
+                        yield OwnedLoopItem::Output(LoopStreamItem::OutputObligationPending { reminder });
                         continue 'turns;
                     }
                 }
                 if hook.is_some() {
                     let (reply, decision) = tokio::sync::oneshot::channel();
-                    yield LoopStreamItem::FinishOrIntake { text: turn_text.clone(), reply };
+                    yield OwnedLoopItem::Output(LoopStreamItem::FinishOrIntake { text: turn_text.clone(), reply });
                     match decision.await.map_err(|error| StreamingError::Completion(CompletionError::ProviderError(format!("finish acknowledgment dropped: {error}"))))?
                         .map_err(|error| StreamingError::Completion(CompletionError::ProviderError(format!("finish or intake failed: {}", ErrorChain(&error)))))? {
                         FinishOrIntake::Finished => {
-                            yield LoopStreamItem::Final { text: turn_text.clone() };
+                            yield OwnedLoopItem::Output(LoopStreamItem::Final { text: turn_text.clone() });
                             break 'turns;
                         },
                         FinishOrIntake::Continue(inputs) => {
@@ -1426,7 +1502,7 @@ where
                         }
                     }
                 }
-                yield LoopStreamItem::Final { text: turn_text.clone() };
+                yield OwnedLoopItem::Output(LoopStreamItem::Final { text: turn_text.clone() });
                 break 'turns;
             }
 
@@ -1437,7 +1513,7 @@ where
                 accepted_source,
                 pending_results,
             ) {
-                yield item;
+                yield OwnedLoopItem::Output(item);
             }
             break 'attempts;
         }

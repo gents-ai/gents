@@ -1,9 +1,9 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
 use gents::documents::skills::prompt_slash_skill_selection;
 use gents::request::lifecycle::{ExecutionOrigin, TriggerLineage, DEFAULT_REQUEST_MAX_RETRIES};
-use gents::{build_signed_request, RequestIdentity, RequestSigner, RequestSpec, RetryLink};
+use gents::store::config_client::ConfigAccess;
+use gents::{RequestIdentity, RequestSigner, RequestSpec, RetryLink};
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::RequestInput;
 use serde_json::Value;
@@ -30,7 +30,7 @@ pub(super) fn normalize_authored_content<'a>(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn prepare_request_submission(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     store: &ClientStore,
     session_id: &str,
     node_did: &str,
@@ -38,7 +38,7 @@ pub(crate) async fn prepare_request_submission(
     signer: &dyn gents::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     content: &str,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     options: SubmitRequestOptions,
     request_id: Option<&str>,
 ) -> Result<(
@@ -53,7 +53,7 @@ pub(crate) async fn prepare_request_submission(
     let request_id = request_id
         .map(str::to_owned)
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let binding = resolve_agent_binding(store, node_did, agent_id, Some(session_id))?;
+    let binding = resolve_agent_binding(store, node_did, agent_did, Some(session_id))?;
     if let Some(mailbox_item_id) = options
         .caused_by_source_doc_id
         .as_deref()
@@ -61,11 +61,11 @@ pub(crate) async fn prepare_request_submission(
         .filter(|value| !value.is_empty())
     {
         validate_mailbox_submission_cause(
-            node,
+            access,
             mailbox_item_id,
             requester_did,
             node_did,
-            binding.agent_id.as_deref().unwrap_or(""),
+            binding.agent_did.as_deref().unwrap_or(""),
             session_id,
         )
         .await?;
@@ -73,7 +73,7 @@ pub(crate) async fn prepare_request_submission(
 
     let (retry_parent_request, retry_parent_request_doc_id, retry_root_request, parent_created_at) =
         if let Some(parent_id) = options.retry_parent_request.as_deref() {
-            let parent = fetch_retry_lineage(node, parent_id, node_did, requester_did).await?;
+            let parent = fetch_retry_lineage(access, parent_id, node_did).await?;
             (
                 parent_id.to_string(),
                 Some(parent.doc_id),
@@ -87,7 +87,8 @@ pub(crate) async fn prepare_request_submission(
         };
     let created_at = canonical_request_created_at_after(parent_created_at.as_deref())?;
 
-    let create = build_signed_request(
+    let create = gents::request::lifecycle::build_signed_client_request(
+        access,
         RequestSpec {
             retry: Some(RetryLink {
                 parent_request_id: (!retry_parent_request.is_empty())
@@ -114,7 +115,7 @@ pub(crate) async fn prepare_request_submission(
                     request_id: request_id.clone(),
                     node_did: node_did.to_string(),
                     requester_did: Some(requester_did.to_string()),
-                    agent_id: binding.agent_id.clone().unwrap_or_default(),
+                    agent_did: binding.agent_did.clone().unwrap_or_default(),
                     session_id: session_id.to_string(),
                     content: content.to_string(),
                     execution_origin: ExecutionOrigin::Interactive,
@@ -131,37 +132,31 @@ pub(crate) async fn prepare_request_submission(
             request_id,
             session_id: session_id.to_string(),
             node_did: node_did.to_string(),
-            agent_id: binding.agent_id,
+            agent_did: binding.agent_did,
         },
         create,
     ))
 }
 
 pub(super) async fn validate_mailbox_submission_cause(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     item_id: &str,
     requester_did: &str,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     session_id: &str,
 ) -> Result<()> {
     let query = format!(
         r#"query {{
             MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{
-                requester_did status action target_node_did target_agent_id session_id
+                requester_did status action target_node_did target_agent_did session_id
             }}
         }}"#,
         escape_graphql_string(item_id)
     );
-    let response = gents::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "validate mailbox submission cause",
-    )
-    .await?;
+    let response = access.execute(&query).await?;
     let rows = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("MailboxItem"))
         .and_then(Value::as_array)
         .context("mailbox cause query returned no row array")?;
@@ -170,16 +165,13 @@ pub(super) async fn validate_mailbox_submission_cause(
     }
     let row = &rows[0];
     let field = |name: &str| row.get(name).and_then(Value::as_str).unwrap_or("");
-    if field("requester_did") != requester_did {
-        bail!("mailbox submission cause is owned by another requester");
-    }
     if field("status") != "open" {
         bail!("mailbox submission cause is no longer open");
     }
     if !matches!(field("action"), "start_request" | "write_document") {
         bail!("mailbox submission cause does not open a compose surface");
     }
-    if field("target_node_did") != node_did || field("target_agent_id") != agent_id {
+    if field("target_node_did") != node_did || field("target_agent_did") != agent_did {
         bail!("mailbox submission route does not match the target agent");
     }
     if let Some(expected_session) = row
@@ -188,6 +180,9 @@ pub(super) async fn validate_mailbox_submission_cause(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
+        if field("requester_did") != requester_did {
+            bail!("mailbox submission cause is owned by another requester");
+        }
         if expected_session != session_id {
             bail!("mailbox submission route does not match the target session");
         }
@@ -215,21 +210,18 @@ struct RetryLineage {
 }
 
 async fn fetch_retry_lineage(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     request_id: &str,
     node_did: &str,
-    requester_did: &str,
 ) -> Result<RetryLineage> {
     let escaped = escape_graphql_string(request_id);
     let node_did = escape_graphql_string(node_did);
-    let requester_did = escape_graphql_string(requester_did);
     let query = format!(
         r#"query {{
             AgentRequest(
                 filter: {{
                     request_id: {{ _eq: "{escaped}" }},
-                    node_did: {{ _eq: "{node_did}" }},
-                    requester_did: {{ _eq: "{requester_did}" }}
+                    node_did: {{ _eq: "{node_did}" }}
                 }},
                 limit: 2
             ) {{
@@ -239,13 +231,12 @@ async fn fetch_retry_lineage(
             }}
         }}"#
     );
-    let resp =
-        gents::store::graphql::graphql_with_transaction_retry(node, &query, "fetch_retry_lineage")
-            .await
-            .with_context(|| format!("fetch_retry_lineage({request_id})"))?;
+    let resp = access
+        .execute(&query)
+        .await
+        .with_context(|| format!("fetch_retry_lineage({request_id})"))?;
     let rows = resp
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|d| d.get("AgentRequest"))
         .and_then(|v| v.as_array())
         .cloned()

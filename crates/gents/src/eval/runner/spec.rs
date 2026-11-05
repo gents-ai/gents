@@ -21,7 +21,8 @@ pub(super) fn trial_spec(
         trial_id: planned.trial_id.clone(),
         pack_dir: cell.pack_dir.clone(),
         pack_digest: cell.spec.subject.pack_digest.clone(),
-        agent_id: cell.spec.subject.agent_id.clone(),
+        agent_slot: cell.spec.subject.agent_slot.clone(),
+        evaluator_did: frozen.record.evaluator_did.clone(),
         inference,
         fixtures: fixtures(
             &cell.pack_dir,
@@ -51,6 +52,8 @@ pub(super) fn stage_specs(case: &EvalCase, fallback: &[Capture]) -> Vec<StageSpe
             seed: stage.seed.as_ref().map(|seed| FixtureDocument {
                 collection: seed.collection.clone(),
                 document: seed.document.clone(),
+                session_readers: seed.session_readers.clone(),
+                session_agent_owned: seed.session_agent_owned,
             }),
             deadline_secs: stage.deadline_secs,
             settle: stage.settle,
@@ -78,6 +81,8 @@ pub(super) fn fixtures(
             .extend(declared.documents.iter().map(|document| FixtureDocument {
                 collection: document.collection.clone(),
                 document: document.document.clone(),
+                session_readers: document.session_readers.clone(),
+                session_agent_owned: document.session_agent_owned,
             }));
         for asset in &declared.assets {
             fixtures.files.extend(asset_files(pack_dir, asset)?);

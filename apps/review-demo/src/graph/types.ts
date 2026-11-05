@@ -84,7 +84,7 @@ export type InferenceCallRow = {
 export type AgentRequestRow = {
   request_id: string;
   session_id?: string | null;
-  agent_id?: string | null;
+  agent_did?: string | null;
   lifecycle_state?: string | null;
   caused_by_trigger_id?: string | null;
   caused_by_correlation?: string | null;

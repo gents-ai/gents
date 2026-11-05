@@ -144,6 +144,71 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn startup_gate_blocks_concurrent_client_operations_until_owner_bootstrap_finishes() {
+    use axum::{
+        routing::{get, post},
+        Router,
+    };
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let ready = Arc::new(AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = calls.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let router = Router::new()
+        .route("/private-bind-probe", get(|| async { "probe" }))
+        .route(
+            "/api/v0/graphql",
+            post(move || {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    "ok"
+                }
+            }),
+        );
+    let router = HttpAuthority::for_endpoint(&endpoint)
+        .with_startup_gate(ready.clone(), "/private-bind-probe".into())
+        .wrap(router);
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    }));
+    let client = reqwest::Client::new();
+    assert_eq!(
+        client
+            .get(format!("{endpoint}/private-bind-probe"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let mut pending = tokio::task::JoinSet::new();
+    for _ in 0..16 {
+        let client = client.clone();
+        let url = format!("{endpoint}/api/v0/graphql");
+        pending.spawn(async move { client.post(url).send().await.unwrap().status() });
+    }
+    while let Some(response) = pending.join_next().await {
+        assert_eq!(response.unwrap(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    ready.store(true, Ordering::Release);
+    assert_eq!(
+        client
+            .post(format!("{endpoint}/api/v0/graphql"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_authorization() {
     let directory = tempfile::tempdir().unwrap();
     let paths = DesktopPaths::from_root(directory.path().join("operator"));
@@ -152,12 +217,15 @@ async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_autho
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let endpoint = format!("http://{address}");
-    let config = HttpAuthority::for_endpoint(&endpoint).protect_http(
-        gents::defra_node::HttpConfig::with_listener(listener)
-            .unwrap()
-            .with_extra_routes(runtime_routes(&endpoint, &owner)),
-    );
-    let node = gents::defra_node::EmbeddedNode::builder()
+    let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let config = HttpAuthority::for_endpoint(&endpoint)
+        .with_startup_gate(ready.clone(), "/private-bind-probe".into())
+        .protect_http(
+            gents::defra_node::HttpConfig::with_listener(listener)
+                .unwrap()
+                .with_extra_routes(runtime_routes(&endpoint, &owner)),
+        );
+    let node = gents::defra_node::Node::builder()
         .with_node_identity_did(owner.did())
         .with_node_acp_enabled()
         .with_http(config)
@@ -169,6 +237,19 @@ async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_autho
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .unwrap();
+
+    for path in ["/api/v0/graphql", "/api/v0/collections", "/status"] {
+        assert_eq!(
+            client
+                .get(format!("{endpoint}{path}"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+    ready.store(true, std::sync::atomic::Ordering::Release);
 
     for path in [
         "/health-check",
@@ -229,7 +310,7 @@ async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_autho
     .await
     .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    node.shutdown().await;
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[derive(Deserialize)]
@@ -361,6 +442,7 @@ async fn node_principal_routes_refuse_anonymous_and_foreign_callers_before_work(
         "/metrics",
         "/activation",
         "/identity/decide",
+        gents_protocol::agent_identity::AGENT_IDENTITY_PATH,
     ] {
         for foreign in [false, true] {
             let mut request = if path == "/identity/decide" {
@@ -409,6 +491,7 @@ async fn foreign_host_is_refused_on_public_private_and_independently_authenticat
         "/mcp/pool",
         "/activation",
         "/identity/decide",
+        gents_protocol::agent_identity::AGENT_IDENTITY_PATH,
         "/enrollment/decisions",
         "/enrollment/pending",
         "/accounts/usage/read",
@@ -477,7 +560,7 @@ async fn managed_readiness_status_uses_the_hosted_node_principal() {
 }
 
 #[tokio::test]
-async fn remote_pack_install_requires_the_runtime_operator_before_work() {
+async fn remote_pack_install_requires_authenticated_client_before_work() {
     let fixture = Fixture::start().await;
     let body = serde_json::json!({
         "node_did": fixture.owner.did(), "root": "", "dependencies": [],
@@ -487,7 +570,7 @@ async fn remote_pack_install_requires_the_runtime_operator_before_work() {
     });
     for (identity, expected) in [
         (None, StatusCode::UNAUTHORIZED),
-        (Some(&fixture.other), StatusCode::FORBIDDEN),
+        (Some(&fixture.other), StatusCode::SERVICE_UNAVAILABLE),
         (Some(&fixture.owner), StatusCode::SERVICE_UNAVAILABLE),
     ] {
         let mut request = fixture
@@ -506,4 +589,53 @@ async fn remote_pack_install_requires_the_runtime_operator_before_work() {
         assert_eq!(response.status(), expected);
     }
     assert_eq!(fixture.queries.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn agent_identity_provisioning_requires_client_authentication_and_writes_no_config() {
+    let f = Fixture::start().await;
+    let url = format!(
+        "{}{}",
+        f.endpoint,
+        gents_protocol::agent_identity::AGENT_IDENTITY_PATH
+    );
+    let unsigned = f
+        .client
+        .post(&url)
+        .json(&serde_json::json!({"node_did":f.owner.did()}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
+    let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+        format!("{}/api/v0/graphql", f.endpoint),
+        f.owner.did(),
+    );
+    let response = endpoint
+        .authorize(
+            f.client
+                .post(&url)
+                .json(&serde_json::json!({"node_did":"different-node"})),
+        )
+        .unwrap()
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(f.queries.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[test]
+fn advertised_authority_is_explicit_and_does_not_trust_forwarded_headers() {
+    let authority = HttpAuthority::for_endpoint("http://0.0.0.0:9191/api/v0/graphql")
+        .with_advertised_endpoint(Some("https://runtime.example:8443/api/v0/graphql"));
+    assert!(authority.accepts(&request("runtime.example:8443")));
+    assert!(authority.accepts(&request("localhost:9191")));
+    assert!(!authority.accepts(&request("runtime.example:9191")));
+    let mut foreign = request("attacker.example:8443");
+    foreign.headers_mut().insert(
+        "x-forwarded-host",
+        header::HeaderValue::from_static("runtime.example:8443"),
+    );
+    assert!(!authority.accepts(&foreign));
 }

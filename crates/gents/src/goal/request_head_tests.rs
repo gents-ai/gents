@@ -295,7 +295,7 @@ fn signed_row(create: &AgentRequestCreate, doc: u64) -> AgentRequestRow {
         request_id: create.request_id.clone(),
         node_did: Some(create.node_did.clone()),
         requester_did: Some(create.requester_did.clone()),
-        agent_id: Some(create.agent_id.clone()),
+        agent_did: Some(create.agent_did.clone()),
         session_id: Some(create.session_id.clone()),
         retry_parent_request: create.retry_parent_request.clone(),
         retry_parent_request_doc_id: create.retry_parent_request_doc_id.clone(),
@@ -574,7 +574,7 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await

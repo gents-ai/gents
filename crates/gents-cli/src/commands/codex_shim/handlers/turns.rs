@@ -62,6 +62,7 @@ pub(super) async fn handle_turn_request(
                 };
                 if let Some(refusal) = gents::session::message::interrupt_refusal(
                     &state.node,
+                    state.local_requester_did(),
                     &caller,
                     &thread.scope(),
                 )

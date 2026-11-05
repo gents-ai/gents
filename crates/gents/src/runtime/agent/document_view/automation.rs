@@ -40,8 +40,8 @@ pub(super) fn resolve_automation(
             unavailable_triggers.insert(trigger_id.clone());
             continue;
         }
-        let agent_id = task.agent_id.as_str();
-        let Some(behavior_record) = view.agents.get(agent_id) else {
+        let agent_did = task.agent_did.as_str();
+        let Some(behavior_record) = view.agents.get(agent_did) else {
             unavailable_triggers.insert(trigger_id.clone());
             continue;
         };
@@ -49,7 +49,7 @@ pub(super) fn resolve_automation(
             unavailable_triggers.insert(trigger_id.clone());
             continue;
         }
-        if unavailable_agents.contains_key(agent_id) {
+        if unavailable_agents.contains_key(agent_did) {
             unavailable_triggers.insert(trigger_id.clone());
             continue;
         }
@@ -124,7 +124,7 @@ fn resolved_task_from(task: &crate::documents::Task) -> ResolvedTask {
         emit_outcome: task.emit_outcome,
         task_id: task.task_id.clone(),
         name: task.display_name.clone(),
-        agent_id: task.agent_id.clone(),
+        agent_did: task.agent_did.clone(),
         prompt_template: task.prompt_template.clone(),
         goal_objective_template: task.goal_objective_template.clone(),
         goal_token_budget: task.goal_token_budget,
@@ -146,18 +146,18 @@ fn resolve_tasks(
             continue;
         }
 
-        if task.agent_id.trim().is_empty() {
+        if task.agent_did.trim().is_empty() {
             continue;
         }
 
-        let behavior_record = match view.agents.get(&task.agent_id) {
+        let behavior_record = match view.agents.get(&task.agent_did) {
             Some(record) => record,
             None => continue,
         };
         if !behavior_record.value.enabled {
             continue;
         }
-        if unavailable_agents.contains_key(&task.agent_id) {
+        if unavailable_agents.contains_key(&task.agent_did) {
             continue;
         }
 

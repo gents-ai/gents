@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_loop::provider_audit::{AuxiliaryOutputEvent, AuxiliaryOutputObservation};
 use gents_loop::provider_input::ProviderInputProfile;
 use gents_protocol::message::{AssistantContent, Message, Reasoning, ReasoningContent};
@@ -47,13 +47,13 @@ async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
     crate::store::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
-    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
+    crate::test_support::install_test_agent(&node, identity.did(), "did:test:agent").await;
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         uuid::Uuid::new_v4().to_string(),
         identity.did(),
         identity.did(),
-        "general",
+        "did:test:agent",
         uuid::Uuid::new_v4().to_string(),
         "Name this conversation",
         "interactive",
@@ -84,8 +84,13 @@ async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
     )
     .await
     .unwrap();
-    let mut lifecycle =
-        RequestLifecycle::new_with_node_did(node.clone(), "general", identity.did(), title, 60);
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
+        node.clone(),
+        "did:test:agent",
+        identity.did(),
+        title,
+        60,
+    );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let writer = DefraStreamWriter::new(node.clone(), identity.did(), Duration::from_millis(1));
     lifecycle.begin_owned_execution(&writer).await.unwrap();
@@ -184,7 +189,7 @@ async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
         StreamPayload::Reasoning
     );
     assert_eq!(retained.streams[0].text, "received before shutdown");
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 fn modeled_scope(case: &LeanAuxiliaryOutputCase) -> (CaptureScope, usize, u32) {
@@ -294,7 +299,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
     let session_id = format!("session-{request_id}");
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
-        r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "did:test:test", agent_id: "general", session_id: "{}", retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#,
+        r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "did:test:test", agent_did: "did:test:agent", session_id: "{}", retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#,
         crate::store::graphql::escape_graphql_string(&request_id),
         crate::store::graphql::escape_graphql_string(&session_id),
         crate::store::graphql::escape_graphql_string(&request_id),
@@ -315,7 +320,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
-        "general",
+        "did:test:agent",
         "did:test:test",
         row.try_into().unwrap(),
         60,
@@ -460,7 +465,18 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         let empty_state = output_state(&node, &request_doc_id).await;
         assert_eq!(output_counts(&empty_state), (0, 0), "{}", case.name);
         let before = native_raw(case, &lifecycle, &generation);
-        let claimed_append = canonical::append_provider_segment(&node, &generation, &before).await;
+        let claimed_append = canonical::append_provider_segment(
+            &node,
+            identity::Did::new(
+                node.node_identity_did()
+                    .expect("fixture node identity")
+                    .to_owned(),
+            )
+            .unwrap(),
+            &generation,
+            &before,
+        )
+        .await;
         assert_eq!(
             claimed_append.is_ok(),
             case.expected.claimed_append_accepted,
@@ -491,7 +507,18 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         begin.unwrap();
         assert_eq!(lifecycle.execution_generation().unwrap(), generation);
         let raw = native_raw(case, &lifecycle, &generation);
-        let append = canonical::append_provider_segment(&node, &generation, &raw).await;
+        let append = canonical::append_provider_segment(
+            &node,
+            identity::Did::new(
+                node.node_identity_did()
+                    .expect("fixture node identity")
+                    .to_owned(),
+            )
+            .unwrap(),
+            &generation,
+            &raw,
+        )
+        .await;
         assert_eq!(
             append.is_ok(),
             case.expected.begun_append_accepted,
@@ -664,6 +691,12 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         });
         let publication = canonical::publish_provider_turn(
             &node,
+            identity::Did::new(
+                node.node_identity_did()
+                    .expect("fixture node identity")
+                    .to_owned(),
+            )
+            .unwrap(),
             &generation,
             canonical::ProviderPublicationPlan {
                 final_flush: Some(publication_closing),
@@ -709,7 +742,19 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             } => canonical::ProviderAttemptClose::Partial,
             _ => panic!("{}: unsupported modeled close", case.name),
         };
-        let close = canonical::close_provider_attempt(&node, &generation, &raw, close_kind).await;
+        let close = canonical::close_provider_attempt(
+            &node,
+            identity::Did::new(
+                node.node_identity_did()
+                    .expect("fixture node identity")
+                    .to_owned(),
+            )
+            .unwrap(),
+            &generation,
+            &raw,
+            close_kind,
+        )
+        .await;
         assert_eq!(close.is_ok(), case.expected.close_accepted, "{}", case.name);
         close.unwrap();
         let closed_state = output_state(&node, &request_doc_id).await;
@@ -730,8 +775,19 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         stale.writer = OutputWriter::RequestExecution {
             execution_generation: stale_generation.clone(),
         };
-        let stale_replay =
-            canonical::close_provider_attempt(&node, &stale_generation, &stale, close_kind).await;
+        let stale_replay = canonical::close_provider_attempt(
+            &node,
+            identity::Did::new(
+                node.node_identity_did()
+                    .expect("fixture node identity")
+                    .to_owned(),
+            )
+            .unwrap(),
+            &stale_generation,
+            &stale,
+            close_kind,
+        )
+        .await;
         assert_eq!(
             stale_replay.is_ok(),
             case.expected.stale_close_replay_accepted,
@@ -756,7 +812,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             "{}",
             case.name
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(path).unwrap();
     }
 }
@@ -982,7 +1038,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             terminal_selection: None,
         });
         assert_eq!(view, LiveView::Absent, "{}", case.name);
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(path).unwrap();
     }
 }

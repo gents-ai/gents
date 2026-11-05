@@ -63,7 +63,7 @@ impl AgentToolConfig {
             anyhow::ensure!(
                 !target.name.trim().is_empty()
                     && !target.target_node_did.trim().is_empty()
-                    && !target.agent_id.trim().is_empty(),
+                    && !target.agent_did.trim().is_empty(),
                 "invalid AgentTarget {id}"
             );
             anyhow::ensure!(
@@ -98,10 +98,10 @@ impl AgentToolConfig {
             .collect()
     }
 
-    pub(crate) fn allows(&self, target_node_did: &str, agent_id: &str) -> bool {
-        self.targets
-            .iter()
-            .any(|target| target.target_node_did == target_node_did && target.agent_id == agent_id)
+    pub(crate) fn allows(&self, target_node_did: &str, agent_did: &str) -> bool {
+        self.targets.iter().any(|target| {
+            target.target_node_did == target_node_did && target.agent_did == agent_did
+        })
     }
 }
 

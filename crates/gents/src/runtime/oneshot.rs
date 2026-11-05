@@ -4,7 +4,7 @@ use crate::inference::llm::message::Message;
 use crate::inference::llm::rig_compat::{ProviderClient, ProviderModel};
 use crate::inference::llm::tool::ToolDyn;
 use anyhow::{anyhow, Context, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_loop::loop_stream::TaggedMessage;
 use gents_loop::output_obligation::OutputObligationCheck;
 
@@ -44,7 +44,8 @@ pub async fn run_openai_oneshot_with_tools(
     crate::store::schema::migration::ensure_all_runtime_migrations(node.clone()).await?;
 
     let api_key = agent.completion_client_api_key()?;
-    let tool_runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), agent.node_did());
+    let tool_runtime =
+        ToolRuntimeContext::oneshot_with_node_did(node.clone(), agent.node_did()).for_agent(agent);
     let tool_surface = agent
         .tools
         .resolve(&node, agent.node_did(), &Default::default())
@@ -197,7 +198,7 @@ where
 {
     let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
         node.clone(),
-        &agent.agent_id,
+        &agent.agent_did,
         agent.node_identity().clone(),
         prompt,
         agent.deadline_duration.as_secs(),
@@ -216,7 +217,7 @@ where
     );
     let request = lifecycle.request().clone();
     let stream_writer =
-        DefraStreamWriter::new(node.clone(), agent.node_did(), std::time::Duration::ZERO);
+        DefraStreamWriter::new(node.clone(), agent.agent_did(), std::time::Duration::ZERO);
     match lifecycle.begin_owned_execution(&stream_writer).await {
         Ok(()) => {}
         Err(error) => {
@@ -269,7 +270,7 @@ where
             request_id: request.request_id.clone(),
             node_did: agent.node_did().to_string(),
             requester_did: String::new(),
-            agent_id: agent.agent_id.clone(),
+            agent_did: agent.agent_did.clone(),
             session_id: request.session_id.clone(),
             model_name: agent.model_name.clone(),
             provider_family,
@@ -288,11 +289,12 @@ where
         }
     };
 
-    let hook = match DefraSessionHook::resume_with_identity_policy(
+    let hook = match DefraSessionHook::resume_with_actor_policy(
         node.clone(),
         &request.session_id,
         agent.node_did(),
         request.requester_did.as_deref(),
+        ::identity::Did::new(request.agent_did.clone())?,
         FailurePolicy::default(),
     )
     .await
@@ -371,7 +373,7 @@ where
     let scoped_inference = crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
         request.requester_did.clone(),
         Some(request.node_did.clone()),
-        Some(request.agent_id.clone()),
+        Some(request.agent_did.clone()),
         Some(request.request_id.clone()),
         crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
             deadline,
@@ -439,6 +441,12 @@ where
                 Ok(TerminalizeResult::Won | TerminalizeResult::AlreadySame)
             ) {
                 RequestLifecycle::recover_all(&node, agent.node_did()).await?;
+                crate::triggers::engine::durable::recover_outcomes(
+                    &node,
+                    agent.node_did(),
+                    &request.agent_did,
+                )
+                .await?;
             }
             let close_result = if matches!(lifecycle_result, Ok(TerminalizeResult::Won)) {
                 hook.close().await

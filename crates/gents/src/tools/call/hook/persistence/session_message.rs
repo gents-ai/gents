@@ -28,7 +28,7 @@ impl DefraSessionHook {
         macro_rules! refuse {
             ($class:expr, $payload:expr) => {{
                 let payload = $payload;
-                lifecycle.spawn_failed($class, &payload).await?;
+                Box::pin(lifecycle.spawn_failed($class, &payload)).await?;
                 return Ok(self.skip_tool_result(tool_name, payload));
             }};
         }
@@ -37,14 +37,17 @@ impl DefraSessionHook {
             .request_doc_id()
             .context("session-message dispatch lacks its calling request document")?
             .to_owned();
-        let caller =
-            crate::request::binding::load_agent_request_by_doc_id(&self.node, &caller_doc_id)
-                .await?
-                .context("session-message calling request disappeared")?;
+        let access = self.actor_access()?;
+        let caller = crate::request::binding::load_agent_request_by_doc_id_with_access(
+            &access,
+            &caller_doc_id,
+        )
+        .await?
+        .context("session-message calling request disappeared")?;
         let tools = crate::session::message::load_caller_session_tools(
             &self.node,
             &caller.node_did,
-            &caller.agent_id,
+            &caller.agent_did,
         )
         .await?;
         if !tools.enabled {
@@ -87,7 +90,12 @@ impl DefraSessionHook {
                 );
             };
             if target.target_node_did == caller.node_did
-                && load_agent(&self.node, &target.agent_id).await?.is_none()
+                && !crate::session::message::target_agent_exists(
+                    &access,
+                    &target.target_node_did,
+                    &target.agent_did,
+                )
+                .await?
             {
                 refuse!(
                     FailureClass::ServiceUnavailable,
@@ -96,7 +104,7 @@ impl DefraSessionHook {
                         "/agent",
                         format!(
                             "agent '{agent}' refers to agent '{}' which no longer exists",
-                            target.agent_id
+                            target.agent_did
                         ),
                         false,
                     )
@@ -105,7 +113,7 @@ impl DefraSessionHook {
             (
                 crate::request::lifecycle::SessionMessageTarget {
                     node_did: target.target_node_did,
-                    agent_id: target.agent_id,
+                    agent_did: target.agent_did,
                     session_id: uuid::Uuid::new_v4().to_string(),
                 },
                 (parsed.prompt, parsed.task),
@@ -138,6 +146,7 @@ impl DefraSessionHook {
             let Some(target) = crate::session::message::resolve_send_target(
                 &self.node,
                 &caller.node_did,
+                &caller.agent_did,
                 &tools,
                 &target_session,
             )
@@ -164,8 +173,9 @@ impl DefraSessionHook {
             if delivery == crate::session::message::AgentMessageDelivery::Interrupt {
                 if let Some(reason) = crate::session::message::interrupt_refusal(
                     &self.node,
+                    &caller.agent_did,
                     &crate::session::origin::SessionScope::of_request(&caller),
-                    &crate::session::message::target_scope(&caller.node_did, &target),
+                    &crate::session::message::target_scope(&caller.agent_did, &target),
                 )
                 .await?
                 {
@@ -190,8 +200,9 @@ impl DefraSessionHook {
         let caller_hop = caller.request_hop;
         let rendered = match crate::session::message::render_body(
             &self.node,
+            &caller.agent_did,
             &caller.node_did,
-            &target.agent_id,
+            &target.agent_did,
             &target.session_id,
             body,
         )
@@ -210,7 +221,7 @@ impl DefraSessionHook {
             .to_owned();
         let cause = crate::request::lifecycle::SessionMessageCause {
             caller_node_did: caller.node_did.clone(),
-            caller_agent_id: caller.agent_id.clone(),
+            caller_agent_did: caller.agent_did.clone(),
             caller_session_id: caller.session_id.clone(),
             caller_requester_did: caller.requester_did.clone(),
             caller_request_id: caller.request_id.clone(),
@@ -290,6 +301,11 @@ impl DefraSessionHook {
                     invalid_tool_arguments_payload(tool_name, "/delivery", refusal.to_string())
                 );
             }
+            Err(error @ crate::session::message::CommitError::ObservedTerminal { .. }) => {
+                return Ok(ToolCallHookAction::Terminate {
+                    reason: error.to_string(),
+                });
+            }
             Err(error) => {
                 if let crate::session::message::CommitError::Other(ref error) = error {
                     if let Some(capacity) = error.downcast_ref::<BackgroundCapacityExceeded>() {
@@ -354,14 +370,17 @@ impl DefraSessionHook {
             .request_doc_id()
             .context("agents tool call lacks its calling request document")?
             .to_owned();
-        let caller =
-            crate::request::binding::load_agent_request_by_doc_id(&self.node, &caller_doc_id)
-                .await?
-                .context("agents tool calling request disappeared")?;
+        let access = self.actor_access()?;
+        let caller = crate::request::binding::load_agent_request_by_doc_id_with_access(
+            &access,
+            &caller_doc_id,
+        )
+        .await?
+        .context("agents tool calling request disappeared")?;
         let tools = crate::session::message::load_caller_session_tools(
             &self.node,
             &caller.node_did,
-            &caller.agent_id,
+            &caller.agent_did,
         )
         .await?;
         if !tools.enabled {
@@ -435,6 +454,7 @@ impl DefraSessionHook {
             let Some(target) = crate::session::message::resolve_send_target(
                 &self.node,
                 &caller.node_did,
+                &caller.agent_did,
                 &tools,
                 parsed.session_id.trim(),
             )
@@ -443,7 +463,7 @@ impl DefraSessionHook {
                 return Ok(tool_not_allowed_payload(tool_name, "/session_id", &parsed.session_id, "session is not messageable; discover available sessions with agent_session_list", tools.target_names()));
             };
             if let Err(error) = parsed.validate_target(&crate::session::message::target_scope(
-                &caller.node_did,
+                &caller.agent_did,
                 &target,
             )) {
                 return Ok(invalid_tool_arguments_payload(
@@ -485,6 +505,7 @@ impl DefraSessionHook {
         let Some(target) = crate::session::message::resolve_send_target(
             &self.node,
             &caller.node_did,
+            &caller.agent_did,
             &tools,
             session,
         )
@@ -496,9 +517,10 @@ impl DefraSessionHook {
                 "only the session that started this session may control it",
             ));
         };
-        let target = crate::session::message::target_scope(&caller.node_did, &target);
+        let target = crate::session::message::target_scope(&caller.agent_did, &target);
         if let Some(reason) = crate::session::message::interrupt_refusal(
             &self.node,
+            &caller.agent_did,
             &crate::session::origin::SessionScope::of_request(&caller),
             &target,
         )
@@ -520,8 +542,12 @@ impl DefraSessionHook {
         }
         match tool_name {
             crate::tools::native::AGENT_INTERRUPT_TOOL_NAME => {
-                let interrupted =
-                    crate::session::message::interrupt_session(&self.node, &target).await?;
+                let interrupted = crate::session::message::interrupt_session(
+                    &self.node,
+                    &caller.agent_did,
+                    &target,
+                )
+                .await?;
                 Ok(json_string(json!({
                     "ok": true,
                     "session_id": session,
@@ -532,6 +558,7 @@ impl DefraSessionHook {
             crate::tools::native::AGENT_STOP_TOOL_NAME => {
                 let receipt = crate::session::stop_session(
                     &self.node,
+                    &caller.agent_did,
                     &target.node_did,
                     &target.session_id,
                     target.requester_did.as_deref(),
@@ -549,6 +576,7 @@ impl DefraSessionHook {
                 };
                 crate::session::resume_session(
                     &self.node,
+                    &caller.agent_did,
                     &target.node_did,
                     &target.session_id,
                     target.requester_did.as_deref(),

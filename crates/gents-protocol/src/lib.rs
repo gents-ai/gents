@@ -1,3 +1,4 @@
+pub mod agent_identity;
 pub mod canonical;
 pub mod chatgpt_oauth;
 pub mod client_installation;

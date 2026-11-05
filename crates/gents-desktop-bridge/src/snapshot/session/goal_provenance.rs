@@ -35,7 +35,7 @@ async fn observe<'source, 'request>(
     headers: &'source [TranscriptMessageRow],
     dependencies: Option<&'source CanonicalTranscriptDependencies>,
     view: ProvenanceView<'_>,
-) -> Option<ObservedProvenance<'source, 'request>> {
+) -> anyhow::Result<Option<ObservedProvenance<'source, 'request>>> {
     let mut read = BTreeSet::new();
     let mut candidates = Vec::new();
     for request in requests {
@@ -115,16 +115,17 @@ async fn observe<'source, 'request>(
     .await
     {
         Ok(confirmed) => confirmed,
+        Err(error) if super::is_permission_denied(&error) => return Err(error),
         Err(error) => {
             tracing::warn!(error = %error, "opening Goal provenance unavailable");
-            return None;
+            return Ok(None);
         }
     };
-    Some(ObservedProvenance {
+    Ok(Some(ObservedProvenance {
         confirmed,
         candidates,
         copied,
-    })
+    }))
 }
 
 pub(crate) async fn attach(
@@ -133,7 +134,7 @@ pub(crate) async fn attach(
     headers: &[TranscriptMessageRow],
     dependencies: Option<&CanonicalTranscriptDependencies>,
     snapshot: &mut DesktopSessionSnapshot,
-) {
+) -> anyhow::Result<()> {
     let Some(ObservedProvenance {
         confirmed,
         candidates,
@@ -154,9 +155,9 @@ pub(crate) async fn attach(
                 .collect(),
         },
     )
-    .await
+    .await?
     else {
-        return;
+        return Ok(());
     };
     for request in candidates {
         let Some(doc) = request.doc_id.as_deref() else {
@@ -234,6 +235,7 @@ pub(crate) async fn attach(
             }
         }
     }
+    Ok(())
 }
 
 pub(super) async fn attach_messages(
@@ -243,7 +245,7 @@ pub(super) async fn attach_messages(
     dependencies: Option<&CanonicalTranscriptDependencies>,
     scope: (&str, &str),
     messages: &mut [MessageView],
-) {
+) -> anyhow::Result<()> {
     let Some(ObservedProvenance {
         confirmed,
         candidates,
@@ -260,9 +262,9 @@ pub(super) async fn attach_messages(
             pending: Vec::new(),
         },
     )
-    .await
+    .await?
     else {
-        return;
+        return Ok(());
     };
     for request in candidates {
         let Some(goal_id) = request
@@ -293,6 +295,7 @@ pub(super) async fn attach_messages(
             }
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

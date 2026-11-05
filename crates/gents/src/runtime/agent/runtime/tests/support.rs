@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::thread::JoinHandle;
 
-pub(super) use crate::documents::{default_agent_id_for_node, Tools};
+pub(super) use crate::documents::Tools;
 pub(super) use crate::ensure_runtime_schemas;
 pub(super) use crate::request::watcher::AgentRequest;
 pub(super) use crate::runtime::status::RuntimeStatusHandle;
@@ -18,10 +18,10 @@ pub(super) use gents_protocol::node_readiness::{
 };
 pub(super) use serde_json::Value;
 
-pub(super) async fn test_node() -> Arc<defra_node::EmbeddedNode> {
+pub(super) async fn test_node() -> Arc<defra_node::Node> {
     let identity = test_identity("runtime-test-node");
     Arc::new(
-        defra_node::EmbeddedNode::builder()
+        defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await
@@ -34,7 +34,7 @@ pub(super) fn test_identity(name: &str) -> KeyIdentity {
     KeyIdentity::load_or_create(path, None).unwrap()
 }
 
-pub(super) fn request(agent_id: Option<&str>, session_id: &str) -> AgentRequest {
+pub(super) fn request(agent_did: Option<&str>, session_id: &str) -> AgentRequest {
     AgentRequest {
         retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
@@ -42,7 +42,7 @@ pub(super) fn request(agent_id: Option<&str>, session_id: &str) -> AgentRequest 
         request_id: "req-1".to_string(),
         node_did: "did:test:test".to_string(),
         requester_did: None,
-        agent_id: agent_id.unwrap_or_default().to_owned(),
+        agent_did: agent_did.unwrap_or_default().to_owned(),
         session_id: session_id.to_string(),
         content: "hello".to_string(),
         max_total_tokens: None,
@@ -89,7 +89,7 @@ struct RuntimeDiagnosticRow {
 }
 
 pub(super) async fn fetch_runtime_status(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
 ) -> RuntimeStatusRow {
     fetch_runtime_status_if_present(node, node_did)
@@ -98,7 +98,7 @@ pub(super) async fn fetch_runtime_status(
 }
 
 async fn fetch_runtime_status_if_present(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
 ) -> Option<RuntimeStatusRow> {
     let escaped_node_did = escape_graphql_string(node_did);
@@ -139,7 +139,7 @@ async fn fetch_runtime_status_if_present(
 }
 
 pub(super) async fn wait_for_runtime_reconcile_phase(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
     expected_reconcile_phase: &str,
 ) -> RuntimeStatusRow {
@@ -163,7 +163,7 @@ pub(super) async fn wait_for_runtime_reconcile_phase(
 }
 
 pub(super) async fn fetch_node_readiness(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
 ) -> NodeReadinessSnapshot {
     let escaped_node_did = escape_graphql_string(node_did);
@@ -196,7 +196,7 @@ pub(super) async fn fetch_node_readiness(
 }
 
 pub(super) async fn wait_for_runtime_process_state(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
     expected_process_state: &str,
 ) {
@@ -398,7 +398,7 @@ impl crate::runtime::agent::ProcessLifecycleObserver for RecordingObserver {
 }
 
 pub(super) async fn bind_default_agent_backend(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     backend_id: &str,
     endpoint: &str,
@@ -410,7 +410,7 @@ pub(super) async fn bind_default_agent_backend(
 }
 
 pub(super) async fn bind_default_agent_backend_with_capacity(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     backend_id: &str,
     endpoint: &str,
@@ -428,7 +428,7 @@ pub(super) async fn bind_default_agent_backend_with_capacity(
 }
 
 pub(super) async fn bind_default_agent_backend_with_capacity_and_probe_status(
-    node: &Arc<defra_node::EmbeddedNode>,
+    node: &Arc<defra_node::Node>,
     node_did: &str,
     backend_id: &str,
     endpoint: &str,
@@ -440,15 +440,16 @@ pub(super) async fn bind_default_agent_backend_with_capacity_and_probe_status(
     };
     use crate::Collection;
     let mut principal = crate::ensure_node(node, node_did).await.unwrap();
-    let agent_id = default_agent_id_for_node(node_did);
-    principal.default_agent_id = Some(agent_id.clone());
-    let context_id = format!("{agent_id}:context");
-    let tools_id = format!("{agent_id}:tools");
-    let profile_id = format!("{agent_id}:inference");
+    let binding = crate::test_support::ensure_test_default_agent(node, node_did).await;
+    let agent_did = binding.agent_did.clone();
+    principal.default_agent_did = Some(agent_did.clone());
+    let context_id = format!("{agent_did}:context");
+    let tools_id = format!("{agent_did}:tools");
+    let profile_id = format!("{agent_did}:inference");
     let documents = [
         (Collection::Node, serde_json::to_value(principal).unwrap()),
         (Collection::Agent, serde_json::json!({"node_did":node_did,
-            "agent_id":agent_id, "context_id":context_id, "inference_profile_id":profile_id})),
+            "agent_did":agent_did, "creation_nonce":binding.creation_nonce, "context_id":context_id, "inference_profile_id":profile_id})),
         (Collection::AgentContext, serde_json::json!({"node_did":node_did,
             "context_id":context_id, "tools_id":tools_id})),
         (Collection::Tools, serde_json::json!({"node_did":node_did, "tools_id":tools_id})),
@@ -480,7 +481,7 @@ pub(super) async fn bind_default_agent_backend_with_capacity_and_probe_status(
 }
 
 pub(super) async fn create_agent_request(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
     request_id: &str,
     session_id: &str,
@@ -490,29 +491,36 @@ pub(super) async fn create_agent_request(
 }
 
 pub(super) async fn create_agent_request_for_agent(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     node_did: &str,
-    agent_id: Option<&str>,
+    agent_did: Option<&str>,
     request_id: &str,
     session_id: &str,
     content: &str,
 ) -> String {
-    let identity = crate::store::identity::RegisteredIdentity::from_registered_did(node_did, None)
-        .expect("registered runtime test identity");
-    let agent_id = agent_id
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| default_agent_id_for_node(node_did));
+    let agent_did = match agent_did {
+        Some(did) => did.to_owned(),
+        None => crate::load_node(node, node_did)
+            .await
+            .unwrap()
+            .expect("fixture node exists")
+            .default_agent_did
+            .expect("fixture default agent installed"),
+    };
+    let identity =
+        crate::store::identity::RegisteredIdentity::from_registered_did(&agent_did, None)
+            .expect("fixture agent signer registered");
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
         node_did,
-        node_did,
-        agent_id,
+        &agent_did,
+        &agent_did,
         session_id,
         content,
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did),
     );
     crate::sign_agent_request_create(&identity, &mut create)
         .await
@@ -550,7 +558,7 @@ pub(super) async fn create_agent_request_for_agent(
 }
 
 pub(super) async fn wait_for_inference_call_state(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     request_id: &str,
     expected_state: &str,
 ) {
@@ -597,7 +605,7 @@ pub(super) async fn wait_for_inference_call_state(
 }
 
 pub(super) async fn update_backend_probe_status(
-    node: &defra_node::EmbeddedNode,
+    node: &defra_node::Node,
     backend_id: &str,
     probe_status: &str,
 ) {

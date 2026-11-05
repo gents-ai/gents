@@ -7,7 +7,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, request_id: &str, session_id: &str) -
     let request_id = crate::store::graphql::escape_graphql_string(request_id);
     let session_id = crate::store::graphql::escape_graphql_string(session_id);
     let now = crate::store::graphql::escape_graphql_string(&now);
-    let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "did:test:test", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#)).await;
+    let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "did:test:test", agent_did: "did:test:agent", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#)).await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
     let response = node
         .execute(&format!(
@@ -21,7 +21,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, request_id: &str, session_id: &str) -
             .unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
-        "general",
+        "did:test:agent",
         "did:test:test",
         row.try_into().unwrap(),
         60,
@@ -65,7 +65,7 @@ async fn authored_publication_replays_and_reconstructs_exact_message() {
     .await
     .unwrap();
     assert_eq!(reconstructed, message);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -139,7 +139,7 @@ async fn selected_history_missing_later_payload_never_returns_a_shortened_prefix
         format!("{error:#}").contains("not-yet-replicated-close"),
         "{error:#}"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -207,7 +207,7 @@ async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_o
         rows[1]["message_key"],
         format!("authored:{request_doc_id}:prompt")
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -356,6 +356,12 @@ async fn provider_publication_request_size_benchmark() {
             let publish = || {
                 super::canonical::publish_provider_turn(
                     &node,
+                    identity::Did::new(
+                        node.node_identity_did()
+                            .expect("fixture node identity")
+                            .to_owned(),
+                    )
+                    .unwrap(),
                     lifecycle.execution_generation().unwrap(),
                     super::canonical::ProviderPublicationPlan {
                         final_flush: Some(segment.clone()),
@@ -391,7 +397,7 @@ async fn provider_publication_request_size_benchmark() {
             "fresh_publication_median_ms": fresh[2], "replay_median_ms": replay[2],
             "fresh_request_scans": fresh_scans, "replay_request_scans": replay_scans,
         }));
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(path).unwrap();
     }
     let result = serde_json::json!({"measurements": measurements, "persistent_node": true});
@@ -410,6 +416,12 @@ async fn first_publication_rejects_native_message_that_differs_from_reconstructi
     let expected = gents_protocol::message::Message::assistant("different native message");
     let error = super::canonical::publish_provider_turn(
         &node,
+        identity::Did::new(
+            node.node_identity_did()
+                .expect("fixture node identity")
+                .to_owned(),
+        )
+        .unwrap(),
         lifecycle.execution_generation().unwrap(),
         super::canonical::ProviderPublicationPlan {
             final_flush: Some(segment),
@@ -439,7 +451,7 @@ async fn first_publication_rejects_native_message_that_differs_from_reconstructi
         .as_array()
         .unwrap()
         .is_empty());
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -459,8 +471,19 @@ async fn publish_tool_turn_for_rollback_test(
         background_calls: Vec::new(),
         consumes_folded: None,
     };
-    super::canonical::publish_provider_turn(node, lifecycle.execution_generation().unwrap(), plan)
-        .await
+    super::canonical::publish_provider_turn(
+        node,
+        identity::Did::new(
+            (node)
+                .node_identity_did()
+                .expect("fixture node identity")
+                .to_owned(),
+        )
+        .unwrap(),
+        lifecycle.execution_generation().unwrap(),
+        plan,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -533,7 +556,7 @@ async fn publication_and_replay_read_only_the_selected_source() {
     .unwrap();
     assert_eq!(history.len(), 4);
     assert_eq!(history.last(), Some(&message));
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(path).unwrap();
 }
 
@@ -580,7 +603,7 @@ async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fai
         writes >= 3,
         "tool-bearing publication must have multiple writes"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -607,7 +630,7 @@ async fn recovery_receipt_fixture(
                     txn,
                     &request.session_id,
                     &request.node_did,
-                    &request.agent_id,
+                    &request.agent_did,
                     request.requester_did.as_deref(),
                     None,
                     None,
@@ -747,7 +770,7 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
     assert_eq!(replay.unwrap(), RecoveryResult::Won { published: 1 });
     assert_eq!(writes, 0);
     assert_eq!(snapshot().await, committed);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -873,7 +896,7 @@ async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selecti
         committed,
         "external replay must preserve all physical IDs, request facts and session observation"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -889,6 +912,12 @@ async fn provider_closure_cannot_precede_committed_source_timestamp() {
     );
     super::canonical::append_provider_segment_at(
         &node,
+        identity::Did::new(
+            node.node_identity_did()
+                .expect("fixture node identity")
+                .to_owned(),
+        )
+        .unwrap(),
         lifecycle.execution_generation().unwrap(),
         &raw,
         now,
@@ -902,6 +931,12 @@ async fn provider_closure_cannot_precede_committed_source_timestamp() {
     closing.created_at = now.to_rfc3339();
     let error = super::canonical::publish_provider_turn_at(
         &node,
+        identity::Did::new(
+            node.node_identity_did()
+                .expect("fixture node identity")
+                .to_owned(),
+        )
+        .unwrap(),
         lifecycle.execution_generation().unwrap(),
         super::canonical::ProviderPublicationPlan {
             final_flush: Some(closing),
@@ -934,7 +969,7 @@ async fn provider_closure_cannot_precede_committed_source_timestamp() {
         segments[0]["close"].is_null(),
         "failed closure writes no close fact"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -998,7 +1033,7 @@ async fn multiple_flushes_close_and_reconstruct_exact_final_message() {
         3,
         "two immutable flushes plus terminal-only closure"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -1095,7 +1130,7 @@ async fn published_turn_stays_nonterminal_until_request_selection_commits() {
             (_, observation) => panic!("terminal={terminal}: unexpected {observation:?}"),
         }
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -1175,7 +1210,7 @@ async fn final_delta_shares_its_closing_record_and_replay_adds_nothing() {
             after.data, before.data,
             "lost-ack replay must not append a closing record"
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }
 }
@@ -1218,9 +1253,19 @@ async fn publication_timestamp_follows_a_flush_that_already_owns_the_tail() {
         close: None,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
-    canonical::append_provider_segment(&node, lifecycle.execution_generation().unwrap(), &segment)
-        .await
-        .unwrap();
+    canonical::append_provider_segment(
+        &node,
+        identity::Did::new(
+            node.node_identity_did()
+                .expect("fixture node identity")
+                .to_owned(),
+        )
+        .unwrap(),
+        lifecycle.execution_generation().unwrap(),
+        &segment,
+    )
+    .await
+    .unwrap();
     tail.streams = encoded.streams;
     tail.next_ordinal = 1;
     drop(tails);
@@ -1237,7 +1282,7 @@ async fn publication_timestamp_follows_a_flush_that_already_owns_the_tail() {
     .await
     .unwrap();
     assert_eq!(observed, message);
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -1443,7 +1488,7 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
             .is_empty(),
         "headerless replay must remain read-only"
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -1531,7 +1576,7 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
         assert_eq!(a.accepted_header_doc_id, b.accepted_header_doc_id);
         assert_eq!(a.arguments, b.arguments);
     }
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -1708,7 +1753,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     .await
     .unwrap();
     assert_eq!(output, "one receipt-loss dispatch result");
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(path);
 }
 
@@ -1721,7 +1766,7 @@ async fn modeled_inputs_survive_publication_replay_and_forks() {
     crate::store::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
-    crate::test_support::install_test_agent(&node, OWNER, "general").await;
+    crate::test_support::install_test_agent(&node, OWNER, "did:test:agent").await;
     let mut lifecycle = claimed(&node, "captured-documents", SESSION).await;
     let writer = DefraStreamWriter::new(node.clone(), OWNER, Duration::ZERO);
     lifecycle.begin_owned_execution(&writer).await.unwrap();
@@ -1783,6 +1828,7 @@ async fn modeled_inputs_survive_publication_replay_and_forks() {
     assert_eq!(before, expected);
     let child = crate::session::fork(
         &node,
+        &identity::Did::new(OWNER).unwrap(),
         crate::session::ForkParams {
             source_session_id: SESSION,
             boundary: crate::session::ForkBoundary::UserTurn(
@@ -1790,7 +1836,7 @@ async fn modeled_inputs_survive_publication_replay_and_forks() {
             ),
             caller_node_did: OWNER,
             caller_requester_did: None,
-            target_agent_id: None,
+            target_agent_did: None,
         },
     )
     .await
@@ -1808,7 +1854,7 @@ async fn modeled_inputs_survive_publication_replay_and_forks() {
             .unwrap(),
         before
     );
-    node.shutdown().await;
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -1901,7 +1947,115 @@ async fn cancelled_flush_replays_before_inference_close_or_publication() {
             assert_eq!(replay.message_doc_id, message_doc_id);
             assert_eq!(access.execute(&query).await.unwrap(), after);
         }
-        node.shutdown().await;
+        node.shutdown().await.expect("shut down test node");
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
+#[tokio::test]
+async fn dirty_native_flush_completes_before_the_turn_barrier_or_is_recovered_after_stop() {
+    use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+    use futures::StreamExt;
+    use gents_protocol::message::Message;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    for after_commit in [false, true] {
+        let (node, path, lifecycle, mut writer) = fixture(if after_commit {
+            "handoff-flush-after-commit"
+        } else {
+            "handoff-flush-before-commit"
+        })
+        .await;
+        writer.batch_interval = Duration::from_secs(60);
+        let doc = lifecycle.request().doc_id.clone();
+        writer
+            .start_provider_attempt(&doc, 0, 0, "inference.1".parse().unwrap())
+            .await;
+        assert!(writer.write_tokens(&doc, "first").await.unwrap());
+        assert!(!writer.write_tokens(&doc, " buffered").await.unwrap());
+        assert!(writer.next_flush_deadline(&doc).await.is_some());
+        let message = Message::assistant("first buffered");
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let hook_started = Arc::new(AtomicBool::new(false));
+        let marked = hook_started.clone();
+        let mut progress = Box::pin(async_stream::stream! {
+            yield crate::runtime::agent::loop_stream::LoopStreamItem::ProviderTurnReady {
+                turn: 0, attempt: 0, message: Message::assistant("first buffered"),
+            };
+            marked.store(true, Ordering::SeqCst);
+            yield crate::runtime::agent::loop_stream::LoopStreamItem::Final { text: "done".into() };
+        });
+        let flush = async {
+            if after_commit {
+                ConfigApplyTxn::with_embedded_commit_ack_pause(
+                    reached.clone(),
+                    writer.flush_native_partial(&lifecycle, &message),
+                )
+                .await
+            } else {
+                ConfigApplyTxn::with_successful_mutation_pause_at(
+                    1,
+                    reached.clone(),
+                    release.clone(),
+                    writer.flush_native_partial(&lifecycle, &message),
+                )
+                .await
+                .0
+            }
+        };
+        let mut combined = Box::pin(gents_loop::stream_processor::flush_while_polling(
+            flush,
+            progress.next(),
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                () = reached.notified() => {},
+                _ = &mut combined => panic!("flush skipped its selected boundary"),
+            }
+        })
+        .await
+        .expect("flush reaches the selected transaction boundary");
+        assert!(
+            !hook_started.load(Ordering::SeqCst),
+            "the next call stays behind the held flush"
+        );
+        if after_commit {
+            drop(combined);
+            drop(progress);
+            assert!(!hook_started.load(Ordering::SeqCst));
+            writer
+                .flush_native_partial(&lifecycle, &message)
+                .await
+                .expect("reconcile the exact pending flush after its unconfirmed acknowledgement");
+            let rows = ConfigAccess::local(node.clone()).execute(&format!(
+                r#"{{ AgentOutputSegment(filter: {{request_doc_id: {{_eq: "{}"}}}}) {{_docID ordinal}} }}"#,
+                crate::store::graphql::escape_graphql_string(&doc),
+            )).await.unwrap();
+            assert_eq!(
+                rows["data"]["AgentOutputSegment"].as_array().unwrap().len(),
+                1
+            );
+        } else {
+            release.notify_one();
+            let (result, item) = combined.await;
+            result.expect("flush commits");
+            assert!(matches!(
+                item,
+                Some(Some(
+                    crate::runtime::agent::loop_stream::LoopStreamItem::ProviderTurnReady { .. }
+                ))
+            ));
+            writer
+                .publish_native_turn(&lifecycle, 0, 0, &message)
+                .await
+                .expect("publish accepted turn");
+            writer.flush_pending(&doc).await.unwrap();
+            assert!(writer.next_flush_deadline(&doc).await.is_none());
+            let _ = progress.next().await;
+            assert!(hook_started.load(Ordering::SeqCst));
+        }
+        node.shutdown().await.expect("node shutdown");
         let _ = std::fs::remove_dir_all(path);
     }
 }

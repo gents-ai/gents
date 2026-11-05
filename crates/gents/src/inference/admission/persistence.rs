@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use gents_loop::rig_compat::CachedInputTokensObservation;
 
 use super::client::AdmissionError;
@@ -40,10 +40,14 @@ pub(super) async fn persist_call_queued(
 ) -> Result<String> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "queued", None, Some(&now), None, None, None)?;
-    let resp = crate::store::config_client::ConfigAccess::write_local_response(
+    let resp = crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
+        Some(identity::Did::new(call.agent_did.clone()).map_err(anyhow::Error::from)?),
         "admission.persist_call_queued",
-        &mutation,
+        |txn| {
+            let mutation = &mutation;
+            Box::pin(async move { txn.execute_local_response(mutation).await })
+        },
     )
     .await?;
     extract_inference_call_doc_id(resp.data.as_ref())
@@ -56,10 +60,14 @@ pub(super) async fn persist_call_started(
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "running", None, Some(&now), Some(&now), None, None)
         .map_err(completion_persistence_error)?;
-    let resp = crate::store::config_client::ConfigAccess::write_local_response(
+    let resp = crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
+        Some(identity::Did::new(call.agent_did.clone()).map_err(completion_persistence_error)?),
         "admission.persist_call_started",
-        &mutation,
+        |txn| {
+            let mutation = &mutation;
+            Box::pin(async move { txn.execute_local_response(mutation).await })
+        },
     )
     .await
     .map_err(completion_persistence_error)?;
@@ -82,10 +90,14 @@ pub(super) async fn persist_existing_call_running(
             input: {{ call_state: "running", started_at: "{started_at}" }}
         ) {{ _docID }} }}"#
     );
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
+        Some(identity::Did::new(call.agent_did.clone()).map_err(anyhow::Error::from)?),
         "admission.persist_existing_call_running",
-        &mutation,
+        |txn| {
+            let mutation = &mutation;
+            Box::pin(async move { txn.execute_local_response(mutation).await })
+        },
     )
     .await?;
     anyhow::ensure!(
@@ -114,10 +126,14 @@ pub(super) async fn persist_terminal_call(
         Some(&now),
         usage,
     )?;
-    crate::store::config_client::ConfigAccess::write_local_response(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
+        Some(identity::Did::new(call.agent_did.clone()).map_err(anyhow::Error::from)?),
         "admission.persist_terminal_call",
-        &mutation,
+        |txn| {
+            let mutation = &mutation;
+            Box::pin(async move { txn.execute_local_response(mutation).await })
+        },
     )
     .await?;
     Ok(())
@@ -153,10 +169,14 @@ pub(super) async fn persist_existing_call_terminal(
                 {prompt_tokens} {completion_tokens} {cached_input_tokens} }}
         ) {{ _docID }} }}"#
     );
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
+        Some(identity::Did::new(call.agent_did.clone()).map_err(anyhow::Error::from)?),
         "admission.persist_existing_call_terminal",
-        &mutation,
+        |txn| {
+            let mutation = &mutation;
+            Box::pin(async move { txn.execute_local_response(mutation).await })
+        },
     )
     .await?;
     if !crate::store::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?
@@ -176,20 +196,28 @@ pub(super) async fn persist_existing_call_terminal(
                 input: {{ {prompt_tokens} {completion_tokens} {cached_input_tokens} }}
             ) {{ _docID }} }}"#
         );
-        let response = crate::store::config_client::ConfigAccess::write_local_response(
+        let response = crate::store::config_client::ConfigAccess::transact_local_write(
             &node,
+            Some(identity::Did::new(call.agent_did.clone()).map_err(anyhow::Error::from)?),
             "admission.persist_late_call_usage",
-            &mutation,
+            |txn| {
+                let mutation = &mutation;
+                Box::pin(async move { txn.execute_local_response(mutation).await })
+            },
         )
         .await?;
         !crate::store::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?
             .is_empty()
     } else {
         let query = format!(r#"{{ InferenceCall(filter: {{ {terminal_filter} }}) {{ _docID }} }}"#);
-        let response = crate::store::graphql::graphql_with_transaction_retry(
-            node.as_ref(),
-            &query,
-            "confirm terminal InferenceCall",
+        let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
+            &node,
+            Some(identity::Did::new(call.agent_did.clone())?),
+            "inference.confirm_terminal_call",
+            |txn| {
+                let query = &query;
+                Box::pin(async move { txn.execute_local_response(query).await })
+            },
         )
         .await?;
         !crate::store::graphql::rows::<serde_json::Value>(&response, "InferenceCall")?.is_empty()
@@ -231,7 +259,7 @@ fn add_call_mutation(
                 {profile_id}
                 call_seq: {call_seq},
                 backend_id: "{backend_id}",
-                agent_id: "{agent_id}",
+                agent_did: "{agent_did}",
                 node_did: "{node_did}",
                 call_kind: "{call_kind}",
                 attempt: {attempt},
@@ -256,7 +284,7 @@ fn add_call_mutation(
         session_id = escape_graphql_string(&call.session_id),
         call_seq = call.call_seq,
         backend_id = escape_graphql_string(&call.backend_id),
-        agent_id = escape_graphql_string(&call.agent_id),
+        agent_did = escape_graphql_string(&call.agent_did),
         node_did = escape_graphql_string(&call.node_did),
         call_kind = call.call_kind.as_str(),
         attempt = call.attempt,

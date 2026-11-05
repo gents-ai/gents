@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use defra_node::EmbeddedNode;
+use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 
 use crate::documents::template::{render_template, task_node_ctx, TemplateScope};
@@ -12,7 +12,7 @@ pub async fn write_manual_agent_request(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
     node_did: &str,
-    agent_id: &str,
+    agent_did: &str,
     task_id: &str,
     prompt_template: &str,
     args: Value,
@@ -22,7 +22,7 @@ pub async fn write_manual_agent_request(
         actor,
         ManualRequestTarget {
             node_did,
-            agent_id,
+            agent_did,
             task_id,
         },
         prompt_template,
@@ -34,7 +34,7 @@ pub async fn write_manual_agent_request(
 
 pub struct ManualRequestTarget<'a> {
     pub node_did: &'a str,
-    pub agent_id: &'a str,
+    pub agent_did: &'a str,
     pub task_id: &'a str,
 }
 
@@ -48,11 +48,11 @@ pub async fn write_manual_agent_request_with_conversation_title(
 ) -> Result<String> {
     let ManualRequestTarget {
         node_did,
-        agent_id,
+        agent_did,
         task_id,
     } = target;
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let (node_scope, ctx_scope) = task_node_ctx(node_did, agent_id, &now);
+    let (node_scope, ctx_scope) = task_node_ctx(node_did, agent_did, &now);
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let scope = TemplateScope {
@@ -76,7 +76,7 @@ pub async fn write_manual_agent_request_with_conversation_title(
         node,
         actor,
         node_did,
-        agent_id,
+        agent_did,
         &content,
         ExecutionOrigin::Interactive,
         TriggerLineage {
@@ -110,7 +110,7 @@ pub async fn write_manual_agent_request_with_conversation_title(
 mod tests {
     use std::sync::Arc;
 
-    use defra_node::EmbeddedNode;
+    use defra_node::Node as EmbeddedNode;
     use serde_json::Value;
 
     use super::{
@@ -205,7 +205,7 @@ mod tests {
             &node_did,
             "behavior-1",
             "task-1",
-            "tick {{ ctx.now }} on {{ node.node_did }} / {{ node.agent_id }}",
+            "tick {{ ctx.now }} on {{ node.node_did }} / {{ node.agent_did }}",
             serde_json::json!({}),
         )
         .await
@@ -292,7 +292,7 @@ mod tests {
             actor,
             ManualRequestTarget {
                 node_did: &node_did,
-                agent_id: "behavior-1",
+                agent_did: "behavior-1",
                 task_id: "task-1",
             },
             "hello {{ args.name }}",

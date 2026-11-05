@@ -1401,9 +1401,9 @@ mod data_calls {
 
     const NODE: &str = "did:key:z6Mknode";
 
-    async fn node_with(rows: &[(&str, &str)]) -> Arc<crate::defra_node::EmbeddedNode> {
+    async fn node_with(rows: &[(&str, &str)]) -> Arc<crate::defra_node::Node> {
         let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::defra_node::Node::builder()
                 .build()
                 .await
                 .unwrap(),
@@ -1444,7 +1444,7 @@ mod data_calls {
     /// Runs a plugin that asks for `requests` once and echoes the answers.
     async fn ask(
         data: Option<PluginDataDeclaration>,
-        node: &Arc<crate::defra_node::EmbeddedNode>,
+        node: &Arc<crate::defra_node::Node>,
         requests: Value,
     ) -> crate::plugin::executor::PluginCall {
         let canned = json!({"data_calls": {"requests": requests, "state": {"page": 1}}});
@@ -1502,7 +1502,7 @@ mod data_calls {
             &node,
             json!([query(
                 "q",
-                json!({"filter": {"owner": {"_eq": "$caller.node_did"}}, "limit": 10})
+                json!({"filter": {"owner": {"_eq": "$caller.did"}}, "limit": 10})
             )]),
         )
         .await;
@@ -1515,7 +1515,7 @@ mod data_calls {
         let node = node_with(&[(NODE, "mine"), ("did:key:z6Mkother", "theirs")]).await;
         let requests = json!([query(
             "q",
-            json!({"filter": {"owner": {"_eq": "$caller.node_did"}}, "limit": 10})
+            json!({"filter": {"owner": {"_eq": "$caller.did"}}, "limit": 10})
         )]);
         let canned = json!({"data_calls": {"requests": requests, "state": {}}});
         let (home, mut record) = installed_plugin(
@@ -1524,7 +1524,11 @@ mod data_calls {
         );
         record.declaration.data = Some(declaration(&["query"]));
         store::write_record(home.path(), &record).unwrap();
-        let caller = DataCaller::operator(ConfigAccess::local(node), NODE).unwrap();
+        let caller = DataCaller::operator(
+            ConfigAccess::local_as(node, identity::Did::new(NODE.to_owned()).unwrap()),
+            "did:key:z6Mkruntime",
+        )
+        .unwrap();
         let call = PluginExecutor::new(Some(home.path().to_owned()))
             .call_with_data(&record, json!({}), caller)
             .await
@@ -1719,7 +1723,7 @@ mod tool_writes {
     }
 
     struct Finished {
-        node: Arc<crate::defra_node::EmbeddedNode>,
+        node: Arc<crate::defra_node::Node>,
         path: std::path::PathBuf,
         tool_row: Value,
         result: Result<String, String>,
@@ -1740,7 +1744,7 @@ mod tool_writes {
         }
 
         async fn finish(self) {
-            self.node.shutdown().await;
+            self.node.shutdown().await.expect("node shutdown");
             std::fs::remove_dir_all(self.path).unwrap();
         }
     }
@@ -1777,9 +1781,17 @@ mod tool_writes {
         }
         store::write_record(home.path(), &record).unwrap();
         let executor = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
+        let node_did = node.node_identity_did().unwrap();
+        let root_identity =
+            crate::store::identity::RegisteredIdentity::from_registered_did(node_did, None)
+                .unwrap();
+        let binding = crate::store::identity::provision_agent_identity(&root_identity).unwrap();
+        let agent_identity =
+            crate::store::identity::resolve_agent_identity(&root_identity, &binding).unwrap();
         let tool = PluginTool::resolve(executor, &tool_ref(Some(&record.digest)), None)
             .unwrap()
-            .with_data_node(node.clone());
+            .with_agent_data(node.clone(), node_did, Some(agent_identity.did()))
+            .unwrap();
         let doc_id = call.doc_id().unwrap().to_owned();
         let registry = gents_loop::live_output::LiveToolOutputRegistry::default();
         let writer = registry.writer_for(doc_id.clone()).await;
@@ -1995,7 +2007,7 @@ mod job_calls {
 
     fn tool_output() -> StampContext {
         StampContext::ToolOutput {
-            node_did: "did:test:test".into(),
+            caller_did: "did:test:test".into(),
             session_id: "session".into(),
             request_doc_id: "request".into(),
             tool_call_doc_id: "tool".into(),
@@ -2048,7 +2060,7 @@ mod job_calls {
         json!({"id": id, "result": {"row_doc_id": row_doc_id, "offset": offset, "limit": limit}})
     }
 
-    async fn child_node(text: &str) -> Arc<crate::defra_node::EmbeddedNode> {
+    async fn child_node(text: &str) -> Arc<crate::defra_node::Node> {
         let node = open().await;
         completed_request(
             &node,
@@ -2102,7 +2114,7 @@ mod job_calls {
     }
 
     async fn finish(admission: PublishedAdmission) {
-        admission.node.shutdown().await;
+        admission.node.shutdown().await.expect("node shutdown");
         let _ = std::fs::remove_dir_all(admission.path);
     }
 
@@ -2170,7 +2182,7 @@ mod job_calls {
         assert!(
             matches!(&answers["missing"], RoundResult::Error { error } if error.contains("nope"))
         );
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
@@ -2252,7 +2264,7 @@ mod job_calls {
     async fn callback_invocation_is_not_offered_job_calls_result() {
         let node = open().await;
         let callback = StampContext::Callback {
-            node_did: "did:test:test".into(),
+            caller_did: "did:test:test".into(),
         };
         let requests = json!([result_request("r", "row", 0, 100)]);
         let call = run(
@@ -2272,7 +2284,7 @@ mod job_calls {
         )
         .await;
         assert!(call.outcome.output.get("job_calls").is_none());
-        node.shutdown().await;
+        node.shutdown().await.expect("node shutdown");
     }
 
     #[tokio::test]
