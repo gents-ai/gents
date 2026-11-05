@@ -459,8 +459,7 @@ mod tests {
             .unwrap();
         let rejection = axum::Json::<EnrollmentOperatorQueryCommand>::from_request(request, &())
             .await
-            .err()
-            .expect("unknown query");
+            .expect_err("unknown query");
         assert_eq!(
             rejection.status(),
             axum::http::StatusCode::UNPROCESSABLE_ENTITY
