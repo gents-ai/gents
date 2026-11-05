@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "tools::surface::root_publication::tests::native_workspace_root_publication_obeys_node_authority",
+            package: "gents",
+            source_path: "crates/gents/src/tools/surface/root_publication.rs",
+            module_path: "tools::surface::root_publication::tests",
+            function: "native_workspace_root_publication_obeys_node_authority",
+        },
+        ConformanceConsumer::RustTest {
             id: "documents::write_tool::tests::workspace_datastore_create_tools_follow_the_model",
             package: "gents",
             source_path: "crates/gents/src/documents/write_tool.rs",
