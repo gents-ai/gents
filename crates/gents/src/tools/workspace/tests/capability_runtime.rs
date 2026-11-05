@@ -61,40 +61,14 @@ async fn workspace_completion_reads_keep_selected_agent_visibility() -> anyhow::
         )
         .await?;
     assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
-    let repository_policy = node.add_dac_policy_as(&context, "name: WorkspaceCompletionReads\nresources:\n  - name: facts\n    permissions:\n      - name: read\n      - name: update\n      - name: delete\n").await?;
-    for (name, schema) in [
-        (
-            "IsolatedWorkspace",
-            gents_protocol::schemas::ISOLATED_WORKSPACE,
-        ),
-        (
-            "WorkspacePlacement",
-            gents_protocol::schemas::WORKSPACE_PLACEMENT,
-        ),
-        (
-            "WorkspaceBinding",
-            gents_protocol::schemas::WORKSPACE_BINDING,
-        ),
-        (
-            "WorkspaceReceipt",
-            gents_protocol::schemas::WORKSPACE_RECEIPT,
-        ),
-        (
-            "RepositoryPlacement",
-            gents_protocol::schemas::REPOSITORY_PLACEMENT,
-        ),
+    for schema in [
+        gents_protocol::schemas::ISOLATED_WORKSPACE,
+        gents_protocol::schemas::WORKSPACE_PLACEMENT,
+        gents_protocol::schemas::WORKSPACE_BINDING,
+        gents_protocol::schemas::WORKSPACE_RECEIPT,
+        gents_protocol::schemas::REPOSITORY_PLACEMENT,
     ] {
-        let (id, resource) = if name == "RepositoryPlacement" {
-            (&repository_policy, "facts")
-        } else {
-            (&policy, "agent_children")
-        };
-        let schema = schema.replacen(
-            &format!("type {name}"),
-            &format!("type {name} @policy(id: \"{id}\", resource: \"{resource}\")"),
-            1,
-        );
-        node.add_collection_as(&context, &schema).await?;
+        node.add_collection_as(&context, schema).await?;
     }
     let admin = crate::ConfigAccess::local_as(node.clone(), runtime.did().parse()?);
     for actor in [selected.did(), other.did()] {
