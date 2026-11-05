@@ -377,6 +377,39 @@ mod tests {
                 );
             }
         }
+        let writer_access = client(&endpoint, &writer)?;
+        let update = format!("mutation($input: WorkspaceRootMutationInputArg!) {{ update_WorkspaceRoot(docID: \"{}\", input: $input) {{ _docID }} }}", escape_graphql_string(&root_doc));
+        let denied_update = writer_access
+            .transact_write("test.root.reader_update_denied", |txn| {
+                let update = &update;
+                Box::pin(async move {
+                    txn.execute_client_signed_update(
+                        update,
+                        &json!({"input":{"enabled":false}}),
+                        gents_protocol::schemas::WORKSPACE_ROOT,
+                    )
+                    .await
+                })
+            })
+            .await;
+        let changed = match denied_update {
+            Ok(response) => !mutation_documents(&response, "update_WorkspaceRoot")?
+                .unwrap_or_default()
+                .is_empty(),
+            Err(_) => false,
+        };
+        let writer_case = cases
+            .iter()
+            .find(|case| case["actor"] == "writer" && case["permission"] == "update")
+            .context("missing modeled writer update")?;
+        assert_eq!(changed, writer_case["expected"].as_bool().unwrap());
+        let observed = owner
+            .execute(&format!(
+                "{{ WorkspaceRoot(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ enabled }} }}",
+                escape_graphql_string(&root_doc)
+            ))
+            .await?;
+        assert_eq!(observed["data"]["WorkspaceRoot"][0]["enabled"], true);
         let runtime_access = client(&endpoint, &runtime)?;
         let before = owner
             .execute(&format!(
@@ -402,16 +435,29 @@ mod tests {
             .await?;
         assert_eq!(before, after);
         assert!(root_row_in_access(&owner, &denied_path).await?.is_empty());
+        assert!(set_workspace_root_with_readers(
+            &owner,
+            runtime.did(),
+            &denied_path,
+            None,
+            true,
+            &[other.did().to_owned()]
+        )
+        .await
+        .is_err());
+        assert!(root_row_in_access(&owner, &denied_path).await?.is_empty());
         let aborted_path = directory
             .path()
             .join("aborted")
             .to_string_lossy()
             .into_owned();
         let runtime_did = runtime.did().to_owned();
+        let writer_did = writer.did().to_owned();
         let aborted: Result<()> = owner.transact_write("test.root.abort", |txn| {
             let node_doc = &node_doc;
             let aborted_path = &aborted_path;
             let runtime_did = &runtime_did;
+            let writer_did = &writer_did;
             Box::pin(async move {
                 fence_node(txn, node_doc).await?;
                 let response = txn.execute_client_signed_create(
@@ -420,6 +466,7 @@ mod tests {
                     gents_protocol::schemas::WORKSPACE_ROOT).await?;
                 let doc = created_doc_id(&response, "WorkspaceRoot")?;
                 txn.add_resource_relationship("WorkspaceRoot", &doc, "parent", "nodes", node_doc).await?;
+                txn.add_actor_relationship("WorkspaceRoot", &doc, "reader", &identity::Did::new(writer_did)?).await?;
                 anyhow::bail!("intentional abort")
             })
         }).await;
