@@ -90,11 +90,14 @@ pub(super) fn cold_backup(plan: &Plan, directory: &Path) -> Result<()> {
         } else {
             path.clone()
         };
-        copy_tree(
+        copy_backup_tree(
             &source,
             &temp
                 .path()
                 .join(path.file_name().context("owned filename")?),
+            path == plan
+                .home
+                .join(gents::store::local::home::PLUGIN_SERVICES_DIR_NAME),
         )?;
     }
     fs::write(
@@ -107,7 +110,16 @@ pub(super) fn cold_backup(plan: &Plan, directory: &Path) -> Result<()> {
     File::open(directory)?.sync_all()?;
     Ok(())
 }
+#[cfg(test)]
 pub(super) fn copy_tree(source: &Path, target: &Path) -> Result<()> {
+    copy_backup_tree(source, target, false)
+}
+
+fn transient_worker(entry: &fs::DirEntry) -> Result<bool> {
+    Ok(entry.file_type()?.is_dir() && entry.file_name().to_string_lossy().starts_with("run-"))
+}
+
+fn copy_backup_tree(source: &Path, target: &Path, workers: bool) -> Result<()> {
     let meta = fs::symlink_metadata(source)?;
     if meta.file_type().is_symlink() {
         #[cfg(unix)]
@@ -118,10 +130,15 @@ pub(super) fn copy_tree(source: &Path, target: &Path) -> Result<()> {
         fs::create_dir(target)?;
         fs::set_permissions(target, meta.permissions())?;
         for entry in fs::read_dir(source)? {
-            let path = entry?.path();
-            copy_tree(
+            let entry = entry?;
+            if workers && transient_worker(&entry)? {
+                continue;
+            }
+            let path = entry.path();
+            copy_backup_tree(
                 &path,
                 &target.join(path.file_name().context("backup entry")?),
+                false,
             )?;
         }
         File::open(target)?.sync_all()?;
@@ -231,11 +248,15 @@ impl Changes {
 }
 
 pub(super) fn check_backup_capacity(home: &Path, destination: &Path) -> Result<()> {
-    fn size(path: &Path) -> Result<u64> {
+    fn size(path: &Path, workers: bool) -> Result<u64> {
         let meta = fs::symlink_metadata(path)?;
         if meta.is_dir() {
             fs::read_dir(path)?.try_fold(0u64, |sum, entry| {
-                sum.checked_add(size(&entry?.path())?)
+                let entry = entry?;
+                if workers && transient_worker(&entry)? {
+                    return Ok(sum);
+                }
+                sum.checked_add(size(&entry.path(), false)?)
                     .context("backup size overflow")
             })
         } else if meta.is_file() || meta.file_type().is_symlink() {
@@ -252,7 +273,10 @@ pub(super) fn check_backup_capacity(home: &Path, destination: &Path) -> Result<(
             path
         };
         bytes = bytes
-            .checked_add(size(&source)?)
+            .checked_add(size(
+                &source,
+                source == home.join(gents::store::local::home::PLUGIN_SERVICES_DIR_NAME),
+            )?)
             .context("backup size overflow")?;
     }
     #[cfg(not(unix))]

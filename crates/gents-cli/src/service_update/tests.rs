@@ -447,6 +447,50 @@ fn cold_backup_copies_the_claimed_store_even_when_its_directory_is_a_symlink() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn cold_backup_omits_transient_plugin_workers_without_touching_other_state() {
+    use std::os::unix::fs::symlink;
+
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("data");
+    let services = home.path().join("plugin-services");
+    let worker = services.join("run-worker");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("retained"), b"store").unwrap();
+    std::fs::create_dir_all(worker.join("profile")).unwrap();
+    symlink("missing-target", worker.join("profile/SingletonLock")).unwrap();
+    std::fs::create_dir_all(services.join("persistent/run-nested")).unwrap();
+    std::fs::write(services.join("persistent/run-nested/state"), b"keep").unwrap();
+    std::fs::write(services.join("run-file"), b"keep file").unwrap();
+    let plan = fixture_plan(home.path());
+    let directory = operation_dir(home.path(), plan.id);
+    let _store = gents::store::local::home::lock_home_store(home.path()).unwrap();
+    files::cold_backup(&plan, &directory).unwrap();
+    let backup = directory.join("backup");
+    assert_eq!(
+        std::fs::read(backup.join("data/retained")).unwrap(),
+        b"store"
+    );
+    assert!(!backup.join("plugin-services/run-worker").exists());
+    assert_eq!(
+        std::fs::read(backup.join("plugin-services/persistent/run-nested/state")).unwrap(),
+        b"keep"
+    );
+    assert_eq!(
+        std::fs::read(backup.join("plugin-services/run-file")).unwrap(),
+        b"keep file"
+    );
+    assert!(std::fs::symlink_metadata(worker.join("profile/SingletonLock")).is_ok());
+    let restored = home.path().join("restored");
+    files::copy_tree(&backup.join("plugin-services"), &restored).unwrap();
+    assert_eq!(
+        std::fs::read(restored.join("persistent/run-nested/state")).unwrap(),
+        b"keep"
+    );
+    assert!(!restored.join("run-worker").exists());
+}
+
 #[test]
 fn login_enablement_can_change_without_disrupting_the_calling_runtime() {
     let home = tempfile::tempdir().unwrap();
