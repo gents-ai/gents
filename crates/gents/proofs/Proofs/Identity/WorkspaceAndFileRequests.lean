@@ -85,6 +85,17 @@ def freezeWorkspaceAgents (node : String) (configured : Option WorkspaceAgentSel
   if agents.writer.isEmpty || agents.integrator.isEmpty || agents.writer == node || agents.integrator == node
     then none else some agents
 
+/-- Read-only participants are explicit Agent selections, frozen with the
+writer and integrator. A node DID cannot stand in for a reader. -/
+def freezeWorkspaceReaders (node : String) (readers : List String) : Option (List String) :=
+  if readers.any (fun reader => reader.isEmpty || reader == node) then none else some readers
+
+theorem configured_workspace_readers_are_retained :
+    freezeWorkspaceReaders "node" ["reviewer", "recorder"] = some ["reviewer", "recorder"] := by decide
+
+theorem node_is_not_a_workspace_reader :
+    freezeWorkspaceReaders "node" ["node"] = none := by decide
+
 theorem missing_selection_does_not_select_node : freezeWorkspaceAgents "node" none = none := by rfl
 theorem distinct_selected_agents_are_retained :
     freezeWorkspaceAgents "node" (some ⟨"writer", "integrator"⟩) = some ⟨"writer", "integrator"⟩ := by decide
@@ -173,6 +184,7 @@ def workspacePublicationFixture : Household.State :=
     relations := [⟨"workspaces", "workspace", "parent", .object "agents" "agent-doc"⟩,
       ⟨"workspaces", "workspace", "writer", .actor "writer"⟩,
       ⟨"workspaces", "workspace", "integrator", .actor "integrator"⟩,
+      ⟨"workspaces", "workspace", "reader", .actor "reader"⟩,
       ⟨"workspace_children", "binding", "parent", .object "workspaces" "workspace"⟩],
     enrolled := [] }
 
@@ -182,10 +194,12 @@ def workspaceChildPermission (actor permission : String) : Bool :=
 theorem selected_agents_see_the_same_binding :
     workspaceChildPermission "writer" "read" = true ∧
     workspaceChildPermission "integrator" "read" = true ∧
+    workspaceChildPermission "reader" "read" = true ∧
+    workspaceChildPermission "reader" "update" = false ∧
     workspaceChildPermission "other" "read" = false := by native_decide
 
 def workspaceChildCasesJson : String :=
-  (Lean.toJson (["user", "creator", "writer", "integrator", "other"].flatMap fun actor =>
+  (Lean.toJson (["user", "creator", "writer", "integrator", "reader", "other"].flatMap fun actor =>
     ["read", "update", "delete"].map fun permission => Lean.Json.mkObj
       [("actor", Lean.toJson actor), ("permission", Lean.toJson permission),
        ("expected", Lean.toJson (workspaceChildPermission actor permission))])).compress
@@ -199,7 +213,7 @@ def revokedWorkspaceChildFixture : Household.State :=
     (.revoke ⟨"workspace_children", "binding", "parent", .object "workspaces" "workspace"⟩)
 
 def workspaceChildRevocationCasesJson : String :=
-  (Lean.toJson (["user", "creator", "writer", "integrator", "other"].map fun actor =>
+  (Lean.toJson (["user", "creator", "writer", "integrator", "reader", "other"].map fun actor =>
     Lean.Json.mkObj [("actor", Lean.toJson actor),
       ("read", Lean.toJson (Household.allowed 8 revokedWorkspaceChildFixture actor "workspace_children" "binding" "read"))])).compress
 
