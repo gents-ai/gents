@@ -133,6 +133,18 @@ impl Fixture {
         )
         .await
         .unwrap();
+        let (session_doc_id, agent_did, agent_doc_id, replacement_evidence) =
+            test_signed_replacement_fields(
+                &ConfigAccess::local_as(
+                    self.node.clone(),
+                    ::identity::Did::new(self.identity.did()).unwrap(),
+                ),
+                self.identity.as_ref(),
+                self.identity.did(),
+                SESSION,
+                &replacements,
+            )
+            .await;
         let mut command = SessionInputEdit {
             version: SESSION_INPUT_EDIT_VERSION,
             command_id: uuid::Uuid::new_v4().to_string(),
@@ -140,10 +152,14 @@ impl Fixture {
             requester_peer_id: None,
             node_did: self.identity.did().to_owned(),
             session_id: SESSION.into(),
+            session_doc_id,
+            agent_did,
+            agent_doc_id,
             issued_at: (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
             expires_at: (Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
             edit,
             replacements,
+            replacement_evidence,
             signature: Vec::new(),
         };
         command.signature = self
@@ -399,6 +415,18 @@ impl ModeledQueue {
         if !authority.replacements_valid {
             replacements[0].admission.signature[0] ^= 1;
         }
+        let (session_doc_id, agent_did, agent_doc_id, replacement_evidence) =
+            test_signed_replacement_fields(
+                &ConfigAccess::local_as(
+                    self.fixture.node.clone(),
+                    ::identity::Did::new(self.fixture.identity.did()).unwrap(),
+                ),
+                requester,
+                self.fixture.identity.did(),
+                SESSION,
+                &replacements,
+            )
+            .await;
         let mut command = SessionInputEdit {
             version: SESSION_INPUT_EDIT_VERSION,
             command_id: format!("command-{}", model.id),
@@ -410,10 +438,14 @@ impl ModeledQueue {
             } else {
                 "another-session".into()
             },
+            session_doc_id,
+            agent_did,
+            agent_doc_id,
             issued_at: self.instant(model.issued_at).to_rfc3339(),
             expires_at: self.instant(model.expires_at).to_rfc3339(),
             edit,
             replacements,
+            replacement_evidence,
             signature: Vec::new(),
         };
         command.signature = requester.sign(&command.signing_payload()).await.unwrap();

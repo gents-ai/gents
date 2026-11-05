@@ -3,8 +3,8 @@ use crate::{enrollment::canonical_domain_payload, request_admission::AgentReques
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const SESSION_INPUT_EDIT_VERSION: u8 = 1;
-pub const AUTHORED_QUEUE_EDIT_VERSION: u64 = 1;
+pub const SESSION_INPUT_EDIT_VERSION: u8 = 2;
+pub const AUTHORED_QUEUE_EDIT_VERSION: u64 = 2;
 pub const STATUS_AUTHORED_QUEUE_EDIT_FIELD: &str = "authored_queue_edit_version";
 
 #[derive(Debug, thiserror::Error)]
@@ -25,6 +25,10 @@ pub enum SessionInputEditError {
     NoRequestsSelected,
     #[error("message and presigned replacement counts differ")]
     ReplacementCountMismatch,
+    #[error("native replacement evidence does not match replacement count")]
+    ReplacementEvidenceCountMismatch,
+    #[error("replacement signer or physical targets differ from the edit")]
+    ReplacementTargetsDiffer,
     #[error("unsupported session input edit receipt version")]
     UnsupportedReceiptVersion,
     #[error("invalid session input edit receipt signature length")]
@@ -74,10 +78,14 @@ pub struct SessionInputEdit {
     pub requester_peer_id: Option<String>,
     pub node_did: String,
     pub session_id: String,
+    pub session_doc_id: String,
+    pub agent_did: String,
+    pub agent_doc_id: String,
     pub issued_at: String,
     pub expires_at: String,
     pub edit: PendingQueueEdit,
     pub replacements: Vec<AgentRequestCreate>,
+    pub replacement_evidence: Vec<serde_json::Value>,
     pub signature: Vec<u8>,
 }
 
@@ -93,6 +101,9 @@ impl SessionInputEdit {
             self.requester_did.clone(),
             self.node_did.clone(),
             self.session_id.clone(),
+            self.session_doc_id.clone(),
+            self.agent_did.clone(),
+            self.agent_doc_id.clone(),
             self.issued_at.clone(),
             self.expires_at.clone(),
         ];
@@ -139,8 +150,14 @@ impl SessionInputEdit {
             fields.push(hex(&replacement.signing_payload()));
             fields.push(hex(&replacement.admission.signature));
         }
+        fields.push(self.replacement_evidence.len().to_string());
+        for evidence in &self.replacement_evidence {
+            fields.push(hex(
+                &serde_json::to_vec(evidence).expect("native evidence serializes")
+            ));
+        }
         canonical_domain_payload(
-            "gents-session-input-edit-v1",
+            "gents-session-input-edit-v2",
             fields.iter().map(String::as_str),
         )
     }
@@ -166,6 +183,9 @@ impl SessionInputEdit {
             &self.requester_did,
             &self.node_did,
             &self.session_id,
+            &self.session_doc_id,
+            &self.agent_did,
+            &self.agent_doc_id,
         ] {
             if value.trim().is_empty() {
                 return Err(SessionInputEditError::EmptyIdentity);
@@ -191,6 +211,19 @@ impl SessionInputEdit {
         }
         if self.edit.messages.len() != self.replacements.len() {
             return Err(SessionInputEditError::ReplacementCountMismatch);
+        }
+        if self.replacement_evidence.len() != self.replacements.len() {
+            return Err(SessionInputEditError::ReplacementEvidenceCountMismatch);
+        }
+        if self.replacements.iter().any(|create| {
+            create.admission.signer_did != self.requester_did
+                || create.node_did != self.node_did
+                || create.session_id != self.session_id
+                || create.session_doc_id.as_deref() != Some(self.session_doc_id.as_str())
+                || create.agent_did != self.agent_did
+                || create.agent_doc_id.as_deref() != Some(self.agent_doc_id.as_str())
+        }) {
+            return Err(SessionInputEditError::ReplacementTargetsDiffer);
         }
         Ok(())
     }
@@ -306,6 +339,9 @@ mod tests {
             requester_peer_id: None,
             node_did: "node".into(),
             session_id: "session".into(),
+            session_doc_id: "session-doc".into(),
+            agent_did: "agent".into(),
+            agent_doc_id: "agent-doc".into(),
             issued_at: "2026-01-01T00:00:00Z".into(),
             expires_at: "2026-01-01T00:01:00Z".into(),
             edit: PendingQueueEdit {
@@ -314,6 +350,7 @@ mod tests {
                 messages: vec![message("one"), message("two")],
             },
             replacements: Vec::new(),
+            replacement_evidence: Vec::new(),
             signature: Vec::new(),
         };
         let legacy = command.signing_payload();
@@ -327,5 +364,23 @@ mod tests {
         command.edit.messages[0].authored_input = None;
         command.edit.messages[1].authored_input = Some(input);
         assert_ne!(first, command.signing_payload());
+
+        let bound = command.signing_payload();
+        command.session_doc_id = "different-session-doc".into();
+        assert_ne!(bound, command.signing_payload());
+        command.session_doc_id = "session-doc".into();
+        command.agent_did = "different-agent".into();
+        assert_ne!(bound, command.signing_payload());
+        command.agent_did = "agent".into();
+        command.agent_doc_id = "different-agent-doc".into();
+        assert_ne!(bound, command.signing_payload());
+        command.agent_doc_id = "agent-doc".into();
+        command
+            .replacement_evidence
+            .push(serde_json::json!({"block": [1, 2, 3]}));
+        assert_ne!(bound, command.signing_payload());
+        let evidence_bound = command.signing_payload();
+        command.replacement_evidence[0]["block"][0] = serde_json::json!(4);
+        assert_ne!(evidence_bound, command.signing_payload());
     }
 }

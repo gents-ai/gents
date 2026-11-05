@@ -440,13 +440,21 @@ pub(crate) async fn prepare_pending_user_edit_with_deliveries(
                 delivery,
             },
         )?;
+        let create = crate::request::lifecycle::materialize::build_request(spec)?;
         creates.push(
-            crate::request::lifecycle::build_signed_client_request(
-                access,
-                spec,
-                RequestSigner::Identity(signer),
-            )
-            .await?,
+            access
+                .transact_readonly("queue.edit.bind_targets", |txn| {
+                    let create = create.clone();
+                    Box::pin(async move {
+                        crate::request::lifecycle::client::build_signed_edit_request_in_txn(
+                            txn,
+                            create,
+                            RequestSigner::Identity(signer),
+                        )
+                        .await
+                    })
+                })
+                .await?,
         );
     }
     Ok(creates)
@@ -702,7 +710,9 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
             return Ok(Err(error.to_string()));
         }
     }
-    if persisted_replacements_in_txn(txn, node_did, creates).await? != PersistedReplacements::None {
+    if persisted_replacements_in_txn(txn, node_did, creates, None).await?
+        != PersistedReplacements::None
+    {
         return Ok(Err("Replacement request identity already exists.".into()));
     }
     Ok(Ok(validated))
@@ -719,26 +729,36 @@ pub(crate) async fn persisted_replacements_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     creates: &[AgentRequestCreate],
+    expected_docs: Option<&[String]>,
 ) -> Result<PersistedReplacements> {
+    anyhow::ensure!(
+        expected_docs.is_none_or(|docs| docs.len() == creates.len()),
+        "replacement evidence count changed"
+    );
     let mut exact = Vec::new();
     let mut missing = 0;
-    for create in creates {
+    for (index, create) in creates.iter().enumerate() {
         let response = txn.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID admission_signature }} }}"#,
+            r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID admission_signature }} }}"#,
             escape_graphql_string(node_did), escape_graphql_string(&create.request_id)
         )).await?;
         let existing = response["data"]["AgentRequest"]
             .as_array()
             .context("replacement identity lookup missing")?;
+        if existing.len() > 1 {
+            return Ok(PersistedReplacements::Conflicting);
+        }
         match existing.first() {
             None => missing += 1,
             Some(row)
-                if row["admission_signature"].as_str()
-                    == Some(
-                        bs58::encode(&create.admission.signature)
-                            .into_string()
-                            .as_str(),
-                    ) =>
+                if expected_docs
+                    .is_none_or(|docs| row["_docID"].as_str() == Some(docs[index].as_str()))
+                    && row["admission_signature"].as_str()
+                        == Some(
+                            bs58::encode(&create.admission.signature)
+                                .into_string()
+                                .as_str(),
+                        ) =>
             {
                 exact.push(
                     row["_docID"]
@@ -760,6 +780,7 @@ pub(crate) async fn persisted_replacements_in_txn(
 pub(crate) async fn apply_pending_user_edit_in_txn(
     txn: &ConfigApplyTxn<'_>,
     validated: ValidatedPendingEdit,
+    graphs: &[std::sync::Arc<db::block::builder::VerifiedClientCreate>],
 ) -> Result<PendingQueueReceipt> {
     let ValidatedPendingEdit {
         node_did,
@@ -771,11 +792,22 @@ pub(crate) async fn apply_pending_user_edit_in_txn(
         request_doc_ids: Vec::new(),
         request_ids: Vec::new(),
     };
-    for create in &creates {
-        let response = txn
-            .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
+    anyhow::ensure!(
+        graphs.len() == creates.len(),
+        "replacement graph count changed"
+    );
+    for (create, graph) in creates.iter().zip(graphs) {
+        let session = create
+            .session_doc_id
+            .as_deref()
+            .context("replacement session target missing")?;
+        let agent = create
+            .agent_doc_id
+            .as_deref()
+            .context("replacement Agent target missing")?;
+        let id = txn
+            .stage_verified_edit_request(create, graph.clone(), session, agent)
             .await?;
-        let id = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
         receipt.request_doc_ids.push(id);
         receipt.request_ids.push(create.request_id.clone());
     }
@@ -926,10 +958,20 @@ pub(super) async fn replace_pending_user_messages(
         None,
     )
     .await?;
+    let mut graphs = Vec::with_capacity(creates.len());
+    for create in &creates {
+        let input = crate::request::lifecycle::client_request_input(create)?;
+        let evidence =
+            crate::store::config_client::prepare_request_evidence(signer, input.clone()).await?;
+        graphs.push(std::sync::Arc::new(
+            crate::store::config_client::verify_request_evidence(input, evidence).await?,
+        ));
+    }
     access
         .transact_write("queue.replace_pending_messages", |txn| {
             let edit = &edit;
             let creates = &creates;
+            let graphs = &graphs;
             Box::pin(async move {
                 let validated = validate_pending_user_edit_in_txn(
                     txn,
@@ -942,7 +984,7 @@ pub(super) async fn replace_pending_user_messages(
                 )
                 .await?
                 .map_err(anyhow::Error::msg)?;
-                apply_pending_user_edit_in_txn(txn, validated).await
+                apply_pending_user_edit_in_txn(txn, validated, graphs).await
             })
         })
         .await

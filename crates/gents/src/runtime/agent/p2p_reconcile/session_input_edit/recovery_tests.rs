@@ -111,6 +111,15 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
     )
     .await
     .unwrap();
+    let (session_doc_id, agent_did, agent_doc_id, replacement_evidence) =
+        test_signed_replacement_fields(
+            &access,
+            home.identity.as_ref(),
+            did,
+            "edit-session",
+            &replacements,
+        )
+        .await;
     let mut command = SessionInputEdit {
         version: SESSION_INPUT_EDIT_VERSION,
         command_id: uuid::Uuid::new_v4().to_string(),
@@ -118,10 +127,14 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
         requester_peer_id: None,
         node_did: did.to_owned(),
         session_id: "edit-session".into(),
+        session_doc_id,
+        agent_did,
+        agent_doc_id,
         issued_at: issued_at.to_rfc3339(),
         expires_at: (issued_at + chrono::Duration::minutes(5)).to_rfc3339(),
         edit,
         replacements,
+        replacement_evidence,
         signature: Vec::new(),
     };
     command.signature = home
