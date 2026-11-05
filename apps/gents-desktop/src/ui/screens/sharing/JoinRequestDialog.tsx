@@ -14,7 +14,7 @@ import { DEFAULT_LEASE_SECONDS, type JoinRequest } from "../../../hooks/sharing"
 import { useSharingActions } from "@/hooks/useSharing";
 import { SHARING_SECTION } from "@/lib/joinInvite";
 import { navigate } from "@/lib/router";
-import { fullTime, shortTime } from "../TranscriptMarker";
+import { fullTime } from "../TranscriptMarker";
 import { CopyButton, errorMessage, LeaseSelect, partyName, shortDid } from "./parts";
 import { MonitorSmartphone } from "lucide-react";
 import { cn } from "@gents/ui/lib/utils";
@@ -109,46 +109,44 @@ export function JoinRequestDialog() {
     >
       <DialogContent className="sm:max-w-lg" data-testid="join-request-dialog">
         <DialogHeader>
-          <div className="flex items-start gap-3">
+          <div className="flex items-center gap-3">
             <span
               aria-hidden
               className="grid size-10 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"
             >
               <MonitorSmartphone className="size-5" />
             </span>
-            <div className="grid min-w-0 gap-1">
+            <div className="grid min-w-0 gap-0.5">
               <DialogTitle>
-                {who} wants to join {nodeName}
+                {who} asks to join {nodeName}
               </DialogTitle>
-              <DialogDescription className="flex flex-wrap items-center gap-x-2">
-                <span className="flex min-w-0 items-center gap-1 font-mono text-xs">
-                  {shortDid(request.from.did)}
+              <DialogDescription className="flex flex-wrap items-center gap-x-1 text-xs">
+                <span
+                  className={cn(left < 60_000 && !gone && "text-warning")}
+                  title={fullTime(request.expiresAt)}
+                >
+                  {gone ? "No longer waiting" : expires}
+                </span>
+                <span aria-hidden>·</span>
+                <span className="flex min-w-0 items-center gap-0.5">
+                  from <span className="font-mono">{shortDid(request.from.did)}</span>
                   <CopyButton
                     text={request.from.did}
                     label={`Copy ${request.from.did}`}
                     title="Copy DID"
                   />
                 </span>
-                {request.requestedAt && (
-                  <span title={fullTime(request.requestedAt)}>
-                    asked {shortTime(request.requestedAt)}
-                  </span>
-                )}
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
-        <div
-          className={cn(
-            "grid gap-2 rounded-xl border p-4 text-sm",
-            request.scope.kind === "node"
-              ? "border-warning/40 bg-warning/5"
-              : "border-border bg-muted/40",
-          )}
-        >
-          <p>{grantText(request, nodeName)}</p>
-          <p className="flex flex-wrap items-center gap-2 text-muted-foreground">
+        <div className="grid gap-1.5 rounded-lg border border-border bg-muted/40 px-3.5 py-3 text-sm">
+          <b className="font-medium">They'd be able to</b>
+          <span>{ableTo(request, nodeName)}</span>
+          <b className="mt-1 font-medium">They'd see</b>
+          <span>{seeing(request, nodeName)}</span>
+          <span className="mt-1 flex flex-wrap items-center gap-2 text-muted-foreground">
             For
             <LeaseSelect
               value={lease}
@@ -156,13 +154,26 @@ export function JoinRequestDialog() {
               label={`Access for ${partyName(request.from)} lasts`}
               disabled={busy !== null || gone}
             />
-          </p>
-          {request.inviteId && (
-            <p className="text-muted-foreground">Using an invite you made.</p>
-          )}
+            {request.inviteId ? "· with an invite you made" : "· no invite"}
+          </span>
         </div>
 
-        <p className="text-sm text-muted-foreground">
+        {request.scope.kind === "node" && !gone && (
+          <p className="text-sm text-warning">
+            That's the whole node. Approve it only for a device of your own.
+          </p>
+        )}
+        {gone && (
+          <p role="status" className="text-sm text-muted-foreground">
+            This request isn't waiting any more: it expired, or was decided elsewhere.
+          </p>
+        )}
+        {error && !gone && (
+          <p role="alert" className="text-sm break-words text-destructive">
+            {error}
+          </p>
+        )}
+        <p className="text-xs text-muted-foreground">
           Nothing is shared until you approve.{" "}
           <button
             type="button"
@@ -176,31 +187,14 @@ export function JoinRequestDialog() {
           </button>
         </p>
 
-        {gone && (
-          <p role="status" className="text-sm text-muted-foreground">
-            This request isn't waiting any more: it expired, or was decided elsewhere.
-          </p>
-        )}
-        {error && !gone && (
-          <p role="alert" className="text-sm break-words text-destructive">
-            {error}
-          </p>
-        )}
-
-        <DialogFooter className="items-center sm:justify-between">
-          <span
-            className={cn(
-              "text-xs text-muted-foreground tabular-nums",
-              left < 60_000 && "text-warning",
-            )}
-            title={fullTime(request.expiresAt)}
-          >
-            {expires}
-          </span>
+        <DialogFooter className="flex-row items-center justify-between sm:justify-between">
           {gone ? (
-            <Button onClick={closeReview}>Close</Button>
+            <>
+              <span />
+              <Button onClick={closeReview}>Close</Button>
+            </>
           ) : (
-            <span className="flex gap-2">
+            <>
               <Button
                 variant="outline"
                 disabled={busy !== null}
@@ -211,7 +205,7 @@ export function JoinRequestDialog() {
               <Button disabled={busy !== null} onClick={() => void run("approve")}>
                 {busy === "approve" ? "Approving…" : "Approve"}
               </Button>
-            </span>
+            </>
           )}
         </DialogFooter>
       </DialogContent>
@@ -219,12 +213,22 @@ export function JoinRequestDialog() {
   );
 }
 
-/* what approving would give, in words: the whole node is the broad one */
-function grantText(request: JoinRequest, nodeName: string) {
+/* what approving would let them do, in words */
+function ableTo(request: JoinRequest, nodeName: string) {
   const { scope } = request;
   if (scope.kind === "node")
-    return `They'd get all of ${nodeName}: its agents, sessions and settings, and they could send requests to any of its agents.`;
+    return `Use all of ${nodeName}: its agents, settings and sessions, and send requests to any agent.`;
   if (scope.kind === "pack")
-    return `They'd get the ${scope.name} pack's data and pages on ${nodeName}, and nothing else.`;
-  return `They could start sessions with the ${scope.name} agent on ${nodeName}, and nothing else.`;
+    return `Use the ${scope.name} pack on ${nodeName}, and nothing else.`;
+  return `Start sessions with the ${scope.name} agent on ${nodeName}, and nothing else.`;
+}
+
+/* what of this node they'd see */
+function seeing(request: JoinRequest, nodeName: string) {
+  const { scope } = request;
+  if (scope.kind === "node")
+    return `Everything on ${nodeName}, including every session.`;
+  if (scope.kind === "pack")
+    return `The ${scope.name} pack's data, and nothing else of ${nodeName}.`;
+  return `The sessions they start with the ${scope.name} agent.`;
 }
