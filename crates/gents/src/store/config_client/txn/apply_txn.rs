@@ -51,6 +51,19 @@ pub(super) enum EmbeddedTransactionPurpose {
 }
 
 impl<'a> ConfigApplyTxn<'a> {
+    /// An unbound local collection cannot hide individual rows through DAC.
+    /// HTTP collection metadata and metadata failures do not prove completeness.
+    pub(crate) fn collection_has_no_document_policy(&self, name: &str) -> bool {
+        match &self.backend {
+            TxnBackend::Embedded { node, .. } => node
+                .get_collection(name)
+                .ok()
+                .flatten()
+                .is_some_and(|collection| collection.policy.is_none()),
+            TxnBackend::Http { .. } => false,
+        }
+    }
+
     pub(crate) fn managed_agent_signer(
         &self,
     ) -> Option<crate::store::identity::ManagedAgentSigner> {

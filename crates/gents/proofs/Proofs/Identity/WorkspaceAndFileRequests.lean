@@ -64,6 +64,12 @@ theorem hidden_policy_looks_unconfigured :
 theorem complete_unconfigured_store_keeps_fallback :
     rootFallbackAllowed true false = true := by decide
 
+def rootCompletenessCasesJson : String :=
+  (Lean.toJson ([false, true].flatMap fun complete => [false, true].map fun configured =>
+    Lean.Json.mkObj [("complete", Lean.toJson complete),
+      ("visible_configured", Lean.toJson configured),
+      ("fallback_allowed", Lean.toJson (rootFallbackAllowed complete configured))])).compress
+
 /-- Workspace effects are Agent-authored, while their logical parent grants
 the user access. Host-only placement and operator root configuration must not
 be inferred from that child relationship. -/

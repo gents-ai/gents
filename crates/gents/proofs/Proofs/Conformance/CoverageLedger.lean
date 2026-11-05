@@ -1521,6 +1521,12 @@ def caseCoverage : List CoverageEntry :=
       "client_journal_isolation::private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
+      "workspace_root_completeness_cases"
+      "WorkspaceRootCompletenessCases"
+      "tools::surface::root_admission::tests::workspace_root_fallback_requires_complete_visibility"
+      "Checks root projection for incomplete views; an ACL-bound authoritative root publication contract remains separate.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "mailbox_claimed_recipient_cases"
       "MailboxClaimedRecipientCases"
       "request::lifecycle::client::tests::mailbox_claim_tests::delegated_http_claim_routes_mailbox_to_immediate_signer"

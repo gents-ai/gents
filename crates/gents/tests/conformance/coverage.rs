@@ -495,6 +495,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "mailbox_claimed_recipient_cases",
             "MailboxClaimedRecipientCases",
         ),
+        (
+            !snapshot.workspace_root_completeness_cases.is_empty(),
+            "workspace_root_completeness_cases",
+            "WorkspaceRootCompletenessCases",
+        ),
     ] {
         if present {
             emitted.insert((key.into(), class.into()));

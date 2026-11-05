@@ -78,13 +78,24 @@ impl WorkspaceRootPolicy {
     }
 }
 
+/// The caller supplies all configured roots; actor-filtered database results
+/// must instead use the completeness-aware loader below.
 pub fn project_workspace_root_policy(
     documents: Vec<WorkspaceRootDocument>,
     ceiling_root: Option<&Path>,
 ) -> WorkspaceRootPolicy {
+    project_workspace_root_policy_with_completeness(documents, ceiling_root, true)
+}
+
+fn project_workspace_root_policy_with_completeness(
+    documents: Vec<WorkspaceRootDocument>,
+    ceiling_root: Option<&Path>,
+    complete: bool,
+) -> WorkspaceRootPolicy {
     let resolved_ceiling = ceiling_root.and_then(|ceiling| resolve_tool_root(ceiling).ok());
-    let configured =
-        !documents.is_empty() || (ceiling_root.is_some() && resolved_ceiling.is_none());
+    let configured = !complete
+        || !documents.is_empty()
+        || (ceiling_root.is_some() && resolved_ceiling.is_none());
 
     let candidates = if configured {
         documents
@@ -143,9 +154,10 @@ pub(crate) async fn load_workspace_root_policy_in_txn(
         .execute("{ WorkspaceRoot { root_path enabled } }")
         .await
         .context("querying WorkspaceRoot policy in configuration transaction")?;
-    Ok(project_workspace_root_policy(
+    Ok(project_workspace_root_policy_with_completeness(
         decode_workspace_root_rows(&response)?,
         ceiling_root,
+        txn.collection_has_no_document_policy("WorkspaceRoot"),
     ))
 }
 
@@ -160,9 +172,15 @@ pub async fn load_workspace_root_policy(
     )
     .await?;
     let value = serde_json::json!({"data": response.data.unwrap_or(serde_json::Value::Null)});
-    Ok(project_workspace_root_policy(
+    let complete = node
+        .get_collection("WorkspaceRoot")
+        .ok()
+        .flatten()
+        .is_some_and(|collection| collection.policy.is_none());
+    Ok(project_workspace_root_policy_with_completeness(
         decode_workspace_root_rows(&value)?,
         ceiling_root,
+        complete,
     ))
 }
 
@@ -432,6 +450,86 @@ fn resolve_path_with_canonical_prefix(path: &Path) -> Result<ResolvedToolRoot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_root_fallback_requires_complete_visibility() {
+        for case in
+            &crate::lean_vocab_test::lean_contract_snapshot().workspace_root_completeness_cases
+        {
+            let complete = case["complete"].as_bool().unwrap();
+            let visible_configured = case["visible_configured"].as_bool().unwrap();
+            let documents = if visible_configured {
+                vec![WorkspaceRootDocument {
+                    root_path: None,
+                    enabled: Some(false),
+                }]
+            } else {
+                Vec::new()
+            };
+            let policy = project_workspace_root_policy_with_completeness(documents, None, complete);
+            assert_eq!(
+                !policy.configured && policy.published.is_empty(),
+                case["fallback_allowed"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn filtered_native_workspace_roots_do_not_enable_fallback() -> anyhow::Result<()> {
+        use crate::store::identity::NodeIdentity;
+        let directory = tempfile::tempdir()?;
+        let owner = crate::KeyIdentity::load_or_create(directory.path().join("owner.key"), None)?;
+        let binding = crate::store::identity::provision_agent_identity(&owner)?;
+        let agent = crate::store::identity::resolve_agent_identity(&owner, &binding)?;
+        let node = std::sync::Arc::new(
+            defra_node::Node::builder()
+                .enable_signing()
+                .with_node_identity_did(owner.did())
+                .with_node_acp_enabled()
+                .build()
+                .await?,
+        );
+        let context =
+            defra_core::RequestContext::default().with_identity(Some(owner.did().to_owned()));
+        let policy_id = node.add_dac_policy_as(&context, "name: WorkspaceRootCompleteness\nresources:\n  - name: roots\n    permissions:\n      - name: read\n      - name: update\n      - name: delete\n").await?;
+        node.add_collection_as(&context, &format!(
+            "type WorkspaceRoot @policy(id: \"{policy_id}\", resource: \"roots\") {{ root_path: String enabled: Boolean }}"
+        )).await?;
+        let owner_access = crate::ConfigAccess::local_as(node.clone(), owner.did().parse()?);
+        for permission in [
+            crate::store::config_client::NodePermission::DocumentRead,
+            crate::store::config_client::NodePermission::CollectionGet,
+        ] {
+            owner_access
+                .grant_node_permission(&agent.did().parse()?, permission)
+                .await?;
+        }
+        owner_access.write("test.root.hidden", &format!(
+            "mutation {{ create_WorkspaceRoot(input: {{root_path: \"{}\", enabled: true}}) {{_docID}} }}",
+            crate::store::graphql::escape_graphql_string(&directory.path().to_string_lossy())
+        )).await?;
+        let access = crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            agent.did().parse()?,
+            agent.as_ref(),
+        )?;
+        let rows = access.execute("{ WorkspaceRoot { _docID } }").await?;
+        assert_eq!(rows["data"]["WorkspaceRoot"].as_array().unwrap().len(), 0);
+        let projected = access
+            .transact_readonly("test.root.filtered", |txn| {
+                Box::pin(async move { load_workspace_root_policy_in_txn(txn, None).await })
+            })
+            .await?;
+        assert!(projected.configured);
+        assert!(projected.published.is_empty());
+        assert!(matches!(
+            projected.admit(directory.path())?,
+            RootAdmission::Denied { .. }
+        ));
+        node.shutdown().await?;
+        Ok(())
+    }
 
     #[test]
     fn nonexistent_descendant_is_retained_and_admitted() {
