@@ -134,15 +134,23 @@ pub(crate) async fn load_pending_enrollments(
     home: &std::path::Path,
     graphql: &str,
 ) -> Result<serde_json::Value> {
+    load_enrollment_query(home, graphql, EnrollmentOperatorQuery::Pending).await
+}
+
+pub(crate) async fn load_enrollment_query(
+    home: &std::path::Path,
+    graphql: &str,
+    query: EnrollmentOperatorQuery,
+) -> Result<serde_json::Value> {
     let identity = resolve_home_identity(Some(home))
-        .context("loading operator identity for pending enrollments")?;
+        .context("loading operator identity for enrollment query")?;
     let mut url = reqwest::Url::parse(graphql).context("parsing runtime GraphQL endpoint")?;
     url.set_path("/enrollment/pending");
     url.set_query(None);
     url.set_fragment(None);
     let mut command = EnrollmentOperatorQueryCommand {
         protocol_version: ENROLLMENT_PROTOCOL_VERSION,
-        query: EnrollmentOperatorQuery::Pending,
+        query,
         admin_did: identity.did().to_string(),
         issued_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
         nonce: Uuid::new_v4().simple().to_string(),
@@ -151,7 +159,7 @@ pub(crate) async fn load_pending_enrollments(
     command.admin_sig = identity
         .sign(&command.signing_payload())
         .await
-        .context("signing pending enrollment query")?;
+        .context("signing enrollment query")?;
     let response = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()?
@@ -159,15 +167,15 @@ pub(crate) async fn load_pending_enrollments(
         .json(&command)
         .send()
         .await
-        .context("loading pending enrollment requests from live runtime")?;
+        .context("loading enrollment query from live runtime")?;
     let status = response.status();
     let body: serde_json::Value = response
         .json()
         .await
-        .context("decoding pending enrollment response")?;
+        .context("decoding enrollment query response")?;
     anyhow::ensure!(
         status.is_success(),
-        "runtime rejected enrollment pending query ({status}): {}",
+        "runtime rejected enrollment query ({status}): {}",
         body.get("error")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("unknown error")

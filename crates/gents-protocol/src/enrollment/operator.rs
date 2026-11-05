@@ -20,12 +20,16 @@ pub enum EnrollmentOperatorAction {
 #[serde(rename_all = "snake_case")]
 pub enum EnrollmentOperatorQuery {
     Pending,
+    Members,
+    History,
 }
 
 impl EnrollmentOperatorQuery {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Pending => "pending",
+            Self::Members => "members",
+            Self::History => "history",
         }
     }
 }
@@ -173,5 +177,30 @@ impl EnrollmentOperatorQueryCommand {
             return Err(EnrollmentError::OperatorQueryExpired);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operator_query_signatures_bind_the_requested_view() {
+        let mut command = EnrollmentOperatorQueryCommand {
+            protocol_version: ENROLLMENT_PROTOCOL_VERSION,
+            query: EnrollmentOperatorQuery::Pending,
+            admin_did: "did:key:operator".into(),
+            issued_at: "2026-11-05T00:00:00Z".into(),
+            nonce: "nonce".into(),
+            admin_sig: vec![0; 64],
+        };
+        let pending = command.signing_payload();
+        command.query = EnrollmentOperatorQuery::Members;
+        let members = command.signing_payload();
+        command.query = EnrollmentOperatorQuery::History;
+        let history = command.signing_payload();
+        assert_ne!(pending, members);
+        assert_ne!(pending, history);
+        assert_ne!(members, history);
     }
 }
