@@ -129,18 +129,26 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
                 "a resend never authors another request"
             );
             wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
-            run_cli_json(
+            let requests = gents_server::server_host::pending_managed_enrollments(&home_dir, &graphql)
+                .await
+                .context("listing managed pending enrollments")?;
+            assert!(requests.iter().any(|item| item.request_id == pending.request_id));
+            let outcome = gents_server::server_host::decide_managed_enrollment(
                 &home_dir,
-                &[
-                    "p2p",
-                    "enrollment",
-                    "approve",
-                    &pending.request_id,
-                    "--home",
-                    home_arg,
-                ],
+                &graphql,
+                &pending.request_id,
+                gents_server::server_host::ManagedEnrollmentDecision::Approve {
+                    lease_seconds: 3600,
+                },
             )
-            .context("approving enrollment request")?;
+            .await
+            .context("approving managed enrollment request")?;
+            assert_eq!(outcome.request_id, pending.request_id);
+            assert_eq!(outcome.state, "approved");
+            assert!(!gents_server::server_host::pending_managed_enrollments(&home_dir, &graphql)
+                .await?
+                .iter()
+                .any(|item| item.request_id == pending.request_id));
 
             let enrolled = wait_for_chat_ready_enrollment(&core, &node_did).await?;
             assert_ne!(
