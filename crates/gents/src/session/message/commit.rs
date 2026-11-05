@@ -67,7 +67,7 @@ pub(crate) async fn commit(
         .as_ref()
         .map(|_| crate::subscribe_collections(node, ["AgentToolCall"]))
         .transpose()?;
-    let error = match commit_once(node, cause, lifecycle, plan, report_delivery).await {
+    let error = match Box::pin(commit_once(node, cause, lifecycle, plan, report_delivery)).await {
         Ok(receipt) => {
             if new_child.is_some() {
                 complete_new_child_relationships(node, lifecycle, &receipt).await;
@@ -80,7 +80,10 @@ pub(crate) async fn commit(
         let changes = changes
             .as_mut()
             .expect("new child subscribed before publication");
-        return observe_unconfirmed_child(node, cause, lifecycle, expected, changes).await;
+        return Box::pin(observe_unconfirmed_child(
+            node, cause, lifecycle, expected, changes,
+        ))
+        .await;
     }
     let doc_id = lifecycle
         .doc_id()

@@ -250,7 +250,7 @@ where
             })
             .map(Arc::new);
         let inference = Box::pin(async {
-                let prepared = async {
+                let prepared = Box::pin(async {
                     let output_obligation_gate = crate::runtime::agent::output_obligation::OutputObligationGate::for_request(
                         self.node.clone(), request, self.output_obligations.as_ref(),
                     ).await?;
@@ -588,7 +588,7 @@ where
                         loop_prompt,
                         max_turns_provenance,
                     ))
-                };
+                });
                 let Some(prepared) =
                     super::request::prepare_unless_interrupted(interrupt_rx, prepared).await
                 else {
@@ -652,7 +652,7 @@ where
                     attempt_index,
                     inference_token.clone(),
                     terminal_failure_reason.clone(),
-                    async {
+                    Box::pin(async {
                         let mut processor = crate::runtime::agent::stream_processor::StreamProcessor::new(
                             &persistence_hook,
                             stream_writer,
@@ -963,7 +963,7 @@ where
                             return Err(error);
                         }
                         Ok(HandleRequestOutcome::Completed)
-                    },
+                    }),
                 )
                 .await
             }
