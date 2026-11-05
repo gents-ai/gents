@@ -905,6 +905,109 @@ async fn claim_selected_publication_keeps_later_incompatible_pending_row() {
 }
 
 #[tokio::test]
+async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
+    let case = crate::lean_vocab_test::lean_contract_snapshot()
+        .agent_steering_boundary_cases
+        .iter()
+        .find(|case| {
+            case.inputs
+                .iter()
+                .map(|item| item.kind.as_str())
+                .collect::<Vec<_>>()
+                == ["queued", "user_steer", "queued"]
+        })
+        .expect("modeled user steer behind queued messages");
+    let db = test_db("direct-steer-queued-followups").await;
+    let session_id = "direct-steer-queued-followups";
+    let entry = |id, delivery: &str| LeanFoldQueueEntry {
+        request_id: id,
+        execution_origin: "interactive".into(),
+        delivery: delivery.into(),
+        order_key: id,
+        source: "user".into(),
+        policy: "append".into(),
+        queued_after: Some(99),
+        requester_id: Some(1),
+        turn_context: 0,
+        fresh: true,
+    };
+    let mut bound = RapidHashMap::new();
+    let head = LeanFoldQueueEntry {
+        queued_after: None,
+        ..entry(99, "queue")
+    };
+    bound.insert(99, enqueue_signed(&db, session_id, &head, 0).await);
+    let mut active = claim_head(&db, &bound, 99, &[]).await;
+    let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
+    active.begin(&writer).await;
+    for (index, item) in case.inputs.iter().enumerate() {
+        let delivery = if item.kind == "user_steer" {
+            "steer"
+        } else {
+            "queue"
+        };
+        bound.insert(
+            item.id,
+            enqueue_signed(&db, session_id, &entry(item.id, delivery), index + 1).await,
+        );
+    }
+    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        db.node.clone(),
+        db.identity.clone(),
+        authority,
+    );
+    let snapshot =
+        super::super::intake::steering_snapshot(&db.node, active.lifecycle.request(), &verifier)
+            .await
+            .unwrap();
+    let selected = case.expected.expect("modeled steer selection");
+    assert_eq!(snapshot.inputs.len(), 1);
+    assert_eq!(snapshot.inputs[0].key, folded_input_key(&bound[&selected]));
+    writer
+        .publish_authored_message(
+            &active.lifecycle,
+            &folded_input_key(&bound[&selected]),
+            &gents_protocol::message::Message::user(format!("message {selected}")),
+        )
+        .await
+        .unwrap();
+    let rows = fold_rows(&db.node, session_id).await;
+    let access = crate::store::config_client::ConfigAccess::local(db.node.clone());
+    let queue = pending_user_queue(&access, db.node_did(), session_id, db.node_did())
+        .await
+        .unwrap();
+    assert_eq!(
+        queue
+            .entries
+            .iter()
+            .map(|item| item.request_id.clone())
+            .collect::<Vec<_>>(),
+        case.inputs
+            .iter()
+            .filter(|item| Some(item.id) != case.expected)
+            .map(|item| item.id.to_string())
+            .collect::<Vec<_>>()
+    );
+    for item in &case.inputs {
+        let row = rows
+            .iter()
+            .find(|row| row.request_id == item.id.to_string())
+            .unwrap();
+        if Some(item.id) == case.expected {
+            assert_eq!(row.lifecycle_state, RequestLifecycleState::Superseded);
+            assert_eq!(
+                row.superseded_by_request_doc_id.as_deref(),
+                Some(bound[&99].as_str())
+            );
+        } else {
+            assert_eq!(row.lifecycle_state, RequestLifecycleState::Pending);
+            assert!(row.superseded_by_request_doc_id.is_none());
+        }
+    }
+}
+
+#[tokio::test]
 async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
     use crate::lean_vocab_test::LeanQueueManagementOperation;
     let case = crate::lean_vocab_test::lean_queue_management_cases()
