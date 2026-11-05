@@ -496,6 +496,8 @@ pub struct ToolServiceRegistryRow {
     pub mcp_port: Option<i64>,
     #[serde(default)]
     pub mcp_path: Option<String>,
+    #[serde(default)]
+    pub endpoint_url: Option<String>,
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub send_node_did: bool,
     #[serde(default, deserialize_with = "deserialize_null_default")]

@@ -30,6 +30,11 @@ pub struct ToolServiceRegistry {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub mcp_path: Option<String>,
+    /// Full http(s) MCP URL. When set it is used verbatim and the address,
+    /// port and path fields are ignored; HTTPS cannot be expressed otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub endpoint_url: Option<String>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",

@@ -117,18 +117,7 @@ pub async fn probe_mcp_service(
         bail!("service_id must not be empty");
     }
     let registry_entry = load_registry_entry(core, node_did, service_id).await?;
-    let service = McpHealthCheckService {
-        service_id: registry_entry.service_id.clone(),
-        hostname: registry_entry.hostname.unwrap_or_default(),
-        tailscale_ip: registry_entry.tailscale_ip.unwrap_or_default(),
-        lan_ip: registry_entry.lan_ip.unwrap_or_default(),
-        mcp_port: registry_entry
-            .mcp_port
-            .and_then(|port| u16::try_from(port).ok()),
-        mcp_path: registry_entry.mcp_path.unwrap_or_default(),
-        send_node_did: registry_entry.send_node_did,
-        updated_at: None,
-    };
+    let service = McpHealthCheckService::from(registry_entry);
     let health_map = ServiceHealthMap::new();
     let pool = McpPool::new();
     let started = std::time::Instant::now();
@@ -214,6 +203,7 @@ async fn load_registry_entry(
                 lan_ip
                 mcp_port
                 mcp_path
+                endpoint_url
                 send_node_did
                 enabled
             }}

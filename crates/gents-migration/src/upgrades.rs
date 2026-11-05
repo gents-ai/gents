@@ -208,6 +208,14 @@ pub(crate) fn include_existing_by_version(
             &["catalog_freshness"][..],
         ),
         (
+            "ToolServiceRegistry",
+            "bafyreigckps33q33zvnrodzqlz72ri4osyodxleniwy6txwkfhnq7tgg3q",
+            "bafyreibvc5vydfmb6swugrjjff5c7eqfymcw6ckm5kn62wqz6tfmlvir2y",
+            "tool-service-registry-add-endpoint-url",
+            r#"[{"op":"add","path":"/ToolServiceRegistry/Fields/-","value":{"Name":"endpoint_url","Kind":"String"}}]"#,
+            &["endpoint_url"][..],
+        ),
+        (
             "PeerPairingApplied",
             "bafyreifunn7vevp6b6rzg232gjfypp2lqviafe5now5ldlwo3na5nfinq4",
             "bafyreifiujskeayi7adradcst2jit3srboodcd6ejy2m6gppwy2mv6k7ri",

@@ -461,6 +461,20 @@ fn project_measured_mcp_services(
         if !service.enabled {
             continue;
         }
+        if let Some(endpoint_url) = service
+            .endpoint_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            // Health rows record the canonical URL the shared resolver produced.
+            if let Ok(url) = crate::tools::mcp::registry::parse_endpoint_url(endpoint_url) {
+                expected_endpoints
+                    .entry(service.service_id.clone())
+                    .or_default()
+                    .insert(url.to_string());
+            }
+            continue;
+        }
         let Some(port) = service
             .mcp_port
             .and_then(|port| u16::try_from(port).ok())

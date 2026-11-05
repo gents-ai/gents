@@ -138,7 +138,7 @@ pub(in crate::tools::builtin::self_config) fn help_patch_contracts(
         Some("mcp-service") => vec![patch_contract(
             SelfConfigTarget::ToolServiceRegistry,
             json!({
-                "display_name":"string|null","description":"string|null","hostname":"string|null","tailscale_ip":"string|null","lan_ip":"string|null","mcp_port":"integer|null","mcp_path":"string|null; absent uses endpoint root","send_node_did":"boolean; default false","enabled":"boolean; default true","tags":"array<string>; default []"
+                "display_name":"string|null","description":"string|null","hostname":"string|null","tailscale_ip":"string|null","lan_ip":"string|null","mcp_port":"integer|null","mcp_path":"string|null; absent uses endpoint root","endpoint_url":"string|null; full http(s) URL, overrides address/port/path","send_node_did":"boolean; default false","enabled":"boolean; default true","tags":"array<string>; default []"
             }),
         )],
         Some("automation") => vec![

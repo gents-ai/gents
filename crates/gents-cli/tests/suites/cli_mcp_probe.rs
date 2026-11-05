@@ -61,6 +61,82 @@ async fn mcp_register_upserts_a_host_endpoint() -> Result<()> {
 }
 
 #[tokio::test]
+async fn mcp_register_stores_an_https_endpoint_verbatim_and_refuses_secrets_in_the_url(
+) -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let node_home = tempdir.path().join("node-home");
+    let service_id = format!("remote-mcp-{}", Uuid::new_v4().simple());
+    {
+        let node = initialized_node(tempdir.path(), &node_home, "mcp-register-https").await?;
+        ensure_runtime_schemas(&node).await?;
+        node.shutdown().await;
+    }
+    let node_home_text = node_home.to_str().context("node home utf8")?;
+    for refused in [
+        "https://user:secret@mcp.example.com/mcp",
+        "https://mcp.example.com/mcp?api_key=secret",
+    ] {
+        let stderr = run_cli_failure_stderr(
+            tempdir.path(),
+            &[
+                "mcp",
+                "register",
+                "--home",
+                node_home_text,
+                "--endpoint",
+                refused,
+                &service_id,
+            ],
+        )?;
+        assert!(stderr.contains("--endpoint"), "{stderr}");
+        assert!(
+            !stderr.contains("secret"),
+            "the refusal must not echo the secret"
+        );
+    }
+    run_cli_text(
+        tempdir.path(),
+        &[
+            "mcp",
+            "register",
+            "--home",
+            node_home_text,
+            "--endpoint",
+            "https://mcp.example.com/mcp",
+            &service_id,
+        ],
+    )?;
+
+    let node = initialized_node(tempdir.path(), &node_home, "mcp-register-https-read").await?;
+    let query = format!(
+        r#"{{ ToolServiceRegistry(filter: {{ service_id: {{ _eq: "{service_id}" }} }}) {{
+            endpoint_url hostname lan_ip mcp_port mcp_path
+        }} }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("ToolServiceRegistry"))
+        .and_then(Value::as_array)
+        .context("registered rows")?;
+    assert_eq!(rows.len(), 1, "refused registrations must not write");
+    let row = &rows[0];
+    assert_eq!(
+        row.get("endpoint_url").and_then(Value::as_str),
+        Some("https://mcp.example.com/mcp")
+    );
+    for field in ["hostname", "lan_ip", "mcp_port", "mcp_path"] {
+        assert!(
+            row.get(field).is_some_and(Value::is_null),
+            "{field} must be null"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let node_home = tempdir.path().join("node-home");
