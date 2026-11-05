@@ -29,6 +29,7 @@ export interface UxStorage {
 /** the OS door: every member resolves instead of throwing when the
     capability is absent, so a caller branches on the result */
 export interface UxOs {
+  /** resolves false outside a click or a key press in the page */
   openExternal: (url: string) => Promise<boolean>;
   revealPath: (path: string) => Promise<boolean>;
   pickDirectory: (options?: {
