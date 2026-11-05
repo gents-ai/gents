@@ -36,7 +36,7 @@ source consistency checks, not a separate runtime compatibility version.
 - When `gents` opens Codex from a directory inside the tool root, the thread starts
   there. From outside it, `gents` prints the directory the thread will use, before
   Codex opens and again after it exits. Threads default to the tool root.
-- First-run setup asks which folder agents may work in, whichever tools were chosen.
+- First-run setup asks which folder agents should work in.
   It refuses the filesystem root and anything above the person's home, as the desktop
   does, and asks for confirmation before using the whole home.
 - `gents config client set codex|grok` chooses the interface a home opens, and

@@ -359,10 +359,15 @@ pub const PACK_INSTALLS_DIR_NAME: &str = "pack-installs";
 /// UX plugins dropped in by hand for development (`<id>/plugin.js`); the
 /// desktop's dev door. Installed packs keep theirs in the pack store.
 pub const UX_PLUGINS_DIR_NAME: &str = "ux-plugins";
+/// Present from when `init` records key custody until it publishes configuration. A home in
+/// that window has `init.json` but no default agent, and a service started on it exits at once
+/// and is restarted forever.
+pub const INIT_PENDING_FILE_NAME: &str = "init-pending";
 
 pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     DATA_DIR_NAME,
     INIT_CONFIG_FILE_NAME,
+    INIT_PENDING_FILE_NAME,
     KEYS_DIR_NAME,
     RUNTIME_STATE_FILE_NAME,
     NETWORK_CONFIG_FILE_NAME,

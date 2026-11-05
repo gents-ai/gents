@@ -8,6 +8,7 @@ use gents::store::config_client::GraphqlEndpoint;
 use gents::store::identity::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity, KeyIdentity, NodeIdentity,
 };
+use gents::store::local::home::INIT_PENDING_FILE_NAME;
 use gents_protocol::error_chain::ErrorChain;
 
 use crate::shared::{StoredInitConfig, StoredRuntimeState};
@@ -66,11 +67,6 @@ pub(crate) fn write_init_config(home_dir: &Path, state: &StoredInitConfig) -> Re
 pub(crate) fn read_init_config(home_dir: &Path) -> Result<Option<StoredInitConfig>> {
     Ok(gents::store::local::home::read_init_config(home_dir)?)
 }
-
-/// Present from when `init` records key custody until it publishes configuration. A home in
-/// that window has `init.json` but no default agent, and a service started on it exits at once
-/// and is restarted forever.
-const INIT_PENDING_FILE_NAME: &str = "init-pending";
 
 pub(crate) fn mark_init_pending(home_dir: &Path) -> Result<()> {
     let path = home_dir.join(INIT_PENDING_FILE_NAME);
