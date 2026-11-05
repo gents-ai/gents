@@ -547,6 +547,7 @@ function PacksHome({
                 {listed.map((pack) => {
                   const packName = nameOf(pack);
                   const have = isMine(packName);
+                  const latest = text(pack.latest);
                   return (
                     <PackCard
                       key={packName}
@@ -554,7 +555,8 @@ function PacksHome({
                       to={href({ name: "packs", item: packName })}
                       description={text(pack.description)}
                       adds={[]}
-                      status={text(pack.latest) ?? "No version yet"}
+                      status={latest ?? ""}
+                      statusClassName="w-14 max-w-none min-w-0"
                       meta={
                         <PackMeta
                           keywords={keywordsOf(pack).slice(0, 2)}
@@ -569,7 +571,7 @@ function PacksHome({
                           pack={packName}
                           busy={busy !== null}
                           items={
-                            blocked || have
+                            blocked || have || !latest
                               ? []
                               : [
                                   {
@@ -586,24 +588,20 @@ function PacksHome({
                             <Check aria-hidden className="size-3.5" />
                             Installed
                           </span>
-                        ) : (
-                          <Hint
-                            label={
-                              blocked ??
-                              (text(pack.latest)
-                                ? `Install ${packName} on this node`
-                                : "Its publisher hasn't published a version yet")
-                            }
+                        ) : !latest ? (
+                          <span
+                            className="text-xs text-muted-foreground"
+                            title="Its publisher hasn't published a version yet"
                           >
+                            No version
+                          </span>
+                        ) : (
+                          <Hint label={blocked ?? `Install ${packName} on this node`}>
                             <span>
                               <Button
                                 size="sm"
                                 variant="outline"
-                                disabled={
-                                  blocked !== null ||
-                                  busy !== null ||
-                                  !text(pack.latest)
-                                }
+                                disabled={blocked !== null || busy !== null}
                                 onClick={() => void install(packName)}
                               >
                                 Install
