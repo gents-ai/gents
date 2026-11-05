@@ -500,6 +500,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "workspace_root_completeness_cases",
             "WorkspaceRootCompletenessCases",
         ),
+        (
+            !snapshot.workspace_completion_actor_cases.is_empty(),
+            "workspace_completion_actor_cases",
+            "WorkspaceCompletionActorCases",
+        ),
     ] {
         if present {
             emitted.insert((key.into(), class.into()));

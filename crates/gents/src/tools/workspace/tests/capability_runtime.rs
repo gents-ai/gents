@@ -4,6 +4,37 @@ use crate::store::identity::NodeIdentity;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[tokio::test]
+async fn workspace_completion_requires_selected_managed_agent() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime =
+        crate::KeyIdentity::load_or_create(directory.path().join("runtime.key"), None).unwrap();
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
+    let agent = crate::store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(runtime.did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    for case in &crate::lean_vocab_test::lean_contract_snapshot().workspace_completion_actor_cases {
+        let actor = case["actor"].as_str().unwrap();
+        let selected = if actor == "empty" { "" } else { agent.did() };
+        let held: &dyn NodeIdentity = if actor == "agent" {
+            agent.as_ref()
+        } else {
+            &runtime
+        };
+        assert_eq!(
+            super::super::runtime::completion_access(&node, held, selected).is_ok(),
+            case["expected"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+    node.shutdown().await.unwrap();
+}
+
 async fn query(node: &defra_node::Node, document: &str) -> serde_json::Value {
     let response = node.execute(document).await;
     assert!(!response.has_errors(), "{document}: {:?}", response.errors);
@@ -17,8 +48,11 @@ async fn runtime_seal_case(unowned: bool) {
         crate::store::identity::KeyIdentity::load_or_create(db_dir.path().join("agent.key"), None)
             .unwrap();
     let did = identity.did();
+    let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+    let agent = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
     let node = Arc::new(
         defra_node::Node::builder()
+            .enable_signing()
             .data_path(db_dir.path().join("db"))
             .with_node_identity_did(did)
             .build()
@@ -26,6 +60,17 @@ async fn runtime_seal_case(unowned: bool) {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
+    let admin = crate::ConfigAccess::local_as(node.clone(), did.parse().unwrap());
+    for permission in [
+        crate::store::config_client::NodePermission::DocumentRead,
+        crate::store::config_client::NodePermission::DocumentUpdate,
+        crate::store::config_client::NodePermission::DacRelationAdd,
+    ] {
+        admin
+            .grant_node_permission(&agent.did().parse().unwrap(), permission)
+            .await
+            .unwrap();
+    }
     node.add_collection("type CapabilityReviewVerdict { workspace_id: String accepted: Boolean }")
         .await
         .unwrap();
@@ -62,7 +107,7 @@ async fn runtime_seal_case(unowned: bool) {
         "runtime-capability-writer",
         did,
         did,
-        "general",
+        agent.did(),
         "runtime-capability-session",
         "Apply the owned patch",
         "interactive",
@@ -87,6 +132,15 @@ async fn runtime_seal_case(unowned: bool) {
             .unwrap()
             .unwrap();
     let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
+    admin
+        .add_actor_relationship(
+            "AgentRequest",
+            &request.doc_id,
+            "working_agent",
+            &agent.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
     let lineage = WorkspaceLineage {
         workspace_id: request.workspace_id.clone(),
         workspace_authority: request.workspace_authority.clone(),
@@ -96,10 +150,16 @@ async fn runtime_seal_case(unowned: bool) {
     materialize_workspace_binding(&node, &request.request_id, &request.doc_id, did, &lineage)
         .await
         .unwrap();
-    let mut owner = RequestLifecycle::new_with_node_did(node.clone(), "general", did, request, 120);
+    let mut owner =
+        RequestLifecycle::new_with_node_did(node.clone(), agent.did(), did, request, 120);
+    owner.bind_managed_agent(agent.as_ref()).unwrap();
     owner.claim().await.unwrap();
-    let writer =
-        crate::request::streaming::DefraStreamWriter::new(node.clone(), did, Duration::ZERO);
+    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+        node.clone(),
+        &owner,
+        Duration::ZERO,
+    )
+    .unwrap();
     owner.begin_owned_execution(&writer).await.unwrap();
     let request = owner.request().clone();
     let dest = PathBuf::from(&created.placement.host_path);
@@ -115,7 +175,7 @@ async fn runtime_seal_case(unowned: bool) {
     query(&node, r#"mutation { create_CapabilityReviewVerdict(input: { workspace_id: "runtime-capability", accepted: true }) { _docID } }"#).await;
     let before_head = git(&fx.repo, &["rev-parse", "HEAD"]);
     let before_readme = fs::read(fx.repo.join("README.md")).unwrap();
-    let result = seal_on_writer_success(&node, &request, Some(&fx.repo)).await;
+    let result = seal_on_writer_success(&node, agent.as_ref(), &request, Some(&fx.repo)).await;
     if unowned {
         let error = result
             .expect_err("accepted verdict cannot authorize an unowned log")
@@ -131,16 +191,31 @@ async fn runtime_seal_case(unowned: bool) {
             .unwrap();
         let mut integrator = request.clone();
         integrator.workspace_authority = Some("integrate".into());
-        let denial = integrate_on_integrator_success(&node, &integrator, Some(&fx.repo))
-            .await
-            .expect_err("unsealed rejected writer cannot integrate")
-            .to_string();
+        let denial =
+            integrate_on_integrator_success(&node, agent.as_ref(), &integrator, Some(&fx.repo))
+                .await
+                .expect_err("unsealed rejected writer cannot integrate")
+                .to_string();
         assert!(
             denial.contains("Sealed") || denial.contains("sealed"),
             "{denial}"
         );
     } else {
         result.expect("owned untracked file seals through the runtime");
+        let receipts = query(
+            &node,
+            "{ WorkspaceReceipt { _docID _version { cid height fieldName } } }",
+        )
+        .await;
+        let document = &receipts["WorkspaceReceipt"][0];
+        let version =
+            crate::store::graphql::document_composite_version(document, "workspace receipt")
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            node.verified_block_signer_did(&version.cid).await.unwrap(),
+            agent.did()
+        );
         owner
             .terminalize_owned(
                 RequestTerminalOutcome::Completed,

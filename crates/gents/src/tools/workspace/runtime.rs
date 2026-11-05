@@ -62,6 +62,22 @@ const PLACEMENT_FIELDS: &str = r#"
     observed_tree_hash
 "#;
 
+pub(super) fn completion_access(
+    node: &std::sync::Arc<EmbeddedNode>,
+    identity: &dyn crate::store::identity::NodeIdentity,
+    selected_agent: &str,
+) -> Result<crate::ConfigAccess> {
+    anyhow::ensure!(
+        !selected_agent.is_empty() && identity.did() == selected_agent,
+        "workspace completion requires the selected Agent identity"
+    );
+    Ok(crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(selected_agent)?,
+        identity,
+    )?)
+}
+
 pub async fn stamp_workspace_lineage(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
@@ -153,6 +169,7 @@ pub(crate) fn apply_workspace_lineage_stamp(
 
 pub async fn seal_on_writer_success(
     node: &std::sync::Arc<EmbeddedNode>,
+    agent_identity: &dyn crate::store::identity::NodeIdentity,
     request: &AgentRequest,
     operator_tool_root: Option<&Path>,
 ) -> Result<()> {
@@ -166,6 +183,7 @@ pub async fn seal_on_writer_success(
     if !matches!(authority, WorkspaceAuthority::ReadWrite) {
         return Ok(());
     }
+    let access = completion_access(node, agent_identity, &request.agent_did)?;
 
     let mut docs = load_docs(
         node,
@@ -208,11 +226,12 @@ pub async fn seal_on_writer_success(
         execute_seal_workspace_plan(&plan, &mut journal, &mut ctx)
             .map_err(|err| anyhow::anyhow!("{err}"))?
     };
-    flush_seal_outcome(node, &request.agent_did, &docs, &outcome).await
+    flush_seal_outcome(&access, &docs, &outcome).await
 }
 
 pub async fn integrate_on_integrator_success(
     node: &std::sync::Arc<EmbeddedNode>,
+    agent_identity: &dyn crate::store::identity::NodeIdentity,
     request: &AgentRequest,
     operator_tool_root: Option<&Path>,
 ) -> Result<()> {
@@ -226,6 +245,7 @@ pub async fn integrate_on_integrator_success(
     if !matches!(authority, WorkspaceAuthority::Integrate) {
         return Ok(());
     }
+    let access = completion_access(node, agent_identity, &request.agent_did)?;
 
     let mut docs = load_docs(
         node,
@@ -270,9 +290,9 @@ pub async fn integrate_on_integrator_success(
         execute_integrate_workspace_plan(&plan, &mut journal, &mut ctx)
             .map_err(|err| anyhow::anyhow!("{err}"))?
     };
-    flush_integrate_outcome(node, &request.agent_did, &outcome).await?;
+    flush_integrate_outcome(&access, &outcome).await?;
     finalize_integrate_trunk(&trunk, outcome.pending_head_sha.as_deref())?;
-    release_integrate_binding(node, &request.agent_did, &docs, &outcome).await?;
+    release_integrate_binding(&access, &docs, &outcome).await?;
     clear_integrate_journal(&trunk, workspace_id);
     Ok(())
 }
@@ -682,8 +702,7 @@ async fn load_repository(
 }
 
 async fn flush_seal_outcome(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor_did: &str,
+    access: &crate::ConfigAccess,
     docs: &MemoryWorkspaceDocuments,
     outcome: &SealWorkspaceOutcome,
 ) -> Result<()> {
@@ -701,45 +720,37 @@ async fn flush_seal_outcome(
         &outcome.receipt,
         &now,
     );
-    crate::store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(actor_did.to_owned())?,
-    )
-    .write("workspace.seal_documents", &mutation)
-    .await
-    .with_context(|| {
-        format!(
-            "persist sealed workspace {} receipt {}",
-            outcome.workspace.workspace_id, outcome.receipt.receipt_id
-        )
-    })?;
+    access
+        .write("workspace.seal_documents", &mutation)
+        .await
+        .with_context(|| {
+            format!(
+                "persist sealed workspace {} receipt {}",
+                outcome.workspace.workspace_id, outcome.receipt.receipt_id
+            )
+        })?;
     Ok(())
 }
 
 async fn flush_integrate_outcome(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor_did: &str,
+    access: &crate::ConfigAccess,
     outcome: &IntegrateWorkspaceOutcome,
 ) -> Result<()> {
     let mutation = workspace_integrate_docs_mutation(&[], &outcome.receipt);
-    crate::store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(actor_did.to_owned())?,
-    )
-    .write("workspace.integrate_documents", &mutation)
-    .await
-    .with_context(|| {
-        format!(
-            "persist integrator receipt {} for workspace {}",
-            outcome.receipt.receipt_id, outcome.workspace.workspace_id
-        )
-    })?;
+    access
+        .write("workspace.integrate_documents", &mutation)
+        .await
+        .with_context(|| {
+            format!(
+                "persist integrator receipt {} for workspace {}",
+                outcome.receipt.receipt_id, outcome.workspace.workspace_id
+            )
+        })?;
     Ok(())
 }
 
 async fn release_integrate_binding(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor_did: &str,
+    access: &crate::ConfigAccess,
     docs: &MemoryWorkspaceDocuments,
     outcome: &IntegrateWorkspaceOutcome,
 ) -> Result<()> {
@@ -758,18 +769,15 @@ async fn release_integrate_binding(
         return Ok(());
     }
     let mutation = workspace_integrate_docs_mutation(&released, &outcome.receipt);
-    crate::store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(actor_did.to_owned())?,
-    )
-    .write("workspace.release_integrate_binding", &mutation)
-    .await
-    .with_context(|| {
-        format!(
-            "release Integrate binding for receipt {}",
-            outcome.receipt.receipt_id
-        )
-    })?;
+    access
+        .write("workspace.release_integrate_binding", &mutation)
+        .await
+        .with_context(|| {
+            format!(
+                "release Integrate binding for receipt {}",
+                outcome.receipt.receipt_id
+            )
+        })?;
     Ok(())
 }
 

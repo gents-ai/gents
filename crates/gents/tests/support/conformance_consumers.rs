@@ -63,6 +63,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "native_node_scoped_file_requests_match_modeled_access",
         },
         ConformanceConsumer::RustTest {
+            id: "tools::workspace::tests::capability_runtime::workspace_completion_requires_selected_managed_agent",
+            package: "gents",
+            source_path: "crates/gents/src/tools/workspace/tests/capability_runtime.rs",
+            module_path: "tools::workspace::tests::capability_runtime",
+            function: "workspace_completion_requires_selected_managed_agent",
+        },
+        ConformanceConsumer::RustTest {
             id: "tools::surface::root_admission::tests::workspace_root_fallback_requires_complete_visibility",
             package: "gents",
             source_path: "crates/gents/src/tools/surface/root_admission.rs",

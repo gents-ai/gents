@@ -96,4 +96,17 @@ def callbackActorCasesJson : String :=
   (Lean.toJson ([("agent", "agent", "agent"), ("node", "node", "agent"), ("empty", "", "")].map fun (role, actor, selected) => Lean.Json.mkObj
     [("actor", Lean.toJson role), ("expected", Lean.toJson (callbackActorMatches actor selected))])).compress
 
+/-- Completion effects are published by the same held Agent selected for the
+request. The node DID is host location and does not provide a substitute signer. -/
+def completionActorMatches (held selected : String) : Bool :=
+  !selected.isEmpty && held == selected
+
+theorem completion_requires_selected_agent :
+    completionActorMatches "agent" "agent" = true ∧
+    completionActorMatches "node" "agent" = false := by decide
+
+def completionActorCasesJson : String :=
+  (Lean.toJson ([("agent", "agent", "agent"), ("node", "node", "agent"), ("empty", "", "")].map fun (role, held, selected) => Lean.Json.mkObj
+    [("actor", Lean.toJson role), ("expected", Lean.toJson (completionActorMatches held selected))])).compress
+
 end Identity.WorkspaceAndFileRequests

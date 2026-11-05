@@ -89,6 +89,7 @@ where
                 }
                 if let Err(error) = crate::tools::workspace::seal_on_writer_success(
                     &self.node,
+                    self.agent_config.agent_identity.as_ref(),
                     request,
                     self.operator_tool_root.as_deref(),
                 )
@@ -112,6 +113,7 @@ where
                 }
                 if let Err(error) = crate::tools::workspace::integrate_on_integrator_success(
                     &self.node,
+                    self.agent_config.agent_identity.as_ref(),
                     request,
                     self.operator_tool_root.as_deref(),
                 )
