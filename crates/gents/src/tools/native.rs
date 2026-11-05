@@ -16,8 +16,6 @@ pub(crate) use file_tools::change_capture::{FileChanges, VerifiedUnchanged};
 pub(crate) use file_tools::file_contents;
 mod goal;
 pub(crate) mod lsp;
-#[cfg(feature = "agent-memory")]
-mod memory;
 mod native_runner;
 pub use native_runner::enable_self_runner;
 pub(crate) mod session_history;
@@ -88,8 +86,6 @@ pub use lsp::{
     lsp_action_authorized, lsp_advertised, lsp_apply_authorized, result_looks_failed,
     result_path_matches, LspAction, LspMutationSource,
 };
-#[cfg(feature = "agent-memory")]
-pub use memory::{build_memory_tool, MEMORY_TOOL_NAME};
 pub use session_history::{
     build_session_history_tool, load_latest_session_context_calls,
     load_pinned_request_context_observation, load_request_context_observation,

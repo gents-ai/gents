@@ -33,7 +33,6 @@ pub(crate) struct InitSummary {
     pub(crate) tool_package: ToolPackageArg,
     pub(crate) tool_ceiling: ToolCeilingArg,
     pub(crate) tool_root: Option<String>,
-    pub(crate) enable_memory: bool,
     pub(crate) enable_defra_query: bool,
     pub(crate) defra_query_collections: Vec<String>,
     pub(crate) created_node: bool,

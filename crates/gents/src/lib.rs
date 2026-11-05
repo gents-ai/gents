@@ -537,8 +537,6 @@ pub use store::identity::{
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
     KeyIdentity, NodeIdentity, RegisteredIdentity, RuntimeNode, ServiceAccount,
 };
-#[cfg(feature = "agent-memory")]
-pub use store::schema::NODE_MEMORY_SCHEMA;
 pub use store::schema::{
     ensure_runtime_schemas, AGENT_MESSAGE_SCHEMA, AGENT_OUTPUT_SEGMENT_SCHEMA,
     AGENT_REQUEST_SCHEMA, AGENT_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA,

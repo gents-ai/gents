@@ -135,7 +135,7 @@ Examples:
   gents init --write
   gents init --yolo
   gents init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write
-  gents init --enable-memory --defra-query-collection AgentRequest
+  gents init --defra-query-collection AgentRequest
   gents init --identity-only
   gents init --identity-only --identity-backend macos-keychain --keychain-label LABEL
   gents init --identity-only --identity-backend macos-secure-enclave --secure-enclave-label LABEL
@@ -953,14 +953,24 @@ mod tests {
             gents_protocol::error_chain::ErrorChain(&error)
         );
 
-        access.local_node().unwrap().shutdown().await.expect("node shutdown");
+        access
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("node shutdown");
         drop(access);
         assert_eq!(node.strong_count(), 0, "the access held the only node");
         let (reopened, _) = resolve_config_access(Some(&home), None)
             .await
             .expect("a shut down and dropped access releases the store");
         assert_eq!(reopened.mode(), "local");
-        reopened.local_node().unwrap().shutdown().await.expect("node shutdown");
+        reopened
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("node shutdown");
     }
 
     #[tokio::test]

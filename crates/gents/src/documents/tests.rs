@@ -433,14 +433,7 @@ fn reserved_names_cover_native_and_meta_tools() {
     }
 
     assert!(!is_reserved_builtin_tool_name("request_action"));
-}
-
-#[cfg(feature = "agent-memory")]
-#[test]
-fn memory_tool_name_is_reserved() {
-    assert!(is_reserved_builtin_tool_name(
-        crate::tools::native::MEMORY_TOOL_NAME
-    ));
+    assert!(!is_reserved_builtin_tool_name("memory"));
 }
 
 #[test]
@@ -460,14 +453,22 @@ fn write_tools_deserialize_trims_whitespace() {
 #[test]
 fn stored_built_ins_with_retired_key_decode() {
     let stored: BuiltInTools = serde_json::from_value(
-        serde_json::json!({"enable_graph_tools": true, "enable_memory": true}),
+        serde_json::json!({"enable_graph_tools": true, "enable_goal_tools": true}),
     )
     .expect("a stored built_ins with the retired key decodes");
     let written = serde_json::to_value(&stored).unwrap();
-    assert_eq!(written, serde_json::json!({"enable_memory": true}));
+    assert_eq!(written, serde_json::json!({"enable_goal_tools": true}));
     let without: BuiltInTools =
-        serde_json::from_value(serde_json::json!({"enable_memory": true})).unwrap();
+        serde_json::from_value(serde_json::json!({"enable_goal_tools": true})).unwrap();
     assert_eq!(stored, without);
+}
+
+#[test]
+fn built_ins_reject_the_removed_memory_setting() {
+    assert!(serde_json::from_value::<BuiltInTools>(serde_json::json!({
+        "enable_memory": true
+    }))
+    .is_err());
 }
 
 #[tokio::test]

@@ -4,10 +4,6 @@ use crate::error::{Error, Result};
 use crate::expectation::CollectionExpectation;
 use crate::registry::{BaselineCollection, MigrationStep};
 
-const NODE_MEMORY_ROOT: &str = "bafyreifcm3bi3qofvhfws7nps45xomrsxb2zslvjkkhb7uwh34esxi5okq";
-const NODE_MEMORY_TEXT_TARGET: &str = "bafyreihb3faohzgyj4zedddsedlnivyjhonk6tkhdovvrzyiaris3rkmtu";
-const NODE_MEMORY_TEXT_PATCH: &str = r#"[{"op":"add","path":"/NodeMemory/Fields/-","value":{"Name":"value_text","Kind":"String","Typ":6}}]"#;
-
 const MESSAGE_ROOT: &str = "bafyreibpbyfmfgfookleozyqvuwse6qtfnjf7ipxjq6ryypovs226ziw6a";
 /// An rc0 `AgentMessage` after v1.0.0-rc1's `native_request_id` patch.
 const MESSAGE_REQUEST_ID_TARGET: &str =
@@ -347,22 +343,6 @@ pub(crate) fn include_existing_by_version(
             }
         }
         _ => {}
-    }
-    if let Some(current) = get_version("NodeMemory")? {
-        if [NODE_MEMORY_ROOT, NODE_MEMORY_TEXT_TARGET].contains(&current.as_str()) {
-            if let Some(entry) = baseline.iter_mut().find(|entry| entry.name == "NodeMemory") {
-                entry.expected_version = Some(NODE_MEMORY_ROOT);
-                steps.push(MigrationStep::PatchVersioned {
-                    id: "node-memory-add-text-value",
-                    collection: "NodeMemory",
-                    patch: NODE_MEMORY_TEXT_PATCH,
-                    lens: None,
-                    expected_version: Some(NODE_MEMORY_TEXT_TARGET),
-                    expected_transform: None,
-                    expected_state: CollectionExpectation::fields(&["value_text"]),
-                });
-            }
-        }
     }
     include_session_archive(get_version, baseline, steps)?;
     include_session_starter(get_version, baseline, steps)?;

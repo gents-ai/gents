@@ -254,11 +254,6 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreig5c5e56nzpihh44ouahzyhnu76qihzwmde6z77yahlk4cyurqppu"
     ),
     baseline_entry!(
-        gents_protocol::schemas::NODE_MEMORY_NAME,
-        gents_protocol::schemas::NODE_MEMORY,
-        "bafyreich7rj5lgj3ce5mfndp7xy4awh2khblveen7c7ihf6djm5j2dpo5m"
-    ),
-    baseline_entry!(
         gents_protocol::schemas::TOOLS_NAME,
         gents_protocol::schemas::TOOLS,
         "bafyreiay45qi2chkcus5wfycrsumq5vr6igrydc3ebsqqr2qrkb3qfgo6a"

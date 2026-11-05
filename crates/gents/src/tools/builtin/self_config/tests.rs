@@ -889,11 +889,7 @@ async fn operator_replace_tools(node: &Arc<defra_node::Node>, tools: Value) {
     .unwrap();
 }
 
-async fn operator_grant_pack_install(
-    node: &Arc<defra_node::Node>,
-    owner: &str,
-    tools_id: &str,
-) {
+async fn operator_grant_pack_install(node: &Arc<defra_node::Node>, owner: &str, tools_id: &str) {
     operator_replace_tools(
         node,
         json!({"node_did": owner, "tools_id": tools_id,
@@ -6496,11 +6492,7 @@ fn reselection_keeps_job_grants() {
     ops::reselection_keeps_grants(&held, None, Some(&plain)).expect("no block, no grant");
 }
 
-async fn grant_pack_install_for_test(
-    node: &Arc<defra_node::Node>,
-    owner: &str,
-    tools_id: &str,
-) {
+async fn grant_pack_install_for_test(node: &Arc<defra_node::Node>, owner: &str, tools_id: &str) {
     let value = json!({"node_did":owner,"tools_id":tools_id,"self_config":{"enable_self_config":true,"enable_pack_install":true}});
     let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
         crate::store::config_client::DesiredStateApplyDocument {
@@ -6635,7 +6627,7 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
     no_grant
         .apply(tools_request(
             &no_grant,
-            vec![("built_ins".into(), Some(json!({"enable_memory":true})))],
+            vec![("built_ins".into(), Some(json!({"enable_goal_tools":true})))],
         ))
         .await
         .unwrap();

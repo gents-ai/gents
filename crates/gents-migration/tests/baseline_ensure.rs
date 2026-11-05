@@ -988,38 +988,23 @@ async fn archive_columns_preserve_existing_sessions_and_field_identities() {
 }
 
 #[tokio::test]
-async fn node_memory_text_schema_pins_match() {
-    let fresh = fresh_node().await;
-    fresh.add_collection(schemas::NODE_MEMORY).await.unwrap();
-    let fresh_id = fresh
-        .get_collection("NodeMemory")
-        .unwrap()
-        .unwrap()
-        .version_id;
-    let old = fresh_node().await;
-    let old_sdl = schemas::NODE_MEMORY
-        .lines()
-        .filter(|line| !line.trim_start().starts_with("value_text:"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    old.add_collection(&old_sdl).await.unwrap();
-    assert_eq!(
-        old.get_collection("NodeMemory")
-            .unwrap()
-            .unwrap()
-            .version_id,
-        "bafyreifcm3bi3qofvhfws7nps45xomrsxb2zslvjkkhb7uwh34esxi5okq"
-    );
-    let patched = common::patch_collection(&old, "NodeMemory", r#"[{"op":"add","path":"/NodeMemory/Fields/-","value":{"Name":"value_text","Kind":"String","Typ":6}}]"#).await;
-    assert_eq!(
-        (fresh_id.as_str(), patched.version_id.as_str()),
-        (
-            "bafyreich7rj5lgj3ce5mfndp7xy4awh2khblveen7c7ihf6djm5j2dpo5m",
-            "bafyreihb3faohzgyj4zedddsedlnivyjhonk6tkhdovvrzyiaris3rkmtu"
-        )
-    );
-    fresh.shutdown().await.expect("shut down test node");
-    old.shutdown().await.expect("shut down test node");
+async fn removed_node_memory_is_not_registered_or_deleted() {
+    let node = fresh_node().await;
+    ensure_migrations(&node).await.unwrap();
+    assert!(node.get_collection("NodeMemory").unwrap().is_none());
+
+    node.add_collection("type NodeMemory { marker: String }")
+        .await
+        .unwrap();
+    let created = node
+        .execute(r#"mutation { create_NodeMemory(input: {marker: "preserved"}) { _docID } }"#)
+        .await;
+    assert!(!created.has_errors(), "{created:?}");
+    ensure_migrations(&node).await.unwrap();
+    let result = node.execute("{ NodeMemory { marker } }").await;
+    assert!(!result.has_errors(), "{result:?}");
+    assert_eq!(result.data.unwrap()["NodeMemory"][0]["marker"], "preserved");
+    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
