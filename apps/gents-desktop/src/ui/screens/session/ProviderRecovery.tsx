@@ -64,7 +64,13 @@ export function ProviderRecovery({
     perform,
     refresh,
     canApply,
-  } = useProviderRecovery({ nodeDid, sessionId, requestId, turnState });
+  } = useProviderRecovery({
+    nodeDid,
+    sessionId,
+    requestId,
+    turnState,
+    readable: useFleet((state) => nodeOf(state, nodeDid)?.operatorAccess) ?? true,
+  });
   const { actions } = useApp();
   const node = useFleet((state) => nodeOf(state, nodeDid));
   const [signingIn, setSigningIn] = useState(false);
