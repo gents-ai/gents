@@ -49,7 +49,7 @@ pub(super) async fn p2p_templates_list(args: P2pTemplatesListArgs) -> Result<()>
     let rows = template_rows();
 
     match args.output.ensure_supported(
-        "p2p templates list",
+        "runtime p2p templates list",
         &[OutputFormat::Json, OutputFormat::Table],
     )? {
         OutputFormat::Json => print_json(&json!({

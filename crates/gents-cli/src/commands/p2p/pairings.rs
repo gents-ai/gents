@@ -91,7 +91,7 @@ pub(super) async fn p2p_pairings_list(args: P2pPairingsListArgs) -> Result<()> {
         eprintln!("{warning}");
     }
     match args.output.ensure_supported(
-        "p2p pairings list",
+        "runtime p2p pairings list",
         &[OutputFormat::Json, OutputFormat::Table],
     )? {
         OutputFormat::Json => print_json(&json!({
@@ -239,7 +239,7 @@ fn renewal_warning(rows: &[PeerPairingDesiredRow]) -> Option<String> {
         format!(
             "warning: {} enrollment authorization(s) need renewal: {}. Renew by re-enrolling each peer: \
              this node's p2p enrollment_offer, the peer's enrollment_request, then \
-             `gents p2p enrollment approve <request-id>` here; the new generation supersedes the old one.",
+             `gents runtime p2p enrollment approve <request-id>` here; the new generation supersedes the old one.",
             due.len(),
             due.join("; "),
         )

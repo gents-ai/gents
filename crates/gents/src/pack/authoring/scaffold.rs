@@ -289,8 +289,8 @@ fn ux_plugin_source(names: &Names) -> (String, String) {
         r#"// {title}: a UX plugin the desktop loads from this pack into a frame of
 // its own. Plain ESM, no build step; only `@gents/ux-sdk`, `react` and
 // `react/jsx-runtime` may be imported. Everything it does goes through
-// `ctx`, so disabling the plugin undoes all of it. Run `gents pack check`
-// to lint, `gents pack ux module` to see what the desktop receives. To read and
+// `ctx`, so disabling the plugin undoes all of it. Run `gents config pack check`
+// to lint, `gents config pack ux module` to see what the desktop receives. To read and
 // write the node's documents, declare a surface under `ux[].data` in the
 // manifest and use `useQuery` / `useWrite` from the SDK.
 import {{ NAV_AREA, PLUGIN_PAGE_AREA, TRANSCRIPT_DIRECTIVE_AREA, Group, Row }} from '@gents/ux-sdk'
@@ -400,7 +400,7 @@ pub fn echo_source(entry: &str) -> String {
             if (fwrite(buffer, 1, n, stdout) != n) return 1;\n    }\n    return ferror(stdin) ? 1 : 0;\n}\n",
         "source/main.cpp" => "#include <iostream>\n\nint main() {\n    std::cout << std::cin.rdbuf();\n    \
             return std::cout.good() ? 0 : 1;\n}\n",
-        // `gents pack build` wraps a JS or TS source in Afterburner's stdin/stdout
+        // `gents config pack build` wraps a JS or TS source in Afterburner's stdin/stdout
         // harness, which reads the input and calls `module.exports(input)`; the
         // source itself touches no stdin or stdout.
         "source/main.js" => "module.exports = (input) => input;\n",
@@ -654,8 +654,8 @@ fn readme(names: &Names, template: Template) -> String {
         Template::Workflow => (
             "ships one workflow: a job plugin that spawns the pack's worker and reads its reply",
             "See `plugins/<name>/TOOL.md` for the input and output. \
-             Prove it offline with `gents pack build` and `gents pack test`; ship it with `gents pack install --grant-authority` and \
-             `gents pack wire <namespace>/<name> --agent <agent> --targets-from <namespace>/<name>`.",
+             Prove it offline with `gents config pack build` and `gents config pack test`; ship it with `gents config pack install --grant-authority` and \
+             `gents config pack wire <namespace>/<name> --agent <agent> --targets-from <namespace>/<name>`.",
         ),
     };
     format!(
@@ -817,7 +817,7 @@ mod tests {
         let check = super::super::check::check_dir(&dir).await;
         assert_eq!(
             check.problems,
-            ["build the plugins (demo_flow) with gents pack build before checking its configuration"],
+            ["build the plugins (demo_flow) with gents config pack build before checking its configuration"],
             "the only problem is the unbuilt artifact"
         );
     }
@@ -855,7 +855,7 @@ mod tests {
         let check = super::super::check::check_dir(&dir).await;
         assert_eq!(
             check.problems,
-            ["build the plugins (demo_flow) with gents pack build before checking its configuration"],
+            ["build the plugins (demo_flow) with gents config pack build before checking its configuration"],
         );
     }
 

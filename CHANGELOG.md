@@ -6,21 +6,32 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
-- CLI commands are grouped under `auth`, `data`, `debug` and `pack`, and
-  `gents --help` lists the root commands by section. The old names stop working;
-  there are no aliases, so update scripts that call them.
+- The CLI has eight top-level commands: `accounts`, `automation`,
+  `chat`, `config`, `runtime`, `sessions`, `status` and `utils`, and `gents --help`
+  lists them with a description each. The old names stop working; there are no
+  aliases, so update scripts that call them.
 
   | Old | New |
   | --- | --- |
-  | `codex-login`, `grok-login`, `claude-login`, `claude-gateway-login` | `auth login codex`, `grok`, `claude`, `claude-gateway` |
-  | `codex-auth-probe`, `grok-auth-probe` | `auth probe codex`, `grok` |
-  | `accounts ...` | `auth accounts ...` |
-  | `query`, `write`, `export`, `document`, `schema` | `data query`, `data write`, `data export`, `data document`, `data schema` |
-  | `request`, `response`, `trace`, `background`, `fleet` | `debug request`, `debug response`, `debug trace`, `debug background`, `debug fleet` |
-  | `plugin ...`, `ux ...` | `pack plugin ...`, `pack ux ...` |
-  | `init` | hidden, still works |
-  | `prepare-runtime` | hidden, still works |
+  | `codex-login`, `grok-login`, `claude-login`, `claude-gateway-login` | `accounts login codex`, `grok`, `claude`, `claude-gateway` |
+  | `cloud login` | `accounts login cloud` |
+  | `codex-auth-probe`, `grok-auth-probe` | `accounts probe codex`, `grok` |
+  | `accounts list`, `label`, `disable`, `remove` | unchanged |
+  | `session ...` | `sessions ...` |
+  | `goal`, `task`, `job`, `mailbox` | `automation goal`, `automation task`, `automation job`, `automation mailbox` |
+  | `tools explain` | `config tools explain` |
+  | `mcp register`, `mcp probe` | `config mcp register`, `config mcp probe` |
+  | `pack ...`, `plugin ...`, `ux ...` | `config pack ...`, `config pack plugin ...`, `config pack ux ...` |
+  | `server`, `service`, `provision`, `reset`, `diagnose`, `p2p`, `desktop`, `version` | `runtime server`, `runtime service`, and so on |
+  | `query`, `write`, `export`, `document`, `schema` | `utils data query`, and so on |
+  | `request`, `response`, `trace`, `background`, `fleet` | `utils debug request`, and so on |
+  | `eval`, `optimization` | `utils eval`, `utils optimization` |
+  | `codex` | hidden, still works; bare `gents` opens it |
+  | `init`, `prepare-runtime` | hidden, still work |
 
+  `gents server` and `gents service` also still work, hidden: installed service
+  definitions run `gents server`, and an updater of another version runs
+  `gents service update-check`.
 - `gents` with no command sets up a home on first run, brings up its runtime
   through the native service without enabling it at login, and opens the
   configured interface. Setup seeds The Engineer with the desktop's default

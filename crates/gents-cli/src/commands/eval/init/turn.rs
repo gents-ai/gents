@@ -61,7 +61,7 @@ impl Turn for LiveTurn {
         let text = chat_turn_text_content(&response);
         anyhow::ensure!(
             !text.trim().is_empty(),
-            "the {} turn ended without a reply; `gents debug response show {}` shows why",
+            "the {} turn ended without a reply; `gents utils debug response show {}` shows why",
             self.agent_id,
             submitted.request_id
         );

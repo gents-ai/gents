@@ -3,10 +3,9 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use crate::{
-    CHAT_AFTER_HELP, CLOUD_AFTER_HELP, CODEX_AFTER_HELP, CONFIG_AFTER_HELP, DIAGNOSE_AFTER_HELP,
-    INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP, RESET_AFTER_HELP,
-    ROOT_HELP_TEMPLATE, SERVER_AFTER_HELP, SESSION_AFTER_HELP, STATUS_AFTER_HELP, TASK_AFTER_HELP,
-    TOOLS_AFTER_HELP,
+    CHAT_AFTER_HELP, CODEX_AFTER_HELP, CONFIG_AFTER_HELP, DIAGNOSE_AFTER_HELP, INIT_AFTER_HELP,
+    P2P_AFTER_HELP, PROVISION_AFTER_HELP, RESET_AFTER_HELP, ROOT_HELP_TEMPLATE, SERVER_AFTER_HELP,
+    SESSION_AFTER_HELP, STATUS_AFTER_HELP, TASK_AFTER_HELP,
 };
 
 mod accounts;
@@ -90,12 +89,45 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
-    #[command(about = "Print build and release metadata")]
-    Version,
-    #[command(about = "Manage local desktop state")]
-    Desktop {
+    #[command(
+        about = "Chat with the selected or default agent in the terminal",
+        after_help = CHAT_AFTER_HELP
+    )]
+    Chat(ChatArgs),
+    #[command(about = "Show the current local runtime status", after_help = STATUS_AFTER_HELP)]
+    Status(StatusArgs),
+    #[command(about = "List, show and fork sessions", after_help = SESSION_AFTER_HELP)]
+    Sessions {
         #[command(subcommand)]
-        command: DesktopCommand,
+        command: SessionCommand,
+    },
+    #[command(about = "Goals, tasks, plugin jobs and the mailbox")]
+    Automation {
+        #[command(subcommand)]
+        command: AutomationCommand,
+    },
+    #[command(about = "Sign in to providers and gents cloud, and manage accounts")]
+    Accounts {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
+    #[command(
+        about = "Agents, backends, tools, MCP services and packs",
+        after_help = CONFIG_AFTER_HELP
+    )]
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+    #[command(about = "Run, install, diagnose and reset the local runtime")]
+    Runtime {
+        #[command(subcommand)]
+        command: RuntimeCommand,
+    },
+    #[command(about = "Data, debugging, evals and optimization")]
+    Utils {
+        #[command(subcommand)]
+        command: UtilsCommand,
     },
     #[command(
         about = "Initialize a local node home directory",
@@ -104,66 +136,73 @@ pub(crate) enum Command {
     )]
     Init(InitArgs),
     #[command(
-        about = "Provision a local node home from a portable manifest root",
-        after_help = PROVISION_AFTER_HELP
+        about = "Prepare an initialized local runtime and serve until shutdown",
+        hide = true
     )]
-    Provision(ProvisionArgs),
-    #[command(about = "Clear persisted local runtime state", after_help = RESET_AFTER_HELP)]
-    Reset(ResetArgs),
+    PrepareRuntime(PrepareRuntimeArgs),
+    #[command(
+        about = "Open the Codex terminal UI against the local Node runtime",
+        after_help = CODEX_AFTER_HELP,
+        hide = true
+    )]
+    Codex(CodexArgs),
+    /// Installed service definitions run `gents server --home`, so this name
+    /// outlives the binary that wrote them.
+    #[command(name = "server", hide = true)]
+    Server(ServeArgs),
+    /// A running updater of another version runs the candidate's
+    /// `gents service update-check`, so this name must keep parsing.
+    #[command(hide = true)]
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
+    #[command(name = "__native-fs-runner", hide = true)]
+    NativeFsRunner(NativeFsRunnerArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum RuntimeCommand {
     #[command(
         name = "server",
         about = "Run the local gents runtime from an initialized home",
         after_help = SERVER_AFTER_HELP
     )]
-    Server(ServeArgs),
-    #[command(
-        about = "Prepare an initialized local runtime and serve until shutdown",
-        hide = true
-    )]
-    PrepareRuntime(PrepareRuntimeArgs),
+    Server(Box<ServeArgs>),
     #[command(about = "Install and control the per-user native Gents runtime service")]
     Service {
         #[command(subcommand)]
         command: ServiceCommand,
     },
     #[command(
-        about = "Chat with the selected or default agent in the terminal",
-        after_help = CHAT_AFTER_HELP
+        about = "Provision a local node home from a portable manifest root",
+        after_help = PROVISION_AFTER_HELP
     )]
-    Chat(ChatArgs),
-    #[command(
-        about = "Open the Codex terminal UI against the local Node runtime",
-        after_help = CODEX_AFTER_HELP
-    )]
-    Codex(CodexArgs),
-    #[command(about = "Sign in, check credentials and manage subscription accounts")]
-    Auth {
-        #[command(subcommand)]
-        command: AuthCommand,
-    },
-    #[command(about = "Sign in to and work with a gents cloud", after_help = CLOUD_AFTER_HELP)]
-    Cloud {
-        #[command(subcommand)]
-        command: CloudCommand,
-    },
-    #[command(name = "__native-fs-runner", hide = true)]
-    NativeFsRunner(NativeFsRunnerArgs),
+    Provision(ProvisionArgs),
+    #[command(about = "Clear persisted local runtime state", after_help = RESET_AFTER_HELP)]
+    Reset(ResetArgs),
+    #[command(about = "Run local configuration and runtime diagnostics", after_help = DIAGNOSE_AFTER_HELP)]
+    Diagnose(DiagnoseArgs),
     #[command(about = "Inspect and control live P2P runtime connectivity", after_help = P2P_AFTER_HELP)]
     P2p {
         #[command(subcommand)]
         command: P2pCommand,
     },
-    #[command(about = "Show the current local runtime status", after_help = STATUS_AFTER_HELP)]
-    Status(StatusArgs),
-    #[command(about = "Query, write and export application documents and schemas")]
-    Data {
+    #[command(about = "Manage local desktop state")]
+    Desktop {
         #[command(subcommand)]
-        command: DataCommand,
+        command: DesktopCommand,
     },
-    #[command(about = "Probe registered MCP service health", after_help = MCP_AFTER_HELP)]
-    Mcp {
+    #[command(about = "Print build and release metadata")]
+    Version,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum AutomationCommand {
+    #[command(about = "Inspect and control durable session goals")]
+    Goal {
         #[command(subcommand)]
-        command: McpCommand,
+        command: GoalCommand,
     },
     #[command(
         about = "Trigger configured Task documents on demand",
@@ -172,38 +211,6 @@ pub(crate) enum Command {
     Task {
         #[command(subcommand)]
         command: TaskCommand,
-    },
-    #[command(about = "List, inspect, build, publish, install and exercise packs")]
-    Pack {
-        #[command(subcommand)]
-        command: PackCommand,
-    },
-    #[command(about = "Run local configuration and runtime diagnostics", after_help = DIAGNOSE_AFTER_HELP)]
-    Diagnose(DiagnoseArgs),
-    #[command(about = "Explain resolved agent tool surfaces", after_help = TOOLS_AFTER_HELP)]
-    Tools {
-        #[command(subcommand)]
-        command: ToolsCommand,
-    },
-    #[command(about = "Inspect and write runtime configuration documents", after_help = CONFIG_AFTER_HELP)]
-    Config {
-        #[command(subcommand)]
-        command: ConfigCommand,
-    },
-    #[command(about = "Inspect requests, responses, traces, background calls and slots")]
-    Debug {
-        #[command(subcommand)]
-        command: DebugCommand,
-    },
-    #[command(about = "Manage and fork sessions", after_help = SESSION_AFTER_HELP)]
-    Session {
-        #[command(subcommand)]
-        command: SessionCommand,
-    },
-    #[command(about = "Inspect and control durable session goals")]
-    Goal {
-        #[command(subcommand)]
-        command: GoalCommand,
     },
     #[command(about = "Inspect and control plugin jobs")]
     Job {
@@ -214,6 +221,20 @@ pub(crate) enum Command {
     Mailbox {
         #[command(subcommand)]
         command: MailboxCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum UtilsCommand {
+    #[command(about = "Query, write and export application documents and schemas")]
+    Data {
+        #[command(subcommand)]
+        command: DataCommand,
+    },
+    #[command(about = "Inspect requests, responses, traces, background calls and slots")]
+    Debug {
+        #[command(subcommand)]
+        command: DebugCommand,
     },
     #[command(about = "Run, inspect, compare and clean up evals")]
     Eval {

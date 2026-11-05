@@ -218,7 +218,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
             },
             "next_steps": [
                 "gents config apply --root <manifest-root> --home <home> --bind-node-did home",
-                "gents server"
+                "gents runtime server"
             ],
             "init": null
         });
@@ -371,7 +371,7 @@ fn added_account_note(sign_in: &gents::inference::auth::credential::SignIn) -> O
     .then(|| {
         format!(
             "This sign-in was stored as another account, {}. The backend set up here runs on \
-             the provider's original account; see `gents auth accounts`.",
+             the provider's original account; see `gents accounts`.",
             gents::inference::auth::credential::effective_account_label(&sign_in.credential)
         )
     })
@@ -596,7 +596,7 @@ async fn maybe_inline_codex_login(
         Err(error) => {
             eprintln!(
                 "ChatGPT login did not complete: {error:#}\n\
-                 The backend is configured; finish later with `gents auth login codex` \
+                 The backend is configured; finish later with `gents accounts login codex` \
                  (add --device-auth on a headless machine)."
             );
             InlineCodexLoginState::Unauthenticated
@@ -1448,15 +1448,15 @@ fn init_next_steps(
 ) -> Vec<String> {
     let mut steps = Vec::new();
     if summary.provider_kind == gents::BackendProviderKind::ChatGptCodex && !codex_logged_in {
-        steps.push("gents auth login codex".to_string());
+        steps.push("gents accounts login codex".to_string());
     }
     if summary.provider_kind == gents::BackendProviderKind::XaiGrokOAuth && !grok_logged_in {
-        steps.push("gents auth login grok".to_string());
+        steps.push("gents accounts login grok".to_string());
     }
     if summary.provider_kind == gents::BackendProviderKind::ClaudeCliSubscription
         && !claude_logged_in
     {
-        steps.push("gents auth login claude".to_string());
+        steps.push("gents accounts login claude".to_string());
     }
     if summary.model_name.is_empty() {
         steps.push(
@@ -1467,7 +1467,7 @@ fn init_next_steps(
     } else if is_probably_llama_server_endpoint(&summary.endpoint) {
         steps.push(format!("llama-server -hf {}", summary.model_name));
     }
-    steps.push("gents server".to_string());
+    steps.push("gents runtime server".to_string());
     steps.push("gents codex".to_string());
     let home = crate::shell_word(home);
     steps.push(format!(

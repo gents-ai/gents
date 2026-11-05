@@ -447,10 +447,10 @@ async fn probe_shim(endpoint: &RemoteEndpoint) -> Result<()> {
     match tokio::time::timeout(SHIM_PROBE_TIMEOUT, connect).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => {
-            bail!("no Codex shim listening at {authority} ({error}); start `gents server` first")
+            bail!("no Codex shim listening at {authority} ({error}); start `gents runtime server` first")
         }
         Err(_) => {
-            bail!("timed out reaching the Codex shim at {authority}; start `gents server` first")
+            bail!("timed out reaching the Codex shim at {authority}; start `gents runtime server` first")
         }
     }
 }

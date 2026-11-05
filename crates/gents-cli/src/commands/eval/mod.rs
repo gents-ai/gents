@@ -153,7 +153,7 @@ pub(crate) async fn execute(
     result.map_err(surface_refusal)
 }
 
-/// `gents eval cancel` from argv alone: the marker is written before the
+/// `gents utils eval cancel` from argv alone: the marker is written before the
 /// home's access is opened, since the process hosting the run may hold the
 /// home's embedded node.
 async fn cancel_without_context(
@@ -170,7 +170,7 @@ async fn cancel_without_context(
     manage::cancel(&runs_dir(&home_dir), &args.run_id, purpose, &mut out).await
 }
 
-/// `gents eval watch` from argv. The process hosting the run may hold the
+/// `gents utils eval watch` from argv. The process hosting the run may hold the
 /// home's embedded node; then the watch reads the files the runner leaves
 /// and tries the node again only once no live process holds the run.
 async fn watch_while_held(

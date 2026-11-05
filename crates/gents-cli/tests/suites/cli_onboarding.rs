@@ -105,10 +105,7 @@ fn bare_gents_without_a_terminal_prints_help_and_exits_2() -> Result<()> {
 
         let stderr = stderr_of(&output);
         assert_eq!(output.status.code(), Some(2), "{args:?} stderr:\n{stderr}");
-        assert!(
-            stderr.contains("Data and debugging"),
-            "{args:?} stderr:\n{stderr}"
-        );
+        assert!(stderr.contains("\n  utils "), "{args:?} stderr:\n{stderr}");
         assert!(output.stdout.is_empty(), "{args:?} wrote to stdout");
         assert_eq!(
             fs::read_dir(user_home.path())?.count(),
@@ -144,7 +141,7 @@ fn bare_gents_with_agent_and_no_terminal_exits_2() -> Result<()> {
 
     let stderr = stderr_of(&output);
     assert_eq!(output.status.code(), Some(2), "stderr:\n{stderr}");
-    assert!(stderr.contains("Data and debugging"), "stderr:\n{stderr}");
+    assert!(stderr.contains("\n  utils "), "stderr:\n{stderr}");
     assert_eq!(fs::read_dir(user_home.path())?.count(), 0, "wrote to HOME");
     Ok(())
 }
@@ -208,7 +205,7 @@ fn config_client_set_and_show() -> Result<()> {
     let stderr = stderr_of(&set);
     assert!(set.status.success(), "stderr:\n{stderr}");
     assert!(
-        stderr.contains("gents service restart"),
+        stderr.contains("gents runtime service restart"),
         "stderr:\n{stderr}"
     );
     assert_eq!(show()?.trim(), "grok");

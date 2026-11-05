@@ -207,7 +207,7 @@ fn report_from_initialized_identity(summary: IdentityOnlyHomeSummary) -> Provisi
 
 fn next_steps(home_dir: &Path, root: &Path) -> Vec<String> {
     vec![
-        format!("gents server --home {}", home_dir.display()),
+        format!("gents runtime server --home {}", home_dir.display()),
         format!(
             "gents config diff --root {} --home {} --bind-node-did home",
             root.display(),

@@ -112,7 +112,7 @@ impl std::fmt::Display for StoreLockHeld {
         let home = self.home.display();
         write!(
             f,
-            "another Gents runtime{holder} is already using {home}. Stop it first: `gents service stop --home {home}` if it runs as the background service, or Ctrl-C in the terminal running `gents server`"
+            "another Gents runtime{holder} is already using {home}. Stop it first: `gents runtime service stop --home {home}` if it runs as the background service, or Ctrl-C in the terminal running `gents runtime server`"
         )
     }
 }

@@ -139,13 +139,13 @@ impl std::fmt::Display for JobReadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotAJob => {
-                f.write_str("not a plugin job; find the job's address with `gents job list`")
+                f.write_str("not a plugin job; find the job's address with `gents automation job list`")
             }
             Self::NotAuthorized => f.write_str(
                 "this job belongs to another session or requester; read it from the session that started it",
             ),
             Self::NotYetObservable => f.write_str(
-                "no job row is visible at this address yet; retry shortly, or check the address with `gents job list`",
+                "no job row is visible at this address yet; retry shortly, or check the address with `gents automation job list`",
             ),
             Self::Unavailable { message } => write!(f, "job store unavailable: {message}"),
             Self::Malformed { message } => {

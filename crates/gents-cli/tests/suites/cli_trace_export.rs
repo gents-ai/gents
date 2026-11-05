@@ -65,6 +65,7 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
             "debug",
             "trace",
             "export",
@@ -311,6 +312,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
         let json_schema_output = run_cli_text(
             tempdir.path(),
             &[
+                "utils",
                 "debug",
                 "trace",
                 "project-schema",
@@ -331,6 +333,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
         let jsonl_schema_output = run_cli_text(
             tempdir.path(),
             &[
+                "utils",
                 "debug",
                 "trace",
                 "project-schema",
@@ -353,6 +356,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
         let eval_jsonl_schema_output = run_cli_text(
             tempdir.path(),
             &[
+                "utils",
                 "debug",
                 "trace",
                 "project-schema",
@@ -376,6 +380,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
     let atif_native_schema_output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
             "debug",
             "trace",
             "project-schema",
@@ -418,6 +423,7 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
             "debug",
             "trace",
             "timeline",
@@ -860,6 +866,7 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
             "debug",
             "trace",
             "capture",
@@ -896,6 +903,7 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
             "debug",
             "trace",
             "capture",
@@ -933,6 +941,7 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
             "debug",
             "trace",
             "capture",
@@ -961,6 +970,7 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
             "debug",
             "trace",
             "capture",
@@ -990,6 +1000,7 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
             "debug",
             "trace",
             "capture",
@@ -1015,6 +1026,7 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let stderr = run_cli_failure_stderr(
         tempdir.path(),
         &[
+            "utils",
             "debug",
             "trace",
             "capture",
@@ -1032,6 +1044,7 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "utils",
             "debug",
             "trace",
             "timeline",
@@ -1227,6 +1240,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
     let denied_scope = run_cli_failure_stderr(
         tempdir.path(),
         &[
+            "utils",
             "debug",
             "trace",
             "project",
@@ -1375,6 +1389,7 @@ async fn trace_project_graphql_enforces_acp_read_filter_with_real_cli() -> Resul
         run_cli_text(
             &cwd,
             &[
+                "utils",
                 "debug",
                 "trace",
                 "project",
@@ -1484,6 +1499,7 @@ fn trace_project_json_with_extra_args(
     extra_args: &[&str],
 ) -> Result<Value> {
     let mut args = vec![
+        "utils",
         "debug",
         "trace",
         "project",
@@ -1512,6 +1528,7 @@ fn trace_project_jsonl_lines(
     let output = run_cli_text(
         cwd,
         &[
+            "utils",
             "debug",
             "trace",
             "project",
@@ -1544,6 +1561,7 @@ fn trace_project_eval_jsonl_lines(
     let output = run_cli_text(
         cwd,
         &[
+            "utils",
             "debug",
             "trace",
             "project",

@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::cli::args::{P2pDiscoveryArg, P2pRelayModeArg, ServeArgs, ServiceNetworkArgs};
 use crate::native_service::{CommandRunner, NativeServiceManager};
 
-/// Listen settings `gents server` applies for each flag it is not given. The
-/// native service definition stays `gents server --home <HOME>`, so the
+/// Listen settings `gents runtime server` applies for each flag it is not given. The
+/// native service definition stays `gents runtime server --home <HOME>`, so the
 /// desktop's own installs and updates of that definition keep these.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -101,7 +101,7 @@ impl NetworkSettings {
         }
     }
 
-    /// Explicit `gents server` flags win over persisted settings.
+    /// Explicit `gents runtime server` flags win over persisted settings.
     pub(crate) fn fill_unset(&self, args: &mut ServeArgs) {
         args.http_addr = args.http_addr.or(self.http_addr);
         args.http_port = args.http_port.or(self.http_port);
@@ -170,7 +170,7 @@ where
     if settings.persist(home)? && manager.status()?.running {
         tracing::warn!(
             home = %home.display(),
-            "network settings changed while the service is running; run `gents service restart --home {}` to apply them",
+            "network settings changed while the service is running; run `gents runtime service restart --home {}` to apply them",
             home.display()
         );
     }
@@ -194,7 +194,7 @@ mod tests {
     use clap::Parser as _;
 
     use super::*;
-    use crate::cli::{Cli, Command, ServiceAction};
+    use crate::cli::{Cli, Command, RuntimeCommand, ServiceAction};
     use crate::native_service::{
         CommandOutput, NativeServiceConfig, NativeServicePlatform, SERVICE_LABEL, SYSTEMD_UNIT,
     };
@@ -251,13 +251,15 @@ mod tests {
     }
 
     fn install_network(argv: &[&str]) -> ServiceNetworkArgs {
-        let mut full = vec!["gents", "service", "install"];
+        let mut full = vec!["gents", "runtime", "service", "install"];
         full.extend_from_slice(argv);
         match Cli::try_parse_from(full)
             .expect("service install parses")
             .command
         {
-            Some(Command::Service { command }) => match command.into_parts().2 {
+            Some(Command::Runtime {
+                command: RuntimeCommand::Service { command },
+            }) => match command.into_parts().2 {
                 ServiceAction::Install { network, .. } => network,
                 _ => panic!("expected install"),
             },
@@ -496,13 +498,17 @@ mod tests {
     fn install_accepts_an_explicit_environment_file() {
         let cli = Cli::try_parse_from([
             "gents",
+            "runtime",
             "service",
             "install",
             "--environment-file",
             "operator.json",
         ])
         .unwrap();
-        let Some(Command::Service { command }) = cli.command else {
+        let Some(Command::Runtime {
+            command: RuntimeCommand::Service { command },
+        }) = cli.command
+        else {
             panic!("service command");
         };
         let ServiceAction::Install {

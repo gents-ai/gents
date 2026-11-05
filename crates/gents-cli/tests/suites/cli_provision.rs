@@ -26,6 +26,7 @@ async fn provision_initializes_home_binds_manifest_and_diff_exact() -> Result<()
     let report = run_cli_json(
         &target_home_env,
         &[
+            "runtime",
             "provision",
             "--store-key-custody",
             "file",
@@ -106,6 +107,7 @@ async fn provision_rejects_initialized_home_without_loadable_identity() -> Resul
     let stderr = run_cli_failure_stderr(
         &home_env,
         &[
+            "runtime",
             "provision",
             "--store-key-custody",
             "file",
@@ -145,6 +147,7 @@ async fn provision_rejects_uninitialized_home_without_bootstrap_flag() -> Result
     let stderr = run_cli_failure_stderr(
         &home_env,
         &[
+            "runtime",
             "provision",
             "--store-key-custody",
             "file",

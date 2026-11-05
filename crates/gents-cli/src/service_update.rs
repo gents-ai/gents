@@ -166,7 +166,7 @@ pub(crate) async fn submit(args: ServiceUpdateArgs) -> Result<()> {
                 )
                 .await?;
             return Err(error.context(format!(
-                "update {} failed; inspect `gents service update-status --home {} {}`",
+                "update {} failed; inspect `gents runtime service update-status --home {} {}`",
                 plan.id,
                 plan.home.display(),
                 plan.id
@@ -421,7 +421,7 @@ fn refuse_origin_disruption(
             if let (Ok(origin), Ok(home)) =
                 (std::fs::canonicalize(origin), std::fs::canonicalize(home))
             {
-                anyhow::ensure!(origin != home, "This command would disrupt the runtime executing your turn. Use `gents service update` and finish your turn after acceptance; inspect `service update-status` after reconnect. Use external administration for unsupported maintenance.");
+                anyhow::ensure!(origin != home, "This command would disrupt the runtime executing your turn. Use `gents runtime service update` and finish your turn after acceptance; inspect `gents runtime service update-status` after reconnect. Use external administration for unsupported maintenance.");
             }
         }
     }

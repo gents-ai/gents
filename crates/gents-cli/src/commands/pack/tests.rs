@@ -483,7 +483,7 @@ fn expect_digest_mismatch_names_both_digests_and_pack_show() {
         "{:#}",
         check_expected_digest(Some("sha256:expected"), "sha256:actual").unwrap_err()
     );
-    for needle in ["sha256:expected", "sha256:actual", "gents pack show"] {
+    for needle in ["sha256:expected", "sha256:actual", "gents config pack show"] {
         assert!(error.contains(needle), "{needle} missing from {error}");
     }
 }

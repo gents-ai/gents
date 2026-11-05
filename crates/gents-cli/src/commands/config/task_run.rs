@@ -416,14 +416,14 @@ pub(crate) fn resolve_task_id_for(
     match (positional, flag) {
         (Some(positional), Some(flag)) if positional != flag => {
             anyhow::bail!(
-                "conflicting task ids provided: positional={} and --task-id={}\nNext:\n  1. Pass the task id once: `gents task {command} TASK_ID`\n  2. Or use `--task-id TASK_ID`, but not both",
+                "conflicting task ids provided: positional={} and --task-id={}\nNext:\n  1. Pass the task id once: `gents automation task {command} TASK_ID`\n  2. Or use `--task-id TASK_ID`, but not both",
                 positional,
                 flag
             );
         }
         (Some(task_id), _) | (_, Some(task_id)) => Ok(task_id.to_string()),
         (None, None) => anyhow::bail!(
-            "missing task id\nNext:\n  1. Pass it positionally: `gents task {command} TASK_ID`\n  2. Or use `--task-id TASK_ID`"
+            "missing task id\nNext:\n  1. Pass it positionally: `gents automation task {command} TASK_ID`\n  2. Or use `--task-id TASK_ID`"
         ),
     }
 }

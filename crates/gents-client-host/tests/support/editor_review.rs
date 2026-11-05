@@ -486,7 +486,7 @@ async fn enrollment_decision(root: &Path, home: &Path, action: &str, request: &s
         std::time::Duration::from_secs(30),
         tokio::process::Command::new(cli)
             .current_dir(root)
-            .args(["p2p", "enrollment", action, request, "--home"])
+            .args(["runtime", "p2p", "enrollment", action, request, "--home"])
             .arg(home)
             .kill_on_drop(true)
             .output(),

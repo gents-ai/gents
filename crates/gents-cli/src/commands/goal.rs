@@ -26,7 +26,7 @@ pub(crate) async fn dispatch(command: GoalCommand) -> Result<()> {
 
 async fn goal_show(args: GoalShowArgs) -> Result<()> {
     args.output
-        .ensure_supported("goal show", &[OutputFormat::Json])?;
+        .ensure_supported("automation goal show", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
     print_json(&goal_show_value(&access, &node_did, &args.scope.session, Utc::now()).await?)
 }
@@ -54,7 +54,7 @@ async fn goal_show_value(
 
 async fn goal_set(args: GoalSetArgs) -> Result<()> {
     args.output
-        .ensure_supported("goal set", &[OutputFormat::Json])?;
+        .ensure_supported("automation goal set", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
     print_json(&goal_set_value(&access, &node_did, &args).await?)
 }
@@ -88,7 +88,7 @@ async fn goal_set_value(
 
 async fn goal_resume(args: GoalResumeArgs) -> Result<()> {
     args.output
-        .ensure_supported("goal resume-request", &[OutputFormat::Json])?;
+        .ensure_supported("automation goal resume-request", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
     crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &node_did)?;
     let identity =
@@ -106,7 +106,7 @@ async fn goal_resume(args: GoalResumeArgs) -> Result<()> {
 
 async fn goal_resume_on(args: GoalResumeOnArgs) -> Result<()> {
     args.output
-        .ensure_supported("goal resume-on", &[OutputFormat::Json])?;
+        .ensure_supported("automation goal resume-on", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
     crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &node_did)?;
     let identity =
@@ -135,7 +135,7 @@ async fn goal_resume_on(args: GoalResumeOnArgs) -> Result<()> {
 
 async fn goal_clear(args: GoalShowArgs) -> Result<()> {
     args.output
-        .ensure_supported("goal clear", &[OutputFormat::Json])?;
+        .ensure_supported("automation goal clear", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
     let goal = load_goal(&access, &node_did, &args.scope.session)
         .await?

@@ -155,7 +155,7 @@ impl PackInstaller {
     /// Removes an installed pack's `PackInstallation` record and everything
     /// it lists. Never resolves the package (no
     /// store or registry lookup); releases its home and plugin store records
-    /// but no plugin bytes or archive; use `gents pack remove` for that.
+    /// but no plugin bytes or archive; use `gents config pack remove` for that.
     pub(super) async fn remove(&self, package: &str) -> anyhow::Result<String> {
         let args = PackInstallParams {
             package: package.to_owned(),

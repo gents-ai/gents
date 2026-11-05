@@ -336,7 +336,7 @@ mod tests {
             super::super::render::breakdown_table(&breakdown, &mut out).unwrap();
             assert_eq!(String::from_utf8(out).unwrap(), format!("\n{expected}\n"));
         }
-        let help = Cli::try_parse_from(["gents", "eval", "--help"])
+        let help = Cli::try_parse_from(["gents", "utils", "eval", "--help"])
             .err()
             .map(|error| error.to_string())
             .unwrap_or_default();
@@ -348,7 +348,7 @@ mod tests {
         let missing = eval(&fixture, &with(&["--case", "zzz"])).await.unwrap_err();
         assert_eq!(missing.to_string(), "the comparison has no case \"zzz\"");
         assert!(Cli::try_parse_from([
-            "gents", "eval", "compare", "r1", "r1", "--by", "check", "--case", "val-a"
+            "gents", "utils", "eval", "compare", "r1", "r1", "--by", "check", "--case", "val-a"
         ])
         .is_err());
     }

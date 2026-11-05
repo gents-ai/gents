@@ -96,7 +96,7 @@ pub fn pack_job_block_admissible(
              by {coordinate} or its dependencies, job.policy.trusted_packs within {coordinate} \
              and its dependencies, and job.policy.dynamic off or check. Next: drop the job \
              block from the pack, or install the \
-             pack with `gents pack install` and wire the block into Tools as the operator",
+             pack with `gents config pack install` and wire the block into Tools as the operator",
             plugin.plugin
         );
     }

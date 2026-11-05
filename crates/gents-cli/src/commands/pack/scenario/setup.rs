@@ -26,6 +26,7 @@ pub(super) async fn install_dependencies(
     for package in packages {
         tracing::info!(%package, "installing dependency");
         let mut args = vec![
+            "config".to_owned(),
             "pack".to_owned(),
             "install".to_owned(),
             package.clone(),

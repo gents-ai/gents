@@ -147,7 +147,7 @@ fn status_maps_verification_to_user_paused_and_names_it() {
     assert_eq!(frame["status"], "user_paused");
     let message = frame["pause_message"].as_str().unwrap();
     assert!(message.contains("verification"));
-    assert!(message.contains("gents job show session-1:call-1"));
+    assert!(message.contains("gents automation job show session-1:call-1"));
 }
 
 #[test]
@@ -294,7 +294,7 @@ fn outcome_code_message_and_next_call_reach_the_detail() {
     let detail = frame["last_event_detail"].as_str().unwrap();
     assert!(detail.contains("plugin_job_step_failed"));
     assert!(detail.contains("step three failed"));
-    assert!(detail.contains("gents job show session-1:call-1"));
+    assert!(detail.contains("gents automation job show session-1:call-1"));
 }
 
 #[test]
@@ -307,7 +307,7 @@ fn pause_message_names_the_next_call() {
     assert!(frame["pause_message"]
         .as_str()
         .unwrap()
-        .contains("gents job show session-1:call-1"));
+        .contains("gents automation job show session-1:call-1"));
     assert!(frame["last_event_detail"]
         .as_str()
         .unwrap()
@@ -572,7 +572,7 @@ async fn abandoned_frame_names_gents_job_show() {
     let message = frames[0]["pause_message"].as_str().unwrap();
     assert!(message.starts_with("Gents stopped observing this job: "));
     assert!(message.contains(&JobReadError::NotAuthorized.to_string()));
-    assert!(message.ends_with("next: gents job show session-1:call-1"));
+    assert!(message.ends_with("next: gents automation job show session-1:call-1"));
 }
 
 #[tokio::test]

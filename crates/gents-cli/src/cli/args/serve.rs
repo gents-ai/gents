@@ -35,7 +35,7 @@ pub(crate) struct ServeArgs {
     pub(crate) data_dir: Option<PathBuf>,
     #[arg(
         long,
-        help = "HTTP listen address. Defaults to the home's network.json (`gents service install --http-addr`), else 127.0.0.1"
+        help = "HTTP listen address. Defaults to the home's network.json (`gents runtime service install --http-addr`), else 127.0.0.1"
     )]
     pub(crate) http_addr: Option<IpAddr>,
     #[arg(

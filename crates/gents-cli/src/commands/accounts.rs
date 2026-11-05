@@ -127,10 +127,9 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
                 &mut std::io::stderr(),
             )
             .await?;
-            match output.ensure_supported(
-                "auth accounts list",
-                &[OutputFormat::Table, OutputFormat::Json],
-            )? {
+            match output
+                .ensure_supported("accounts list", &[OutputFormat::Table, OutputFormat::Json])?
+            {
                 OutputFormat::Json => print_json(&serde_json::to_value(rows)?),
                 _ => {
                     print!("{}", render_table(&rows));
@@ -277,7 +276,7 @@ impl Snapshot {
                 )
             }
             [] => anyhow::bail!(
-                "no account {needle:?} on this node; `gents auth accounts list` shows them"
+                "no account {needle:?} on this node; `gents accounts list` shows them"
             ),
             many => anyhow::bail!(
                 "{needle:?} names several accounts: {}; pass --provider or one of these ids",

@@ -19,7 +19,7 @@ pub(crate) fn resolve_publish_token(
         return Ok(token);
     }
     credentials::get(home, registry)?.with_context(|| {
-        format!("you are not signed in to {registry}; run gents pack login, or pass --token")
+        format!("you are not signed in to {registry}; run gents config pack login, or pass --token")
     })
 }
 

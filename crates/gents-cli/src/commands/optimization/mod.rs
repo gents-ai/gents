@@ -127,7 +127,7 @@ async fn behavior_proposer(
     ensure_tool_less(&config, &ctx.owner, &agent_id)?;
     let gents::ConfigAccess::Graphql(graphql) = &ctx.access else {
         anyhow::bail!(
-            "start `gents server` for this home and retry: an agent proposer runs on a served home"
+            "start `gents runtime server` for this home and retry: an agent proposer runs on a served home"
         );
     };
     crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &ctx.owner)?;
@@ -451,7 +451,7 @@ async fn promote(
     }
     writeln!(
         out,
-        "promoted job {}: the target now digests to {} (was {}); `gents optimization revert {} --digest {}` undoes it",
+        "promoted job {}: the target now digests to {} (was {}); `gents utils optimization revert {} --digest {}` undoes it",
         args.job_id,
         promotion.target_digest,
         promotion.previous_digest,
@@ -508,7 +508,7 @@ async fn rm(ctx: &EvalContext, args: &OptimizationRmArgs, out: &mut dyn Write) -
     tracing::warn!(job_id = %args.job_id, bytes, "optimization job directory removed; its documents stay");
     let unpromotable = if state == JobState::ReadyToPromote {
         format!(
-            "; a later `gents optimization promote {}` will refuse: the retained checkpoint pack under {} is gone",
+            "; a later `gents utils optimization promote {}` will refuse: the retained checkpoint pack under {} is gone",
             args.job_id,
             dir.display()
         )

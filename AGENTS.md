@@ -94,7 +94,7 @@ Do not duplicate changing versions in instructions.
   Persisted messages remain native. DefraDB is the pinned public dependency in
   the workspace `Cargo.toml`; investigate node, schema, identity, and
   transaction behavior there. Claude subscriptions use Anthropic Messages HTTP
-  with a node-scoped `OAuthCredential` written by `gents auth login claude` and
+  with a node-scoped `OAuthCredential` written by `gents accounts login claude` and
   refreshed by gents; the `claude` binary is not a dependency.
 
 ## Foundation

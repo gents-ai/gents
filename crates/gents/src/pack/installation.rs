@@ -225,7 +225,7 @@ async fn live_digests<'a>(
 fn edited_error(coordinate: &str, edited: &[String]) -> anyhow::Error {
     anyhow::anyhow!(
         "{} of {coordinate}'s documents were edited since it was installed: {}; \
-         use the operator CLI `gents pack install`, `gents pack update`, or `gents pack remove` with --overwrite or --keep to decide how to handle them; the agent pack command does not accept these flags",
+         use the operator CLI `gents config pack install`, `gents config pack update`, or `gents config pack remove` with --overwrite or --keep to decide how to handle them; the agent pack command does not accept these flags",
         edited.len(),
         edited.join(", ")
     )
@@ -775,7 +775,7 @@ pub async fn remove_pack(
                 anyhow::ensure!(
                     !record.plugin_store,
                     "{coordinate} is not installed as a pack for {owner}: only its plugins \
-                     are, through gents pack plugin install; remove them with gents pack plugin remove"
+                     are, through gents config pack plugin install; remove them with gents config pack plugin remove"
                 );
                 if !record.required_by.is_empty() {
                     let dependents: Vec<&str> =

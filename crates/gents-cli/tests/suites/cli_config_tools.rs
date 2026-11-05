@@ -239,7 +239,7 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
     let resolved_root = fs::canonicalize(&workspace)?;
     let resolved_root = resolved_root.to_str().context("utf-8 resolved root")?;
 
-    let live = run_cli_json(&home, &["tools", "explain"])?;
+    let live = run_cli_json(&home, &["config", "tools", "explain"])?;
     assert_eq!(
         live["host_tool_ceiling"]["tool_ceiling"], "readonly",
         "{live}"
@@ -267,6 +267,7 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
     let remote = run_cli_json(
         &elsewhere,
         &[
+            "config",
             "tools",
             "explain",
             "--home",
@@ -287,7 +288,7 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
 
     server.child.kill()?;
     server.child.wait()?;
-    let offline_text = run_cli_text(&home, &["tools", "explain"])?;
+    let offline_text = run_cli_text(&home, &["config", "tools", "explain"])?;
     assert_keys_in_order(
         &offline_text,
         &[
@@ -376,7 +377,7 @@ async fn tools_explain_refuses_a_live_root_the_server_cannot_resolve() -> Result
     wait_for_port(port, &mut server)?;
     wait_for_runtime_state_graphql(&home, &graphql, Duration::from_secs(30)).await?;
 
-    let stderr = run_cli_failure_stderr(&home, &["tools", "explain"])?;
+    let stderr = run_cli_failure_stderr(&home, &["config", "tools", "explain"])?;
     assert!(stderr.contains("has no usable root"), "{stderr}");
     assert!(stderr.contains(dangling.to_str().unwrap()), "{stderr}");
     assert!(stderr.contains("restart the server"), "{stderr}");
@@ -399,10 +400,10 @@ async fn tools_explain_refuses_a_home_whose_runtime_serves_another_node() -> Res
         &["--node-name", "explain-home", "--home", home_arg],
     )?)?;
 
-    let offline = run_cli_json(&cwd, &["tools", "explain", "--home", home_arg])?;
+    let offline = run_cli_json(&cwd, &["config", "tools", "explain", "--home", home_arg])?;
     let next = offline["next"].as_str().unwrap_or_default();
     assert!(
-        next.contains(&format!("gents server --home {quoted_home}")),
+        next.contains(&format!("gents runtime server --home {quoted_home}")),
         "{offline}"
     );
 
@@ -426,7 +427,7 @@ async fn tools_explain_refuses_a_home_whose_runtime_serves_another_node() -> Res
         wait_for_runtime_state_graphql(&other, &graphql, Duration::from_secs(30)).await?;
     write_json_file(&home.join("runtime.json"), &other_state)?;
 
-    let stderr = run_cli_failure_stderr(&cwd, &["tools", "explain", "--home", home_arg])?;
+    let stderr = run_cli_failure_stderr(&cwd, &["config", "tools", "explain", "--home", home_arg])?;
     assert!(
         stderr.contains(&format!("belongs to node {owner}")),
         "{stderr}"
@@ -436,7 +437,7 @@ async fn tools_explain_refuses_a_home_whose_runtime_serves_another_node() -> Res
         "{stderr}"
     );
     assert!(
-        stderr.contains(&format!("gents server --home {quoted_home}")),
+        stderr.contains(&format!("gents runtime server --home {quoted_home}")),
         "{stderr}"
     );
     Ok(())

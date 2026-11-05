@@ -125,7 +125,7 @@ def packJobBlockAdmissible (via : InstallProvenance) (closure : List String)
   decide (via = .operator ∧ b.targetsFrom ⊆ closure ∧ b.trusted ⊆ closure ∧
     b.dynamic ∈ [.off, .check])
 
-/-- `gents pack wire … --targets-from <pack>`: the pack's targets join
+/-- `gents config pack wire … --targets-from <pack>`: the pack's targets join
 the job targets, every job target joins the caller's AgentTools target list,
 and the pack joins `trusted_packs`. Content packs ship no job block, so
 this operator wiring, not a pack-shipped block, grants their targets.

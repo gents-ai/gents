@@ -24,7 +24,7 @@ fn assert_diagnostic(error: &ConfigClientError, endpoint: &GraphqlEndpoint) {
     let message = error.to_string();
     assert!(message.contains(endpoint.url()), "{message}");
     assert_eq!(message.matches("\nNext:\n").count(), 1, "{message}");
-    assert!(message.contains("gents server"), "{message}");
+    assert!(message.contains("gents runtime server"), "{message}");
     assert!(!message.starts_with("Next:"), "the cause precedes the hint");
 }
 

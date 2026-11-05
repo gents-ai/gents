@@ -27,18 +27,18 @@ cp -r examples/ux-plugins/focus_timer  ~/.gents/ux-plugins/
 # `install` takes a pack spec, so a local path must be explicit (`./`, `../`,
 # absolute, or a `.pack` file); a bare path reads as a registry coordinate.
 # Without the CLI installed: `cargo run -q -p gents-cli --bin gents -- pack …`
-gents pack check   examples/ux-plugins/board_docs
-gents pack install ./examples/ux-plugins/board_docs --home ~/.gents
-gents pack check   examples/ux-plugins/board_pack
-gents pack install ./examples/ux-plugins/board_pack --home ~/.gents
+gents config pack check   examples/ux-plugins/board_docs
+gents config pack install ./examples/ux-plugins/board_docs --home ~/.gents
+gents config pack check   examples/ux-plugins/board_pack
+gents config pack install ./examples/ux-plugins/board_pack --home ~/.gents
 
 # see what the desktop will receive
-gents pack ux list
-gents pack ux module focus_timer
-gents pack ux module examples/board_pack/board
+gents config pack ux list
+gents config pack ux module focus_timer
+gents config pack ux module examples/board_pack/board
 ```
 
-Every example passes `gents pack ux lint` and is covered by
+Every example passes `gents config pack ux lint` and is covered by
 `apps/gents-desktop/tests/ux-examples.test.ts`, which loads each one into an
 in-process frame over the real port protocol and, for the board, drives its
 `ctx.data` reads and writes.

@@ -94,10 +94,10 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
             })
         }
         "build" => bail!(
-            "pack build isn't available through config. Run `gents pack build` from the operator CLI to build plugin artifacts before installing."
+            "pack build isn't available through config. Run `gents config pack build` from the operator CLI to build plugin artifacts before installing."
         ),
         "test" => bail!(
-            "pack test isn't available through config. Run `gents pack test` from the operator CLI."
+            "pack test isn't available through config. Run `gents config pack test` from the operator CLI."
         ),
         other => Err(CommandGuidance {
             message: format!(
@@ -135,7 +135,7 @@ fn check_outcome_fields(report: &CheckReport) -> (bool, String) {
     let note = if !report.problems.is_empty() {
         "Fix each named problem before installing; this call made no change."
     } else if !report.unverified.is_empty() {
-        "unverified lists checks this call could not run. An empty problems list is not full validation; run `gents pack check` before reporting success."
+        "unverified lists checks this call could not run. An empty problems list is not full validation; run `gents config pack check` before reporting success."
     } else {
         "Every validation available in this call passed."
     };
@@ -188,7 +188,7 @@ impl ConfigCommandTool {
             "dir": relative,
             "files": report.files,
             "next_call": json!({"argv":["pack","check",relative]}),
-            "note": "Scaffolded inside the effective tool root. The pack is not installed and nothing runs; check it, then build plugin artifacts with `gents pack build` from the operator CLI before installing.",
+            "note": "Scaffolded inside the effective tool root. The pack is not installed and nothing runs; check it, then build plugin artifacts with `gents config pack build` from the operator CLI before installing.",
         }
         .pretty()
     }

@@ -1,14 +1,14 @@
 use clap::Subcommand;
 
 use super::{
-    AccountsCommand, BackgroundCommand, ClaudeGatewayLoginArgs, ClaudeLoginArgs,
+    AccountsCommand, BackgroundCommand, ClaudeGatewayLoginArgs, ClaudeLoginArgs, CloudLoginArgs,
     CodexAuthProbeArgs, CodexLoginArgs, DocumentCommand, ExportArgs, FleetCommand,
     GrokAuthProbeArgs, GrokLoginArgs, QueryArgs, RequestCommand, ResponseCommand, SchemaCommand,
     TraceCommand, WriteArgs,
 };
 use crate::{
-    BACKGROUND_AFTER_HELP, FLEET_AFTER_HELP, REQUEST_AFTER_HELP, RESPONSE_AFTER_HELP,
-    SCHEMA_AFTER_HELP, TRACE_AFTER_HELP,
+    BACKGROUND_AFTER_HELP, CLOUD_AFTER_HELP, FLEET_AFTER_HELP, REQUEST_AFTER_HELP,
+    RESPONSE_AFTER_HELP, SCHEMA_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
 #[derive(Subcommand)]
@@ -23,13 +23,8 @@ pub(crate) enum AuthCommand {
         #[command(subcommand)]
         command: AuthProbeCommand,
     },
-    #[command(
-        about = "List, label, disable or remove the subscription accounts signed in on this node"
-    )]
-    Accounts {
-        #[command(subcommand)]
-        command: AccountsCommand,
-    },
+    #[command(flatten)]
+    Accounts(AccountsCommand),
 }
 
 #[derive(Subcommand)]
@@ -47,6 +42,11 @@ pub(crate) enum AuthLoginCommand {
     Claude(ClaudeLoginArgs),
     #[command(about = "Sign in to a Claude Code cloud gateway and store the account in DefraDB")]
     ClaudeGateway(ClaudeGatewayLoginArgs),
+    #[command(
+        about = "Sign in to a gents cloud and store the workspace token in DefraDB",
+        after_help = CLOUD_AFTER_HELP
+    )]
+    Cloud(CloudLoginArgs),
 }
 
 #[derive(Subcommand)]

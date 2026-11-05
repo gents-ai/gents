@@ -236,9 +236,9 @@ fn next_step_lines(initialized: &serde_json::Value, home: &Path) -> Vec<String> 
         .into_iter()
         .flatten()
         .filter_map(serde_json::Value::as_str)
-        .filter(|step| !matches!(*step, "gents server" | "gents codex"))
+        .filter(|step| !matches!(*step, "gents runtime server" | "gents codex"))
         .map(|step| {
-            if step.starts_with("gents auth login") {
+            if step.starts_with("gents accounts login") {
                 format!(
                     "Sign in later with `{step} --home {}`.",
                     crate::shell_word(home)
@@ -293,9 +293,9 @@ mod tests {
     fn only_steps_setup_does_not_take_itself_are_printed() {
         let initialized = serde_json::json!({
             "next_steps": [
-                "gents auth login codex",
+                "gents accounts login codex",
                 "llama-server -hf m",
-                "gents server",
+                "gents runtime server",
                 "gents codex",
                 "To change the model's address, do this.",
             ],
@@ -304,7 +304,7 @@ mod tests {
         assert_eq!(
             next_step_lines(&initialized, home),
             [
-                "Sign in later with `gents auth login codex --home /srv/home`.",
+                "Sign in later with `gents accounts login codex --home /srv/home`.",
                 "If your model is not running yet, start it with `llama-server -hf m`.",
                 "To change the model's address, do this.",
             ]
@@ -312,10 +312,10 @@ mod tests {
         assert!(next_step_lines(&serde_json::json!({}), home).is_empty());
         assert_eq!(
             next_step_lines(
-                &serde_json::json!({"next_steps": ["gents auth login codex"]}),
+                &serde_json::json!({"next_steps": ["gents accounts login codex"]}),
                 Path::new("/srv/my home")
             ),
-            ["Sign in later with `gents auth login codex --home '/srv/my home'`."]
+            ["Sign in later with `gents accounts login codex --home '/srv/my home'`."]
         );
     }
 

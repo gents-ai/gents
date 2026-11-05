@@ -325,7 +325,7 @@ impl P2pTool {
         );
         for name in &collections {
             validate_collection_identifier(name)?;
-            ensure!(self.collections.permits(name), "application collection {name} is outside this tool's P2P collection grant. A configuration owner grants it in this agent's Tools built_ins.p2p_collections, and gents pack wire grants a wired plugin's pack collections. The grant this tool holds was fixed when this request started, so a new grant applies from the agent's next request, not in this turn: finish the turn and retry then. ACP document access remains separate; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}");
+            ensure!(self.collections.permits(name), "application collection {name} is outside this tool's P2P collection grant. A configuration owner grants it in this agent's Tools built_ins.p2p_collections, and gents config pack wire grants a wired plugin's pack collections. The grant this tool holds was fixed when this request started, so a new grant applies from the agent's next request, not in this turn: finish the turn and retry then. ACP document access remains separate; next call: p2p {{\"action\":\"help\",\"topic\":\"scope\"}}");
             crate::runtime::agent::p2p_reconcile::resolve_embedded_collection_id(&self.node, name)?
                 .with_context(|| format!("collection {name} is unavailable on this node"))?;
         }

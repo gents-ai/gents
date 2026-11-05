@@ -222,7 +222,7 @@ where
             format!(
                 "request {from_request_id:?} did not stop on a usage limit; move its profile \
                  with `gents config profile set-account <profile>` and resume with \
-                 `gents goal resume-request --from {from_request_id}`"
+                 `gents automation goal resume-request --from {from_request_id}`"
             )
         })?;
     let switch = match limited.profile {
@@ -255,7 +255,7 @@ where
                 .context(
                     "switch failed; nothing changed: the profile that hit the limit is on \
                      neither its account nor the target; move it with `gents config profile \
-                     set-account <profile>` and resume with `gents goal resume-request`",
+                     set-account <profile>` and resume with `gents automation goal resume-request`",
                 )?;
             None
         }

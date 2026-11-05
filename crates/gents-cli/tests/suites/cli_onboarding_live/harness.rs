@@ -94,10 +94,10 @@ impl LiveBox {
             .env("HOME", &root)
             .args(["service", "update-check"])
             .output()
-            .context("running gents service update-check")?;
+            .context("running gents runtime service update-check")?;
         ensure!(
             output.status.success(),
-            "gents service update-check failed: {}",
+            "gents runtime service update-check failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         let metadata: Value = serde_json::from_slice(&output.stdout)?;
@@ -350,7 +350,7 @@ impl Drop for LiveBox {
         for home in self.homes.lock().expect("homes lock").iter() {
             let _ = self
                 .gents()
-                .args(["service", "uninstall", "--home"])
+                .args(["runtime", "service", "uninstall", "--home"])
                 .arg(home)
                 .output();
         }

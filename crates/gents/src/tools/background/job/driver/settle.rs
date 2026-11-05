@@ -122,8 +122,9 @@ pub(in crate::tools::background::job) fn refusal_text(
     tool: &str,
     address: &str,
 ) -> (&'static str, String) {
-    let inspect =
-        format!("Next: `gents job show {address}`; the `{tool}` help says how a run is resumed");
+    let inspect = format!(
+        "Next: `gents automation job show {address}`; the `{tool}` help says how a run is resumed"
+    );
     match refusal {
         Refusal::Stalled => (
             "the job stopped making progress: every child is terminal and the step spawned nothing and sent no message",
@@ -140,7 +141,7 @@ pub(in crate::tools::background::job) fn refusal_text(
         ),
         Refusal::EngineChanged => (
             "the job's plugin changed since the job was pinned",
-            format!("Next: call `{tool}` again to start a new run; `gents job show {address}` keeps the old one"),
+            format!("Next: call `{tool}` again to start a new run; `gents automation job show {address}` keeps the old one"),
         ),
         Refusal::DepthExceeded => (
             "the job would run too deep in a chain of jobs",

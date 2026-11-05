@@ -797,7 +797,7 @@ pub async fn adopt_step0(
                         "handle": pin.handle,
                         "script_id": pin.script_id,
                         "tier": progress.last_event,
-                        "next": format!("Next: `gents job show {address}`"),
+                        "next": format!("Next: `gents automation job show {address}`"),
                     })
                     .to_string();
                     crate::tools::call::lifecycle::publish_background_receipt_in_txn(
@@ -920,18 +920,18 @@ fn step0_refusal(
                 "no job row {} exists to resume",
                 resume.map_or("", |(row, _)| row)
             ),
-            format!("Next: `gents job show <address>` with the address the run's receipt printed; the `{tool}` help says how a run is resumed"),
+            format!("Next: `gents automation job show <address>` with the address the run's receipt printed; the `{tool}` help says how a run is resumed"),
         ),
         Refusal::ResumeNotHead => match resume {
             Some((row, Some(address))) => (
                 FailureClass::PolicyDenied,
                 format!("{row} was already resumed by {address}; only a run's newest row resumes"),
-                format!("Next: `gents job show {address}`; the `{tool}` help says how a run is resumed"),
+                format!("Next: `gents automation job show {address}`; the `{tool}` help says how a run is resumed"),
             ),
             _ => (
                 FailureClass::PolicyDenied,
                 "that row was already resumed; only a run's newest row resumes".to_owned(),
-                format!("Next: `gents job show <address>` with the newest row's address; the `{tool}` help says how a run is resumed"),
+                format!("Next: `gents automation job show <address>` with the newest row's address; the `{tool}` help says how a run is resumed"),
             ),
         },
         Refusal::PolicyDenied if effects => (

@@ -140,10 +140,10 @@ async fn mcp_probe(args: McpProbeArgs) -> Result<()> {
         items: snapshots,
     };
 
-    match args
-        .output
-        .ensure_supported("mcp probe", &[OutputFormat::Text, OutputFormat::Json])?
-    {
+    match args.output.ensure_supported(
+        "config mcp probe",
+        &[OutputFormat::Text, OutputFormat::Json],
+    )? {
         OutputFormat::Json => print_json(&serde_json::to_value(report)?),
         OutputFormat::Text => {
             print_probe_table(&report.items);

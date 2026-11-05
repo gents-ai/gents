@@ -411,7 +411,10 @@ async fn resume_on_covers_limits_only() {
         error.contains("gents config profile set-account"),
         "{error}"
     );
-    assert!(error.contains("gents goal resume-request"), "{error}");
+    assert!(
+        error.contains("gents automation goal resume-request"),
+        "{error}"
+    );
     assert_eq!(limited.profile_backend().await, limited.a);
     assert_eq!(limited.goal_status().await, "usage_limited");
     assert!(limited.children().await.is_empty());

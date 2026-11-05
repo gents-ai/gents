@@ -133,7 +133,7 @@ else
   env -u GENTS_BUILD_GIT_TAG GENTS_BUILD_GIT_SHA="$BUILD_SOURCE" GENTS_BUILD_GIT_REF="$BUILD_REF" GENTS_BUILD_GIT_DIRTY="$BUILD_DIRTY" \
     cargo build --quiet --manifest-path "$ROOT/Cargo.toml" -p gents-cli --bin gents -p gents-fs-runner --bin gents-fs-runner
   GENTS="$ROOT/target/debug/gents"
-  BUILT_VERSION=$("$GENTS" version)
+  BUILT_VERSION=$("$GENTS" runtime version)
   case "$BUILT_VERSION" in
     *"$BUILD_SOURCE"*) ;;
     *) echo "built binary does not match checkout $BUILD_SOURCE: $BUILT_VERSION" >&2; exit 1 ;;
@@ -165,7 +165,7 @@ DID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["node_did"
 GRAPHQL="http://127.0.0.1:$PORT/api/v0/graphql"
 served() {
   grep -qF "127.0.0.1:$PORT/" "$EVAL_HOME/runtime.json" 2>/dev/null &&
-    "$GENTS" data query --home "$EVAL_HOME" --graphql "$GRAPHQL" --collection Node --field node_did 2>/dev/null |
+    "$GENTS" utils data query --home "$EVAL_HOME" --graphql "$GRAPHQL" --collection Node --field node_did 2>/dev/null |
       python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if any(r.get("node_did")==sys.argv[1] for r in d.get("results",[])) else 1)' "$DID" 2>/dev/null
 }
 if ! served; then
@@ -183,7 +183,7 @@ PYFREE
     GRAPHQL="http://127.0.0.1:$PORT/api/v0/graphql"
   fi
   echo "serving $EVAL_HOME on $PORT (log $EVAL_HOME/server.log) ..." >&2
-  (cd "$EVAL_HOME/work" && exec nohup "$GENTS" server --home "$EVAL_HOME" --http-port "$PORT" \
+  (cd "$EVAL_HOME/work" && exec nohup "$GENTS" runtime server --home "$EVAL_HOME" --http-port "$PORT" \
     </dev/null >"$EVAL_HOME/server.log" 2>&1) &
   EVAL_SERVER_PID=$!
   echo "$EVAL_SERVER_PID" >"$EVAL_HOME/server.pid"
@@ -353,7 +353,7 @@ PYSPLIT
     cat >&2 <<EOF
 
 == $level ($split): $TRIALS trials per case, $TRIAL_CONCURRENCY trials at once, $PER_TRIAL call(s) per trial, $MODEL at $ENDPOINT
-watch:  $GENTS eval watch $RUN_ID --home $EVAL_HOME
+watch:  $GENTS utils eval watch $RUN_ID --home $EVAL_HOME
 EOF
     python3 - "$PLAN_DRAFT" "$DEFINITION_ID" "$RUN_SUBJECT" "$PROFILE_ID" "$split" "$TRIALS" "$TRIAL_CONCURRENCY" "$RUN_ID" <<'PYPLAN'
 import json, pathlib, sys
@@ -382,16 +382,16 @@ BATCH_LOG="$EVAL_HOME/batch-$STAMP.log"
 FIRST_RUN_ID=$(python3 -c 'import json,sys; a=json.load(open(sys.argv[1]))["runs"][0]["args"]; print(a[a.index("--run-id")+1])' "$PLAN")
 echo "saved batch plan: $PLAN" >&2
 echo "global active trial cap: $TRIAL_CONCURRENCY (floor($CONCURRENCY / $PER_TRIAL)); provider/background calls are not globally capped" >&2
-(cd "$EVAL_HOME/work" && exec "$GENTS" eval batch --plan "$PLAN" --concurrency "$TRIAL_CONCURRENCY" --home "$EVAL_HOME") >"$BATCH_LOG" 2>&1 &
+(cd "$EVAL_HOME/work" && exec "$GENTS" utils eval batch --plan "$PLAN" --concurrency "$TRIAL_CONCURRENCY" --home "$EVAL_HOME") >"$BATCH_LOG" 2>&1 &
 BATCH_PID=$!
-WATCH_COMMAND="$GENTS eval watch $FIRST_RUN_ID --home $EVAL_HOME"
+WATCH_COMMAND="$GENTS utils eval watch $FIRST_RUN_ID --home $EVAL_HOME"
 if [ "$WATCH" = web ]; then WATCH_COMMAND="http://127.0.0.1:$WEB_PORT"; fi
 trap 'echo "Batch continues in process $BATCH_PID. Plan: $PLAN. Watch: $WATCH_COMMAND" >&2; disown "$BATCH_PID" 2>/dev/null || true; exit 130' INT
 echo "batch log: $BATCH_LOG" >&2
 if [ "$WATCH" = tui ]; then
   while kill -0 "$BATCH_PID" 2>/dev/null; do
     if [ -f "$EVAL_HOME/eval/runs/$FIRST_RUN_ID/progress.json" ] || [ -f "$EVAL_HOME/eval/runs/$FIRST_RUN_ID/report.json" ]; then
-      "$GENTS" eval watch "$FIRST_RUN_ID" --home "$EVAL_HOME" || true
+      "$GENTS" utils eval watch "$FIRST_RUN_ID" --home "$EVAL_HOME" || true
       break
     fi
     sleep 1
@@ -401,7 +401,7 @@ status=0
 wait "$BATCH_PID" || status=$?
 trap - INT
 if [ "$status" != 0 ]; then tail -n 20 "$BATCH_LOG" >&2; fi
-echo "resume saved batch: $GENTS eval batch --plan $PLAN --concurrency $TRIAL_CONCURRENCY --home $EVAL_HOME" >&2
-echo "saved plan: $PLAN; inspect each run with $GENTS eval show <run-id> --home $EVAL_HOME" >&2
+echo "resume saved batch: $GENTS utils eval batch --plan $PLAN --concurrency $TRIAL_CONCURRENCY --home $EVAL_HOME" >&2
+echo "saved plan: $PLAN; inspect each run with $GENTS utils eval show <run-id> --home $EVAL_HOME" >&2
 echo "the eval home stays served on $PORT; stop it with: kill \$(cat $EVAL_HOME/server.pid)" >&2
 exit "$status"

@@ -29,28 +29,49 @@ fn init_uses_the_runtime_backend_defaults_and_preserves_overrides() {
 #[test]
 fn grouped_commands_parse() {
     const PATHS: &[&[&str]] = &[
-        &["auth", "login", "codex"],
-        &["auth", "login", "grok"],
-        &["auth", "login", "claude"],
-        &["auth", "login", "claude-gateway"],
-        &["auth", "probe", "codex"],
-        &["auth", "probe", "grok"],
-        &["auth", "accounts"],
-        &["data", "query"],
-        &["data", "write"],
-        &["data", "export"],
-        &["data", "document"],
-        &["data", "schema"],
-        &["debug", "request"],
-        &["debug", "response"],
-        &["debug", "trace"],
-        &["debug", "background"],
-        &["debug", "fleet"],
-        &["pack", "plugin"],
-        &["pack", "ux"],
+        &["chat"],
+        &["status"],
+        &["sessions", "list"],
+        &["sessions", "show"],
+        &["sessions", "fork"],
+        &["automation", "goal"],
+        &["automation", "task"],
+        &["automation", "job"],
+        &["automation", "mailbox"],
+        &["accounts", "login", "codex"],
+        &["accounts", "login", "grok"],
+        &["accounts", "login", "claude"],
+        &["accounts", "login", "claude-gateway"],
+        &["accounts", "login", "cloud"],
+        &["accounts", "probe", "codex"],
+        &["accounts", "probe", "grok"],
+        &["accounts", "list"],
+        &["accounts", "label"],
+        &["accounts", "disable"],
+        &["accounts", "remove"],
+        &["config", "agent"],
+        &["config", "tools", "explain"],
+        &["config", "tools", "set"],
+        &["config", "mcp", "register"],
+        &["config", "mcp", "probe"],
+        &["config", "mcp", "list"],
+        &["config", "pack", "plugin"],
+        &["config", "pack", "ux"],
+        &["runtime", "server"],
+        &["runtime", "service"],
+        &["runtime", "provision"],
+        &["runtime", "reset"],
+        &["runtime", "diagnose"],
+        &["runtime", "p2p"],
+        &["runtime", "desktop"],
+        &["runtime", "version"],
+        &["utils", "data", "query"],
+        &["utils", "debug", "request"],
+        &["utils", "eval"],
+        &["utils", "optimization"],
         &["init"],
         &["prepare-runtime"],
-        &["chat"],
+        &["codex"],
     ];
     for path in PATHS {
         let argv = [&["gents"], *path, &["--help"]].concat();
@@ -62,53 +83,55 @@ fn grouped_commands_parse() {
 }
 
 #[test]
+fn installed_services_and_updaters_keep_their_root_names() {
+    let cli = Cli::try_parse_from(["gents", "server", "--home", "/h"]).expect("server parses");
+    assert!(matches!(cli.command, Some(Command::Server(_))));
+    let cli = Cli::try_parse_from(["gents", "service", "update-check", "--home", "/h"])
+        .expect("the update preflight parses");
+    assert!(matches!(cli.command, Some(Command::Service { .. })));
+}
+
+#[test]
 fn old_names_stop_working() {
-    const OLD_NAMES: &[&str] = &[
-        "codex-login",
-        "grok-login",
-        "claude-login",
-        "claude-gateway-login",
-        "codex-auth-probe",
-        "grok-auth-probe",
-        "accounts",
-        "query",
-        "write",
-        "export",
-        "document",
-        "schema",
-        "request",
-        "response",
-        "trace",
-        "background",
-        "fleet",
-        "plugin",
-        "ux",
+    const OLD_NAMES: &[&[&str]] = &[
+        &["codex-login"],
+        &["claude-login"],
+        &["query"],
+        &["plugin"],
+        &["auth"],
+        &["cloud"],
+        &["session"],
+        &["goal"],
+        &["task"],
+        &["job"],
+        &["mailbox"],
+        &["tools"],
+        &["mcp"],
+        &["pack"],
+        &["provision"],
+        &["reset"],
+        &["diagnose"],
+        &["p2p"],
+        &["desktop"],
+        &["version"],
+        &["data"],
+        &["debug"],
+        &["eval"],
+        &["optimization"],
+        &["accounts", "accounts"],
     ];
-    for name in OLD_NAMES {
-        let Err(error) = Cli::try_parse_from(["gents", name]) else {
-            panic!("`gents {name}` should no longer parse");
+    for path in OLD_NAMES {
+        let argv = [&["gents"], *path].concat();
+        let Err(error) = Cli::try_parse_from(argv) else {
+            panic!("`gents {path:?}` should no longer parse");
         };
-        assert_eq!(error.kind(), ErrorKind::InvalidSubcommand, "{name}");
+        assert_eq!(error.kind(), ErrorKind::InvalidSubcommand, "{path:?}");
     }
 }
 
 #[test]
 fn root_help_lists_every_visible_command_exactly_once() {
     let template = crate::ROOT_HELP_TEMPLATE;
-    for section in [
-        "Start",
-        "Work",
-        "Accounts",
-        "Configure",
-        "Runtime",
-        "Data and debugging",
-        "Measure",
-    ] {
-        assert!(
-            template.contains(&format!("\x1b[1;4m{section}\x1b[0m\n  ")),
-            "{section} is a styled heading above its commands"
-        );
-    }
     let cli = Cli::command();
     let rows: Vec<(&str, &str)> = template
         .lines()
@@ -118,8 +141,19 @@ fn root_help_lists_every_visible_command_exactly_once() {
             (name, about.trim_start())
         })
         .collect();
-    assert_eq!(rows.len(), 26, "{rows:?}");
-    for hidden in ["init", "prepare-runtime", "__native-fs-runner"] {
+    assert_eq!(rows.len(), 8, "{rows:?}");
+    assert!(
+        rows.windows(2).all(|pair| pair[0].0 < pair[1].0),
+        "root help lists commands alphabetically: {rows:?}"
+    );
+    for hidden in [
+        "init",
+        "prepare-runtime",
+        "__native-fs-runner",
+        "server",
+        "service",
+        "codex",
+    ] {
         assert!(
             !rows.iter().any(|(name, _)| *name == hidden),
             "{hidden} is hidden: {rows:?}"
@@ -135,7 +169,7 @@ fn root_help_lists_every_visible_command_exactly_once() {
             "{name}'s row says what its own help says"
         );
         assert!(
-            "  ".len() + 14 + about.chars().count() <= 80,
+            "  ".len() + 12 + about.chars().count() <= 80,
             "{name}'s row fits an 80 column terminal"
         );
     }

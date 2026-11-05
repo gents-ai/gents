@@ -18,11 +18,11 @@ how this page uses it in `gents-ux-plugins/BOARD_DATA_CONTRACT.md`.
 ## Try it
 
 ```sh
-gents pack check   examples/ux-plugins/board_docs
-gents pack install ./examples/ux-plugins/board_docs --home ~/.gents
+gents config pack check   examples/ux-plugins/board_docs
+gents config pack install ./examples/ux-plugins/board_docs --home ~/.gents
 
-gents pack check   examples/ux-plugins/board_pack
-gents pack install ./examples/ux-plugins/board_pack --home ~/.gents
+gents config pack check   examples/ux-plugins/board_pack
+gents config pack install ./examples/ux-plugins/board_pack --home ~/.gents
 ```
 
 The documents pack installs *into the node* (schema and surface); the

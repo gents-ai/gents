@@ -110,7 +110,7 @@ pub(crate) fn config_client(command: ClientConfigCommand) -> Result<()> {
             ensure_client_supported(client, cfg!(unix))?;
             ClientSettings { client }.persist(&home)?;
             eprintln!(
-                "client set to {}; run `gents service restart --home {}` to apply it",
+                "client set to {}; run `gents runtime service restart --home {}` to apply it",
                 client.name(),
                 crate::shell_word(&home)
             );

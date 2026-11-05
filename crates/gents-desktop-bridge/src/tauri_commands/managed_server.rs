@@ -310,7 +310,7 @@ where
     ensure_app_not_quitting(&state)?;
     let managed_selection = run_native(native_service(&app, &state)?, |service| {
         if let Some(id) = service.pending_update()? {
-            anyhow::bail!("Managed runtime update {id} is in progress. Reconnect after it finishes, or run `gents service update-status --home <node-home> {id}` with this node's home to resume its supervisor.");
+            anyhow::bail!("Managed runtime update {id} is in progress. Reconnect after it finishes, or run `gents runtime service update-status --home <node-home> {id}` with this node's home to resume its supervisor.");
         }
         service.has_managed_executable()
     }).await?;

@@ -27,6 +27,7 @@ async fn run_refuses_without_a_proposer_and_an_unknown_proposer_is_a_usage_error
     );
     let usage = match Cli::try_parse_from([
         "gents",
+        "utils",
         "optimization",
         "run",
         DEFINITION,
@@ -219,7 +220,7 @@ async fn a_behavior_proposer_needs_a_served_home() {
     .await
     .unwrap_err();
     assert!(
-        error.to_string().contains("start `gents server`"),
+        error.to_string().contains("start `gents runtime server`"),
         "{error:#}"
     );
 }
@@ -839,7 +840,7 @@ async fn rm_force_of_a_ready_job_says_a_later_promote_will_refuse() {
     let dir = fixture.ctx.jobs_dir().join("job-1");
     assert!(
         removed.lines().any(|line| line.contains(&format!(
-            "; a later `gents optimization promote job-1` will refuse: the retained checkpoint pack under {} is gone",
+            "; a later `gents utils optimization promote job-1` will refuse: the retained checkpoint pack under {} is gone",
             dir.display()
         ))),
         "{removed}"
@@ -859,7 +860,8 @@ fn run_and_rm_help_say_what_absence_and_force_mean() {
 
     let mut cli = Cli::command();
     let optimization = cli
-        .find_subcommand_mut("optimization")
+        .find_subcommand_mut("utils")
+        .and_then(|utils| utils.find_subcommand_mut("optimization"))
         .expect("optimization");
     let run = optimization
         .find_subcommand_mut("run")

@@ -93,7 +93,7 @@ pub(crate) fn read_finished_init_config(home_dir: &Path) -> Result<Option<Stored
 
 /// Load and register the signer recorded by an initialized home; every
 /// embedded-node entry point uses this same loader so opening the data
-/// directory outside `gents server` never silently produces unsigned commits.
+/// directory outside `gents runtime server` never silently produces unsigned commits.
 pub(crate) fn load_initialized_home_identity(
     home_dir: &Path,
     config: &StoredInitConfig,
@@ -226,7 +226,7 @@ pub(crate) fn resolve_graphql_endpoint(
 
     anyhow::ensure!(
         home.is_none(),
-        "home {} has no running server recorded; start `gents server --home {}` or pass --graphql explicitly",
+        "home {} has no running server recorded; start `gents runtime server --home {}` or pass --graphql explicitly",
         home_dir.display(),
         home_dir.display()
     );
@@ -297,7 +297,7 @@ pub(crate) fn resolve_node_did(home: Option<&Path>, explicit: Option<&str>) -> R
     }
 
     anyhow::bail!(
-        "node DID is required; run `gents init`, start `gents server`, then retry `gents status`, or pass --node-did explicitly"
+        "node DID is required; run `gents init`, start `gents runtime server`, then retry `gents status`, or pass --node-did explicitly"
     )
 }
 

@@ -101,7 +101,14 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
 
     let list = run_cli_json(
         &home_dir,
-        &["session", "list", "--graphql", &graphql, "--output", "json"],
+        &[
+            "sessions",
+            "list",
+            "--graphql",
+            &graphql,
+            "--output",
+            "json",
+        ],
     )?;
     let list_row = list
         .get("items")
@@ -119,7 +126,7 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
 
     let show = run_cli_json(
         &home_dir,
-        &["session", "show", "--graphql", &graphql, &session_id],
+        &["sessions", "show", "--graphql", &graphql, &session_id],
     )?;
     assert_eq!(
         show.get("session_id").and_then(Value::as_str),
@@ -130,7 +137,7 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
     let show_by_flag = run_cli_json(
         &home_dir,
         &[
-            "session",
+            "sessions",
             "show",
             "--graphql",
             &graphql,
@@ -176,7 +183,7 @@ async fn session_fork_against_a_running_server_refuses_with_the_holder_and_the_g
     let stderr = run_cli_failure_stderr(
         &home_dir,
         &[
-            "session",
+            "sessions",
             "fork",
             "--node-did",
             &node_did,

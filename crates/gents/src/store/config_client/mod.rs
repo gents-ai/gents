@@ -493,7 +493,7 @@ fn is_probably_local_graphql_endpoint(graphql: &str) -> bool {
 /// Operator guidance appended to HTTP GraphQL errors; CLI-flavored and stripped by non-CLI consumers.
 pub fn graphql_diagnostic_hint(graphql: &str) -> String {
     if is_probably_local_graphql_endpoint(graphql) {
-        "Next:\n  1. If this home is not initialized, run `gents init`\n  2. Start the runtime with `gents server`\n  3. Inspect it with `gents status`".to_string()
+        "Next:\n  1. If this home is not initialized, run `gents init`\n  2. Start the runtime with `gents runtime server`\n  3. Inspect it with `gents status`".to_string()
     } else {
         format!(
             "Next:\n  1. Verify the GraphQL endpoint {graphql}\n  2. Retry with `--graphql {graphql}` or point the command at the correct runtime"

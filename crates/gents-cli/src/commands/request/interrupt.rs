@@ -61,7 +61,7 @@ pub(super) async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> 
         already_terminal,
     );
     match args.output.ensure_supported(
-        "debug request interrupt",
+        "utils debug request interrupt",
         &[OutputFormat::Text, OutputFormat::Json],
     )? {
         OutputFormat::Json => print_json(&summary)?,

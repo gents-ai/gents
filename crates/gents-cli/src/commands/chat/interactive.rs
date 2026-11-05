@@ -103,7 +103,7 @@ pub(super) async fn run(
                 }
                 if matches!(content, "/exit" | "/quit" | "exit" | "quit") {
                     if !turns.is_empty() {
-                        eprintln!("Waiting for submitted requests to finish. Use `gents debug request interrupt` to stop one.");
+                        eprintln!("Waiting for submitted requests to finish. Use `gents utils debug request interrupt` to stop one.");
                     }
                     accepting = false;
                     continue;

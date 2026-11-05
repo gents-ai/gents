@@ -548,7 +548,7 @@ pub(crate) async fn discover_standard_runtime(
     let runtime = read_json::<StoredRuntimeState>(&node_home.join(RUNTIME_STATE_FILE_NAME))
         .with_context(|| {
             format!(
-                "no running local Gents runtime found at {}; run `gents server` first",
+                "no running local Gents runtime found at {}; run `gents runtime server` first",
                 node_home.join(RUNTIME_STATE_FILE_NAME).display()
             )
         })?;
@@ -838,7 +838,7 @@ fn url_host_is_loopback_or_unspecified(url: &reqwest::Url) -> bool {
 fn validate_runtime_identity(runtime: &StoredRuntimeState, init: &StoredInitConfig) -> Result<()> {
     if runtime.p2p_transport != "iroh" {
         anyhow::bail!(
-            "local runtime uses p2p_transport={}; desktop pairing requires iroh. Restart with `gents server` from a current build.",
+            "local runtime uses p2p_transport={}; desktop pairing requires iroh. Restart with `gents runtime server` from a current build.",
             if runtime.p2p_transport.is_empty() {
                 "<empty>"
             } else {

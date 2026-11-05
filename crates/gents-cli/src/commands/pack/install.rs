@@ -243,12 +243,12 @@ pub(crate) async fn install_documents_pack_resolved(
 }
 
 /// Refuses, before any write, a pack whose content digest is not the one the
-/// operator reviewed with `gents pack show`.
+/// operator reviewed with `gents config pack show`.
 pub(super) fn check_expected_digest(expected: Option<&str>, actual: &str) -> Result<()> {
     match expected {
         Some(expected) if expected != actual => anyhow::bail!(
             "the pack's digest is {actual}, not the expected {expected}. Nothing was installed. \
-             Next: gents pack show ./dir"
+             Next: gents config pack show ./dir"
         ),
         _ => Ok(()),
     }
@@ -277,7 +277,7 @@ pub(super) fn check_wire_target(manifest: &PackManifest, wire: &[String]) -> Res
 }
 
 /// Wires each plugin `pack` shipped into each of `agents`, agent by agent,
-/// through the same writer as `gents pack wire`.
+/// through the same writer as `gents config pack wire`.
 pub(crate) async fn wire_pack_plugins(
     access: &gents::store::config_client::ConfigAccess,
     owner: &str,
@@ -351,7 +351,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
     check_expected_digest(args.expect_digest.as_deref(), pack.digest())?;
     check_wire_target(pack.manifest(), &args.wire)?;
     args.output.ensure_supported(
-        "pack install",
+        "config pack install",
         &[crate::cli::output_format::OutputFormat::Json],
     )?;
     match pack.manifest().metadata.kind {

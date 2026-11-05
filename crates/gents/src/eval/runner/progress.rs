@@ -373,7 +373,7 @@ mod tests {
         assert!(!is_fresh(&slot, Duration::from_secs(3)));
     }
 
-    /// `gents eval rm --force` may remove a run directory under a live loop;
+    /// `gents utils eval rm --force` may remove a run directory under a live loop;
     /// the loop's next write must not bring it back.
     #[test]
     fn a_write_into_a_removed_run_directory_creates_nothing() {

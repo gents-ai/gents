@@ -30,7 +30,7 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
     )?;
     let node_did = node_did_from_init(&init)?;
 
-    let output = run_cli_json(&home_dir, &["diagnose"])?;
+    let output = run_cli_json(&home_dir, &["runtime", "diagnose"])?;
     assert_eq!(output.get("status").and_then(Value::as_str), Some("ok"));
     let runtime_schema = output
         .pointer("/checks/schemas")
@@ -126,7 +126,7 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
-    let healthy = run_cli_json(&home_dir, &["diagnose", "--graphql", &graphql])?;
+    let healthy = run_cli_json(&home_dir, &["runtime", "diagnose", "--graphql", &graphql])?;
     assert_eq!(
         healthy
             .pointer("/checks/runtime_node_readiness/required")
@@ -161,6 +161,7 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
     let malformed = run_cli_json(
         &home_dir,
         &[
+            "runtime",
             "diagnose",
             "--graphql",
             &graphql,
@@ -214,7 +215,7 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
     .await?;
     drop(serve);
 
-    let offline = run_cli_json(&home_dir, &["diagnose"])?;
+    let offline = run_cli_json(&home_dir, &["runtime", "diagnose"])?;
     assert_eq!(offline.get("status").and_then(Value::as_str), Some("ok"));
     assert_eq!(
         offline
@@ -286,7 +287,12 @@ async fn diagnose_with_explicit_graphql_does_not_reuse_unrelated_local_p2p_state
 
     let output = run_cli_json(
         &home_dir,
-        &["diagnose", "--graphql", "http://127.0.0.1:1/api/v0/graphql"],
+        &[
+            "runtime",
+            "diagnose",
+            "--graphql",
+            "http://127.0.0.1:1/api/v0/graphql",
+        ],
     )?;
     assert_eq!(
         output.get("p2p_transport").and_then(Value::as_str),

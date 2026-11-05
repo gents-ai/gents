@@ -347,7 +347,7 @@ impl DefraSessionHook {
                     let hint = match pre.status {
                         GoalStatus::Active => unreachable!("active goals use the edit path"),
                         GoalStatus::Blocked | GoalStatus::Paused | GoalStatus::UsageLimited => {
-                            "an operator resumes it with `gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)"
+                            "an operator resumes it with `gents automation goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)"
                         }
                         GoalStatus::Complete => {
                             "a complete goal is terminal and has no resume path"

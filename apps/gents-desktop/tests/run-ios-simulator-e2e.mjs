@@ -132,6 +132,7 @@ async function approveEnrollment(settings, requestId) {
   const deadline = Date.now() + 30_000;
   while (true) {
     const result = runIssuer(settings, [
+      "runtime",
       "p2p",
       "enrollment",
       "approve",

@@ -24,7 +24,7 @@ pub const CLAUDE_GATEWAY_PROVIDER: &str = "claude-gateway";
 pub const CLAUDE_GATEWAY_PRODUCT: OAuthProduct = OAuthProduct {
     name: "Claude gateway",
     backend_label: "Claude gateway backend",
-    login_command: "auth login claude-gateway",
+    login_command: "accounts login claude-gateway",
     not_entitled_guidance: "Ask the gateway's administrator for access to Claude.",
 };
 

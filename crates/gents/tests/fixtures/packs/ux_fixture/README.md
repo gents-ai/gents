@@ -9,7 +9,7 @@ each production form the desktop loader accepts:
   the input `{"role": "ux", "surface": "webview"}` is
   `{"module": "<esm>", "css": "<css>"}`; the `.afb` door.
 
-Used by `gents-cli`'s pack install, `gents pack check` lint and the desktop
+Used by `gents-cli`'s pack install, `gents config pack check` lint and the desktop
 bridge's `desktop_ux_plugin_source` tests.
 
 ## Configuration

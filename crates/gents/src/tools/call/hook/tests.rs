@@ -2033,15 +2033,15 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
     for (status, expected_hint) in [
         (
             crate::goal::GoalStatus::Blocked,
-            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
+            "gents automation goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
         ),
         (
             crate::goal::GoalStatus::Paused,
-            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
+            "gents automation goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
         ),
         (
             crate::goal::GoalStatus::UsageLimited,
-            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
+            "gents automation goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
         ),
         (
             crate::goal::GoalStatus::Complete,

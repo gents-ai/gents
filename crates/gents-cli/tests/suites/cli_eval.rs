@@ -8,12 +8,12 @@ fn eval_run_help_and_a_missing_definition_refuses_before_any_run_directory_exist
     let home_dir = tempdir.path().join("home");
     std::fs::create_dir_all(&home_dir)?;
 
-    let help = run_cli_text(&home_dir, &["eval", "run", "--help"])?;
+    let help = run_cli_text(&home_dir, &["utils", "eval", "run", "--help"])?;
     assert!(help.contains("--cell"), "{help}");
     for argv in [
-        &["eval", "run", "--help"][..],
-        &["eval", "resume", "--help"],
-        &["optimization", "run", "--help"],
+        &["utils", "eval", "run", "--help"][..],
+        &["utils", "eval", "resume", "--help"],
+        &["utils", "optimization", "run", "--help"],
     ] {
         let help = run_cli_text(&home_dir, argv)?;
         assert!(help.contains("Exit status: 0 when the"), "{help}");
@@ -29,6 +29,7 @@ fn eval_run_help_and_a_missing_definition_refuses_before_any_run_directory_exist
         .env("RUST_LOG", "error")
         .current_dir(fixture_parent)
         .args([
+            "utils",
             "eval",
             "run",
             "missing-def",
@@ -60,6 +61,7 @@ fn a_repeated_cell_or_a_stray_or_repeated_profile_exits_2_as_a_usage_error() -> 
     let cases: [(&[&str], &str); 3] = [
         (
             &[
+                "utils",
                 "eval",
                 "run",
                 "x",
@@ -72,6 +74,7 @@ fn a_repeated_cell_or_a_stray_or_repeated_profile_exits_2_as_a_usage_error() -> 
         ),
         (
             &[
+                "utils",
                 "eval",
                 "run",
                 "x",
@@ -85,7 +88,9 @@ fn a_repeated_cell_or_a_stray_or_repeated_profile_exits_2_as_a_usage_error() -> 
             "--profile names cell \"a\" more than once",
         ),
         (
-            &["eval", "run", "x", "--cell", "a=p", "--cell", "a=q"],
+            &[
+                "utils", "eval", "run", "x", "--cell", "a=p", "--cell", "a=q",
+            ],
             "--cell declares cell \"a\" more than once",
         ),
     ];
@@ -111,7 +116,7 @@ fn eval_cancel_writes_the_marker_before_opening_the_home() -> Result<()> {
     let output = std::process::Command::new(cli_bin())
         .env("HOME", tempdir.path())
         .env("RUST_LOG", "error")
-        .args(["eval", "cancel", "r1"])
+        .args(["utils", "eval", "cancel", "r1"])
         .output()
         .context("running gents")?;
     let stdout = String::from_utf8_lossy(&output.stdout);

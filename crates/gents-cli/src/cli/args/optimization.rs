@@ -6,7 +6,7 @@ use super::{
     ProposerArg, SubjectArg,
 };
 
-/// `gents optimization run`'s exit statuses: scripts must not read a job left
+/// `gents utils optimization run`'s exit statuses: scripts must not read a job left
 /// running as a success.
 const OPTIMIZATION_RUN_AFTER_HELP: &str = "Exit status: 0 when the job settled; 1 when it stopped still running (Ctrl-C; the same command with --job-id resumes it) or the command was refused; 2 on a usage error.";
 
@@ -46,7 +46,7 @@ impl OptimizationCommand {
 #[derive(clap::Args)]
 pub(crate) struct OptimizationRunArgs {
     pub(crate) definition_id: String,
-    /// `<pack>[:<agent>]`: a pack name, resolved as `gents pack install`
+    /// `<pack>[:<agent>]`: a pack name, resolved as `gents config pack install`
     /// resolves one, or a pack directory written as a path. Without a
     /// agent, the pack's only inference-slot agent.
     #[arg(long, value_parser = parse_subject)]
@@ -72,7 +72,7 @@ pub(crate) struct OptimizationRunArgs {
     /// `scripted:<file>`: a JSON array of `{"text", "rationale"}`, one per
     /// round; a file holding fewer than `--rounds` is refused before the job
     /// is frozen. `agent:<pack>[:<agent>]`: an agent of a pack
-    /// (`<pack>` resolves like `gents pack install`, e.g. `prompt_proposer`
+    /// (`<pack>` resolves like `gents config pack install`, e.g. `prompt_proposer`
     /// or `gents/prompt_proposer@1.0.0`, or is a directory path), installed
     /// into the home and asked once per round on the served home.
     #[arg(long, value_parser = parse_proposer)]
@@ -117,7 +117,7 @@ pub(crate) struct OptimizationShowArgs {
 #[derive(clap::Args)]
 pub(crate) struct OptimizationDigestArgs {
     pub(crate) job_id: String,
-    /// promote: the checkpoint's pack digest (`optimization show`);
+    /// promote: the checkpoint's pack digest (`utils optimization show`);
     /// revert: the target digest the promotion printed.
     #[arg(long)]
     pub(crate) digest: String,

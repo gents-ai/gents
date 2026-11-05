@@ -414,7 +414,7 @@ pub(crate) async fn build_backend_client(
                     .map_err(anyhow::Error::from)
                 }
                 crate::documents::BackendAuth::NodeOAuth { account_ref } => {
-                    // A gateway signed in with `gents auth login claude-gateway`.
+                    // A gateway signed in with `gents accounts login claude-gateway`.
                     let (bearer, _) = crate::inference::auth::http::bootstrap_oauth_client_typed(
                         node.clone(),
                         agent.node_did(),
@@ -1019,7 +1019,7 @@ mod tests {
         .err()
         .expect("no gateway account yet");
         assert!(
-            format!("{missing:#}").contains("auth login claude-gateway"),
+            format!("{missing:#}").contains("accounts login claude-gateway"),
             "{missing:#}"
         );
         seed_oauth_credential(

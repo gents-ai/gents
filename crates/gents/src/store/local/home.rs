@@ -335,7 +335,7 @@ const DATA_DIR_NAME: &str = "data";
 const KEYS_DIR_NAME: &str = "keys";
 pub const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 pub const RUNTIME_STARTUP_LOCK_FILE_NAME: &str = "runtime-startup.lock";
-/// Host-local listen addresses for `gents server`; binding precedes opening
+/// Host-local listen addresses for `gents runtime server`; binding precedes opening
 /// the store, so they cannot live in a document.
 pub const NETWORK_CONFIG_FILE_NAME: &str = "network.json";
 /// The interface `gents` opens for this home; no file means Codex.

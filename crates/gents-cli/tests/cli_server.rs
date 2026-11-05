@@ -244,7 +244,7 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
             stderr_log.reopen().context("opening gents stderr log")?,
         ));
     support::process::configure_foreground_server_env(&mut command, &[]);
-    let mut child = command.spawn().context("spawning gents server")?;
+    let mut child = command.spawn().context("spawning gents runtime server")?;
     drop(child.stdout.take());
     let mut serve = ServeProcess {
         child,
@@ -566,8 +566,11 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
         .write("test.nac.signed", &mutation)
         .await
         .with_context(|| format!("{phase}: principal-signed HTTP write"))?;
-        let replicators = run_cli_json(&home_dir, &["p2p", "admin", "replicators", "list"])
-            .with_context(|| format!("{phase}: CLI P2P administration over HTTP"))?;
+        let replicators = run_cli_json(
+            &home_dir,
+            &["runtime", "p2p", "admin", "replicators", "list"],
+        )
+        .with_context(|| format!("{phase}: CLI P2P administration over HTTP"))?;
         assert_eq!(replicators["status"], "ok", "{phase}: {replicators}");
         let anonymous_rows = gents::store::config_client::ConfigAccess::graphql(graphql.clone())
             .execute(r#"{ CompactionEntry(filter: { node_did: { _eq: "did:test:nac" } }) { compaction_key } }"#)
@@ -1553,6 +1556,7 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
     let submitted = run_cli_json(
         &home_dir,
         &[
+            "utils",
             "debug",
             "request",
             "submit",
@@ -1712,7 +1716,7 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
 
     let cli_snapshot = run_cli_json(
         &home_dir,
-        &["debug", "fleet", "slots", "--graphql", &graphql],
+        &["utils", "debug", "fleet", "slots", "--graphql", &graphql],
     )?;
     assert_eq!(
         cli_snapshot.pointer("/totals/assigned"),
@@ -2545,6 +2549,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let request = run_cli_json(
         &home_dir,
         &[
+            "utils",
             "data",
             "query",
             "--graphql",
@@ -2573,6 +2578,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let tool_calls = run_cli_json(
         &home_dir,
         &[
+            "utils",
             "data",
             "query",
             "--graphql",
@@ -2676,6 +2682,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let messages = run_cli_json(
         &home_dir,
         &[
+            "utils",
             "data",
             "query",
             "--graphql",
@@ -2713,6 +2720,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let denied = run_cli_failure_stderr(
         &home_dir,
         &[
+            "utils",
             "data",
             "query",
             "--graphql",
@@ -2731,6 +2739,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let diagnostic = run_cli_failure_stderr(
         &home_dir,
         &[
+            "utils",
             "data",
             "query",
             "--graphql",
@@ -2754,6 +2763,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let inventory = run_cli_json(
         &home_dir,
         &[
+            "utils",
             "data",
             "query",
             "--graphql",
@@ -2814,7 +2824,7 @@ async fn trace_of_a_served_home_reads_only_as_its_home() -> Result<()> {
     .await
     .context("seeding the traced request")?;
 
-    let trace = ["debug", "trace", "timeline", "--graphql", &graphql];
+    let trace = ["utils", "debug", "trace", "timeline", "--graphql", &graphql];
     let request = ["--request-id", "home-trace-req"];
     let anonymous = run_cli_failure_stderr(&caller_dir, &[&trace[..], &request[..]].concat())?;
     assert!(anonymous.contains("probably denied"), "{anonymous}");

@@ -38,7 +38,7 @@ pub(super) async fn request_pending(args: RequestPendingArgs) -> Result<()> {
     )
     .await?;
     match args.output.ensure_supported(
-        "debug request pending",
+        "utils debug request pending",
         &[OutputFormat::Text, OutputFormat::Json],
     )? {
         OutputFormat::Json => print_json(&serde_json::to_value(&snapshot)?)?,

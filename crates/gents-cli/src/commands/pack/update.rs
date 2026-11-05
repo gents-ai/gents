@@ -114,7 +114,7 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
         let Some(latest) = pack["latest"].as_str() else {
             failed.push(json!({
                 "pack": coordinate,
-                "error": "the registry reported no latest version for this pack; run gents pack outdated and retry",
+                "error": "the registry reported no latest version for this pack; run gents config pack outdated and retry",
             }));
             continue;
         };

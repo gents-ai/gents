@@ -18,7 +18,7 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 use super::{execute, Deps, EvalContext};
-use crate::cli::{Cli, Command, EvalCommand};
+use crate::cli::{Cli, Command, EvalCommand, UtilsCommand};
 
 pub(crate) const DEFINITION: &str = "cli-def";
 pub(crate) const TRAIN_CASES: [&str; 1] = ["train-a"];
@@ -159,10 +159,16 @@ pub(crate) fn executor(failing_baseline_cases: &[&str]) -> ScriptedExecutor {
 }
 
 pub(crate) fn eval_command(argv: &[&str]) -> EvalCommand {
-    let cli = Cli::try_parse_from(["gents", "eval"].into_iter().chain(argv.iter().copied()))
-        .unwrap_or_else(|error| panic!("{error}"));
+    let cli = Cli::try_parse_from(
+        ["gents", "utils", "eval"]
+            .into_iter()
+            .chain(argv.iter().copied()),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     match cli.command {
-        Some(Command::Eval { command }) => command,
+        Some(Command::Utils {
+            command: UtilsCommand::Eval { command },
+        }) => command,
         _ => panic!("not an eval command"),
     }
 }

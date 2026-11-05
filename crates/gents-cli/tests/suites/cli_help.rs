@@ -4,19 +4,19 @@ use anyhow::{Context, Result};
 use std::fs;
 
 #[test]
-fn top_level_help_is_sectioned() -> Result<()> {
+fn top_level_help_lists_the_eight_groups() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
     let output = run_cli_text(&home_dir, &["--help"])?;
     assert!(
-        output.contains("Start\n  chat "),
-        "expected the Start section in help output, got:\n{output}"
+        output.contains("Commands:\n  accounts "),
+        "expected the command list in help output, got:\n{output}"
     );
     assert!(
-        output.contains("Data and debugging\n  data "),
-        "expected the Data and debugging section in help output, got:\n{output}"
+        output.contains("\n  utils "),
+        "expected the last group in help output, got:\n{output}"
     );
     assert!(
         !output.contains('\x1b'),
@@ -36,11 +36,11 @@ fn group_help_lists_its_own_subcommands() -> Result<()> {
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
-    let output = run_cli_text(&home_dir, &["auth", "--help"])?;
-    for subcommand in ["login", "probe", "accounts"] {
+    let output = run_cli_text(&home_dir, &["accounts", "--help"])?;
+    for subcommand in ["login", "probe", "list", "label", "disable", "remove"] {
         assert!(
-            output.contains(subcommand),
-            "expected {subcommand} in auth help output, got:\n{output}"
+            output.contains(&format!("\n  {subcommand} ")),
+            "expected {subcommand} in accounts help output, got:\n{output}"
         );
     }
 
@@ -61,7 +61,7 @@ fn status_without_runtime_suggests_init_and_server() -> Result<()> {
         "expected init suggestion in stderr, got:\n{stderr}"
     );
     assert!(
-        stderr.contains("gents server"),
+        stderr.contains("gents runtime server"),
         "expected server suggestion in stderr, got:\n{stderr}"
     );
     assert!(
@@ -78,7 +78,7 @@ fn server_help_requires_authentication_for_remote_app_server_bind() -> Result<()
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
-    let output = run_cli_text(&home_dir, &["server", "--help"])?;
+    let output = run_cli_text(&home_dir, &["runtime", "server", "--help"])?;
     assert!(
         output.contains("--codex-shim-auth-token-env"),
         "expected authenticated remote-bind guidance in server help, got:\n{output}"

@@ -33,7 +33,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
     {
         Some(node_did) => node_did,
         None => bail!(
-            "node DID is required; run `gents init`, start `gents server`, then retry `gents chat`, or pass --node-did explicitly"
+            "node DID is required; run `gents init`, start `gents runtime server`, then retry `gents chat`, or pass --node-did explicitly"
         ),
     };
     let session_id = args

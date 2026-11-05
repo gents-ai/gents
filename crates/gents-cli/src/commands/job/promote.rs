@@ -1,4 +1,4 @@
-//! `gents job promote`: a finished dynamic run becomes an installed, wired tool.
+//! `gents automation job promote`: a finished dynamic run becomes an installed, wired tool.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -272,8 +272,8 @@ pub async fn promote(
         promoted_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     };
     let recovery = format!(
-        "; the tool {plugin} is installed: finish with gents pack wire {plugin} --agent {agent}{owners}, \
-         or remove it with gents pack remove {plugin}",
+        "; the tool {plugin} is installed: finish with gents config pack wire {plugin} --agent {agent}{owners}, \
+         or remove it with gents config pack remove {plugin}",
         plugin = pack.plugin,
         owners = run
             .owners

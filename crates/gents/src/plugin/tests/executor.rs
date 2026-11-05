@@ -788,7 +788,10 @@ mod bound {
         let tool = tool_for(&writer.home, &writer.record);
         let work = writer.root.join("work");
         let error = in_session(&tool, &work, &work, false).await.unwrap_err();
-        assert!(error.contains("gents pack plugin dirs add"), "{error}");
+        assert!(
+            error.contains("gents config pack plugin dirs add"),
+            "{error}"
+        );
         assert!(error.contains("--access read_write"), "{error}");
         assert!(!work.join("out.json").exists());
     }
@@ -894,14 +897,20 @@ mod bound {
         let work = fx.root.join("work");
         let dotdot = work.join("..").join("outside").join("in.json");
         let error = in_session(&tool, &dotdot, &work, false).await.unwrap_err();
-        assert!(error.contains("gents pack plugin dirs add"), "{error}");
+        assert!(
+            error.contains("gents config pack plugin dirs add"),
+            "{error}"
+        );
         assert!(error.contains("outside"), "{error}");
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(fx.root.join("outside"), work.join("escape")).unwrap();
             let through = work.join("escape").join("in.json");
             let error = in_session(&tool, &through, &work, false).await.unwrap_err();
-            assert!(error.contains("gents pack plugin dirs add"), "{error}");
+            assert!(
+                error.contains("gents config pack plugin dirs add"),
+                "{error}"
+            );
         }
         assert!(
             refusal(&tool, std::path::Path::new("relative/x"))
@@ -1022,7 +1031,10 @@ mod bound {
             .bind_input(&fx.record, &input, &BindContext::headless(Some(&work)))
             .await
             .unwrap_err();
-        assert!(error.contains("gents pack plugin dirs add"), "{error}");
+        assert!(
+            error.contains("gents config pack plugin dirs add"),
+            "{error}"
+        );
         assert!(approval::pending(fx.home.path()).unwrap().is_empty());
     }
 
@@ -1101,7 +1113,7 @@ mod bound {
             .await
             .unwrap_err();
         assert!(
-            format!("{error:#}").contains("gents pack plugin dirs add"),
+            format!("{error:#}").contains("gents config pack plugin dirs add"),
             "{error:#}"
         );
     }

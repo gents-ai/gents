@@ -38,6 +38,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let offline = run_cli_json(
         &home_dir,
         &[
+            "utils",
             "data",
             "document",
             "create",
@@ -64,6 +65,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let created = run_cli_json(
         &home_dir,
         &[
+            "utils",
             "data",
             "document",
             "create",
@@ -80,6 +82,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let rows = run_cli_json(
         &home_dir,
         &[
+            "utils",
             "data",
             "query",
             "--graphql",
@@ -104,6 +107,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let unknown_field = run_cli_failure_stderr(
         &home_dir,
         &[
+            "utils",
             "data",
             "document",
             "create",
@@ -119,6 +123,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let metadata_field = run_cli_failure_stderr(
         &home_dir,
         &[
+            "utils",
             "data",
             "document",
             "create",
@@ -137,6 +142,7 @@ async fn document_create_signs_as_the_home_principal_and_keeps_schema_validation
     let unknown_collection = run_cli_failure_stderr(
         &home_dir,
         &[
+            "utils",
             "data",
             "document",
             "create",
@@ -194,6 +200,7 @@ async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> 
     let refusal = run_cli_failure_stderr(
         &other_dir,
         &[
+            "utils",
             "data",
             "document",
             "create",
@@ -213,6 +220,7 @@ async fn document_create_cannot_write_to_a_home_it_does_not_own() -> Result<()> 
     let rows = run_cli_json(
         &home_dir,
         &[
+            "utils",
             "data",
             "query",
             "--graphql",

@@ -68,8 +68,8 @@ mod tests {
 
     #[test]
     fn the_command_name_is_every_word_before_the_first_flag() {
-        let args = ["debug", "request", "show", "--id", "x", "extra"].map(String::from);
-        assert_eq!(command_name(&args), "debug request show");
+        let args = ["utils", "debug", "request", "show", "--id", "x", "extra"].map(String::from);
+        assert_eq!(command_name(&args), "utils debug request show");
         assert_eq!(command_name(&[]), "");
     }
 }

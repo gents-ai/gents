@@ -100,7 +100,7 @@ impl GoalCommand {
         };
         if *self == Self::Resume {
             return Ok(format!(
-                "Goal remains {}. Resume it with `gents goal resume-request --session SESSION --from REQUEST_ID`.",
+                "Goal remains {}. Resume it with `gents automation goal resume-request --session SESSION --from REQUEST_ID`.",
                 goal.status
             ));
         }

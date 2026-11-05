@@ -6,7 +6,7 @@ use gents::Collection;
 use tokio_util::sync::CancellationToken;
 
 use super::execute;
-use crate::cli::{Cli, Command, OptimizationCommand};
+use crate::cli::{Cli, Command, OptimizationCommand, UtilsCommand};
 use crate::commands::eval::testing::{
     deps, executor, Fixture, CANDIDATE_PROMPT, DEFINITION, VALIDATION_CASES,
 };
@@ -14,13 +14,15 @@ use crate::commands::eval::Deps;
 
 pub(crate) fn optimization_command(argv: &[&str]) -> OptimizationCommand {
     let cli = Cli::try_parse_from(
-        ["gents", "optimization"]
+        ["gents", "utils", "optimization"]
             .into_iter()
             .chain(argv.iter().copied()),
     )
     .unwrap_or_else(|error| panic!("{error}"));
     match cli.command {
-        Some(Command::Optimization { command }) => command,
+        Some(Command::Utils {
+            command: UtilsCommand::Optimization { command },
+        }) => command,
         _ => panic!("not an optimization command"),
     }
 }

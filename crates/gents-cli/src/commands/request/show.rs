@@ -27,7 +27,7 @@ pub(crate) async fn request_show(args: RequestShowArgs) -> Result<()> {
         resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
     let snapshot = load_request_show_snapshot(&graphql, &request_id).await?;
     match args.output.ensure_supported(
-        "debug request show",
+        "utils debug request show",
         &[OutputFormat::Text, OutputFormat::Json],
     )? {
         OutputFormat::Json => {

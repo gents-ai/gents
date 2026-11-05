@@ -147,7 +147,7 @@ pub(super) async fn p2p_network_list(args: P2pNetworkListArgs) -> Result<()> {
     let count = peers.len();
 
     match args.output.ensure_supported(
-        "p2p network list",
+        "runtime p2p network list",
         &[OutputFormat::Json, OutputFormat::Table],
     )? {
         OutputFormat::Json => print_json(&json!({

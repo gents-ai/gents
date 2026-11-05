@@ -64,19 +64,24 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
     let root = temp.path().join("pack");
     document_pack(&root, "1.0.0", None)?;
     let root_arg = root.to_str().unwrap();
-    run_cli_json(&home, &["pack", "install", root_arg, "--graphql", &graphql])?;
+    run_cli_json(
+        &home,
+        &["config", "pack", "install", root_arg, "--graphql", &graphql],
+    )?;
     let query = "{ Tools { tools_id integrations display_name } PackInstallation { coordinate version digest } }";
     let before = graphql_query(&graphql, query).await?;
 
     let bytes = document_pack(&root, "1.1.0", Some(("private/missing", None)))?;
-    let error =
-        run_cli_failure_stderr(&home, &["pack", "install", root_arg, "--graphql", &graphql])?;
+    let error = run_cli_failure_stderr(
+        &home,
+        &["config", "pack", "install", root_arg, "--graphql", &graphql],
+    )?;
     assert!(
         error.contains("private/missing") && error.contains("neither the pack"),
         "{error}"
     );
     assert!(
-        error.contains("gents pack install <namespace>/<pack>"),
+        error.contains("gents config pack install <namespace>/<pack>"),
         "{error}"
     );
     assert_eq!(graphql_query(&graphql, query).await?, before);
@@ -110,6 +115,7 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
     let failed = run_cli_failure_stdout_json(
         &home,
         &[
+            "config",
             "pack",
             "update",
             "gents/safety",
@@ -132,14 +138,20 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
     // remotely install an exact pin through the runtime's guarded graph owner.
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../gents/tests/fixtures/packs/job_plugin_fixture");
-    run_cli_json(&home, &["pack", "install", fixture.to_str().unwrap()])?;
+    run_cli_json(
+        &home,
+        &["config", "pack", "install", fixture.to_str().unwrap()],
+    )?;
     let plugin = gents::plugin::store::read_record(&home.join(".gents"), "fixture", "job_fixture")?;
     document_pack(
         &root,
         "1.2.0",
         Some(("fixture/job_fixture", Some(&plugin.digest))),
     )?;
-    run_cli_json(&home, &["pack", "install", root_arg, "--graphql", &graphql])?;
+    run_cli_json(
+        &home,
+        &["config", "pack", "install", root_arg, "--graphql", &graphql],
+    )?;
     let installed = graphql_query(&graphql, query).await?;
     document_pack(
         &root,
@@ -149,8 +161,10 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
             Some("sha256:0000000000000000000000000000000000000000000000000000000000000000"),
         )),
     )?;
-    let wrong_pin =
-        run_cli_failure_stderr(&home, &["pack", "install", root_arg, "--graphql", &graphql])?;
+    let wrong_pin = run_cli_failure_stderr(
+        &home,
+        &["config", "pack", "install", root_arg, "--graphql", &graphql],
+    )?;
     assert!(
         wrong_pin.contains("pins plugin fixture/job_fixture"),
         "{wrong_pin}"
@@ -167,7 +181,7 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
         create_Agent(input: {{agent_id: "broken-agent", node_did: "{owner_escaped}", context_id: "broken-context", inference_profile_id: "{profile}", enabled: true}}) {{_docID}}
     }}"#)).await?;
     wait_for_runtime_quiescence(&graphql, &owner, 2, Duration::from_millis(200)).await?;
-    let diagnosed = run_cli_json(&home, &["diagnose", "--graphql", &graphql])?;
+    let diagnosed = run_cli_json(&home, &["runtime", "diagnose", "--graphql", &graphql])?;
     let unavailable = diagnosed
         .pointer("/checks/runtime_node_readiness/unavailable_agents")
         .and_then(Value::as_array)
