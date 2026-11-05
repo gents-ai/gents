@@ -150,6 +150,16 @@ const PROFILES = {
     name: "Viewer",
     grants: ["See the board and the moves"],
   },
+  sessionRead: {
+    id: "read",
+    name: "Read this session",
+    grants: ["Read the session as it goes"],
+  },
+  sessionReply: {
+    id: "reply",
+    name: "Read and reply",
+    grants: ["Read the session as it goes", "Reply, and answer its questions"],
+  },
   agentUser: {
     id: "agent-user",
     name: "Agent user",
@@ -162,7 +172,9 @@ const profilesFor = (scope: ShareScope): ShareProfile[] =>
     ? [PROFILES.device]
     : scope.kind === "pack"
       ? [PROFILES.player, PROFILES.viewer]
-      : [PROFILES.agentUser];
+      : scope.kind === "session"
+        ? [PROFILES.sessionRead, PROFILES.sessionReply]
+        : [PROFILES.agentUser];
 
 /** invites' links and codes as the harness reads them back */
 export const HARNESS_INVITE = {

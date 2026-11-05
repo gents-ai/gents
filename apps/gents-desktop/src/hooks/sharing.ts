@@ -7,14 +7,16 @@
  * runtime's generated types when they exist, and never write them to a node.
  */
 
-/** what a share covers: the whole node, one pack's data and pages, or one
-    named agent. An agent is granted on its own, never as part of a pack's
-    share; the agent scope is the desktop's stand-in until the runtime grants
-    named agents (#3495). */
+/** what a share covers: the whole node, one pack's data and pages, one
+    named agent, or one session. An agent is granted on its own, never as part
+    of a pack's share. The agent and session scopes are the desktop's stand-ins
+    until the runtime grants named agents (#3495) and single sessions (#3496);
+    a session's `name` is its title as the sharer sees it. */
 export type ShareScope =
   | { kind: "node" }
   | { kind: "pack"; pack: string; name: string }
-  | { kind: "agent"; agent: string; name: string };
+  | { kind: "agent"; agent: string; name: string }
+  | { kind: "session"; nodeDid: string; session: string; name: string };
 
 /** what the other side may do, in words the screen shows as they are */
 export type ShareProfile = {
@@ -46,7 +48,8 @@ export type JoinRequest = {
 /** someone with access now, one grant per scope: a person given a pack and
     an agent is two members, revoked apart */
 export type SharingMember = {
-  /** the approved request that gave this access, which revoking names */
+  /** the approved request, or the direct grant, that gave this access,
+      which revoking names */
   requestId: string;
   party: SharingParty;
   scope: ShareScope;
@@ -85,12 +88,18 @@ export type Invite = {
 };
 
 /** whether two scopes name the same share */
-export const sameScope = (a: ShareScope, b: ShareScope) =>
-  a.kind === "node"
-    ? b.kind === "node"
-    : a.kind === "pack"
-      ? b.kind === "pack" && a.pack === b.pack
-      : b.kind === "agent" && a.agent === b.agent;
+export function sameScope(a: ShareScope, b: ShareScope): boolean {
+  switch (a.kind) {
+    case "node":
+      return b.kind === "node";
+    case "pack":
+      return b.kind === "pack" && a.pack === b.pack;
+    case "agent":
+      return b.kind === "agent" && a.agent === b.agent;
+    case "session":
+      return b.kind === "session" && a.session === b.session;
+  }
+}
 
 export type SharingDecisionKind =
   "approved" | "denied" | "revoked" | "expired" | "left";
@@ -176,6 +185,15 @@ export interface SharingAdapter {
       approval carries one fixed expiry, so a member renews by enrolling
       again. */
   renew?(nodeDid: string, requestId: string, leaseSeconds: number): Promise<void>;
+  /** gives a party the node can already reach access to `scope` with no
+      invite or enrollment, as a session is shared (#3496); it then lists as a
+      member, and revoking ends it. Absent where the runtime can't. */
+  grant?(
+    nodeDid: string,
+    scope: ShareScope,
+    partyDid: string,
+    profileId: string,
+  ): Promise<void>;
   /** the profiles an invite may carry for this scope */
   profiles(nodeDid: string, scope: ShareScope): Promise<ShareProfile[]>;
   createInvite(nodeDid: string, draft: InviteDraft): Promise<Invite>;

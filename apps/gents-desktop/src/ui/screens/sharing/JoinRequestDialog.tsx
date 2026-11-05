@@ -220,6 +220,8 @@ function ableTo(request: JoinRequest, nodeName: string) {
     return `Use all of ${nodeName}: its agents, settings and sessions, and send requests to any agent.`;
   if (scope.kind === "pack")
     return `Use the ${scope.name} pack on ${nodeName}, and nothing else.`;
+  if (scope.kind === "session")
+    return `Read the session “${scope.name}” on ${nodeName}${request.profile.id === "reply" ? ", reply and answer its questions" : ""}, and nothing else.`;
   return `Start sessions with the ${scope.name} agent on ${nodeName}, and nothing else.`;
 }
 
@@ -230,5 +232,6 @@ function seeing(request: JoinRequest, nodeName: string) {
     return `Everything on ${nodeName}, including every session.`;
   if (scope.kind === "pack")
     return `The ${scope.name} pack's data, and nothing else of ${nodeName}.`;
+  if (scope.kind === "session") return `That session, and nothing else of ${nodeName}.`;
   return `The sessions they start with the ${scope.name} agent.`;
 }
