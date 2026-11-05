@@ -1,4 +1,8 @@
-import type { SharingDecision, SharingDecisionKind } from "../../../hooks/sharing";
+import type {
+  SharingDecision,
+  SharingDecisionKind,
+  SharingHistoryLimits,
+} from "../../../hooks/sharing";
 import { fullTime, shortTime } from "../TranscriptMarker";
 import { ItemRow, partyName, scopeText } from "./parts";
 
@@ -9,6 +13,27 @@ const DECIDED: Record<SharingDecisionKind, string> = {
   expired: "Expired",
   left: "Left",
 };
+
+/** what the history leaves out, in one line, or null when there's nothing to
+    say: "Showing the latest 50 of 73. Decisions replaced by a later one aren't
+    shown." */
+export function historyNote(limits: SharingHistoryLimits | null) {
+  if (!limits || (limits.observed === 0 && !limits.conflictsOmitted)) return null;
+  const { observed, limit, omitsSuperseded, conflictsOmitted } = limits;
+  const left =
+    omitsSuperseded && conflictsOmitted
+      ? "replaced by a later one, or in conflict,"
+      : omitsSuperseded
+        ? "replaced by a later one"
+        : conflictsOmitted
+          ? "in conflict"
+          : null;
+  const parts = [
+    observed > limit && `Showing the latest ${limit} of ${observed}.`,
+    left && `Decisions ${left} aren't shown.`,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" ") : null;
+}
 
 /** One line of the node's sharing history: what happened to whom, for
     what, who decided it and when. */

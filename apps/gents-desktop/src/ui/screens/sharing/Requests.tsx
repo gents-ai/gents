@@ -4,7 +4,6 @@ import { Button } from "@gents/ui/components/button";
 import { FieldRows } from "@gents/ui/components/field";
 import { cn } from "@gents/ui/lib/utils";
 import { DEFAULT_LEASE_SECONDS, type JoinRequest } from "../../../hooks/sharing";
-import { approvedHere } from "@/app/approvedHere";
 import { useSharingActions } from "@/hooks/useSharing";
 import { fullTime, shortTime } from "../TranscriptMarker";
 import {
@@ -72,19 +71,9 @@ function RequestRow({ nodeDid, request }: { nodeDid: string; request: JoinReques
     setBusy(kind);
     setError(null);
     try {
-      if (kind === "approve") {
-        const seconds = Number(lease);
-        await sharing.approve(nodeDid, request.requestId, seconds);
-        const now = Date.now();
-        approvedHere.add(nodeDid, {
-          requestId: request.requestId,
-          party: from,
-          scope,
-          profile,
-          leaseExpiresAt: new Date(now + seconds * 1000).toISOString(),
-          approvedAt: new Date(now).toISOString(),
-        });
-      } else await sharing.deny(nodeDid, request.requestId);
+      if (kind === "approve")
+        await sharing.approve(nodeDid, request.requestId, Number(lease));
+      else await sharing.deny(nodeDid, request.requestId);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {

@@ -6,6 +6,7 @@ import { useSharing } from "../src/ui/hooks/useSharing";
 import { renderIn, testApp } from "./app-fixture";
 import { createDesktopUiHarness } from "./ui-harness/desktopHarness";
 import {
+  HARNESS_BRUNO_GAME,
   HARNESS_GAME_PACK,
   HARNESS_INVITE,
   SHARING_SCENARIOS,
@@ -51,15 +52,10 @@ describe("the harness's sharing", () => {
     await expect(sharing.deny(NODE, "request-harness-laptop")).rejects.toThrow(
       "already decided",
     );
-    const game = {
-      kind: "pack",
-      pack: HARNESS_GAME_PACK,
-      name: "Tic-tac-toe",
-    } as const;
-    await sharing.revoke(NODE, "did:key:z6MkHarnessBruno", game);
-    await expect(
-      sharing.revoke(NODE, "did:key:z6MkHarnessBruno", game),
-    ).rejects.toThrow("no longer have access");
+    await sharing.revoke(NODE, HARNESS_BRUNO_GAME);
+    await expect(sharing.revoke(NODE, HARNESS_BRUNO_GAME)).rejects.toThrow(
+      "no longer have access",
+    );
     const state = (await sharing.read(NODE))!;
     expect(state.members.map((m) => [m.party.name, m.scope.kind])).toEqual([
       ["David's phone", "node"],
@@ -106,26 +102,6 @@ describe("the harness's sharing", () => {
     const state = (await createHarnessSharing("sharing-requests-only").read(NODE))!;
     expect(state.requests).toHaveLength(2);
     expect([state.members, state.invites, state.history]).toEqual([[], [], []]);
-  });
-
-  it("revokes an approval by its request, except as today's runtime", async () => {
-    expect(
-      createHarnessSharing("sharing-requests-only").revokeApproval,
-    ).toBeUndefined();
-    const sharing = createHarnessSharing("sharing-approved-here");
-    await sharing.revokeApproval!(NODE, "request-harness-tablet");
-    await expect(
-      sharing.revokeApproval!(NODE, "request-harness-tablet"),
-    ).rejects.toThrow("already revoked");
-    const full = createHarnessSharing("sharing", () => 0);
-    await full.approve(NODE, "request-harness-jack", 30 * DAY);
-    await full.revokeApproval!(NODE, "request-harness-jack");
-    const state = (await full.read(NODE))!;
-    expect(state.members.some((m) => m.party.name === "Jack")).toBe(false);
-    expect(state.history[0]).toMatchObject({
-      kind: "revoked",
-      party: { name: "Jack" },
-    });
   });
 
   it("stands in for a runtime that can't share", async () => {
