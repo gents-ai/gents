@@ -6,6 +6,7 @@
    contrib/plugins-store.ts, with useSyncExternalStore in place of nanostores
    (the app has no nanostores dependency). */
 import { useSyncExternalStore } from "react";
+import type { UxNotificationKind } from "@/sandbox/contract";
 
 export type UxPluginDoor = "bundled" | "dev" | "pack";
 export type UxPluginProducer = "file" | "afb";
@@ -25,6 +26,8 @@ export interface UxPluginRecord {
   pack?: string;
   /** areas and directive names the manifest declared; the gate the context enforces */
   declared?: UxDeclaredContributions;
+  /** the kinds of notification its module declared, once it has loaded */
+  notifications?: readonly UxNotificationKind[];
 }
 
 export interface UxDeclaredContributions {

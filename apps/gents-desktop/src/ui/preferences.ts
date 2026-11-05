@@ -40,6 +40,9 @@ export type Preferences = {
   hiddenAgents: string[];
   /** which kinds of thing the app's notifications tell this device about */
   notify: Record<NotifyKind, boolean>;
+  /** the plugins' notification kinds turned on on this device, each as
+      `pluginNotifySwitch(key, kind)`; every other kind is off */
+  pluginNotify: string[];
 };
 
 /** The side nav's items and sections in the order chosen, and which are
@@ -100,6 +103,7 @@ const initial = (): Preferences => ({
   hiddenNodes: [],
   hiddenAgents: [],
   notify: { ...NOTIFY_ALL },
+  pluginNotify: [],
 });
 
 /* only flags this build knows survive, so an unknown id is dropped on the
@@ -179,6 +183,9 @@ export function restorePreferences(
       ? storedStrings(saved.hiddenAgents)
       : defaults.hiddenAgents,
     notify: restoreNotify(saved.notify, defaults.notify),
+    pluginNotify: Array.isArray(saved.pluginNotify)
+      ? storedStrings(saved.pluginNotify)
+      : defaults.pluginNotify,
   };
 }
 
@@ -252,7 +259,19 @@ export const preferences = {
   setNotify(kind: NotifyKind, on: boolean) {
     store.setState({ notify: { ...store.getState().notify, [kind]: on } });
   },
+  setPluginNotify(key: string, kind: string, on: boolean) {
+    store.setState({
+      pluginNotify: toggled(
+        store.getState().pluginNotify,
+        pluginNotifySwitch(key, kind),
+        on,
+      ),
+    });
+  },
 };
+
+/** A plugin's notification kind among the ones turned on. */
+export const pluginNotifySwitch = (key: string, kind: string) => `${key} ${kind}`;
 
 const toggled = (list: string[], key: string, on: boolean) =>
   on ? (list.includes(key) ? list : [...list, key]) : list.filter((k) => k !== key);
@@ -312,6 +331,10 @@ export const useHiddenAgents = () => usePreferences((p) => p.hiddenAgents);
 export const useNotifyKinds = () => usePreferences((p) => p.notify);
 /** the kinds this device is told about, for the notification owner */
 export const notifyKinds = () => store.getState().notify;
+export const usePluginNotify = () => usePreferences((p) => p.pluginNotify);
+/** whether the person turned this plugin's kind on, on this device */
+export const pluginNotifyOn = (key: string, kind: string) =>
+  store.getState().pluginNotify.includes(pluginNotifySwitch(key, kind));
 
 const isOn = (flags: Record<string, FlagSetting>, id: FlagId) => {
   const setting = flags[id];

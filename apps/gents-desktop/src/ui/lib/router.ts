@@ -15,14 +15,20 @@ import { isAppLink, linkRoute, parseLink } from "./links";
    extra route costs it nothing; only the path functions must know it. */
 export type Route =
   | ShellRoute
-  | { name: "plugin"; pluginId: string }
+  /* `path`: a place within the page, which the page reads off the route */
+  | { name: "plugin"; pluginId: string; path?: string }
   /* the sessions one session started, a level down the sessions list */
   | { name: "sessionsUnder"; session: string }
   /* the sessions archived out of the list */
   | { name: "sessionsArchived" };
 
 export function pathFor(route: Route): string {
-  if (route.name === "plugin") return `/plugins/${encodeURIComponent(route.pluginId)}`;
+  if (route.name === "plugin") {
+    const page = `/plugins/${encodeURIComponent(route.pluginId)}`;
+    return route.path
+      ? `${page}/${route.path.split("/").map(encodeURIComponent).join("/")}`
+      : page;
+  }
   if (route.name === "sessionsArchived") return "/sessions/archived";
   if (route.name === "sessionsUnder") {
     return `/sessions/under/${encodeURIComponent(route.session)}`;
@@ -33,7 +39,12 @@ export function pathFor(route: Route): string {
 export function parseRoute(path: string): Route {
   const parts = path.replace(/^#\/?/, "").replace(/^\//, "").split("/").filter(Boolean);
   if (parts[0] === "plugins" && parts[1]) {
-    return { name: "plugin", pluginId: decodeURIComponent(parts[1]) };
+    const path = parts.slice(2).map(decodeURIComponent).join("/");
+    return {
+      name: "plugin",
+      pluginId: decodeURIComponent(parts[1]),
+      ...(path ? { path } : {}),
+    };
   }
   if (parts[0] === "sessions" && parts[1] === "archived") {
     return { name: "sessionsArchived" };

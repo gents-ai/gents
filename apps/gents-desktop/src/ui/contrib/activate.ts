@@ -26,6 +26,14 @@ export interface ActivateOptions {
   defaultEnabled?: boolean;
 }
 
+/** What a plugin's notification switches are kept under: a pack plugin's
+    listing (`<ns>/<pack>/<id>`), so a plugin of the same id from another
+    pack or folder never inherits the person's choice; otherwise its door
+    and id. */
+export function notifierKey(record: { id: string; door: UxPluginDoor; pack?: string }) {
+  return record.pack ? `${record.pack}/${record.id}` : `${record.door}:${record.id}`;
+}
+
 /** live plugins: id -> the disposers of the current incarnation */
 const live = new Map<string, (() => void)[]>();
 
@@ -62,6 +70,7 @@ export function activateUxPlugin(
     producer: options.producer,
     pack: options.pack,
     declared: options.declared,
+    notifications: plugin.notifications,
   };
 
   const fail = (error: unknown) => {
@@ -92,6 +101,8 @@ export function activateUxPlugin(
           declared: options.declared,
           listing: options.listing,
           name: record.name,
+          notifier: notifierKey(record),
+          notifications: plugin.notifications,
         }),
       );
     } catch (error) {

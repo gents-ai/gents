@@ -111,6 +111,29 @@ export interface UxData {
   ) => Promise<() => void>;
 }
 
+/** one kind of notification a plugin may raise, as its module declares it:
+    the person turns each kind on in Settings, Notifications, and none is on
+    until they do */
+export interface UxNotificationKind {
+  /** `[a-z][a-z0-9-]{0,31}`, stable: the person's switch is kept under it */
+  kind: string;
+  /** what the switch says, up to 60 characters */
+  label: string;
+  /** a sentence under the switch, up to 160 characters */
+  description?: string;
+}
+
+/** a notification a plugin asks for: one of its declared kinds, a title of
+    up to 80 characters and an optional body of up to 160. `target` is a
+    place within the plugin's own page (`items/42`) that a click opens; the
+    page itself when absent. Nothing else can be a target. */
+export interface UxNotifyRequest {
+  kind: string;
+  title: string;
+  body?: string;
+  target?: string;
+}
+
 export interface UxContext {
   /** the resolved source tag, `'plugin:<id>'` */
   readonly source: string;
@@ -136,6 +159,11 @@ export interface UxContext {
   plugin: (name: string, input: unknown) => Promise<unknown>;
   /** see UxShell.send */
   send: (content: string) => Promise<void>;
+  /** tells the person through the system's notifications, or in the app
+      while its window is in front; rejects with the reason when the kind is
+      undeclared or switched off, the request is malformed or too frequent,
+      or the app doesn't let plugins notify */
+  notify: (request: UxNotifyRequest) => Promise<void>;
   shell: UxShell;
   storage: UxStorage;
   os: UxOs;
@@ -149,6 +177,8 @@ export interface GentsUxPlugin {
   description?: string;
   /** registers on load when the user has not chosen; false ships opt-in */
   defaultEnabled?: boolean;
+  /** the kinds of notification `ctx.notify` may raise */
+  notifications?: UxNotificationKind[];
   register: (ctx: UxContext) => void | Promise<void>;
 }
 

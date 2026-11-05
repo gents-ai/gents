@@ -134,6 +134,7 @@ export async function loadRuntimeUxPlugin(
       name: meta.name,
       description: meta.description,
       defaultEnabled: meta.defaultEnabled,
+      notifications: host.notificationKinds,
       register: async (ctx: UxContext) => {
         ctx.onDispose(() => host.dispose());
         await host.activate(ctx);
