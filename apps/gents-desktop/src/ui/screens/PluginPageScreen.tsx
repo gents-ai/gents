@@ -36,7 +36,7 @@ export function PluginPageScreen({
   windowed?: boolean;
 }) {
   const pages = useContributions(PLUGIN_PAGE_AREA);
-  const native = !windowed && inNativeShell() && !isMobileTauriShell();
+  const native = !windowed && canOpenPageWindows();
   const elsewhere = usePluginWindowOpen(pluginId, native);
   const page = pages.find((c) => c.source === `plugin:${pluginId}` && c.render);
   if (elsewhere) return <OpenElsewhere pluginId={pluginId} />;
@@ -69,14 +69,7 @@ function useOpenInWindow(pluginId: string) {
   const nodeDid = useSelectedNodeDid();
   return {
     name,
-    open: () =>
-      void openPluginWindow({
-        pluginId,
-        nodeDid,
-        title: name.slice(0, 120),
-      }).catch((error) =>
-        toast.error(`Couldn't open ${name} in a new window: ${errorText(error)}`),
-      ),
+    open: () => openPageWindow(pluginId, name, nodeDid),
   };
 }
 
@@ -138,3 +131,15 @@ function OpenInWindow({ pluginId }: { pluginId: string }) {
     </PaneBar>
   );
 }
+
+/** Opens a plugin's page in a window of its own on a node, or brings the
+    one already open forward; a failure says so instead of throwing. */
+export function openPageWindow(pluginId: string, name: string, nodeDid: string | null) {
+  void openPluginWindow({ pluginId, nodeDid, title: name.slice(0, 120) }).catch(
+    (error) =>
+      toast.error(`Couldn't open ${name} in a new window: ${errorText(error)}`),
+  );
+}
+
+/** Whether this shell can open a page in a window of its own. */
+export const canOpenPageWindows = () => inNativeShell() && !isMobileTauriShell();
