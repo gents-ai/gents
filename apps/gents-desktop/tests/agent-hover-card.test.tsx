@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { fleetNodes } from "../src/ui/lib/scope";
 import { AgentHoverCard, NodeHoverCard } from "../src/ui/screens/HoverCards";
+import { avatarSrc } from "@/lib/avatar";
 import { deployment } from "./config-panel-wiring/fixtures";
 import { node, renderIn, renderRouted, testApp } from "./app-fixture";
 
@@ -65,6 +66,15 @@ describe("a node's hover card", () => {
       { timeout: 2000 },
     );
     expect(logos.querySelectorAll("img")).toHaveLength(2);
+  });
+
+  it("draws the node's saved portrait", async () => {
+    cardFor("did:key:remote", {
+      nodeConfig: { node_did: "did:key:remote", avatar: "12" },
+    });
+    await userEvent.hover(screen.getByRole("button", { name: "avatar" }));
+    await screen.findByText("Agents", {}, { timeout: 2000 });
+    expect(document.querySelector(`img[src="${avatarSrc("12")}"]`)).not.toBeNull();
   });
 
   it("says None when a node has no inference", async () => {
