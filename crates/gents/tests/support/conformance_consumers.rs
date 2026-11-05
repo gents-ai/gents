@@ -63,6 +63,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "native_node_scoped_file_requests_match_modeled_access",
         },
         ConformanceConsumer::RustTest {
+            id: "tools::workspace::tests::quickstart_base_freeze::quickstart_freezes_base_without_fabricating_requests_or_writer_receipts",
+            package: "gents",
+            source_path: "crates/gents/src/tools/workspace/tests/quickstart_base_freeze.rs",
+            module_path: "tools::workspace::tests::quickstart_base_freeze",
+            function: "quickstart_freezes_base_without_fabricating_requests_or_writer_receipts",
+        },
+        ConformanceConsumer::RustTest {
             id: "tools::workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission",
             package: "gents",
             source_path: "crates/gents/src/tools/workspace/tests/capability_runtime.rs",
