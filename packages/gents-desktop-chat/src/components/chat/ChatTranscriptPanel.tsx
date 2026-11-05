@@ -92,6 +92,8 @@ export function ChatTranscriptPanel({
         (item.kind === "pendingUserTurn" &&
           item.requestId === optimisticPendingTurn.requestId) ||
         (item.kind === "userMessage" &&
+          item.reconstruction.state === "ready" &&
+          item.content !== null &&
           (item.inputRequestId ?? (item.ownsTurn ? item.requestId : null)) ===
             optimisticPendingTurn.requestId),
     );
@@ -161,8 +163,7 @@ export function ChatTranscriptPanel({
     return -1;
   }, [timelineItems]);
   const pinUser =
-    !isTerminalTurnState(session?.turnState) &&
-    latestUserIndex >= 0;
+    !isTerminalTurnState(session?.turnState) && latestUserIndex >= 0;
   const stickyUserItemKey = pinUser
     ? timelineKey(timelineItems[latestUserIndex]!)
     : null;

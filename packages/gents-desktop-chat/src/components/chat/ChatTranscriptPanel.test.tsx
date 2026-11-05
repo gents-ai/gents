@@ -349,7 +349,34 @@ test("puts an input submitted to an empty timeline before the arriving live resp
       activity={null}
     />,
   );
-  expect(html.indexOf(pending.content)).toBeLessThan(
-    html.indexOf("New live"),
-  );
+  expect(html.indexOf(pending.content)).toBeLessThan(html.indexOf("New live"));
 });
+
+test.each(["loading", "missing"] as const)(
+  "retains optimistic text while matching authored content is %s",
+  (state) => {
+    const html = renderToStaticMarkup(
+      <ChatTranscriptPanel
+        selectedSessionId="session"
+        session={{
+          ...session,
+          timelineItems: [
+            {
+              kind: "userMessage",
+              itemKey: "hydrating",
+              requestId: "parent",
+              inputRequestId: pending.requestId,
+              ownsTurn: false,
+              content: null,
+              timestamp: null,
+              reconstruction: { state },
+            },
+          ],
+        }}
+        optimisticPendingTurn={pending}
+        activity={null}
+      />,
+    );
+    expect(html).toContain(pending.content);
+  },
+);
