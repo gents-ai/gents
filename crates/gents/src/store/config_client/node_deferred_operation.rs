@@ -6,7 +6,8 @@ use defra_node::Node as EmbeddedNode;
 use super::{ConfigAccess, ConfigApplyTxn, ConfigClientError};
 use crate::store::graphql::escape_graphql_string;
 
-const DEFERRED_COLLECTIONS: [&str; 4] = [
+const DEFERRED_COLLECTIONS: [&str; 5] = [
+    "Network",
     "EnrollmentOperatorNonce",
     "NetworkAdminPin",
     "PeerPairingApplied",
