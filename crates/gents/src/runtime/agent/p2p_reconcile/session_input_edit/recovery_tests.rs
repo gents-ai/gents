@@ -156,9 +156,14 @@ async fn future_issued_command_defers_without_receipt_then_applies() {
     let command = edit_command(&home, issued_at).await;
     let id = submit(&home.node, &command).await;
     let before = requests(&home.node).await;
-    let deferred = process_command(&home.node, &home.identity, &id, &[agent_for(&home).await])
-        .await
-        .unwrap();
+    let deferred = process_command(
+        &home.node,
+        &home.identity,
+        &id,
+        agent_for(&home).await.as_ref(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         deferred.map(|at| at.timestamp_millis()),
         Some(issued_at.timestamp_millis())
@@ -196,9 +201,14 @@ async fn overwritten_receipt_after_apply_is_reissued_as_applied() {
     let home = temp_home(false).await;
     let command = edit_command(&home, Utc::now() - chrono::Duration::seconds(1)).await;
     let id = submit(&home.node, &command).await;
-    process_command(&home.node, &home.identity, &id, &[agent_for(&home).await])
-        .await
-        .unwrap();
+    process_command(
+        &home.node,
+        &home.identity,
+        &id,
+        agent_for(&home).await.as_ref(),
+    )
+    .await
+    .unwrap();
     let applied: SessionInputEditReceipt =
         serde_json::from_str(&raw_receipt(&home.node, &id).await.unwrap()).unwrap();
     assert_eq!(applied.outcome, SessionInputEditOutcome::Applied);
@@ -206,9 +216,14 @@ async fn overwritten_receipt_after_apply_is_reissued_as_applied() {
     for overwrite in ["{}".to_owned(), String::new()] {
         ConfigAccess::local(home.node.clone()).write("test.overwrite.receipt", &format!(r#"mutation {{ update_AgentSessionInputEdit(docID: "{}", input: {{ receipt_json: "{}" }}) {{ _docID }} }}"#,
             escape_graphql_string(&id), escape_graphql_string(&overwrite))).await.unwrap();
-        process_command(&home.node, &home.identity, &id, &[agent_for(&home).await])
-            .await
-            .unwrap();
+        process_command(
+            &home.node,
+            &home.identity,
+            &id,
+            agent_for(&home).await.as_ref(),
+        )
+        .await
+        .unwrap();
         let reissued: SessionInputEditReceipt =
             serde_json::from_str(&raw_receipt(&home.node, &id).await.unwrap()).unwrap();
         reissued.validate_for(&command).unwrap();
@@ -229,7 +244,7 @@ async fn late_twin_of_an_applied_command_is_left_unanswered_without_error() {
         &owner.node,
         &owner.identity,
         &prior,
-        &[agent_for(&owner).await],
+        agent_for(&owner).await.as_ref(),
     )
     .await
     .unwrap();
@@ -286,9 +301,14 @@ async fn late_twin_of_an_applied_command_is_left_unanswered_without_error() {
 
     for id in [&twin, &prior] {
         assert_eq!(
-            process_command(&owner.node, &owner.identity, id, &[agent_for(&owner).await])
-                .await
-                .unwrap(),
+            process_command(
+                &owner.node,
+                &owner.identity,
+                id,
+                agent_for(&owner).await.as_ref()
+            )
+            .await
+            .unwrap(),
             None
         );
     }

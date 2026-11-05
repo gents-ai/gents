@@ -1561,6 +1561,11 @@ def caseCoverage : List CoverageEntry :=
       "runtime::agent::p2p_reconcile::session_input_edit::verified_graph_tests::signed_user_graph_and_agent_effect_share_the_claim_transaction")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "session_input_edit_native_discovery_cases"
+      "SessionCommandNativeDiscovery"
+      "runtime::agent::p2p_reconcile::session_commands::tests::generated_session_command_discovery_uses_held_agent_and_native_visibility")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "identity_private_journal_policy"
       "PrivateJournalSigner"
       "client::mutations::chat::request::receipt::tests::client_submission_refuses_a_different_local_signer_before_journal_write")

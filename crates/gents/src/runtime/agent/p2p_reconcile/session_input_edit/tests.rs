@@ -44,9 +44,16 @@ impl Fixture {
             .await;
         let agent_identity =
             crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
-        let access = ConfigAccess::local(node.clone());
-        access.write("test.edit.session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{SESSION}", node_did: "{}", requester_did: "{}", agent_did: "{}", created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,
-            escape_graphql_string(identity.did()), escape_graphql_string(identity.did()), escape_graphql_string(&binding.agent_did))).await.unwrap();
+        let access =
+            ConfigAccess::local_as(node.clone(), ::identity::Did::new(identity.did()).unwrap());
+        let agent = ::identity::Did::new(&binding.agent_did).unwrap();
+        access.transact_write("test.edit.session", |txn| Box::pin(async {
+            let response = txn.execute(&format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{SESSION}", node_did: "{}", requester_did: "{}", agent_did: "{}", created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,
+                escape_graphql_string(identity.did()), escape_graphql_string(identity.did()), escape_graphql_string(&binding.agent_did))).await?;
+            let doc = crate::store::graphql::created_doc_id(&response, "AgentSession")?;
+            txn.add_actor_relationship("AgentSession", &doc, "working_agent", &agent).await?;
+            Ok::<_, anyhow::Error>(())
+        })).await.unwrap();
         Self {
             node,
             identity,
@@ -448,7 +455,7 @@ impl ModeledQueue {
             &self.fixture.node,
             &self.fixture.identity,
             &doc,
-            &[self.fixture.agent_identity.clone()],
+            self.fixture.agent_identity.as_ref(),
         )
         .await
         .unwrap();
@@ -489,6 +496,7 @@ async fn unanswered_sweep_discovers_malformed_command_for_transactional_validati
         CommandKind::InputEdit,
         &fixture.node,
         fixture.identity.as_ref(),
+        fixture.agent_identity.as_ref(),
         Sweep::Unanswered,
     )
     .await
@@ -498,7 +506,7 @@ async fn unanswered_sweep_discovers_malformed_command_for_transactional_validati
         &fixture.node,
         &fixture.identity,
         &doc_id,
-        &[fixture.agent_identity.clone()]
+        fixture.agent_identity.as_ref()
     )
     .await
     .is_err());
@@ -615,7 +623,7 @@ async fn invalid_receipt_cannot_suppress_a_valid_edit_and_stale_edit_never_write
         &fixture.node,
         &fixture.identity,
         &first_id,
-        &[fixture.agent_identity.clone()],
+        fixture.agent_identity.as_ref(),
     )
     .await
     .unwrap();
@@ -628,7 +636,7 @@ async fn invalid_receipt_cannot_suppress_a_valid_edit_and_stale_edit_never_write
         &fixture.node,
         &fixture.identity,
         &stale_id,
-        &[fixture.agent_identity.clone()],
+        fixture.agent_identity.as_ref(),
     )
     .await
     .unwrap();
@@ -661,7 +669,7 @@ async fn valid_author_signature_cannot_install_replacement_with_wrong_admission_
         &fixture.node,
         &fixture.identity,
         &id,
-        &[fixture.agent_identity.clone()],
+        fixture.agent_identity.as_ref(),
     )
     .await
     .unwrap();
@@ -684,7 +692,7 @@ async fn edit_effect_and_receipt_rollback_together_after_a_write_failure() {
             &fixture.node,
             &fixture.identity,
             &id,
-            &[fixture.agent_identity.clone()],
+            fixture.agent_identity.as_ref(),
         ),
     )
     .await;
@@ -697,7 +705,7 @@ async fn edit_effect_and_receipt_rollback_together_after_a_write_failure() {
         &fixture.node,
         &fixture.identity,
         &id,
-        &[fixture.agent_identity.clone()],
+        fixture.agent_identity.as_ref(),
     )
     .await
     .unwrap();
@@ -741,7 +749,7 @@ async fn cryptographically_invalid_receipt_cannot_suppress_valid_edit() {
         &fixture.node,
         &fixture.identity,
         &id,
-        &[fixture.agent_identity.clone()],
+        fixture.agent_identity.as_ref(),
     )
     .await
     .unwrap();

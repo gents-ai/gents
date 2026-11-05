@@ -162,47 +162,29 @@ pub(crate) async fn process_command(
     node: &Arc<EmbeddedNode>,
     identity: &Arc<dyn NodeIdentity>,
     doc_id: &str,
-    agent_identities: &[Arc<dyn NodeIdentity>],
+    agent_identity: &dyn NodeIdentity,
 ) -> Result<Option<DateTime<Utc>>> {
-    let actor_query = format!(
-        r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ node_did session_id }} }}"#,
-        escape_graphql_string(doc_id)
-    );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &actor_query,
-        "input_edit.resolve_agent",
-    )
-    .await?;
-    let rows =
-        crate::store::graphql::rows::<serde_json::Value>(&response, "AgentSessionInputEdit")?;
-    let row = rows.first().context("session command is missing")?;
-    let node_did = row["node_did"]
-        .as_str()
-        .context("session command has no node DID")?;
-    if node_did != identity.did() {
-        return Ok(None);
-    }
-    let session_id = row["session_id"]
-        .as_str()
-        .context("session command has no session ID")?;
-    let actor = crate::session::load_session_agent_did(node, node_did, session_id).await?;
-    let agent_identity = agent_identities
-        .iter()
-        .find(|identity| identity.did() == actor.as_str())
-        .context("session edit Agent identity is unavailable")?;
-    let access = ConfigAccess::local_managed_agent(node.clone(), actor, agent_identity.as_ref())?;
+    let actor = ::identity::Did::new(agent_identity.did())?;
+    let access = ConfigAccess::local_managed_agent(node.clone(), actor.clone(), agent_identity)?;
     let store = GraphqlEnrollmentStore::new(node.clone(), identity.clone());
     access.transact_idempotent(IdempotentTransactionRetry::Standard,
         "queue.apply_signed_edit", |txn| {
         let store = &store;
+        let actor = &actor;
         Box::pin(async move {
             let response = txn.execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {FIELDS} }} }}"#, escape_graphql_string(doc_id))).await?;
             let rows: Vec<CommandRow> = serde_json::from_value(response["data"]["AgentSessionInputEdit"].clone())?;
-            let [row] = rows.as_slice() else { anyhow::bail!("edit command is missing or ambiguous"); };
+            let [row] = rows.as_slice() else {
+                anyhow::ensure!(rows.is_empty(), "edit command is ambiguous");
+                return Ok(None);
+            };
             if row.node_did != identity.did() {
                 return Ok(None);
             }
+            let Some(session) = crate::session::load_agent_session_owner_in_txn(txn, &row.node_did, &row.session_id).await? else {
+                return Ok(None);
+            };
+            if session.session.agent_did != actor.as_str() { return Ok(None); }
             let command: SessionInputEdit = serde_json::from_str(&row.intent_json)?;
             anyhow::ensure!(row.command_id == command.command_id && row.node_did == command.node_did
                 && row.requester_did == command.requester_did && row.requester_peer_id == command.requester_peer_id

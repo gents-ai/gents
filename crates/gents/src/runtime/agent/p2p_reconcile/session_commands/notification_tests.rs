@@ -54,7 +54,7 @@ impl Stream for ObservedChanges {
 }
 
 #[tokio::test]
-async fn collection_block_notifications_never_enter_the_command_retry_queue() {
+async fn notifications_without_a_held_agent_do_not_enter_the_command_retry_queue() {
     let temp = tempfile::tempdir().unwrap();
     let identity: Arc<dyn NodeIdentity> = Arc::new(
         crate::store::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
@@ -123,8 +123,8 @@ async fn collection_block_notifications_never_enter_the_command_retry_queue() {
         }
         assert_eq!(
             *failures.lock().unwrap(),
-            vec!["not-yet-replicated-command"; expected_count],
-            "only real document ids may be processed or retried"
+            Vec::<String>::new(),
+            "notifications cannot supply an executing Agent"
         );
     }
     cancel.cancel();
