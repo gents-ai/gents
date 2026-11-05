@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from "react";
-import { NodeAvatar } from "./AgentAvatar";
+import { NodeAvatar, nodeAvatarOf } from "./AgentAvatar";
 import { ArrowUpRight, Copy, MessageSquarePlus } from "lucide-react";
 import { toast } from "sonner";
 import type { NodeView } from "../../hooks/fleetStore";
@@ -272,6 +272,7 @@ export function NodeHoverCard({
           avatar={
             <NodeAvatar
               name={deployment.node.displayName ?? deployment.label}
+              {...nodeAvatarOf(deployment)}
               className="size-8 shrink-0"
             />
           }

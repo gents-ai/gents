@@ -12,6 +12,39 @@ use crate::cli::{Cli, Command};
 pub use crate::cli::args::ToolCeilingArg as ManagedToolCeiling;
 pub use crate::commands::p2p::enrollment_admin::EnrollmentDecisionRejected;
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct ManagedPendingEnrollment {
+    pub request_id: String,
+    pub network_id: String,
+    pub candidate_did: String,
+    pub candidate_peer: String,
+    pub owner_agent: String,
+    pub expires_at: String,
+    pub profile: Option<String>,
+    pub issued_at: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct ManagedPendingEnrollments {
+    pending: Vec<ManagedPendingEnrollment>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedEnrollmentDecision {
+    Approve { lease_seconds: u64 },
+    Deny,
+    Revoke,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, PartialEq, Eq)]
+pub struct ManagedEnrollmentDecisionOutcome {
+    pub request_id: String,
+    pub state: String,
+    pub decision_doc_id: String,
+    pub revision_doc_id: Option<String>,
+    pub delivery_pending: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub home: PathBuf,
@@ -107,21 +140,52 @@ pub async fn approve_managed_client_enrollment(
     graphql: &str,
     request_id: &str,
 ) -> Result<()> {
-    let request_id = request_id.trim();
-    anyhow::ensure!(
-        !request_id.is_empty(),
-        "managed enrollment request id is empty"
-    );
-    crate::commands::p2p::enrollment_admin::submit_enrollment_decision(
+    decide_managed_enrollment(
         home,
         graphql,
         request_id,
-        EnrollmentOperatorAction::Approve,
-        DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
+        ManagedEnrollmentDecision::Approve {
+            lease_seconds: DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
+        },
     )
     .await
     .context("approving desktop enrollment on managed runtime")?;
     Ok(())
+}
+
+pub async fn pending_managed_enrollments(
+    home: &Path,
+    graphql: &str,
+) -> Result<Vec<ManagedPendingEnrollment>> {
+    let body =
+        crate::commands::p2p::enrollment_admin::load_pending_enrollments(home, graphql).await?;
+    let result: ManagedPendingEnrollments =
+        serde_json::from_value(body).context("decoding managed pending enrollments")?;
+    Ok(result.pending)
+}
+
+pub async fn decide_managed_enrollment(
+    home: &Path,
+    graphql: &str,
+    request_id: &str,
+    decision: ManagedEnrollmentDecision,
+) -> Result<ManagedEnrollmentDecisionOutcome> {
+    let (action, lease_seconds) = match decision {
+        ManagedEnrollmentDecision::Approve { lease_seconds } => {
+            (EnrollmentOperatorAction::Approve, lease_seconds)
+        }
+        ManagedEnrollmentDecision::Deny => (EnrollmentOperatorAction::Deny, 0),
+        ManagedEnrollmentDecision::Revoke => (EnrollmentOperatorAction::Revoke, 0),
+    };
+    let body = crate::commands::p2p::enrollment_admin::submit_enrollment_decision(
+        home,
+        graphql,
+        request_id,
+        action,
+        lease_seconds,
+    )
+    .await?;
+    serde_json::from_value(body).context("decoding managed enrollment decision")
 }
 
 pub fn initialized_home(path: &Path) -> bool {

@@ -550,15 +550,22 @@ pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<Str
 pub async fn read_client_replicated_schema(
     node: std::sync::Arc<defra_node::EmbeddedNode>,
 ) -> anyhow::Result<ReplicatedSchema> {
+    read_replicated_schema(node, CLIENT_COLLECTIONS).await
+}
+
+pub async fn read_replicated_schema(
+    node: std::sync::Arc<defra_node::EmbeddedNode>,
+    collections: &[&str],
+) -> anyhow::Result<ReplicatedSchema> {
     let access = crate::store::config_client::ConfigAccess::local(node);
     let mut schema = ReplicatedSchema::new();
-    for name in CLIENT_COLLECTIONS {
+    for name in collections {
         let identity = access
             .collection_version(name)
             .await?
             .as_ref()
             .and_then(ReplicatedCollectionIdentity::from_collection_version)
-            .ok_or_else(|| anyhow::anyhow!("client route collection {name} is not registered"))?;
+            .ok_or_else(|| anyhow::anyhow!("collection {name} is not registered"))?;
         schema.insert((*name).to_string(), identity);
     }
     Ok(schema)
@@ -782,6 +789,25 @@ mod tests {
                 .collections,
             vec!["Task".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn requested_app_schema_is_local_and_fails_for_missing_collections() {
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        crate::store::config_client::ConfigAccess::local(node.clone())
+            .add_collection("type GameState @branchable { turn: String }")
+            .await
+            .unwrap();
+        let schema = read_replicated_schema(node.clone(), &["GameState"])
+            .await
+            .unwrap();
+        assert_eq!(schema.len(), 1);
+        assert!(schema["GameState"].branchable);
+        assert!(!schema["GameState"].version_id.is_empty());
+        let error = read_replicated_schema(node, &["GameState", "MissingGame"])
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("MissingGame"));
     }
 
     #[tokio::test]

@@ -34,6 +34,12 @@ use tauri::Manager;
 #[cfg(desktop)]
 use tauri::{Emitter, Listener};
 
+/// The app's Tauri context. It expands once per crate, since it embeds the
+/// macOS Info.plist under a fixed symbol.
+pub(crate) fn context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
+
 pub fn run() {
     install_tracing(TracingConfig {
         filter: None,
@@ -52,7 +58,7 @@ pub fn run() {
     prefer_host_tools();
     install_runtime();
 
-    let context = tauri::generate_context!();
+    let context = context();
     #[cfg(all(feature = "native-e2e", debug_assertions, desktop))]
     let context = native_local_e2e_context(context);
     let mut context = context;

@@ -6,6 +6,7 @@ import { FieldRow } from "@gents/ui/components/field";
 import { Input } from "@gents/ui/components/input";
 import { Switch } from "@gents/ui/components/switch";
 import { FLAGS } from "@/lib/flags";
+import { SEARCH_FIELD } from "@/lib/textAssist";
 import { preferences, usePreferences, useRelaunchPending } from "@/preferences";
 import { Group } from "../agent/rows";
 import { Hint } from "../Hint";
@@ -43,6 +44,7 @@ export function ExperimentalPanel() {
           <Search className="size-4 shrink-0 text-muted-foreground" />
           <Input
             type="search"
+            {...SEARCH_FIELD}
             aria-label="Search experimental features"
             placeholder="Search by name or description"
             className="h-8 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0 dark:bg-transparent"

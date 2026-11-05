@@ -70,6 +70,23 @@ export async function saveNodeAvatar(
 
 /* a card under the node's header: one thing about the node right now, and
    the way to where it is set */
+/** One summary fact on a single line, for a side sheet's head where a
+    card would push the form down. */
+export function CompactSummary({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="mb-4 flex min-w-0 items-center gap-2 rounded-xl bg-raised/50 px-3 py-2 text-sm">
+      <span className="shrink-0 text-xs text-muted-foreground">{label}</span>
+      {children}
+    </div>
+  );
+}
+
 /** A summary card under a page's header; with `to`, the whole card leads
     there. Node, agent and task pages share them. */
 export function Summary({
@@ -156,31 +173,43 @@ function PacksValue({ packs }: { packs: PacksRead }) {
 /* the agents a card shows marks for before the rest are counted as +n */
 const MARKS = 4;
 
-/** The node's agents: a few of their marks, then how many more, and how
-    many there are. */
+/** Agents as a few overlapping marks, then +n for the rest. */
+export function AgentMarks({
+  deployment,
+  agentIds,
+}: {
+  deployment: NodeView;
+  agentIds: readonly string[];
+}) {
+  const more = agentIds.length - MARKS;
+  const mark = "-ml-1.5 size-6 text-[10px] ring-2 ring-background first:ml-0";
+  return (
+    <span aria-hidden className="flex shrink-0 items-center">
+      {agentIds.slice(0, MARKS).map((agentId) => (
+        <AgentInitials
+          key={agentId}
+          name={agentName(agentId, deployment)}
+          className={mark}
+        />
+      ))}
+      {more > 0 && (
+        <span
+          className={`grid shrink-0 place-items-center rounded-full border border-border bg-raised font-medium text-muted-foreground ${mark}`}
+        >
+          +{more}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** The node's agents: a few of their marks, and how many there are. */
 function AgentsValue({ deployment }: { deployment: NodeView }) {
   const agents = deployment.agents;
   if (agents.length === 0) return <span className="truncate">None</span>;
-  const more = agents.length - MARKS;
-  const mark = "-ml-1.5 size-6 text-[10px] ring-2 ring-background first:ml-0";
   return (
     <>
-      <span aria-hidden className="flex shrink-0 items-center">
-        {agents.slice(0, MARKS).map((a) => (
-          <AgentInitials
-            key={a.agentId}
-            name={agentName(a.agentId, deployment)}
-            className={mark}
-          />
-        ))}
-        {more > 0 && (
-          <span
-            className={`grid shrink-0 place-items-center rounded-full border border-border bg-raised font-medium text-muted-foreground ${mark}`}
-          >
-            +{more}
-          </span>
-        )}
-      </span>
+      <AgentMarks deployment={deployment} agentIds={agents.map((a) => a.agentId)} />
       <span className="truncate text-muted-foreground">
         {counted(agents.length, "agent")}
       </span>

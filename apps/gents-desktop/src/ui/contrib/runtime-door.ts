@@ -198,11 +198,12 @@ async function loadListing(entry: UxPluginListing): Promise<void> {
 
 /* reconcile disk with the inventory; `reloadKnown` re-reads every entry,
    a plain scan re-reads only what is new or broken */
-async function reconcile(reloadKnown: boolean): Promise<void> {
+async function reconcile(reloadKnown: boolean, reloadPack?: string): Promise<void> {
   let listings: UxPluginListing[];
   try {
     listings = await listRuntimeUxPlugins();
-  } catch {
+  } catch (error) {
+    if (reloadPack !== undefined) throw error;
     /* no local agent home (mobile, or not started): nothing to scan */
     return;
   }
@@ -221,7 +222,12 @@ async function reconcile(reloadKnown: boolean): Promise<void> {
     known.delete(id);
   }
   for (const entry of listings.sort((a, b) => a.id.localeCompare(b.id))) {
-    if (known.get(entry.id) && !reloadKnown) continue;
+    if (
+      known.get(entry.id) &&
+      !reloadKnown &&
+      (reloadPack === undefined || entry.pack !== reloadPack)
+    )
+      continue;
     if (!enabledByListing(entry)) {
       /* off: the row says so from the manifest; nothing of it runs */
       const previous = known.get(entry.id) ?? null;
@@ -234,14 +240,32 @@ async function reconcile(reloadKnown: boolean): Promise<void> {
 }
 
 /** scan the doors; a scan asked for while one runs follows it, never drops */
-export function scanRuntimeUxPlugins(reloadKnown = false): Promise<void> {
-  const run = () => reconcile(reloadKnown);
+function queueScan(reloadKnown: boolean, reloadPack?: string): Promise<void> {
+  const run = () => reconcile(reloadKnown, reloadPack);
   const scan: Promise<void> = (inFlight ?? Promise.resolve()).then(run, run);
   inFlight = scan;
-  void scan.finally(() => {
+  const clear = () => {
     if (inFlight === scan) inFlight = null;
-  });
+  };
+  void scan.then(clear, clear);
   return scan;
+}
+
+export function scanRuntimeUxPlugins(reloadKnown = false): Promise<void> {
+  return queueScan(reloadKnown);
+}
+
+const CHANGED_KEY = "gents.ux-plugins-changed.v1";
+
+/** after a pack changes: reloads its pages here and in the app's other
+    windows; rejects when this window's reload fails */
+export function refreshRuntimePackUxPlugins(pack: string): Promise<void> {
+  try {
+    window.localStorage.setItem(CHANGED_KEY, JSON.stringify({ pack, at: Date.now() }));
+  } catch {
+    /* no storage: only this window reloads */
+  }
+  return queueScan(false, pack);
 }
 
 /** the panel's Reload button */
@@ -254,35 +278,20 @@ export function uxScanSettled(): Promise<void> {
 }
 
 /* Every window keeps its own inventory, so a pack installed, updated or
-   removed in one is rescanned in all: here at once, the others through a
+   removed in one is reloaded in all: here at once, the others through a
    storage event (which never reaches the window that wrote it). */
-const CHANGED_KEY = "gents.ux-plugins-changed.v1";
-
-/** after a pack change: an update reloads what is already loaded, an install
-    or removal only adds and drops */
-export function announceUxPluginsChanged(reloadKnown: boolean): Promise<void> {
-  try {
-    window.localStorage.setItem(
-      CHANGED_KEY,
-      JSON.stringify({ reloadKnown, at: Date.now() }),
-    );
-  } catch {
-    /* no storage: only this window rescans */
-  }
-  return scanRuntimeUxPlugins(reloadKnown);
-}
-
 export function followOtherWindowsPackChanges(): () => void {
   const follow = (event: StorageEvent) => {
     if (event.key !== CHANGED_KEY || !event.newValue) return;
-    let reloadKnown = false;
+    let pack: unknown;
     try {
-      reloadKnown =
-        (JSON.parse(event.newValue) as { reloadKnown?: unknown }).reloadKnown === true;
+      pack = (JSON.parse(event.newValue) as { pack?: unknown }).pack;
     } catch {
       /* unreadable: a plain scan */
     }
-    void scanRuntimeUxPlugins(reloadKnown);
+    /* the window that made the change reports a failed reload */
+    const scan = typeof pack === "string" ? queueScan(false, pack) : queueScan(false);
+    void scan.catch(() => undefined);
   };
   window.addEventListener("storage", follow);
   return () => window.removeEventListener("storage", follow);

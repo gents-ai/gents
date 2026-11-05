@@ -9,7 +9,7 @@ type Icon = ComponentType<{ className?: string }>;
 
 export type SearchTarget =
   | { kind: "attention"; item: MailboxItemView }
-  | { kind: "node"; nodeDid: string; name: string }
+  | { kind: "node"; nodeDid: string; name: string; avatar: string | null }
   | { kind: "session"; session: SessionSummary }
   | { kind: "agent"; route: Route; agentId: string; nodeDid: string }
   | { kind: "setting" | "action"; route: Route; icon: Icon };
@@ -83,7 +83,14 @@ export type SearchSources = {
     pack: string | null;
   }[];
   /** every node, with what it is to this app and whether it answers */
-  nodes: readonly { nodeDid: string; name: string; place: string; offline: boolean }[];
+  nodes: readonly {
+    nodeDid: string;
+    name: string;
+    /** the node's saved portrait, if it has one */
+    avatar: string | null;
+    place: string;
+    offline: boolean;
+  }[];
   agentName: (session: SessionSummary) => string;
   nodeName: (nodeDid: string) => string;
   places: readonly {
@@ -110,7 +117,7 @@ export function searchEntries(src: SearchSources): SearchEntry[] {
     ),
     ...src.nodes.map((n) =>
       entry(
-        { kind: "node", nodeDid: n.nodeDid, name: n.name },
+        { kind: "node", nodeDid: n.nodeDid, name: n.name, avatar: n.avatar },
         `node:${n.nodeDid}`,
         n.name,
         [n.place, n.offline && "Offline"].filter(Boolean).join(" · "),

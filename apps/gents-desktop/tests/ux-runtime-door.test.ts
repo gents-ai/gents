@@ -18,6 +18,7 @@ import {
 import { registry } from "@/contrib/registry";
 import {
   configureUxDoors,
+  refreshRuntimePackUxPlugins,
   reloadRuntimeUxPlugins,
   resetRuntimeDoor,
   scanRuntimeUxPlugins,
@@ -110,6 +111,49 @@ const packed = (name: string, defaultEnabled: boolean | null): UxPluginListing =
 });
 const reads = () =>
   call.mock.calls.filter(([command]) => command === "desktop_ux_plugin_source");
+
+it("refreshes only the changed pack and removes its retired pages", async () => {
+  const first = packed("first", true);
+  const second = {
+    ...packed("second", true),
+    id: "other/game/second",
+    pack: "other/game",
+  };
+  listings = [first, second];
+  sources.set(first.id, chipPlugin("first"));
+  sources.set(second.id, chipPlugin("second"));
+  await scanRuntimeUxPlugins();
+  call.mockClear();
+
+  await refreshRuntimePackUxPlugins("acme/tools");
+  expect(reads()).toEqual([["desktop_ux_plugin_source", { id: first.id }]]);
+  expect(chips()).toEqual(expect.arrayContaining(["first:chip", "second:chip"]));
+
+  listings = [second];
+  call.mockClear();
+  await refreshRuntimePackUxPlugins("acme/tools");
+  expect(reads()).toHaveLength(0);
+  expect(chips()).toEqual(["second:chip"]);
+});
+
+it("reports an explicit pack refresh failure without retiring the current pages", async () => {
+  const entry = packed("widget", true);
+  listings = [entry];
+  sources.set(entry.id, chipPlugin("widget"));
+  await scanRuntimeUxPlugins();
+  configureUxDoors({
+    list: async () => {
+      throw new Error("inventory unavailable");
+    },
+    source: async () => {
+      throw new Error("unexpected read");
+    },
+  });
+  await expect(refreshRuntimePackUxPlugins("acme/tools")).rejects.toThrow(
+    "inventory unavailable",
+  );
+  expect(chips()).toEqual(["widget:chip"]);
+});
 
 describe("discovery runs nothing that is off", () => {
   it.each([null, true, false])(

@@ -18,6 +18,7 @@ mod dependencies;
 mod documents;
 pub(crate) use documents::sdl_paths;
 mod removal;
+mod scope_preview;
 pub use catalog::{installed_catalog, InstalledCatalogEntry};
 pub use documents::{
     apply_prepared_dependency_schemas, document_pack_schema_paths, install_documents_with_plugins,
@@ -25,6 +26,7 @@ pub use documents::{
     prepare_document_pack_install, PreparedDependency, PreparedDocumentPackInstall,
 };
 pub use removal::ensure_plugins_unreferenced;
+pub use scope_preview::{preview_installed_pack_scope, InstalledPackScopePreview};
 const RECORD: &str = "PackInstallation";
 const HISTORY_LIMIT: usize = 32;
 

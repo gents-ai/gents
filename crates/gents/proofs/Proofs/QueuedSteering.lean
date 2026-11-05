@@ -80,34 +80,31 @@ theorem agent_steer_does_not_enter_a_later_turn (planned active : Nat)
     (h : planned ≠ active) : agentSteerTargets planned active = false := by
   simp [agentSteerTargets, h]
 
-/-- An agent steer may pass ordinary queued turns without moving or consuming them.
+/-- A direct steer may pass ordinary queued turns without moving or consuming them.
 Earlier steering inputs retain their own order and block later steers when incompatible. -/
 inductive BoundaryInputKind where
   | queued | userSteer | agentSteer | blocked
   deriving DecidableEq, Repr
 
-def boundaryCandidateAux (passedQueue : Bool) : List (Nat × BoundaryInputKind) → Option Nat
+def boundaryCandidate : List (Nat × BoundaryInputKind) → Option Nat
   | [] => none
-  | (_, .queued) :: rest => boundaryCandidateAux true rest
+  | (_, .queued) :: rest => boundaryCandidate rest
   | (id, .agentSteer) :: _ => some id
-  | (id, .userSteer) :: _ => if passedQueue then none else some id
+  | (id, .userSteer) :: _ => some id
   | (_, .blocked) :: _ => none
 
-def boundaryCandidate (inputs : List (Nat × BoundaryInputKind)) : Option Nat :=
-  boundaryCandidateAux false inputs
-
 /-- Earlier compatible steers are consumed in arrival order. An ordinary
-queued turn may be passed by an agent steer but not by a user steer. -/
+queued turn may be passed by a direct steer without changing its position. -/
 def agentSteerReachable (target : Nat) (inputs : List (Nat × BoundaryInputKind × Bool)) : Bool :=
-  let rec walk (passedQueue : Bool) : List (Nat × BoundaryInputKind × Bool) → Bool
+  let rec walk : List (Nat × BoundaryInputKind × Bool) → Bool
     | [] => false
-    | (_, .queued, _) :: rest => walk true rest
+    | (_, .queued, _) :: rest => walk rest
     | (_, .blocked, _) :: _ => false
     | (id, .userSteer, compatible) :: rest =>
-        !passedQueue && compatible && (id == target || walk false rest)
+        compatible && (id == target || walk rest)
     | (id, .agentSteer, compatible) :: rest =>
-        compatible && (id == target || walk passedQueue rest)
-  walk false inputs
+        compatible && (id == target || walk rest)
+  walk inputs
 
 def agentSteerReachabilityCases : List (List (Nat × BoundaryInputKind × Bool) × Nat) :=
   [ ([(1, .agentSteer, true)], 1)
@@ -117,7 +114,10 @@ def agentSteerReachabilityCases : List (List (Nat × BoundaryInputKind × Bool) 
   , ([(1, .queued, true), (2, .userSteer, true), (3, .agentSteer, true)], 3)
   , ([(1, .agentSteer, false), (2, .agentSteer, true)], 2)
   , ([(1, .blocked, true), (2, .agentSteer, true)], 2)
-  , ([(1, .agentSteer, false)], 1) ]
+  , ([(1, .agentSteer, false)], 1)
+  , ([(1, .queued, true), (2, .userSteer, true), (3, .queued, true)], 2)
+  , ([(1, .queued, true), (2, .userSteer, false), (3, .userSteer, true)], 3)
+  , ([(1, .queued, true), (2, .userSteer, true), (3, .userSteer, true)], 3) ]
 
 def boundaryCases : List (List (Nat × BoundaryInputKind)) :=
   [ [], [(1, .queued)], [(1, .agentSteer)], [(1, .userSteer)]
@@ -126,14 +126,19 @@ def boundaryCases : List (List (Nat × BoundaryInputKind)) :=
   , [(1, .queued), (2, .userSteer), (3, .agentSteer)]
   , [(1, .queued), (2, .queued), (3, .agentSteer), (4, .agentSteer)]
   , [(1, .blocked), (2, .agentSteer)]
-  , [(1, .queued), (2, .blocked), (3, .agentSteer)] ]
+  , [(1, .queued), (2, .blocked), (3, .agentSteer)]
+  , [(1, .queued), (2, .userSteer), (3, .queued)]
+  , [(1, .queued), (2, .userSteer), (3, .userSteer)] ]
 
 theorem agent_steer_passes_queued_turns :
     boundaryCandidate [(1, .queued), (2, .agentSteer), (3, .queued)] = some 2 := by decide
 
+theorem user_steer_passes_queued_turns :
+    boundaryCandidate [(1, .queued), (2, .userSteer), (3, .queued)] = some 2 := by decide
+
 theorem earlier_steering_is_not_overtaken :
     boundaryCandidate [(1, .userSteer), (2, .agentSteer)] = some 1 ∧
-    boundaryCandidate [(1, .queued), (2, .userSteer), (3, .agentSteer)] = none := by decide
+    boundaryCandidate [(1, .queued), (2, .userSteer), (3, .agentSteer)] = some 2 := by decide
 
 structure FoldedScope where
   node : Nat

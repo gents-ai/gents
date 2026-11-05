@@ -95,6 +95,8 @@ impl EnrollmentDecisionService {
                     "candidate_did": pending.request.candidate_did,
                     "candidate_peer": pending.request.candidate_peer,
                     "owner_agent": pending.request.owner_agent,
+                    "profile": pending.request.profile,
+                    "issued_at": pending.request.issued_at,
                     "expires_at": pending.request.expires_at,
                 })
             })

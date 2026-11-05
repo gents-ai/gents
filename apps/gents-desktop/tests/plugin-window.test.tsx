@@ -27,9 +27,9 @@ import {
   uxPluginRecords,
 } from "@/contrib/plugins-store";
 import {
-  announceUxPluginsChanged,
   configureUxDoors,
   followOtherWindowsPackChanges,
+  refreshRuntimePackUxPlugins,
   resetRuntimeDoor,
 } from "@/contrib/runtime-door";
 import { PLUGIN_PAGE_AREA } from "@/contrib/types";
@@ -206,18 +206,18 @@ describe("following other windows", () => {
     expect(uxPluginRecords().board?.status).toBe("loaded");
   });
 
-  it("rescans when a pack changes here or in another window", async () => {
+  it("reloads a changed pack's pages here and in the other windows", async () => {
     const list = vi.fn(async () => ({ plugins: [] }));
     configureUxDoors({ list, source: vi.fn() });
     disposers.push(followOtherWindowsPackChanges());
 
-    await announceUxPluginsChanged(false);
+    await refreshRuntimePackUxPlugins("acme/tools");
     expect(list).toHaveBeenCalledTimes(1);
     expect(
       JSON.parse(window.localStorage.getItem("gents.ux-plugins-changed.v1")!),
-    ).toMatchObject({ reloadKnown: false });
+    ).toMatchObject({ pack: "acme/tools" });
 
-    storage("gents.ux-plugins-changed.v1", { reloadKnown: true, at: 1 });
+    storage("gents.ux-plugins-changed.v1", { pack: "acme/tools", at: 1 });
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
   });
 });
