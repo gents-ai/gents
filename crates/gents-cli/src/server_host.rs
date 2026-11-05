@@ -19,7 +19,7 @@ pub struct ManagedPendingEnrollment {
     pub network_id: String,
     pub candidate_did: String,
     pub candidate_peer: String,
-    pub owner_agent: String,
+    pub owner_node_did: String,
     pub expires_at: String,
     pub profile: Option<String>,
     pub issued_at: Option<String>,
@@ -266,4 +266,19 @@ pub async fn decide_managed_enrollment(
 
 pub fn initialized_home(path: &Path) -> bool {
     path.join(crate::INIT_CONFIG_FILE_NAME).is_file()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn pending_enrollment_reads_node_identity_from_runtime_response() {
+        let response = serde_json::json!({"pending": [{
+            "request_id": "request", "network_id": "network",
+            "candidate_did": "did:key:client", "candidate_peer": "peer",
+            "owner_node_did": "did:key:node", "expires_at": "later",
+            "profile": "client", "issued_at": "now"
+        }]});
+        let pending: super::ManagedPendingEnrollments = serde_json::from_value(response).unwrap();
+        assert_eq!(pending.pending[0].owner_node_did, "did:key:node");
+    }
 }
