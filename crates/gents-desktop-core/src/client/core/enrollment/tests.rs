@@ -615,6 +615,7 @@ async fn signed_current_receipt_opens_generation_and_revocation_closes_it() {
         candidate_peer: decision.candidate_peer.clone(),
         owner_agent: decision.owner_agent.clone(),
         decision: "approved".into(),
+        agent_ids_json: None,
         authorization_sequence: 1,
         authorization_expires_at: authorization_expires_at.clone(),
         decided_at: decision.decided_at.clone(),
