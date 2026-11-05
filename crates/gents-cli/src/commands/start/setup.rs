@@ -21,31 +21,42 @@ use super::interface_install_message;
 /// `apps/gents-desktop/src-tauri/icons/icon.png`.
 const LOGO_GRID: [&str; 5] = ["...###.", "###....", ".....##", "..#....", "...###."];
 
-/// The logo's shape: columns across the grid, whose cells share them as evenly as whole
-/// columns allow. 14 is the icon's own proportions, since a terminal cell is about twice as
-/// tall as it is wide; the logo reads better somewhat wider than that.
+/// The logo's size in terminal columns and rows, the two numbers that set its shape. The icon's
+/// own proportions would be 14 by 5, since a terminal cell is about twice as tall as it is wide.
 const LOGO_WIDTH: usize = 18;
+const LOGO_HEIGHT: usize = 7;
 const LOGO_CELLS: usize = 7;
 
+/// Samples the grid at the middle of each column and half row, so the bars stay even and the
+/// shape symmetric at any size.
 pub(super) fn logo() -> String {
-    let column = |cell: usize| (2 * cell * LOGO_WIDTH + LOGO_CELLS) / (2 * LOGO_CELLS);
-    LOGO_GRID
+    let nearest =
+        |position: usize, size: usize, cells: usize| (2 * position + 1) * cells / (2 * size);
+    let filled = |half_row: usize, column: usize| {
+        let row = LOGO_GRID[nearest(half_row, 2 * LOGO_HEIGHT, LOGO_GRID.len())];
+        row.as_bytes()[nearest(column, LOGO_WIDTH, LOGO_CELLS)] == b'#'
+    };
+    (0..LOGO_HEIGHT)
         .map(|row| {
-            row.chars()
-                .enumerate()
-                .map(|(cell, mark)| {
-                    let shown = if mark == '#' { "█" } else { " " };
-                    shown.repeat(column(cell + 1) - column(cell))
-                })
+            (0..LOGO_WIDTH)
+                .map(
+                    |column| match (filled(2 * row, column), filled(2 * row + 1, column)) {
+                        (true, true) => '█',
+                        (true, false) => '▀',
+                        (false, true) => '▄',
+                        (false, false) => ' ',
+                    },
+                )
                 .collect::<String>()
         })
+        .collect::<Vec<_>>()
         .join("\n")
 }
 
 /// The logo in the middle of a pane, with the lines above it. A question under it that does not
 /// fit scrolls it up; nothing is lost but the padding.
 fn centered_logo(columns: usize, rows: usize) -> String {
-    let above = "\n".repeat(rows.saturating_sub(LOGO_GRID.len()) / 2);
+    let above = "\n".repeat(rows.saturating_sub(LOGO_HEIGHT) / 2);
     let indent = " ".repeat(columns.saturating_sub(LOGO_WIDTH) / 2);
     let logo = logo()
         .lines()
@@ -247,14 +258,15 @@ mod tests {
     use crate::cli::args::{ToolCeilingArg, ToolPackageArg};
 
     #[test]
-    fn logo_keeps_the_app_icon_grid_at_its_width() {
+    fn logo_keeps_the_app_icon_grid_at_its_size() {
         let rows: Vec<Vec<char>> = logo().lines().map(|row| row.chars().collect()).collect();
-        assert_eq!(rows.len(), LOGO_GRID.len());
-        for (row, grid) in rows.iter().zip(LOGO_GRID) {
-            assert_eq!(row.len(), LOGO_WIDTH);
+        assert_eq!(rows.len(), LOGO_HEIGHT);
+        assert!(rows.iter().all(|row| row.len() == LOGO_WIDTH));
+        for (grid_row, grid) in LOGO_GRID.iter().enumerate() {
+            let row = (2 * grid_row + 1) * LOGO_HEIGHT / (2 * LOGO_GRID.len());
             for (cell, mark) in grid.chars().enumerate() {
-                let middle = (2 * cell + 1) * LOGO_WIDTH / (2 * LOGO_CELLS);
-                assert_eq!(row[middle] == '█', mark == '#', "{grid} cell {cell}");
+                let column = (2 * cell + 1) * LOGO_WIDTH / (2 * LOGO_CELLS);
+                assert_eq!(rows[row][column] != ' ', mark == '#', "{grid} cell {cell}");
             }
         }
     }
@@ -263,7 +275,7 @@ mod tests {
     fn the_logo_sits_in_the_middle_of_the_pane() {
         let centered = centered_logo(120, 40);
         let lines: Vec<&str> = centered.split('\n').collect();
-        let above = (40 - LOGO_GRID.len()) / 2;
+        let above = (40 - LOGO_HEIGHT) / 2;
         assert!(lines[..above].iter().all(|line| line.is_empty()));
         let indent = " ".repeat((120 - LOGO_WIDTH) / 2);
         let expected: Vec<String> = logo().lines().map(|row| format!("{indent}{row}")).collect();
@@ -272,7 +284,7 @@ mod tests {
 
     #[test]
     fn a_pane_too_small_or_unknown_gets_the_logo_at_the_top_left() {
-        assert_eq!(centered_logo(LOGO_WIDTH, LOGO_GRID.len()), logo());
+        assert_eq!(centered_logo(LOGO_WIDTH, LOGO_HEIGHT), logo());
         assert_eq!(centered_logo(10, 3), logo());
         assert_eq!(centered_logo(0, 0), logo());
     }

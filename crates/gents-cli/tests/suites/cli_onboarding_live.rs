@@ -498,14 +498,15 @@ mod no_model {
             .nth(1)
             .context("setup prints a first screen")?;
         let lines: Vec<&str> = first_screen.split("\r\n").collect();
+        let in_logo = |line: &str| line.contains(['█', '▀', '▄']);
         let above = lines
             .iter()
-            .position(|line| line.contains('█'))
+            .position(|line| in_logo(line))
             .context("the logo is on the first screen")?;
         let logo: Vec<&str> = lines[above..]
             .iter()
             .copied()
-            .take_while(|line| line.contains('█'))
+            .take_while(|line| in_logo(line))
             .collect();
         let left = logo
             .iter()
