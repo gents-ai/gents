@@ -18,6 +18,7 @@ import type {
   UxContext,
   UxContribution,
   UxDataCallResult,
+  UxDataWatchEvent,
   UxDataSurfaceDecl,
   UxDeployment,
 } from "./contract";
@@ -182,6 +183,8 @@ export function createSandboxRuntime(
   };
   let storage: Record<string, unknown> = {};
   const callbacks = new Map<string, (...args: unknown[]) => unknown>();
+  const dataWatches = new Map<string, (event: UxDataWatchEvent) => void>();
+  const dataWatchStops = new Map<string, () => void>();
   const surfaces = new Map<string, SurfaceRender>();
   const surfaceOwner = new Map<string, string>();
   const eventListeners = new Map<
@@ -451,6 +454,30 @@ export function createSandboxRuntime(
       },
       os,
       data: {
+        watch: async (surface, tool, args, listener) => {
+          const id = `watch${nextId++}`;
+          dataWatches.set(id, listener);
+          let stopped = false;
+          const stop = () => {
+            if (stopped) return;
+            stopped = true;
+            dataWatches.delete(id);
+            dataWatchStops.delete(id);
+            const index = disposers.indexOf(stop);
+            if (index !== -1) disposers.splice(index, 1);
+            void rpc("data.unwatch", id).catch(() => {});
+          };
+          dataWatchStops.set(id, stop);
+          disposers.push(stop);
+          try {
+            await rpc("data.watch", id, surface, tool, args);
+            return stop;
+          } catch (error) {
+            stop();
+            throw error;
+          }
+        },
+
         supportsExpectedNode: true,
         call: (surface, tool, args, expectedNodeDid) =>
           (expectedNodeDid === undefined
@@ -462,6 +489,7 @@ export function createSandboxRuntime(
                 args ?? {},
                 expectedNodeDid,
               )) as Promise<UxDataCallResult>,
+
         surfaces: () => rpc("data.surfaces") as Promise<UxDataSurfaceDecl[]>,
       },
     };
@@ -550,9 +578,40 @@ export function createSandboxRuntime(
         }
         return;
       }
-      case "shell":
-        shell = message.shell;
+      case "data-watch": {
+        const listener = dataWatches.get(message.id);
+        if (listener) {
+          try {
+            listener(message.value as UxDataWatchEvent);
+          } catch (error) {
+            log("error", `data watch listener threw: ${String(error)}`);
+          }
+        }
         return;
+      }
+      case "data-watch-closed":
+        dataWatchStops.get(message.id)?.();
+        return;
+      case "shell": {
+        const previous =
+          (shell.selectedDeployment as UxDeployment | null)?.nodeDid ?? null;
+        shell = message.shell;
+        const current =
+          (shell.selectedDeployment as UxDeployment | null)?.nodeDid ?? null;
+        if (previous !== current) {
+          const event = { type: "shell-changed", payload: { nodeDid: current } };
+          for (const type of ["shell-changed", "*"]) {
+            eventListeners.get(type)?.forEach((listener) => {
+              try {
+                listener(event);
+              } catch (error) {
+                log("error", `listener for ${type} threw: ${String(error)}`);
+              }
+            });
+          }
+        }
+        return;
+      }
       case "theme":
         applyTheme(message.theme);
         return;

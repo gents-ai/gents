@@ -3560,6 +3560,58 @@ Denies the desktop_ux_data_surfaces command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-ux-data-unwatch`
+
+</td>
+<td>
+
+Enables the desktop_ux_data_unwatch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-ux-data-unwatch`
+
+</td>
+<td>
+
+Denies the desktop_ux_data_unwatch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-ux-data-watch`
+
+</td>
+<td>
+
+Enables the desktop_ux_data_watch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-ux-data-watch`
+
+</td>
+<td>
+
+Denies the desktop_ux_data_watch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-ux-plugin-source`
 
 </td>

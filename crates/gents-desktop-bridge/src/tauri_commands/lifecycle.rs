@@ -243,7 +243,9 @@ where
                 "desktop client not initialized",
             )
         })?;
-        bridge.set_window_selected_node(window.label(), did.clone());
+        if bridge.set_window_selected_node(window.label(), did.clone()) {
+            state.ux_watches.cancel_window(window.label());
+        }
         core
     };
 

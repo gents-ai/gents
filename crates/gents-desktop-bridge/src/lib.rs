@@ -31,6 +31,8 @@ pub mod state;
 #[cfg(feature = "tauri-host")]
 pub mod tauri_commands;
 pub mod types;
+#[cfg(feature = "tauri-host")]
+mod ux_watch;
 
 pub use config::{
     AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, NodeHomePolicy,

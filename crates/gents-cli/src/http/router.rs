@@ -164,6 +164,7 @@ pub(crate) fn runtime_contract_router(
     };
 
     let operator_routes = Router::new()
+        .route("/packs/ux/watch", post(crate::http::pack_watch::watch))
         .route(
             "/packs/install",
             post(crate::http::pack_install::install_handler).layer(

@@ -361,10 +361,15 @@ async fn node_principal_routes_refuse_anonymous_and_foreign_callers_before_work(
         "/metrics",
         "/activation",
         "/identity/decide",
+        "/packs/ux/watch",
     ] {
         for foreign in [false, true] {
             let mut request = if path == "/identity/decide" {
                 f.client.post(format!("{}{path}", f.endpoint)).json(&serde_json::json!({ "actor": "untrusted", "permission": "read", "resource": "policy/row/document" }))
+            } else if path == "/packs/ux/watch" {
+                f.client
+                    .post(format!("{}{path}", f.endpoint))
+                    .json(&serde_json::json!({"ux":"x", "nodeDid":"x", "surface":"x", "tool":"x"}))
             } else {
                 f.get(path)
             };
