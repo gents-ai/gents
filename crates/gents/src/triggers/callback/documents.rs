@@ -1245,7 +1245,7 @@ pub async fn load_repository_placement(
     agent_did: &str,
 ) -> Result<Option<RepositoryPlacementRef>> {
     anyhow::ensure!(
-        access.actor_did().as_deref() == Some(agent_did),
+        !agent_did.is_empty() && access.actor_did().as_deref() == Some(agent_did),
         "callback workspace actor mismatch"
     );
     let row: Option<crate::documents::RepositoryPlacement> = access
@@ -1296,7 +1296,7 @@ pub async fn flush_workspace_docs(
     agent_did: &str,
 ) -> Result<()> {
     anyhow::ensure!(
-        access.actor_did().as_deref() == Some(agent_did),
+        !agent_did.is_empty() && access.actor_did().as_deref() == Some(agent_did),
         "callback workspace actor mismatch"
     );
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -1324,7 +1324,7 @@ pub(crate) async fn load_isolated_workspace(
     agent_did: &str,
 ) -> Result<Option<IsolatedWorkspaceDoc>> {
     anyhow::ensure!(
-        access.actor_did().as_deref() == Some(agent_did),
+        !agent_did.is_empty() && access.actor_did().as_deref() == Some(agent_did),
         "callback workspace actor mismatch"
     );
     let query = format!(
@@ -1354,7 +1354,7 @@ pub(crate) async fn load_workspace_placement(
     agent_did: &str,
 ) -> Result<Option<WorkspacePlacementDoc>> {
     anyhow::ensure!(
-        access.actor_did().as_deref() == Some(agent_did),
+        !agent_did.is_empty() && access.actor_did().as_deref() == Some(agent_did),
         "callback workspace actor mismatch"
     );
     let query = format!(

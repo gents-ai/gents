@@ -87,7 +87,7 @@ theorem callback_node_identity_is_not_the_agent_actor :
     callbackActorMatches "node" "agent" = false ∧ callbackActorMatches "agent" "agent" = true := by decide
 
 def callbackActorCasesJson : String :=
-  (Lean.toJson (["agent", "node"].map fun actor => Lean.Json.mkObj
-    [("actor", Lean.toJson actor), ("expected", Lean.toJson (callbackActorMatches actor "agent"))])).compress
+  (Lean.toJson ([("agent", "agent", "agent"), ("node", "node", "agent"), ("empty", "", "")].map fun (role, actor, selected) => Lean.Json.mkObj
+    [("actor", Lean.toJson role), ("expected", Lean.toJson (callbackActorMatches actor selected))])).compress
 
 end Identity.WorkspaceAndFileRequests

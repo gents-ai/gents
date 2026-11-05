@@ -664,18 +664,25 @@ async fn workspace_reads_keep_the_held_agent_actor() {
     let agent_access = super::test_agent_access(&node);
     let node_access =
         crate::ConfigAccess::local_as(node.clone(), identity::Did::new(node_did).unwrap());
+    let empty_access = crate::ConfigAccess::graphql_as("http://127.0.0.1:1/api/v0/graphql", "");
     for case in &crate::lean_vocab_test::lean_contract_snapshot().callback_workspace_actor_cases {
         let access = match case["actor"].as_str().unwrap() {
             "agent" => &agent_access,
             "node" => &node_access,
+            "empty" => &empty_access,
             actor => panic!("unknown modeled actor {actor}"),
         };
         let expected = case["expected"].as_bool().unwrap();
+        let selected = if case["actor"] == "empty" {
+            ""
+        } else {
+            &agent_did
+        };
         let documents = super::documents::load_memory_workspace_docs(
             access,
             "missing-workspace",
             node_did,
-            &agent_did,
+            selected,
         )
         .await;
         assert_eq!(documents.is_ok(), expected, "workspace actor: {case}");
@@ -683,7 +690,7 @@ async fn workspace_reads_keep_the_held_agent_actor() {
             access,
             "missing-repository",
             node_did,
-            &agent_did,
+            selected,
         )
         .await;
         assert_eq!(repository.is_ok(), expected, "repository actor: {case}");
