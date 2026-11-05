@@ -484,6 +484,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         ));
     }
     for (present, key, class) in [
+        (!snapshot.workspace_quickstart_selection_cases.is_empty(), "workspace_quickstart_selection_cases", "WorkspaceQuickstartSelectionCases"),
         (!snapshot.workspace_callback_selection_cases.is_empty(), "workspace_callback_selection_cases", "WorkspaceCallbackSelectionCases"),
         (!snapshot.workspace_datastore_write_cases.is_empty(), "workspace_datastore_write_cases", "WorkspaceDatastoreWriteCases"),
         (!snapshot.node_file_request_access_cases.is_empty(), "node_file_request_access_cases", "NodeFileRequestAccessCases"),

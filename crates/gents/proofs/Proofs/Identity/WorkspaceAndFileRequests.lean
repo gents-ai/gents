@@ -145,6 +145,12 @@ theorem quickstart_creator_resolves_only_selected_agent :
     Household.allowed 8 quickstartSelectedAgentFixture "other" "agents" "target" "read" = false ∧
     Household.allowed 8 quickstartSelectedAgentRevoked "creator" "agents" "target" "read" = false := by native_decide
 
+def quickstartSelectedAgentCasesJson : String :=
+  (Lean.toJson (["user", "creator", "other"].map fun actor => Lean.Json.mkObj
+    [("actor", Lean.toJson actor),
+     ("before", Lean.toJson (Household.allowed 8 quickstartSelectedAgentFixture actor "agents" "target" "read")),
+     ("after_revocation", Lean.toJson (Household.allowed 8 quickstartSelectedAgentRevoked actor "agents" "target" "read"))])).compress
+
 /-- A filtered or malformed physical request is not proof that an exclusive
 workspace binding is stale. Release requires a visible terminal request. -/
 def mayReleaseExclusive (visible terminal : Bool) : Bool := visible && terminal
