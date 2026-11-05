@@ -66,6 +66,80 @@ pub(super) async fn insert_signed(db: &TestDb, mut request: AgentRequestCreate) 
     gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
+async fn enqueue_owned(
+    db: &TestDb,
+    agent: &str,
+    session: &str,
+    id: &str,
+    text: &str,
+    delivery: QueueDelivery,
+) -> String {
+    let did = db.node_identity.did();
+    let access = db.client_access(db.node_identity.as_ref());
+    let mut request = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        id,
+        did,
+        did,
+        agent,
+        session,
+        text,
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        AgentRequestAdmissionRecord::client(did),
+    );
+    request.input = gents::request::lifecycle::prepare_user_message_input(
+        &access,
+        did,
+        session,
+        request.input,
+        delivery,
+    )
+    .await
+    .unwrap();
+    request.session_doc_id = Some(
+        gents::request::lifecycle::reserve_goal_session(&access, &request)
+            .await
+            .unwrap(),
+    );
+    let agent_doc = access
+        .transact_readonly("test.queue.agent", |txn| {
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>(
+                    gents::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        gents::Collection::Agent,
+                        did,
+                        agent,
+                    )
+                    .await?
+                    .expect("selected Agent exists")
+                    .0,
+                )
+            })
+        })
+        .await
+        .unwrap();
+    request.agent_doc_id = Some(agent_doc);
+    gents::sign_agent_request_create(db.node_identity.as_ref(), &mut request)
+        .await
+        .unwrap();
+    gents::request::lifecycle::submit_client_request(&access, &request)
+        .await
+        .unwrap();
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(id)
+        ))
+        .await
+        .unwrap();
+    response["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .into()
+}
+
 async fn submit_edit(
     db: &TestDb,
     session_id: &str,
@@ -90,19 +164,12 @@ async fn submit_edit_inner(
         escape_graphql_string(session_id)
     ))
     .await?;
-    if existing["data"]["AgentSession"]
-        .as_array()
-        .is_none_or(Vec::is_empty)
-    {
-        let mut session = crate::support::session_document_in_scope(
-            did,
-            session_id,
-            "general",
-            "2026-10-10T00:00:00Z",
-        );
-        session.requester_did = Some(did.into());
-        crate::support::create_session_document(&db.node, &session).await;
-    }
+    anyhow::ensure!(
+        existing["data"]["AgentSession"]
+            .as_array()
+            .is_some_and(|rows| rows.len() == 1),
+        "queue edit requires its existing physical session"
+    );
     let cancel = tokio_util::sync::CancellationToken::new();
     let worker = tokio::spawn(run_session_command_reconciler(
         db.node.clone(),
@@ -110,10 +177,7 @@ async fn submit_edit_inner(
         support::fixtures::session_command_agent_snapshot(&db).await,
         cancel.clone(),
     ));
-    let access = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    );
+    let access = db.client_access(db.node_identity.as_ref());
     let result = match steer {
         Some(selected) => {
             submit_pending_user_steer(
@@ -157,23 +221,24 @@ pub(super) async fn row(db: &TestDb, doc: &str) -> serde_json::Value {
 #[tokio::test]
 async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
     let db = test_db("signed-queue-management").await;
+    let agent = support::managed_agent(&db).await;
     let did = db.node_identity.did();
     let access = ConfigAccess::local_as(
         db.node.clone(),
         ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
     );
-    let first = enqueue(
+    let first = enqueue_owned(
         &db,
-        "general",
+        agent.did(),
         "edit-session",
         "edit-first",
         "first original",
         QueueDelivery::Steer,
     )
     .await;
-    let second = enqueue(
+    let second = enqueue_owned(
         &db,
-        "general",
+        agent.did(),
         "edit-session",
         "edit-second",
         "second original",
@@ -296,14 +361,15 @@ async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
 #[tokio::test]
 async fn stale_queue_snapshot_rejects_edit_without_mutating_signed_requests() {
     let db = test_db("stale-queue-management").await;
+    let agent = support::managed_agent(&db).await;
     let did = db.node_identity.did();
     let access = ConfigAccess::local_as(
         db.node.clone(),
         ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
     );
-    let first = enqueue(
+    let first = enqueue_owned(
         &db,
-        "general",
+        agent.did(),
         "stale-session",
         "stale-first",
         "unchanged first",
@@ -311,9 +377,9 @@ async fn stale_queue_snapshot_rejects_edit_without_mutating_signed_requests() {
     )
     .await;
     let before = row(&db, &first).await;
-    let second = enqueue(
+    let second = enqueue_owned(
         &db,
-        "general",
+        agent.did(),
         "stale-session",
         "stale-second",
         "concurrent append",
@@ -357,9 +423,10 @@ async fn stale_queue_snapshot_rejects_edit_without_mutating_signed_requests() {
 #[tokio::test]
 async fn invalid_edited_attachment_does_not_supersede_the_original() {
     let db = test_db("invalid-edited-attachment").await;
-    let original = enqueue(
+    let agent = support::managed_agent(&db).await;
+    let original = enqueue_owned(
         &db,
-        "general",
+        agent.did(),
         "invalid-edit-session",
         "invalid-edit-original",
         "original message",
@@ -395,11 +462,11 @@ async fn invalid_edited_attachment_does_not_supersede_the_original() {
 #[tokio::test]
 async fn edited_skill_outside_context_does_not_supersede_the_original() {
     let db = test_db("invalid-edited-skill").await;
+    let agent = support::managed_agent(&db).await;
     let did = db.node_identity.did();
-    crate::support::create_agent(&db.node, "general", did).await;
-    let original = enqueue(
+    let original = enqueue_owned(
         &db,
-        "general",
+        agent.did(),
         "invalid-skill-session",
         "original",
         "original message",
@@ -432,11 +499,11 @@ async fn edited_skill_outside_context_does_not_supersede_the_original() {
 #[tokio::test]
 async fn authored_edit_keeps_queue_slot_and_retains_new_attachment_bytes() {
     let db = test_db("authored-queue-edit").await;
+    let agent = support::managed_agent(&db).await;
     let did = db.node_identity.did();
-    crate::support::create_agent(&db.node, "general", did).await;
-    let original = enqueue(
+    let original = enqueue_owned(
         &db,
-        "general",
+        agent.did(),
         "authored-edit-session",
         "authored-original",
         "original",
@@ -496,18 +563,29 @@ async fn authored_edit_keeps_queue_slot_and_retains_new_attachment_bytes() {
 #[tokio::test]
 async fn authored_edit_changes_allowed_skills_without_losing_queue_position() {
     let db = test_db("allowed-edited-skill").await;
+    let agent = support::managed_agent(&db).await;
     let did = db.node_identity.did();
-    crate::support::create_agent(&db.node, "general", did).await;
     let access = ConfigAccess::local_as(
         db.node.clone(),
         ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
     );
     let owner = escape_graphql_string(did);
-    access.write("test.skill_context", &format!(r#"mutation {{ create_AgentContext(input: {{ node_did: "{owner}", context_id: "general:context", skill_ids: ["review"] }}) {{ _docID }} }}"#)).await.unwrap();
-    access.write("test.attach_context", &format!(r#"mutation {{ update_Agent(filter: {{ node_did: {{ _eq: "{owner}" }}, agent_did: {{ _eq: "general" }} }}, input: {{ context_id: "general:context" }}) {{ _docID }} }}"#)).await.unwrap();
-    let original = enqueue(
+    let selected = escape_graphql_string(agent.did());
+    let context = access.write("test.skill_context", &format!(r#"mutation {{ create_AgentContext(input: {{ node_did: "{owner}", context_id: "test-context", skill_ids: ["review"] }}) {{ _docID }} }}"#)).await.unwrap();
+    let context_doc = gents::store::graphql::created_doc_id(&context, "AgentContext").unwrap();
+    access
+        .add_actor_relationship(
+            "AgentContext",
+            &context_doc,
+            "reader",
+            &::identity::Did::new(agent.did()).unwrap(),
+        )
+        .await
+        .unwrap();
+    access.write("test.attach_context", &format!(r#"mutation {{ update_Agent(filter: {{ node_did: {{ _eq: "{owner}" }}, agent_did: {{ _eq: "{selected}" }} }}, input: {{ context_id: "test-context" }}) {{ _docID }} }}"#)).await.unwrap();
+    let original = enqueue_owned(
         &db,
-        "general",
+        agent.did(),
         "allowed-skill-session",
         "original",
         "original message",
@@ -553,18 +631,29 @@ async fn authored_edit_changes_allowed_skills_without_losing_queue_position() {
 #[tokio::test]
 async fn queued_edit_accepts_skill_only_but_rejects_truly_empty_input() {
     let db = test_db("skill-only-queue-edit").await;
+    let agent = support::managed_agent(&db).await;
     let did = db.node_identity.did();
-    crate::support::create_agent(&db.node, "general", did).await;
     let access = ConfigAccess::local_as(
         db.node.clone(),
         ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
     );
     let owner = escape_graphql_string(did);
-    access.write("test.skill_context", &format!(r#"mutation {{ create_AgentContext(input: {{ node_did: "{owner}", context_id: "general:context", skill_ids: ["review"] }}) {{ _docID }} }}"#)).await.unwrap();
-    access.write("test.attach_context", &format!(r#"mutation {{ update_Agent(filter: {{ node_did: {{ _eq: "{owner}" }}, agent_did: {{ _eq: "general" }} }}, input: {{ context_id: "general:context" }}) {{ _docID }} }}"#)).await.unwrap();
-    let original = enqueue(
+    let selected = escape_graphql_string(agent.did());
+    let context = access.write("test.skill_context", &format!(r#"mutation {{ create_AgentContext(input: {{ node_did: "{owner}", context_id: "test-context", skill_ids: ["review"] }}) {{ _docID }} }}"#)).await.unwrap();
+    let context_doc = gents::store::graphql::created_doc_id(&context, "AgentContext").unwrap();
+    access
+        .add_actor_relationship(
+            "AgentContext",
+            &context_doc,
+            "reader",
+            &::identity::Did::new(agent.did()).unwrap(),
+        )
+        .await
+        .unwrap();
+    access.write("test.attach_context", &format!(r#"mutation {{ update_Agent(filter: {{ node_did: {{ _eq: "{owner}" }}, agent_did: {{ _eq: "{selected}" }} }}, input: {{ context_id: "test-context" }}) {{ _docID }} }}"#)).await.unwrap();
+    let original = enqueue_owned(
         &db,
-        "general",
+        agent.did(),
         "skill-only-session",
         "original",
         "original message",
@@ -612,14 +701,15 @@ async fn queued_edit_accepts_skill_only_but_rejects_truly_empty_input() {
 #[tokio::test]
 async fn signed_pending_replacement_authenticates_delivery_and_each_position_field() {
     let db = test_db("queue-signature-tampering").await;
+    let agent = support::managed_agent(&db).await;
     let _did = db.node_identity.did();
     let access = ConfigAccess::local_as(
         db.node.clone(),
         ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
     );
-    let original = enqueue(
+    let original = enqueue_owned(
         &db,
-        "general",
+        agent.did(),
         "signature-session",
         "signature-original",
         "original signed message",
@@ -713,6 +803,7 @@ async fn signed_pending_replacement_authenticates_delivery_and_each_position_fie
 #[tokio::test]
 async fn explicit_steering_prioritizes_one_message_without_losing_other_queued_input() {
     let db = test_db("explicit-pending-steer").await;
+    let agent = support::managed_agent(&db).await;
     let did = db.node_identity.did();
     let session = "explicit-pending-steer-session";
     let mut originals = Vec::new();
@@ -721,7 +812,9 @@ async fn explicit_steering_prioritizes_one_message_without_losing_other_queued_i
         ("second", "Keep second queued"),
         ("selected", "Steer this message"),
     ] {
-        originals.push(enqueue(&db, "general", session, id, content, QueueDelivery::Queue).await);
+        originals.push(
+            enqueue_owned(&db, agent.did(), session, id, content, QueueDelivery::Queue).await,
+        );
     }
     let access = ConfigAccess::local_as(
         db.node.clone(),
