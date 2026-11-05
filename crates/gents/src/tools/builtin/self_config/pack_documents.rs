@@ -104,7 +104,7 @@ impl PackInstaller {
             },
             &environment,
         )?;
-        let prepared = crate::pack::prepare_document_pack_install(
+        let mut prepared = crate::pack::prepare_document_pack_install(
             &access,
             owner,
             distribution.manifest(),
@@ -120,6 +120,13 @@ impl PackInstaller {
             &environment,
         )
         .await?;
+        for source in std::iter::once(distribution).chain(dependencies.iter()) {
+            let manifest = source.manifest();
+            prepared.sources.insert(
+                format!("{}/{}", manifest.metadata.namespace, manifest.name),
+                source.provenance(),
+            );
+        }
         // Inference slot bindings pick provider accounts exactly like the
         // install lifecycle: every selected profile must be account-free or on
         // its provider's default account. Fence before the preview return or

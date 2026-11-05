@@ -743,6 +743,8 @@ fn install_engine_wat(job: &Job, wat: &str) -> InstalledPlugin {
             ux: Vec::new(),
             installed_at: "2026-01-01T00:00:00Z".into(),
             installed_via: Some(crate::pack::InstalledVia::Operator),
+            source: None,
+            source_history: Vec::new(),
         },
     )
     .unwrap();

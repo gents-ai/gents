@@ -7,6 +7,7 @@ use gents::pack::PackManifest;
 pub(crate) struct PackSource {
     pub(super) archive: std::sync::Arc<PackArchive>,
     pub(super) from: Source,
+    pub(super) file_name: Option<String>,
 }
 
 pub(super) enum Source {
@@ -23,11 +24,46 @@ pub(super) enum Source {
 
 impl PackSource {
     /// A verified archive the runtime received from its operator.
-    pub(crate) fn received(archive: PackArchive) -> Self {
-        Self {
-            archive: archive.into(),
-            from: Source::Local,
+    pub(crate) fn received(
+        archive: PackArchive,
+        source: Option<gents::pack::PackSource>,
+    ) -> Result<Self> {
+        if let Some(source) = &source {
+            source.validate()?;
         }
+        let (from, file_name) = match source {
+            None => (Source::Local, None),
+            Some(gents::pack::PackSource::Local { file_name }) => (Source::Local, file_name),
+            Some(gents::pack::PackSource::Installed) => (Source::Installed, None),
+            Some(gents::pack::PackSource::Store) => (Source::Store, None),
+            Some(gents::pack::PackSource::Registry {
+                namespace,
+                name,
+                version,
+                artifact_digest,
+            }) => {
+                anyhow::ensure!(
+                    namespace == archive.manifest().metadata.namespace
+                        && name == archive.manifest().name
+                        && version == archive.manifest().version,
+                    "registry source does not match the archive"
+                );
+                (
+                    Source::Registry {
+                        namespace,
+                        name,
+                        version,
+                        artifact_digest,
+                    },
+                    None,
+                )
+            }
+        };
+        Ok(Self {
+            archive: archive.into(),
+            from,
+            file_name,
+        })
     }
 
     pub(crate) fn shared_archive(&self) -> std::sync::Arc<PackArchive> {
@@ -59,6 +95,27 @@ impl PackSource {
         }
     }
 
+    pub(crate) fn provenance(&self) -> gents::pack::PackSource {
+        match &self.from {
+            Source::Local => gents::pack::PackSource::Local {
+                file_name: self.file_name.clone(),
+            },
+            Source::Installed => gents::pack::PackSource::Installed,
+            Source::Store => gents::pack::PackSource::Store,
+            Source::Registry {
+                namespace,
+                name,
+                version,
+                artifact_digest,
+            } => gents::pack::PackSource::Registry {
+                namespace: namespace.clone(),
+                name: name.clone(),
+                version: version.clone(),
+                artifact_digest: artifact_digest.clone(),
+            },
+        }
+    }
+
     pub(crate) fn describe(&self) -> String {
         match &self.from {
             Source::Registry {
@@ -82,9 +139,18 @@ pub(crate) async fn resolve_pack_source(
 ) -> Result<PackSource> {
     if let Some(local) = local::classify(spec) {
         let archive = local::open(&local, home)?;
+        let (from, file_name) = match &local {
+            gents::pack::local::LocalName::Path(path) => (
+                Source::Local,
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned()),
+            ),
+            gents::pack::local::LocalName::Digest(_) => (Source::Store, None),
+        };
         return Ok(PackSource {
             archive: archive.into(),
-            from: Source::Local,
+            from,
+            file_name,
         });
     }
     let installed: Vec<gents::pack::InstalledPack> = gents::pack::list_home_installs(home)?
@@ -120,6 +186,7 @@ pub(crate) async fn resolve_pack_source(
     Ok(PackSource {
         archive: resolved.archive.into(),
         from,
+        file_name: None,
     })
 }
 

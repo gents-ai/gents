@@ -854,6 +854,8 @@ mod tests {
                 installed_at: "2026-10-01T00:00:00Z".into(),
                 ux: vec![],
                 installed_via: None,
+                source: None,
+                source_history: Vec::new(),
             },
         )
         .unwrap();

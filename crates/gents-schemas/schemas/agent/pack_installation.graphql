@@ -10,4 +10,6 @@ type PackInstallation @index(fields: ["node_did", "coordinate"], unique: true) {
     required_by: JSON
     explicit: Boolean
     plugin_store: Boolean
+    source: JSON
+    source_history: JSON
 }

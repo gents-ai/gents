@@ -48,6 +48,8 @@ fn install_record(
             plugins,
             dependency_assets: Vec::new(),
             installed_via: None,
+            source: None,
+            source_history: Vec::new(),
             installed_at: "2026-01-01T00:00:00Z".into(),
             ux,
         },

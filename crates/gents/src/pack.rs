@@ -41,8 +41,8 @@ pub use installation::{
     preview_installed_pack_scope, read_installed_pack, record_plugin_store_change,
     record_plugin_store_change_as, referenced_pack_digests, remove_pack, DriftPolicy,
     InstallReport, InstalledCatalogEntry, InstalledPack, InstalledPackPlugin,
-    InstalledPackScopePreview, PackIdentity, PluginStoreChangeError, PreparedDependency,
-    PreparedDocumentPackInstall, RemoveReport, Retained,
+    InstalledPackScopePreview, PackIdentity, PackSource, PackSourceHistory, PluginStoreChangeError,
+    PreparedDependency, PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub use loader::{
     decode_pack_config, ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,

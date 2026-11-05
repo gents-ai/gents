@@ -157,6 +157,7 @@ pub struct PreparedDocumentPackInstall {
     pub inference: PackInferenceBindingPreview,
     pub dependency_inference: BTreeMap<String, PackInferenceBindingPreview>,
     pub dependencies: Vec<PreparedDependency>,
+    pub sources: BTreeMap<String, super::PackSource>,
 }
 
 pub(super) fn document_ux_install_allowed(
@@ -404,6 +405,7 @@ pub async fn prepare_document_pack_install(
         inference,
         dependency_inference,
         dependencies: prepared_dependencies,
+        sources: BTreeMap::new(),
     })
 }
 
@@ -654,6 +656,8 @@ pub(super) fn record_home_install(
             ux: manifest.metadata.ux.clone(),
             installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             installed_via: Some(installed_via),
+            source: None,
+            source_history: Vec::new(),
         },
         installed_via,
         explicit,
@@ -714,6 +718,7 @@ pub async fn install_prepared_document_graph(
             bindings: dependency.inference.bindings.clone(),
             dependencies: Vec::new(),
             explicit: false,
+            source: prepared.sources.get(&dependency.coordinate).cloned(),
         });
     }
     let mut assets = BTreeMap::new();
@@ -732,6 +737,14 @@ pub async fn install_prepared_document_graph(
             .map(|d| d.coordinate.clone())
             .collect(),
         explicit,
+        source: prepared
+            .sources
+            .get(&format!(
+                "{}/{}",
+                archive.manifest().metadata.namespace,
+                archive.manifest().name
+            ))
+            .cloned(),
     });
     let (mut reports, plugins) =
         install_document_graph(access, owner, stages, policy, home, consent).await?;
@@ -750,6 +763,7 @@ pub(super) struct DocumentPackStage {
     pub(super) bindings: PackInferenceBindings,
     pub(super) dependencies: Vec<String>,
     pub(super) explicit: bool,
+    pub(super) source: Option<super::PackSource>,
 }
 
 pub(super) async fn install_document_graph(
@@ -861,10 +875,15 @@ pub(super) async fn install_document_graph(
                 identity
             })
             .collect::<Vec<_>>();
+        let sources = stages
+            .iter()
+            .map(|stage| stage.source.clone())
+            .collect::<Vec<_>>();
         let result = access
             .transact_write_with_finality("pack.document_graph.install", |txn| {
                 let documents = documents.clone();
                 let identities = &identities;
+                let sources = &sources;
                 let owner = &owner;
                 let reference_packs = reference_packs.clone();
                 let home = home.clone();
@@ -888,9 +907,19 @@ pub(super) async fn install_document_graph(
                     })
                     .await??;
                     let mut reports = Vec::new();
-                    for (identity, documents) in identities.iter().zip(documents) {
+                    for ((identity, documents), source) in
+                        identities.iter().zip(documents).zip(sources)
+                    {
                         reports.push(
-                            super::install_in_txn(txn, owner, identity, documents, policy).await?,
+                            super::install_in_txn(
+                                txn,
+                                owner,
+                                identity,
+                                documents,
+                                policy,
+                                source.as_ref(),
+                            )
+                            .await?,
                         );
                     }
                     super::validate_plugin_replacements_in_txn(txn, owner, identities).await?;
@@ -958,6 +987,7 @@ pub async fn install_documents_with_plugins(
         bindings: bindings.clone(),
         dependencies,
         explicit,
+        source: None,
     };
     let (mut reports, plugins) =
         install_document_graph(access, owner, vec![stage], policy, home, consent).await?;
