@@ -1142,6 +1142,58 @@ Denies the desktop_job_control command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-join-history-read`
+
+</td>
+<td>
+
+Enables the desktop_join_history_read command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-join-history-read`
+
+</td>
+<td>
+
+Denies the desktop_join_history_read command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-join-members-list`
+
+</td>
+<td>
+
+Enables the desktop_join_members_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-join-members-list`
+
+</td>
+<td>
+
+Denies the desktop_join_members_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-join-request-decide`
 
 </td>
