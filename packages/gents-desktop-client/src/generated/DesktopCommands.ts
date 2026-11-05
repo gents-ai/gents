@@ -60,6 +60,9 @@ import type { InferenceSetupCatalog } from "./InferenceSetupCatalog.js";
 import type { InstalledPacksView } from "./InstalledPacksView.js";
 import type { InterruptRequestResult } from "./InterruptRequestResult.js";
 import type { JobControlOutcome } from "./JobControlOutcome.js";
+import type { JoinRequestDecideRequest } from "./JoinRequestDecideRequest.js";
+import type { JoinRequestDecisionView } from "./JoinRequestDecisionView.js";
+import type { JoinRequestView } from "./JoinRequestView.js";
 import type { JsonValue } from "./serde_json/JsonValue.js";
 import type { MCPServiceHealthView } from "./MCPServiceHealthView.js";
 import type { MailboxItemObservation } from "./MailboxItemObservation.js";
@@ -197,6 +200,8 @@ export type DesktopCommands = {
   desktop_init_local_standard: { args: { request: DesktopInitRequest }; result: DesktopInitSummary };
   desktop_interrupt_request: { args: { request: DesktopInterruptRequest }; result: InterruptRequestResult };
   desktop_job_control: { args: { request: DesktopJobControlRequest }; result: JobControlOutcome };
+  desktop_join_request_decide: { args: { request: JoinRequestDecideRequest }; result: JoinRequestDecisionView };
+  desktop_join_requests_list: { args: { nodeDid: string }; result: Array<JoinRequestView> };
   desktop_list_backends_with_health: { args: Record<string, never>; result: Array<BackendHealthView> };
   desktop_list_mcp_services_with_health: { args: Record<string, never>; result: Array<MCPServiceHealthView> };
   desktop_mailbox_dismiss: { args: { request: MailboxItemRequest }; result: void };

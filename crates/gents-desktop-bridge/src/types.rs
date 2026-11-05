@@ -22,3 +22,7 @@ mod diagnostics;
 #[path = "types/json.rs"]
 mod json;
 pub use diagnostics::*;
+
+#[path = "types/join_requests.rs"]
+mod join_requests;
+pub use join_requests::*;

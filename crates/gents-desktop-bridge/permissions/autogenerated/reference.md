@@ -1142,6 +1142,58 @@ Denies the desktop_job_control command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-join-request-decide`
+
+</td>
+<td>
+
+Enables the desktop_join_request_decide command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-join-request-decide`
+
+</td>
+<td>
+
+Denies the desktop_join_request_decide command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-join-requests-list`
+
+</td>
+<td>
+
+Enables the desktop_join_requests_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-join-requests-list`
+
+</td>
+<td>
+
+Denies the desktop_join_requests_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-list-backends-with-health`
 
 </td>
@@ -4059,7 +4111,7 @@ Interrupt request execution
 </td>
 <td>
 
-Local runtime provisioning and managed server lifecycle
+Local runtime provisioning, managed server lifecycle and its join requests
 
 </td>
 </tr>

@@ -40,6 +40,8 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_managed_server_reset", "runtime-admin"),
         ("desktop_managed_server_validate_root", "runtime-admin"),
         ("desktop_managed_server_open_login_items", "runtime-admin"),
+        ("desktop_join_requests_list", "runtime-admin"),
+        ("desktop_join_request_decide", "runtime-admin"),
         ("desktop_open_db_explorer", "runtime-admin"),
         ("desktop_open_external_url", "external-links"),
         ("desktop_pack_installed", "packs-read"),
@@ -456,6 +458,10 @@ mod tests {
             ("desktop_managed_server_reset", "mutate"),
             ("desktop_managed_server_validate_root", "mutate"),
             ("desktop_managed_server_open_login_items", "mutate"),
+            // signs an operator query with the co-hosted node's own key, so it
+            // sits with that node's administration
+            ("desktop_join_requests_list", "mutate"),
+            ("desktop_join_request_decide", "mutate"),
             ("desktop_open_db_explorer", "mutate"),
             ("desktop_open_external_url", "mutate"),
             ("desktop_pack_installed", "read"),

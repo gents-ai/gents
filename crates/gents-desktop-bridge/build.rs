@@ -15,6 +15,8 @@ const COMMANDS: &[&str] = &[
     "desktop_managed_server_reset",
     "desktop_managed_server_validate_root",
     "desktop_managed_server_open_login_items",
+    "desktop_join_requests_list",
+    "desktop_join_request_decide",
     "desktop_open_db_explorer",
     "desktop_open_external_url",
     "desktop_pack_installed",
