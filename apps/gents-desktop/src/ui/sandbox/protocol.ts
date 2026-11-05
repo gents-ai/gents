@@ -52,6 +52,8 @@ export type HostToFrame =
   | { t: "show"; surface: string; props: Record<string, unknown> }
   | { t: "hide"; surface: string }
   | { t: "event"; type: string; payload: unknown }
+  | { t: "data-watch"; id: string; value: unknown }
+  | { t: "data-watch-closed"; id: string }
   | { t: "shell"; shell: ShellSnapshot }
   | { t: "theme"; theme: "light" | "dark" }
   | { t: "invoke"; callback: string; args: unknown[] }
@@ -83,6 +85,8 @@ export const RPC_VERBS = [
   "os.pickDirectory",
   "data.call",
   "data.surfaces",
+  "data.watch",
+  "data.unwatch",
 ] as const;
 export type RpcVerb = (typeof RPC_VERBS)[number];
 

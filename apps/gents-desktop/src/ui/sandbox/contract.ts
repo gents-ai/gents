@@ -64,6 +64,9 @@ export interface UxDataCallResult {
   output: unknown;
 }
 
+export type UxDataWatchEvent =
+  { kind: "snapshot"; value: UxDataCallResult } | { kind: "error"; message: string };
+
 /** one tool of a surface, as the node declares it */
 export interface UxDataToolDecl {
   kind: "query" | "create";
@@ -95,6 +98,13 @@ export interface UxData {
   ) => Promise<UxDataCallResult>;
   /** the declarations behind the plugin's surfaces, for typing a page */
   surfaces: () => Promise<UxDataSurfaceDecl[]>;
+  /** Observe a declared query until the returned disposer is called. */
+  watch: (
+    surface: string,
+    tool: string,
+    args: Record<string, unknown>,
+    listener: (event: UxDataWatchEvent) => void,
+  ) => Promise<() => void>;
 }
 
 export interface UxContext {

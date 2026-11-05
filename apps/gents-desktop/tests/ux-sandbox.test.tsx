@@ -12,7 +12,7 @@ import {
   sandboxHostOf,
 } from "@/contrib/loader";
 import { navItems, navRowState } from "@/app/navRegistry";
-import { installUxHost, type UxHost } from "@/contrib/plugin";
+import { installUxHost, type UxHost, type UxDataWatchEvent } from "@/contrib/plugin";
 import {
   resetUxPluginStore,
   setUxPluginEnabled,
@@ -142,6 +142,113 @@ afterEach(() => {
 });
 
 describe("a plugin in its frame", () => {
+  it("cancels the frame watch when the selected node changes", async () => {
+    const previous = host.shell.selectedDeployment;
+    let node = "did:key:a";
+    let changed = () => {};
+    host.shell.selectedDeployment = () => ({ nodeDid: node }) as never;
+    host.onShellChange = (listener) => {
+      changed = listener;
+      return () => {};
+    };
+    const stop = vi.fn();
+    host.data!.watch = async () => stop;
+    const source = `export default { id: 'board', async register(ctx) {
+      await ctx.data.watch('board', 'list_tasks', {}, () => {})
+    } }`;
+    try {
+      expect(await load(source)).toBe("board");
+      await settle();
+      node = "did:key:b";
+      changed();
+      await settle();
+      expect(stop).toHaveBeenCalledOnce();
+    } finally {
+      host.shell.selectedDeployment = previous;
+      delete host.onShellChange;
+      delete host.data!.watch;
+    }
+  });
+  it("cancels a watch that finishes starting after its frame is disposed", async () => {
+    let resolveStart: ((stop: () => void) => void) | undefined;
+    const stop = vi.fn();
+    host.data!.watch = () =>
+      new Promise((resolve) => {
+        resolveStart = resolve;
+      });
+    const source = `export default { id: 'board', register(ctx) {
+      void ctx.data.watch('board', 'list_tasks', {}, () => {}).catch(() => {})
+    } }`;
+    try {
+      expect(await load(source)).toBe("board");
+      await settle();
+      expect(resolveStart).toBeDefined();
+      retireRuntimeUxPlugin("board");
+      resolveStart!(stop);
+      await settle();
+      expect(stop).toHaveBeenCalledOnce();
+    } finally {
+      delete host.data!.watch;
+    }
+  });
+  it("delivers query watches only to their frame and cancels on node changes and disposal", async () => {
+    const listeners = new Map<string, (event: UxDataWatchEvent) => void>();
+    const stops = new Map<string, ReturnType<typeof vi.fn>>();
+    host.data!.watch = async (listing, _node, _surface, _tool, _args, listener) => {
+      listeners.set(listing, listener);
+      const stop = vi.fn();
+      stops.set(listing, stop);
+      return stop;
+    };
+    const source = (id: string) => `export default { id: '${id}', async register(ctx) {
+      await ctx.data.watch('board', 'list_tasks', {}, event => { if (event.kind === 'snapshot') ctx.storage.set('value', event.value.output); else ctx.storage.set('error', event.message) })
+    } }`;
+    try {
+      expect(await load(source("board"))).toBe("board");
+      expect(
+        await loadRuntimeUxPlugin(
+          { source: source("other") },
+          {
+            origin: "acme/kit/other",
+            expectId: "other",
+            door: "pack",
+            file: "/other",
+            listing: "acme/kit/other",
+            declared: { areas: [], directives: [] },
+          },
+        ),
+      ).toBe("other");
+      await settle();
+      listeners.get("acme/kit/board")!({
+        kind: "snapshot",
+        value: { kind: "query", output: "board-only" },
+      });
+      await settle();
+      expect(window.localStorage.getItem("gents.ux.board.value")).toBe('"board-only"');
+      expect(window.localStorage.getItem("gents.ux.other.value")).toBeNull();
+      sandboxHostOf("board")!.selectionChanged({
+        route: {},
+        deployments: [],
+        selectedDeployment: { nodeDid: "did:key:b" },
+        selectedSessionId: null,
+      });
+      expect(stops.get("acme/kit/board")).toHaveBeenCalledOnce();
+      listeners.get("acme/kit/board")!({
+        kind: "snapshot",
+        value: { kind: "query", output: "stale" },
+      });
+      await settle();
+      expect(window.localStorage.getItem("gents.ux.board.value")).toBe('"board-only"');
+      listeners.get("acme/kit/other")!({ kind: "error", message: "Unavailable" });
+      await settle();
+      expect(window.localStorage.getItem("gents.ux.other.error")).toBe('"Unavailable"');
+      expect(stops.get("acme/kit/other")).toHaveBeenCalledOnce();
+      retireRuntimeUxPlugin("other");
+      expect(stops.get("acme/kit/other")).toHaveBeenCalledOnce();
+    } finally {
+      delete host.data!.watch;
+    }
+  });
   it("registers shell-drawn rows as data, and the shell draws them", async () => {
     expect(await load()).toBe("board");
     await settle();

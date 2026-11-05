@@ -60,6 +60,9 @@ export interface UxDataCallResult {
   output: unknown;
 }
 
+export type UxDataWatchEvent =
+  { kind: "snapshot"; value: UxDataCallResult } | { kind: "error"; message: string };
+
 /** the plugin a host verb acts for: its id and the name the inventory shows */
 export interface UxCaller {
   id: string;
@@ -89,6 +92,14 @@ export interface UxHost {
       args: Record<string, unknown>,
     ) => Promise<UxDataCallResult>;
     surfaces: (listing: string, nodeDid: string) => Promise<unknown[]>;
+    watch?: (
+      listing: string,
+      nodeDid: string,
+      surface: string,
+      tool: string,
+      args: Record<string, unknown>,
+      listener: (event: UxDataWatchEvent) => void,
+    ) => Promise<() => void>;
   };
   os: UxOs;
   /** a change of the route, the selection or the fleet: what a frame's
@@ -133,6 +144,12 @@ export interface UxContext {
       args?: Record<string, unknown>,
     ) => Promise<UxDataCallResult>;
     surfaces: () => Promise<unknown[]>;
+    watch: (
+      surface: string,
+      tool: string,
+      args: Record<string, unknown>,
+      listener: (event: UxDataWatchEvent) => void,
+    ) => Promise<() => void>;
   };
 }
 
@@ -351,6 +368,27 @@ export function createUxContext(
       return host().os;
     },
     data: {
+      watch: async (surface, tool, args, listener) => {
+        const h = host();
+        const node = h.shell.selectedDeployment();
+        if (!options.listing || !h.data?.watch || !node)
+          throw new Error(`${pluginId}: live data is unavailable`);
+        const stop = await h.data.watch(
+          options.listing,
+          node.nodeDid,
+          surface,
+          tool,
+          args,
+          listener,
+        );
+        let closed = false;
+        return track(() => {
+          if (!closed) {
+            closed = true;
+            stop();
+          }
+        });
+      },
       call: (surface, tool, args) => {
         const h = host();
         const node = h.shell.selectedDeployment();
