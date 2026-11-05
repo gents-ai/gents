@@ -46,7 +46,8 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     let operator = crate::ConfigAccess::Graphql(
         crate::store::config_client::GraphqlEndpoint::as_principal(&endpoint, user.did())
             .with_client_signing_capability(user.client_signing_capability().unwrap())
-            .unwrap(),
+            .unwrap()
+            .with_client_signed_agent_creates(),
     );
     let outsider_access = crate::ConfigAccess::Graphql(
         crate::store::config_client::GraphqlEndpoint::as_principal(&endpoint, outsider.did())
