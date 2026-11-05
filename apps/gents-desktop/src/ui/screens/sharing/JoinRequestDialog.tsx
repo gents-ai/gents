@@ -62,7 +62,8 @@ export function JoinRequestDialog() {
   const [error, setError] = useState<string | null>(null);
   if (!open) return <Dialog open={false} />;
   const { nodeDid, nodeName, request } = open;
-  const who = partyName(request.from);
+  /* named honestly until a request carries its device's own name */
+  const who = request.from.name ?? "A device";
   const gone =
     waiting !== null &&
     waiting.nodeDid === nodeDid &&
@@ -125,7 +126,7 @@ export function JoinRequestDialog() {
             <LeaseSelect
               value={lease}
               onChange={setLease}
-              label={`Access for ${who} lasts`}
+              label={`Access for ${partyName(request.from)} lasts`}
               disabled={busy !== null || gone}
             />
           </dd>
