@@ -43,6 +43,7 @@ import { useFirstRun } from "./ui/app/useFirstRun";
 import { WindowControls } from "./ui/app/WindowControls";
 import { useDockVisit } from "./ui/app/workspace";
 import { useHomeDid, useStartup } from "./ui/hooks/useClient";
+import { JoinRequestAlerts } from "./ui/app/JoinRequestAlerts";
 import { useFleet } from "./ui/hooks/useFleet";
 import { fleetNodes } from "./ui/lib/scope";
 import { useFollowRoute } from "./ui/hooks/useFollowRoute";
@@ -293,6 +294,7 @@ function AppBody() {
       </AppShell>
       <Toaster closeButton />
       {hasLocalNode && <PluginAccessPrompt />}
+      {hasLocalNode && <JoinRequestAlerts route={route} />}
       <Shortcuts />
       <SearchPalette />
       <MailboxStack route={route} />
