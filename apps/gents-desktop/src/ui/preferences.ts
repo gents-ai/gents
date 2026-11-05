@@ -6,6 +6,7 @@ import { FLAGS, type FlagId, type FlagSetting } from "./lib/flags";
 import { browserStorage, storedStrings } from "./lib/storage";
 import { applyTheme, systemTheme, type Theme, type ThemePreference } from "./theme";
 import { ZOOM_STEPS } from "./lib/zoom";
+import type { NotifyKind } from "./lib/notify/events";
 
 export type NavMode = "hover" | "expanded" | "collapsed";
 /** How the sidebar shows: one of the nav's modes, or hidden altogether
@@ -53,6 +54,8 @@ export type Preferences = {
   hiddenNodes: string[];
   /** agents left out of the menus that offer agents, by `agentKey` */
   hiddenAgents: string[];
+  /** which kinds of thing the app's notifications tell this device about */
+  notify: Record<NotifyKind, boolean>;
 };
 
 /** The side nav's items and sections in the order chosen, and which are
@@ -79,6 +82,27 @@ export const DEFAULT_NAV_LAYOUT: NavLayout = { order: [], shown: {} };
 
 const NAV_MODES: readonly string[] = ["hover", "expanded", "collapsed"];
 
+const NOTIFY_ALL: Record<NotifyKind, boolean> = {
+  finished: true,
+  failed: true,
+  question: true,
+  mailbox: true,
+};
+
+function restoreNotify(
+  stored: unknown,
+  defaults: Record<NotifyKind, boolean>,
+): Record<NotifyKind, boolean> {
+  const saved = (typeof stored === "object" && stored !== null ? stored : {}) as Record<
+    string,
+    unknown
+  >;
+  const kinds = { ...defaults };
+  for (const kind of Object.keys(kinds) as NotifyKind[])
+    if (typeof saved[kind] === "boolean") kinds[kind] = saved[kind] as boolean;
+  return kinds;
+}
+
 const initial = (): Preferences => ({
   theme: "system",
   nav: "hover",
@@ -94,6 +118,7 @@ const initial = (): Preferences => ({
   openOn: null,
   hiddenNodes: [],
   hiddenAgents: [],
+  notify: { ...NOTIFY_ALL },
 });
 
 /* only flags this build knows survive, so an unknown id is dropped on the
@@ -184,6 +209,7 @@ export function restorePreferences(
     hiddenAgents: Array.isArray(saved.hiddenAgents)
       ? storedStrings(saved.hiddenAgents)
       : defaults.hiddenAgents,
+    notify: restoreNotify(saved.notify, defaults.notify),
   };
 }
 
@@ -272,6 +298,9 @@ export const preferences = {
       ),
     });
   },
+  setNotify(kind: NotifyKind, on: boolean) {
+    store.setState({ notify: { ...store.getState().notify, [kind]: on } });
+  },
 };
 
 const toggled = (list: string[], key: string, on: boolean) =>
@@ -339,6 +368,9 @@ export const useOpenOn = () => usePreferences((p) => p.openOn);
 export const openOnNode = () => store.getState().openOn;
 export const useHiddenNodes = () => usePreferences((p) => p.hiddenNodes);
 export const useHiddenAgents = () => usePreferences((p) => p.hiddenAgents);
+export const useNotifyKinds = () => usePreferences((p) => p.notify);
+/** the kinds this device is told about, for the notification owner */
+export const notifyKinds = () => store.getState().notify;
 
 export const isOn = (flags: Record<string, FlagSetting>, id: FlagId) => {
   const setting = flags[id];

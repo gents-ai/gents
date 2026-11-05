@@ -51,7 +51,7 @@ import { automationsOf } from "./automations/model";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { useFleet } from "../hooks/useFleet";
 import { isListed, useAgentSections } from "./agent/sections";
-import { SETTINGS_SECTIONS } from "./settings/sections";
+import { shownSettingsSections } from "./settings/sections";
 import { KIND, openItem } from "./MailboxItem";
 import { openInStack } from "./MailboxStack";
 import { NodeAgentStack } from "./NodeBehaviorStack";
@@ -240,7 +240,7 @@ function useEntries(): SearchEntry[] {
               icon: s.icon,
             }))
           : []),
-        ...SETTINGS_SECTIONS.map((s) => ({
+        ...shownSettingsSections().map((s) => ({
           key: `setting:app:${s.id}`,
           title: s.label,
           group: "App settings",

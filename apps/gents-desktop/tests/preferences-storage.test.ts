@@ -28,6 +28,7 @@ const defaults: Preferences = {
   openOn: null,
   hiddenNodes: [],
   hiddenAgents: [],
+  notify: { finished: true, failed: true, question: true, mailbox: true },
 };
 
 describe("preferences read back from storage", () => {
@@ -69,6 +70,7 @@ describe("preferences read back from storage", () => {
       openOn: null,
       hiddenNodes: [],
       hiddenAgents: [],
+      notify: { finished: true, failed: true, question: true, mailbox: true },
     });
     expect(restorePreferences({ sentTurn: "anchor" }, defaults).sentTurn).toBe(
       "anchor",
