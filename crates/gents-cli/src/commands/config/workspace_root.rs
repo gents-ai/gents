@@ -97,12 +97,13 @@ pub(super) async fn workspace_root_set(args: WorkspaceRootUpsertArgs) -> Result<
         crate::resolve_graphql_endpoint(Some(&args.graphql), None)?
             .with_client_signed_agent_creates(),
     );
-    let doc_id = gents::tools::surface::set_workspace_root(
+    let doc_id = gents::tools::surface::set_workspace_root_with_readers(
         &access,
         &args.node_did,
         &root_path,
         args.display_name.as_deref(),
         enabled,
+        &args.reader_agents,
     )
     .await?;
     print_json(&json!({
@@ -112,6 +113,20 @@ pub(super) async fn workspace_root_set(args: WorkspaceRootUpsertArgs) -> Result<
         "enabled": enabled,
     }))?;
     Ok(())
+}
+
+pub(super) async fn workspace_root_revoke_reader(args: WorkspaceRootReaderArgs) -> Result<()> {
+    let path = canonicalize_workspace_root_path(&args.path)?;
+    let root_path = path
+        .to_str()
+        .context("workspace root path must be valid UTF-8")?;
+    let access = ConfigAccess::Graphql(
+        crate::resolve_graphql_endpoint(Some(&args.graphql), None)?
+            .with_client_signed_agent_creates(),
+    );
+    gents::tools::surface::revoke_workspace_root_reader(&access, root_path, &args.agent_did)
+        .await?;
+    print_json(&json!({"root_path":root_path, "revoked_agent":args.agent_did}))
 }
 
 pub(super) async fn workspace_root_rm(args: ConfigShowArgs) -> Result<()> {

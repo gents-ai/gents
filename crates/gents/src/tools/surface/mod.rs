@@ -21,21 +21,25 @@ pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
 pub(crate) use output_budget::configured_output_budget;
 pub use policy::{
-    EndpointScope, RuntimeToolAvailability, TOOL_POLICY_V1, ToolPolicyBash, ToolPolicySurface,
-    ToolPolicyVersion,
-};
-pub(crate) use root_admission::{
-    RootExecutionGuard, load_workspace_root_policy_in_txn, resolve_admitted_tool_root,
+    EndpointScope, RuntimeToolAvailability, ToolPolicyBash, ToolPolicySurface, ToolPolicyVersion,
+    TOOL_POLICY_V1,
 };
 #[doc(hidden)]
 pub use root_admission::{
-    WorkspaceRootDocument, WorkspaceRootPolicy, admit_authored_root, canonicalize_tools_root,
-    load_workspace_root_policy, project_workspace_root_policy, resolve_configured_tool_root,
+    admit_authored_root, canonicalize_tools_root, load_workspace_root_policy,
+    project_workspace_root_policy, resolve_configured_tool_root, WorkspaceRootDocument,
+    WorkspaceRootPolicy,
 };
-pub use root_publication::{delete_workspace_root, set_workspace_root, WorkspaceRootWriteError};
+pub(crate) use root_admission::{
+    load_workspace_root_policy_in_txn, resolve_admitted_tool_root, RootExecutionGuard,
+};
+pub use root_publication::{
+    delete_workspace_root, revoke_workspace_root_reader, set_workspace_root,
+    set_workspace_root_with_readers, WorkspaceRootWriteError,
+};
 pub use runtime_context::ToolRuntimeContext;
+pub use selection::{resolve_goal_capabilities, CustomToolFactory, ResolvedToolSelection};
 pub(crate) use selection::{AgentToolConfig, BackgroundToolConfig};
-pub use selection::{CustomToolFactory, ResolvedToolSelection, resolve_goal_capabilities};
 pub use timeouts::{BackgroundTimeoutPolicy, BackgroundTimeouts, BoundedTimeout, ToolTimeouts};
 
 use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
@@ -46,14 +50,14 @@ use anyhow::{Context, Result};
 
 use crate::documents::{AgentTargetDocument, QueryToolDecl, WriteToolDecl};
 use crate::tools::builtin::defra_query::{
-    BoundedQueryTool, CollectionScope, DEFRA_QUERY_TOOL_NAME, build_defra_query_tool,
+    build_defra_query_tool, BoundedQueryTool, CollectionScope, DEFRA_QUERY_TOOL_NAME,
 };
 use crate::tools::builtin::defra_write::BoundedWriteTool;
 use crate::tools::mcp::meta::build_meta_tools;
 use crate::tools::native::{
-    CONTEXT_BUDGET_TOOL_NAME, CliToolConfig, SESSION_HISTORY_TOOL_NAME, ToolSet, agent_tool_names,
-    background_tool_names, build_agent_tools, build_background_tools, build_context_budget_tool,
-    build_goal_tools, build_session_history_tool,
+    agent_tool_names, background_tool_names, build_agent_tools, build_background_tools,
+    build_context_budget_tool, build_goal_tools, build_session_history_tool, CliToolConfig,
+    ToolSet, CONTEXT_BUDGET_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
 };
 
 const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;

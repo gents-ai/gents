@@ -138,6 +138,8 @@ pub(crate) enum AgentCommand {
 pub(crate) enum WorkspaceRootCommand {
     #[command(name = "set")]
     Set(WorkspaceRootUpsertArgs),
+    #[command(name = "revoke-reader", about = "Revoke a selected Agent's access to a workspace root")]
+    RevokeReader(WorkspaceRootReaderArgs),
     #[command(name = "list", about = "List WorkspaceRoot documents")]
     List(ConfigListArgs),
     #[command(name = "show", about = "Show a WorkspaceRoot document")]
@@ -338,6 +340,8 @@ pub(crate) struct WorkspaceRootUpsertArgs {
     pub(crate) graphql: String,
     #[arg(long)]
     pub(crate) node_did: String,
+    #[arg(long = "reader-agent", help = "Grant read access to this explicitly selected Agent DID")]
+    pub(crate) reader_agents: Vec<String>,
     #[arg(long, help = "Absolute path to register as a workspace root")]
     pub(crate) path: PathBuf,
     #[arg(long)]
@@ -347,6 +351,16 @@ pub(crate) struct WorkspaceRootUpsertArgs {
         help = "Register the root disabled; excluded from allowed_roots until re-enabled"
     )]
     pub(crate) disabled: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct WorkspaceRootReaderArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(long)]
+    pub(crate) path: PathBuf,
+    #[arg(long)]
+    pub(crate) agent_did: String,
 }
 
 #[derive(clap::Args)]

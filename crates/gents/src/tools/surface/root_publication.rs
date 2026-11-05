@@ -66,6 +66,29 @@ async fn fence_node(txn: &ConfigApplyTxn<'_>, node_doc: &str) -> Result<()> {
     Ok(())
 }
 
+async fn selected_agent(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    agent_did: &str,
+    require_enabled: bool,
+) -> Result<identity::Did> {
+    let did = identity::Did::new(agent_did)?;
+    anyhow::ensure!(
+        agent_did != node_did,
+        "root reader must be an explicitly selected Agent"
+    );
+    let (_, row) = read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_did)
+        .await?
+        .context("selected root reader Agent is unavailable")?;
+    anyhow::ensure!(
+        row["agent_did"] == agent_did
+            && row["node_did"] == node_did
+            && (!require_enabled || row["enabled"] != false),
+        "selected root reader Agent changed or is disabled"
+    );
+    Ok(did)
+}
+
 /// Publishes an immutable physical Node binding and the native parent relation in
 /// one transaction. Existing roots retain their current relationships on update.
 pub async fn set_workspace_root(
@@ -75,20 +98,37 @@ pub async fn set_workspace_root(
     display_name: Option<&str>,
     enabled: bool,
 ) -> std::result::Result<String, WorkspaceRootWriteError> {
+    set_workspace_root_with_readers(access, node_did, root_path, display_name, enabled, &[]).await
+}
+
+/// Each reader is an explicit operator selection; an ordinary update with no
+/// selections never restores an Agent reader that the operator revoked.
+pub async fn set_workspace_root_with_readers(
+    access: &ConfigAccess,
+    node_did: &str,
+    root_path: &str,
+    display_name: Option<&str>,
+    enabled: bool,
+    reader_agents: &[String],
+) -> std::result::Result<String, WorkspaceRootWriteError> {
     let result: Result<String> = access.transact_write("workspace_root.set", |txn| Box::pin(async move {
         anyhow::ensure!(std::path::Path::new(root_path).is_absolute(), "workspace root path must be absolute");
         let node_doc = selected_node(txn, node_did).await?;
         let existing = root_row(txn, root_path).await?;
         if let Some(row) = &existing { checked_root_doc(row, node_did, &node_doc)?; }
+        let mut readers = Vec::new();
+        for agent_did in reader_agents.iter().collect::<std::collections::BTreeSet<_>>() {
+            readers.push(selected_agent(txn, node_did, agent_did, true).await?);
+        }
         fence_node(txn, &node_doc).await?;
         let updated_at = chrono::Utc::now().to_rfc3339();
-        if let Some(row) = existing {
+        let doc = if let Some(row) = existing {
             let doc = checked_root_doc(&row, node_did, &node_doc)?;
             let mutation = format!("mutation($input: WorkspaceRootMutationInputArg!) {{ update_WorkspaceRoot(docID: \"{}\", input: $input) {{ _docID }} }}", escape_graphql_string(doc));
             let result = txn.execute_client_signed_update(&mutation, &json!({"input":{"display_name":display_name,"enabled":enabled,"updated_at":updated_at}}), gents_protocol::schemas::WORKSPACE_ROOT).await?;
             let docs = mutation_documents(&result, "update_WorkspaceRoot")?.context("WorkspaceRoot update returned no confirmation")?;
             anyhow::ensure!(docs.len() == 1 && docs[0]["_docID"] == doc, "WorkspaceRoot update was not confirmed");
-            Ok(doc.to_owned())
+            doc.to_owned()
         } else {
             let result = txn.execute_client_signed_create(
                 "mutation($input: WorkspaceRootMutationInputArg!) { create_WorkspaceRoot(input: $input) { _docID } }",
@@ -96,9 +136,42 @@ pub async fn set_workspace_root(
                 gents_protocol::schemas::WORKSPACE_ROOT).await?;
             let doc = created_doc_id(&result, "WorkspaceRoot")?;
             txn.add_resource_relationship("WorkspaceRoot", &doc, "parent", "nodes", &node_doc).await?;
-            Ok(doc)
+            doc
+        };
+        for reader in readers {
+            txn.add_actor_relationship("WorkspaceRoot", &doc, "reader", &reader).await?;
         }
+        Ok(doc)
     })).await;
+    result.map_err(WorkspaceRootWriteError::Publication)
+}
+
+/// Revocation acts on the exact visible root and selected Agent in the same
+/// Node-authorized transaction. It never infers an Agent from a node identity.
+pub async fn revoke_workspace_root_reader(
+    access: &ConfigAccess,
+    root_path: &str,
+    agent_did: &str,
+) -> std::result::Result<(), WorkspaceRootWriteError> {
+    let result: Result<()> = access
+        .transact_write("workspace_root.revoke_reader", |txn| {
+            Box::pin(async move {
+                let row = root_row(txn, root_path)
+                    .await?
+                    .context("workspace root is unavailable")?;
+                let node_did = row["node_did"]
+                    .as_str()
+                    .context("workspace root is missing Node scope")?;
+                let node_doc = selected_node(txn, node_did).await?;
+                let doc = checked_root_doc(&row, node_did, &node_doc)?;
+                let reader = selected_agent(txn, node_did, agent_did, false).await?;
+                fence_node(txn, &node_doc).await?;
+                txn.delete_actor_relationship("WorkspaceRoot", doc, "reader", &reader)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await;
     result.map_err(WorkspaceRootWriteError::Publication)
 }
 
@@ -150,7 +223,9 @@ mod tests {
         let user = crate::KeyIdentity::load_or_create(directory.path().join("user.key"), None)?;
         let runtime =
             crate::KeyIdentity::load_or_create(directory.path().join("runtime.key"), None)?;
-        let agent = crate::KeyIdentity::load_or_create(directory.path().join("agent.key"), None)?;
+        let writer = crate::KeyIdentity::load_or_create(directory.path().join("writer.key"), None)?;
+        let integrator =
+            crate::KeyIdentity::load_or_create(directory.path().join("integrator.key"), None)?;
         let other = crate::KeyIdentity::load_or_create(directory.path().join("other.key"), None)?;
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr()?;
@@ -173,7 +248,7 @@ mod tests {
             )
             .await?;
         assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
-        for key in [&runtime, &agent, &other] {
+        for key in [&runtime, &writer, &integrator, &other] {
             for permission in [
                 acp::nac::NodePermission::DocumentRead,
                 acp::nac::NodePermission::DocumentUpdate,
@@ -184,6 +259,8 @@ mod tests {
             }
         }
         node.add_collection_as(&context, gents_protocol::schemas::NODE)
+            .await?;
+        node.add_collection_as(&context, gents_protocol::schemas::AGENT)
             .await?;
         let binding = format!(
             "type WorkspaceRoot @policy(id: \"{policy}\", resource: \"workspace_roots\") {{"
@@ -211,8 +288,26 @@ mod tests {
                 })
             })
             .await?;
+        for agent in [&writer, &integrator] {
+            owner.transact_write("test.root.agent", |txn| Box::pin(async {
+                txn.execute_client_signed_create(
+                    "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                    &json!({"input":{"node_did":runtime.did(),"agent_did":agent.did(),"enabled":true}}),
+                    gents_protocol::schemas::AGENT).await?;
+                Ok::<_, anyhow::Error>(())
+            })).await?;
+        }
         let path = directory.path().join("one").to_string_lossy().into_owned();
-        let root_doc = set_workspace_root(&owner, runtime.did(), &path, Some("one"), true).await?;
+        let readers = vec![writer.did().to_owned(), integrator.did().to_owned()];
+        let root_doc = set_workspace_root_with_readers(
+            &owner,
+            runtime.did(),
+            &path,
+            Some("one"),
+            true,
+            &readers,
+        )
+        .await?;
         let query = format!("{{ WorkspaceRoot(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ _docID _version {{ cid height fieldName }} }} }}", escape_graphql_string(&root_doc));
         let signed = owner.execute(&query).await?;
         let signed_rows: Vec<Value> = rows(&signed, "WorkspaceRoot")?;
@@ -232,7 +327,8 @@ mod tests {
             let key = match case["actor"].as_str().unwrap() {
                 "user" => &user,
                 "runtime" => &runtime,
-                "agent" => &agent,
+                "writer" => &writer,
+                "integrator" => &integrator,
                 "other" => &other,
                 actor => panic!("unknown modeled actor {actor}"),
             };
@@ -332,6 +428,51 @@ mod tests {
             !root_row_in_access(&owner, &aborted_path).await?.is_empty(),
             cases[0]["aborted_document"].as_bool().unwrap()
         );
+        revoke_workspace_root_reader(&owner, &path, writer.did()).await?;
+        assert_eq!(
+            set_workspace_root(&owner, runtime.did(), &path, None, true).await?,
+            root_doc
+        );
+        for case in cases {
+            let key = match case["actor"].as_str().unwrap() {
+                "user" => &user,
+                "runtime" => &runtime,
+                "writer" => &writer,
+                "integrator" => &integrator,
+                "other" => &other,
+                actor => panic!("unknown modeled actor {actor}"),
+            };
+            let permission = match case["permission"].as_str().unwrap() {
+                "read" => defra_node::DocumentPermission::Read,
+                "update" => defra_node::DocumentPermission::Update,
+                "delete" => defra_node::DocumentPermission::Delete,
+                permission => panic!("unknown modeled permission {permission}"),
+            };
+            let allowed = node
+                .document_acp()
+                .check_doc_access(
+                    &defra_node::AcpIdentity::Authenticated(key.did().parse()?),
+                    permission,
+                    &policy,
+                    "workspace_roots",
+                    &root_doc,
+                )
+                .await?;
+            assert_eq!(
+                allowed,
+                case["after_writer_revocation"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+        set_workspace_root_with_readers(
+            &owner,
+            runtime.did(),
+            &path,
+            None,
+            true,
+            &[writer.did().to_owned()],
+        )
+        .await?;
         owner
             .delete_resource_relationship("WorkspaceRoot", &root_doc, "parent", "nodes", &node_doc)
             .await?;
@@ -343,7 +484,8 @@ mod tests {
             let key = match case["actor"].as_str().unwrap() {
                 "user" => &user,
                 "runtime" => &runtime,
-                "agent" => &agent,
+                "writer" => &writer,
+                "integrator" => &integrator,
                 "other" => &other,
                 actor => panic!("unknown modeled actor {actor}"),
             };
