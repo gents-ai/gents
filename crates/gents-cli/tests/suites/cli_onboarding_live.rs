@@ -813,6 +813,86 @@ mod no_model {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn ctrl_d_at_a_question_stops_setup_and_changes_nothing() -> Result<()> {
+        let live = LiveBox::new()?;
+        let mut terminal = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("ctrl-d"))?;
+        terminal.expect(FOLDER_QUESTION, PROMPT).await?;
+        terminal.send("\x04")?;
+        let code = terminal.wait_exit(EXIT).await?;
+        ensure!(code != 0, "{}", terminal.transcript());
+        ensure!(
+            !terminal.transcript().contains(ROOT_QUESTION),
+            "end of input is not an empty answer: {}",
+            terminal.transcript()
+        );
+
+        let folder = live.folder("data");
+        let mut terminal = setup_of(&live, &folder, "ctrl-d-menu")?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.expect(INFERENCE_QUESTION, PROMPT).await?;
+        terminal.send("\x04")?;
+        let code = terminal.wait_exit(EXIT).await?;
+        ensure!(code != 0, "{}", terminal.transcript());
+        ensure!(!folder.join("init.json").exists(), "nothing is set up");
+        ensure!(!live.remembered_home().exists(), "nothing is remembered");
+        ensure!(!live.plist().exists(), "nothing is installed");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn ctrl_d_at_the_hidden_key_prompt_restores_the_terminal() -> Result<()> {
+        let live = LiveBox::new()?;
+        let folder = live.folder("data");
+        let mut command = live.first_run(MISSING_BIN);
+        command.arg("--home").arg(&folder);
+
+        let mut terminal =
+            Terminal::spawn(&reporting_terminal_flags(&command), &live.log("ctrl-d-key"))?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.answer(INFERENCE_QUESTION, "1").await?;
+        terminal.answer("connection method for OpenAI", "2").await?;
+        terminal.expect("OpenAI API key (hidden)", PROMPT).await?;
+        // Echo goes off just after the prompt prints, and the end of input has to find it off.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        terminal.send("\x04")?;
+        let code = terminal.wait_exit(EXIT).await?;
+        ensure!(code != 0, "{}", terminal.transcript());
+
+        let transcript = terminal.transcript();
+        let flag = |name| transcript.split_whitespace().any(|word| word == name);
+        ensure!(flag("echo") && !flag("-echo"), "{transcript}");
+        ensure!(!folder.join("init.json").exists(), "nothing is set up");
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn ctrl_d_at_a_yes_by_default_question_declines() -> Result<()> {
+        let live = LiveBox::new()?;
+        let held = HeldShimPort::serving(b"").await?;
+        let folder = live.folder("data");
+
+        let mut terminal = setup_of(&live, &folder, "ctrl-d-sign-in")?;
+        terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
+        terminal.answer(INFERENCE_QUESTION, "1").await?;
+        terminal.answer("connection method for OpenAI", "").await?;
+        terminal.expect("Log in to ChatGPT now", PROMPT).await?;
+        terminal.send("\x04")?;
+        terminal
+            .expect(
+                &format!("gents auth login codex --home {}", folder.display()),
+                PROMPT,
+            )
+            .await?;
+        terminal.expect(ENDPOINT_TEXT, RUNTIME_UP).await?;
+        terminal.expect_exit(1).await?;
+        held.release().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
     async fn setup_warns_about_a_model_that_does_not_answer_and_keeps_going() -> Result<()> {
         let live = LiveBox::new()?;
         let held = HeldShimPort::serving(b"").await?;

@@ -273,7 +273,7 @@ pub(crate) async fn confirm(question: &str, default_yes: bool) -> bool {
             "n" | "no" => false,
             _ => default_yes,
         },
-        Err(_) => default_yes,
+        Err(_) => false,
     }
 }
 
@@ -338,12 +338,18 @@ fn set_terminal_echo(on: bool) -> bool {
         .unwrap_or(false)
 }
 
+/// End of input (Ctrl-D or a closed stdin) is an error: as an empty line it would accept
+/// whatever the prompt offers by default.
 async fn read_line() -> Result<String> {
     tokio::task::spawn_blocking(|| -> Result<String> {
         let mut buf = String::new();
-        std::io::stdin()
+        let read = std::io::stdin()
             .read_line(&mut buf)
             .context("reading from stdin")?;
+        if read == 0 {
+            eprintln!();
+            bail!("input ended before an answer; nothing was set up");
+        }
         Ok(buf)
     })
     .await
