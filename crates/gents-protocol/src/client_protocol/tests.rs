@@ -66,3 +66,87 @@ fn unordered_turn_rejects_ambiguous_tips() {
     ];
     assert_eq!(derive_turn(&ambiguous), None);
 }
+
+#[test]
+fn generated_session_delivery_cases_match_the_lean_classification() {
+    let contract: serde_json::Value =
+        gents_lean_contract::load_contract_snapshot().expect("Lean contract snapshot");
+    let cases = contract["client_session_delivery_cases"]
+        .as_array()
+        .expect("session delivery cases");
+    let mut lifecycle_states = std::collections::BTreeSet::new();
+    let mut outcomes = std::collections::BTreeSet::new();
+    for case in cases {
+        let submitted = match &case["submitted"] {
+            serde_json::Value::Null => None,
+            submitted => {
+                let state = submitted["lifecycle_state"].as_str().expect("lifecycle");
+                lifecycle_states.insert(state.to_owned());
+                Some(SubmittedAttempt {
+                    attempt: keyed_attempt(
+                        "request",
+                        None,
+                        RequestLifecycleState::parse(state).expect("Lean lifecycle state"),
+                        submitted["is_superseded"].as_bool().expect("superseded"),
+                    ),
+                    claimed: submitted["claimed"].as_bool().expect("claimed"),
+                })
+            }
+        };
+        let view = SessionDeliveryView {
+            submitted,
+            pairing: match case["pairing"].as_str() {
+                Some("connected") => PairingSignal::Connected,
+                Some("not_connected") => PairingSignal::NotConnected,
+                other => panic!("unknown pairing {other:?}"),
+            },
+            session_row: match case["session_row"].as_str() {
+                Some("absent") => SessionRowObservation::Absent,
+                Some("canonical") => SessionRowObservation::Canonical,
+                Some("duplicate") => SessionRowObservation::Duplicate,
+                Some("out_of_scope") => SessionRowObservation::OutOfScope,
+                other => panic!("unknown session row {other:?}"),
+            },
+        };
+        let expected = match case["expected"].as_str() {
+            Some("visible") => SessionDelivery::Visible,
+            Some("accepted") => SessionDelivery::Accepted,
+            Some("delivering") => SessionDelivery::Delivering,
+            Some("not_connected") => SessionDelivery::NotConnected,
+            Some("no_request") => SessionDelivery::NoRequest,
+            Some("integrity_fault") => SessionDelivery::IntegrityFault,
+            other => panic!("unknown delivery {other:?}"),
+        };
+        outcomes.insert(format!("{expected:?}"));
+        assert_eq!(derive_session_delivery(&view), expected, "{case}");
+    }
+    assert_eq!(
+        lifecycle_states,
+        RequestLifecycleState::ALL
+            .into_iter()
+            .map(|state| state.as_str().to_owned())
+            .collect(),
+        "generated delivery cases must cover every lifecycle state"
+    );
+    assert_eq!(outcomes.len(), 6, "every delivery outcome is exercised");
+}
+
+#[test]
+fn session_rows_outside_the_scope_or_duplicated_are_faults() {
+    assert_eq!(
+        SessionRowObservation::observe(0, true),
+        SessionRowObservation::Absent
+    );
+    assert_eq!(
+        SessionRowObservation::observe(1, true),
+        SessionRowObservation::Canonical
+    );
+    assert_eq!(
+        SessionRowObservation::observe(2, true),
+        SessionRowObservation::Duplicate
+    );
+    assert_eq!(
+        SessionRowObservation::observe(1, false),
+        SessionRowObservation::OutOfScope
+    );
+}

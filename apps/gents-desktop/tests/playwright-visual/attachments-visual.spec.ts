@@ -9,7 +9,7 @@ test("attachment tray follows the composer in light and dark themes", async ({
   await page
     .getByLabel("Choose attachments")
     .setInputFiles(
-      fileURLToPath(new URL("../../public/avatars/1.png", import.meta.url)),
+      fileURLToPath(new URL("../../public/avatars/1.webp", import.meta.url)),
     );
   const tray = page.getByTestId("attachment-tray");
   await expect(tray).toBeVisible();

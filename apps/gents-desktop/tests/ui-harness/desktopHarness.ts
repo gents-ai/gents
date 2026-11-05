@@ -535,7 +535,9 @@ export type DesktopUiHarnessScenario =
   | "sync-failed"
   | "days"
   | "automated-inputs"
-  | "background";
+  | "background"
+  | "notices"
+  | "startup-port-in-use";
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
@@ -958,6 +960,16 @@ export function createDesktopUiHarness(
     runtimeBooting: false,
     error: null,
   };
+  if (scenario === "startup-port-in-use") {
+    managedServer = {
+      ...managedServer,
+      state: "failed",
+      autoStart: true,
+      nodeName: deployment.label,
+      error:
+        "Port 9191 is in use by a program that does not advertise a Gents identity, and the local Node needs that port. Quit that program, then start the Node again.",
+    };
+  }
   if (scenario === "storage-recovery") {
     managedServer = {
       ...managedServer,
@@ -1268,6 +1280,313 @@ export function createDesktopUiHarness(
       timelineItems: [],
     });
   }
+  if (scenario === "notices") {
+    /* sessions holding each notice the app draws: a failed turn, one that
+       failed earlier and carried on, a usage limit, a goal stopped at its
+       limit, and tool calls that were refused or stopped */
+    const ago = (minutes: number) =>
+      new Date(Date.now() - minutes * 60_000).toISOString();
+    const base = {
+      nodeDid: NODE_DID,
+      agentId: DEFAULT_AGENT_ID,
+      status: "active",
+      goal: null,
+      retryEligibility: { eligible: false, denialReason: null },
+      pendingTurn: null,
+      queuedTurns: [],
+      foldedInputs: [],
+      context: harnessSessionContext(),
+    };
+    const user = (id: string, content: string, minutes: number) => ({
+      kind: "userMessage" as const,
+      itemKey: `${id}-user`,
+      requestId: `request-${id}`,
+      ownsTurn: true,
+      sequence: 1,
+      content,
+      timestamp: ago(minutes),
+      reconstruction: HARNESS_READY_RECONSTRUCTION,
+    });
+    const overloaded =
+      'provider error: 529 overloaded_error {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CVx9"}';
+    sessions.set("session-notices-failed", {
+      ...base,
+      sessionId: "session-notices-failed",
+      title: "Fix the flaky upload test",
+      previewText: "Fix the flaky upload test",
+      turnState: "failed",
+      latestRequestId: "request-notices-failed",
+      latestRequestOutcome: harnessRequestOutcome({ failureReason: overloaded }),
+      timelineItems: [
+        user("notices-failed", "Fix the flaky upload test in uploads.spec.ts.", 6),
+        {
+          kind: "requestContextReductionSummary",
+          itemKey: "request-context-reduction:notices",
+          sequence: 2,
+          requestDocId: "doc-notices-failed",
+          latestTimestamp: ago(5),
+          reductionCount: 3,
+          compactedCount: 0,
+          repairedCount: 1,
+          latestEstimatedInputTokens: 84_210,
+        } as unknown as RenderedTimelineItem,
+      ],
+    });
+    sessions.set("session-notices-continued", {
+      ...base,
+      sessionId: "session-notices-continued",
+      title: "Summarize the release notes",
+      previewText: "Summarize the release notes",
+      turnState: "processing",
+      latestRequestId: "request-notices-continued",
+      latestRequestOutcome: harnessRequestOutcome({ failureReason: overloaded }),
+      timelineItems: [
+        user("notices-continued", "Summarize the release notes for 1.4.", 3),
+      ],
+    });
+    sessions.set("session-notices-limit", {
+      ...base,
+      sessionId: "session-notices-limit",
+      title: "Port the parser to the new grammar",
+      previewText: "Port the parser to the new grammar",
+      turnState: "failed",
+      latestRequestId: "request-notices-limit",
+      latestRequestOutcome: harnessRequestOutcome({
+        failureReason: "every Claude account on this node has reached its usage limit",
+      }),
+      timelineItems: [user("notices-limit", "Port the parser to the new grammar.", 9)],
+    });
+    sessions.set("session-notices-move", {
+      ...base,
+      sessionId: "session-notices-move",
+      title: "Review the sync changes",
+      previewText: "Review the sync changes",
+      turnState: "failed",
+      latestRequestId: "request-notices-move",
+      latestRequestOutcome: harnessRequestOutcome({
+        failureReason: "every Claude account on this node has reached its usage limit",
+      }),
+      timelineItems: [user("notices-move", "Review the sync changes.", 12)],
+    });
+    sessions.set("session-notices-goal", {
+      ...base,
+      sessionId: "session-notices-goal",
+      title: "Make the import job resumable",
+      previewText: "Make the import job resumable",
+      turnState: "completed",
+      latestRequestId: "request-notices-goal",
+      latestRequestOutcome: null,
+      goal: {
+        goalId: "goal-notices",
+        objective: "Make the import job resumable after a crash",
+        status: "usage_limited",
+        tokenBudget: 400_000,
+        tokensUsed: 312_400,
+        activeTimeSeconds: 2_460,
+        consecutiveBlockedAudits: 1,
+        continuationSequence: 4,
+        wrapupRequested: false,
+        wrapupCompleted: false,
+        lastBlockedReason:
+          "verification_failed: the resume test still fails on the second run",
+        lastFailure:
+          "usage_limited: every Claude account on this node has reached its usage limit",
+        completionEvidence: null,
+      },
+      timelineItems: [
+        user("notices-goal", "Make the import job resumable after a crash.", 40),
+      ],
+    });
+    const denied: RenderedToolCallView = {
+      itemKey: "notices-tool-denied",
+      toolName: "bash",
+      statusKind: "error",
+      requestId: "request-notices-tools",
+      toolCallId: "call-notices-denied",
+      toolCallDocId: "doc-notices-denied",
+      startedAt: ago(3),
+      completedAt: ago(3),
+      reconstruction: HARNESS_READY_RECONSTRUCTION,
+      denial: {
+        category: "network",
+        categoryLabel: "Network",
+        ruleId: "bash.network.deny_outbound",
+        reasonLine: "Outbound network access is turned off for this agent's commands.",
+        deniedCommand: "curl",
+        deniedArgument: "https://example.com/install.sh",
+        deniedSubcommand: null,
+        diagnostic:
+          "policy=tools-default rule=bash.network.deny_outbound mode=disabled",
+      },
+      presentation: {
+        kind: "command",
+        command: "curl -fsSL https://example.com/install.sh | sh",
+        exitCode: null,
+        timedOut: false,
+        failed: true,
+        durationMs: null,
+        cwd: "~/src/gents",
+        executionMode: null,
+        networkMode: null,
+        stdout: "",
+        stderr: "",
+        fallbackOutput: null,
+      },
+    };
+    const canceled: RenderedToolCallView = {
+      itemKey: "notices-tool-canceled",
+      toolName: "bash",
+      statusKind: "canceled",
+      requestId: "request-notices-tools",
+      toolCallId: "call-notices-canceled",
+      toolCallDocId: "doc-notices-canceled",
+      startedAt: ago(2),
+      completedAt: ago(1),
+      reconstruction: HARNESS_READY_RECONSTRUCTION,
+      cancelCause: {
+        cause: "userCancelled",
+        source: "requestInterrupt",
+        confidence: "authentic",
+        at: ago(1),
+        evidence: ["interrupt request req-7f3a from did:key:desktop-harness"],
+      },
+      presentation: {
+        kind: "command",
+        command: "npm run test:ui:e2e",
+        exitCode: null,
+        timedOut: false,
+        failed: false,
+        durationMs: 61_000,
+        cwd: "~/src/gents",
+        executionMode: null,
+        networkMode: null,
+        stdout: "Running 580 tests using 6 workers",
+        stderr: "",
+        fallbackOutput: null,
+      },
+    };
+    sessions.set("session-notices-tools", {
+      ...base,
+      sessionId: "session-notices-tools",
+      title: "Install the linter",
+      previewText: "Install the linter",
+      turnState: "completed",
+      latestRequestId: "request-notices-tools",
+      latestRequestOutcome: null,
+      timelineItems: [
+        user("notices-tools", "Install the linter and run the browser tests.", 4),
+        {
+          kind: "toolGroup" as const,
+          itemKey: "notices-tools-group",
+          messageSequence: 1,
+          tools: [denied, canceled],
+        } as unknown as RenderedTimelineItem,
+        harnessAssistantItem({
+          itemKey: "notices-tools-reply",
+          sequence: 3,
+          content: "The install was refused, and you stopped the test run.",
+          reasoning: null,
+          timestamp: ago(1),
+        }),
+      ],
+    });
+    /* a command that wrote to both streams and failed */
+    sessions.set("session-notices-stderr", {
+      ...base,
+      sessionId: "session-notices-stderr",
+      title: "Build the docs",
+      previewText: "Build the docs",
+      turnState: "completed",
+      latestRequestId: "request-notices-stderr",
+      latestRequestOutcome: null,
+      timelineItems: [
+        user("notices-stderr", "Build the docs site.", 2),
+        {
+          kind: "toolGroup" as const,
+          itemKey: "notices-stderr-group",
+          messageSequence: 1,
+          tools: [
+            {
+              itemKey: "notices-stderr-tool",
+              toolName: "bash",
+              statusKind: "error",
+              requestId: "request-notices-stderr",
+              toolCallId: "call-notices-stderr",
+              toolCallDocId: "doc-notices-stderr",
+              startedAt: ago(2),
+              completedAt: ago(2),
+              reconstruction: HARNESS_READY_RECONSTRUCTION,
+              presentation: {
+                kind: "command",
+                command: "npm run docs:build",
+                exitCode: 1,
+                timedOut: false,
+                failed: true,
+                durationMs: 4_200,
+                cwd: "~/src/gents",
+                executionMode: null,
+                networkMode: null,
+                stdout:
+                  "> docs:build\n> vitepress build docs\n\nbuilding client + server bundles...",
+                stderr:
+                  'x Build failed in 3.81s\n[vitepress] docs/guide/nodes.md: Unknown custom container "warn"',
+                fallbackOutput: null,
+              },
+            } satisfies RenderedToolCallView,
+          ],
+        } as unknown as RenderedTimelineItem,
+        harnessAssistantItem({
+          itemKey: "notices-stderr-reply",
+          sequence: 3,
+          content: "The docs build failed on an unknown container in nodes.md.",
+          reasoning: null,
+          timestamp: ago(1),
+        }),
+      ],
+    });
+    deployment = {
+      ...deployment,
+      inferenceBackends: [
+        ...deployment.inferenceBackends,
+        {
+          ...deployment.inferenceBackends[0]!,
+          backendId: "backend-claude",
+          name: "Claude",
+          providerKind: "ClaudeCliSubscription",
+          endpoint: null,
+          apiKeyConfigured: false,
+          apiKeyEnvVar: null,
+          authKind: "node_oauth",
+          models: ["claude-sonnet-5-5"],
+          advertisedModels: [
+            {
+              model_name: "claude-sonnet-5-5",
+              display_name: "Claude Sonnet 5.5",
+              context_window: 200_000,
+              max_context_window: 1_000_000,
+              max_output_tokens: 64_000,
+              reasoning_efforts: null,
+            },
+          ],
+          accountRef: "account-work",
+        },
+      ],
+      inferenceProfiles: [
+        ...deployment.inferenceProfiles,
+        {
+          node_did: NODE_DID,
+          profile_id: "profile-claude",
+          display_name: "Claude Sonnet",
+          backend_id: "backend-claude",
+          model_name: "claude-sonnet-5-5",
+          context_window: 200_000,
+          max_output_tokens: 8192,
+          sampling_id: null,
+          execution_id: null,
+        },
+      ],
+    };
+  }
   if (scenario === "session-hydration") {
     sessions.set("session-remote", {
       sessionId: "session-remote",
@@ -1496,7 +1815,10 @@ export function createDesktopUiHarness(
         desktopHome: "/tmp/gents-bombadil/desktop",
         peerDirectoryPath: "/tmp/gents-bombadil/peers.json",
         nodeDataDir: "/tmp/gents-bombadil/node",
-        diagnosticsHint: "native logging",
+        diagnosticsHint:
+          scenario === "startup-port-in-use"
+            ? "journalctl --user --since '1 hour ago' SYSLOG_IDENTIFIER=gents-desktop SYSLOG_IDENTIFIER=gents-runtime. Runtime startup errors: /home/me/.local/share/gents/desktop/logs/runtime-errors.log"
+            : "native logging",
         nodeHomeExists: !freshHome,
         desktopHomeExists: true,
         peerDirectoryExists: true,
@@ -1849,7 +2171,9 @@ export function createDesktopUiHarness(
     async listUxDataSurfaces() {
       return { surfaces: [] };
     },
-    ...(scenario === "empty-fleet" || scenario === "storage-recovery"
+    ...(scenario === "empty-fleet" ||
+    scenario === "storage-recovery" ||
+    scenario === "startup-port-in-use"
       ? ({
           async managedServerStatus() {
             if (managedServer.state === "running" && !managedServer.pairingReady) {
@@ -4585,10 +4909,12 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "session-hydration":
     case "sync-offline":
     case "storage-recovery":
+    case "startup-port-in-use":
     case "sync-failed":
     case "days":
     case "automated-inputs":
     case "background":
+    case "notices":
       return value;
     default:
       return "default";

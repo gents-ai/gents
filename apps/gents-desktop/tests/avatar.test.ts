@@ -13,7 +13,7 @@ describe("node avatars", () => {
     expect(names.map(avatarFor)).toEqual(firstPass);
     expect(new Set(firstPass)).toEqual(
       new Set(
-        Array.from({ length: AVATARS }, (_, index) => `/avatars/${index + 1}.png`),
+        Array.from({ length: AVATARS }, (_, index) => `/avatars/${index + 1}.webp`),
       ),
     );
   });
@@ -28,17 +28,18 @@ describe("node avatars", () => {
     for (let i = 0; i < 200; i++) expect(randomAvatar("7")).not.toBe("7");
   });
 
-  it("ships every avatar at the intended source resolution", async () => {
+  it("ships every avatar as a 448px WebP", async () => {
     const images = await Promise.all(
       Array.from({ length: AVATARS }, (_, index) =>
-        readFile(resolve("public", "avatars", `${index + 1}.png`)),
+        readFile(resolve("public", "avatars", `${index + 1}.webp`)),
       ),
     );
 
     for (const image of images) {
-      expect(image.subarray(1, 4).toString()).toBe("PNG");
-      expect(image.readUInt32BE(16)).toBe(224);
-      expect(image.readUInt32BE(20)).toBe(224);
+      expect(image.subarray(0, 4).toString()).toBe("RIFF");
+      expect(image.subarray(8, 16).toString()).toBe("WEBPVP8 ");
+      expect(image.readUInt16LE(26) & 0x3fff).toBe(448);
+      expect(image.readUInt16LE(28) & 0x3fff).toBe(448);
     }
   });
 });

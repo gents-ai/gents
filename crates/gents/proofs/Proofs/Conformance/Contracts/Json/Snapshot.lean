@@ -3,6 +3,7 @@ import Proofs.Conformance.Contracts.Json.TerminalSelection
 import Proofs.Conformance.WorkspaceCommandGrants
 import Proofs.Conformance.StorageFailure
 import Proofs.Conformance.RequestPatchPublicationCases
+import Proofs.Conformance.ClientSessionDeliveryCases
 import Proofs.Conformance.AccessReview
 import Proofs.Conformance.OperatorPaths
 import Proofs.Conformance.WorkspaceCommandRoot
@@ -501,6 +502,8 @@ def snapshotJson : String :=
       ++ Conformance.ClientDataPublication.casesJson ++ ","
     ++ "\"client_request_patch_publication_cases\":"
       ++ Conformance.RequestPatchPublicationCases.casesJson ++ ","
+    ++ "\"client_session_delivery_cases\":"
+      ++ Conformance.ClientSessionDelivery.casesJson ++ ","
     ++ "\"client_request_closure_cases\":"
       ++ Conformance.ClientRequestClosure.casesJson ++ ","
     ++ "\"client_request_cache_identity_cases\":"

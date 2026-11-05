@@ -190,6 +190,31 @@ function WindowBar({
   );
 }
 
+/** Where a node's accounts stand against their limits, said only once one is
+    near or at its limit: the closest window decides. */
+export function limitNote(
+  views: readonly AccountUsageView[],
+  now: number,
+): { text: string; tone: "warning" | "destructive"; title: string } | null {
+  let worst: { view: AccountUsageView; window: UsageWindowView } | null = null;
+  for (const view of views)
+    for (const window of view.windows) {
+      /* a window whose reset has passed no longer limits anything */
+      if (window.resetsAt && Date.parse(window.resetsAt) <= now) continue;
+      if (!worst || window.usedPct > worst.window.usedPct) worst = { view, window };
+    }
+  if (!worst || usageLevel(worst.window.usedPct) === "ok") return null;
+  const pct = Math.round(worst.window.usedPct);
+  const title = `${providerTitle(worst.view)}: ${worst.window.label} ${pct}%`;
+  if (pct < 100) return { text: "Near limit", tone: "warning", title };
+  const resets = resetsIn(worst.window, now);
+  return {
+    text: resets ? `Limited · ${resets}` : "Limited",
+    tone: "destructive",
+    title,
+  };
+}
+
 const providerTitle = (view: AccountUsageView) =>
   Object.values(SUBSCRIPTION).find((entry) => entry.provider === view.provider)
     ?.title ??

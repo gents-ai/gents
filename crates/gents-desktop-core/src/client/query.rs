@@ -6,6 +6,9 @@ use gents::documents::{
     InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation, SkillDocument, Task,
     ToolServiceRegistry, Tools, Trigger, TriggerObservation,
 };
+use gents_protocol::client_protocol::{
+    AttemptView, RequestSnapshot, SessionRowObservation, SubmittedAttempt,
+};
 use gents_protocol::graphql::escape_graphql_string;
 use gents_protocol::output::reconstruction::DependencyDenial;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -144,6 +147,16 @@ pub(super) const DATASTORE_TOOL_SURFACE_FIELDS: &str =
     "surface_id node_did display_name enabled entries created_at tags";
 pub(super) const MAILBOX_ITEM_FIELDS: &str = "_docID item_key requester_did node_did status kind action title summary payload source_kind source_id session_id request_id cause_doc_id target_node_did target_agent_id expected_collection parent_item_id deadline_at created_at updated_at resolved_at resolved_doc_id";
 
+/// What a selected-session read found in one read transaction.
+#[derive(Debug)]
+pub enum SelectedSessionRead {
+    /// The node's canonical session row and the requests it selects.
+    Visible(Box<ClientStore>),
+    /// No canonical row yet: the request this database holds for the
+    /// session, which the delivery classification reads beside the pairing.
+    Absent(Option<SubmittedAttempt>),
+}
+
 pub async fn load_chat_patch(
     access: &gents::store::config_client::ConfigAccess,
     node_did: &str,
@@ -151,7 +164,7 @@ pub async fn load_chat_patch(
     request_id: Option<&str>,
     fallback_request_id: Option<&str>,
     page_request_doc_ids: &[String],
-) -> Result<ClientStore> {
+) -> Result<SelectedSessionRead> {
     access
         .transact_readonly("desktop.selected_request_refresh", |txn| {
             let node_did = node_did.to_owned();
@@ -192,7 +205,7 @@ async fn load_chat_patch_with<'a>(
     fallback_request_id: Option<&str>,
     page_request_doc_ids: &[String],
     execute: &mut (impl FnMut(String, &'static str) -> QueryFuture<'a> + 'a),
-) -> Result<ClientStore> {
+) -> Result<SelectedSessionRead> {
     let node_did = node_did.trim();
     let session_id = session_id.trim();
     let request_id = request_id.map(str::trim).filter(|id| !id.is_empty());
@@ -200,12 +213,18 @@ async fn load_chat_patch_with<'a>(
         .map(str::trim)
         .filter(|id| !id.is_empty());
     if node_did.is_empty() || session_id.is_empty() {
-        return Ok(ClientStore::default());
+        return Ok(SelectedSessionRead::Visible(Box::default()));
     }
 
     let session_query = selected_session_query(node_did, session_id);
     let session_data = execute(session_query, "selected session owner").await?;
-    let session = selected_session_from_data(&session_data, node_did, session_id)?;
+    let Some(session) = selected_session_from_data(&session_data, node_did, session_id)? else {
+        let query =
+            submitted_request_query(node_did, session_id, request_id.or(fallback_request_id));
+        let data = execute(query, "selected session submitted request").await?;
+        return submitted_attempt_from_data(&data, node_did, session_id)
+            .map(SelectedSessionRead::Absent);
+    };
     let requester_did = session.requester_did.clone();
     let lookup = selected_request_lookup(
         node_did,
@@ -237,15 +256,18 @@ async fn load_chat_patch_with<'a>(
     .await?;
     let scopes = request_context_scopes(&requests);
     if scopes.is_empty() {
-        return Ok(ClientStore::from_rows(ClientStoreRows {
-            requests,
-            sessions: vec![session],
-            ..ClientStoreRows::default()
-        }));
+        return Ok(SelectedSessionRead::Visible(Box::new(
+            ClientStore::from_rows(ClientStoreRows {
+                requests,
+                sessions: vec![session],
+                ..ClientStoreRows::default()
+            }),
+        )));
     }
     let query = request_context_query(&scopes);
     let data = execute(query, "request session context").await?;
     request_patch_from_context_data(&data, requests, vec![session], requester_did, &scopes)
+        .map(|patch| SelectedSessionRead::Visible(Box::new(patch)))
 }
 
 pub(crate) async fn load_request_documents_on(
@@ -400,30 +422,76 @@ fn selected_session_query(node_did: &str, session_id: &str) -> String {
     )
 }
 
+/// The node creates the canonical row when it claims the request, so an
+/// absent row is `None`. Duplicate or out-of-scope rows are integrity faults
+/// whatever the other delivery signals say (`integrity_fault_is_an_error`).
 fn selected_session_from_data(
     data: &Value,
     node_did: &str,
     session_id: &str,
-) -> Result<AgentSession> {
+) -> Result<Option<AgentSession>> {
     let (sessions, complete) = snapshot_loaders::parse_query_rows_with_completeness::<AgentSession>(
         data,
         AGENT_SESSION_NAME,
     )?;
     anyhow::ensure!(complete, "selected session query returned malformed rows");
+    let in_scope = sessions
+        .iter()
+        .all(|session| session.node_did == node_did && session.session_id == session_id);
+    match SessionRowObservation::observe(sessions.len(), in_scope) {
+        SessionRowObservation::Absent => Ok(None),
+        SessionRowObservation::Canonical => Ok(sessions.into_iter().next()),
+        SessionRowObservation::Duplicate => bail!(
+            "selected session refresh found {} canonical AgentSession rows for one node/session",
+            sessions.len()
+        ),
+        SessionRowObservation::OutOfScope => {
+            bail!("selected session refresh returned a row outside its exact node/session scope")
+        }
+    }
+}
+
+/// The session's newest normal request, or the one the reader tracks.
+fn submitted_request_query(node_did: &str, session_id: &str, request_id: Option<&str>) -> String {
+    let node = escape_graphql_string(node_did);
+    let session = escape_graphql_string(session_id);
+    let request = request_id
+        .map(|id| format!(", request_id: {{ _eq: \"{}\" }}", escape_graphql_string(id)))
+        .unwrap_or_default();
+    format!(
+        "query DesktopSelectedSessionSubmission {{ {AGENT_REQUEST_NAME}(filter: {{ node_did: {{ _eq: \"{node}\" }}, session_id: {{ _eq: \"{session}\" }}, purpose: {{ _eq: \"normal\" }}{request} }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}, {{ _docID: DESC }}], limit: 1) {{ {AGENT_REQUEST_FIELDS} }} }}"
+    )
+}
+
+/// A request is written `pending`; a row without a lifecycle has not been
+/// advanced by the node either.
+fn submitted_attempt_from_data(
+    data: &Value,
+    node_did: &str,
+    session_id: &str,
+) -> Result<Option<SubmittedAttempt>> {
+    let rows = snapshot_loaders::complete_request_rows(data, AGENT_REQUEST_NAME)?;
     anyhow::ensure!(
-        sessions.len() == 1,
-        "selected session refresh requires exactly one canonical AgentSession row for node/session; found {}",
-        sessions.len()
+        rows.iter().all(|row| {
+            row.node_did.as_deref() == Some(node_did)
+                && row.session_id.as_deref() == Some(session_id)
+        }),
+        "selected session submission query returned a row outside its exact node/session scope"
     );
-    let session = sessions
-        .into_iter()
-        .next()
-        .expect("one session was checked");
-    anyhow::ensure!(
-        session.node_did == node_did && session.session_id == session_id,
-        "selected session refresh returned a row outside its exact node/session scope"
-    );
-    Ok(session)
+    let non_empty = |value: Option<&str>| value.is_some_and(|value| !value.trim().is_empty());
+    Ok(rows.into_iter().next().map(|row| SubmittedAttempt {
+        claimed: non_empty(row.claimed_at.as_deref()),
+        attempt: AttemptView {
+            request: RequestSnapshot {
+                is_superseded: non_empty(row.superseded_by_request.as_deref()),
+                lifecycle_state: row
+                    .lifecycle_state
+                    .unwrap_or(RequestLifecycleState::Pending),
+                retry_parent_request: row.retry_parent_request,
+                request_id: row.request_id,
+            },
+        },
+    }))
 }
 
 fn session_request_seed_query(

@@ -100,10 +100,10 @@ export function createDesktopApp({
     ...createProvenance({ api, stores }),
   };
   observeMailboxAnswerRetirement({ api, stores });
-  reconcileSelection(stores, actions.selectNode);
+  const drafts = createDraftStore();
+  reconcileSelection(stores, actions.selectNode, drafts);
   keepSeen(stores);
   watchNotifications(stores);
-  const drafts = createDraftStore();
   return { api, stores, view, drafts, project, trackedRequestId, lifecycle, actions };
 }
 

@@ -8,12 +8,12 @@ import { RichComposer } from "@gents/ui/conversation";
 import { useApp, useView } from "@/app/AppContext";
 import {
   useMailboxCause,
-  useNodeCount,
   useSelectedNode,
   useSelectedNodeDid,
 } from "@/hooks/useClient";
 import { href } from "@/lib/router";
 import { NodeSwitcher } from "@/app/NodeSwitcher";
+import { useShownNodeCount } from "@/lib/hidden";
 import { placeholderFor } from "@/lib/send-status";
 import { agentOf } from "@/lib/agents";
 import { NodeAvatar, nodeAvatarOf } from "../AgentAvatar";
@@ -39,7 +39,7 @@ import { useDraftField } from "../../../hooks/draftStore";
 export function NewSession() {
   const mailboxCause = useMailboxCause();
   const selectedNodeDid = useSelectedNodeDid();
-  const nodeCount = useNodeCount();
+  const nodeCount = useShownNodeCount(selectedNodeDid);
   const deployment = useSelectedNode();
   const choice = useAgentChoice();
   const nodeName = deployment?.node.displayName ?? deployment?.label ?? "the agent";

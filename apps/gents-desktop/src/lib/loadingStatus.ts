@@ -4,6 +4,7 @@ import type {
   DesktopSessionSnapshot,
   OperationalStatus,
 } from "@source-inc/gents-desktop-client";
+import type { BridgeErrorCode } from "@source-inc/gents-desktop-client/generated/BridgeErrorCode";
 import { sessionHydrationLabel, visibleSessionHydration } from "./sessionHydration";
 
 export type DesktopStartupPhase =
@@ -160,8 +161,32 @@ export function startupSteps(
   ];
 }
 
+/** How far a message into a session the node has not returned yet has got:
+    the bridge derives it from the local request, the node's claim and the
+    pairing, and re-reads it when any of them changes. */
+export type SessionDeliveryPhase = "delivering" | "notConnected" | "accepted";
+
+const SESSION_DELIVERY_PHASES: Partial<Record<BridgeErrorCode, SessionDeliveryPhase>> =
+  {
+    sessionDelivering: "delivering",
+    sessionNotConnected: "notConnected",
+    sessionAccepted: "accepted",
+  };
+
+export function sessionDeliveryPhase(
+  code: BridgeErrorCode,
+): SessionDeliveryPhase | null {
+  return SESSION_DELIVERY_PHASES[code] ?? null;
+}
+
+export function isSessionDeliveryPhase(
+  phase: SessionLoadState["phase"],
+): phase is SessionDeliveryPhase {
+  return phase === "delivering" || phase === "notConnected" || phase === "accepted";
+}
+
 export type SessionLoadState = {
-  phase: "idle" | "loading" | "pending" | "loaded" | "failed";
+  phase: "idle" | "loading" | "pending" | SessionDeliveryPhase | "loaded" | "failed";
   sessionId: string | null;
   nodeDid: string | null;
   found: boolean | null;
@@ -216,6 +241,10 @@ export function projectSessionLoadingStatus({
       detail: "Waiting for the latest conversation update.",
       action: null,
     };
+  }
+
+  if (loadMatches && isSessionDeliveryPhase(sessionLoad.phase) && !sessionMatches) {
+    return sessionDeliveryStatus(sessionLoad.phase, sessionLoad.error);
   }
 
   if (loadMatches && sessionLoad.phase === "loading" && sessionLoad.error) {
@@ -346,4 +375,39 @@ function sessionStatusFromOperational(
     detail: operational.detail,
     action: operational.action,
   };
+}
+
+function sessionDeliveryStatus(
+  phase: SessionDeliveryPhase,
+  detail: string | null,
+): SessionLoadingStatus {
+  switch (phase) {
+    case "delivering":
+      return {
+        layer: "sessionSync",
+        phase: "loading",
+        title: "Sending message",
+        detail: detail ?? "Waiting for the node to pick up the message.",
+        action: null,
+      };
+    case "notConnected":
+      return {
+        layer: "p2p",
+        phase: "blocked",
+        title: "Not connected to the node",
+        detail:
+          detail ??
+          "The message is saved on this computer and sends when the connection returns.",
+        action: null,
+      };
+    case "accepted":
+      return {
+        layer: "sessionSync",
+        phase: "loading",
+        title: "Message picked up",
+        detail:
+          detail ?? "The node accepted the message. Its session is on the way back.",
+        action: null,
+      };
+  }
 }

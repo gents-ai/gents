@@ -86,6 +86,9 @@ describe("flags read back from storage", () => {
     pinnedSessions: [],
     flags: {},
     navLayout: { order: [], shown: {} },
+    openOn: null,
+    hiddenNodes: [],
+    hiddenAgents: [],
     notify: { finished: true, failed: true, question: true, mailbox: true },
   };
 

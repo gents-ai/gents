@@ -407,7 +407,10 @@ impl<W> DigestWriter<W> {
     }
 }
 
-impl<W: Write> Write for DigestWriter<W> {
+impl<W> Write for DigestWriter<W>
+where
+    W: Write,
+{
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let written = self.inner.write(buf)?;
         self.hash.update(&buf[..written]);
