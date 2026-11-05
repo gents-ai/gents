@@ -3,9 +3,14 @@ import { IS_MAC } from "@/screens/shortcutKeys";
 /** A key and the modifiers held with it. `mod` is the app's command key: ⌘
     on a Mac, Ctrl elsewhere. `ctrl` is the Control key itself, which on a
     Mac is ⌃ and elsewhere is the same key as `mod`. `key` is the key's value
-    (`KeyboardEvent.key`), lowercased for letters. */
+    (`KeyboardEvent.key`), lowercased for letters, and how the chord is
+    written. `code` matches the physical key instead (`KeyboardEvent.code`),
+    for a key whose value changes with a modifier or the layout: ⇧⌘[ reports
+    "{" on a US keyboard and "[" needs ⌥ on some others, and on a Mac ⌥
+    turns letters and digits into other characters (⌥B is "∫"). */
 export type Chord = {
   key: string;
+  code?: string;
   mod?: boolean;
   ctrl?: boolean;
   alt?: boolean;
@@ -33,7 +38,8 @@ const held = (chord: Chord, mac: boolean) => ({
     modifiers, no more, so ⌃⌘J is not ⌘J and ⌃K stays with text editing. */
 export function matches(
   chord: Chord,
-  e: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">,
+  e: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey"> &
+    Partial<Pick<KeyboardEvent, "code">>,
   mac = IS_MAC,
 ): boolean {
   const want = held(chord, mac);
@@ -42,7 +48,9 @@ export function matches(
     e.ctrlKey === want.ctrl &&
     e.altKey === want.alt &&
     e.shiftKey === want.shift &&
-    e.key.toLowerCase() === chord.key.toLowerCase()
+    (chord.code
+      ? e.code === chord.code
+      : e.key.toLowerCase() === chord.key.toLowerCase())
   );
 }
 

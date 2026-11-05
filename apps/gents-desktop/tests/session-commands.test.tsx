@@ -60,11 +60,14 @@ async function load() {
   return { app, views, router, commands, dispatch, open, go };
 }
 
-/* jsdom is not a Mac: the command key is Ctrl */
+/* jsdom is not a Mac: the command key is Ctrl, and sessions go back and
+   forward with Ctrl+Shift+Tab and Ctrl+Tab */
 const press = (key: string, shift = false) =>
   act(() => {
     fireEvent.keyDown(window, { key, ctrlKey: true, shiftKey: shift });
   });
+const back = () => press("Tab", true);
+const forward = () => press("Tab");
 
 describe("the session keys", () => {
   let unbind: (() => void) | null = null;
@@ -75,14 +78,25 @@ describe("the session keys", () => {
     desktop(false);
   });
 
-  it("go back and forth between the two sessions open last", async () => {
+  it("go back and forward through the sessions opened", async () => {
     const { open, go } = await load();
     go("old");
     go("mid");
-    expect(open()).toBe("mid");
-    press(";");
+    go("new");
+    back();
+    await waitFor(() => expect(open()).toBe("mid"));
+    back();
     await waitFor(() => expect(open()).toBe("old"));
-    press(";");
+    /* nothing before the first */
+    back();
+    expect(open()).toBe("old");
+    forward();
+    await waitFor(() => expect(open()).toBe("mid"));
+    /* opening another drops the sessions ahead, as a page's history does */
+    go("old");
+    forward();
+    expect(open()).toBe("old");
+    back();
     await waitFor(() => expect(open()).toBe("mid"));
   }, 20_000);
 
@@ -94,7 +108,7 @@ describe("the session keys", () => {
       const router = await import("../src/ui/lib/router");
       router.navigate({ name: "sessions" });
     });
-    press(";");
+    back();
     await waitFor(() => expect(open()).toBe("mid"));
   }, 20_000);
 
@@ -107,10 +121,40 @@ describe("the session keys", () => {
       asked.push(route);
       return false;
     });
-    press(";");
+    back();
     expect(asked).toHaveLength(1);
     expect(asked[0]).toMatchObject({ name: "session", sessionId: "old" });
     expect(open()).toBe("mid");
+  }, 20_000);
+
+  it("answer on a Mac to ⇧⌘[ and ⇧⌘] by the keys pressed, and to ⌥⌘U", async () => {
+    const { open, go, dispatch } = await load();
+    go("old");
+    go("mid");
+    /* ⇧ turns the brackets into braces on a US keyboard */
+    const mac = (key: string, code: string, mods: KeyboardEventInit) =>
+      act(() => {
+        dispatch.dispatchKey(
+          new KeyboardEvent("keydown", { key, code, metaKey: true, ...mods }),
+          undefined,
+          true,
+        );
+      });
+    mac("{", "BracketLeft", { shiftKey: true });
+    await waitFor(() => expect(open()).toBe("old"));
+    mac("}", "BracketRight", { shiftKey: true });
+    await waitFor(() => expect(open()).toBe("mid"));
+    /* ⌃Tab stays with the window's own tabs on a Mac */
+    act(() => {
+      dispatch.dispatchKey(
+        new KeyboardEvent("keydown", { key: "Tab", ctrlKey: true, shiftKey: true }),
+        undefined,
+        true,
+      );
+    });
+    expect(open()).toBe("mid");
+    mac("¨", "KeyU", { altKey: true });
+    await waitFor(() => expect(open()).toBe("new"));
   }, 20_000);
 
   it("visit the sessions new since they were looked at, newest first", async () => {

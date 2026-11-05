@@ -8,6 +8,14 @@ import { applyTheme, systemTheme, type Theme, type ThemePreference } from "./the
 import { ZOOM_STEPS } from "./lib/zoom";
 
 export type NavMode = "hover" | "expanded" | "collapsed";
+/** How the sidebar shows: one of the nav's modes, or hidden altogether
+    (kept apart from the mode, which it returns to when shown again). */
+export type SidebarMode = NavMode | "hidden";
+export type CollapsedNav = Exclude<NavMode, "expanded">;
+
+/** The expanded sidebar's width, in pixels: dragged between these, and
+    reset to `initial`. */
+export const NAV_WIDTH = { min: 220, max: 420, initial: 304 } as const;
 
 /** Where a message the person sends settles: the view keeps following the
     foot as the reply grows, or the message is kept near the top of the view
@@ -21,6 +29,14 @@ export type FollowUp = "steer" | "queue";
 export type Preferences = {
   theme: ThemePreference;
   nav: NavMode;
+  /** the rail and sidebar put away entirely on a wide window, whatever
+      `nav` is; the phone's menu is unaffected */
+  navHidden: boolean;
+  /** what the sidebar collapses back to from always open: the person's own
+      pick of open on hover or icons only, never inferred */
+  navCollapsed: CollapsedNav;
+  /** the expanded sidebar's width on this device */
+  navWidth: number;
   zoom: number;
   sentTurn: SentTurnPlacement;
   followUp: FollowUp;
@@ -66,6 +82,9 @@ const NAV_MODES: readonly string[] = ["hover", "expanded", "collapsed"];
 const initial = (): Preferences => ({
   theme: "system",
   nav: "hover",
+  navHidden: false,
+  navCollapsed: "hover",
+  navWidth: NAV_WIDTH.initial,
   zoom: 1,
   sentTurn: "anchor",
   followUp: "steer",
@@ -130,6 +149,18 @@ export function restorePreferences(
       typeof saved.nav === "string" && NAV_MODES.includes(saved.nav)
         ? (saved.nav as NavMode)
         : defaults.nav,
+    navHidden:
+      typeof saved.navHidden === "boolean" ? saved.navHidden : defaults.navHidden,
+    navCollapsed:
+      saved.navCollapsed === "hover" || saved.navCollapsed === "collapsed"
+        ? saved.navCollapsed
+        : defaults.navCollapsed,
+    navWidth:
+      typeof saved.navWidth === "number" &&
+      saved.navWidth >= NAV_WIDTH.min &&
+      saved.navWidth <= NAV_WIDTH.max
+        ? Math.round(saved.navWidth)
+        : defaults.navWidth,
     zoom: (ZOOM_STEPS as readonly unknown[]).includes(saved.zoom)
       ? (saved.zoom as number)
       : defaults.zoom,
@@ -165,13 +196,31 @@ const store = createStore<Preferences>()(
   }),
 );
 
+const navChoice = (nav: NavMode): Partial<Preferences> =>
+  nav === "expanded" ? { nav } : { nav, navCollapsed: nav };
+
 export const preferences = {
   setTheme(theme: ThemePreference) {
     store.setState({ theme });
     applyTheme(theme);
   },
+  /** a mode chosen; open on hover or icons only is also what the sidebar
+      collapses back to from now on */
   setNav(nav: NavMode) {
-    store.setState({ nav });
+    store.setState(navChoice(nav));
+  },
+  /** one of the nav's modes, which shows the sidebar again, or hidden */
+  setSidebarMode(mode: SidebarMode) {
+    store.setState(
+      mode === "hidden"
+        ? { navHidden: true }
+        : { ...navChoice(mode), navHidden: false },
+    );
+  },
+  setNavWidth(width: number) {
+    store.setState({
+      navWidth: Math.round(Math.min(NAV_WIDTH.max, Math.max(NAV_WIDTH.min, width))),
+    });
   },
   setZoom(zoom: number) {
     store.setState({ zoom });
@@ -271,7 +320,17 @@ export const useTheme = (): Theme => {
 };
 export const useThemePreference = () => usePreferences((p) => p.theme);
 export const useNavMode = () => usePreferences((p) => p.nav);
+export const useNavHidden = () => usePreferences((p) => p.navHidden);
+export const useSidebarMode = (): SidebarMode =>
+  usePreferences((p) => (p.navHidden ? "hidden" : p.nav));
+export const useNavWidth = () => usePreferences((p) => p.navWidth);
+export const collapsedNav = (): CollapsedNav => store.getState().navCollapsed;
 export const zoomLevel = () => store.getState().zoom;
+/** how the sidebar shows now, outside React */
+export const sidebarMode = (): SidebarMode => {
+  const { nav, navHidden } = store.getState();
+  return navHidden ? "hidden" : nav;
+};
 export const useSentTurnPlacement = () => usePreferences((p) => p.sentTurn);
 export const useFollowUp = () => usePreferences((p) => p.followUp);
 export const usePinnedSessions = () => usePreferences((p) => p.pinnedSessions);

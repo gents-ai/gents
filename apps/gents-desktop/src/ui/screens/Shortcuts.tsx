@@ -10,11 +10,12 @@ import { Kbd } from "@gents/ui/components/kbd";
 import { currentRoute, navigate } from "@/lib/router";
 import { isMacTauriShell } from "../../lib/shellPlatform";
 import { useHomeDid, useSelectedNodeDid } from "@/hooks/useClient";
-import { ArrowLeftRight, BellDot, History } from "lucide-react";
+import { ArrowLeft, ArrowRight, BellDot, History, PanelLeft } from "lucide-react";
+import { sidebar } from "@/app/sidebarChange";
 import { useApp } from "@/app/AppContext";
 import { switchToNode } from "@/app/NodeSwitcher";
 import { previousNode } from "../../hooks/activeNode";
-import { sessionToReturnTo } from "../../hooks/sessionTrail";
+import { sessionBack, sessionForward, stepTo } from "../../hooks/sessionTrail";
 import { seenMarks } from "@/app/sessionViews";
 import { isNew } from "@/lib/seen";
 import { defaultScope, recentInScope, scopeContextOf } from "@/lib/scope";
@@ -143,20 +144,47 @@ export function Shortcuts() {
     id: "session.previous",
     title: "Go to previous session",
     group: "Session",
-    keys: { key: ";", mod: true },
+    keys: {
+      mac: { key: "[", code: "BracketLeft", mod: true, shift: true },
+      other: { key: "Tab", mod: true, shift: true },
+    },
     desktopOnly: true,
-    icon: ArrowLeftRight,
-    when: () => sessionById(sessionToReturnTo(openSessionId())) !== null,
+    icon: ArrowLeft,
+    when: () => sessionById(sessionBack(openSessionId())) !== null,
     run: () => {
-      const s = sessionById(sessionToReturnTo(openSessionId()));
-      if (s) goToSession(s);
+      const here = openSessionId();
+      const s = sessionById(sessionBack(here));
+      if (!s) return;
+      stepTo(s.sessionId, here === null ? 0 : -1);
+      goToSession(s);
+    },
+  });
+  useCommand({
+    id: "session.next",
+    title: "Go to next session",
+    group: "Session",
+    keys: {
+      mac: { key: "]", code: "BracketRight", mod: true, shift: true },
+      other: { key: "Tab", mod: true },
+    },
+    desktopOnly: true,
+    icon: ArrowRight,
+    when: () => sessionById(sessionForward(openSessionId())) !== null,
+    run: () => {
+      const s = sessionById(sessionForward(openSessionId()));
+      if (!s) return;
+      stepTo(s.sessionId, 1);
+      goToSession(s);
     },
   });
   useCommand({
     id: "session.next-new",
     title: "Go to next new session",
     group: "Session",
-    keys: { key: "a", mod: true, shift: true },
+    keys: {
+      mac: { key: "u", code: "KeyU", mod: true, alt: true },
+      other: { key: "a", mod: true, shift: true },
+    },
     desktopOnly: true,
     icon: BellDot,
     when: () => newSessions().length > 0,
@@ -193,6 +221,15 @@ export function Shortcuts() {
     notInFields: !IS_MAC,
     when: () => transcriptScroller() !== null,
     run: () => step(1),
+  });
+  useCommand({
+    id: "sidebar.toggle",
+    title: "Expand or collapse the sidebar",
+    group: "Pages",
+    /* ⌃⌘S as well, as the platform's own sidebars use */
+    keys: [{ key: "b", mod: true }, { mac: { key: "s", mod: true, ctrl: true } }],
+    icon: PanelLeft,
+    run: () => sidebar.toggle(),
   });
   useCommand({
     id: "help.shortcuts",

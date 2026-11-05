@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
-import { Maximize2, PanelRight, Rows3 } from "lucide-react";
+import { Maximize2, PanelRight, Rows3, X } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@gents/ui/components/dialog";
 import { Kbd } from "@gents/ui/components/kbd";
 import { cn } from "@gents/ui/lib/utils";
@@ -11,7 +11,6 @@ import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { registerCommand, useCommand } from "@/commands/commands";
 import { matchScore, queryWords } from "@/lib/search";
 import { dockTabId } from "./Dock";
-import { NTH_PANEL, NTH_PANEL_TEXT } from "./panelKeys";
 import { dockView, inScope } from "./dock-scope";
 import { listSurfaces, useSurfaces, type Surface } from "./surfaces";
 import type { ShellLayout } from "./useShellLayout";
@@ -35,7 +34,7 @@ const focusPanel = (surface: string | null) =>
       document.querySelector<HTMLElement>(`[data-testid="dock"] button`),
   );
 
-/** The panels a page can show, numbered as the picker and ⌃1–9 count them:
+/** The panels a page can show, numbered as the picker and the number keys count them:
     its open tabs in the tab bar's order, then the ones it could open. */
 export function panelsOf(route: Route, surfaces: readonly Surface[] = listSurfaces()) {
   const dock = workspace.dock(dockScope(route));
@@ -76,7 +75,10 @@ export function usePanelCommands(route: Route, layout: ShellLayout) {
     id: "panel.toggle",
     title: "Show or hide the panel",
     group: "Panel",
-    keys: { key: "j", mod: true },
+    keys: {
+      mac: { key: "b", code: "KeyB", mod: true, alt: true },
+      other: { key: "b", mod: true, shift: true },
+    },
     desktopOnly: true,
     icon: PanelRight,
     when: () =>
@@ -101,25 +103,31 @@ export function usePanelCommands(route: Route, layout: ShellLayout) {
     id: "panel.picker",
     title: "Choose a panel",
     group: "Panel",
-    keys: { key: "j", mod: true, shift: true },
+    keys: {
+      mac: { key: "p", code: "KeyP", mod: true, alt: true },
+      other: { key: "p", mod: true, shift: true },
+    },
     desktopOnly: true,
     icon: Rows3,
     when: () => panelsOf(route, surfaces).length > 0,
     run: openPanelPicker,
   });
+  /* no key: ⌘W always closes the window, as the menu's Close Window does */
   useCommand({
-    id: "panel.nth",
-    title: "Go to a panel by its number",
+    id: "panel.close-tab",
+    title: "Close panel tab",
     group: "Panel",
-    keys: NTH_PANEL,
-    keysText: NTH_PANEL_TEXT,
-    desktopOnly: true,
-    palette: false,
-    run: (index) => {
-      const panel = panelsOf(route, surfaces)[index];
-      if (!panel) return false;
-      if (!view.shown) returnTo.current = document.activeElement;
-      openPanel(panel.surface.id);
+    icon: X,
+    when: () => view.active !== null,
+    run: () => {
+      const closing = view.active;
+      if (!closing) return false;
+      workspace.closeTab(scope, closing.id);
+      /* the last tab closed leaves the panel on what it can open, as an
+         empty panel shows it, rather than hiding it */
+      const after = workspace.dock(scope);
+      if (after.tabs.length === 0) workspace.reopenDock(scope);
+      focusPanel(after.active);
     },
   });
   useCommand({

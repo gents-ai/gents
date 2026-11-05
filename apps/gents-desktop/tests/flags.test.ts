@@ -80,6 +80,9 @@ describe("flags read back from storage", () => {
   const defaults: Preferences = {
     theme: "light",
     nav: "hover",
+    navHidden: false,
+    navCollapsed: "hover",
+    navWidth: 304,
     zoom: 1,
     sentTurn: "follow",
     followUp: "steer",
