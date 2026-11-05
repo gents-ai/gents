@@ -95,6 +95,7 @@ describe("the owner of plugins' notifications", () => {
   let told: (Notice & { to: Route })[];
   let shownInApp: { notice: Notice; open: () => void }[];
   let opened: Route[];
+  let offered: string[] = [];
 
   const notifier = () =>
     createPluginNotifier({
@@ -106,6 +107,7 @@ describe("the owner of plugins' notifications", () => {
       tell: (notice) => void told.push(notice),
       show: (notice, open) => void shownInApp.push({ notice, open }),
       open: (to) => void opened.push(to),
+      offer: (_caller, { kind }) => void offered.push(kind),
     } satisfies PluginNotifyDeps);
 
   beforeEach(() => {
@@ -117,6 +119,7 @@ describe("the owner of plugins' notifications", () => {
     told = [];
     shownInApp = [];
     opened = [];
+    offered = [];
   });
 
   it("tells a switched-on kind, attributed, with a click that opens the plugin's page", async () => {
@@ -161,15 +164,20 @@ describe("the owner of plugins' notifications", () => {
     expect(told).toEqual([]);
   });
 
-  it("refuses a kind the person hasn't turned on, for this pack's plugin only", async () => {
+  it("refuses a kind the person hasn't turned on, for this pack's plugin only, and offers it once", async () => {
     switched = new Set();
-    await expect(
-      notifier()(BOARD, { kind: "task-assigned", title: "x" }),
-    ).rejects.toThrow(/"Task assigned" is off/);
+    const notify = notifier();
+    await expect(notify(BOARD, { kind: "task-assigned", title: "x" })).rejects.toThrow(
+      /"Task assigned" notifications are off/,
+    );
+    await expect(notify(BOARD, { kind: "task-assigned", title: "y" })).rejects.toThrow(
+      /are off/,
+    );
+    expect(offered).toEqual(["task-assigned"]);
     switched = new Set(["other/pack/board task-assigned"]);
     await expect(
       notifier()(BOARD, { kind: "task-assigned", title: "x" }),
-    ).rejects.toThrow(/is off/);
+    ).rejects.toThrow(/are off/);
     expect(told).toEqual([]);
   });
 
@@ -498,21 +506,20 @@ describe("the switches for plugins' notifications", () => {
     const { NotificationsGroup } =
       await import("../src/ui/screens/settings/NotificationsGroup");
     render(<NotificationsGroup />);
-    const toggle = screen.getByRole("switch", { name: "Board: Task assigned" });
+    const toggle = screen.getByRole("switch", { name: "Task assigned" });
     expect(toggle).not.toBeChecked();
-    expect(
-      screen.getByText("A task is yours. From the acme/kit pack."),
-    ).toBeInTheDocument();
+    expect(screen.getByText("A task is yours.")).toBeInTheDocument();
+    /* grouped under the plugin, with its pack beside the name */
+    expect(screen.getByText("Board")).toBeInTheDocument();
+    expect(screen.getByText("acme/kit")).toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: /^Quiet/ })).toBeNull();
     fireEvent.click(toggle);
-    expect(screen.getByRole("switch", { name: "Board: Task assigned" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Task assigned" })).toBeChecked();
     const { pluginNotifyOn } = await import("../src/ui/preferences");
     expect(pluginNotifyOn("acme/kit/board", "task-assigned")).toBe(true);
     expect(pluginNotifyOn("other/kit/board", "task-assigned")).toBe(false);
     act(() => preferences.setPluginNotify("acme/kit/board", "task-assigned", false));
-    expect(
-      screen.getByRole("switch", { name: "Board: Task assigned" }),
-    ).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Task assigned" })).not.toBeChecked();
   });
 
   it("stay hidden until notifications from packs are on", async () => {
@@ -521,6 +528,6 @@ describe("the switches for plugins' notifications", () => {
       await import("../src/ui/screens/settings/NotificationsGroup");
     render(<NotificationsGroup />);
     expect(screen.getByRole("switch", { name: "Finished" })).toBeInTheDocument();
-    expect(screen.queryByRole("switch", { name: "Board: Task assigned" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Task assigned" })).toBeNull();
   });
 });
