@@ -477,8 +477,19 @@ export function createSandboxRuntime(
             throw error;
           }
         },
-        call: (surface, tool, args) =>
-          rpc("data.call", surface, tool, args ?? {}) as Promise<UxDataCallResult>,
+
+        supportsExpectedNode: true,
+        call: (surface, tool, args, expectedNodeDid) =>
+          (expectedNodeDid === undefined
+            ? rpc("data.call", surface, tool, args ?? {})
+            : rpc(
+                "data.call",
+                surface,
+                tool,
+                args ?? {},
+                expectedNodeDid,
+              )) as Promise<UxDataCallResult>,
+
         surfaces: () => rpc("data.surfaces") as Promise<UxDataSurfaceDecl[]>,
       },
     };

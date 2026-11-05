@@ -20,10 +20,11 @@ import { installUxHost, type UxHost } from "@/contrib/plugin";
 import { configureUxDoors, scanRuntimeUxPlugins } from "@/contrib/runtime-door";
 import type { DesktopClientUpdatedEvent } from "@source-inc/gents-desktop-client";
 
-/* the gate on ctx.send: a plugin posts a turn in the user's name, so it
-   must follow the user's own gesture (a click or a key press), never a
-   timer, an effect or a directive's mount, or the model could prompt
-   itself through a plugin it addressed */
+/* the gate on ctx.send and os.openExternal: a plugin posts a turn in the
+   user's name, or carries data out of the app in a URL, so either must
+   follow the user's own gesture (a click or a key press), never a timer,
+   an effect or a directive's mount; otherwise the model could prompt itself
+   through a plugin it addressed, or a shared pack send data out unasked */
 function withinUserGesture(): boolean {
   const activation = (
     navigator as Navigator & { userActivation?: { isActive: boolean } }
@@ -114,6 +115,7 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
     },
     os: {
       openExternal: async (url) => {
+        if (!withinUserGesture()) return false;
         try {
           await app.actions.openExternalUrl(url);
           return true;

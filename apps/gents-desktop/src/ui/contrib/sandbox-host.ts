@@ -633,6 +633,7 @@ export class SandboxHost {
               String(args[0]),
               String(args[1]),
               (args[2] ?? {}) as Record<string, unknown>,
+              args[3] === undefined ? undefined : String(args[3]),
             ),
           );
         case "data.surfaces":

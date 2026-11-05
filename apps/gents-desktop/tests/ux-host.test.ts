@@ -176,6 +176,10 @@ describe("buildUxHost: bridge verbs", () => {
         },
       },
     });
+    Object.defineProperty(navigator, "userActivation", {
+      configurable: true,
+      value: { isActive: true, hasBeenActive: true },
+    });
     try {
       const host = buildUxHost(app, route);
       expect(await host.os.openExternal("https://example.test/")).toBe(true);
@@ -188,7 +192,18 @@ describe("buildUxHost: bridge verbs", () => {
       warn.mockRestore();
     } finally {
       delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+      delete (navigator as { userActivation?: unknown }).userActivation;
     }
+  });
+
+  it("opens nothing outside a gesture, so a page can't send data out unasked", async () => {
+    call.mockReset();
+    const host = buildUxHost(
+      appOver(() => undefined),
+      route,
+    );
+    expect(await host.os.openExternal("https://example.test/?data=1")).toBe(false);
+    expect(call).not.toHaveBeenCalled();
   });
 
   it("exposes no raw bridge verb", () => {

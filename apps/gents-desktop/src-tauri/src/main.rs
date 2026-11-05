@@ -68,6 +68,25 @@ fn main() {
         return;
     }
 
+    #[cfg(all(target_os = "macos", feature = "native-e2e", debug_assertions))]
+    if command.as_deref() == Some("__verify-frame-ipc") {
+        let _ = tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .try_init();
+        let result = (|| -> anyhow::Result<()> {
+            let receipt = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("missing frame probe receipt path"))?;
+            anyhow::ensure!(args.next().is_none(), "unexpected frame probe argument");
+            gents_desktop_tauri_lib::frame_probe::verify_frame_ipc(std::path::Path::new(&receipt))
+        })();
+        if let Err(error) = result {
+            tracing::error!(%error, "frame IPC probe failed");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     gents::enable_self_runner();
     gents_desktop_tauri_lib::run()
 }

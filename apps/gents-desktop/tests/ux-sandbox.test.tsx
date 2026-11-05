@@ -251,6 +251,36 @@ describe("a plugin in its frame", () => {
       delete host.data!.watch;
     }
   });
+
+  it("refuses a frame data call when its expected runtime is no longer selected", async () => {
+    const source = `
+import { PLUGIN_PAGE_AREA } from '@gents/ux-sdk'
+import { useState } from 'react'
+import { jsx, jsxs } from 'react/jsx-runtime'
+function Page({ctx}) {
+  const [error, setError] = useState('')
+  return jsxs('div', {children: [
+    jsx('button', { 'data-testid': 'save', onClick: () => ctx.data.call('board', 'move_task', {}, 'did:key:a').catch(e => setError(e.message)) }),
+    jsx('p', { 'data-testid': 'error', children: error })
+  ]})
+}
+export default { id: 'board', register(ctx) { ctx.register({ id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(Page, {ctx}) }) } }`;
+    expect(await load(source)).toBe("board");
+    await settle();
+    const page = registry.getArea(PLUGIN_PAGE_AREA)[0]!;
+    render(<>{page.render!()}</>);
+    await settle();
+    vi.spyOn(host.shell, "selectedDeployment").mockReturnValue({
+      nodeDid: "did:key:b",
+    } as never);
+    const mount = frameMount("acme/kit/board")!;
+    fireEvent.click(mount.querySelector("[data-testid=save]")!);
+    await settle();
+    expect(mount.querySelector("[data-testid=error]")).toHaveTextContent(
+      "selected runtime changed",
+    );
+    expect(calls.filter((call) => call.verb === "data.call")).toHaveLength(0);
+  });
   it("registers shell-drawn rows as data, and the shell draws them", async () => {
     expect(await load()).toBe("board");
     await settle();

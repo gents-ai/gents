@@ -147,20 +147,25 @@ async function allPages(
   recover: boolean,
 ) {
   const first = (await call(args)).output as QueryPage;
-  if (!Array.isArray(first.results)) return first;
+  if (!Array.isArray(first.results)) throw new Error("Invalid query results.");
   const results: unknown[] = [];
   const left: FieldRecovery[] = [];
   let page = first;
+  let offset = typeof args.offset === "number" ? args.offset : 0;
   for (;;) {
     if (recover) page = await recoverFields(call, args, page);
     for (const entry of page.field_recovery ?? []) {
       left.push({ ...entry, row: entry.row + results.length });
     }
     results.push(...page.results!);
-    if (typeof page.next_offset !== "number" || results.length >= maxRows) break;
+    if (page.next_offset == null) break;
+    if (!Number.isSafeInteger(page.next_offset) || page.next_offset <= offset)
+      throw new Error("Invalid query continuation.");
+    if (results.length >= maxRows) break;
+    offset = page.next_offset;
     const next = (await call({ ...args, offset: page.next_offset }))
       .output as QueryPage;
-    if (!Array.isArray(next.results)) break;
+    if (!Array.isArray(next.results)) throw new Error("Invalid query continuation.");
     page = next;
   }
   const out: QueryPage = { ...first, results: results.slice(0, maxRows) };

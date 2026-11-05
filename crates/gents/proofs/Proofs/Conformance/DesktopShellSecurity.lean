@@ -22,7 +22,9 @@ def cases : Json := Json.mkObj [
   ("send", toJson (bools.flatMap fun gesture => bools.flatMap fun confirmed =>
     bools.map fun sameTarget => Json.mkObj [("gesture", toJson gesture),
       ("confirmed", toJson confirmed), ("sameTarget", toJson sameTarget),
-      ("expected", toJson (send gesture confirmed sameTarget))]))]
+      ("expected", toJson (send gesture confirmed sameTarget))])),
+  ("openExternal", toJson (bools.map fun gesture => Json.mkObj [
+      ("gesture", toJson gesture), ("expected", toJson (openExternal gesture))]))]
 
 end Conformance.DesktopShellSecurity
 

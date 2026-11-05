@@ -138,10 +138,12 @@ export interface UxContext {
   os: UxOs;
   /** the data door, scoped to this plugin's listing and the selected node */
   data: {
+    readonly supportsExpectedNode: boolean;
     call: (
       surface: string,
       tool: string,
       args?: Record<string, unknown>,
+      expectedNodeDid?: string,
     ) => Promise<UxDataCallResult>;
     surfaces: () => Promise<unknown[]>;
     watch: (
@@ -404,7 +406,9 @@ export function createUxContext(
         );
         return trackLifetime(stop);
       },
-      call: (surface, tool, args) => {
+
+      supportsExpectedNode: true,
+      call: (surface, tool, args, expectedNodeDid) => {
         const h = host();
         const node = h.shell.selectedDeployment();
         if (!options.listing || !h.data) {
@@ -413,6 +417,8 @@ export function createUxContext(
           );
         }
         if (!node) return Promise.reject(new Error(`${pluginId}: no node is selected`));
+        if (expectedNodeDid !== undefined && node.nodeDid !== expectedNodeDid)
+          return Promise.reject(new Error(`${pluginId}: the selected runtime changed`));
         return h.data.call(options.listing, node.nodeDid, surface, tool, args ?? {});
       },
       surfaces: () => {

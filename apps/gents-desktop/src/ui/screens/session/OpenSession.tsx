@@ -1,7 +1,13 @@
 import { useCallback, useMemo, useRef, useState, type ComponentProps } from "react";
 import { toast } from "sonner";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
+import { Search } from "lucide-react";
 import { cn } from "@gents/ui/lib/utils";
+import {
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+} from "@gents/ui/components/dropdown-menu";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { useApp, useView } from "@/app/AppContext";
 import { PanelMenu } from "@/app/PanelMenu";
@@ -34,6 +40,8 @@ import { StartedSessionsButton } from "../StartedSessionsButton";
 import { BackgroundButton } from "../BackgroundButton";
 import { ParentLine, StartedByAutomation, Title } from "../SessionHeader";
 import { DROPDOWN_MENU, SessionItems, useRenameFromMenu } from "../SessionMenu";
+import { MOD } from "../shortcutKeys";
+import { openFind } from "./find";
 import { SessionLoading } from "../SessionLoading";
 import { useComposerRoom, useHeaderScrolledOut } from "../sessionLayout";
 import { sentTurnKey } from "../stream-reveal";
@@ -120,6 +128,9 @@ export function OpenSession() {
   const sessionNode = useFleet((s) => nodeOf(s, session?.nodeDid));
   const [renaming, setRenaming] = useState(false);
   const rename = useRenameFromMenu(session ? () => setRenaming(true) : null);
+  /* the find bar's field keeps the focus the menu would hand back, as a
+     rename's does */
+  const find = useRenameFromMenu(openFind);
 
   const stoppableRequestId = interruptTarget({
     trackedRequestId: activeRequestId,
@@ -246,9 +257,22 @@ export function OpenSession() {
                 <Slot area={SESSION_HEADER_ACTIONS_AREA} />
                 <PanelMenu
                   routeName="session"
-                  finalFocus={rename.finalFocus}
-                  onOpenChange={rename.onOpenChange}
+                  finalFocus={
+                    rename.finalFocus === false || find.finalFocus === false
+                      ? false
+                      : undefined
+                  }
+                  onOpenChange={(open) => {
+                    rename.onOpenChange(open);
+                    find.onOpenChange(open);
+                  }}
                 >
+                  <DropdownMenuItem onClick={find.onRename!}>
+                    <Search />
+                    Find in session…
+                    <DropdownMenuShortcut>{`${MOD}F`}</DropdownMenuShortcut>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
                   {summary && (
                     <SessionItems
                       session={summary}

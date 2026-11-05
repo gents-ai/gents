@@ -66,7 +66,7 @@ impl From<&approval::Request> for PluginApprovalView {
                 cwd: command.cwd.to_owned(),
                 root: command.root.to_owned(),
                 execution_mode: command.policy.mode,
-                network_mode: command.policy.network_mode,
+                network_mode: command.policy.effective_network_mode(),
             }
         };
         Self {
