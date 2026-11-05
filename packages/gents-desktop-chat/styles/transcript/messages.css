@@ -706,3 +706,28 @@
 .transcript-items > .current-user-turn {
   background: var(--chat-background, var(--color-surface-strong));
 }
+
+@layer components {
+  .session-compaction {
+    min-width: 0;
+    color: var(--color-text-muted);
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+  .session-compaction > summary {
+    cursor: pointer;
+    width: fit-content;
+    max-width: 100%;
+  }
+  .session-compaction > summary:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  .session-compaction-details {
+    padding-block: 4px;
+  }
+  .session-compaction-details p {
+    margin: 4px 0;
+  }
+}

@@ -808,10 +808,11 @@ fn desired_routes_at(
         .active
         .iter()
         .filter(|active| {
-            gents_protocol::enrollment::authorization_lease_is_fresh_at(
-                &active.revision.authorization_expires_at,
-                now,
-            )
+            active.request.profile == CLIENT_TEMPLATE
+                && gents_protocol::enrollment::authorization_lease_is_fresh_at(
+                    &active.revision.authorization_expires_at,
+                    now,
+                )
         })
         .map(|active| {
             let route = EnrollmentRoute {
@@ -1427,6 +1428,22 @@ mod tests {
             active: vec![active],
             ..EnrollmentProjection::default()
         }
+    }
+
+    #[test]
+    fn client_route_requires_a_fresh_client_profile() {
+        let now = "2030-01-01T00:00:00Z".parse().unwrap();
+        let client = active_enrollment(1, "2031-01-01T00:00:00Z");
+        let projection = projection_with_active(client.clone());
+        assert!(desired_routes_at(&projection, now).contains_key(&client.request.candidate_peer));
+
+        for profile in ["pack:example/game", "peer", ""] {
+            let mut other = client.clone();
+            other.request.profile = profile.into();
+            assert!(desired_routes_at(&projection_with_active(other), now).is_empty());
+        }
+        let expired = active_enrollment(2, "2029-01-01T00:00:00Z");
+        assert!(desired_routes_at(&projection_with_active(expired), now).is_empty());
     }
 
     struct CurrentProjectionReader(Arc<Mutex<EnrollmentProjection>>);

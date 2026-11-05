@@ -4,7 +4,8 @@ import type { NodeView } from "../../../hooks/fleetStore";
 import { Button } from "@gents/ui/components/button";
 import { shortPath } from "@/lib/paths";
 import { counted } from "../NodeFacts";
-import { Summary } from "./AgentCard";
+import { href } from "@/lib/router";
+import { AgentMarks, CompactSummary, Summary } from "./AgentCard";
 import { usersOf } from "./behaviorDraft";
 
 type Files = "Off" | "ReadOnly" | "ReadWrite";
@@ -50,6 +51,53 @@ function alsoOf(tools: Tools): string[] {
   ].filter((part): part is string => Boolean(part));
 }
 
+/** The agents a tool set reaches, through the contexts that name it. */
+export const toolsUsers = (deployment: NodeView, toolsId: string) =>
+  deployment.contexts
+    .filter((c) => c.tools_id === toolsId)
+    .flatMap((c) => usersOf(deployment, c.context_id));
+
+/** The tool set's users at the head of its side sheet: their marks, and
+    their names, each leading to the agent. */
+export function ToolsUsedBy({
+  deployment,
+  tools,
+}: {
+  deployment: NodeView;
+  tools: Tools;
+}) {
+  const agents = toolsUsers(deployment, tools.tools_id);
+  return (
+    <CompactSummary label="Used by">
+      {agents.length ? (
+        <>
+          <AgentMarks deployment={deployment} agentIds={agents.map((a) => a.agentId)} />
+          <span className="min-w-0 truncate">
+            {agents.map((a, i) => (
+              <span key={a.agentId}>
+                {i > 0 && ", "}
+                <a
+                  href={href({
+                    name: "agent",
+                    nodeDid: deployment.nodeDid,
+                    section: "agents",
+                    item: a.agentId,
+                  })}
+                  className="underline-offset-2 hover:underline"
+                >
+                  {a.displayName}
+                </a>
+              </span>
+            ))}
+          </span>
+        </>
+      ) : (
+        <span className="text-muted-foreground">Not used by any agent</span>
+      )}
+    </CompactSummary>
+  );
+}
+
 export function ToolsSummary({
   deployment,
   tools,
@@ -62,8 +110,7 @@ export function ToolsSummary({
   draft: { name: string; files: Files; bash: Bash; root: string };
   edit: { open: boolean; onToggle: () => void; controls: string };
 }) {
-  const contexts = deployment.contexts.filter((c) => c.tools_id === tools.tools_id);
-  const agents = contexts.flatMap((c) => usersOf(deployment, c.context_id));
+  const agents = toolsUsers(deployment, tools.tools_id);
   const also = alsoOf(tools);
   return (
     <div className="@container mb-8 grid gap-4">

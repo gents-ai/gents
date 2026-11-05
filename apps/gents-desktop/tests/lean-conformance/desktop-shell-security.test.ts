@@ -26,6 +26,7 @@ type Cases = {
     sameTarget: boolean;
     expected: boolean;
   }[];
+  openExternal: { gesture: boolean; expected: boolean }[];
 };
 
 afterEach(() => {
@@ -102,5 +103,19 @@ it("binds plugin loading and message consent to the executable shell model", asy
       );
     else expect(confirm).not.toHaveBeenCalled();
     confirm.mockRestore();
+  }
+  expect(cases.openExternal).toHaveLength(2);
+  for (const row of cases.openExternal) {
+    Object.defineProperty(navigator, "userActivation", {
+      configurable: true,
+      value: { isActive: row.gesture },
+    });
+    const app = testApp();
+    const open = vi.spyOn(app.actions, "openExternalUrl").mockResolvedValue(undefined);
+    const opened = await buildUxHost(app, () => ({ name: "sessions" })).os.openExternal(
+      "https://example.test/?data=1",
+    );
+    expect(opened, JSON.stringify(row)).toBe(row.expected);
+    expect(open.mock.calls.length, JSON.stringify(row)).toBe(row.expected ? 1 : 0);
   }
 }, 240_000);
