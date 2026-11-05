@@ -56,12 +56,17 @@ export const partyName = (party: SharingParty) => party.name ?? shortDid(party.d
 export function scopeText(scope: ShareScope): string {
   if (scope.kind === "node") return "Whole node";
   if (scope.kind === "pack") return `${scope.name} pack`;
+  if (scope.kind === "session") return `Session “${scope.name}”`;
   return `${scope.name} agent`;
 }
 
 /** what a share covers, inside a sentence */
 export const scopeInSentence = (scope: ShareScope) =>
-  scope.kind === "node" ? "the whole node" : `the ${scopeText(scope)}`;
+  scope.kind === "node"
+    ? "the whole node"
+    : scope.kind === "session"
+      ? `the session “${scope.name}”`
+      : `the ${scopeText(scope)}`;
 
 export const kindText = (kind: InviteKind) =>
   kind === "device" ? "Your device" : "A person";

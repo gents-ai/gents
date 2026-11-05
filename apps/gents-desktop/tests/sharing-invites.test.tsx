@@ -7,6 +7,7 @@ import { resetJoins } from "../src/ui/lib/joinInvite";
 import { resetPreferences } from "../src/ui/preferences";
 import { AgentScreen } from "../src/ui/screens/agent/AgentScreen";
 import { resetSharingTab } from "../src/ui/screens/sharing/SharingTabs";
+import { InviteDialog } from "../src/ui/screens/sharing/InviteDialog";
 import { resetInstalledPacks } from "../src/ui/screens/packs/model";
 import { node, renderIn, testApp, withFlags } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
@@ -210,5 +211,39 @@ describe("inviting to the node", () => {
       ),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Invite…" })).toBeNull();
+  });
+});
+
+describe("opening an invite on something already chosen", () => {
+  it("opens on a session, with the profiles a session allows", async () => {
+    withFlags({ sharing: true });
+    const sharing = createHarnessSharing("sharing");
+    const app = testApp({
+      sharing,
+      snapshot: { bootstrap, client: { deployments: [node()] } },
+    });
+    renderIn(
+      app,
+      <InviteDialog
+        nodeDid={deployment.nodeDid}
+        name="Local Agent"
+        open
+        scopes={[{ key: "node", scope: { kind: "node" } }]}
+        initial={{
+          kind: "session",
+          nodeDid: deployment.nodeDid,
+          session: "s-1",
+          name: "Fix the login bug",
+        }}
+        onClose={() => {}}
+      />,
+    );
+    const dialog = await screen.findByTestId("invite-dialog");
+    await waitFor(() =>
+      expect(within(dialog).getByText(/Session “Fix the login bug”/)).toBeTruthy(),
+    );
+    await waitFor(() =>
+      expect(within(dialog).getByText(/Read this session/)).toBeTruthy(),
+    );
   });
 });

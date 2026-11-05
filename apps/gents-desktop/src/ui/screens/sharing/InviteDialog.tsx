@@ -18,11 +18,12 @@ import {
 import { Spinner } from "@gents/ui/components/spinner";
 import { Switch } from "@gents/ui/components/switch";
 import { ToggleGroup, ToggleGroupItem } from "@gents/ui/components/toggle-group";
-import type {
-  Invite,
-  InviteKind,
-  ShareProfile,
-  ShareScope,
+import {
+  sameScope,
+  type Invite,
+  type InviteKind,
+  type ShareProfile,
+  type ShareScope,
 } from "../../../hooks/sharing";
 import { useSharingActions } from "@/hooks/useSharing";
 import { fullTime } from "../TranscriptMarker";
@@ -48,12 +49,18 @@ const USES = [
 /** something an invite can share, keyed for a select */
 export type ScopeOption = { key: string; scope: ShareScope };
 
-export const scopeKey = (scope: ShareScope) =>
-  scope.kind === "node"
-    ? "node"
-    : scope.kind === "pack"
-      ? `pack:${scope.pack}`
-      : `agent:${scope.agent}`;
+export function scopeKey(scope: ShareScope): string {
+  switch (scope.kind) {
+    case "node":
+      return "node";
+    case "pack":
+      return `pack:${scope.pack}`;
+    case "agent":
+      return `agent:${scope.agent}`;
+    case "session":
+      return `session:${scope.session}`;
+  }
+}
 
 type Profiles =
   | { state: "reading" }
@@ -68,7 +75,9 @@ export function InviteDialog({
   nodeDid,
   name,
   open,
-  scopes,
+  scopes: listed,
+  initial,
+  startKind = "person",
   onClose,
 }: {
   nodeDid: string;
@@ -76,10 +85,19 @@ export function InviteDialog({
   open: boolean;
   /** what can be shared: the whole node first, then packs and agents */
   scopes: readonly ScopeOption[];
+  /** what it opens on, as from a pack's or a session's own Share…; added to
+      the choices when they don't list it */
+  initial?: ShareScope;
+  /** who it opens for: one's own device, or a person */
+  startKind?: InviteKind;
   onClose: () => void;
 }) {
   const sharing = useSharingActions();
-  const [kind, setKind] = useState<InviteKind>("person");
+  const scopes: readonly ScopeOption[] =
+    initial && !listed.some((s) => sameScope(s.scope, initial))
+      ? [...listed, { key: scopeKey(initial), scope: initial }]
+      : listed;
+  const [kind, setKind] = useState<InviteKind>(startKind);
   const [key, setKey] = useState("node");
   const [profileId, setProfileId] = useState<string | null>(null);
   const [expires, setExpires] = useState(EXPIRIES[1]!.value);
@@ -99,8 +117,8 @@ export function InviteDialog({
 
   useEffect(() => {
     if (!open) return;
-    setKind("person");
-    setKey(scopes.find((s) => s.scope.kind !== "node")?.key ?? "node");
+    setKind(startKind);
+    setKey(initial ? scopeKey(initial) : startFor(startKind));
     setExpires(EXPIRIES[1]!.value);
     setUses("1");
     setPreApproved(false);
