@@ -190,6 +190,26 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     let repository_doc = repository["data"]["RepositoryPlacement"][0]["_docID"]
         .as_str()
         .unwrap();
+    for case in &crate::lean_vocab_test::lean_contract_snapshot().workspace_quickstart_cases {
+        let actor = match case["actor"].as_str().unwrap() {
+            "user" => &operator,
+            "agent" => &access,
+            "other" => &outsider_access,
+            name => panic!("unknown modeled actor {name}"),
+        };
+        let rows = actor
+            .execute("{RepositoryPlacement {_docID}}")
+            .await
+            .unwrap();
+        assert_eq!(
+            !rows["data"]["RepositoryPlacement"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            case["before"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
     let commits = crate::store::graphql::composite_commits(
         &node,
         repository_doc,
@@ -234,6 +254,58 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
             .unwrap()
             .is_empty(),
         "quickstart replay restored the revoked repository reader"
+    );
+    for case in &crate::lean_vocab_test::lean_contract_snapshot().workspace_quickstart_cases {
+        let actor = match case["actor"].as_str().unwrap() {
+            "user" => &operator,
+            "agent" => &access,
+            "other" => &outsider_access,
+            name => panic!("unknown modeled actor {name}"),
+        };
+        let rows = actor
+            .execute("{RepositoryPlacement {_docID}}")
+            .await
+            .unwrap();
+        assert_eq!(
+            !rows["data"]["RepositoryPlacement"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            case["after_revoke"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+    let unpublished = fx._root.path().join("unpublished-repository");
+    tokio::fs::create_dir(&unpublished).await.unwrap();
+    let mut denied = selection.clone();
+    denied.workspace_id = uuid::Uuid::new_v4().to_string();
+    admin
+        .revoke_node_permission(
+            &user.did().parse().unwrap(),
+            crate::store::config_client::NodePermission::DacRelationAdd,
+        )
+        .await
+        .unwrap();
+    assert!(
+        provision_read_only_workspace(&operator, &access, &unpublished, &fx.base_sha, &denied)
+            .await
+            .is_err()
+    );
+    let retained = operator
+        .execute("{RepositoryPlacement {_docID}}")
+        .await
+        .unwrap();
+    let created_after_abort = retained["data"]["RepositoryPlacement"]
+        .as_array()
+        .unwrap()
+        .len()
+        > 1;
+    assert_eq!(
+        created_after_abort,
+        crate::lean_vocab_test::lean_contract_snapshot().workspace_quickstart_cases[0]
+            ["aborted_document_visible"]
+            .as_bool()
+            .unwrap()
     );
     for collection in [
         "AgentRequest",

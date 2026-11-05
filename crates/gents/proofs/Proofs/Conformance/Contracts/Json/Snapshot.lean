@@ -626,6 +626,7 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"workspace_admission_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceAdmissionCasesJson ++ ","
     ++ "\"workspace_cleanup_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceCleanupCasesJson ++ ","
     ++ "\"workspace_publication_cases\":" ++ Identity.WorkspaceAndFileRequests.workspacePublicationCasesJson ++ ","
+    ++ "\"workspace_quickstart_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceQuickstartCasesJson ++ ","
     ++ "\"mailbox_native_policy\":" ++ Identity.MailboxAccess.nativeCasesJson ++ ","
     ++ "\"node_file_request_access_cases\":" ++ Identity.NodeFileRequests.requestAccessCasesJson ++ ","
     ++ "\"callback_workspace_actor_cases\":" ++ Identity.WorkspaceAndFileRequests.callbackActorCasesJson ++ ","

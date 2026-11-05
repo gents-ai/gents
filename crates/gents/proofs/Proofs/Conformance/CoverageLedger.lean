@@ -1557,6 +1557,12 @@ def caseCoverage : List CoverageEntry :=
       "Checks duplicate publication after revocation and a stale retry after cleanup has begun.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "workspace_quickstart_cases"
+      "WorkspaceQuickstartCases"
+      "tools::workspace::tests::quickstart_base_freeze::quickstart_freezes_base_without_fabricating_requests_or_writer_receipts"
+      "Covers user-signed repository publication, Agent visibility, outsider isolation and revocation; host provisioning follows reservation.")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerWithFollowUp
       "workspace_completion_access_cases"
       "WorkspaceCompletionAccessCases"
       "tools::workspace::tests::capability_runtime::workspace_completion_reads_keep_selected_agent_visibility"

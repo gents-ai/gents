@@ -195,6 +195,31 @@ def workspaceAdmissionCasesJson : String :=
     Lean.Json.mkObj [("complete", Lean.toJson true), ("occupied", Lean.toJson occupied),
       ("admitted", Lean.toJson (admitExclusive true occupied))])).compress
 
+/-- The user-authored RepositoryPlacement and selected Agent reader grants
+commit together. Reusing an existing placement does not restore a revoked
+reader; the host effect still requires a visible placement and a committed
+workspace reservation. -/
+def workspaceRepositoryFixture : Household.State :=
+  { objects := [⟨"nodes", "node", "user"⟩, ⟨"configuration", "repository", "user"⟩],
+    relations := [⟨"configuration", "repository", "parent", .object "nodes" "node"⟩,
+      ⟨"configuration", "repository", "reader", .actor "agent"⟩], enrolled := [] }
+
+def revokedWorkspaceRepository : Household.State :=
+  Household.apply workspaceRepositoryFixture (.revoke ⟨"configuration", "repository", "reader", .actor "agent"⟩)
+
+def quickstartRepositoryRead (state : Household.State) (actor : String) : Bool :=
+  Household.allowed 6 state actor "configuration" "repository" "read"
+
+theorem repository_reader_revocation_survives_reuse :
+    quickstartRepositoryRead revokedWorkspaceRepository "agent" = false := by native_decide
+
+def workspaceQuickstartCasesJson : String :=
+  (Lean.toJson (["user", "agent", "other"].map fun actor => Lean.Json.mkObj
+    [("actor", Lean.toJson actor),
+     ("before", Lean.toJson (quickstartRepositoryRead workspaceRepositoryFixture actor)),
+     ("after_revoke", Lean.toJson (quickstartRepositoryRead revokedWorkspaceRepository actor)),
+     ("aborted_document_visible", Lean.toJson (publish false).document)])).compress
+
 def workspaceLivenessCasesJson : String :=
   (Lean.toJson ([false, true].flatMap fun visible => [false, true].map fun terminal =>
     Lean.Json.mkObj [("visible", Lean.toJson visible), ("terminal", Lean.toJson terminal),
