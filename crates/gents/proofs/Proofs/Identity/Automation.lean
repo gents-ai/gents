@@ -2,6 +2,46 @@ import Proofs.Identity.Household
 
 namespace Identity.Automation
 
+/-- A fresh Task request and its physical Agent and session relationships
+commit together. The caller must verify both targets and authenticate the
+selected Agent before entering the native transaction. A failed transaction
+leaves neither document nor grants. Duplicate deliveries are observed rather
+than regranted, preserving later revocations. -/
+def commitTaskRequest (state : Household.State)
+    (requestDoc actor selectedAgent agentDoc sessionDoc : String)
+    (targetsVerified fresh committed : Bool) : Household.State :=
+  if actor == selectedAgent && targetsVerified && fresh && committed then
+    { state with
+      objects := ⟨"delivered_requests", requestDoc, actor⟩ :: state.objects
+      relations :=
+        ⟨"delivered_requests", requestDoc, "parent", .object "agents" agentDoc⟩ ::
+        ⟨"delivered_requests", requestDoc, "session", .object "sessions" sessionDoc⟩ ::
+        state.relations }
+  else state
+
+theorem task_request_aborted (state : Household.State) (request actor selected agent session : String)
+    (verified fresh : Bool) :
+    commitTaskRequest state request actor selected agent session verified fresh false = state := by
+  simp [commitTaskRequest]
+
+theorem task_request_duplicate_preserves_revocation (state : Household.State)
+    (request actor selected agent session : String) (verified committed : Bool) :
+    commitTaskRequest state request actor selected agent session verified false committed = state := by
+  simp [commitTaskRequest]
+
+theorem task_request_rejects_foreign_creator (state : Household.State)
+    (request actor selected agent session : String) (verified fresh committed : Bool)
+    (different : actor ≠ selected) :
+    commitTaskRequest state request actor selected agent session verified fresh committed = state := by
+  simp [commitTaskRequest, different]
+
+theorem task_request_commits_exact_parents (state : Household.State)
+    (request actor agent session : String) :
+    (commitTaskRequest state request actor actor agent session true true true).relations =
+      ⟨"delivered_requests", request, "parent", .object "agents" agent⟩ ::
+      ⟨"delivered_requests", request, "session", .object "sessions" session⟩ ::
+      state.relations := by simp [commitTaskRequest]
+
 /-- Trigger combines configuration and runtime observations in one document.
 ACP1 update authorizes the document, rather than individual fields. -/
 structure Trigger where

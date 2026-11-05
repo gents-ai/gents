@@ -16,8 +16,9 @@ use super::{Reconciled, POLL};
 use crate::defra_node::Node as EmbeddedNode;
 use crate::eval::runner::embedded::home::{EmbeddedHome, RunningRuntime};
 use crate::eval::runner::embedded::observe::{
-    await_terminal_with_access, collect_request_evidence_with_access, poll_request_with_access,
-    NoHook, RequestEvidence, TerminalObservation,
+    await_submitted_terminal_with_access, await_terminal_with_access,
+    collect_request_evidence_with_access, poll_request_with_access, NoHook, RequestEvidence,
+    TerminalObservation,
 };
 #[cfg(test)]
 use crate::eval::runner::embedded::observe::{collect_request_evidence, poll_request};
@@ -171,7 +172,7 @@ async fn observe_stage_terminal(
     let watch_started = std::time::Instant::now();
     let stopped;
     let observed = tokio::select! {
-        observed = await_terminal_with_access(node, access, request_id, remaining, GRACE, &NoHook) => {
+        observed = await_submitted_terminal_with_access(node, access, request_id, remaining, GRACE, &NoHook) => {
             stopped = false;
             observed
         }
@@ -489,7 +490,7 @@ async fn continue_until_done(
         tokio::select! {
             biased;
             () = cancel.cancelled() => break,
-            _ = await_terminal_with_access(&home.node, &access, &request_id, remaining, GRACE, &NoHook) => {}
+            _ = await_submitted_terminal_with_access(&home.node, &access, &request_id, remaining, GRACE, &NoHook) => {}
         }
         let remaining = remaining_of(deadline, started);
         tokio::select! {

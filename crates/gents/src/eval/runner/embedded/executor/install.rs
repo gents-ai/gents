@@ -78,7 +78,9 @@ pub(super) async fn install(
         .agent_did
         .clone();
     if home.node_acp_enabled() {
-        grant_trial_operations(home, &agent_did).await?;
+        for binding in identity.agent_bindings.values() {
+            grant_trial_operations(home, &binding.agent_did).await?;
+        }
     }
     let config = bind_inference_slots(&manifest, &config, &spec.inference)
         .context("binding the pack's inference slots to the frozen profile")?;

@@ -1731,7 +1731,12 @@ async fn stage_task_delivery_with_receipt(
             &request.created_at,
         )
         .await?;
-        if created {
+        let agent_owned = matches!(
+            create.admission.kind,
+            gents_protocol::request_admission::AgentRequestAdmissionKind::LocalSelf
+                | gents_protocol::request_admission::AgentRequestAdmissionKind::RuntimeInternal
+        );
+        if created || agent_owned {
             let session = session::load_agent_session_row_in_txn(
                 txn,
                 &request.node_did,
@@ -1739,8 +1744,7 @@ async fn stage_task_delivery_with_receipt(
                 request.requester_did.as_deref(),
             )
             .await?
-            .context("created Task session disappeared")?
-            .doc_id;
+            .context("Task session disappeared")?;
             let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
                 txn,
                 crate::Collection::Agent,
@@ -1749,7 +1753,54 @@ async fn stage_task_delivery_with_receipt(
             )
             .await?
             .context("selected Task agent is unavailable")?;
-            session_publication = Some((session, agent));
+            if agent_owned {
+                anyhow::ensure!(
+                    txn.actor_did() == Some(request.agent_did.as_str())
+                        && create.admission.signer_did == request.agent_did
+                        && request.doc_id == rows[0]["_docID"].as_str().unwrap_or_default()
+                        && request.node_did == create.node_did
+                        && request.agent_did == create.agent_did
+                        && request.session_id == create.session_id
+                        && request.request_id == create.request_id
+                        && request.requester_did.as_deref() == Some(create.requester_did.as_str())
+                        && session.session.agent_did == request.agent_did,
+                    "Task request publication differs from its authenticated Agent or session"
+                );
+                anyhow::ensure!(
+                    crate::store::identity::verify_did_signature(
+                        &create.admission.signer_did,
+                        &create.signing_payload(),
+                        &create.admission.signature,
+                    )?,
+                    "Task request publication requires its valid signed receipt"
+                );
+                txn.add_resource_relationship(
+                    "AgentRequest",
+                    &request.doc_id,
+                    "parent",
+                    "agents",
+                    &agent,
+                )
+                .await?;
+                txn.add_resource_relationship(
+                    "AgentRequest",
+                    &request.doc_id,
+                    "session",
+                    "sessions",
+                    &session.doc_id,
+                )
+                .await?;
+                txn.add_actor_relationship(
+                    "AgentRequest",
+                    &request.doc_id,
+                    "working_agent",
+                    &identity::Did::new(&request.agent_did)?,
+                )
+                .await?;
+            }
+            if created {
+                session_publication = Some((session.doc_id, agent));
+            }
         }
     }
     Ok(TaskDeliveryAdmission {
@@ -1885,7 +1936,8 @@ mod task_delivery_tests {
                 let created = txn.execute_with_variables(
                     "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
                     &serde_json::json!({"input": {"node_did": PIN_FIXED_DID,
-                        "agent_did": binding.agent_did, "creation_nonce": binding.creation_nonce}}),
+                        "agent_did": binding.agent_did, "creation_nonce": binding.creation_nonce,
+                        "inference_profile_id": "test-profile"}}),
                 ).await?;
                 let agent_doc = crate::store::graphql::created_doc_id(&created, "Agent")?;
                 Ok::<_, anyhow::Error>((node_doc, agent_doc))
@@ -2054,6 +2106,80 @@ mod task_delivery_tests {
             user_sessions["data"]["AgentSession"][0]["relationships_pending"],
             false
         );
+        let household = crate::lean_vocab_test::lean_identity_household_cases()
+            .first()
+            .expect("modeled household");
+        let modeled_user = &household
+            .objects
+            .iter()
+            .find(|object| object.resource == "nodes" && object.id == "home")
+            .unwrap()
+            .owner;
+        let modeled_agent = &household
+            .objects
+            .iter()
+            .find(|object| {
+                object.resource == "delivered_requests" && object.id == "automated-request"
+            })
+            .unwrap()
+            .owner;
+        let modeled_outsider = household.enrolled.last().expect("modeled outsider");
+        let expected_read = |actor: &str| {
+            household
+                .actions
+                .iter()
+                .find_map(|action| match action {
+                    crate::lean_vocab_test::LeanIdentityAction::Check {
+                        actor: checked,
+                        resource,
+                        id,
+                        permission,
+                        expected,
+                    } if checked == actor
+                        && resource == "delivered_requests"
+                        && id == "automated-request"
+                        && permission == "read" =>
+                    {
+                        Some(*expected)
+                    }
+                    _ => None,
+                })
+                .expect("modeled automated request read")
+        };
+        let outsider =
+            crate::KeyIdentity::load_or_create(identity_dir.path().join("outsider.key"), None)
+                .unwrap();
+        let outsider_access =
+            crate::ConfigAccess::local_as(node.clone(), outsider.did().parse().unwrap());
+        let request_query = format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ _docID lifecycle_state }} }}", escape_graphql_string(&first.request.doc_id));
+        for (reader, modeled_actor) in [
+            (&user_access, modeled_user.as_str()),
+            (&access, modeled_agent.as_str()),
+            (&outsider_access, modeled_outsider.as_str()),
+        ] {
+            let response = reader.execute(&request_query).await.unwrap();
+            let visible = !response["data"]["AgentRequest"]
+                .as_array()
+                .unwrap()
+                .is_empty();
+            assert_eq!(
+                visible,
+                expected_read(modeled_actor),
+                "Task request visibility for {modeled_actor}"
+            );
+        }
+        access.write("test.task.finish", &format!(
+            "mutation {{ update_AgentRequest(docID: \"{}\", input: {{ lifecycle_state: \"completed\" }}) {{ _docID }} }}",
+            escape_graphql_string(&first.request.doc_id)
+        )).await.unwrap();
+        let observed = crate::eval::runner::embedded::observe::poll_request_with_access(
+            &user_access,
+            &first.request.request_id,
+        )
+        .await
+        .unwrap()
+        .expect("the user can observe the completed Task request");
+        assert_eq!(observed.lifecycle_state.as_deref(), Some("completed"));
         let session_doc = session["_docID"].as_str().unwrap();
         let trace = crate::lean_vocab_test::lean_contract_snapshot()
             .identity_publication_cases

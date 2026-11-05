@@ -2,6 +2,7 @@ import Proofs.Identity.State
 import Proofs.Identity.Permission
 import Proofs.Identity.Properties
 import Proofs.Identity.Household
+import Proofs.Identity.Automation
 import Proofs.Identity.Operations
 import Proofs.Conformance.ContractCases
 
@@ -203,7 +204,7 @@ def actorRelation (resource id relation actor : String) : Relation :=
   ⟨resource, id, relation, .actor actor⟩
 
 def initial : State :=
-  commitUserSession
+  Identity.Automation.commitTaskRequest (commitUserSession
   { objects := [⟨"nodes", "home", userDid⟩, ⟨"operations", "readiness", runtimeDid⟩, ⟨"agents", "general", userDid⟩, ⟨"agents", "sibling", userDid⟩,
       ⟨"agents", "wife", readerDid⟩, ⟨"sessions", "wife-session", otherAgentDid⟩,
       ⟨"sessions", "sibling-session", userDid⟩,
@@ -243,7 +244,8 @@ def initial : State :=
       actorRelation "sessions" "general-session" "reader" readerDid,
       ⟨"children", "general-message", "parent", .object "sessions" "general-session"⟩,
       ⟨"children", "sibling-message", "parent", .object "sessions" "sibling-session"⟩]
-    enrolled := [userDid, readerDid, strangerDid] } "general-session" userDid agentDid "general" true
+    enrolled := [userDid, readerDid, strangerDid] } "general-session" userDid agentDid "general" true)
+    "automated-request" agentDid agentDid "general" "automated-session" true true true
 
 def nodeAdministratorChanges : List Action :=
   let grant := actorRelation "nodes" "home" "administrator" strangerDid
@@ -437,6 +439,15 @@ theorem unattended_sessions_preserve_agent_ownership_and_user_access :
      allowed 5 initial runtimeDid "sessions" "automated-session" "read",
      allowed 5 initial siblingDid "sessions" "automated-session" "read"] =
     [true, true, true, true, true, true, true, false, false] := by native_decide
+
+theorem unattended_request_preserves_agent_ownership_and_user_access :
+    [allowed 5 initial agentDid "delivered_requests" "automated-request" "read",
+     allowed 5 initial userDid "delivered_requests" "automated-request" "read",
+     allowed 5 initial readerDid "delivered_requests" "automated-request" "read",
+     allowed 5 initial runtimeDid "delivered_requests" "automated-request" "read",
+     allowed 5 initial siblingDid "delivered_requests" "automated-request" "read",
+     allowed 5 initial strangerDid "delivered_requests" "automated-request" "read"] =
+    [true, true, true, false, false, false] := by native_decide
 
 theorem agent_children_inherit_only_their_agent_household :
     [allowed 5 initial agentDid "agent_children" "callback" "delete",

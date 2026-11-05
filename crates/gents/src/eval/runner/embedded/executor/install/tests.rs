@@ -6,6 +6,51 @@ use crate::eval::runner::executor::FixtureDocument;
 use crate::DocumentRuntimeOptions;
 
 #[tokio::test]
+async fn every_installed_trial_agent_can_read_its_operational_collections() {
+    let dir = tempfile::tempdir().unwrap();
+    let pack_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/configurator_evals/sessions/subject");
+    let home = EmbeddedHome::create_trial_temp("all-agent-operations")
+        .await
+        .unwrap();
+    let spec = TrialSpec {
+        pack_digest: materialized_digest(&pack_dir),
+        pack_dir,
+        agent_slot: "engineer".into(),
+        inference: frozen_binding(json!("frozen-profile")),
+        ..TrialSpec::empty_for_tests("t1")
+    };
+    let selected = install(&spec, &home, &dir.path().join("workspace"))
+        .await
+        .unwrap();
+    let evaluator = ConfigAccess::local_as(
+        home.node.clone(),
+        ::identity::Did::new(&spec.evaluator_did).unwrap(),
+    );
+    let agents = evaluator
+        .execute("{ Agent { agent_did display_name } }")
+        .await
+        .unwrap();
+    let agents = agents["data"]["Agent"].as_array().unwrap();
+    assert_eq!(agents.len(), 2);
+    for agent in agents {
+        let did = agent["agent_did"].as_str().unwrap();
+        let actor = ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(did).unwrap());
+        let result = actor
+            .execute("{ AgentRequest { _docID } AgentToolCall { _docID } }")
+            .await
+            .unwrap();
+        assert!(result["data"]["AgentRequest"].is_array(), "{did}: {result}");
+        assert!(
+            result["data"]["AgentToolCall"].is_array(),
+            "{did}: {result}"
+        );
+    }
+    assert!(agents.iter().any(|agent| agent["agent_did"] == selected));
+    home.node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
     let dir = tempfile::tempdir().unwrap();
     let pack_dir = dir.path().join("pack");

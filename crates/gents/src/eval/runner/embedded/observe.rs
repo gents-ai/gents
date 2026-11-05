@@ -114,6 +114,31 @@ pub(crate) async fn await_terminal_with_access(
     grace: Duration,
     hook: &dyn ObservationHook,
 ) -> Result<TerminalObservation> {
+    await_terminal_inner(node, access, request_id, deadline, grace, hook, false).await
+}
+
+/// DefraDB relationship revocations do not publish a request change. Lost access
+/// is therefore observed on the next request update, deadline, or cancellation.
+pub(crate) async fn await_submitted_terminal_with_access(
+    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
+    request_id: &str,
+    deadline: Option<Duration>,
+    grace: Duration,
+    hook: &dyn ObservationHook,
+) -> Result<TerminalObservation> {
+    await_terminal_inner(node, access, request_id, deadline, grace, hook, true).await
+}
+
+async fn await_terminal_inner(
+    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
+    request_id: &str,
+    deadline: Option<Duration>,
+    grace: Duration,
+    hook: &dyn ObservationHook,
+    mut must_be_visible: bool,
+) -> Result<TerminalObservation> {
     let mut changes = crate::subscribe_collections(node, ["AgentRequest"])?;
     let started = std::time::Instant::now();
     let mut interrupted_on_deadline = false;
@@ -121,6 +146,10 @@ pub(crate) async fn await_terminal_with_access(
     let mut last_progress: Option<(String, Option<String>)> = None;
     loop {
         let row = poll_request_with_access(access, request_id).await?;
+        if row.is_none() && must_be_visible {
+            anyhow::bail!("submitted request is unavailable to the evaluator");
+        }
+        must_be_visible |= row.is_some();
         let observed_state = row
             .as_ref()
             .and_then(|row| row.lifecycle_state.clone())
@@ -618,6 +647,82 @@ mod tests {
         use gents_protocol::output::TerminalOutput;
         let home = EmbeddedHome::create_temp("observe-evidence").await.unwrap();
         let did = home.did().to_owned();
+        let binding =
+            crate::store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
+        let owner = ConfigAccess::local_as(home.node.clone(), identity::Did::new(&did).unwrap());
+        let (node_doc, agent_doc) = owner
+            .transact_write("test.observe.household", |txn| {
+                let binding = &binding;
+                let did = &did;
+                Box::pin(async move {
+                    let node = txn.execute_with_variables(
+                        "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                        &serde_json::json!({"input": {"node_did": did}}),
+                    ).await?;
+                    let agent = txn.execute_with_variables(
+                        "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                        &serde_json::json!({"input": {"node_did": did, "agent_did": binding.agent_did,
+                            "creation_nonce": binding.creation_nonce, "inference_profile_id": "test-profile"}}),
+                    ).await?;
+                    Ok::<_, anyhow::Error>((
+                        crate::store::graphql::created_doc_id(&node, "Node")?,
+                        crate::store::graphql::created_doc_id(&agent, "Agent")?,
+                    ))
+                })
+            })
+            .await
+            .unwrap();
+        owner
+            .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
+            .await
+            .unwrap();
+        owner
+            .add_actor_relationship(
+                "Agent",
+                &agent_doc,
+                "executor",
+                &identity::Did::new(&binding.agent_did).unwrap(),
+            )
+            .await
+            .unwrap();
+        let agent_access = ConfigAccess::local_as(
+            home.node.clone(),
+            identity::Did::new(&binding.agent_did).unwrap(),
+        );
+        let session_doc = agent_access
+            .transact_write("test.observe.session", |txn| {
+                let did = &did;
+                let agent_did = &binding.agent_did;
+                Box::pin(async move {
+                    crate::session::ensure_session_in_txn(
+                        txn,
+                        "s-evidence",
+                        did,
+                        agent_did,
+                        Some(agent_did),
+                        None,
+                        None,
+                        "2026-01-01T00:00:00Z",
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(
+                        crate::session::load_agent_session_owner_in_txn(txn, did, "s-evidence")
+                            .await?
+                            .unwrap()
+                            .doc_id,
+                    )
+                })
+            })
+            .await
+            .unwrap();
+        crate::session::grant_created_session_relationships(
+            &agent_access,
+            &session_doc,
+            &agent_doc,
+            &binding.agent_did,
+        )
+        .await
+        .unwrap();
         let mut request = claimed_signed_request(
             &home.node,
             "req-evidence",
@@ -626,6 +731,26 @@ mod tests {
             None,
         )
         .await;
+        agent_access
+            .add_resource_relationship(
+                "AgentRequest",
+                &request.request().doc_id,
+                "parent",
+                "agents",
+                &agent_doc,
+            )
+            .await
+            .unwrap();
+        agent_access
+            .add_resource_relationship(
+                "AgentRequest",
+                &request.request().doc_id,
+                "session",
+                "sessions",
+                &session_doc,
+            )
+            .await
+            .unwrap();
         let mut tool = publish_accepted_on_claimed_request(
             home.node.clone(),
             &mut request,
@@ -642,7 +767,11 @@ mod tests {
         tool.fail("denied", FailureClass::ArgumentInvalid)
             .await
             .unwrap();
-        let writer = DefraStreamWriter::new(home.node.clone(), &did, Duration::from_millis(1));
+        let writer = DefraStreamWriter::new(
+            home.node.clone(),
+            &binding.agent_did,
+            Duration::from_millis(1),
+        );
         writer
             .start_provider_attempt(
                 &request.request().doc_id,
@@ -893,6 +1022,120 @@ mod tests {
             Some(RequestLifecycleState::Completed)
         );
         assert!(!observed.interrupted_on_deadline);
+    }
+
+    #[tokio::test]
+    async fn submitted_request_that_is_not_visible_returns_without_waiting() {
+        let home = EmbeddedHome::create_temp("observe-unavailable")
+            .await
+            .unwrap();
+        let access = ConfigAccess::local(home.node.clone());
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            await_submitted_terminal_with_access(
+                &home.node,
+                &access,
+                "unavailable",
+                None,
+                Duration::ZERO,
+                &NoHook,
+            ),
+        )
+        .await
+        .expect("a missing submitted request must not wait indefinitely");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "submitted request is unavailable to the evaluator"
+        );
+        let cases: Vec<Value> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/eval_request_outcome.json"
+        )))
+        .unwrap();
+        let modeled = cases
+            .iter()
+            .find(|case| {
+                case["state"].is_null()
+                    && case["deadline"] == false
+                    && case["request_reason"].is_null()
+                    && case["inference_reason"].is_null()
+                    && case["inference_failed"] == false
+                    && case["tool_failed"] == false
+            })
+            .unwrap();
+        assert_eq!(
+            classify_request_outcome(None, false, &RequestEvidence::default()),
+            modeled["outcome"].as_str()
+        );
+        home.node.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn submitted_request_that_loses_access_returns_unavailable_after_change() {
+        struct RevokeOnObservation {
+            owner: ConfigAccess,
+            reader: identity::Did,
+            doc: String,
+            done: std::sync::atomic::AtomicBool,
+        }
+        #[async_trait::async_trait]
+        impl ObservationHook for RevokeOnObservation {
+            async fn on_state(&self, _state: &str, _session_id: Option<&str>) {
+                if self.done.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                self.owner
+                    .delete_actor_relationship("AgentRequest", &self.doc, "reader", &self.reader)
+                    .await
+                    .unwrap();
+                self.owner.write("eval.test.signal_after_revoke", &format!(
+                    "mutation {{ update_AgentRequest(docID: \"{}\", input: {{lifecycle_state: \"processing\"}}) {{ _docID }} }}",
+                    escape_graphql_string(&self.doc)
+                )).await.unwrap();
+            }
+        }
+        let home = EmbeddedHome::create_temp("observe-revoked").await.unwrap();
+        insert_request(&home, "req-revoked", "pending").await;
+        let owner =
+            ConfigAccess::local_as(home.node.clone(), identity::Did::new(home.did()).unwrap());
+        let response = owner.execute("{ AgentRequest { _docID } }").await.unwrap();
+        let doc = response["data"]["AgentRequest"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let key_dir = tempfile::tempdir().unwrap();
+        let reader =
+            crate::KeyIdentity::load_or_create(key_dir.path().join("reader.key"), None).unwrap();
+        let reader_did = identity::Did::new(crate::NodeIdentity::did(&reader)).unwrap();
+        owner
+            .add_actor_relationship("AgentRequest", &doc, "reader", &reader_did)
+            .await
+            .unwrap();
+        let reader_access = ConfigAccess::local_as(home.node.clone(), reader_did.clone());
+        let hook = RevokeOnObservation {
+            owner,
+            reader: reader_did,
+            doc,
+            done: Default::default(),
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            await_submitted_terminal_with_access(
+                &home.node,
+                &reader_access,
+                "req-revoked",
+                None,
+                Duration::ZERO,
+                &hook,
+            ),
+        )
+        .await
+        .expect("a request that becomes unavailable must stop observation");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "submitted request is unavailable to the evaluator"
+        );
+        home.node.shutdown().await.unwrap();
     }
 
     #[tokio::test]
