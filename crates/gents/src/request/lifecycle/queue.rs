@@ -52,6 +52,8 @@ pub use coalescing::{
 };
 pub(crate) use draining::drain_all_pending_session_requests_in_txn;
 pub(crate) use draining::drain_automated_wakeups_in_txn;
+#[cfg(test)]
+pub(crate) use edit_submission::publish_edit_command;
 pub use edit_submission::{submit_pending_user_edit, submit_pending_user_steer};
 pub use enqueue::enqueue_local_steering_request;
 #[cfg(test)]

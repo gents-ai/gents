@@ -138,6 +138,19 @@ async fn authority_rejection(
             "replacement changed canonical session provenance".into(),
         ));
     }
+    let session_id = escape_graphql_string(&command.session_doc_id);
+    let response = txn.execute(&format!(
+        r#"{{ AgentSession(filter: {{ _docID: {{ _eq: "{session_id}" }} }}, limit: 2) {{ _docID relationships_pending }} }}"#
+    )).await?;
+    let sessions = response["data"]["AgentSession"]
+        .as_array()
+        .context("edit session readiness unavailable")?;
+    anyhow::ensure!(
+        sessions.len() == 1
+            && sessions[0]["_docID"].as_str() == Some(command.session_doc_id.as_str())
+            && sessions[0]["relationships_pending"] == false,
+        "edit session relationships unavailable"
+    );
     let subject = ::identity::Did::new(&command.requester_did)?;
     let named = |permission: &str| defra_node::DocumentAccessMode::Named {
         permission: permission.to_owned(),
@@ -421,3 +434,5 @@ async fn test_signed_replacement_fields(
 mod recovery_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod verified_graph_tests;

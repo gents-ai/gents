@@ -173,10 +173,29 @@ async fn submit_prepared_edit(
     };
     command.signature = signer.sign(&command.signing_payload()).await?;
     command.validate_shape()?;
+    let doc_id = publish_edit_command(access, &command).await?;
+    match tokio::time::timeout(RECEIPT_WAIT, answered(access, &doc_id, &command)).await {
+        Ok(receipt) => receipt,
+        Err(_) => anyhow::bail!(
+            "Pending edit {} was saved and is waiting for the runtime; its outcome is not yet confirmed.",
+            command.command_id
+        ),
+    }
+}
+
+pub(crate) async fn publish_edit_command(
+    access: &ConfigAccess,
+    command: &SessionInputEdit,
+) -> Result<String> {
+    command.validate_shape()?;
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(command.requester_did.as_str()),
+        "edit actor differs from author"
+    );
     let input = serde_json::json!({"command_id":command.command_id, "requester_did":command.requester_did,
         "requester_peer_id":command.requester_peer_id, "node_did":command.node_did,
         "session_id":command.session_id, "intent_json":serde_json::to_string(&command)?});
-    let doc_id = access.transact_write_with_finality("queue.submit_pending_edit", |txn| {
+    access.transact_write_with_finality("queue.submit_pending_edit", |txn| {
         let input = &input;
         let command = &command;
         Box::pin(async move {
@@ -193,14 +212,7 @@ async fn submit_prepared_edit(
         if failure.unconfirmed {
             failure.error.context(format!("Pending edit {} may have been saved; inspect it before resending", command.command_id))
         } else { failure.error }
-    })?;
-    match tokio::time::timeout(RECEIPT_WAIT, answered(access, &doc_id, &command)).await {
-        Ok(receipt) => receipt,
-        Err(_) => anyhow::bail!(
-            "Pending edit {} was saved and is waiting for the runtime; its outcome is not yet confirmed.",
-            command.command_id
-        ),
-    }
+    })
 }
 
 async fn answered(

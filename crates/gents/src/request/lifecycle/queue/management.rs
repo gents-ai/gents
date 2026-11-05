@@ -634,7 +634,7 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
                 .admission
                 .validate_branch_fields()
                 .map_err(anyhow::Error::msg)?;
-            let expected = super::super::materialize::build_request(replacement_spec(
+            let mut expected = super::super::materialize::build_request(replacement_spec(
                 selected,
                 slot,
                 message,
@@ -653,6 +653,8 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
                         .delivery,
                 },
             )?)?;
+            expected.session_doc_id.clone_from(&create.session_doc_id);
+            expected.agent_doc_id.clone_from(&create.agent_doc_id);
             anyhow::ensure!(
                 create == &expected,
                 "Replacement request does not match the selected message."

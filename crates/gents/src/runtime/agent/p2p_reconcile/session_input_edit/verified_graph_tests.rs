@@ -1,0 +1,213 @@
+use super::*;
+use crate::store::config_client::{GraphqlEndpoint, NodePermission};
+use crate::store::identity::KeyIdentity;
+use gents_protocol::request_admission::{
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+};
+use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, RequestQueue};
+use gents_protocol::session_input_edit::{PendingMessageEdit, PendingQueueEdit};
+
+#[tokio::test]
+async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> anyhow::Result<()> {
+    let cases =
+        &crate::lean_vocab_test::lean_contract_snapshot().session_input_edit_native_claim_cases;
+    for case in cases {
+        let directory = tempfile::tempdir()?;
+        let root: Arc<dyn NodeIdentity> = Arc::new(KeyIdentity::load_or_create(
+            directory.path().join("root.key"),
+            None,
+        )?);
+        let user = KeyIdentity::load_or_create(directory.path().join("user.key"), None)?;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let addr = listener.local_addr()?;
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(root.did())
+                .with_node_acp_enabled()
+                .with_http(defra_node::HttpConfig::with_listener(listener)?)
+                .build()
+                .await?,
+        );
+        crate::ensure_runtime_schemas(&node).await?;
+        let binding = crate::store::identity::provision_agent_identity(root.as_ref())?;
+        let agent = crate::store::identity::resolve_agent_identity(root.as_ref(), &binding)?;
+        let admin = ConfigAccess::local_as(node.clone(), root.did().parse()?);
+        for did in [user.did(), binding.agent_did.as_str()] {
+            for permission in [
+                NodePermission::DocumentRead,
+                NodePermission::DocumentUpdate,
+                NodePermission::DacRelationAdd,
+                NodePermission::DacRelationDelete,
+            ] {
+                admin
+                    .grant_node_permission(&::identity::Did::new(did)?, permission)
+                    .await?;
+            }
+        }
+        let endpoint =
+            GraphqlEndpoint::as_principal(format!("http://{addr}/api/v0/graphql"), user.did())
+                .with_client_signing_capability(user.client_signing_capability()?)?;
+        let access = ConfigAccess::Graphql(endpoint);
+        let (node_doc, agent_doc) = access.transact_write("test.edit.seed", |txn| Box::pin(async {
+            let node_response = txn.execute_client_signed_create(
+                "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                &serde_json::json!({"input":{"node_did":root.did()}}), gents_protocol::schemas::NODE,
+            ).await?;
+            let node_doc = crate::store::graphql::created_doc_id(&node_response, "Node")?;
+            let agent_response = txn.execute_client_signed_create(
+                "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                &serde_json::json!({"input":{"node_did":root.did(),"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"fixture","enabled":true}}),
+                gents_protocol::schemas::AGENT,
+            ).await?;
+            let agent_doc = crate::store::graphql::created_doc_id(&agent_response, "Agent")?;
+            Ok::<_, anyhow::Error>((node_doc, agent_doc))
+        })).await?;
+        access
+            .add_actor_relationship(
+                "Node",
+                &node_doc,
+                "runtime_reader",
+                &::identity::Did::new(root.did())?,
+            )
+            .await?;
+        access
+            .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
+            .await?;
+        access
+            .add_actor_relationship(
+                "Agent",
+                &agent_doc,
+                "executor",
+                &::identity::Did::new(&binding.agent_did)?,
+            )
+            .await?;
+        let mut original = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            "original",
+            root.did(),
+            user.did(),
+            &binding.agent_did,
+            "session",
+            "before",
+            "interactive",
+            "2026-10-10T00:00:00Z",
+            AgentRequestAdmissionRecord::client(user.did()),
+        );
+        original.input.queue = Some(RequestQueue {
+            delivery: QueueDelivery::Queue,
+            position: None,
+            source: QueueSource::User,
+            policy: QueuePolicy::Append,
+            key: None,
+            queued_after_request_id: None,
+            interrupted_request_id: None,
+            background_completion_wake_version: None,
+        });
+        original.session_doc_id =
+            Some(crate::request::lifecycle::reserve_goal_session(&access, &original).await?);
+        original.agent_doc_id = Some(agent_doc.clone());
+        crate::sign_agent_request_create(&user, &mut original).await?;
+        crate::request::lifecycle::submit_client_request(&access, &original).await?;
+        let old = access
+            .execute("{ AgentRequest { _docID request_id } }")
+            .await?;
+        let old_doc = old["data"]["AgentRequest"][0]["_docID"]
+            .as_str()
+            .context("original request missing")?
+            .to_owned();
+        let edit = PendingQueueEdit {
+            expected_request_doc_ids: vec![old_doc.clone()],
+            selected_request_doc_ids: vec![old_doc.clone()],
+            messages: vec![PendingMessageEdit {
+                request_doc_id: old_doc.clone(),
+                content: "after".into(),
+                authored_input: None,
+            }],
+        };
+        let replacements = crate::request::lifecycle::queue::prepare_pending_user_edit(
+            &access,
+            &user,
+            AgentRequestAdmissionRecord::client(user.did()),
+            root.did(),
+            "session",
+            user.did(),
+            &edit,
+        )
+        .await?;
+        let (session_doc_id, agent_did, agent_doc_id, replacement_evidence) =
+            test_signed_replacement_fields(&access, &user, root.did(), "session", &replacements)
+                .await;
+        let mut command = SessionInputEdit {
+            version: SESSION_INPUT_EDIT_VERSION,
+            command_id: uuid::Uuid::new_v4().to_string(),
+            requester_did: user.did().to_owned(),
+            requester_peer_id: None,
+            node_did: root.did().to_owned(),
+            session_id: "session".into(),
+            session_doc_id,
+            agent_did,
+            agent_doc_id,
+            issued_at: (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
+            expires_at: (Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
+            edit,
+            replacements,
+            replacement_evidence,
+            signature: vec![],
+        };
+        command.signature = user.sign(&command.signing_payload()).await?;
+        let command_doc =
+            crate::request::lifecycle::queue::publish_edit_command(&access, &command).await?;
+        if !case["selectedAllowed"]
+            .as_bool()
+            .context("modeled selection missing")?
+        {
+            admin
+                .revoke_node_permission(
+                    &::identity::Did::new(user.did())?,
+                    NodePermission::DocumentUpdate,
+                )
+                .await?;
+        }
+        process_command(&node, &root, &command_doc, agent.as_ref()).await?;
+        let response = access.execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ receipt_json }} }}"#, escape_graphql_string(&command_doc))).await?;
+        let receipt: SessionInputEditReceipt = serde_json::from_str(
+            response["data"]["AgentSessionInputEdit"][0]["receipt_json"]
+                .as_str()
+                .context("receipt missing")?,
+        )?;
+        receipt.validate_for(&command)?;
+        assert_eq!(
+            receipt.outcome == SessionInputEditOutcome::Applied,
+            case["applied"].as_bool().unwrap(),
+            "{}",
+            case["name"]
+        );
+        let old = access.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state superseded_by_request_doc_id }} }}"#, escape_graphql_string(&old_doc))).await?;
+        if receipt.outcome == SessionInputEditOutcome::Applied {
+            assert_eq!(
+                old["data"]["AgentRequest"][0]["lifecycle_state"],
+                "superseded"
+            );
+            assert_eq!(
+                old["data"]["AgentRequest"][0]["superseded_by_request_doc_id"],
+                receipt.request_doc_ids[0]
+            );
+            let replacement = access.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _version {{ cid height fieldName }} }} }}"#, escape_graphql_string(&receipt.request_doc_ids[0]))).await?;
+            let version = crate::store::graphql::document_composite_version(
+                &replacement["data"]["AgentRequest"][0],
+                "replacement",
+            )?
+            .context("replacement version missing")?;
+            assert_eq!(
+                node.verified_block_signer_did(&version.cid).await?,
+                user.did()
+            );
+            process_command(&node, &root, &command_doc, agent.as_ref()).await?;
+        } else {
+            assert_eq!(old["data"]["AgentRequest"][0]["lifecycle_state"], "pending");
+            assert!(receipt.request_doc_ids.is_empty());
+        }
+        node.shutdown().await?;
+    }
+    Ok(())
+}

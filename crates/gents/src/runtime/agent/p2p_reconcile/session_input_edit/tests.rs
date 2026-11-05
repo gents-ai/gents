@@ -48,7 +48,7 @@ impl Fixture {
             ConfigAccess::local_as(node.clone(), ::identity::Did::new(identity.did()).unwrap());
         let agent = ::identity::Did::new(&binding.agent_did).unwrap();
         access.transact_write("test.edit.session", |txn| Box::pin(async {
-            let response = txn.execute(&format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{SESSION}", node_did: "{}", requester_did: "{}", agent_did: "{}", created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,
+            let response = txn.execute(&format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{SESSION}", node_did: "{}", requester_did: "{}", agent_did: "{}", relationships_pending: false, created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,
                 escape_graphql_string(identity.did()), escape_graphql_string(identity.did()), escape_graphql_string(&binding.agent_did))).await?;
             let doc = crate::store::graphql::created_doc_id(&response, "AgentSession")?;
             txn.add_actor_relationship("AgentSession", &doc, "working_agent", &agent).await?;
@@ -96,17 +96,52 @@ impl Fixture {
     }
 
     async fn write_request(&self, mut create: AgentRequestCreate) -> String {
+        let access = ConfigAccess::local_as(
+            self.node.clone(),
+            ::identity::Did::new(self.identity.did()).unwrap(),
+        );
+        let (session, agent) = access
+            .transact_readonly("test.edit.targets", |txn| {
+                Box::pin(async {
+                    let session = crate::session::load_agent_session_owner_in_txn(
+                        txn,
+                        self.identity.did(),
+                        SESSION,
+                    )
+                    .await?
+                    .context("session missing")?;
+                    let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Agent,
+                        self.identity.did(),
+                        &self.agent_did,
+                    )
+                    .await?
+                    .context("agent missing")?;
+                    Ok::<_, anyhow::Error>((session.doc_id, agent))
+                })
+            })
+            .await
+            .unwrap();
+        create.session_doc_id = Some(session.clone());
+        create.agent_doc_id = Some(agent.clone());
         crate::sign_agent_request_create(self.identity.as_ref(), &mut create)
             .await
             .unwrap();
-        let response = ConfigAccess::local_as(
-            self.node.clone(),
-            ::identity::Did::new(self.identity.did().to_owned()).unwrap(),
-        )
-        .write("test.edit.request", &create.graphql_mutation().unwrap())
-        .await
-        .unwrap();
-        crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
+        access
+            .transact_write("test.edit.request", |txn| {
+                let create = &create;
+                let session = &session;
+                let agent = &agent;
+                Box::pin(async move {
+                    crate::request::lifecycle::stage_client_request_in_txn(
+                        txn, create, session, agent,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap()
     }
 
     async fn command(&self) -> SessionInputEdit {
@@ -171,9 +206,26 @@ impl Fixture {
     }
 
     async fn submit(&self, command: &SessionInputEdit) -> String {
-        let response = ConfigAccess::local_as(self.node.clone(), ::identity::Did::new(self.identity.did().to_owned()).unwrap()).write("test.edit.intent", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{ command_id: "{}", requester_did: "{}", node_did: "{}", session_id: "{}", intent_json: "{}" }}) {{ _docID }} }}"#,
-            escape_graphql_string(&command.command_id), escape_graphql_string(&command.requester_did), escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id), escape_graphql_string(&serde_json::to_string(command).unwrap()))).await.unwrap();
-        crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap()
+        let access = ConfigAccess::local_as(
+            self.node.clone(),
+            ::identity::Did::new(self.identity.did()).unwrap(),
+        );
+        let input = serde_json::json!({"command_id":command.command_id, "requester_did":command.requester_did,
+            "requester_peer_id":command.requester_peer_id, "node_did":command.node_did,
+            "session_id":command.session_id, "intent_json":serde_json::to_string(command).unwrap()});
+        access.transact_write("test.edit.intent", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                let response = txn.execute_client_signed_create(
+                    "mutation($input: AgentSessionInputEditMutationInputArg!) { create_AgentSessionInputEdit(input: $input) { _docID } }",
+                    &serde_json::json!({"input":input}), gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT,
+                ).await?;
+                let doc = crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
+                txn.add_resource_relationship("AgentSessionInputEdit", &doc, "parent", "sessions", &command.session_doc_id).await?;
+                txn.add_actor_relationship("AgentSessionInputEdit", &doc, "working_agent", &::identity::Did::new(&command.agent_did)?).await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        }).await.unwrap()
     }
 
     async fn receipt(&self, id: &str) -> SessionInputEditReceipt {
