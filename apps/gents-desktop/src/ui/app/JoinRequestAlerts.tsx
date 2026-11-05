@@ -1,12 +1,16 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Button } from "@gents/ui/components/button";
 import { toast } from "sonner";
 import { useHomeDid } from "@/hooks/useClient";
 import { useFleet } from "@/hooks/useFleet";
 import { useSharingActions } from "@/hooks/useSharing";
 import { SHARING_SECTION } from "@/lib/joinInvite";
-import { navigate, type Route } from "@/lib/router";
+import type { Route } from "@/lib/router";
 import { useFlag } from "@/preferences";
-import { partyName } from "@/screens/sharing/parts";
+import type { JoinRequest } from "../../hooks/sharing";
+import { NodeAvatar } from "@/screens/AgentAvatar";
+import { reviewJoinRequest } from "@/screens/sharing/JoinRequestDialog";
+import { partyName, scopeInSentence } from "@/screens/sharing/parts";
 
 /** Tells the person when someone asks to join this desktop's own node,
     wherever they are in the app: the Sharing section is out of the way, and
@@ -34,7 +38,6 @@ export function JoinRequestAlerts({ route }: { route: Route }) {
   useEffect(() => {
     if (!on || !homeDid) return;
     let live = true;
-    const review: Route = { name: "agent", nodeDid: homeDid, section: SHARING_SECTION };
     const check = () => {
       sharing.read(homeDid).then(
         (state) => {
@@ -49,14 +52,20 @@ export function JoinRequestAlerts({ route }: { route: Route }) {
             if (told.current.has(request.requestId)) continue;
             told.current.add(request.requestId);
             if (lookingRef.current) continue;
-            toast(
-              `${partyName(request.from)} asked to join ${nameRef.current ?? "this node"}`,
-              {
-                id: `join:${request.requestId}`,
-                description: "Approve or deny it in Sharing before it expires.",
-                duration: Infinity,
-                action: { label: "Review", onClick: () => navigate(review) },
-              },
+            const nodeName = nameRef.current ?? "this node";
+            toast.custom(
+              (id) => (
+                <JoinRequestNotice
+                  request={request}
+                  nodeName={nodeName}
+                  onReview={() => {
+                    toast.dismiss(id);
+                    reviewJoinRequest(homeDid, nodeName, request);
+                  }}
+                  onDeny={() => sharing.deny(homeDid, request.requestId)}
+                />
+              ),
+              { id: `join:${request.requestId}`, duration: Infinity },
             );
           }
         },
@@ -79,4 +88,58 @@ export function JoinRequestAlerts({ route }: { route: Route }) {
   }, [looking]);
 
   return null;
+}
+
+/* one request, with what's needed to decide whether to look: who, what they
+   want, and the two answers */
+function JoinRequestNotice({
+  request,
+  nodeName,
+  onReview,
+  onDeny,
+}: {
+  request: JoinRequest;
+  nodeName: string;
+  onReview: () => void;
+  onDeny: () => Promise<void>;
+}) {
+  const [denying, setDenying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const who = partyName(request.from);
+  return (
+    <div
+      role="status"
+      aria-label={`${who} asks to join ${nodeName}`}
+      className="flex w-[356px] items-center gap-3 rounded-2xl border border-border bg-popover p-3 text-popover-foreground shadow-lg"
+    >
+      <NodeAvatar name={who} rollId={request.from.did} className="size-9 shrink-0" />
+      <div className="grid min-w-0 flex-1 gap-0.5">
+        <p className="text-sm leading-snug">
+          <span className="font-medium">{who}</span> asks to join {nodeName}
+        </p>
+        <p className="truncate text-xs text-muted-foreground">
+          {error ??
+            `${request.inviteId ? "With your invite" : "No invite"} · wants ${scopeInSentence(request.scope)}`}
+        </p>
+      </div>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={denying}
+        onClick={() => {
+          setDenying(true);
+          setError(null);
+          onDeny().catch((cause: unknown) => {
+            setError(cause instanceof Error ? cause.message : String(cause));
+            setDenying(false);
+          });
+        }}
+      >
+        {denying ? "Denying…" : "Deny"}
+      </Button>
+      <Button size="sm" disabled={denying} onClick={onReview}>
+        Review
+      </Button>
+    </div>
+  );
 }
