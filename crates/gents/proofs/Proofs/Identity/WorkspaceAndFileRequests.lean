@@ -64,6 +64,41 @@ theorem hidden_policy_looks_unconfigured :
 theorem complete_unconfigured_store_keeps_fallback :
     rootFallbackAllowed true false = true := by decide
 
+/-- A canonical WorkspaceRoot publication checks the acting user's native
+Node update permission by writing a fresh revision on the exact physical Node
+in the same transaction as the user-signed root and its Node parent. ACP1
+does not mandate that parent or fence on raw direct creates; those remain
+outside the admitted canonical-publisher premise. Filtered root sets never
+establish an unconfigured fallback. -/
+def workspaceRootFixture : Household.State :=
+  { objects := [⟨"nodes", "node", "user"⟩, ⟨"workspace_roots", "root", "user"⟩],
+    relations := [⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩,
+      ⟨"workspace_roots", "root", "parent", .object "nodes" "node"⟩], enrolled := [] }
+
+def workspaceRootPermission (actor permission : String) : Bool :=
+  Household.allowed 6 workspaceRootFixture actor "workspace_roots" "root" permission
+
+def workspaceRootAfterRevocation : Household.State :=
+  { workspaceRootFixture with relations := workspaceRootFixture.relations.filter
+      (fun relation => relation.resource != "workspace_roots") }
+
+def workspaceRootPublicationAllowed (actor : String) : Bool :=
+  Household.allowed 6 workspaceRootFixture actor "nodes" "node" "update"
+
+theorem runtime_root_access_is_read_only :
+    workspaceRootPermission "runtime" "read" = true ∧
+    workspaceRootPermission "runtime" "update" = false ∧
+    workspaceRootPublicationAllowed "runtime" = false := by native_decide
+
+def workspaceRootAccessCasesJson : String :=
+  (Lean.toJson (["user", "runtime", "agent", "other"].flatMap fun actor =>
+    ["read", "update", "delete"].map fun permission => Lean.Json.mkObj
+      [("actor", Lean.toJson actor), ("permission", Lean.toJson permission),
+       ("expected", Lean.toJson (workspaceRootPermission actor permission)),
+       ("may_publish", Lean.toJson (workspaceRootPublicationAllowed actor)),
+       ("after_parent_revocation", Lean.toJson (Household.allowed 6 workspaceRootAfterRevocation actor "workspace_roots" "root" permission)),
+       ("aborted_document", Lean.toJson (publish false).document)])).compress
+
 /-- Workspace workflow configuration chooses the writer and integrator
 Agents explicitly. Their selection is frozen into the recorded action plan;
 the node DID and planner-provided labels are not substitute principals. -/

@@ -72,6 +72,11 @@ def policy : List ResourceDefinition :=
       permissions := [permission "read" ["reader", "writer", "selected_by"] [("parent", "read")],
         permission "update" ["writer"] [("parent", "update")],
         permission "delete" [] [("parent", "delete")]] }
+  , { name := "workspace_roots"
+      relations := [⟨"parent", ["nodes"], []⟩]
+      permissions := [permission "read" [] [("parent", "read")],
+        permission "update" [] [("parent", "update")],
+        permission "delete" [] [("parent", "delete")]] }
   , { name := "secret_configuration"
       relations := [⟨"parent", ["nodes"], []⟩, ⟨"runtime_writer", ["actor"], []⟩]
       permissions := [permission "read" ["runtime_writer"] [("parent", "read")],

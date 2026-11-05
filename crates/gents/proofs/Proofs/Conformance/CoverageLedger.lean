@@ -1539,6 +1539,12 @@ def caseCoverage : List CoverageEntry :=
       "Canonical publication attaches the shared parent atomically; ACP1 permits raw admitted writers to create orphan rows.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
+      "workspace_root_access_cases"
+      "WorkspaceRootAccessCases"
+      "tools::surface::root_publication::tests::native_workspace_root_publication_obeys_node_authority"
+      "User publication fences on native Node update and commits the physical parent; raw direct creates remain outside the writer-fencing premise.")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerWithFollowUp
       "workspace_child_revocation_cases"
       "WorkspaceChildRevocationCases"
       "tools::workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"

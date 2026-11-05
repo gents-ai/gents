@@ -623,6 +623,7 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"workspace_agent_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceAgentSelectionCasesJson ++ ","
     ++ "\"workspace_liveness_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceLivenessCasesJson ++ ","
     ++ "\"workspace_child_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceChildCasesJson ++ ","
+    ++ "\"workspace_root_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceRootAccessCasesJson ++ ","
     ++ "\"workspace_child_revocation_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceChildRevocationCasesJson ++ ","
     ++ "\"workspace_admission_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceAdmissionCasesJson ++ ","
     ++ "\"workspace_cleanup_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceCleanupCasesJson ++ ","
