@@ -448,6 +448,7 @@ export function ChoiceRow({
   onChange,
   items,
   none,
+  placeholder,
   error,
   disabled,
 }: Common & {
@@ -455,13 +456,15 @@ export function ChoiceRow({
   onChange: (v: string) => void;
   items: Choice[];
   none?: string;
+  /** shown while nothing is chosen, when there is no `none` choice */
+  placeholder?: string;
 }) {
   const all = none ? [{ value: "", label: none }, ...items] : items;
   return (
     <Row label={label} description={description} htmlFor={id} error={error}>
       <Select
         items={all}
-        value={value}
+        value={value === "" && !none ? null : value}
         onValueChange={(v) => onChange(v ?? "")}
         disabled={disabled}
       >
@@ -470,7 +473,7 @@ export function ChoiceRow({
           aria-invalid={error ? true : undefined}
           className="w-72 max-md:w-full"
         >
-          <SelectValue />
+          <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent>
           {all.map((i) => (

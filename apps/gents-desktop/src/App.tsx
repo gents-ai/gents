@@ -314,7 +314,7 @@ function RouteScreen({ route }: { route: Route }) {
     case "automations":
       return <AutomationsScreen item={route.item} />;
     case "packs":
-      return <PacksScreen item={route.item} />;
+      return <PacksScreen item={route.item} review={route.review} doc={route.doc} />;
     case "agents":
     case "nodes":
       return <AgentsScreen />;
