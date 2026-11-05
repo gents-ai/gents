@@ -113,7 +113,8 @@ export function createSessionReads({
       phase: sameSelection && waiting ? previous.phase : "loading",
       sessionId: nextSessionId,
       nodeDid,
-      found: null,
+      /* looking again doesn't bring a missing session back until it's found */
+      found: sameSelection && previous.found === false ? false : null,
       error: sameSelection ? previous.error : null,
     });
     const started = performance.now();
@@ -158,7 +159,7 @@ export function createSessionReads({
           phase,
           sessionId: nextSessionId,
           nodeDid,
-          found: null,
+          found: code === "notFound" ? false : null,
           error: message,
         });
       }

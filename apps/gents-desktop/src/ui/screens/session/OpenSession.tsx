@@ -43,6 +43,7 @@ import { DROPDOWN_MENU, SessionItems, useRenameFromMenu } from "../SessionMenu";
 import { MOD } from "../shortcutKeys";
 import { openFind } from "./find";
 import { SessionLoading } from "../SessionLoading";
+import { SessionUnavailable, useSessionAbsence } from "./SessionUnavailable";
 import { useComposerRoom, useHeaderScrolledOut } from "../sessionLayout";
 import { sentTurnKey } from "../stream-reveal";
 import { TranscriptPanel, type TranscriptOwner } from "../Transcript";
@@ -64,6 +65,7 @@ export function OpenSession() {
   const selectedSessionId = stores.selection.use.sessionId();
   const sessionLoad = useSessionLoad();
   const session = useSelectedSessionFields(selectScreenFacts);
+  const absence = useSessionAbsence(!session);
   const loadContextDetails = useCallback(
     (input: NonNullable<DesktopSessionSnapshot["context"]["lastRequest"]>) => {
       if (!session?.nodeDid) return Promise.resolve(null);
@@ -159,6 +161,8 @@ export function OpenSession() {
     }
   };
 
+  if (absence === "missing") return <SessionUnavailable />;
+  if (absence === "waiting") return <SessionLoading />;
   if (!session && sessionLoad.phase !== "failed" && sessionLoad.found !== false)
     return <SessionLoading />;
 
