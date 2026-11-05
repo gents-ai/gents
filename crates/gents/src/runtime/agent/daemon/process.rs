@@ -242,7 +242,11 @@ where
 
         let sealed = request::prepare_unless_interrupted(
             &mut interrupt_rx,
-            crate::tools::workspace::writer_request_already_sealed(&self.node, &request),
+            crate::tools::workspace::writer_request_already_sealed_with_identity(
+                &self.node,
+                self.agent_config.agent_identity.as_ref(),
+                &request,
+            ),
         )
         .await;
         let Some(sealed) = sealed else {
@@ -476,9 +480,12 @@ where
                 match terminalize_request(&mut lifecycle, &stream_writer, terminal, None).await {
                     Ok(true) if skipped_before_work => {
                         record_current_request_outcome("completed");
-                        if let Err(error) =
-                            crate::tools::workspace::release_writer_binding(&self.node, &request)
-                                .await
+                        if let Err(error) = crate::tools::workspace::release_writer_binding(
+                            &self.node,
+                            self.agent_config.agent_identity.as_ref(),
+                            &request,
+                        )
+                        .await
                         {
                             tracing::warn!(request_id = %request.request_id, error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
                                 "failed to release writer workspace binding after skipped task gate");
@@ -524,8 +531,12 @@ where
                     }
                 }
                 self.record_request_interruption(&request, interruption_source);
-                if let Err(error) =
-                    crate::tools::workspace::release_writer_binding(&self.node, &request).await
+                if let Err(error) = crate::tools::workspace::release_writer_binding(
+                    &self.node,
+                    self.agent_config.agent_identity.as_ref(),
+                    &request,
+                )
+                .await
                 {
                     tracing::warn!(
                         request_id = %request.request_id,

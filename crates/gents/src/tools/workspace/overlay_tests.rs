@@ -1049,7 +1049,20 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
         )
         .await
         .unwrap();
-    crate::tools::workspace::release_writer_binding(&node, owner.request())
+    let admin = crate::ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did().unwrap().parse().unwrap(),
+    );
+    admin
+        .transact_write("test.workspace.release", |txn| {
+            Box::pin(super::super::runtime::release_writer_binding_in_txn(
+                txn,
+                &owner.request().doc_id,
+                &owner.request().request_id,
+                "artifact-workspace",
+                owner.request().workspace_owner_node_did.as_deref().unwrap(),
+            ))
+        })
         .await
         .unwrap();
     crate::tools::workspace::cleanup_workspace(

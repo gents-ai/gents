@@ -388,6 +388,41 @@ pub async fn writer_request_already_sealed(
     ))
 }
 
+pub(crate) async fn writer_request_already_sealed_with_identity(
+    node: &std::sync::Arc<EmbeddedNode>,
+    agent_identity: &dyn crate::store::identity::NodeIdentity,
+    request: &AgentRequest,
+) -> Result<bool> {
+    let Some(workspace_id) = optional_id(request.workspace_id.as_deref()) else {
+        return Ok(false);
+    };
+    if request
+        .workspace_authority
+        .as_deref()
+        .and_then(|value| WorkspaceAuthority::parse(value).ok())
+        != Some(WorkspaceAuthority::ReadWrite)
+    {
+        return Ok(false);
+    }
+    let access = completion_access(node, agent_identity, &request.agent_did)?;
+    let docs = load_docs_with_access(
+        &access,
+        workspace_id,
+        super::overlay::request_workspace_owner(request)?,
+    )
+    .await?;
+    let workspace = docs
+        .load_isolated_workspace(workspace_id)?
+        .context("writer workspace is unavailable")?;
+    Ok(writer_already_sealed(
+        &workspace.lifecycle_state,
+        &docs.load_receipts(workspace_id)?,
+        &docs.load_bindings(workspace_id)?,
+        &request.request_id,
+        &request.doc_id,
+    ))
+}
+
 fn writer_already_sealed(
     lifecycle_state: &str,
     receipts: &[WorkspaceReceiptDoc],
@@ -504,28 +539,29 @@ pub async fn materialize_workspace_binding(
 
 pub async fn release_writer_binding(
     node: &std::sync::Arc<EmbeddedNode>,
+    agent_identity: &dyn crate::store::identity::NodeIdentity,
     request: &AgentRequest,
 ) -> Result<()> {
     let Some(workspace_id) = optional_id(request.workspace_id.as_deref()) else {
         return Ok(());
     };
     let owner = super::overlay::request_workspace_owner(request)?;
-    crate::store::config_client::ConfigAccess::transact_local_idempotent(
-        node,
-        Some(identity::Did::new(request.agent_did.clone())?),
-        crate::store::config_client::IdempotentTransactionRetry::Standard,
-        "workspace.release_writer_binding",
-        |txn| {
-            Box::pin(release_writer_binding_in_txn(
-                txn,
-                &request.doc_id,
-                &request.request_id,
-                workspace_id,
-                owner,
-            ))
-        },
-    )
-    .await
+    let access = completion_access(node, agent_identity, &request.agent_did)?;
+    access
+        .transact_idempotent(
+            crate::store::config_client::IdempotentTransactionRetry::Standard,
+            "workspace.release_writer_binding",
+            |txn| {
+                Box::pin(release_writer_binding_in_txn(
+                    txn,
+                    &request.doc_id,
+                    &request.request_id,
+                    workspace_id,
+                    owner,
+                ))
+            },
+        )
+        .await
 }
 
 /// Pending terminal paths can encounter malformed request rows. Cleanup
@@ -551,7 +587,7 @@ pub(crate) async fn release_terminal_writer_binding(
     release_writer_binding_in_txn(txn, doc_id, request_id, workspace_id, owner).await
 }
 
-async fn release_writer_binding_in_txn(
+pub(super) async fn release_writer_binding_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request_doc_id: &str,
     request_id: &str,

@@ -84,8 +84,12 @@ where
     }
 
     pub(super) async fn release_failed_writer_binding(&self, request: &AgentRequest) {
-        if let Err(error) =
-            crate::tools::workspace::release_writer_binding(&self.node, request).await
+        if let Err(error) = crate::tools::workspace::release_writer_binding(
+            &self.node,
+            self.agent_config.agent_identity.as_ref(),
+            request,
+        )
+        .await
         {
             tracing::warn!(
                 request_id = %request.request_id,
@@ -111,7 +115,12 @@ where
         {
             record_current_request_outcome("interrupted");
             self.record_request_interruption(request, RequestInterruptionSource::Claimed);
-            crate::tools::workspace::release_writer_binding(&self.node, request).await?;
+            crate::tools::workspace::release_writer_binding(
+                &self.node,
+                self.agent_config.agent_identity.as_ref(),
+                request,
+            )
+            .await?;
         }
         Ok(())
     }
