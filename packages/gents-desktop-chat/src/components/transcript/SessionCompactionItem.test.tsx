@@ -62,9 +62,39 @@ it("preserves zero and omits unavailable count, token and time facts", () => {
   expect(container.querySelector("time")).toBeNull();
 });
 
-it("does not invent a complete token reduction from a partial observation", () => {
-  const { container } = render(
-    <TimelineItem item={{ ...item, originalTokens: null }} />,
-  );
-  expect(container.textContent).not.toContain("tokens");
-});
+it.each([
+  { originalTokens: null, compactedTokens: 1200, text: "After: 1,200 tokens" },
+  {
+    originalTokens: 24000,
+    compactedTokens: null,
+    text: "Before: 24,000 tokens",
+  },
+  { originalTokens: null, compactedTokens: 0, text: "After: 0 tokens" },
+])(
+  "preserves the observed side of partial token facts: $text",
+  ({ text, ...tokens }) => {
+    const { container } = render(
+      <TimelineItem item={{ ...item, ...tokens }} />,
+    );
+    expect(screen.getByText(text)).toBeTruthy();
+    expect(container.textContent).not.toContain("→");
+  },
+);
+
+it.each([NaN, Infinity, -1])(
+  "withholds invalid compaction counts: %s",
+  (value) => {
+    const { container } = render(
+      <TimelineItem
+        item={{
+          ...item,
+          messagesCompacted: value,
+          originalTokens: value,
+          compactedTokens: value,
+        }}
+      />,
+    );
+    expect(screen.getByText("Session context compacted")).toBeTruthy();
+    expect(container.textContent).not.toContain("tokens");
+  },
+);
