@@ -1,23 +1,16 @@
 import type { ReactNode } from "react";
-import { ChevronDown, Download } from "lucide-react";
+import { ChevronDown, Download, MoreHorizontal } from "lucide-react";
+import { Button } from "@gents/ui/components/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@gents/ui/components/dropdown-menu";
+import { navigate } from "@/lib/router";
 import { Skeleton } from "@gents/ui/components/skeleton";
 import { cn } from "@gents/ui/lib/utils";
-import { initials, namespaceOf, shortName } from "./model";
-
-/** A pack's mark: its initials on a quiet tile, where it has no picture. */
-export function PackMark({ pack, large = false }: { pack: string; large?: boolean }) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        "grid shrink-0 place-items-center bg-raised font-mono font-medium text-muted-foreground",
-        large ? "size-12 rounded-xl text-sm" : "size-9 rounded-lg text-xs",
-      )}
-    >
-      {initials(pack)}
-    </span>
-  );
-}
+import { namespaceOf, shortName } from "./model";
 
 /** what a pack adds, as quiet chips */
 export function Chips({ items }: { items: readonly string[] }) {
@@ -37,7 +30,7 @@ export function Chips({ items }: { items: readonly string[] }) {
 }
 
 export const CARD =
-  "group/row relative -mx-3 flex min-w-0 items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-accent has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring/50";
+  "group/row relative flex min-w-0 items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-accent has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring/50";
 
 /** Rows shaped like packs while the list is read, so it doesn't jump when
     they arrive. */
@@ -45,8 +38,7 @@ export function PackRowsLoading({ label, rows = 3 }: { label: string; rows?: num
   return (
     <ul aria-label={label} aria-busy="true" className="divide-y divide-border/60">
       {Array.from({ length: rows }, (_, i) => (
-        <li key={i} className="flex items-center gap-3 py-2.5">
-          <Skeleton className="size-9 rounded-lg" />
+        <li key={i} className="flex items-center gap-3 px-3 py-2.5">
           <span className="grid flex-1 gap-1.5">
             <Skeleton className="h-3.5 w-40 max-w-full" />
             <Skeleton className="h-3 w-72 max-w-full" />
@@ -109,7 +101,7 @@ export function MoreRow({
     <button
       type="button"
       onClick={onClick}
-      className="-mx-3 flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-2.5 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+      className="flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-2.5 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
     >
       {children}
       <ChevronDown aria-hidden className="size-3.5" />
@@ -126,7 +118,7 @@ export function PackList({ label, children }: { label?: string; children: ReactN
   );
 }
 
-/** One pack as a row of the list: its mark, name and namespace, a line
+/** One pack as a row of the list: its name and namespace, a line
     about it, what it adds and how it stands. The name is a link stretched
     over the row, so the whole row opens the pack while `action` stays its
     own control. */
@@ -159,7 +151,6 @@ export function PackCard({
   const namespace = namespaceOf(pack);
   return (
     <li className={CARD} data-testid="pack-card">
-      <PackMark pack={pack} />
       <span className="grid min-w-0 flex-1 gap-0.5">
         <span className="flex min-w-0 items-baseline gap-2">
           <a
@@ -229,5 +220,53 @@ export function Section({
       </div>
       {children}
     </section>
+  );
+}
+
+/** A pack's ⋯ menu: in a list, Open first; then what can be done to it from
+    here. */
+export function PackMenu({
+  pack,
+  busy,
+  items,
+  opens = false,
+}: {
+  pack: string;
+  busy: boolean;
+  items: { label: string; run: () => void; destructive?: boolean }[];
+  opens?: boolean;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`More for ${pack}`}
+            className="text-muted-foreground"
+          />
+        }
+      >
+        <MoreHorizontal />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-44">
+        {opens && (
+          <DropdownMenuItem onClick={() => navigate({ name: "packs", item: pack })}>
+            Open
+          </DropdownMenuItem>
+        )}
+        {items.map((item) => (
+          <DropdownMenuItem
+            key={item.label}
+            disabled={busy}
+            variant={item.destructive ? "destructive" : undefined}
+            onClick={item.run}
+          >
+            {item.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

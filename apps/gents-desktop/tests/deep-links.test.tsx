@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useOutsideLinks, type LinkSource } from "../src/ui/app/useOutsideLinks";
 import { parseLink } from "../src/ui/lib/links";
+import { packLink, usePackPreviewRequest } from "../src/ui/lib/packReview";
+import { resetPreferences } from "../src/ui/preferences";
 import { bindNav, interceptNavClicks, openLink } from "../src/ui/lib/router";
 import { Markdown } from "../src/ui/screens/Markdown";
 
@@ -31,11 +33,34 @@ describe("parseLink", () => {
     });
   });
 
+  it("reads a pack, the version it names and the digest that pins it", () => {
+    const digest = `sha256:${"ab".repeat(32)}`;
+    expect(parseLink(`gents://pack/acme/game?version=1.2.0&digest=${digest}`)).toEqual({
+      kind: "pack",
+      pack: "acme/game",
+      version: "1.2.0",
+      digest,
+    });
+    expect(parseLink("gents:pack/acme/game")).toEqual({
+      kind: "pack",
+      pack: "acme/game",
+    });
+    expect(parseLink(packLink("acme/game", "1.2.0", digest))).toEqual({
+      kind: "pack",
+      pack: "acme/game",
+      version: "1.2.0",
+      digest,
+    });
+  });
+
   it("opens nothing it doesn't know, messages included", () => {
     for (const href of [
       "gents://session/",
       "gents://session/s-1/message/4",
-      "gents://pack/acme/game",
+      "gents://pack/acme",
+      "gents://pack/Acme/game",
+      "gents://pack/acme/game?digest=sha256:short",
+      "gents://pack/acme/game?version=..",
       "gents://node/add?address=10.0.0.1:9191",
       "gents:session",
       "gents://session/%E0%A4%A",
@@ -80,10 +105,50 @@ describe("following a gents link", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const nav = mountNav();
     let opened = true;
-    act(() => void (opened = openLink("gents://pack/acme/game")));
+    act(() => void (opened = openLink("gents://node/add?address=10.0.0.1:9191")));
     expect(opened).toBe(false);
     expect(nav().route).toEqual({ name: "sessions" });
     warn.mockRestore();
+  });
+
+  describe("a pack link", () => {
+    const digest = `sha256:${"cd".repeat(32)}`;
+    const reviewOf = (route: unknown) =>
+      renderHook(() => usePackPreviewRequest((route as { review?: string }).review))
+        .result.current;
+    afterEach(() => resetPreferences());
+
+    it("opens nothing while Packs is off", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const nav = mountNav();
+      let opened = true;
+      act(() => void (opened = openLink(`gents://pack/acme/game?digest=${digest}`)));
+      expect(opened).toBe(false);
+      expect(nav().route).toEqual({ name: "sessions" });
+      warn.mockRestore();
+    });
+
+    it("opens the pack's page on what it would add, installing nothing", () => {
+      resetPreferences({ packs: "on" });
+      const nav = mountNav();
+      act(() => void openLink(`gents://pack/acme/game?version=1.2.0&digest=${digest}`));
+      expect(nav().route).toMatchObject({ name: "packs", review: expect.any(String) });
+      expect(reviewOf(nav().route)).toEqual({
+        package: "acme/game@1.2.0",
+        source: "link",
+        digest,
+      });
+    });
+
+    it("opens the same page for the same link", () => {
+      resetPreferences({ packs: "on" });
+      const nav = mountNav();
+      act(() => void openLink("gents://pack/acme/game"));
+      const first = nav().route;
+      act(() => void openLink("gents://pack/acme/game"));
+      expect(nav().route).toEqual(first);
+      expect(reviewOf(first)).toEqual({ package: "acme/game", source: "link" });
+    });
   });
 
   it("follows a gents link in a reply through the router", () => {

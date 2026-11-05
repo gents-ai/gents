@@ -188,23 +188,25 @@ export function ScheduleEditor({
           timezone: id("tz"),
         }}
       />
-      <Group
-        title="Manual run"
-        action={
-          <Button size="sm" variant="brand" disabled={running} onClick={run}>
-            {running ? "Starting…" : "Run schedule now"}
-          </Button>
-        }
-      >
-        <FactRow label="Trigger">
-          Uses the enabled trigger currently bound to this schedule.
-        </FactRow>
-        {lastRun && (
-          <FactRow label="Started" mono>
-            {lastRun}
+      <div data-readonly-hide="">
+        <Group
+          title="Manual run"
+          action={
+            <Button size="sm" variant="brand" disabled={running} onClick={run}>
+              {running ? "Starting…" : "Run schedule now"}
+            </Button>
+          }
+        >
+          <FactRow label="Trigger">
+            Uses the enabled trigger currently bound to this schedule.
           </FactRow>
-        )}
-      </Group>
+          {lastRun && (
+            <FactRow label="Started" mono>
+              {lastRun}
+            </FactRow>
+          )}
+        </Group>
+      </div>
       {!embedded && (
         <DeleteButton
           label={schedule.display_name ?? schedule.schedule_id}

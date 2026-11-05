@@ -311,7 +311,7 @@ function RouteScreen({ route }: { route: Route }) {
     case "mailbox":
       return <MailboxScreen />;
     case "packs":
-      return <PacksScreen item={route.item} />;
+      return <PacksScreen item={route.item} review={route.review} doc={route.doc} />;
     case "agents":
     case "nodes":
       return <AgentsScreen />;
