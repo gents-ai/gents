@@ -156,7 +156,7 @@ Read from the authentic candidate binary with `codesign -dv --verbose=4`,
 | `Identifier` | `gents` |
 | `Format` | `Mach-O thin (arm64)`; `lipo -archs` prints `arm64` |
 | `CDHash` | `595a5f783971fe0d9271b8357395d52114f51438` |
-| `TeamIdentifier` | `4LPKFKCXDA` (leaf certificate SHA-256 `02d9c8a2…0625`) |
+| `TeamIdentifier` | `NXJ753WW5X` (leaf certificate SHA-256 `ffe16122…1baf`) |
 | Flags | hardened runtime; timestamped 2026-10-19 18:45:57 local |
 
 The file SHA-256 matches the build receipt
