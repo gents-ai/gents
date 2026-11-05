@@ -11,7 +11,9 @@ use gents_protocol::enrollment::{
 use crate::cli::{Cli, Command};
 
 pub use crate::cli::args::ToolCeilingArg as ManagedToolCeiling;
-pub use crate::commands::p2p::enrollment_admin::EnrollmentDecisionRejected;
+pub use crate::commands::p2p::enrollment_admin::{
+    EnrollmentDecisionRejected, EnrollmentQueryRejected,
+};
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub struct ManagedPendingEnrollment {
