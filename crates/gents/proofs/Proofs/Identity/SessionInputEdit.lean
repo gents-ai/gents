@@ -128,6 +128,16 @@ theorem empty_selection_cannot_apply :
     apply .pending Request.CrossActorAuthorization.exampleIntent
       Request.CrossActorAuthorization.permittedObservation ⟨true, true, true, true⟩ (some []) (some []) = .rejected := by decide
 
+/-- An interrupted request without a replacement does not identify the edit
+that interrupted it. If the command's verified receipt is unavailable, that
+observation cannot prove either a new success or a new rejection. -/
+def unprovenRemovalReplay (hasVerifiedReceipt matchesRemoval : Bool) : Bool :=
+  !hasVerifiedReceipt && matchesRemoval
+
+theorem unproven_removal_remains_pending : unprovenRemovalReplay false true = true := by rfl
+
+theorem verified_receipt_needs_no_removal_inference : unprovenRemovalReplay true true = false := by rfl
+
 def claimCasesJson : String :=
   (Lean.toJson ([("allowed", true), ("selected-denied", false)].map fun (name, selected) =>
     Lean.Json.mkObj [("name", Lean.toJson name), ("selectedAllowed", Lean.toJson selected),
@@ -144,6 +154,7 @@ def claimCasesJson : String :=
         ⟨"user", "session-doc", "agent-doc", "input", "evidence", true⟩
         "input" "changed" ⟨true, true, true⟩).replacement)),
       ("noRegrant", Lean.toJson (Request.ClientSignedEditHandoff.recover true ⟨true, true, true⟩ == ⟨false, false, false⟩)),
+      ("unprovenRemovalPending", Lean.toJson (unprovenRemovalReplay false true)),
       ("applied", Lean.toJson (apply .pending Request.CrossActorAuthorization.exampleIntent
         Request.CrossActorAuthorization.permittedObservation ⟨true, true, true, true⟩
         (some [selected]) (some [selected]) == .applied))])).compress
