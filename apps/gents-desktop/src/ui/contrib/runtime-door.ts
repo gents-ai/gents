@@ -202,7 +202,8 @@ async function reconcile(reloadKnown: boolean, reloadPack?: string): Promise<voi
   let listings: UxPluginListing[];
   try {
     listings = await listRuntimeUxPlugins();
-  } catch {
+  } catch (error) {
+    if (reloadPack !== undefined) throw error;
     /* no local agent home (mobile, or not started): nothing to scan */
     return;
   }
@@ -243,9 +244,10 @@ function queueScan(reloadKnown: boolean, reloadPack?: string): Promise<void> {
   const run = () => reconcile(reloadKnown, reloadPack);
   const scan: Promise<void> = (inFlight ?? Promise.resolve()).then(run, run);
   inFlight = scan;
-  void scan.finally(() => {
+  const clear = () => {
     if (inFlight === scan) inFlight = null;
-  });
+  };
+  void scan.then(clear, clear);
   return scan;
 }
 
