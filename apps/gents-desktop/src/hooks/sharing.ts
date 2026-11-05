@@ -1,11 +1,10 @@
 /**
  * Who may use a node, and the invites that let them in.
  *
- * Every sharing screen reads and acts through a {@link SharingAdapter}, so the
- * screens can be built before the runtime offers invites and members to the
- * desktop (#3469, #3470, #3471, #3472, #3495). These shapes are the desktop's
- * stand-in until then: replace them with the runtime's generated types when
- * those exist, and never write them to a node.
+ * Every sharing screen reads and acts through a {@link SharingAdapter}. Invites,
+ * joining, and any scope narrower than the whole node are the desktop's stand-in
+ * until the runtime offers them (#3472, #3495): replace those shapes with the
+ * runtime's generated types when they exist, and never write them to a node.
  */
 
 /** what a share covers: the whole node, one pack's data and pages, or one
@@ -45,15 +44,15 @@ export type JoinRequest = {
 };
 
 /** someone with access now, one grant per scope: a person given a pack and
-    an agent is two members, renewed and revoked apart */
+    an agent is two members, revoked apart */
 export type SharingMember = {
+  /** the approved request that gave this access, which revoking names */
+  requestId: string;
   party: SharingParty;
   scope: ShareScope;
   profile: ShareProfile;
-  since: string;
   /** null for access that doesn't lapse */
   leaseExpiresAt: string | null;
-  renewable: boolean;
 };
 
 export type InviteKind = "device" | "person";
@@ -106,6 +105,17 @@ export type SharingDecision = {
   at: string;
 };
 
+/** what a node's history leaves out, as its runtime reports it */
+export type SharingHistoryLimits = {
+  /** how many records the runtime holds, before its limit */
+  observed: number;
+  limit: number;
+  /** a record replaced by a later one isn't listed */
+  omitsSuperseded: boolean;
+  /** a record in conflict isn't listed */
+  conflictsOmitted: boolean;
+};
+
 /** which parts of a node's sharing its runtime offers; a part it doesn't
     offer reads as empty, which is not the same as none */
 export type SharingAvailability = {
@@ -120,6 +130,8 @@ export type SharingState = {
   members: SharingMember[];
   invites: Invite[];
   history: SharingDecision[];
+  /** null when the runtime reports no limits */
+  historyLimits: SharingHistoryLimits | null;
   available: SharingAvailability;
 };
 
@@ -158,14 +170,12 @@ export interface SharingAdapter {
   subscribe(nodeDid: string, onChange: () => void): () => void;
   approve(nodeDid: string, requestId: string, leaseSeconds: number): Promise<void>;
   deny(nodeDid: string, requestId: string): Promise<void>;
-  /** `scope` names which of the member's grants */
-  revoke(nodeDid: string, memberDid: string, scope: ShareScope): Promise<void>;
-  renew(
-    nodeDid: string,
-    memberDid: string,
-    scope: ShareScope,
-    leaseSeconds: number,
-  ): Promise<void>;
+  /** ends the access a member's approved request gave */
+  revoke(nodeDid: string, requestId: string): Promise<void>;
+  /** extends a member's lease; absent where the runtime can't. A signed
+      approval carries one fixed expiry, so today's runtime renews only by the
+      member enrolling again. */
+  renew?(nodeDid: string, requestId: string, leaseSeconds: number): Promise<void>;
   /** the profiles an invite may carry for this scope */
   profiles(nodeDid: string, scope: ShareScope): Promise<ShareProfile[]>;
   createInvite(nodeDid: string, draft: InviteDraft): Promise<Invite>;
@@ -175,9 +185,6 @@ export interface SharingAdapter {
   acceptInvite(invite: string): Promise<InviteAcceptance>;
   /** withdraws a request this desktop sent */
   cancelRequest(requestId: string): Promise<void>;
-  /** ends the access an approved request gave, known by that request; absent
-      where the runtime can't revoke that way */
-  revokeApproval?(nodeDid: string, requestId: string): Promise<void>;
 }
 
 const UNAVAILABLE = "Sharing needs a newer runtime on this node.";
@@ -190,7 +197,6 @@ export const unavailableSharing: SharingAdapter = {
   approve: refuseSharing,
   deny: refuseSharing,
   revoke: refuseSharing,
-  renew: refuseSharing,
   profiles: refuseSharing,
   createInvite: refuseSharing,
   cancelInvite: refuseSharing,
