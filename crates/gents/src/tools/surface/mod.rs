@@ -34,7 +34,7 @@ pub(crate) use root_admission::{
     load_workspace_root_policy_in_txn, resolve_admitted_tool_root, RootExecutionGuard,
 };
 pub use root_publication::{
-    delete_workspace_root, revoke_workspace_root_reader, set_workspace_root,
+    delete_workspace_root, grant_workspace_root_reader, revoke_workspace_root_reader, set_workspace_root,
     set_workspace_root_with_readers, WorkspaceRootWriteError,
 };
 pub use runtime_context::ToolRuntimeContext;

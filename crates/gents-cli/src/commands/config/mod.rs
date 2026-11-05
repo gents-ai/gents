@@ -78,6 +78,7 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         },
         ConfigCommand::WorkspaceRoot { command } => match command {
             WorkspaceRootCommand::Set(args) => workspace_root::workspace_root_set(args).await,
+            WorkspaceRootCommand::GrantReader(args) => workspace_root::workspace_root_grant_reader(args).await,
             WorkspaceRootCommand::RevokeReader(args) => workspace_root::workspace_root_revoke_reader(args).await,
             WorkspaceRootCommand::List(args) => workspace_root::workspace_root_list(args).await,
             WorkspaceRootCommand::Show(args) => workspace_root::workspace_root_show(args).await,

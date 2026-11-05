@@ -115,6 +115,19 @@ pub(super) async fn workspace_root_set(args: WorkspaceRootUpsertArgs) -> Result<
     Ok(())
 }
 
+pub(super) async fn workspace_root_grant_reader(args: WorkspaceRootReaderArgs) -> Result<()> {
+    let path = canonicalize_workspace_root_path(&args.path)?;
+    let root_path = path
+        .to_str()
+        .context("workspace root path must be valid UTF-8")?;
+    let access = ConfigAccess::Graphql(
+        crate::resolve_graphql_endpoint(Some(&args.graphql), None)?
+            .with_client_signed_agent_creates(),
+    );
+    gents::tools::surface::grant_workspace_root_reader(&access, root_path, &args.agent_did).await?;
+    print_json(&json!({"root_path":root_path, "granted_agent":args.agent_did}))
+}
+
 pub(super) async fn workspace_root_revoke_reader(args: WorkspaceRootReaderArgs) -> Result<()> {
     let path = canonicalize_workspace_root_path(&args.path)?;
     let root_path = path

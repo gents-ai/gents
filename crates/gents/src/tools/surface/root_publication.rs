@@ -143,6 +143,15 @@ pub async fn set_workspace_root_with_readers(
     result.map_err(WorkspaceRootWriteError::Publication)
 }
 
+/// Grants a selected Agent read access without changing the root's state.
+pub async fn grant_workspace_root_reader(
+    access: &ConfigAccess,
+    root_path: &str,
+    agent_did: &str,
+) -> std::result::Result<(), WorkspaceRootWriteError> {
+    change_workspace_root_reader(access, root_path, agent_did, true).await
+}
+
 /// Revocation acts on the exact visible root and actor in the same
 /// Node-authorized transaction, even if the Agent document has been deleted.
 pub async fn revoke_workspace_root_reader(
@@ -150,8 +159,17 @@ pub async fn revoke_workspace_root_reader(
     root_path: &str,
     agent_did: &str,
 ) -> std::result::Result<(), WorkspaceRootWriteError> {
+    change_workspace_root_reader(access, root_path, agent_did, false).await
+}
+
+async fn change_workspace_root_reader(
+    access: &ConfigAccess,
+    root_path: &str,
+    agent_did: &str,
+    grant: bool,
+) -> std::result::Result<(), WorkspaceRootWriteError> {
     let result: Result<()> = access
-        .transact_write("workspace_root.revoke_reader", |txn| {
+        .transact_write("workspace_root.reader", |txn| {
             Box::pin(async move {
                 let row = root_row(txn, root_path)
                     .await?
@@ -161,14 +179,23 @@ pub async fn revoke_workspace_root_reader(
                     .context("workspace root is missing Node scope")?;
                 let node_doc = selected_node(txn, node_did).await?;
                 let doc = checked_root_doc(&row, node_did, &node_doc)?;
-                let reader = identity::Did::new(agent_did)?;
-                anyhow::ensure!(
-                    agent_did != node_did,
-                    "root reader cannot be the Node actor"
-                );
+                let reader = if grant {
+                    selected_agent(txn, node_did, agent_did).await?
+                } else {
+                    anyhow::ensure!(
+                        agent_did != node_did,
+                        "root reader cannot be the Node actor"
+                    );
+                    identity::Did::new(agent_did)?
+                };
                 fence_node(txn, &node_doc).await?;
-                txn.delete_actor_relationship("WorkspaceRoot", doc, "reader", &reader)
-                    .await?;
+                if grant {
+                    txn.add_actor_relationship("WorkspaceRoot", doc, "reader", &reader)
+                        .await?;
+                } else {
+                    txn.delete_actor_relationship("WorkspaceRoot", doc, "reader", &reader)
+                        .await?;
+                }
                 Ok(())
             })
         })
@@ -522,15 +549,7 @@ mod tests {
                 "{case}"
             );
         }
-        set_workspace_root_with_readers(
-            &owner,
-            runtime.did(),
-            &path,
-            None,
-            true,
-            &[writer.did().to_owned()],
-        )
-        .await?;
+        grant_workspace_root_reader(&owner, &path, writer.did()).await?;
         owner
             .delete_resource_relationship("WorkspaceRoot", &root_doc, "parent", "nodes", &node_doc)
             .await?;

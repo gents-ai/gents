@@ -138,6 +138,8 @@ pub(crate) enum AgentCommand {
 pub(crate) enum WorkspaceRootCommand {
     #[command(name = "set")]
     Set(WorkspaceRootUpsertArgs),
+    #[command(name = "grant-reader", about = "Grant a selected Agent access to a workspace root")]
+    GrantReader(WorkspaceRootReaderArgs),
     #[command(name = "revoke-reader", about = "Revoke a selected Agent's access to a workspace root")]
     RevokeReader(WorkspaceRootReaderArgs),
     #[command(name = "list", about = "List WorkspaceRoot documents")]
