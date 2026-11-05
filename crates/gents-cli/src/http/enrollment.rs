@@ -69,27 +69,21 @@ impl EnrollmentDecisionService {
         }
     }
 
-    pub(crate) async fn pending(
+    pub(crate) async fn query(
         &self,
         command: &EnrollmentOperatorQueryCommand,
-    ) -> Result<Vec<serde_json::Value>> {
+    ) -> Result<serde_json::Value> {
         let now = Utc::now();
         authenticate_operator_query(self.identity.as_ref(), command, now).await?;
         consume_operator_nonce(&self.node, &command.admin_did, &command.nonce, now).await?;
-        anyhow::ensure!(
-            command.query == EnrollmentOperatorQuery::Pending,
-            "unsupported enrollment operator query"
-        );
         let projection = self.store.load_projection().await?;
         anyhow::ensure!(
             projection.conflict.is_none(),
             "enrollment root authority is conflicted"
         );
-        Ok(projection
-            .pending
-            .into_iter()
-            .map(|pending| {
-                serde_json::json!({
+        match command.query {
+            EnrollmentOperatorQuery::Pending => Ok(serde_json::json!({
+                "pending": projection.pending.into_iter().map(|pending| serde_json::json!({
                     "request_id": pending.request.request_id,
                     "network_id": pending.request.network_id,
                     "candidate_did": pending.request.candidate_did,
@@ -98,9 +92,66 @@ impl EnrollmentDecisionService {
                     "profile": pending.request.profile,
                     "issued_at": pending.request.issued_at,
                     "expires_at": pending.request.expires_at,
-                })
-            })
-            .collect())
+                })).collect::<Vec<_>>()
+            })),
+            EnrollmentOperatorQuery::Members => Ok(serde_json::json!({
+                "members": projection.active.into_iter()
+                    .filter(|entry| gents_protocol::enrollment::authorization_lease_is_fresh_at(&entry.revision.authorization_expires_at, now))
+                    .map(|entry| serde_json::json!({
+                        "request_id": entry.request.request_id,
+                        "network_id": entry.request.network_id,
+                        "candidate_did": entry.request.candidate_did,
+                        "candidate_peer": entry.request.candidate_peer,
+                        "profile": entry.request.profile,
+                        "authorization_expires_at": entry.revision.authorization_expires_at,
+                    })).collect::<Vec<_>>()
+            })),
+            EnrollmentOperatorQuery::History => {
+                let conflicts_omitted = !projection.request_conflicts.is_empty()
+                    || !projection.scoped_conflicts.is_empty();
+                let mut history = Vec::new();
+                for entry in projection.active {
+                    history.push(serde_json::json!({
+                        "request_id": entry.request.request_id, "candidate_did": entry.request.candidate_did,
+                        "candidate_peer": entry.request.candidate_peer, "profile": entry.request.profile,
+                        "state": "approved", "decided_at": entry.decision.decided_at,
+                        "decided_by": entry.decision.signer_did, "revoked_at": null, "revoked_by": null,
+                    }));
+                }
+                for entry in projection.denied {
+                    history.push(serde_json::json!({
+                        "request_id": entry.request.request_id, "candidate_did": entry.request.candidate_did,
+                        "candidate_peer": entry.request.candidate_peer, "profile": entry.request.profile,
+                        "state": "denied", "decided_at": entry.decision.decided_at,
+                        "decided_by": entry.decision.signer_did, "revoked_at": null, "revoked_by": null,
+                    }));
+                }
+                for entry in projection.revoked {
+                    history.push(serde_json::json!({
+                        "request_id": entry.request.request_id, "candidate_did": entry.request.candidate_did,
+                        "candidate_peer": entry.request.candidate_peer, "profile": entry.request.profile,
+                        "state": "revoked", "decided_at": entry.decision.decided_at,
+                        "decided_by": entry.decision.signer_did, "revoked_at": entry.revision.issued_at,
+                        "revoked_by": entry.revision.signer_did,
+                    }));
+                }
+                history.sort_by(|a, b| {
+                    let latest = |value: &serde_json::Value| {
+                        value["revoked_at"]
+                            .as_str()
+                            .or_else(|| value["decided_at"].as_str())
+                            .unwrap_or("")
+                            .to_owned()
+                    };
+                    latest(b).cmp(&latest(a))
+                });
+                let observed_count = history.len();
+                history.truncate(50);
+                Ok(
+                    serde_json::json!({ "history": history, "observed_count": observed_count, "limit": 50, "omits_superseded": true, "conflicts_omitted": conflicts_omitted }),
+                )
+            }
+        }
     }
 }
 
@@ -405,6 +456,20 @@ mod tests {
         assert!(authenticate_operator_query(&other, &query, now)
             .await
             .is_err());
+        for kind in [
+            EnrollmentOperatorQuery::Members,
+            EnrollmentOperatorQuery::History,
+        ] {
+            let mut changed = query.clone();
+            changed.query = kind;
+            assert!(authenticate_operator_query(&identity, &changed, now)
+                .await
+                .is_err());
+            changed.admin_sig = identity.sign(&changed.signing_payload()).await.unwrap();
+            authenticate_operator_query(&identity, &changed, now)
+                .await
+                .unwrap();
+        }
     }
 
     async fn nonce_test_node(path: &std::path::Path) -> Arc<EmbeddedNode> {

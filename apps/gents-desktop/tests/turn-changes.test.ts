@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { excerptPatch } from "@/lib/excerptPatch";
 import { fileId, preferFile, queued } from "../src/lib/fileReads";
 import { patchText } from "@/lib/filePatch";
-import { recordedDiff } from "../src/lib/recordedFiles";
+import { isReported, recordedDiff } from "../src/lib/recordedFiles";
 import {
   netCounts,
   relativeTo,
@@ -298,5 +298,27 @@ describe("file reads", () => {
     preferFile(SCOPE, "c.rs");
     await Promise.all(["a.rs", "b.rs", "c.rs"].map(read));
     expect(order).toEqual(["c.rs", "a.rs", "b.rs"]);
+  });
+});
+
+describe("matching an edit to its recorded change", () => {
+  const change = (root: string, path: string) =>
+    ({ root, path }) as Parameters<typeof isReported>[0];
+
+  it("matches a path given relative to the session's folder below the recorded root", () => {
+    const recorded = change("/Users/me", "Projects/snake/src/SnakeGame.jsx");
+    expect(isReported(recorded, "src/SnakeGame.jsx")).toBe(true);
+    expect(isReported(recorded, "./src/SnakeGame.jsx")).toBe(true);
+    expect(isReported(recorded, "/Users/me/Projects/snake/src/SnakeGame.jsx")).toBe(
+      true,
+    );
+    expect(isReported(recorded, "Projects/snake/src/SnakeGame.jsx")).toBe(true);
+  });
+
+  it("doesn't match another file, or a partial name", () => {
+    const recorded = change("/Users/me", "Projects/snake/src/SnakeGame.jsx");
+    expect(isReported(recorded, "src/Game.jsx")).toBe(false);
+    expect(isReported(recorded, "Game.jsx")).toBe(false);
+    expect(isReported(recorded, "/elsewhere/src/SnakeGame.jsx")).toBe(false);
   });
 });

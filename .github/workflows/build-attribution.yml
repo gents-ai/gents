@@ -61,6 +61,9 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      - name: Install CMake for native dependencies
+        run: bash .github/scripts/setup-cmake.sh
+
       - name: Install protobuf compiler
         run: .github/scripts/setup-protoc.sh
 
