@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@gents/ui/components/button";
+import { MonitorSmartphone } from "lucide-react";
 import { toast } from "sonner";
 import { useHomeDid } from "@/hooks/useClient";
 import { useFleet } from "@/hooks/useFleet";
@@ -8,10 +9,9 @@ import { SHARING_SECTION } from "@/lib/joinInvite";
 import { navigate, type Route } from "@/lib/router";
 import { useFlag } from "@/preferences";
 import type { JoinRequest } from "../../hooks/sharing";
-import { NodeAvatar } from "@/screens/AgentAvatar";
 import { noteWaiting, reviewJoinRequest } from "@/screens/sharing/JoinRequestDialog";
 import { inNativeShell, windowLabel } from "../../lib/nativeShell";
-import { partyName, scopeInSentence } from "@/screens/sharing/parts";
+import { scopeInSentence, shortDid } from "@/screens/sharing/parts";
 
 const MANY = 3;
 const MANY_ID = "join:many";
@@ -83,7 +83,9 @@ export function JoinRequestAlerts({ route }: { route: Route }) {
                   nodeName={nodeName}
                   onReview={() => {
                     toast.dismiss(id);
-                    reviewJoinRequest(homeDid, nodeName, request);
+                    /* opened after this click: the click that opens it would
+                       otherwise count as a press outside it and close it */
+                    setTimeout(() => reviewJoinRequest(homeDid, nodeName, request), 0);
                   }}
                   onDeny={() => sharing.deny(homeDid, request.requestId)}
                 />
@@ -129,21 +131,28 @@ function JoinRequestNotice({
 }) {
   const [denying, setDenying] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const who = partyName(request.from);
+  /* until a request carries its device's own name, it's named honestly as
+     a device and shown by its DID */
+  const who = request.from.name ?? "A device";
   return (
     <div
       role="status"
       aria-label={`${who} asks to join ${nodeName}`}
       className="flex w-[356px] items-center gap-3 rounded-2xl border border-border bg-popover p-3 text-popover-foreground shadow-lg"
     >
-      <NodeAvatar name={who} rollId={request.from.did} className="size-9 shrink-0" />
+      <span
+        aria-hidden
+        className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"
+      >
+        <MonitorSmartphone className="size-4" />
+      </span>
       <div className="grid min-w-0 flex-1 gap-0.5">
         <p className="text-sm leading-snug">
           <span className="font-medium">{who}</span> asks to join {nodeName}
         </p>
-        <p className="truncate text-xs text-muted-foreground">
+        <p className="truncate text-xs text-muted-foreground" title={request.from.did}>
           {error ??
-            `${request.inviteId ? "With your invite" : "No invite"} · wants ${scopeInSentence(request.scope)}`}
+            `${shortDid(request.from.did)} · ${request.inviteId ? "your invite" : "no invite"} · wants ${scopeInSentence(request.scope)}`}
         </p>
       </div>
       <Button
