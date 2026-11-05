@@ -1538,6 +1538,11 @@ def caseCoverage : List CoverageEntry :=
       "tools::workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
       "Canonical publication attaches the shared parent atomically; ACP1 permits raw admitted writers to create orphan rows.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
+      "workspace_datastore_write_cases"
+      "WorkspaceDatastoreWriteCases"
+      "documents::write_tool::tests::workspace_datastore_create_tools_follow_the_model")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
       "workspace_root_access_cases"
       "WorkspaceRootAccessCases"

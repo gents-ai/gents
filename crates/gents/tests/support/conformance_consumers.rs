@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "documents::write_tool::tests::workspace_datastore_create_tools_follow_the_model",
+            package: "gents",
+            source_path: "crates/gents/src/documents/write_tool.rs",
+            module_path: "documents::write_tool::tests",
+            function: "workspace_datastore_create_tools_follow_the_model",
+        },
+        ConformanceConsumer::RustTest {
             id: "store::config_client::dormant_file_request_conformance::native_node_scoped_file_requests_match_modeled_access",
             package: "gents",
             source_path: "crates/gents/src/store/config_client/dormant_file_request_conformance.rs",

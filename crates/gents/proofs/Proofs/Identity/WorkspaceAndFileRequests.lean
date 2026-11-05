@@ -136,6 +136,25 @@ def mayReleaseExclusive (visible terminal : Bool) : Bool := visible && terminal
 
 theorem invisible_request_does_not_release_binding : mayReleaseExclusive false true = false := by rfl
 
+/-- A configured datastore create tool runs with a managed Agent's native
+creation authority. Workspace-owned collections require their canonical
+publisher so a tool cannot create an unparented child outside the scoped
+inventory. Native direct writers remain subject to the admitted-writer premise. -/
+def workspaceRuntimeOwnedCollections : List String :=
+  ["WorkspaceRoot", "RepositoryPlacement", "IsolatedWorkspace", "WorkspaceBinding",
+    "WorkspacePlacement", "WorkspaceReceipt"]
+
+def workspaceDatastoreWriteAllowed (collection : String) : Bool :=
+  !workspaceRuntimeOwnedCollections.contains collection
+
+theorem workspace_binding_tool_create_refused :
+    workspaceDatastoreWriteAllowed "WorkspaceBinding" = false := by decide
+
+def workspaceDatastoreWriteCasesJson : String :=
+  (Lean.toJson ((workspaceRuntimeOwnedCollections ++ ["Notes"]).map fun collection =>
+    Lean.Json.mkObj [("collection", Lean.toJson collection),
+      ("allowed", Lean.toJson (workspaceDatastoreWriteAllowed collection))])).compress
+
 /-- Workspace publication attaches its physical Agent parent and the selected
 writer and integrator in the same transaction. Every admitted child is linked
 to this workspace; a child outside that publication is not a binding in the
