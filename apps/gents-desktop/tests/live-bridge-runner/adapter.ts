@@ -24,7 +24,11 @@ import type { LiveBridgeRunner } from "../live-bridge-runner";
 
 type BridgeHttpClient = {
   getJson: <T>(path: string) => Promise<T>;
-  postJson: <T = unknown>(path: string, body: unknown, timeoutMs?: number) => Promise<T>;
+  postJson: <T = unknown>(
+    path: string,
+    body: unknown,
+    timeoutMs?: number,
+  ) => Promise<T>;
 };
 
 type BridgeAdapterObservers = {
@@ -95,9 +99,12 @@ export function createBridgeHttpAdapter(
     listInstalledPacks: () => client.getJson("/desktop/packs/installed"),
     listPackPluginSlots: () => client.getJson("/desktop/packs/plugin-slots"),
     readPackAccount: () => client.getJson("/desktop/packs/account"),
-    searchPacks: (query, page) => client.postJson("/desktop/packs/search", { query, page }),
+    searchPacks: (query, page) =>
+      client.postJson("/desktop/packs/search", { query, page }),
     packInfo: (pack) => client.postJson("/desktop/packs/info", { package: pack }),
-    installPack: async (request) => { await client.postJson("/desktop/packs/install", request, 300_000); },
+    installPack: async (request) => {
+      await client.postJson("/desktop/packs/install", request, 300_000);
+    },
     updatePack: unsupported("updatePack"),
     removePack: unsupported("removePack"),
     bindPackPlugin: unsupported("bindPackPlugin"),
@@ -118,7 +125,8 @@ export function createBridgeHttpAdapter(
     listUxPlugins: () => client.getJson("/desktop/ux/plugins"),
     readUxPluginSource: (id) => client.postJson("/desktop/ux/source", { id }),
     callPackPlugin: (request) => client.postJson("/desktop/ux/plugin-call", request),
-    callUxData: (request) => client.postJson("/desktop/ux/data", { ...request, args: request.args ?? {} }),
+    callUxData: (request) =>
+      client.postJson("/desktop/ux/data", { ...request, args: request.args ?? {} }),
     listUxDataSurfaces: (request) => client.postJson("/desktop/ux/surfaces", request),
 
     fetchDesktopSnapshot: async () =>

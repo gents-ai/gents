@@ -81,13 +81,17 @@ class BrowserBridgeHttpClient {
   }
 
   async postJson<T = unknown>(path: string, body: unknown, timeoutMs = this.timeoutMs) {
-    const response = await this.fetchWithTimeout(this.url(path), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
+    const response = await this.fetchWithTimeout(
+      this.url(path),
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-    }, timeoutMs);
+      timeoutMs,
+    );
     return this.decodeJson<T>(response);
   }
 

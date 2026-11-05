@@ -109,7 +109,9 @@ describe("live bridge runner startup/config adapter", () => {
     await adapter.readPackAccount();
     await adapter.searchPacks("game", 2);
     await adapter.packInfo("demo/game");
-    const install = { package: "demo/game" } as Parameters<typeof adapter.installPack>[0];
+    const install = { package: "demo/game" } as Parameters<
+      typeof adapter.installPack
+    >[0];
     await adapter.installPack(install);
     await adapter.listUxPlugins();
     await adapter.readUxPluginSource("demo/game/board");
@@ -119,7 +121,13 @@ describe("live bridge runner startup/config adapter", () => {
     await adapter.callUxData(data);
     const plugin = { ux: "demo/game/board", name: "game", input: { cell: 3 } };
     await adapter.callPackPlugin(plugin);
-    expect(getJson.mock.calls).toEqual([["/desktop/packs/installed"], ["/desktop/packs/plugin-slots"], ["/desktop/packs/wire-sources"], ["/desktop/packs/account"], ["/desktop/ux/plugins"]]);
+    expect(getJson.mock.calls).toEqual([
+      ["/desktop/packs/installed"],
+      ["/desktop/packs/plugin-slots"],
+      ["/desktop/packs/wire-sources"],
+      ["/desktop/packs/account"],
+      ["/desktop/ux/plugins"],
+    ]);
     expect(postJson.mock.calls).toEqual([
       ["/desktop/packs/search", { query: "game", page: 2 }],
       ["/desktop/packs/info", { package: "demo/game" }],
@@ -130,5 +138,4 @@ describe("live bridge runner startup/config adapter", () => {
       ["/desktop/ux/plugin-call", plugin],
     ]);
   });
-
 });

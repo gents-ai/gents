@@ -129,37 +129,43 @@ struct VersionResponse {
 pub(super) async fn handle_request(
     fixture: &Arc<LiveBridgeFixture>,
     request: HttpRequestData,
+    runtime: &tokio::runtime::Handle,
 ) -> Result<HttpResponse> {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/desktop/packs/plugin-slots") => {
             let home = fixture.node_home().to_path_buf();
-            json(run_pack(move || packs::plugin_slots(home)).await?)
+            json(run_pack(runtime, move || packs::plugin_slots(home)).await?)
         }
         ("GET", "/desktop/packs/wire-sources") => {
             let home = fixture.node_home().to_path_buf();
-            json(run_pack(move || packs::wire_sources(home)).await?)
+            json(run_pack(runtime, move || packs::wire_sources(home)).await?)
         }
         ("GET", "/desktop/packs/account") => {
             let home = fixture.node_home().to_path_buf();
-            json(run_pack(move || packs::whoami(home, None)).await?)
+            json(run_pack(runtime, move || packs::whoami(home, None)).await?)
         }
         ("GET", "/desktop/packs/installed") => {
             let home = fixture.node_home().to_path_buf();
-            json(run_pack(move || packs::installed(home, None)).await?)
+            json(run_pack(runtime, move || packs::installed(home, None)).await?)
         }
         ("POST", "/desktop/packs/search") => {
             let query = decode::<PackSearchRequest>(&request.body, "decoding pack search")?;
-            json(run_pack(move || packs::search(None, query.query, query.page.max(1))).await?)
+            json(
+                run_pack(runtime, move || {
+                    packs::search(None, query.query, query.page.max(1))
+                })
+                .await?,
+            )
         }
         ("POST", "/desktop/packs/info") => {
             let request = decode::<PackInfoRequest>(&request.body, "decoding pack info")?;
-            json(run_pack(move || packs::info(None, request.package)).await?)
+            json(run_pack(runtime, move || packs::info(None, request.package)).await?)
         }
         ("POST", "/desktop/packs/install") => {
             let request = decode::<PackInstallRequest>(&request.body, "decoding pack install")?;
             let home = fixture.node_home().to_path_buf();
             json(
-                run_pack(move || {
+                run_pack(runtime, move || {
                     packs::install(
                         home,
                         request.package,
@@ -180,7 +186,7 @@ pub(super) async fn handle_request(
             let request = decode::<UxSourceRequest>(&request.body, "decoding ux source")?;
             let home = fixture.node_home().to_path_buf();
             json(serde_json::to_value(
-                run_pack(move || packs::ux_module(home, request.id)).await?,
+                run_pack(runtime, move || packs::ux_module(home, request.id)).await?,
             )?)
         }
         ("POST", "/desktop/ux/data") => {
@@ -226,7 +232,7 @@ pub(super) async fn handle_request(
             } else {
                 None
             };
-            let output = run_pack(move || {
+            let output = run_pack(runtime, move || {
                 packs::plugin_call(home, request.ux, request.name, request.input, operator)
             })
             .await?;
@@ -968,15 +974,11 @@ fn json(value: serde_json::Value) -> Result<HttpResponse> {
     Ok(HttpResponse::json_ok(serde_json::to_string(&value)?))
 }
 
-async fn run_pack<F, Fut, T>(operation: F) -> Result<T>
+async fn run_pack<F, Fut, T>(runtime: &tokio::runtime::Handle, operation: F) -> Result<T>
 where
     F: FnOnce() -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<T>>,
     T: Send + 'static,
 {
-    gents::store::local::storage_backend::drive_unsendable(
-        &tokio::runtime::Handle::current(),
-        operation,
-    )
-    .await?
+    gents::store::local::storage_backend::drive_unsendable(runtime, operation).await?
 }
