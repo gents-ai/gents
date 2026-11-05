@@ -195,6 +195,7 @@ async fn runtime_seal_case(unowned: bool) {
         crate::store::config_client::NodePermission::DocumentRead,
         crate::store::config_client::NodePermission::DocumentUpdate,
         crate::store::config_client::NodePermission::DacRelationAdd,
+        crate::store::config_client::NodePermission::CollectionGet,
     ] {
         admin
             .grant_node_permission(&agent.did().parse().unwrap(), permission)
@@ -204,15 +205,50 @@ async fn runtime_seal_case(unowned: bool) {
     node.add_collection("type CapabilityReviewVerdict { workspace_id: String accepted: Boolean }")
         .await
         .unwrap();
+    let node_data = query(
+        &node,
+        &format!(
+            r#"mutation {{ create_Node(input: {{node_did: "{}"}}) {{_docID}} }}"#,
+            did
+        ),
+    )
+    .await;
+    let node_doc =
+        crate::store::graphql::created_doc_id(&serde_json::json!({"data":node_data}), "Node")
+            .unwrap();
+    let agent_data = query(&node, &format!(r#"mutation {{ create_Agent(input: {{node_did: "{}", agent_did: "{}", creation_nonce: "{}", enabled: true}}) {{_docID}} }}"#, did, agent.did(), binding.creation_nonce)).await;
+    let agent_doc =
+        crate::store::graphql::created_doc_id(&serde_json::json!({"data":agent_data}), "Agent")
+            .unwrap();
+    admin
+        .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
+        .await
+        .unwrap();
+    admin
+        .add_actor_relationship("Agent", &agent_doc, "reader", &agent.did().parse().unwrap())
+        .await
+        .unwrap();
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
     let mut memory = MemoryWorkspaceDocuments::default();
     let mut action = fx.action("runtime-capability", "runtime-unit", "runtime-capability");
+    action.writer_agent_did = Some(agent.did().to_owned());
+    action.writer_agent_doc_id = Some(agent_doc.clone());
+    action.integrator_agent_did = Some(agent.did().to_owned());
+    action.integrator_agent_doc_id = Some(agent_doc);
     action.path_capability = WorkspacePathCapability::exact_paths(vec!["patch.rs".into()]).unwrap();
     let created = {
         let mut ctx = fx.ctx(&mut memory, git_worktree_caps());
+        ctx.owner_node_did = did.to_owned();
+        ctx.repository.owner_node_did = did.to_owned();
         ctx.writer_principal = agent.did().to_owned();
         ctx.integrator_principal = agent.did().to_owned();
         execute_create_workspace_plan(
-            &emit_create_workspace_plan(action),
+            &emit_create_workspace_plan(action.clone()),
             &mut Vec::new(),
             &mut ctx,
         )
@@ -225,13 +261,49 @@ async fn runtime_seal_case(unowned: bool) {
         host_path: fx.repo.clone(),
         enabled: true,
     };
-    for mutation in [
-        isolated_workspace_upsert_mutation(&created.workspace),
-        workspace_placement_upsert_mutation(&created.placement, &timestamp),
-        repository_placement_upsert_mutation(&repository, &timestamp).unwrap(),
-    ] {
-        query(&node, &mutation).await;
-    }
+    crate::triggers::callback::flush_workspace_docs(&agent_access, &memory, agent.did(), &action)
+        .await
+        .unwrap();
+    let repo_mutation = repository_placement_upsert_mutation(&repository, &timestamp).unwrap();
+    let agent_did = agent.did().to_owned();
+    admin
+        .transact_write("test.workspace.repository", |txn| {
+            let repo_mutation = &repo_mutation;
+            let node_doc = &node_doc;
+            let agent_did = &agent_did;
+            Box::pin(async move {
+                let response = txn.execute(repo_mutation).await?;
+                let rows = crate::store::graphql::mutation_documents(
+                    &response,
+                    "upsert_RepositoryPlacement",
+                )?
+                .context("repository mutation omitted confirmation")?;
+                let [row] = rows else {
+                    anyhow::bail!("repository mutation did not affect one document")
+                };
+                let repo_doc = row["_docID"]
+                    .as_str()
+                    .context("repository physical ID missing")?;
+                txn.add_resource_relationship(
+                    "RepositoryPlacement",
+                    repo_doc,
+                    "parent",
+                    "nodes",
+                    node_doc,
+                )
+                .await?;
+                txn.add_actor_relationship(
+                    "RepositoryPlacement",
+                    repo_doc,
+                    "reader",
+                    &agent_did.parse()?,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "runtime-capability-writer",
