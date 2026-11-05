@@ -80,7 +80,7 @@ def apply (prior : Outcome) (intent : Request.CrossActorAuthorization.Intent)
       match selectedObserved, selectedAtCommit with
       | some observed, some current =>
           if observed != current then .pending
-          else if observed.all id then .applied else .rejected
+          else if !observed.isEmpty && observed.all id then .applied else .rejected
       | _, _ => .pending
   | .denied => .rejected
   | _ => .pending
@@ -115,5 +115,9 @@ theorem selected_request_revoke_conflicts :
 theorem missing_selected_request_observation_stays_pending :
     apply .pending Request.CrossActorAuthorization.exampleIntent
       Request.CrossActorAuthorization.permittedObservation ⟨true, true, true, true⟩ none none = .pending := by decide
+
+theorem empty_selection_cannot_apply :
+    apply .pending Request.CrossActorAuthorization.exampleIntent
+      Request.CrossActorAuthorization.permittedObservation ⟨true, true, true, true⟩ (some []) (some []) = .rejected := by decide
 
 end Identity.SessionInputEdit
