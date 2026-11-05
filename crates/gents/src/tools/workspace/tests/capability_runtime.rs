@@ -986,6 +986,29 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         seal_hash: None,
         lifecycle_state: "active".into(),
     };
+    let declaration: crate::documents::WriteToolDecl = serde_json::from_value(serde_json::json!({
+        "tool_name":"create_hidden_binding", "collection":"WorkspaceBinding",
+        "fields":[{"name":"binding_id"},{"name":"workspace_id"},{"name":"workspace_doc_id"}]
+    }))?;
+    let tool = crate::tools::builtin::defra_write::BoundedWriteTool::new(
+        writer_access.clone(),
+        declaration,
+    );
+    let args = serde_json::from_value(serde_json::json!({
+        "binding_id":"tool-hidden", "workspace_id":"workspace", "workspace_doc_id":workspace_doc
+    }))?;
+    let allowed = crate::lean_vocab_test::lean_contract_snapshot()
+        .workspace_datastore_write_cases
+        .iter()
+        .find(|case| case["collection"] == "WorkspaceBinding")
+        .and_then(|case| case["allowed"].as_bool())
+        .context("missing modeled workspace write case")?;
+    assert_eq!(
+        crate::inference::llm::tool::Tool::call(&tool, args)
+            .await
+            .is_ok(),
+        allowed
+    );
     let response = writer_access
         .write(
             "test.workspace.detached_child",
@@ -995,6 +1018,24 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
     let rows =
         crate::store::graphql::mutation_documents(&response, "upsert_WorkspaceBinding")?.unwrap();
     let detached_doc = rows[0]["_docID"].as_str().unwrap().to_owned();
+    let integrator_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        integrator.did().parse()?,
+        integrator.as_ref(),
+    )?;
+    let query = super::super::overlay::workspace_bindings_for_parent_query(&workspace_doc);
+    let writer_rows = writer_access.execute(&query).await?;
+    let integrator_rows = integrator_access.execute(&query).await?;
+    assert!(writer_rows["data"]["WorkspaceBinding"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["binding_id"] == "detached-binding"));
+    assert!(!integrator_rows["data"]["WorkspaceBinding"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["binding_id"] == "detached-binding"));
     writer_access
         .add_resource_relationship(
             "WorkspaceBinding",
