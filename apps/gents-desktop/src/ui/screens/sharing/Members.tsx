@@ -87,7 +87,11 @@ export function MemberRow({
               <span className="truncate font-mono" title={party.did}>
                 {shortDid(party.did)}
               </span>
-              <CopyButton text={party.did} label={`Copy ${party.did}`} title="Copy DID" />
+              <CopyButton
+                text={party.did}
+                label={`Copy ${party.did}`}
+                title="Copy DID"
+              />
             </span>
           )}
           <span>{what}</span>
