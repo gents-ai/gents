@@ -15,6 +15,7 @@ import {
   Inbox,
   LayoutGrid,
   ListTree,
+  Package,
   Plus,
   Search,
   Settings,
@@ -50,6 +51,8 @@ import { SessionStatus } from "./SessionStatus";
 import { agentName } from "./behavior";
 import { Hint } from "./Hint";
 import { SEARCH_FIELD } from "@/lib/textAssist";
+import { useFlag } from "@/preferences";
+import { readInstalledPacks, shortName, useInstalledPacks } from "./packs/model";
 
 const IS_MAC = navigator.platform.toUpperCase().includes("MAC");
 /** The palette's shortcut, as shown and as `aria-keyshortcuts` names it. */
@@ -68,7 +71,17 @@ const FILTERS: { id: SearchFilter; label: string }[] = [
   { id: "action", label: "Actions" },
 ];
 
-const ACTIONS: { key: string; title: string; route: Route; icon: typeof Plus }[] = [
+type Action = { key: string; title: string; route: Route; icon: typeof Plus };
+
+/* offered only while the Packs experimental feature is on */
+const PACKS_ACTION: Action = {
+  key: "action:packs",
+  title: "Go to packs",
+  route: { name: "packs" },
+  icon: Package,
+};
+
+const ACTIONS: Action[] = [
   {
     key: "action:new",
     title: "New session",
@@ -162,6 +175,9 @@ function useEntries(): SearchEntry[] {
   const selected = useSelectedNodeDid();
   const sections = useAgentSections();
   const hidden = useHidden();
+  const { actions } = useApp();
+  const packsOn = useFlag("packs");
+  const installed = useInstalledPacks().packs;
   const fleet = useFleet(
     useShallow((s) => ({
       nodes: s.nodes,
@@ -171,6 +187,12 @@ function useEntries(): SearchEntry[] {
       nodeKeys: s.nodeKeys,
     })),
   );
+  const selectedNode = fleet.nodes[selected ?? fleet.nodeKeys[0] ?? ""];
+  const packsHere =
+    packsOn && selectedNode !== undefined && isLocalNode(selectedNode, homeDid);
+  useEffect(() => {
+    if (packsHere && installed === null) void readInstalledPacks(actions);
+  }, [packsHere, installed, actions]);
   return useMemo(() => {
     const nodes = fleet.nodeKeys.flatMap((key) => fleet.nodes[key] ?? []);
     const nodeName = (nodeDid: string) => {
@@ -225,10 +247,19 @@ function useEntries(): SearchEntry[] {
           route: { name: "settings", section: s.id } as Route,
           icon: s.icon,
         })),
+        ...(packsHere && nodeDid
+          ? (installed ?? []).map((p) => ({
+              key: `setting:pack:${p.pack}`,
+              title: shortName(p.pack),
+              group: `${nodeName(nodeDid)} · Packs`,
+              route: { name: "packs", item: p.pack } as Route,
+              icon: Package,
+            }))
+          : []),
       ],
-      actions: ACTIONS,
+      actions: packsOn ? [...ACTIONS, PACKS_ACTION] : ACTIONS,
     });
-  }, [fleet, selected, sections, homeDid, hidden]);
+  }, [fleet, selected, sections, homeDid, hidden, packsOn, packsHere, installed]);
 }
 
 function PaletteBody({

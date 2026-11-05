@@ -12,6 +12,8 @@ vi.mock("../src/ui/contrib/runtime-door", () => ({
 }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
+const listed = vi.fn();
+
 function show(options: { installed?: boolean; fail?: boolean } = {}) {
   const action = vi.fn(async () => {
     if (options.fail) throw new Error("operation failed");
@@ -19,7 +21,7 @@ function show(options: { installed?: boolean; fail?: boolean } = {}) {
   renderIn(
     testApp({
       api: {
-        listInstalledPacks: async () => ({
+        listInstalledPacks: listed.mockImplementation(async () => ({
           packs: options.installed
             ? [
                 {
@@ -31,7 +33,7 @@ function show(options: { installed?: boolean; fail?: boolean } = {}) {
                 },
               ]
             : [],
-        }),
+        })),
         listPackPluginSlots: async () => ({ plugins: [], profiles: [] }),
         listPackWireSources: async () => ({ plugins: [], target_packs: [] }),
         readPackAccount: async () => {
@@ -54,6 +56,7 @@ function show(options: { installed?: boolean; fail?: boolean } = {}) {
 describe("pack page discovery", () => {
   beforeEach(() => {
     scan.mockClear();
+    listed.mockReset();
   });
 
   it("scans newly installed pack pages", async () => {
@@ -82,6 +85,18 @@ describe("pack page discovery", () => {
       .click(await screen.findByRole("button", { name: "Remove" }));
     await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(scan).toHaveBeenCalledWith("demo/game"));
+    confirm.mockRestore();
+  });
+
+  it("re-reads the list while a page reload still waits", async () => {
+    scan.mockImplementationOnce(() => new Promise<void>(() => {}));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const action = show({ installed: true });
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(listed).toHaveBeenCalledTimes(2));
     confirm.mockRestore();
   });
 

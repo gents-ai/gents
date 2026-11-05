@@ -12,6 +12,7 @@ import {
   Flag,
   History,
   Inbox,
+  Package,
   Pin,
   Plus,
   RefreshCw,
@@ -20,8 +21,11 @@ import {
   Waypoints,
 } from "lucide-react";
 import type { Route } from "@/lib/router";
+import type { FlagId } from "@/lib/flags";
 import {
+  isOn,
   useFlag,
+  usePreferences,
   useNavLayout,
   type ListedCount,
   type NavLayout,
@@ -51,6 +55,8 @@ export type NavRow = NavItem & {
   countsNodes?: boolean;
   /** what it belongs to, offered with its family and named where listed */
   group?: EntryGroup;
+  /** the experimental feature it belongs to: listed only while it is on */
+  flag?: FlagId;
 };
 
 const sessionLists = (route: Route) =>
@@ -116,6 +122,16 @@ export const APP_NAV_ROWS: readonly NavRow[] = [
     count: (ctx) => ctx.mailboxCount,
     placement: "primary",
     own: true,
+  },
+  {
+    id: "packs",
+    label: "Packs",
+    icon: <Package className="size-4" />,
+    to: { name: "packs" },
+    active: (route) => route.name === "packs",
+    placement: "primary",
+    own: true,
+    flag: "packs",
   },
   {
     id: "sessions",
@@ -349,7 +365,9 @@ export function useNavCandidates(): (NavRow | NavDivider)[] {
   );
   const layout = useNavLayout();
   const dividers = dividersIn(layout.order, "items");
-  return [...APP_NAV_ROWS, ...config, ...contributed, ...dividers];
+  const flags = usePreferences((p) => p.flags);
+  const own = APP_NAV_ROWS.filter((row) => !row.flag || isOn(flags, row.flag));
+  return [...own, ...config, ...contributed, ...dividers];
 }
 
 /** the entries the nav's top draws, in order */
