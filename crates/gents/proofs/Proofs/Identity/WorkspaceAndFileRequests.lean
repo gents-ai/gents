@@ -137,17 +137,22 @@ structure WorkspacePublication where
   agentParent : Bool := false
   writer : Bool := false
   integrator : Bool := false
+  reader : Bool := false
   deriving BEq, DecidableEq, Repr
 
 def publishWorkspace (commit : Bool) : WorkspacePublication :=
-  if commit then ⟨true, true, true, true⟩ else ⟨false, false, false, false⟩
+  if commit then ⟨true, true, true, true, true⟩ else ⟨false, false, false, false, false⟩
 
+def revokeWorkspaceReader (p : WorkspacePublication) : WorkspacePublication := { p with reader := false }
 def revokeWorkspaceWriter (p : WorkspacePublication) : WorkspacePublication := { p with writer := false }
 def reuseWorkspace (p : WorkspacePublication) : WorkspacePublication := p
 
-theorem failed_workspace_publication_is_empty : publishWorkspace false = ⟨false, false, false, false⟩ := by rfl
+theorem failed_workspace_publication_is_empty : publishWorkspace false = ⟨false, false, false, false, false⟩ := by rfl
 theorem workspace_reuse_does_not_restore_revocation :
-    reuseWorkspace (revokeWorkspaceWriter (publishWorkspace true)) = ⟨true, true, false, true⟩ := by rfl
+    reuseWorkspace (revokeWorkspaceWriter (publishWorkspace true)) = ⟨true, true, false, true, true⟩ := by rfl
+
+theorem workspace_reuse_does_not_restore_reader :
+    (reuseWorkspace (revokeWorkspaceReader (publishWorkspace true))).reader = false := by rfl
 
 /-- A worktree effect starts only after the workspace and its native parent and
 selected Agent relationships have committed. An unknown reservation outcome
@@ -173,6 +178,7 @@ theorem callback_retry_does_not_reopen_cleaning :
 
 def workspacePublicationCasesJson : String :=
   (Lean.Json.mkObj [("revoked_writer_restored", Lean.toJson (reuseWorkspace (revokeWorkspaceWriter (publishWorkspace true))).writer),
+    ("revoked_reader_restored", Lean.toJson (reuseWorkspace (revokeWorkspaceReader (publishWorkspace true))).reader),
     ("stale_publication_allowed", Lean.toJson (callbackWorkspacePublishable "cleaning" "ready")),
     ("aborted_document_visible", Lean.toJson (publishWorkspace false).document),
     ("effect_after_failed_reservation", Lean.toJson (mayProvisionWorkspace false))]).compress
