@@ -173,7 +173,7 @@ async fn install_documents_pack_resolved_inner(
         .iter()
         .map(PackSource::archive)
         .collect::<Vec<_>>();
-    let prepared = if let Some(local) = local {
+    let mut prepared = if let Some(local) = local {
         gents::pack::prepare_document_pack_archive_with_runtime(
             access,
             owner,
@@ -230,6 +230,13 @@ async fn install_documents_pack_resolved_inner(
         }
         Err(refusal) => return Err(refusal),
     };
+    for source in std::iter::once(pack).chain(dependencies.iter()) {
+        let manifest = source.manifest();
+        prepared.sources.insert(
+            format!("{}/{}", manifest.metadata.namespace, manifest.name),
+            source.provenance(),
+        );
+    }
     let inference = prepared.inference.clone();
     let dependency_inference = prepared.dependency_inference.clone();
     if args.preview {
@@ -341,6 +348,8 @@ async fn install_documents_pack_resolved_inner(
                 ux: pack.manifest().metadata.ux.clone(),
                 installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 installed_via: Some(gents::pack::InstalledVia::Operator),
+                source: Some(pack.provenance()),
+                source_history: Vec::new(),
             },
             gents::pack::InstalledVia::Operator,
             explicit,
@@ -610,12 +619,13 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
             }
             let notify_scope = notification_scope.clone();
             let notify_home = home.clone();
-            let result = gents::pack::plugin_lifecycle::install(
+            let result = gents::pack::plugin_lifecycle::install_with_source(
                 &home,
                 &pack.archive,
                 args.grant_authority,
                 slot_owner.as_deref(),
                 &requested,
+                Some(pack.provenance()),
                 move |identity, changes| {
                     let home = notify_home;
                     async move {

@@ -175,6 +175,7 @@ pub struct PreparedDocumentPackInstall {
     pub inference: PackInferenceBindingPreview,
     pub dependency_inference: BTreeMap<String, PackInferenceBindingPreview>,
     pub dependencies: Vec<PreparedDependency>,
+    pub sources: BTreeMap<String, super::PackSource>,
 }
 
 /// Public facts from the staged host, checked against the reviewed archives.
@@ -820,6 +821,7 @@ async fn prepare_document_pack_install_inner(
         inference,
         dependency_inference,
         dependencies: prepared_dependencies,
+        sources: BTreeMap::new(),
     })
 }
 
@@ -1092,6 +1094,8 @@ pub(super) fn record_home_install(
             ux: manifest.metadata.ux.clone(),
             installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             installed_via: Some(installed_via),
+            source: None,
+            source_history: Vec::new(),
         },
         installed_via,
         explicit,
@@ -1188,6 +1192,7 @@ pub(super) fn document_graph_stages(
             bindings: dependency.inference.bindings.clone(),
             dependencies: Vec::new(),
             explicit: false,
+            source: prepared.sources.get(&dependency.coordinate).cloned(),
         });
     }
     let mut assets = BTreeMap::new();
@@ -1208,6 +1213,14 @@ pub(super) fn document_graph_stages(
             .map(|d| d.coordinate.clone())
             .collect(),
         explicit,
+        source: prepared
+            .sources
+            .get(&format!(
+                "{}/{}",
+                archive.manifest().metadata.namespace,
+                archive.manifest().name
+            ))
+            .cloned(),
     });
     Ok(stages)
 }
@@ -1223,6 +1236,7 @@ pub(super) struct DocumentPackStage {
     pub(super) bindings: PackInferenceBindings,
     pub(super) dependencies: Vec<String>,
     pub(super) explicit: bool,
+    pub(super) source: Option<super::PackSource>,
 }
 
 /// The same document graph reconstructed by the host and the client.
@@ -1230,6 +1244,7 @@ pub(super) struct DocumentPackStage {
 pub struct HostedDocumentGraph {
     identities: Vec<PackIdentity>,
     documents: Vec<Vec<crate::store::config_client::DesiredStateApplyDocument>>,
+    sources: Vec<Option<super::PackSource>>,
     node_binding: Option<crate::store::config_client::ConfigurationNodeBinding>,
     plugin_root: bool,
 }
@@ -1249,6 +1264,7 @@ pub(super) fn hosted_document_graph_from_stages(
 ) -> Result<HostedDocumentGraph> {
     let mut identities = Vec::new();
     let mut documents = Vec::new();
+    let mut sources = Vec::new();
     for stage in stages {
         let mut plugins = Vec::new();
         for plugin in &stage.manifest.metadata.plugins {
@@ -1268,10 +1284,12 @@ pub(super) fn hosted_document_graph_from_stages(
         identity.explicit = stage.explicit;
         identities.push(identity);
         documents.push(super::installable_documents(&stage.config)?);
+        sources.push(stage.source.clone());
     }
     Ok(HostedDocumentGraph {
         identities,
         documents,
+        sources,
         node_binding: prepared.node_binding.clone(),
         plugin_root: stages.last().is_some_and(|stage| {
             matches!(
@@ -1294,6 +1312,7 @@ pub async fn apply_hosted_document_graph(
             owner,
             &graph.identities,
             graph.documents.clone(),
+            &graph.sources,
             policy,
             graph.node_binding.as_ref(),
         )
@@ -1307,6 +1326,10 @@ pub async fn apply_hosted_document_graph(
         .documents
         .split_last()
         .context("hosted plugin graph missing")?;
+    let (root_source, dependency_sources) = graph
+        .sources
+        .split_last()
+        .context("hosted plugin graph missing")?;
     anyhow::ensure!(
         root_documents.is_empty(),
         "plugin root cannot replace pack documents"
@@ -1316,12 +1339,20 @@ pub async fn apply_hosted_document_graph(
         owner,
         dependencies,
         dependency_documents.to_vec(),
+        dependency_sources,
         policy,
         graph.node_binding.as_ref(),
     )
     .await?;
     super::validate_plugin_replacements_in_txn(txn, owner, std::slice::from_ref(root)).await?;
-    super::write_installed_plugin_identity(txn, owner, root, graph.node_binding.as_ref()).await?;
+    super::write_installed_plugin_identity(
+        txn,
+        owner,
+        root,
+        graph.node_binding.as_ref(),
+        root_source.as_ref(),
+    )
+    .await?;
     super::dependencies::claim_in_txn(txn, owner, &root.coordinate, &root.dependencies, policy)
         .await?;
     reports.push(super::InstallReport {
@@ -1375,13 +1406,27 @@ pub(super) async fn apply_document_graph_in_txn(
     owner: &str,
     identities: &[PackIdentity],
     documents: Vec<Vec<crate::store::config_client::DesiredStateApplyDocument>>,
+    sources: &[Option<super::PackSource>],
     policy: DriftPolicy,
     node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
 ) -> Result<Vec<InstallReport>> {
+    anyhow::ensure!(
+        sources.len() == identities.len(),
+        "pack source count does not match the document graph"
+    );
     let mut reports = Vec::new();
-    for (identity, documents) in identities.iter().zip(documents) {
+    for ((identity, documents), source) in identities.iter().zip(documents).zip(sources) {
         reports.push(
-            super::install_in_txn(txn, owner, identity, documents, policy, node_binding).await?,
+            super::install_in_txn(
+                txn,
+                owner,
+                identity,
+                documents,
+                policy,
+                node_binding,
+                source.as_ref(),
+            )
+            .await?,
         );
     }
     super::validate_plugin_replacements_in_txn(txn, owner, identities).await?;
@@ -1473,10 +1518,15 @@ pub(super) async fn install_document_graph(
                 identity
             })
             .collect::<Vec<_>>();
+        let sources = stages
+            .iter()
+            .map(|stage| stage.source.clone())
+            .collect::<Vec<_>>();
         let result = access
             .transact_write_with_finality("pack.document_graph.install", |txn| {
                 let documents = documents.clone();
                 let identities = &identities;
+                let sources = &sources;
                 let owner = &owner;
                 let reference_packs = reference_packs.clone();
                 let home = home.clone();
@@ -1518,6 +1568,7 @@ pub(super) async fn install_document_graph(
                         owner,
                         identities,
                         documents,
+                        sources,
                         policy,
                         node_binding.as_ref(),
                     )
@@ -1587,6 +1638,7 @@ pub async fn install_documents_with_plugins(
         bindings: bindings.clone(),
         dependencies,
         explicit,
+        source: None,
     };
     let (mut reports, plugins) =
         install_document_graph(access, owner, vec![stage], policy, home, consent, None).await?;

@@ -149,6 +149,7 @@ pub(crate) mod test_support {
         super::PackSource {
             archive: archive.into(),
             from: super::source::Source::Local,
+            file_name: None,
         }
     }
 

@@ -69,6 +69,10 @@ struct InstallRequest {
     node_did: String,
     root: Archive,
     dependencies: Vec<Archive>,
+    #[serde(default)]
+    root_source: Option<gents::pack::PackSource>,
+    #[serde(default)]
+    dependency_sources: Vec<Option<gents::pack::PackSource>>,
     inference_slots: Vec<String>,
     overwrite: bool,
     keep: bool,
@@ -174,6 +178,11 @@ pub(crate) async fn encode_install_request(
     explicit: bool,
 ) -> Result<serde_json::Value> {
     let root = pack.shared_archive();
+    let root_source = Some(pack.provenance());
+    let dependency_sources = dependencies
+        .iter()
+        .map(|source| Some(source.provenance()))
+        .collect();
     let dependencies = dependencies
         .iter()
         .map(PackSource::shared_archive)
@@ -193,6 +202,8 @@ pub(crate) async fn encode_install_request(
             node_did,
             root,
             dependencies,
+            root_source,
+            dependency_sources,
             inference_slots,
             overwrite,
             keep,
@@ -327,13 +338,27 @@ fn decode_install_request(mut request: InstallRequest, node_did: &str) -> Result
                 .map(|archive| archive.0.len())
                 .sum::<usize>(),
     )?;
-    let open = |archive: Archive| -> Result<PackSource> {
-        Ok(PackSource::received(PackArchive::from_bytes(&archive.0)?))
+    anyhow::ensure!(
+        request.dependency_sources.is_empty()
+            || request.dependency_sources.len() == request.dependencies.len(),
+        "dependency source count does not match archives"
+    );
+    if request.dependency_sources.is_empty() {
+        request
+            .dependency_sources
+            .resize(request.dependencies.len(), None);
+    }
+    let open = |archive: Archive, source| -> Result<PackSource> {
+        PackSource::received(PackArchive::from_bytes(&archive.0)?, source)
     };
-    let root = open(std::mem::replace(&mut request.root, Archive(Vec::new())))?;
+    let root = open(
+        std::mem::replace(&mut request.root, Archive(Vec::new())),
+        request.root_source.take(),
+    )?;
     let dependencies = std::mem::take(&mut request.dependencies)
         .into_iter()
-        .map(open)
+        .zip(std::mem::take(&mut request.dependency_sources))
+        .map(|(archive, source)| open(archive, source))
         .collect::<Result<Vec<_>>>()?;
     anyhow::ensure!(
         matches!(

@@ -11,4 +11,6 @@ type PackInstallation @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6
     required_by: JSON
     explicit: Boolean
     plugin_store: Boolean
+    source: JSON
+    source_history: JSON
 }

@@ -57,7 +57,7 @@ pub use installation::{
     prepare_hosted_document_pack_archive, read_installed_pack, record_plugin_store_change,
     record_plugin_store_change_as, record_staged_plugin_store_change, referenced_pack_digests,
     remove_pack, DriftPolicy, HostedDocumentGraph, HostedPackPreparation, InstallReport,
-    InstalledCatalogEntry, InstalledPack, InstalledPackPlugin, PackIdentity, PackRemovalError,
+    InstalledCatalogEntry, InstalledPack, InstalledPackPlugin, PackIdentity, PackRemovalError, PackSource, PackSourceHistory,
     PluginStoreChangeError, PreparedDependency, PreparedDocumentPackInstall, RemoveReport,
     Retained,
 };

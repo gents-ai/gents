@@ -107,12 +107,13 @@ impl PackInstaller {
         let notify_identity = self.core.identity().ok();
         let notify_node_binding = node_binding.clone();
         let notify_home = home.to_owned();
-        let (record, plugins) = crate::pack::plugin_lifecycle::install(
+        let (record, plugins) = crate::pack::plugin_lifecycle::install_with_source(
             home,
             &distribution.0.archive,
             false,
             Some(self.core.node_did()),
             &inference.bindings,
+            Some(distribution.provenance()),
             move |identity, changes| {
                 let access = notify_access;
                 let node_did = notify_node;
