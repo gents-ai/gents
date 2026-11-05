@@ -1539,6 +1539,12 @@ def caseCoverage : List CoverageEntry :=
       "Canonical publication attaches the shared parent atomically; ACP1 permits raw admitted writers to create orphan rows.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
+      "workspace_child_revocation_cases"
+      "WorkspaceChildRevocationCases"
+      "tools::workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
+      "Documents the completeness limit after explicitly granting a child owner native relationship deletion.")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerWithFollowUp
       "workspace_admission_cases"
       "WorkspaceAdmissionCases"
       "tools::workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"

@@ -966,6 +966,78 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             .unwrap(),
         "stale callback publication changed a cleaning workspace"
     );
+    let detached = WorkspaceBindingDoc {
+        workspace_doc_id: Some(workspace_doc.clone()),
+        binding_id: "detached-binding".into(),
+        workspace_id: "workspace".into(),
+        request_id: "detached-request".into(),
+        request_doc_id: "detached-request-doc".into(),
+        authority: "readOnly".into(),
+        owner_node_did: user.did().into(),
+        seal_hash: None,
+        lifecycle_state: "active".into(),
+    };
+    let response = writer_access
+        .write(
+            "test.workspace.detached_child",
+            &workspace_binding_upsert_mutation(&detached),
+        )
+        .await?;
+    let rows =
+        crate::store::graphql::mutation_documents(&response, "upsert_WorkspaceBinding")?.unwrap();
+    let detached_doc = rows[0]["_docID"].as_str().unwrap().to_owned();
+    writer_access
+        .add_resource_relationship(
+            "WorkspaceBinding",
+            &detached_doc,
+            "parent",
+            "workspaces",
+            &workspace_doc,
+        )
+        .await?;
+    writer_access
+        .delete_resource_relationship(
+            "WorkspaceBinding",
+            &detached_doc,
+            "parent",
+            "workspaces",
+            &workspace_doc,
+        )
+        .await?;
+    for case in &crate::lean_vocab_test::lean_contract_snapshot().workspace_child_revocation_cases {
+        let actor = match case["actor"].as_str().unwrap() {
+            "user" => user.did(),
+            "creator" => creator.did(),
+            "writer" => writer.did(),
+            "integrator" => integrator.did(),
+            "other" => other.did(),
+            name => panic!("unknown actor {name}"),
+        };
+        let subject = actor.parse()?;
+        let decisions = admin
+            .transact_readonly("test.workspace.detached_access", |txn| {
+                let subject = &subject;
+                let doc = detached_doc.clone();
+                Box::pin(async move {
+                    txn.observe_document_access(
+                        subject,
+                        "WorkspaceBinding",
+                        &[doc],
+                        defra_node::DocumentAccessMode::Named {
+                            permission: "read".into(),
+                            node_permission: acp::nac::NodePermission::DocumentRead,
+                        },
+                    )
+                    .await
+                })
+            })
+            .await?;
+        assert_eq!(
+            decisions == [defra_node::DocumentAccessDecision::Allowed],
+            case["read"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
     node.shutdown().await?;
     Ok(())
 }

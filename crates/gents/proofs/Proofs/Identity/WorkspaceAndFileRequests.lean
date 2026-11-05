@@ -164,6 +164,19 @@ def workspaceChildCasesJson : String :=
       [("actor", Lean.toJson actor), ("permission", Lean.toJson permission),
        ("expected", Lean.toJson (workspaceChildPermission actor permission))])).compress
 
+/-- ACP1 allows a child owner with native relation-delete capability to unlink
+a binding. Its former parent readers then cannot distinguish the hidden child
+from absence. Canonical Agent capability provisioning does not grant that
+delete operation; granting it explicitly invalidates inventory completeness. -/
+def revokedWorkspaceChildFixture : Household.State :=
+  Household.apply workspacePublicationFixture
+    (.revoke ⟨"workspace_children", "binding", "parent", .object "workspaces" "workspace"⟩)
+
+def workspaceChildRevocationCasesJson : String :=
+  (Lean.toJson (["user", "creator", "writer", "integrator", "other"].map fun actor =>
+    Lean.Json.mkObj [("actor", Lean.toJson actor),
+      ("read", Lean.toJson (Household.allowed 8 revokedWorkspaceChildFixture actor "workspace_children" "binding" "read"))])).compress
+
 /-- Exclusive admission reads the complete published-child set and commits a
 new child together with a write to the shared workspace revision. The shared
 write makes two decisions from the same prior snapshot conflict. -/

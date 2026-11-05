@@ -276,6 +276,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) workspace_agent_selection_cases: Vec<serde_json::Value>,
     pub(crate) workspace_liveness_cases: Vec<serde_json::Value>,
     pub(crate) workspace_child_cases: Vec<serde_json::Value>,
+    pub(crate) workspace_child_revocation_cases: Vec<serde_json::Value>,
     pub(crate) workspace_admission_cases: Vec<serde_json::Value>,
     pub(crate) workspace_cleanup_cases: Vec<serde_json::Value>,
     pub(crate) workspace_publication_cases: serde_json::Value,
