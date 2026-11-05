@@ -51,6 +51,7 @@ pub(crate) async fn outdated_packs(
         report.push(json!({
             "pack": pack.coordinate,
             "installed": pack.version,
+            "digest": pack.digest,
             "latest": latest,
             "outdated": outdated,
             "error": error,

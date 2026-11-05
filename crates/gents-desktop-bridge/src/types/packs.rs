@@ -13,6 +13,10 @@ pub struct InstalledPacksView {
 pub struct InstalledPackView {
     pub pack: String,
     pub installed: String,
+    /// The installed archive's content digest, which a pack link pins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub digest: Option<String>,
     pub latest: Option<String>,
     pub outdated: Option<bool>,
     pub error: Option<String>,
@@ -103,8 +107,97 @@ pub struct PackInstallView {
     )]
     #[ts(optional = nullable)]
     pub would_write: Option<Option<bool>>,
+    /// What a preview reports for review; an install's own report may omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub coordinate: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub documents: Option<Vec<PackReviewDocumentView>>,
+    /// The collections the pack's schemas declare; null when they can't be
+    /// known before it installs.
+    #[serde(
+        default,
+        deserialize_with = "super::json::present_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub collections: Option<Option<Vec<String>>>,
+    /// The declared collections the node already has, which the install
+    /// shares rather than creates; null when that can't be known before it
+    /// installs.
+    #[serde(
+        default,
+        deserialize_with = "super::json::present_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional = nullable)]
+    pub shared_collections: Option<Option<Vec<String>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub authority: Option<Vec<PackAuthorityAskView>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub inference_needs: Option<PackInferenceNeedsView>,
     #[serde(flatten)]
     details: super::json::WireObject,
+}
+
+/// The inference a pack and its dependencies need, by slot name: one binding
+/// serves every pack that declares the slot. An install binds each required
+/// slot or refuses.
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct PackInferenceNeedsView {
+    pub slots: Vec<PackInferenceSlotNeedView>,
+    pub profiles: Vec<gents::pack::PackInferenceProfileOption>,
+    /// The required slots the install would refuse as unbound.
+    pub unbound: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct PackInferenceSlotNeedView {
+    pub name: String,
+    pub description: String,
+    pub optional: bool,
+    /// The coordinates of the packs that declare it.
+    pub packs: Vec<String>,
+    pub profile: Option<String>,
+    /// The install chose `profile` itself: the slot is the pack's only
+    /// required one and the node has one usable profile.
+    pub automatic: bool,
+}
+
+/// One document a pack install would write.
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct PackReviewDocumentView {
+    pub collection: String,
+    pub id: Option<String>,
+    pub name: Option<String>,
+    /// The tools a data tool surface declares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tools: Option<Vec<String>>,
+    /// The document's set fields as the install would write them, a
+    /// backend's stored secret shown only by kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub content: Option<BTreeMap<String, Value>>,
+}
+
+/// What one of a pack's plugins asks of the host beyond a sealed sandbox.
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct PackAuthorityAskView {
+    pub plugin: String,
+    pub asks: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]

@@ -2107,7 +2107,16 @@ export function createDesktopUiHarness(
       const [namespace, name] = pack.split("/");
       return { namespace, name, versions: [] };
     },
-    async installPack() {},
+    async installPack(request) {
+      const [pack, version] = request.package.split("@");
+      return {
+        pack: pack!,
+        coordinate: pack!,
+        version: version ?? null,
+        digest: "sha256:harness",
+        source: "registry",
+      };
+    },
     async updatePack() {},
     async removePack() {},
     async bindPackPlugin() {},
