@@ -1145,7 +1145,13 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
         wait_for_complete_agent_response(&graphql, &request, &session, TURN_BUDGET).await?;
         let terminal = call(owner.node_identity().did().to_owned(), key.clone()).await?;
         anyhow::ensure!(terminal.status() == reqwest::StatusCode::NOT_FOUND, "terminal activity remained visible");
-        run_cli_json(&runtime_home, &["p2p", "enrollment", "revoke", &enrollment, "--home", home])?;
+        let revocation = gents_server::server_host::decide_managed_enrollment(
+            &runtime_home,
+            &graphql,
+            &enrollment,
+            gents_server::server_host::ManagedEnrollmentDecision::Revoke,
+        ).await?;
+        anyhow::ensure!(revocation.state == "revoked", "unexpected revocation: {revocation:?}");
         let revoked = timeout(ENROLL_BUDGET, async {
             loop {
                 let response = call(owner.node_identity().did().to_owned(), key.clone()).await?;
