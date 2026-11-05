@@ -32,6 +32,7 @@ pub use documents::{
 };
 pub use executor::cleanup::{execute_cleanup_workspace_plan, CleanupWorkspaceOutcome};
 pub use executor::create::execute_create_workspace_plan;
+pub(crate) use executor::create::prepare_workspace_reservation;
 pub use executor::freeze::execute_freeze_workspace_base_plan;
 pub use executor::integrate::{
     execute_integrate_workspace_plan, finalize_integrate_trunk, IntegrateWorkspaceOutcome,

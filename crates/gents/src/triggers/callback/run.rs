@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 
@@ -17,7 +17,7 @@ use crate::tools::workspace::{
 use super::claim::{claim_invocation, invocation_is_claimable};
 use super::documents::{
     create_callback_result, flush_workspace_docs, load_callback, load_callback_module_as,
-    load_callback_result, load_memory_workspace_docs, load_repository_placement,
+    load_callback_result, load_isolated_workspace, load_memory_workspace_docs, load_repository_placement,
     load_trusted_callback_signers, strip_secret_fields, update_invocation, CallbackInvocationDoc,
     CallbackModuleDoc, CallbackResultDoc,
 };
@@ -154,7 +154,6 @@ pub(super) async fn bind_workspace_agent_documents(
     node_did: &str,
     plan: &mut ActionPlan,
 ) -> Result<()> {
-    use anyhow::Context as _;
     for action in &mut plan.actions {
         let HostAction::CreateWorkspace(action) = action else {
             continue;
@@ -723,6 +722,48 @@ async fn execute_running_invocation(
     if current_state(&journal, 0).is_none() {
         advance(&mut journal, 0, ActionJournalState::Validated);
         persist_journal(node, access, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
+    }
+    let existing_workspace = load_isolated_workspace(
+        access,
+        &action.workspace_id,
+        &invocation.owner_node_did,
+        &invocation.agent_did,
+    )
+    .await?;
+    if let Some(existing) = &existing_workspace {
+        anyhow::ensure!(
+            existing.writer_principal == writer_agent
+                && existing.integrator_principal == integrator_agent
+                && existing.caused_by_invocation_id == invocation.invocation_id,
+            "existing workspace differs from the frozen callback provenance"
+        );
+    }
+    if existing_workspace.is_none() {
+        let action_for_reservation = action.clone();
+        let repository_for_reservation = repository.clone();
+        let ceiling_for_reservation = ceiling.map(Path::to_path_buf);
+        let owner = invocation.owner_node_did.clone();
+        let writer = writer_agent.to_owned();
+        let integrator = integrator_agent.to_owned();
+        let invocation_id = invocation.invocation_id.clone();
+        let correlation = correlation_from_source(source);
+        let reservation = tokio::task::spawn_blocking(move || {
+            crate::tools::workspace::prepare_workspace_reservation(
+                &action_for_reservation,
+                &repository_for_reservation,
+                ceiling_for_reservation.as_deref(),
+                &owner,
+                &writer,
+                &integrator,
+                &invocation_id,
+                &correlation,
+            )
+        })
+        .await
+        .context("joining workspace reservation preparation")??;
+        let mut reserved = MemoryWorkspaceDocuments::default();
+        reserved.write_isolated_workspace(reservation)?;
+        flush_workspace_docs(access, &reserved, &invocation.agent_did, &action).await?;
     }
     if matches!(
         current_state(&journal, 0),

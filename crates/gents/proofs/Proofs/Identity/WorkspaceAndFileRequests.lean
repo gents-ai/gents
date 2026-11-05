@@ -112,6 +112,13 @@ theorem failed_workspace_publication_is_empty : publishWorkspace false = ⟨fals
 theorem workspace_reuse_does_not_restore_revocation :
     reuseWorkspace (revokeWorkspaceWriter (publishWorkspace true)) = ⟨true, true, false, true⟩ := by rfl
 
+/-- A worktree effect starts only after the workspace and its native parent and
+selected Agent relationships have committed. An unknown reservation outcome
+does not authorize a fresh host effect. -/
+def mayProvisionWorkspace (reservationConfirmed : Bool) : Bool := reservationConfirmed
+
+theorem unconfirmed_reservation_has_no_host_effect : mayProvisionWorkspace false = false := by rfl
+
 /-- Callback publication can complete provisioning or repeat an identical
 result. A stale retry cannot replace an advanced workspace lifecycle. -/
 def callbackWorkspacePublishable (existing desired : String) : Bool :=
@@ -123,7 +130,8 @@ theorem callback_retry_does_not_reopen_cleaning :
 def workspacePublicationCasesJson : String :=
   (Lean.Json.mkObj [("revoked_writer_restored", Lean.toJson (reuseWorkspace (revokeWorkspaceWriter (publishWorkspace true))).writer),
     ("stale_publication_allowed", Lean.toJson (callbackWorkspacePublishable "cleaning" "ready")),
-    ("aborted_document_visible", Lean.toJson (publishWorkspace false).document)]).compress
+    ("aborted_document_visible", Lean.toJson (publishWorkspace false).document),
+    ("effect_after_failed_reservation", Lean.toJson (mayProvisionWorkspace false))]).compress
 
 def workspacePublicationFixture : Household.State :=
   { objects := [⟨"agents", "agent-doc", "user"⟩,

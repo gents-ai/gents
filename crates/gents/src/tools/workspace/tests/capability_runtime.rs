@@ -655,6 +655,62 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         integrator_agent_did: Some(integrator.did().into()),
         integrator_agent_doc_id: Some(agent_docs[2].clone()),
     };
+    let fx = tokio::task::spawn_blocking(Fixture::new).await?;
+    let mut invalid_action = action.clone();
+    invalid_action.workspace_id = "denied-reservation".into();
+    invalid_action.work_unit_id = "denied-unit".into();
+    invalid_action.base_sha = fx.base_sha.clone();
+    invalid_action.writer_agent_doc_id = Some("unavailable-physical-agent".into());
+    let repo = RepositoryPlacementRef {
+        repository_id: invalid_action.repository_id.clone(),
+        owner_node_did: user.did().into(),
+        host_path: fx.repo.clone(),
+        enabled: true,
+    };
+    let reservation = {
+        let action = invalid_action.clone();
+        let repository = repo.clone();
+        let ceiling = fx.parent().to_path_buf();
+        let owner = user.did().to_owned();
+        let writer = writer.did().to_owned();
+        let integrator = integrator.did().to_owned();
+        tokio::task::spawn_blocking(move || {
+            super::super::executor::create::prepare_workspace_reservation(
+                &action,
+                &repository,
+                Some(&ceiling),
+                &owner,
+                &writer,
+                &integrator,
+                "denied-invocation",
+                "denied-correlation",
+            )
+        })
+        .await??
+    };
+    let target = workspace_host_path(
+        &fx.repo,
+        &invalid_action.workspace_id,
+        &invalid_action.branch,
+        Some(fx.parent()),
+    )?;
+    let mut denied_docs = MemoryWorkspaceDocuments::default();
+    denied_docs.write_isolated_workspace(reservation)?;
+    assert!(crate::triggers::callback::flush_workspace_docs(
+        &creator_access,
+        &denied_docs,
+        creator.did(),
+        &invalid_action
+    )
+    .await
+    .is_err());
+    assert_eq!(
+        target.exists(),
+        crate::lean_vocab_test::lean_contract_snapshot().workspace_publication_cases
+            ["effect_after_failed_reservation"]
+            .as_bool()
+            .unwrap()
+    );
     let workspace = IsolatedWorkspaceDoc {
         path_capability: action.path_capability.clone(),
         workspace_id: "workspace".into(),
