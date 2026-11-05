@@ -131,6 +131,10 @@ export function PacksScreen({
       area?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]') ?? null,
     );
   }, []);
+  /* an item's page opens at its top, not where its pack's page was */
+  useLayoutEffect(() => {
+    if (doc && scroller) scroller.scrollTop = 0;
+  }, [doc, scroller]);
   const over = usePackFileDrop(root, local, (path) =>
     navigate(previewPage({ package: path, source: "file" })),
   );
@@ -154,6 +158,7 @@ export function PacksScreen({
                 local={local}
                 name={name}
                 packActions={packs}
+                scroller={scroller}
               />
             ) : (
               <p className="text-sm text-muted-foreground">
@@ -173,6 +178,7 @@ export function PacksScreen({
               local={local}
               name={name}
               packActions={packs}
+              scroller={scroller}
             />
           ) : (
             <PacksHome

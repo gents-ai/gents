@@ -155,6 +155,14 @@ const object = (value: unknown): Record<string, unknown> => {
     : {};
 };
 
+/* a tool set also reaches agents through its plugins' background jobs */
+const jobTargets = (integrations: unknown) => {
+  const plugins = object(integrations).plugins;
+  return (Array.isArray(plugins) ? plugins : []).flatMap((plugin) =>
+    strs(object(object(plugin).job).agent_targets),
+  );
+};
+
 /** What a preview would add, laid out as a pack's page lays out what it
     added (see `resourceTree`), then the documents its page has no section
     for, then its plugins; the settings that belong to nothing else it adds
@@ -181,8 +189,13 @@ export function previewTree(report: PackInstallReport): ResourceTree {
         skill_ids: strs(fields.skill_ids),
       };
     },
-    targetsOfTools: (toolsId) =>
-      strs(object(content(find("Tools", toolsId)).agents).target_ids),
+    targetsOfTools: (toolsId) => {
+      const tools = content(find("Tools", toolsId));
+      return [
+        ...strs(object(tools.agents).target_ids),
+        ...jobTargets(tools.integrations),
+      ];
+    },
     agentOfTarget: (targetId) => str(content(find("AgentTarget", targetId)).agent_id),
   });
   const unsectioned = parts

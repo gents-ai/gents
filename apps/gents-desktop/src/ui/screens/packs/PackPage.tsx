@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { ArrowLeft, ArrowRight, ChevronRight } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -47,7 +47,10 @@ import {
   statusOf,
   summaryOf,
   text,
+  keepPackPlace,
+  packPlaceTop,
   useInstalledPacks,
+  usePackPlace,
   useRegistryAccount,
   versionsOf,
 } from "./model";
@@ -143,13 +146,16 @@ const OPEN_ROWS = 12;
 function ResourceList({
   tree,
   to,
+  place,
   parent = null,
 }: {
   tree: readonly Resource[];
   to: Opens;
+  /** the pack's page these rows belong to */
+  place: string;
   parent?: Resource | null;
 }) {
-  const [shut, setShut] = useState<Record<string, boolean>>({});
+  const { shut } = usePackPlace(place);
   if (parent)
     return (
       <ul className="mb-2 ml-3 border-l border-border/60 pl-3">
@@ -157,7 +163,7 @@ function ResourceList({
           <li key={keyOf(r)}>
             <ResourceRow resource={r} to={to(r, parent)} />
             {r.children.length > 0 && (
-              <ResourceList tree={r.children} to={to} parent={r} />
+              <ResourceList tree={r.children} to={to} place={place} parent={r} />
             )}
           </li>
         ))}
@@ -175,7 +181,7 @@ function ResourceList({
             type="button"
             aria-expanded={open}
             aria-label={`What's under ${r.name}`}
-            onClick={() => setShut((s) => ({ ...s, [key]: open }))}
+            onClick={() => keepPackPlace(place, { shut: { ...shut, [key]: open } })}
             className="ml-[7px] grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
           >
             <ChevronRight
@@ -197,7 +203,9 @@ function ResourceList({
                   : undefined
               }
             />
-            {open && <ResourceList tree={r.children} to={to} parent={r} />}
+            {open && (
+              <ResourceList tree={r.children} to={to} place={place} parent={r} />
+            )}
           </li>
         );
       })}
@@ -205,14 +213,42 @@ function ResourceList({
   );
 }
 
+/* The page is put back where it was scrolled to once its rows are drawn, and
+   every scroll after is kept. Listening in a layout effect stops before the
+   rows are taken away, so the scroll that clamps doesn't count. */
+function useKeptPackTop(scroller: HTMLElement | null, place: string, drawn: boolean) {
+  const restored = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (!scroller || !drawn || restored.current === place) return;
+    restored.current = place;
+    scroller.scrollTop = packPlaceTop(place);
+  }, [scroller, place, drawn]);
+  useLayoutEffect(() => {
+    if (!scroller) return;
+    const keep = () => {
+      if (restored.current === place) keepPackPlace(place, { top: scroller.scrollTop });
+    };
+    scroller.addEventListener("scroll", keep, { passive: true });
+    return () => scroller.removeEventListener("scroll", keep);
+  }, [scroller, place]);
+}
+
 /* what a pack adds, then, collapsed, the settings that belong to nothing
    else it adds */
-function Resources({ tree, other, to }: ResourceTree & { to: Opens }) {
+function Resources({
+  tree,
+  other,
+  to,
+  place,
+}: ResourceTree & { to: Opens; place: string }) {
+  const { other: otherOpen } = usePackPlace(place);
   return (
     <div className="grid">
-      <ResourceList tree={tree} to={to} />
+      <ResourceList tree={tree} to={to} place={place} />
       {other.length > 0 && (
         <Collapsible
+          open={otherOpen}
+          onOpenChange={(open) => keepPackPlace(place, { other: open })}
           className={`group/other ${tree.length ? "border-t border-border/60" : ""}`}
         >
           <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-accent">
@@ -223,7 +259,7 @@ function Resources({ tree, other, to }: ResourceTree & { to: Opens }) {
             </span>
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <ResourceList tree={other} to={to} />
+            <ResourceList tree={other} to={to} place={place} />
           </CollapsibleContent>
         </Collapsible>
       )}
@@ -264,6 +300,7 @@ export function PackPage({
   local,
   name,
   packActions,
+  scroller,
 }: {
   /** the pack, by its name; a file's isn't known until it's read */
   pack: string | null;
@@ -273,6 +310,8 @@ export function PackPage({
   local: boolean;
   name: string;
   packActions: PackActions;
+  /** what scrolls the page */
+  scroller: HTMLElement | null;
 }) {
   const { actions } = useApp();
   const { packs, info } = useInstalledPacks();
@@ -302,6 +341,8 @@ export function PackPage({
   }, [actions, previewing]);
   const report = preview?.state === "read" ? preview.report : null;
   const pack = report?.coordinate ?? listedPack ?? "";
+  const place = request?.package ?? named ?? pack;
+  useKeptPackTop(scroller, place, preview?.state !== "reading");
   useEffect(() => {
     if (!pack || fromFile) return;
     void readPackInfo(actions, pack);
@@ -513,6 +554,7 @@ export function PackPage({
         >
           <Resources
             {...added}
+            place={place}
             to={(r, parent) => href(configRoute(node!.nodeDid, r, parent))}
           />
         </Section>
@@ -541,6 +583,7 @@ export function PackPage({
           ) : would && would.tree.length + would.other.length > 0 ? (
             <Resources
               {...would}
+              place={place}
               to={(r) =>
                 r.collection
                   ? href(previewPage(previewing, docRef(r.collection, r.id)))
