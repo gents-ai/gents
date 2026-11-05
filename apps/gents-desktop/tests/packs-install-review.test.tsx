@@ -121,7 +121,14 @@ function show(
       listInstalledPacks: async () => ({ packs: [research] }),
       packInfo: async () => packInfo,
       searchPacks: async () => ({
-        packs: [{ namespace: "acme", name: "docs", description: "A documents page" }],
+        packs: [
+          {
+            namespace: "acme",
+            name: "docs",
+            description: "A documents page",
+            latest: "2.0.0",
+          },
+        ],
         has_more: false,
       }),
       installPack,
@@ -414,6 +421,24 @@ describe("the install review", () => {
       within(again.review).getByRole("button", { name: "Details" }),
     );
     expect(within(again.review).queryByText("Size")).toBeNull();
+  });
+
+  it("says in words when a pack was made for an older version of Gents", async () => {
+    const stale =
+      "resolving gents/docs from the registry: /Users/x/.gents/packs/.tmpAB is not a valid pack: the pack manifest is not valid JSON: unknown field `behaviors`";
+    show(
+      bridge(() => {
+        throw new Error(stale);
+      }),
+    );
+    const { user, review } = await openRegistryReview();
+    expect(
+      await within(review).findByText(/made for an older version of Gents/),
+    ).toBeTruthy();
+    expect(within(review).queryByText(/\.tmpAB/)).toBeNull();
+    await user.click(within(review).getByRole("button", { name: "Details" }));
+    expect(within(review).getByText(/\.tmpAB/)).toBeTruthy();
+    expect(installButton(review)).toBeDisabled();
   });
 
   it("refuses a pack that changed since it was reviewed, and reviews it again", async () => {
@@ -785,12 +810,24 @@ describe("coming back to the Packs list", () => {
     vi.fn(async (_query: string, page: number) =>
       page === 1
         ? {
-            packs: [{ namespace: "acme", name: "first", description: "First" }],
+            packs: [
+              {
+                namespace: "acme",
+                name: "first",
+                description: "First",
+                latest: "1.0.0",
+              },
+            ],
             has_more: true,
           }
         : {
             packs: [
-              { namespace: "acme", name: "docs", description: "A documents page" },
+              {
+                namespace: "acme",
+                name: "docs",
+                description: "A documents page",
+                latest: "1.0.0",
+              },
             ],
             has_more: false,
           },

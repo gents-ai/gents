@@ -34,7 +34,7 @@ import {
 } from "@gents/ui/components/select";
 import type { PackInstallChoice } from "../agent/usePackActions";
 import { ItemIcon } from "./PackPage";
-import { Section } from "./PackCard";
+import { ErrorDetail, Section } from "./PackCard";
 import {
   bytes,
   otherLabel,
@@ -50,6 +50,7 @@ import {
   overlapsOf,
   previewParts,
   previewPlugins,
+  readFailure,
   refusalOf,
 } from "./review";
 import type { PackReviewRequest } from "@/lib/packReview";
@@ -375,12 +376,14 @@ export function PackInstallReview({
         )}
 
         {read.state === "unread" && !stale && (
-          <p role="alert" className="text-sm text-warning">
-            {linkMismatch
-              ? "This isn't the pack the link names: its digest is different, so it isn't offered. "
-              : "Couldn't read this pack. "}
-            <span className="text-muted-foreground">{read.error}</span>
-          </p>
+          <div className="grid gap-2">
+            <p role="alert" className="text-sm text-warning">
+              {linkMismatch
+                ? "This isn't the pack the link names: its digest is different, so it isn't offered."
+                : readFailure(read.error)}
+            </p>
+            <ErrorDetail error={read.error} />
+          </div>
         )}
 
         {report && (
