@@ -32,6 +32,8 @@ pub(super) const INFERENCE_QUESTION: &str = "Choose an inference provider";
 pub(super) const LOCAL_PROVIDER: &str = "4";
 pub(super) const NO_MODEL_TEXT: &str = "No model answered at";
 pub(super) const CLEAR_SCREEN: &str = "\x1b[2J";
+pub(super) const PTY_ROWS: u16 = 40;
+pub(super) const PTY_COLUMNS: u16 = 120;
 pub(super) const ROOT_QUESTION: &str = "Which folder should agents work in?";
 /// A relative answer to `ROOT_QUESTION`, because every test's terminal starts in its
 /// temporary `HOME`. `LiveBox::new` creates it.
@@ -395,8 +397,8 @@ impl Terminal {
         }
         let mut log = File::create(log)?;
         let pair = portable_pty::native_pty_system().openpty(PtySize {
-            rows: 40,
-            cols: 120,
+            rows: PTY_ROWS,
+            cols: PTY_COLUMNS,
             pixel_width: 0,
             pixel_height: 0,
         })?;

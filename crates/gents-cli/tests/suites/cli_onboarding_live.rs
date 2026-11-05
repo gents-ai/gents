@@ -493,6 +493,28 @@ mod no_model {
             transcript.starts_with(CLEAR_SCREEN),
             "setup starts on a clear screen: {transcript}"
         );
+        let first_screen = transcript
+            .split(CLEAR_SCREEN)
+            .nth(1)
+            .context("setup prints a first screen")?;
+        let lines: Vec<&str> = first_screen.split("\r\n").collect();
+        let above = lines
+            .iter()
+            .position(|line| line.contains('█'))
+            .context("the logo is on the first screen")?;
+        let logo: Vec<&str> = lines[above..]
+            .iter()
+            .copied()
+            .take_while(|line| line.contains('█'))
+            .collect();
+        let left = logo
+            .iter()
+            .map(|line| line.chars().take_while(|mark| *mark == ' ').count())
+            .min()
+            .context("the logo has rows")?;
+        let logo_width = logo[0].chars().count() - left;
+        assert_eq!(above, (usize::from(PTY_ROWS) - logo.len()) / 2);
+        assert_eq!(left, (usize::from(PTY_COLUMNS) - logo_width) / 2);
         let agents = live
             .gents()
             .args(["config", "agent", "list", "--home"])

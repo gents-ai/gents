@@ -10,6 +10,7 @@ use crate::cli::args::{InitArgs, StoreKeyCustodyArg};
 use crate::cli::{Cli, Command};
 use crate::client_settings::InterfaceClient;
 use crate::commands::codex::{interface_bin, CODEX_BIN_ENV};
+use crate::commands::eval::terminal_size;
 use crate::commands::init::init_home;
 use crate::home_state::{read_finished_init_config, resolve_home_dir};
 use crate::interactive_backend::{confirm, prompt_line_default, resolve_backend_interactively};
@@ -41,10 +42,24 @@ pub(super) fn logo() -> String {
         .join("\n")
 }
 
+/// The logo in the middle of a pane, with the lines above it. A question under it that does not
+/// fit scrolls it up; nothing is lost but the padding.
+fn centered_logo(columns: usize, rows: usize) -> String {
+    let above = "\n".repeat(rows.saturating_sub(LOGO_GRID.len()) / 2);
+    let indent = " ".repeat(columns.saturating_sub(LOGO_WIDTH) / 2);
+    let logo = logo()
+        .lines()
+        .map(|row| format!("{indent}{row}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{above}{logo}")
+}
+
 /// Gives the next question a screen to itself. It clears only what is visible: `3J` would also
 /// erase the scrollback the person was reading before they typed `gents`.
 fn next_screen() {
-    eprintln!("\x1b[2J\x1b[H{}\n", logo());
+    let (columns, rows) = terminal_size().unwrap_or_default();
+    eprintln!("\x1b[2J\x1b[H{}\n", centered_logo(columns, rows));
 }
 
 /// `~user` is not expanded, so that spelling is an ordinary relative folder.
@@ -242,6 +257,24 @@ mod tests {
                 assert_eq!(row[middle] == '█', mark == '#', "{grid} cell {cell}");
             }
         }
+    }
+
+    #[test]
+    fn the_logo_sits_in_the_middle_of_the_pane() {
+        let centered = centered_logo(120, 40);
+        let lines: Vec<&str> = centered.split('\n').collect();
+        let above = (40 - LOGO_GRID.len()) / 2;
+        assert!(lines[..above].iter().all(|line| line.is_empty()));
+        let indent = " ".repeat((120 - LOGO_WIDTH) / 2);
+        let expected: Vec<String> = logo().lines().map(|row| format!("{indent}{row}")).collect();
+        assert_eq!(lines[above..], expected);
+    }
+
+    #[test]
+    fn a_pane_too_small_or_unknown_gets_the_logo_at_the_top_left() {
+        assert_eq!(centered_logo(LOGO_WIDTH, LOGO_GRID.len()), logo());
+        assert_eq!(centered_logo(10, 3), logo());
+        assert_eq!(centered_logo(0, 0), logo());
     }
 
     #[test]
