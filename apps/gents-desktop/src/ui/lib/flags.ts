@@ -39,6 +39,17 @@ export const FLAGS = [
       "The first real experimental feature is added and the tests use it instead.",
     restart: false,
   },
+  {
+    id: "automations",
+    name: "Automations",
+    description:
+      "An Automations page for the active node: what runs on its own, when it runs next, and how its runs went.",
+    default: false,
+    owner: "david-on-github",
+    removeBy: "2027-03-01",
+    removeWhen: "The Automations page ships to everyone.",
+    restart: false,
+  },
 ] as const satisfies readonly Flag[];
 
 export type FlagId = (typeof FLAGS)[number]["id"];

@@ -3,7 +3,7 @@ import type { MailboxItemView, SessionSummary } from "@source-inc/gents-desktop-
 import type { Route } from "./router";
 
 export type SearchKind =
-  "attention" | "node" | "session" | "agent" | "setting" | "action";
+  "attention" | "node" | "session" | "agent" | "automation" | "setting" | "action";
 
 type Icon = ComponentType<{ className?: string }>;
 
@@ -21,6 +21,7 @@ export type SearchTarget =
     }
   | { kind: "session"; session: SessionSummary }
   | { kind: "agent"; route: Route; agentId: string; nodeDid: string }
+  | { kind: "automation"; route: Route; icon: Icon }
   | { kind: "setting"; route: Route; icon: Icon }
   | { kind: "action"; run: () => void; icon: Icon; keys?: string };
 
@@ -104,6 +105,8 @@ export type SearchSources = {
     current?: boolean;
     last?: boolean;
   }[];
+  /** the active node's automations, while the Automations page is on */
+  automations: readonly { id: string; name: string; when: string; icon: Icon }[];
   agentName: (session: SessionSummary) => string;
   nodeName: (nodeDid: string) => string;
   places: readonly {
@@ -181,6 +184,19 @@ export function searchEntries(src: SearchSources): SearchEntry[] {
         a.pack ? [a.node, a.pack] : [a.node],
       ),
     ),
+    ...src.automations.map((a) =>
+      entry(
+        {
+          kind: "automation",
+          route: { name: "automations", item: a.id },
+          icon: a.icon,
+        },
+        `automation:${a.id}`,
+        a.name,
+        a.when,
+        [a.when],
+      ),
+    ),
     ...src.places.map((p) =>
       entry(
         { kind: "setting", route: p.route, icon: p.icon },
@@ -216,6 +232,7 @@ const LABEL: Record<SearchKind, string> = {
   node: "Nodes",
   session: "Sessions",
   agent: "Agents",
+  automation: "Automations",
   setting: "Settings",
   action: "Actions",
 };
@@ -224,6 +241,7 @@ const ORDER: SearchKind[] = [
   "node",
   "session",
   "agent",
+  "automation",
   "setting",
   "action",
 ];

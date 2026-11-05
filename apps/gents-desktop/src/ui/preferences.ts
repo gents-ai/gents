@@ -340,7 +340,7 @@ export const openOnNode = () => store.getState().openOn;
 export const useHiddenNodes = () => usePreferences((p) => p.hiddenNodes);
 export const useHiddenAgents = () => usePreferences((p) => p.hiddenAgents);
 
-const isOn = (flags: Record<string, FlagSetting>, id: FlagId) => {
+export const isOn = (flags: Record<string, FlagSetting>, id: FlagId) => {
   const setting = flags[id];
   return setting === undefined
     ? FLAGS.find((f) => f.id === id)!.default
