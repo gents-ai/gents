@@ -149,6 +149,18 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         count(&http(admin_address, &outsider)?.execute(&query).await?),
         0
     );
+    assert_eq!(
+        count(&admin_local.execute(&query).await?) != 0,
+        expected,
+        "embedded receiver runtime must not inherit the origin's reader tuple"
+    );
+    let receiver_author =
+        ConfigAccess::local_as(admin_node.clone(), identity::Did::new(candidate.did())?);
+    assert_eq!(
+        count(&receiver_author.execute(&query).await?),
+        1,
+        "signed genesis must retain its actual creator on the receiver"
+    );
     candidate_local
         .delete_actor_relationship("NetworkEnrollmentRequest", &doc, "reader", &reader)
         .await?;
