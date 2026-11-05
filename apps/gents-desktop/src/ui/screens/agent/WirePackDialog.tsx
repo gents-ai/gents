@@ -20,6 +20,7 @@ import {
 } from "@gents/ui/components/select";
 import type { AgentView, PackWireResult } from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
+import { useCopied } from "@/lib/clipboard";
 
 export type WirePackDialogProps = {
   /** the plugin to wire, `<namespace>/<name>` */
@@ -35,6 +36,22 @@ export type WirePackDialogProps = {
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
+/* The runtime won't pin a plugin through GraphQL while it serves the node's
+   home, because the commit's outcome could be unknown; its refusal names
+   the command to run with the node stopped. */
+const WHILE_RUNNING = "cannot publish a plugin pin through GraphQL";
+export const refusedWhileRunning = (error: string) =>
+  error.includes(WHILE_RUNNING) ? (error.match(/`([^`]+)`/)?.[1] ?? null) : undefined;
+
+/* Once the runtime has refused, Enable would only fail again while this
+   run of the app lasts, so the dialog says why before anyone tries. */
+let refusedThisRun = false;
+export const forgetRefusal = () => {
+  refusedThisRun = false;
+};
+const wireCommand = (plugin: string, agent: string) =>
+  `gents pack wire ${plugin} --agent ${agent} --home <node-home>`;
+
 export function WirePackDialog({
   plugin,
   agents,
@@ -46,6 +63,7 @@ export function WirePackDialog({
   const [agentId, setAgentId] = useState(agent ?? agents[0]?.agentId ?? "");
   const [preview, setPreview] = useState<PackWireResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [refused, setRefused] = useState(refusedThisRun);
   const [busy, setBusy] = useState(false);
   const request = { plugin, agent: agentId, targetsFrom, remove: false };
 
@@ -71,7 +89,11 @@ export function WirePackDialog({
       await actions.wirePack({ ...request, preview: false });
       onClose(true);
     } catch (e) {
-      setError(message(e));
+      const text = message(e);
+      if (refusedWhileRunning(text) !== undefined) {
+        refusedThisRun = true;
+        setRefused(true);
+      } else setError(text);
       setBusy(false);
     }
   }
@@ -131,7 +153,13 @@ export function WirePackDialog({
               ))}
             </ul>
           )}
-          {error && <FieldError>{error}</FieldError>}
+          {refused ? (
+            <Refusal plugin={plugin} command={wireCommand(plugin, agentId)} />
+          ) : (
+            error && (
+              <FieldError className="[overflow-wrap:anywhere]">{error}</FieldError>
+            )
+          )}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onClose(false)}>
@@ -139,7 +167,7 @@ export function WirePackDialog({
           </Button>
           <Button
             variant="brand"
-            disabled={busy || !preview}
+            disabled={busy || !preview || refused}
             onClick={() => void confirm()}
           >
             Enable
@@ -147,5 +175,31 @@ export function WirePackDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/* why Enable can't work on a running node yet, with the command to run once
+   it's stopped */
+function Refusal({ plugin, command }: { plugin: string; command: string }) {
+  const { copied, copy } = useCopied();
+  return (
+    <div role="alert" className="grid gap-2 rounded-xl bg-raised/50 p-3 text-sm">
+      <p>
+        {plugin} can’t be enabled from the app while this node is running yet. Until it
+        can, stop the node, then run this:
+      </p>
+      <div className="relative">
+        <pre className="rounded-lg bg-background/70 p-2.5 pr-16 font-mono text-xs break-all whitespace-pre-wrap">
+          {command}
+        </pre>
+        <button
+          type="button"
+          onClick={() => copy(command)}
+          className="absolute top-1.5 right-2 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+    </div>
   );
 }
