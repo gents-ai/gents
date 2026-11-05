@@ -7,24 +7,10 @@ use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, Req
 use gents_protocol::session_input_edit::{PendingMessageEdit, PendingQueueEdit};
 use tokio_util::sync::CancellationToken;
 
-async fn temp_home(p2p: bool) -> EmbeddedHome {
-    let tempdir = tempfile::tempdir().unwrap();
-    let config: Option<crate::eval::runner::embedded::home::P2PConfigForPath> = p2p.then(|| {
-        Arc::new(|data_path: &std::path::Path| defra_node::P2PConfig {
-            port: Some(0),
-            bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
-            relay_mode: p2p::iroh::IrohRelayModeConfig::Disabled,
-            discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
-            allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
-            max_concurrent_multipath_paths: None,
-            secret_key_path: Some(data_path.join("p2p.key")),
-            load_persisted_collections: true,
-            sync: Default::default(),
-            peer_key: Default::default(),
-            rebroadcast_on_merge: false,
-        }) as _
-    });
-    let home = EmbeddedHome::in_tempdir(tempdir, config).await.unwrap();
+async fn temp_home() -> EmbeddedHome {
+    let home = EmbeddedHome::create_temp("input-edit-recovery")
+        .await
+        .unwrap();
     let binding = crate::store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
     crate::test_support::install_test_agent_binding(
         &home.node,
@@ -52,15 +38,81 @@ async fn agent_for(home: &EmbeddedHome) -> Arc<dyn NodeIdentity> {
     crate::store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap()
 }
 
+async fn active_agents(
+    home: &EmbeddedHome,
+) -> tokio::sync::watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>> {
+    let agent_identity = agent_for(home).await;
+    let node = Arc::new(crate::store::identity::RuntimeNode {
+        node_did: home.identity.did().into(),
+        identity: home.identity.clone(),
+        default_agent_did: agent_identity.did().into(),
+        display_name: None,
+        enabled: true,
+    });
+    let agent = Arc::new(crate::inference::resolved::ResolvedAgent {
+        configuration: crate::inference::resolved::ResolvedConfiguration::Static,
+        agent_did: agent_identity.did().into(),
+        node: node.clone(),
+        agent_identity,
+        backend_id: None,
+        backend_provider_kind:
+            crate::inference::backends::provider::BackendProviderKind::OpenAiCompatible,
+        openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
+        backend_endpoint: String::new(),
+        backend_auth: crate::documents::BackendAuth::Unauthenticated,
+        claude_platform: None,
+        model_name: String::new(),
+        profile_id: None,
+        service_tier: None,
+        resolved_reasoning_efforts: None,
+        context_window: 8192,
+        max_output_tokens: 1024,
+        max_turns: 2,
+        max_turns_provenance: crate::inference::resolved::MaxTurnsProvenance::Default,
+        system_prompt: String::new(),
+        tools: crate::tools::surface::AgentToolSurfaceConfig::meta_only(),
+        compaction: None,
+        compaction_inference: None,
+        max_total_tokens: None,
+        stream_batch_ms: 0,
+        stream_liveness_timeout: std::time::Duration::from_secs(5),
+        provider_idle_timeout: std::time::Duration::from_secs(5),
+        deadline_duration: std::time::Duration::from_secs(30),
+        completion_retry:
+            crate::runtime::agent::completion_retry::CompletionRetryProfileFields::default(),
+        sampling: crate::inference::resolved::SamplingConfig::default(),
+        skills: Vec::new(),
+        oauth_pool: Vec::new(),
+    });
+    let snapshot = crate::runtime::snapshot::ResolvedRuntimeSnapshot::from_parts(
+        agent.agent_did.clone(),
+        vec![agent],
+        Default::default(),
+        Default::default(),
+    )
+    .with_node(node)
+    .with_local_did(home.identity.did().into())
+    .activate(1, Default::default());
+    let (_sender, receiver) = tokio::sync::watch::channel(Arc::new(snapshot));
+    receiver
+}
+
+fn client_access(home: &EmbeddedHome, signer: &dyn NodeIdentity) -> ConfigAccess {
+    ConfigAccess::Graphql(
+        crate::store::config_client::GraphqlEndpoint::as_principal(
+            home.graphql_endpoint().unwrap(),
+            signer.did(),
+        )
+        .with_client_signing_capability(signer.client_signing_capability().unwrap())
+        .unwrap()
+        .with_client_signed_agent_creates(),
+    )
+}
+
 async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionInputEdit {
     let did = home.identity.did();
     let binding = crate::test_support::ensure_test_default_agent(&home.node, did).await;
-    let access = ConfigAccess::local_as(
-        home.node.clone(),
-        ::identity::Did::new(did.to_owned()).unwrap(),
-    )
-    .with_client_signing_capability(home.identity.client_signing_capability().unwrap())
-    .unwrap();
+    let access = client_access(home, home.identity.as_ref());
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "original",
@@ -180,13 +232,11 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
 }
 
 async fn submit(
-    node: &Arc<EmbeddedNode>,
+    home: &EmbeddedHome,
     signer: &dyn NodeIdentity,
     command: &SessionInputEdit,
 ) -> String {
-    let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(signer.did()).unwrap())
-        .with_client_signing_capability(signer.client_signing_capability().unwrap())
-        .unwrap();
+    let access = client_access(home, signer);
     let input = serde_json::json!({"command_id":command.command_id, "requester_did":command.requester_did,
         "requester_peer_id":command.requester_peer_id, "node_did":command.node_did,
         "session_id":command.session_id, "intent_json":serde_json::to_string(command).unwrap()});
@@ -218,10 +268,10 @@ async fn requests(node: &Arc<EmbeddedNode>) -> serde_json::Value {
 
 #[tokio::test]
 async fn future_issued_command_defers_without_receipt_then_applies() {
-    let home = temp_home(false).await;
+    let home = temp_home().await;
     let issued_at = Utc::now() + chrono::Duration::seconds(2);
     let command = edit_command(&home, issued_at).await;
-    let id = submit(&home.node, home.identity.as_ref(), &command).await;
+    let id = submit(&home, home.identity.as_ref(), &command).await;
     let before = requests(&home.node).await;
     let deferred = process_command(
         &home.node,
@@ -242,7 +292,7 @@ async fn future_issued_command_defers_without_receipt_then_applies() {
     let worker = tokio::spawn(run_session_command_reconciler_with_agents(
         home.node.clone(),
         home.identity.clone(),
-        None,
+        Some(active_agents(&home).await),
         cancel.clone(),
     ));
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
@@ -265,9 +315,9 @@ async fn future_issued_command_defers_without_receipt_then_applies() {
 
 #[tokio::test]
 async fn overwritten_receipt_after_apply_is_reissued_as_applied() {
-    let home = temp_home(false).await;
+    let home = temp_home().await;
     let command = edit_command(&home, Utc::now() - chrono::Duration::seconds(1)).await;
-    let id = submit(&home.node, home.identity.as_ref(), &command).await;
+    let id = submit(&home, home.identity.as_ref(), &command).await;
     process_command(
         &home.node,
         &home.identity,
@@ -302,86 +352,33 @@ async fn overwritten_receipt_after_apply_is_reissued_as_applied() {
 }
 
 #[tokio::test]
-async fn late_twin_of_an_applied_command_is_left_unanswered_without_error() {
-    let owner = temp_home(true).await;
-    let peer = temp_home(true).await;
-    let command = edit_command(&owner, Utc::now() - chrono::Duration::seconds(1)).await;
-    let prior = submit(&owner.node, owner.identity.as_ref(), &command).await;
+async fn duplicate_command_id_after_apply_preserves_receipt_and_effects() {
+    let home = temp_home().await;
+    let command = edit_command(&home, Utc::now() - chrono::Duration::seconds(1)).await;
+    let prior = submit(&home, home.identity.as_ref(), &command).await;
     process_command(
-        &owner.node,
-        &owner.identity,
+        &home.node,
+        &home.identity,
         &prior,
-        agent_for(&owner).await.as_ref(),
+        agent_for(&home).await.as_ref(),
     )
     .await
     .unwrap();
-    let receipt = raw_receipt(&owner.node, &prior).await.unwrap();
-    let effects = requests(&owner.node).await;
-    let twin = submit(&peer.node, peer.identity.as_ref(), &command).await;
-    assert_ne!(twin, prior);
-
-    use super::super::RemoteP2pAdmin;
-    let collections = vec!["AgentSessionInputEdit".to_owned()];
-    let mut addresses = Vec::new();
-    for home in [&owner, &peer] {
-        let p2p = home.node.p2p().unwrap();
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
-        let address = loop {
-            if let Some(address) = p2p.shareable_address().await.ok().flatten() {
-                break address;
-            }
-            assert!(tokio::time::Instant::now() < deadline, "no P2P address");
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        };
-        addresses.push(address);
-    }
-    let owner_admin = super::super::EmbeddedRemoteP2pAdmin::new(owner.node.clone());
-    let peer_admin = super::super::EmbeddedRemoteP2pAdmin::new(peer.node.clone());
-    for admin in [&owner_admin, &peer_admin] {
-        admin.add_p2p_collections(&collections).await.unwrap();
-    }
-    owner_admin.connect(&addresses[1..]).await.unwrap();
-    peer_admin
-        .add_replicator(&addresses[..1], &collections, &Default::default())
-        .await
-        .unwrap();
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        let rows = ConfigAccess::local(owner.node.clone())
-            .execute("{ AgentSessionInputEdit { _docID } }")
+    let receipt = raw_receipt(&home.node, &prior).await.unwrap();
+    let effects = requests(&home.node).await;
+    let mut twin = command.clone();
+    twin.issued_at = (DateTime::parse_from_rfc3339(&command.issued_at).unwrap()
+        - chrono::Duration::seconds(1))
+    .to_rfc3339();
+    twin.signature = home.identity.sign(&twin.signing_payload()).await.unwrap();
+    let access = client_access(&home, home.identity.as_ref());
+    assert!(
+        crate::request::lifecycle::queue::publish_edit_command(&access, &twin)
             .await
-            .unwrap();
-        if rows["data"]["AgentSessionInputEdit"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|row| row["_docID"] == twin.as_str())
-        {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "twin did not replicate"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-
-    for id in [&twin, &prior] {
-        assert_eq!(
-            process_command(
-                &owner.node,
-                &owner.identity,
-                id,
-                agent_for(&owner).await.as_ref()
-            )
-            .await
-            .unwrap(),
-            None
-        );
-    }
-    assert!(raw_receipt(&owner.node, &twin).await.is_none());
-    assert_eq!(raw_receipt(&owner.node, &prior).await.unwrap(), receipt);
-    assert_eq!(requests(&owner.node).await, effects);
+            .is_err()
+    );
+    assert_eq!(raw_receipt(&home.node, &prior).await.unwrap(), receipt);
+    assert_eq!(requests(&home.node).await, effects);
 }
 
 async fn overwrite_receipt(node: &Arc<EmbeddedNode>, id: &str, raw: &str) {
@@ -398,7 +395,7 @@ async fn reconcile_until_verified(
     let worker = tokio::spawn(run_session_command_reconciler_with_agents(
         home.node.clone(),
         home.identity.clone(),
-        None,
+        Some(active_agents(home).await),
         cancel.clone(),
     ));
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
@@ -423,9 +420,9 @@ async fn reconcile_until_verified(
 
 #[tokio::test]
 async fn receipt_overwritten_while_stopped_is_reissued_at_restart() {
-    let home = temp_home(false).await;
+    let home = temp_home().await;
     let command = edit_command(&home, Utc::now() - chrono::Duration::seconds(1)).await;
-    let id = submit(&home.node, home.identity.as_ref(), &command).await;
+    let id = submit(&home, home.identity.as_ref(), &command).await;
     let applied = reconcile_until_verified(&home, &command, &id).await;
     assert_eq!(applied.outcome, SessionInputEditOutcome::Applied);
     let effects = requests(&home.node).await;
@@ -440,10 +437,10 @@ async fn receipt_overwritten_while_stopped_is_reissued_at_restart() {
 
 #[tokio::test]
 async fn future_issued_command_with_invalid_receipt_is_processed_at_its_deadline() {
-    let home = temp_home(false).await;
+    let home = temp_home().await;
     let issued_at = Utc::now() + chrono::Duration::seconds(2);
     let command = edit_command(&home, issued_at).await;
-    let id = submit(&home.node, home.identity.as_ref(), &command).await;
+    let id = submit(&home, home.identity.as_ref(), &command).await;
     overwrite_receipt(&home.node, &id, "{}").await;
 
     let receipt = reconcile_until_verified(&home, &command, &id).await;

@@ -9,6 +9,7 @@ use gents_protocol::session_input_edit::SessionInputEdit;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
+pub use crate::runtime::snapshot::ActiveRuntimeSnapshot as SessionCommandAgentSnapshot;
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
 
@@ -199,13 +200,14 @@ pub(crate) async fn unanswered_goal_commands(
     Ok(pending)
 }
 
-/// Agent-scoped commands remain pending until a runtime snapshot supplies their signing identities.
+/// Agent-scoped commands use the active runtime's held signing identities.
 pub async fn run_session_command_reconciler(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
+    agents: tokio::sync::watch::Receiver<Arc<SessionCommandAgentSnapshot>>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    run_session_command_reconciler_with_agents(node, identity, None, cancel).await
+    run_session_command_reconciler_with_agents(node, identity, Some(agents), cancel).await
 }
 
 pub(crate) async fn run_session_command_reconciler_with_agents(

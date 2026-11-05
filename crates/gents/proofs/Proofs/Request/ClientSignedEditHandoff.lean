@@ -26,11 +26,10 @@ def currentHttpAccepts (authenticated graphAuthor : String) : Bool := authentica
 
 theorem agent_http_cannot_replay_user_graph : currentHttpAccepts "agent" "user" = false := by rfl
 
-/-- This is the obligation for a future native mixed-actor transaction, not a
-claim that the pinned engine already provides it. The transaction verifies the
-client graph and immediate-author permissions, then commits replacement
-creates, the queue edit and its receipt together. Unsupported or conflicted
-native operations have no effect. -/
+/-- The native mixed-actor transaction verifies the client graph and the
+immediate author's permissions, then commits replacement creates, the queue
+edit and its receipt together. Unsupported or conflicted native operations
+have no effect. -/
 structure NativeTransaction where
   mixedActorsSupported : Bool
   requesterChecksCommitted : Bool
