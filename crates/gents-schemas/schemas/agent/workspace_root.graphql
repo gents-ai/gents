@@ -1,4 +1,4 @@
-type WorkspaceRoot {
+type WorkspaceRoot @policy(id: "8d9e64ca014dddfb01e5a55a5018e0a56d238ea0da1df1b6b33d50b1ac23386a", resource: "workspace_roots") {
     node_did: String @index @immutable
     node_doc_id: String @index @immutable
     root_path: String @index(unique: true)

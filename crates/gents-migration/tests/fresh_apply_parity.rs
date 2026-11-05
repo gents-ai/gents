@@ -280,12 +280,15 @@ async fn unbound_identity_collections_are_rejected_without_data_changes() {
         AGENT_OWNERSHIP_POLICY_ID, ENROLLMENT_OPERATOR_NONCE, ENROLLMENT_OPERATOR_NONCE_NAME,
         FILE_IMAGE_HYDRATION_REQUEST, FILE_IMAGE_HYDRATION_REQUEST_NAME,
         FILE_INVENTORY_IMAGE_REQUEST, FILE_INVENTORY_IMAGE_REQUEST_NAME, FILE_INVENTORY_REQUEST,
-        FILE_INVENTORY_REQUEST_NAME, NETWORK_ADMIN_PIN, NETWORK_ADMIN_PIN_NAME, NODE_NAME,
-        NODE_RUNTIME, NODE_RUNTIME_NAME, OAUTH_CREDENTIAL, OAUTH_CREDENTIAL_NAME,
-        PEER_PAIRING_APPLIED, PEER_PAIRING_APPLIED_NAME, PEER_PAIRING_DESIRED,
-        PEER_PAIRING_DESIRED_NAME, PROJECTION_ACP_BINDING, PROJECTION_ACP_BINDING_NAME,
+        FILE_INVENTORY_REQUEST_NAME, ISOLATED_WORKSPACE, ISOLATED_WORKSPACE_NAME,
+        NETWORK_ADMIN_PIN, NETWORK_ADMIN_PIN_NAME, NODE_NAME, NODE_RUNTIME, NODE_RUNTIME_NAME,
+        OAUTH_CREDENTIAL, OAUTH_CREDENTIAL_NAME, PEER_PAIRING_APPLIED, PEER_PAIRING_APPLIED_NAME,
+        PEER_PAIRING_DESIRED, PEER_PAIRING_DESIRED_NAME, PROJECTION_ACP_BINDING,
+        PROJECTION_ACP_BINDING_NAME, REPOSITORY_PLACEMENT, REPOSITORY_PLACEMENT_NAME,
         SESSION_HYDRATION_REQUEST, SESSION_HYDRATION_REQUEST_NAME, TOOL_SERVICE_HEALTH_STATE,
-        TOOL_SERVICE_HEALTH_STATE_NAME,
+        TOOL_SERVICE_HEALTH_STATE_NAME, WORKSPACE_BINDING, WORKSPACE_BINDING_NAME,
+        WORKSPACE_PLACEMENT, WORKSPACE_PLACEMENT_NAME, WORKSPACE_RECEIPT, WORKSPACE_RECEIPT_NAME,
+        WORKSPACE_ROOT, WORKSPACE_ROOT_NAME,
     };
     for (name, sdl, resource, key) in [
         (
@@ -355,15 +358,64 @@ async fn unbound_identity_collections_are_rejected_without_data_changes() {
             "configuration",
             "request_key",
         ),
+        (
+            WORKSPACE_ROOT_NAME,
+            WORKSPACE_ROOT,
+            "workspace_roots",
+            "root_path",
+        ),
+        (
+            ISOLATED_WORKSPACE_NAME,
+            ISOLATED_WORKSPACE,
+            "workspaces",
+            "workspace_id",
+        ),
+        (
+            WORKSPACE_BINDING_NAME,
+            WORKSPACE_BINDING,
+            "workspace_children",
+            "binding_id",
+        ),
+        (
+            WORKSPACE_PLACEMENT_NAME,
+            WORKSPACE_PLACEMENT,
+            "workspace_children",
+            "workspace_id",
+        ),
+        (
+            WORKSPACE_RECEIPT_NAME,
+            WORKSPACE_RECEIPT,
+            "workspace_children",
+            "receipt_id",
+        ),
+        (
+            REPOSITORY_PLACEMENT_NAME,
+            REPOSITORY_PLACEMENT,
+            "configuration",
+            "repository_id",
+        ),
     ] {
         let node = fresh_node().await;
         let directive =
             format!("@policy(id: \"{AGENT_OWNERSHIP_POLICY_ID}\", resource: \"{resource}\") ");
         let old = sdl.replace(&directive, "");
-        assert_ne!(old, sdl, "{name}: expected policy directive was not removed");
+        assert_ne!(
+            old, sdl,
+            "{name}: expected policy directive was not removed"
+        );
         node.add_collection(&old).await.unwrap();
         let extra = if name == FILE_INVENTORY_IMAGE_REQUEST_NAME {
             ", inventory_reference: {}"
+        } else if [
+            ISOLATED_WORKSPACE_NAME,
+            WORKSPACE_BINDING_NAME,
+            WORKSPACE_PLACEMENT_NAME,
+        ]
+        .contains(&name)
+        {
+            ", owner_node_did: \"retained-node\""
+        } else if name == REPOSITORY_PLACEMENT_NAME {
+            ", node_did: \"retained-node\""
         } else {
             ""
         };
