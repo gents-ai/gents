@@ -96,5 +96,4 @@ export const MessageList = memo(function MessageList({
     </>
   );
 });
-
 const estimateItemSize = () => 120;
