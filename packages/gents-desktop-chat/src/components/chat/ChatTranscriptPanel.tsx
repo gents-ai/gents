@@ -15,6 +15,7 @@ import { LIST_WINDOW_THRESHOLD } from "@source-inc/gents-desktop-ui";
 import { isTerminalTurnState } from "@source-inc/gents-desktop-client";
 import { MessageList } from "../Transcript.js";
 import { timelineKey } from "../transcript/TimelineItem.js";
+import { isHiddenRuntimeInput } from "../transcript/runtimeInputs.js";
 import {
   coalesceToolGroups,
   type CompactTimelineItem,
@@ -80,7 +81,9 @@ export function ChatTranscriptPanel({
   const [newContentBelow, setNewContentBelow] = useState(false);
 
   const sourceTimelineItems = useMemo<RenderedTimelineItem[]>(() => {
-    const durable = session?.timelineItems ?? [];
+    const durable = (session?.timelineItems ?? []).filter(
+      (item) => !isHiddenRuntimeInput(item),
+    );
     if (
       !optimisticPendingTurn ||
       optimisticPendingTurn.sessionId !== selectedSessionId
@@ -161,8 +164,7 @@ export function ChatTranscriptPanel({
     return -1;
   }, [timelineItems]);
   const pinUser =
-    !isTerminalTurnState(session?.turnState) &&
-    latestUserIndex >= 0;
+    !isTerminalTurnState(session?.turnState) && latestUserIndex >= 0;
   const stickyUserItemKey = pinUser
     ? timelineKey(timelineItems[latestUserIndex]!)
     : null;
