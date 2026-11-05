@@ -26,7 +26,7 @@ fn validate_source_language(owner: &str, declared: &str) -> Result<SourceLang> {
     let normalized = declared.trim().to_ascii_lowercase();
     anyhow::ensure!(
         gents::pack::SUPPORTED_PLUGIN_LANGUAGES.contains(&normalized.as_str()),
-        "{owner} declares language {declared:?}; Afterburner can compile it, but gents pack plugin \
+        "{owner} declares language {declared:?}; Afterburner can compile it, but gents config pack plugin \
          run cannot run it under its declared bounds yet, so it is refused rather than built \
          unusable; supported languages: {}",
         gents::pack::SUPPORTED_PLUGIN_LANGUAGES.join(", ")
@@ -375,7 +375,7 @@ mod tests {
     }
 
     /// A pack generated from a dynamic run builds, passes its recorded step-0
-    /// fixture and checks clean, offline: the stages `gents job promote` runs
+    /// fixture and checks clean, offline: the stages `gents automation job promote` runs
     /// before it installs.
     #[tokio::test]
     async fn a_generated_promotion_pack_builds_tests_and_checks() {
@@ -461,7 +461,7 @@ mod tests {
         assert_eq!(checked.problems, Vec::<String>::new());
     }
 
-    /// `gents pack new --template workflow --language js` scaffolds a pack whose
+    /// `gents config pack new --template workflow --language js` scaffolds a pack whose
     /// step function builds through the harness and answers its own fixture.
     #[tokio::test]
     async fn js_workflow_scaffold_builds_and_passes_its_fixture() {

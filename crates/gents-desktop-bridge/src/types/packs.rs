@@ -177,7 +177,7 @@ pub struct PackPluginBindingView {
     pub bound: Option<gents::plugin::model_calls::ModelBinding>,
 }
 
-/// The JSON `gents job promote` reports for a promoted dynamic run.
+/// The JSON `gents automation job promote` reports for a promoted dynamic run.
 #[derive(Debug, Serialize, Deserialize, TS)]
 pub struct WorkflowPromoteView {
     pub tool: String,

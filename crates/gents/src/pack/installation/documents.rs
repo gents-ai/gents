@@ -346,13 +346,13 @@ fn require_documents_dependency(dependency: &super::super::PackManifest) -> Resu
     anyhow::ensure!(
         matches!(dependency.metadata.kind, super::super::PackKind::Documents),
         "dependency {}/{} is a {:?} pack, which cannot be installed as a dependency; \
-         install it with `gents pack install` or `gents pack plugin install`, then remove it from `dependencies`",
+         install it with `gents config pack install` or `gents config pack plugin install`, then remove it from `dependencies`",
         dependency.metadata.namespace, dependency.name, dependency.metadata.kind
     );
     anyhow::ensure!(
         dependency.metadata.dependencies.is_empty(),
         "dependency {}/{} declares dependencies of its own; dependencies are one level: \
-         install it with `gents pack install`, then remove it from `dependencies`",
+         install it with `gents config pack install`, then remove it from `dependencies`",
         dependency.metadata.namespace,
         dependency.name
     );
@@ -861,7 +861,7 @@ fn ensure_plugin_references_resolve_with_inventory(
                 .unwrap_or_default();
             for reference in references {
                 if plugin_home.is_none() && inventory.is_none() {
-                    anyhow::bail!("pack {} Tools {:?} names plugin {}; remote GraphQL installation cannot verify plugin files on the node; run `gents pack install {} --home <node-home>` on that node without --graphql", manifest.name, tools.tools_id, reference.plugin, root);
+                    anyhow::bail!("pack {} Tools {:?} names plugin {}; remote GraphQL installation cannot verify plugin files on the node; run `gents config pack install {} --home <node-home>` on that node without --graphql", manifest.name, tools.tools_id, reference.plugin, root);
                 }
                 if shipped.contains(&reference.plugin) {
                     if let Some(pin) = &reference.digest {
@@ -898,7 +898,7 @@ fn ensure_plugin_references_resolve_with_inventory(
                         }
                     }
                     Err(error) if crate::plugin::store::is_not_found(&error) => anyhow::bail!(
-                        "pack {} Tools {:?} names plugin {}, which neither the pack nor its dependencies ship and this node has not installed; install the pack that ships {} first (`gents pack install <namespace>/<pack>`), or declare that pack as a dependency of {}",
+                        "pack {} Tools {:?} names plugin {}, which neither the pack nor its dependencies ship and this node has not installed; install the pack that ships {} first (`gents config pack install <namespace>/<pack>`), or declare that pack as a dependency of {}",
                         manifest.name,
                         tools.tools_id,
                         reference.plugin,
@@ -917,7 +917,7 @@ fn ensure_plugin_references_resolve_with_inventory(
     if plugin_home.is_none() && inventory.is_none() {
         if let Some(plugin) = shipped.first() {
             anyhow::bail!(
-                "pack {root} ships plugin {plugin}; remote GraphQL installation cannot publish plugin files on the node; run `gents pack install {root} --home <node-home>` on that node without --graphql"
+                "pack {root} ships plugin {plugin}; remote GraphQL installation cannot publish plugin files on the node; run `gents config pack install {root} --home <node-home>` on that node without --graphql"
             );
         }
     }

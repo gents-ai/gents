@@ -15,7 +15,7 @@ export type { DynamicWorkflowView as DynamicWorkflow } from "../generated/Dynami
 export type { WorkflowPromoteRequest } from "../generated/WorkflowPromoteRequest.js";
 export type { WorkflowPromoteView as WorkflowPromoted } from "../generated/WorkflowPromoteView.js";
 
-/* The bridge's wire commands return the JSON `gents pack wire` reports, which
+/* The bridge's wire commands return the JSON `gents config pack wire` reports, which
    the bridge does not type (`serde_json::Value`); these are its shapes. */
 
 /** What wiring changed, answer first; `job` is the block the person consents to. */

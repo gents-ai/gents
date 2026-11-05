@@ -88,7 +88,7 @@ impl InterfaceEndpoint {
                 }
                 ensure!(
                     is_mine && holds_one,
-                    "the Grok socket {socket} is not held by this Gents home's runtime, so Grok did not open. Stop whatever holds it (`lsof {socket}` names it), restart this home's runtime with `gents service restart --home {home}` or whatever is running it, with its Codex endpoint on, then run `gents` again.",
+                    "the Grok socket {socket} is not held by this Gents home's runtime, so Grok did not open. Stop whatever holds it (`lsof {socket}` names it), restart this home's runtime with `gents runtime service restart --home {home}` or whatever is running it, with its Codex endpoint on, then run `gents` again.",
                     socket = crate::shell_word(socket),
                     home = crate::shell_word(home)
                 );
@@ -208,7 +208,7 @@ async fn ensure_up_runtime_opens(
 ) -> Result<()> {
     if wait_for_endpoint(home, endpoint, timeout).await.is_err() {
         bail!(
-            "this home's runtime is up, but its {} has not opened. Check `gents status --home {home}`: a missing agent keeps it closed, and a restart will not help that. Otherwise restart it with `gents service restart --home {home}`, or restart whatever is running it, then run `gents` again.",
+            "this home's runtime is up, but its {} has not opened. Check `gents status --home {home}`: a missing agent keeps it closed, and a restart will not help that. Otherwise restart it with `gents runtime service restart --home {home}`, or restart whatever is running it, then run `gents` again.",
             endpoint.describe(),
             home = crate::shell_word(home)
         );
@@ -233,7 +233,7 @@ async fn wait_for_endpoint(
     while !endpoint.answers().await {
         if Instant::now() >= deadline {
             bail!(
-                "the runtime did not open its {} within {} s; it was left running, check `gents service status --home {}`",
+                "the runtime did not open its {} within {} s; it was left running, check `gents runtime service status --home {}`",
                 endpoint.describe(),
                 timeout.as_secs_f32(),
                 crate::shell_word(home)
@@ -246,7 +246,7 @@ async fn wait_for_endpoint(
 
 fn no_service_manager_message(home: &Path) -> String {
     format!(
-        "run `gents server --home {}` in another terminal, then `gents`",
+        "run `gents runtime server --home {}` in another terminal, then `gents`",
         crate::shell_word(home)
     )
 }
@@ -303,7 +303,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("gents service status --home /srv/home"),
+                .contains("gents runtime service status --home /srv/home"),
             "{error:#}"
         );
     }
@@ -378,7 +378,7 @@ mod tests {
         assert!(!error.contains(" off"), "{error}");
         let status = error.find("gents status --home /srv/home").expect(&error);
         let restart = error
-            .find("gents service restart --home /srv/home")
+            .find("gents runtime service restart --home /srv/home")
             .expect(&error);
         assert!(status < restart, "{error}");
     }
@@ -457,7 +457,7 @@ mod tests {
 
         assert!(refusals[0].contains("/tmp/held.sock"), "{}", refusals[0]);
         assert!(
-            refusals[0].contains("gents service restart --home /srv/home"),
+            refusals[0].contains("gents runtime service restart --home /srv/home"),
             "{}",
             refusals[0]
         );
@@ -484,28 +484,28 @@ mod tests {
         for (message, command) in [
             (
                 no_service_manager_message(home),
-                "gents server --home '/srv/my home'",
+                "gents runtime server --home '/srv/my home'",
             ),
             (
                 wait_for_endpoint(home, &codex, Duration::ZERO)
                     .await
                     .unwrap_err()
                     .to_string(),
-                "gents service status --home '/srv/my home'",
+                "gents runtime service status --home '/srv/my home'",
             ),
             (
                 ensure_up_runtime_opens(home, "mine", &mut codex, Duration::ZERO)
                     .await
                     .unwrap_err()
                     .to_string(),
-                "gents service restart --home '/srv/my home'",
+                "gents runtime service restart --home '/srv/my home'",
             ),
             (
                 grok.ensure_is_this_homes(home, "mine")
                     .await
                     .unwrap_err()
                     .to_string(),
-                "gents service restart --home '/srv/my home'",
+                "gents runtime service restart --home '/srv/my home'",
             ),
             (
                 grok.ensure_is_this_homes(home, "mine")
@@ -535,7 +535,7 @@ mod tests {
     fn no_service_manager_says_run_gents_server_then_gents() {
         assert_eq!(
             no_service_manager_message(Path::new("/srv/home")),
-            "run `gents server --home /srv/home` in another terminal, then `gents`"
+            "run `gents runtime server --home /srv/home` in another terminal, then `gents`"
         );
     }
 

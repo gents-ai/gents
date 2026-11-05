@@ -13,7 +13,7 @@ export function sentence(text: string): string {
 }
 
 /** `text` without its clauses that tell the person to run a command, such
-    as "; add one with `gents auth login claude --label <label>`". */
+    as "; add one with `gents accounts login claude --label <label>`". */
 export function withoutCommandHints(text: string): string {
   return text
     .replace(/[;,.]?\s*[^;,.]*`[^`]*`[^;,.]*/g, "")

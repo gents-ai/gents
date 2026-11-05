@@ -12,7 +12,7 @@ pub const CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV: &str = "GENTS_CLAUDE_OAUTH_TOKEN_
 pub const CLAUDE_OAUTH_PRODUCT: OAuthProduct = OAuthProduct {
     name: "Claude",
     backend_label: "Claude subscription backend",
-    login_command: "auth login claude",
+    login_command: "accounts login claude",
     not_entitled_guidance:
         "Check that the Claude plan includes Claude Code (Pro/Max), or use an API-key backend.",
 };
@@ -112,7 +112,7 @@ mod tests {
             &OAuthAuthProblem::Missing,
         );
         assert!(
-            text.contains("gents auth login claude --node-did did:key:z6MkTest"),
+            text.contains("gents accounts login claude --node-did did:key:z6MkTest"),
             "{text}"
         );
         assert!(text.contains("Claude subscription backend"), "{text}");

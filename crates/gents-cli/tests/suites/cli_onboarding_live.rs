@@ -194,7 +194,13 @@ mod no_model {
         let live = LiveBox::new()?;
         let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
         live.bring_up(&home.home).await?;
-        live.gents_ok(&["service", "stop", "--home", &home.home.to_string_lossy()])?;
+        live.gents_ok(&[
+            "runtime",
+            "service",
+            "stop",
+            "--home",
+            &home.home.to_string_lossy(),
+        ])?;
 
         let mut command = live.bare_gents("/usr/bin/true", &home.home);
         command.args(["--agent", &home.default_agent_id]);
@@ -288,7 +294,7 @@ mod no_model {
         ] {
             live.gents_ok(&["config", "client", "set", client, "--home", &home_arg])?;
             if client == "grok" {
-                live.gents_ok(&["service", "restart", "--home", &home_arg])?;
+                live.gents_ok(&["runtime", "service", "restart", "--home", &home_arg])?;
             }
 
             let mut terminal = Terminal::spawn(&command, &live.log(client))?;
@@ -333,7 +339,13 @@ mod no_model {
         live.bring_up(&home.home).await?;
         let pid = live.service_pid().context("the service runs")?;
         let mtime = live.plist_mtime()?;
-        live.gents_ok(&["service", "stop", "--home", &home.home.to_string_lossy()])?;
+        live.gents_ok(&[
+            "runtime",
+            "service",
+            "stop",
+            "--home",
+            &home.home.to_string_lossy(),
+        ])?;
 
         live.bring_up(&home.home).await?;
 
@@ -367,7 +379,13 @@ mod no_model {
         );
         assert_eq!(live.service_pid(), Some(pid));
 
-        live.gents_ok(&["service", "stop", "--home", &a.home.to_string_lossy()])?;
+        live.gents_ok(&[
+            "runtime",
+            "service",
+            "stop",
+            "--home",
+            &a.home.to_string_lossy(),
+        ])?;
         let mut terminal = Terminal::spawn(
             &live.bare_gents(MISSING_BIN, &b.home),
             &live.log("owned-by-a"),
@@ -430,7 +448,9 @@ mod no_model {
             .expect("Waiting for this home's runtime", PROMPT)
             .await?;
         terminal.expect("gents status", RUNTIME_UP).await?;
-        terminal.expect("gents service restart", EXIT).await?;
+        terminal
+            .expect("gents runtime service restart", EXIT)
+            .await?;
         terminal.expect("whatever is running it", EXIT).await?;
         terminal.expect_exit(1).await?;
         ensure!(
@@ -877,7 +897,7 @@ mod no_model {
         terminal.send("\x04")?;
         terminal
             .expect(
-                &format!("gents auth login codex --home {}", folder.display()),
+                &format!("gents accounts login codex --home {}", folder.display()),
                 PROMPT,
             )
             .await?;
@@ -919,7 +939,7 @@ mod no_model {
 
         let read = |collection: &str, fields: &[&str]| -> Result<String> {
             let mut command = live.gents();
-            command.args(["data", "query", "find", "--collection", collection]);
+            command.args(["utils", "data", "query", "find", "--collection", collection]);
             for field in fields {
                 command.args(["--field", field]);
             }
@@ -993,7 +1013,7 @@ mod no_model {
 
         terminal
             .expect(
-                &format!("gents auth login codex --home {}", folder.display()),
+                &format!("gents accounts login codex --home {}", folder.display()),
                 PROMPT,
             )
             .await?;
@@ -1229,11 +1249,13 @@ mod with_model {
             &live.bare_gents_grok(&grok, &home.home),
             &live.log("grok-socket-off"),
         )?;
-        refused.expect("gents service restart", RUNTIME_UP).await?;
+        refused
+            .expect("gents runtime service restart", RUNTIME_UP)
+            .await?;
         refused.expect_exit(1).await?;
         assert_eq!(live.service_pid(), Some(pid));
 
-        live.gents_ok(&["service", "restart", "--home", &home_arg])?;
+        live.gents_ok(&["runtime", "service", "restart", "--home", &home_arg])?;
         let agent = turn_in_grok(
             &live,
             &home,

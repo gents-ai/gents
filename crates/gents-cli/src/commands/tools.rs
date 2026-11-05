@@ -43,7 +43,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                     anyhow::ensure!(
                         expected == live,
                         "home {} belongs to node {expected}, but the runtime its runtime.json names \
-                         serves node {live}; restart `gents server --home {}` to serve this home, or \
+                         serves node {live}; restart `gents runtime server --home {}` to serve this home, or \
                          pass --graphql to explain that node",
                         home_dir.display(),
                         shell_quoted_path(&home_dir)?
@@ -187,8 +187,8 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         }),
         next: host.live_node_did.is_none().then(|| {
             let server = match &home_hint {
-                Some(home) => format!("gents server --home {home}"),
-                None => "gents server".to_owned(),
+                Some(home) => format!("gents runtime server --home {home}"),
+                None => "gents runtime server".to_owned(),
             };
             format!(
                 "No runtime serves this home, so this is the configured init.json ceiling; a \

@@ -203,7 +203,7 @@ class RunnerSupervisionTest(unittest.TestCase):
             response = json.loads((logs / "response.json").read_text())
             self.assertEqual(response["request"]["lifecycle_state"], "completed")
             self.assertEqual(
-                (home / "invocations.jsonl").read_text().count('["debug", "response", "wait"'),
+                (home / "invocations.jsonl").read_text().count('["utils", "debug", "response", "wait"'),
                 2,
             )
             self.assertTrue((logs / "trajectory.json").is_file())
@@ -309,10 +309,10 @@ class RunnerSupervisionTest(unittest.TestCase):
                 },
             )
             self.assertTrue(
-                any(args[:2] == ["tools", "explain"] for args in invocations)
+                any(args[:3] == ["config", "tools", "explain"] for args in invocations)
             )
             submitted = next(
-                args for args in invocations if args[:3] == ["debug", "request", "submit"]
+                args for args in invocations if args[:4] == ["utils", "debug", "request", "submit"]
             )
             self.assertEqual(submitted[submitted.index("--seed") + 1], "1234")
             self.assertEqual(
@@ -374,7 +374,7 @@ elif args[:3] == ["config", "profile", "set"]:
     print("{}")
 elif args[:3] == ["config", "tools", "set"]:
     print("{}")
-elif args[:2] == ["tools", "explain"]:
+elif args[:3] == ["config", "tools", "explain"]:
     if not (home / "second-server-ready").exists():
         print("database is locked by the restarting server", file=sys.stderr)
         sys.exit(73)
@@ -384,7 +384,7 @@ elif args[:1] == ["status"]:
         print("GraphQL connection refused", file=sys.stderr)
         sys.exit(1)
     print(json.dumps({"process_state": "ready", "readiness_status": "ready"}, indent=2))
-elif args[:3] == ["debug", "request", "submit"]:
+elif args[:4] == ["utils", "debug", "request", "submit"]:
     request = {
         "request_id": "request-1",
         "seed": int(option("--seed")) if option("--seed") is not None else None,
@@ -392,11 +392,11 @@ elif args[:3] == ["debug", "request", "submit"]:
     }
     Path(option("--output-file")).write_text(json.dumps(request, indent=2))
     print(json.dumps(request, indent=2))
-elif args[:3] == ["debug", "request", "show"]:
+elif args[:4] == ["utils", "debug", "request", "show"]:
     submitted = next(
         json.loads(line)
         for line in (home / "invocations.jsonl").read_text().splitlines()
-        if json.loads(line)[:3] == ["debug", "request", "submit"]
+        if json.loads(line)[:4] == ["utils", "debug", "request", "submit"]
     )
     print(json.dumps({
         "request": {
@@ -408,7 +408,7 @@ elif args[:3] == ["debug", "request", "show"]:
             ),
         }
     }, indent=2))
-elif args[:3] == ["debug", "response", "wait"]:
+elif args[:4] == ["utils", "debug", "response", "wait"]:
     if os.environ.get("FAKE_WAITER_TRANSIENT_ONCE"):
         count_file = home / "waiter-count"
         count = int(count_file.read_text()) + 1 if count_file.exists() else 1
@@ -429,12 +429,12 @@ elif args[:3] == ["debug", "response", "wait"]:
     signal.signal(signal.SIGTERM, cancelled)
     while True:
         time.sleep(1)
-elif args[:3] == ["debug", "response", "show"]:
+elif args[:4] == ["utils", "debug", "response", "show"]:
     print("GraphQL connection refused", file=sys.stderr)
     sys.exit(1)
-elif args[:3] == ["debug", "trace", "timeline"]:
+elif args[:4] == ["utils", "debug", "trace", "timeline"]:
     print(json.dumps({"request_id": "request-1", "events": [{"kind": "partial"}]}))
-elif args[:3] == ["debug", "trace", "project"]:
+elif args[:4] == ["utils", "debug", "trace", "project"]:
     trajectory = {
         "trajectory_id": "partial-trajectory",
         "session_id": "partial-session",

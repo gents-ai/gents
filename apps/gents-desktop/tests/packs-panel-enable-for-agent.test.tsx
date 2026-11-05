@@ -148,7 +148,7 @@ describe("PacksPanel Enable for agent", () => {
         job: null,
         warnings: [],
         next_call:
-          "gents pack wire fixture/job_fixture --agent default --targets-from <pack>",
+          "gents config pack wire fixture/job_fixture --agent default --targets-from <pack>",
       },
     }));
     show(["fixture/job_pack"], jobPack);

@@ -246,7 +246,7 @@ pub(crate) mod tests {
         };
         let error = resolve(None).unwrap_err();
         assert!(
-            format!("{error:#}").contains("gents pack login"),
+            format!("{error:#}").contains("gents config pack login"),
             "{error:#}"
         );
         gents::pack::registry::credentials::set(home.path(), registry, "gcpat_saved").unwrap();
