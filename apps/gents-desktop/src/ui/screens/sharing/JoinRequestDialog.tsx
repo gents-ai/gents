@@ -16,7 +16,7 @@ import { SHARING_SECTION } from "@/lib/joinInvite";
 import { navigate } from "@/lib/router";
 import { fullTime } from "../TranscriptMarker";
 import { CopyButton, errorMessage, LeaseSelect, partyName, shortDid } from "./parts";
-import { MonitorSmartphone } from "lucide-react";
+import { MonitorSmartphone, TriangleAlert } from "lucide-react";
 import { cn } from "@gents/ui/lib/utils";
 import { useMinute } from "../time";
 import { sayApproved, sayDenied } from "./decided";
@@ -164,8 +164,12 @@ export function JoinRequestDialog() {
         </div>
 
         {request.scope.kind === "node" && !gone && (
-          <p className="text-sm text-warning">
-            That's the whole node. Approve it only for a device of your own.
+          <p className="flex gap-2 text-sm text-warning">
+            <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
+            <span>
+              This gives full access to {nodeName}. Approve it only if it's your own
+              device.
+            </span>
           </p>
         )}
         {gone && (
