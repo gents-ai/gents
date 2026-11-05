@@ -159,7 +159,7 @@ fn foreign_endpoint_refusal(remote: &str, identity: Option<&RuntimeIdentity>) ->
         format!(" It serves Gents home {home}; run `gents --home {home}` to open it.")
     });
     format!(
-        "the Codex endpoint {remote} does not belong to this Gents home.{other_home} To use this home, stop whatever holds that endpoint."
+        "could not confirm the Codex endpoint {remote} belongs to this Gents home.{other_home} To use this home, stop whatever holds that endpoint."
     )
 }
 
@@ -195,30 +195,49 @@ fn preflight_decision(identity: &RuntimeIdentity, agent: &str) -> PreflightDecis
     ))
 }
 
-/// The set can be empty when `/runtime` answers, and no cross-process notification
-/// of a publish exists, so only an empty set is looked at again. A home whose
-/// backend is down stays empty, and this gives up rather than call the agent unknown.
+/// The set can be empty when `/runtime` answers, and no cross-process notification of a
+/// publish exists, so `/runtime` is read again until `published` holds or the wait ends.
+/// Returns the last read, or `None` once a read fails.
+async fn read_identity_until<F>(
+    authority: &str,
+    bearer: Option<&str>,
+    publish_wait: Duration,
+    published: F,
+) -> Option<RuntimeIdentity>
+where
+    F: Fn(&RuntimeIdentity) -> bool,
+{
+    let deadline = Instant::now() + publish_wait;
+    loop {
+        let identity = read_runtime_identity(authority, bearer).await?;
+        if published(&identity) || Instant::now() >= deadline {
+            return Some(identity);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Only an empty set is looked at again. A home whose backend is down stays empty, and this
+/// gives up rather than call the agent unknown.
 async fn preflight_agent(
     authority: &str,
     bearer: Option<&str>,
     agent: &str,
     publish_wait: Duration,
 ) -> Result<()> {
-    let deadline = Instant::now() + publish_wait;
-    loop {
-        let Some(identity) = read_runtime_identity(authority, bearer).await else {
-            bail!("{}", foreign_endpoint_refusal(authority, None));
-        };
-        match preflight_decision(&identity, agent) {
-            PreflightDecision::Go => return Ok(()),
-            PreflightDecision::Refuse(message) => bail!("{message}"),
-            PreflightDecision::WaitForPublish if Instant::now() >= deadline => bail!(
-                "this runtime has published no runnable agent, so {agent:?} cannot open yet. Check `gents status`."
-            ),
-            PreflightDecision::WaitForPublish => {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }
+    let identity = read_identity_until(authority, bearer, publish_wait, |identity| {
+        preflight_decision(identity, agent) != PreflightDecision::WaitForPublish
+    })
+    .await;
+    let Some(identity) = identity else {
+        bail!("{}", foreign_endpoint_refusal(authority, None));
+    };
+    match preflight_decision(&identity, agent) {
+        PreflightDecision::Go => Ok(()),
+        PreflightDecision::Refuse(message) => bail!("{message}"),
+        PreflightDecision::WaitForPublish => bail!(
+            "this runtime has published no runnable agent, so {agent:?} cannot open yet. Check `gents status`."
+        ),
     }
 }
 
@@ -250,30 +269,30 @@ fn cannot_open_refusal(identity: &RuntimeIdentity, home: &Path) -> String {
 }
 
 /// With nothing runnable an interface only fails in its own words, as Codex does with
-/// `model/list returned no models for TUI bootstrap`. No cross-process notification of a
-/// publish exists, so the set is looked at again until the wait ends. A pinned runtime
-/// publishes no set, and a runtime that cannot say is left for the interface to report.
+/// `model/list returned no models for TUI bootstrap`. A pinned runtime publishes no set,
+/// and a runtime that cannot say is left for the interface to report.
 pub(crate) async fn ensure_an_agent_can_run(
     remote: &str,
     home: &Path,
     agent_given: bool,
     publish_wait: Duration,
 ) -> Result<()> {
-    let deadline = Instant::now() + publish_wait;
-    loop {
-        let Some(identity) = runtime_identity_at(remote).await else {
-            return Ok(());
-        };
-        if can_open(&identity, agent_given) {
-            return Ok(());
-        }
-        ensure!(
-            Instant::now() < deadline,
-            "{}",
-            cannot_open_refusal(&identity, home)
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    let Ok(RemoteEndpoint::WebSocket { authority, .. }) = resolve_endpoint(remote) else {
+        return Ok(());
+    };
+    let identity = read_identity_until(&authority, None, publish_wait, |identity| {
+        can_open(identity, agent_given)
+    })
+    .await;
+    let Some(identity) = identity else {
+        return Ok(());
+    };
+    ensure!(
+        can_open(&identity, agent_given),
+        "{}",
+        cannot_open_refusal(&identity, home)
+    );
+    Ok(())
 }
 
 /// The route exists only on a local runtime, so nothing else can serve `--agent`.
@@ -625,12 +644,9 @@ pub(crate) mod tests {
             .await
             .expect_err("nothing answers");
 
-        assert!(
-            error
-                .to_string()
-                .contains("does not belong to this Gents home"),
-            "{error:#}"
-        );
+        let error = error.to_string();
+        assert!(!error.contains("does not belong"), "{error}");
+        assert!(error.contains("could not confirm"), "{error}");
     }
 
     /// Answers each `/runtime` request with the next body, then keeps repeating the last.

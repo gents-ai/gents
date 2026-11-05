@@ -133,6 +133,52 @@ mod no_model {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn grok_opens_on_the_socket_the_service_holds_whatever_the_terminal_expects() -> Result<()>
+    {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
+        live.gents_ok(&[
+            "config",
+            "client",
+            "set",
+            "grok",
+            "--home",
+            &home.home.to_string_lossy(),
+        ])?;
+        let (interface, recorded) = recording_interface(&live)?;
+        let terminal_dir = tempfile::Builder::new()
+            .prefix("gents-")
+            .tempdir_in("/tmp")?;
+        let mut command = live.bare_gents_grok(&interface.to_string_lossy(), &home.home);
+        command.env("XDG_RUNTIME_DIR", terminal_dir.path());
+
+        let mut terminal = Terminal::spawn(&command, &live.log("other-runtime-dir"))?;
+
+        let code = terminal.wait_exit(RUNTIME_UP).await?;
+        ensure!(code == 0, "{}", terminal.transcript());
+        let runtime: serde_json::Value =
+            reqwest::get(format!("http://127.0.0.1:{SHIM_PORT}/runtime"))
+                .await?
+                .json()
+                .await?;
+        let held = runtime["grok_socket"]
+            .as_str()
+            .context("the service holds a socket")?;
+        ensure!(
+            !Path::new(held).starts_with(terminal_dir.path()),
+            "the service must not share the terminal's directory: {held}"
+        );
+        let args = fs::read_to_string(&recorded)?;
+        ensure!(
+            args.contains(&format!("--leader-socket\n{held}\n")),
+            "{args}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
     async fn the_first_open_after_a_start_finds_the_default_agent() -> Result<()> {
         let backend = answering_backend()?;
         let live = LiveBox::new()?;
@@ -370,7 +416,11 @@ mod no_model {
             &live.log("endpoint-off"),
         )?;
 
-        terminal.expect("gents service restart", RUNTIME_UP).await?;
+        terminal
+            .expect("Waiting for this home's runtime", PROMPT)
+            .await?;
+        terminal.expect("gents status", RUNTIME_UP).await?;
+        terminal.expect("gents service restart", EXIT).await?;
         terminal.expect("whatever is running it", EXIT).await?;
         terminal.expect_exit(1).await?;
         ensure!(
