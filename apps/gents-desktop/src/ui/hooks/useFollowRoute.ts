@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { useApp } from "../app/AppContext";
 import { navigate, reviewNavigation, type Route } from "../lib/router";
 import { sessionDestination } from "../../hooks/selectionActions";
+import { noteOpenSession } from "../../hooks/sessionTrail";
 import { useFleet } from "./useFleet";
 
 // Re-asked when the nodes' session lists change, since a session on another
@@ -40,6 +41,9 @@ export function useFollowRoute(route: Route) {
   useEffect(() => {
     follow(false);
   }, [followRoute, selectNode, sessionId, nodeDid]);
+  useEffect(() => {
+    if (sessionId) noteOpenSession(sessionId);
+  }, [sessionId]);
   useEffect(() => {
     if (sessionId) follow(true);
   }, [followRoute, sessionId, nodeDid, listed]);

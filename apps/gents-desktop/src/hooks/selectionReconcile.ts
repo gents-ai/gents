@@ -3,7 +3,7 @@ import { selectedAgentIdForDeployment } from "@source-inc/gents-desktop-client";
 import { toast } from "sonner";
 import { routeMoves } from "../ui/lib/router";
 import { openOnNode } from "../ui/preferences";
-import { rememberedNode, rememberNode } from "./activeNode";
+import { noteActiveNode, rememberedNode, rememberNode } from "./activeNode";
 import type { DraftStore } from "./draftStore";
 import { firstNode, type FleetState, nodeOf, type NodeView } from "./fleetStore";
 import { selection } from "./selectionStore";
@@ -122,10 +122,12 @@ export function reconcileSelection(
   });
   store.subscribe(settle);
   let kept = store.getState().nodeDid;
+  if (kept) noteActiveNode(kept);
   store.subscribe(({ nodeDid }) => {
     if (!nodeDid || nodeDid === kept) return;
     kept = nodeDid;
     rememberNode(nodeDid);
+    noteActiveNode(nodeDid);
   });
   settle();
 }

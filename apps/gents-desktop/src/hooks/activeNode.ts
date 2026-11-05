@@ -17,3 +17,18 @@ export function rememberNode(nodeDid: string) {
     /* nothing to keep it in */
   }
 }
+
+/* the node active before the current one, in this window, for the key that
+   goes back to it; it isn't kept across a reload */
+let current: string | null = null;
+let previous: string | null = null;
+
+/** Notes a node made active, so the one before it can be gone back to. */
+export function noteActiveNode(nodeDid: string) {
+  if (nodeDid === current) return;
+  if (current) previous = current;
+  current = nodeDid;
+}
+
+/** The node active before the current one, if there was one. */
+export const previousNode = () => previous;

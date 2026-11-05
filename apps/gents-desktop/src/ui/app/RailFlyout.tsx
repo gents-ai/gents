@@ -28,6 +28,7 @@ import {
 } from "./navLayout";
 import { useMailboxList } from "@/screens/MailboxStack";
 import { NavMenu } from "./CustomizeNav";
+import { useKeysHint } from "@/commands/commands";
 import { NavScroll } from "./NavScroll";
 import { NavMailbox } from "./NavMailbox";
 import { NavNodes } from "./NavNodes";
@@ -67,7 +68,7 @@ function Item({
   count,
   tally,
   icon,
-  keys,
+  command,
   children,
 }: {
   to: string;
@@ -77,10 +78,11 @@ function Item({
   /** how many there are here, a plain fact, in quiet text */
   tally?: number;
   icon: ReactNode;
-  /** the key that goes here, named on hover */
-  keys?: string;
+  /** the command whose key goes here, named on hover */
+  command?: string;
   children: ReactNode;
 }) {
+  const keys = useKeysHint(command ?? "");
   return (
     <a
       href={to}
@@ -155,7 +157,7 @@ export function NavPanel({
       <Item
         key={item.id}
         to={href(to)}
-        keys={item.keys}
+        command={item.command}
         active={active}
         count={count}
         /* one node, the person's own, is no news */

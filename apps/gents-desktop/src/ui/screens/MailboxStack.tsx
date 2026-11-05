@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback } from "react";
 import { toast } from "sonner";
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import { currentRoute, pathFor, type Route } from "@/lib/router";
@@ -8,7 +8,7 @@ import { useInScope, useSelectedNodeDid } from "@/hooks/useClient";
 import { listViews, useListViews } from "@/app/listViews";
 import { groupItems, matches, type TriageGroup } from "./mailbox-triage";
 import { ItemDialog } from "./MailboxItem";
-import { commandKey } from "./shortcutKeys";
+import { useCommand } from "@/commands/commands";
 import { useMinute } from "./time";
 
 const SCOPE = defaultScope("mailbox");
@@ -90,19 +90,18 @@ export function MailboxStack({ route }: { route: Route }) {
     [selectedNodeDid, where, keepEvery],
   );
   const close = useCallback(() => listViews.setMailboxOpen(null), []);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!commandKey(e) || !e.shiftKey || e.altKey || e.key.toLowerCase() !== "m")
-        return;
-      e.preventDefault();
+  useCommand({
+    id: "mailbox.stack",
+    title: "Answer and triage the mailbox from anywhere",
+    group: "Pages",
+    keys: { key: "m", mod: true, shift: true },
+    run: () => {
       if (openId !== null) return close();
       const first = shown[0];
       if (first) open(first.itemId, 0);
       else toast("Nothing needs you right now", { id: "mailbox-empty" });
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [openId, shown, open, close]);
+    },
+  });
   return (
     <ItemDialog
       items={shown}

@@ -12,6 +12,7 @@ import { SyncHealth } from "./SyncHealth";
 import { navRowState, type NavContext } from "./navRegistry";
 import { drawNavRows, useNavFooter, useNavRows, type NavRow } from "./navLayout";
 import { NavMenu } from "./CustomizeNav";
+import { useKeysHint } from "@/commands/commands";
 import { NavScroll } from "./NavScroll";
 import { ContribBoundary } from "@/contrib/react/boundary";
 import {
@@ -23,19 +24,21 @@ import {
 
 function RailItem({
   label,
-  keys,
+  command,
   active,
   count,
   to,
   children,
 }: {
   label: string;
-  keys?: string;
+  /** the command whose key its tooltip names */
+  command?: string;
   active?: boolean;
   count?: number;
   to: Route;
   children: ReactNode;
 }) {
+  const keys = useKeysHint(command ?? "");
   return (
     <Tooltip>
       <TooltipTrigger
@@ -152,7 +155,7 @@ export function Rail({ route, settings }: { route: Route; settings: ReactNode })
       <RailItem
         key={item.id}
         label={item.label}
-        keys={item.keys}
+        command={item.command}
         to={to}
         active={active}
         count={count}
