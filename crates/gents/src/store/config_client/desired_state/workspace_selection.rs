@@ -19,6 +19,9 @@ async fn links(
         return Ok(BTreeSet::new());
     };
     let callback: crate::documents::Callback = serde_json::from_value(value)?;
+    if !callback.enabled {
+        return Ok(BTreeSet::new());
+    }
     let selection = match callback.handler {
         CallbackHandler::BuiltIn {
             workspace_agents, ..
