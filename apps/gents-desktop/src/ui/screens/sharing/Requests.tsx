@@ -4,6 +4,7 @@ import { Button } from "@gents/ui/components/button";
 import { FieldRows } from "@gents/ui/components/field";
 import { cn } from "@gents/ui/lib/utils";
 import { DEFAULT_LEASE_SECONDS, type JoinRequest } from "../../../hooks/sharing";
+import { sayApproved, sayDenied } from "./decided";
 import { useSharingActions } from "@/hooks/useSharing";
 import { fullTime, shortTime } from "../TranscriptMarker";
 import {
@@ -20,9 +21,11 @@ import {
     Deny. Nothing shows while nobody is waiting. */
 export function RequestsStrip({
   nodeDid,
+  nodeName,
   requests,
 }: {
   nodeDid: string;
+  nodeName: string;
   requests: JoinRequest[];
 }) {
   const [open, setOpen] = useState(true);
@@ -51,7 +54,12 @@ export function RequestsStrip({
         {open && (
           <div role="list" aria-label="Requests" className="divide-y divide-border/60">
             {requests.map((request) => (
-              <RequestRow key={request.requestId} nodeDid={nodeDid} request={request} />
+              <RequestRow
+                key={request.requestId}
+                nodeDid={nodeDid}
+                nodeName={nodeName}
+                request={request}
+              />
             ))}
           </div>
         )}
@@ -60,7 +68,15 @@ export function RequestsStrip({
   );
 }
 
-function RequestRow({ nodeDid, request }: { nodeDid: string; request: JoinRequest }) {
+function RequestRow({
+  nodeDid,
+  nodeName,
+  request,
+}: {
+  nodeDid: string;
+  nodeName: string;
+  request: JoinRequest;
+}) {
   const sharing = useSharingActions();
   const [lease, setLease] = useState(String(DEFAULT_LEASE_SECONDS));
   const [busy, setBusy] = useState<"approve" | "deny" | null>(null);
@@ -71,9 +87,15 @@ function RequestRow({ nodeDid, request }: { nodeDid: string; request: JoinReques
     setBusy(kind);
     setError(null);
     try {
-      if (kind === "approve")
+      if (kind === "approve") {
         await sharing.approve(nodeDid, request.requestId, Number(lease));
-      else await sharing.deny(nodeDid, request.requestId);
+        sayApproved(nodeName, Number(lease), () =>
+          sharing.revoke(nodeDid, request.requestId),
+        );
+      } else {
+        await sharing.deny(nodeDid, request.requestId);
+        sayDenied();
+      }
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
