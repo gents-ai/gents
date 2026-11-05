@@ -27,6 +27,7 @@ import {
 import { AppProvider, useApp } from "./ui/app/AppContext";
 import { AppShell } from "./ui/app/AppShell";
 import { NodeNavigationGuard } from "./ui/app/NodeNavigationGuard";
+import { useOutsideLinks } from "./ui/app/useOutsideLinks";
 import { usePlatformSetup, useWindowTitle } from "./ui/app/platform";
 import { useFirstRun } from "./ui/app/useFirstRun";
 import { WindowControls } from "./ui/app/WindowControls";
@@ -139,6 +140,9 @@ function AppBody() {
     fleetNodes(state).some((node) => isLocalNode(node, homeDid)),
   );
   useNativeWindowReadiness(startup.phase === "ready" && firstRun.settled);
+  useOutsideLinks(
+    startup.phase === "ready" && firstRun.settled && firstRun.phase !== "active",
+  );
 
   const titlebar = (
     <div className="titlebar-drag-region" data-tauri-drag-region>
