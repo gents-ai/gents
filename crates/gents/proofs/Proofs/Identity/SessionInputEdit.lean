@@ -47,14 +47,15 @@ theorem working_agent_can_write_receipt_but_other_cannot :
 /-- Discovery is scoped to held active Agent identities. A notification only
 requests another current-state sweep; it does not supply an executing actor.
 The signed selected Agent is checked again when the command is processed. -/
-def discover (state : Household.State) (active : List String)
-    (document selected : String) : List String :=
-  active.filter fun actor => actor == selected &&
-    Household.allowed 5 state actor "goal_controls" document "read"
+def discover (state : Household.State) (active : List String) (document : String) : List String :=
+  active.filter fun actor => Household.allowed 5 state actor "goal_controls" document "read"
+
+def selectedForEffect (discovered : List String) (selected : String) : List String :=
+  discovered.filter (· == selected)
 
 theorem discovery_requires_the_selected_held_agent :
-    discover fixture ["runtime", "other"] "edit-doc" "agent" = [] ∧
-    discover fixture ["runtime", "agent", "other"] "edit-doc" "agent" = ["agent"] := by native_decide
+    selectedForEffect (discover fixture ["runtime", "other"] "edit-doc") "agent" = [] ∧
+    selectedForEffect (discover fixture ["runtime", "agent", "other"] "edit-doc") "agent" = ["agent"] := by native_decide
 
 def shouldSweep (notification resync tick : Bool) : Bool := notification || resync || tick
 
