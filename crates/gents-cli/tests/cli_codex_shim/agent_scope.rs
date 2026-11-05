@@ -487,6 +487,79 @@ async fn no_agent_route_with_a_public_url() -> Result<()> {
     Ok(())
 }
 
+/// `/runtime` as a page that DNS-rebound `host` onto loopback would ask for it: same-origin,
+/// so with no `Origin`.
+async fn runtime_status_for_host(
+    shim: &AgentShim,
+    host: &str,
+    bearer: Option<&str>,
+) -> Result<u16> {
+    let mut request = reqwest::Client::builder()
+        .no_proxy()
+        .build()?
+        .get(format!("http://127.0.0.1:{}/runtime", shim.shim_port))
+        .header(reqwest::header::HOST, host);
+    if let Some(bearer) = bearer {
+        request = request.bearer_auth(bearer);
+    }
+    Ok(request.send().await?.status().as_u16())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_answers_only_a_loopback_host_with_no_public_url() -> Result<()> {
+    let shim = AgentShim::start(|_| vec![], &[]).await?;
+    let port = shim.shim_port;
+
+    for host in [
+        format!("127.0.0.1:{port}"),
+        format!("localhost:{port}"),
+        format!("LOCALHOST:{port}"),
+        format!("[::1]:{port}"),
+        "127.0.0.1".to_string(),
+    ] {
+        assert_eq!(
+            runtime_status_for_host(&shim, &host, None).await?,
+            200,
+            "{host}"
+        );
+    }
+    for host in [
+        "evil.example".to_string(),
+        format!("evil.example:{port}"),
+        format!("127.0.0.1.evil.example:{port}"),
+        format!("localhost.evil.example:{port}"),
+    ] {
+        assert_eq!(
+            runtime_status_for_host(&shim, &host, None).await?,
+            403,
+            "{host:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_answers_any_host_with_a_public_url() -> Result<()> {
+    let shim = AgentShim::start(
+        |_| {
+            vec![
+                "--codex-shim-auth-token-env".to_string(),
+                "GENTS_SHIM_TEST_TOKEN".to_string(),
+                "--codex-shim-public-url".to_string(),
+                "wss://shim.example:8443/".to_string(),
+            ]
+        },
+        &[("GENTS_SHIM_TEST_TOKEN", "correct-secret")],
+    )
+    .await?;
+
+    assert_eq!(
+        runtime_status_for_host(&shim, "shim.example:8443", Some("correct-secret")).await?,
+        200
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_root_route_is_unchanged() -> Result<()> {
     let shim = AgentShim::start(|_| vec![], &[]).await?;

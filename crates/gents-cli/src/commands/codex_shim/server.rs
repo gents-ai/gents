@@ -1,6 +1,6 @@
 use super::*;
 use axum::extract::Path as RoutePath;
-use axum::http::header::ORIGIN;
+use axum::http::header::{HOST, ORIGIN};
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::OnceLock;
 
@@ -21,6 +21,7 @@ pub(crate) struct CodexShimBindArgs {
     pub(crate) poll_ms: u64,
     pub(crate) runnable: watch::Receiver<Vec<String>>,
     pub(crate) agent_routes: bool,
+    pub(crate) has_public_url: bool,
     /// Set once this runtime's Grok leader holds its socket.
     pub(crate) grok_socket: Arc<OnceLock<PathBuf>>,
 }
@@ -50,6 +51,7 @@ struct RuntimeRouteState {
     identity: RuntimeIdentity,
     shim: ShimState,
     agent_routes: bool,
+    loopback_host_only: bool,
     runnable: watch::Receiver<Vec<String>>,
     grok_socket: Arc<OnceLock<PathBuf>>,
     sidecars: Arc<Mutex<RapidHashMap<String, Arc<Mutex<CodexSidecar>>>>>,
@@ -202,6 +204,7 @@ pub(crate) async fn bind_codex_shim(
         identity,
         shim: state.clone(),
         agent_routes,
+        loopback_host_only: args.bind_addr.is_loopback() && !args.has_public_url,
         runnable: args.runnable,
         grok_socket: args.grok_socket,
         sidecars: Arc::new(Mutex::new(sidecars)),
@@ -332,7 +335,28 @@ async fn agent_ws_upgrade(
         .into_response()
 }
 
+/// After DNS rebinding a page is same-origin with this server, and its GET carries no
+/// `Origin`, so only `Host` shows it came by another name. `/runtime` names the home path,
+/// DID and agents.
+fn host_is_loopback(headers: &HeaderMap) -> bool {
+    headers
+        .get(HOST)
+        .and_then(|host| host.to_str().ok())
+        .and_then(|host| url::Url::parse(&format!("http://{host}/")).ok())
+        .is_some_and(|url| {
+            url.host()
+                .is_some_and(|host| crate::commands::codex::is_loopback_host(&host))
+        })
+}
+
 async fn runtime_identity(State(state): State<RuntimeRouteState>, headers: HeaderMap) -> Response {
+    if state.loopback_host_only && !host_is_loopback(&headers) {
+        tracing::warn!(
+            target: "gents_cli::commands::codex_shim",
+            "rejected /runtime request whose Host is not a loopback name"
+        );
+        return StatusCode::FORBIDDEN.into_response();
+    }
     if !request_is_authorized(&headers, state.shim.auth_token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }

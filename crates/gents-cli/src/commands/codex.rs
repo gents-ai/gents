@@ -398,11 +398,7 @@ fn resolve_endpoint(remote: &str) -> Result<RemoteEndpoint> {
     let port = url
         .port_or_known_default()
         .context("Codex shim WebSocket endpoint is missing a port")?;
-    let loopback = match host {
-        Host::Domain(name) => name.eq_ignore_ascii_case("localhost"),
-        Host::Ipv4(address) => address.is_loopback(),
-        Host::Ipv6(address) => address.is_loopback(),
-    };
+    let loopback = is_loopback_host(&host);
     let authority = match host {
         Host::Ipv6(address) => format!("[{address}]:{port}"),
         _ => format!("{}:{port}", url.host_str().expect("host checked above")),
@@ -412,6 +408,14 @@ fn resolve_endpoint(remote: &str) -> Result<RemoteEndpoint> {
         secure,
         loopback,
     })
+}
+
+pub(crate) fn is_loopback_host(host: &Host<&str>) -> bool {
+    match host {
+        Host::Domain(name) => name.eq_ignore_ascii_case("localhost"),
+        Host::Ipv4(address) => address.is_loopback(),
+        Host::Ipv6(address) => address.is_loopback(),
+    }
 }
 
 fn validate_remote_auth(endpoint: &RemoteEndpoint, auth_env: Option<&str>) -> Result<()> {
