@@ -33,6 +33,14 @@ function show(route: Route = { name: "sessions" }, sharing = true) {
   const api = {
     listJoinRequests: vi.fn(async () => listed),
     decideJoinRequest: vi.fn(),
+    listJoinMembers: vi.fn(async () => []),
+    readJoinHistory: vi.fn(async () => ({
+      history: [],
+      observedCount: 0,
+      limit: 50,
+      omitsSuperseded: false,
+      conflictsOmitted: false,
+    })),
   };
   const app = testApp({
     api,
