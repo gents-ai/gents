@@ -22,6 +22,7 @@ gents = { path = "../../../crates/gents" }
 gents-fs-runner = { path = "../../../crates/gents-fs-runner" }
 gents-desktop-bridge = { workspace = true }
 gents-desktop-core.workspace = true
+gents-server = { package = "gents-cli", path = "../../../crates/gents-cli", default-features = false, features = ["typescript"] }
 gents-protocol = { path = "../../../crates/gents-protocol" }
 reqwest.workspace = true
 rapidhash = { workspace = true }
@@ -51,7 +52,9 @@ gents-lean-contract.workspace = true
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 mimalloc.workspace = true
-tauri-plugin-single-instance = "2"
+# 2.5 needs tauri 2.12; move it with the tauri upgrade.
+tauri-plugin-deep-link = "~2.4.10"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

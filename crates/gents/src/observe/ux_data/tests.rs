@@ -211,6 +211,156 @@ fn board_surface(node_did: &str, surface_id: &str, enabled: bool) -> Value {
 }
 
 #[tokio::test]
+async fn watch_emits_declared_query_snapshots_for_writes_and_deletes() {
+    let fixture = Fixture::new().await;
+    let did = fixture.node.node_identity_did().unwrap().to_owned();
+    fixture
+        .write_surface(board_surface(&did, "board", true))
+        .await;
+    let request = UxDataCall {
+        ux: BOARD.into(),
+        node_did: did.clone(),
+        surface: "board".into(),
+        tool: "list_tasks".into(),
+        args: json!({}),
+    };
+    let mut watch = watch_local(fixture.home.path(), fixture.node.clone(), request.clone())
+        .await
+        .unwrap();
+    assert_eq!(watch.initial()["output"]["count"], 0);
+    fixture
+        .access
+        .write(
+            "test.ux_watch.create",
+            r#"mutation { create_BoardTask(input: {title:"first", lane:"todo"}) { _docID } }"#,
+        )
+        .await
+        .unwrap();
+    let updated = tokio::time::timeout(std::time::Duration::from_secs(5), watch.next())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated["output"]["count"], 1);
+    fixture
+        .access
+        .write(
+            "test.ux_watch.delete",
+            r#"mutation { delete_BoardTask(filter: {title:{_eq:"first"}}) { _docID } }"#,
+        )
+        .await
+        .unwrap();
+    let deleted = tokio::time::timeout(std::time::Duration::from_secs(5), watch.next())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(deleted["output"]["count"], 0);
+    let reopened = watch_local(fixture.home.path(), fixture.node.clone(), request)
+        .await
+        .unwrap();
+    assert_eq!(reopened.initial()["output"]["count"], 0);
+}
+
+#[tokio::test]
+async fn watch_refuses_foreign_nodes_undeclared_and_mutating_tools() {
+    let fixture = Fixture::new().await;
+    let did = fixture.node.node_identity_did().unwrap().to_owned();
+    fixture
+        .write_surface(board_surface(&did, "board", true))
+        .await;
+    let request = UxDataCall {
+        ux: BOARD.into(),
+        node_did: did,
+        surface: "board".into(),
+        tool: "list_tasks".into(),
+        args: json!({}),
+    };
+    let mut other = request.clone();
+    other.node_did = OTHER_NODE.into();
+    assert!(
+        watch_local(fixture.home.path(), fixture.node.clone(), other)
+            .await
+            .is_err()
+    );
+    let mut other = request.clone();
+    other.tool = "add_task".into();
+    assert!(
+        watch_local(fixture.home.path(), fixture.node.clone(), other)
+            .await
+            .is_err()
+    );
+    let mut other = request;
+    other.tool = "undeclared".into();
+    assert!(
+        watch_local(fixture.home.path(), fixture.node.clone(), other)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn watch_stops_when_the_declared_surface_is_disabled() {
+    let fixture = Fixture::new().await;
+    let did = fixture.node.node_identity_did().unwrap().to_owned();
+    fixture
+        .write_surface(board_surface(&did, "board", true))
+        .await;
+    let request = UxDataCall {
+        ux: BOARD.into(),
+        node_did: did.clone(),
+        surface: "board".into(),
+        tool: "list_tasks".into(),
+        args: json!({}),
+    };
+    let mut watch = watch_local(fixture.home.path(), fixture.node.clone(), request)
+        .await
+        .unwrap();
+    fixture
+        .write_surface(board_surface(&did, "board", false))
+        .await;
+    let error = tokio::time::timeout(std::time::Duration::from_secs(5), watch.next())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("disabled"));
+    fixture
+        .write_surface(board_surface(&did, "board", true))
+        .await;
+    assert!(watch
+        .next()
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("closed"));
+}
+
+#[tokio::test]
+async fn watch_stops_when_the_query_projection_changes() {
+    let fixture = Fixture::new().await;
+    let did = fixture.node.node_identity_did().unwrap().to_owned();
+    fixture
+        .write_surface(board_surface(&did, "board", true))
+        .await;
+    let request = UxDataCall {
+        ux: BOARD.into(),
+        node_did: did.clone(),
+        surface: "board".into(),
+        tool: "list_tasks".into(),
+        args: json!({}),
+    };
+    let mut watch = watch_local(fixture.home.path(), fixture.node.clone(), request)
+        .await
+        .unwrap();
+    let mut surface = board_surface(&did, "board", true);
+    surface["entries"]["entries"][0]["fields"] = json!(["title"]);
+    fixture.write_surface(surface).await;
+    let error = tokio::time::timeout(std::time::Duration::from_secs(5), watch.next())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("declaration changed"));
+}
+
+#[tokio::test]
 async fn a_page_creates_through_the_declared_create_tool_and_reads_it_back() {
     let fixture = Fixture::new().await;
     let created = fixture

@@ -122,6 +122,8 @@ permissions = [
   "allow-desktop-ux-plugins-list",
   "allow-desktop-ux-plugin-source",
   "allow-desktop-ux-data-surfaces",
+  "allow-desktop-ux-data-watch",
+  "allow-desktop-ux-data-unwatch",
 ]
 
 [[set]]

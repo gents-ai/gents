@@ -1581,3 +1581,215 @@ async fn authenticated_enrollment_hydrates_preexisting_session_history() {
     server.node.shutdown().await;
     client.node.shutdown().await;
 }
+
+async fn install_shared_fixture(
+    db: &crate::support::TestDb,
+    archive: &gents::pack::archive::PackArchive,
+) {
+    use gents::pack::{
+        install_prepared_document_pack, load_pack_config, prepare_document_pack_install,
+        DriftPolicy, InstalledVia, PackInferenceBindings, PackInstallOptions,
+    };
+    let owner = db.node_identity.did().to_string();
+    gents::ensure_node(&db.node, &owner).await.unwrap();
+    let config = load_pack_config(
+        archive.manifest(),
+        &PackInstallOptions {
+            node_did: owner.clone(),
+        },
+        &|path| Ok(archive.asset(path)?.to_vec()),
+        &|_| None,
+    )
+    .unwrap();
+    let access = gents::ConfigAccess::local(db.node.clone());
+    let prepared = prepare_document_pack_install(
+        &access,
+        &owner,
+        archive.manifest(),
+        &config,
+        &PackInferenceBindings::new(),
+        &[],
+        InstalledVia::Operator,
+        None,
+        Some(archive),
+        &|_| None,
+    )
+    .await
+    .unwrap();
+    install_prepared_document_pack(
+        &access,
+        &owner,
+        archive,
+        &[],
+        &prepared,
+        None,
+        false,
+        InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let packs = gents::pack::installed_packs(None, Some((&access, &owner)))
+        .await
+        .unwrap();
+    let pack = packs
+        .iter()
+        .find(|pack| pack.coordinate == "fixture/shared_fixture")
+        .expect("the node records the installed pack");
+    assert_eq!(pack.version, "1.0.0");
+    assert_eq!(pack.digest, archive.digest());
+}
+
+async fn write_fixture_move(node: &std::sync::Arc<EmbeddedNode>, id: &str, mark: &str) {
+    let id = escape_graphql_string(id);
+    let mark = escape_graphql_string(mark);
+    let mutation = format!(
+        r#"mutation {{ create_SharedFixtureMove(input: {{ move_id: "{id}", mark: "{mark}" }}) {{ _docID }} }}"#
+    );
+    gents::ConfigAccess::local(node.clone())
+        .write("test.shared_fixture_move", &mutation)
+        .await
+        .unwrap();
+}
+
+async fn wait_for_fixture_move(node: &std::sync::Arc<EmbeddedNode>, id: &str, mark: &str) {
+    let access = gents::ConfigAccess::local(node.clone());
+    let escaped = escape_graphql_string(id);
+    let query = format!(
+        r#"{{ SharedFixtureMove(filter: {{ move_id: {{ _eq: "{escaped}" }} }}) {{ move_id mark }} }}"#
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let answer = access.execute(&query).await.unwrap();
+        let rows = answer["data"]["SharedFixtureMove"]
+            .as_array()
+            .expect("move rows");
+        if rows.iter().any(|row| row["mark"].as_str() == Some(mark)) {
+            assert_eq!(rows.len(), 1, "one durable move per id");
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "move {id} was not observed: {rows:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn matching_document_packs_sync_over_explicit_app_collection_pairing() {
+    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/packs/shared_fixture");
+    let (bytes, _) = gents::pack::archive::pack_dir(&path).unwrap();
+    let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let a = test_p2p_db("shared-fixture-a").await;
+    let b = test_p2p_db("shared-fixture-b").await;
+    install_shared_fixture(&a, &archive).await;
+    install_shared_fixture(&b, &archive).await;
+
+    let did_a = a.node_identity.did().to_string();
+    let did_b = b.node_identity.did().to_string();
+    let mock_a = MockModelEndpoint::start("default").unwrap();
+    let mock_b = MockModelEndpoint::start("default").unwrap();
+    bind_default_agent_backend(&a.node, &did_a, "fixture-a-backend", mock_a.endpoint()).await;
+    bind_default_agent_backend(&b.node, &did_b, "fixture-b-backend", mock_b.endpoint()).await;
+    let options = || DocumentRuntimeOptions {
+        tool_ceiling: ToolCeiling::meta_only(),
+        ..Default::default()
+    };
+    let runtime_a =
+        Gents::from_default_agent_documents(a.node.clone(), a.node_identity.clone(), options())
+            .await
+            .unwrap();
+    let runtime_b =
+        Gents::from_default_agent_documents(b.node.clone(), b.node_identity.clone(), options())
+            .await
+            .unwrap();
+    let (stop_a, receiver_a) = tokio::sync::watch::channel(false);
+    let (stop_b, receiver_b) = tokio::sync::watch::channel(false);
+    let task_a = tokio::spawn(runtime_a.run(receiver_a));
+    let task_b = tokio::spawn(runtime_b.run(receiver_b));
+
+    let (peer_a, address_a) = wait_for_peer_identity(a.node.as_ref()).await;
+    let (peer_b, address_b) = wait_for_peer_identity(b.node.as_ref()).await;
+    let enrollment = authorize_enrollment_peer(
+        a.node.clone(),
+        NETWORK_ID,
+        NETWORK_NAME,
+        a.node_identity.clone(),
+        b.node_identity.clone(),
+        &peer_b,
+        &address_b,
+    )
+    .await;
+    authorize_enrollment_peer(
+        b.node.clone(),
+        NETWORK_ID,
+        NETWORK_NAME,
+        b.node_identity.clone(),
+        a.node_identity.clone(),
+        &peer_a,
+        &address_a,
+    )
+    .await;
+    let control_a =
+        wait_for_enrollment_route_applied(a.node.as_ref(), &peer_b, Duration::from_secs(60)).await;
+    wait_for_current_route_receipt(
+        b.node.as_ref(),
+        &enrollment.request_id,
+        &enrollment.request_digest,
+        &peer_b,
+        Duration::from_secs(60),
+    )
+    .await;
+    let control_b =
+        wait_for_enrollment_route_applied(b.node.as_ref(), &peer_a, Duration::from_secs(60)).await;
+    write_app_collection_pairing(
+        a.node.as_ref(),
+        &peer_b,
+        &did_a,
+        &address_b,
+        &["SharedFixtureMove"],
+    )
+    .await;
+    write_app_collection_pairing(
+        b.node.as_ref(),
+        &peer_a,
+        &did_b,
+        &address_a,
+        &["SharedFixtureMove"],
+    )
+    .await;
+    wait_for_app_collections_pairing_applied(
+        a.node.as_ref(),
+        &peer_b,
+        "SharedFixtureMove",
+        Duration::from_secs(45),
+    )
+    .await;
+    wait_for_app_collections_pairing_applied(
+        b.node.as_ref(),
+        &peer_a,
+        "SharedFixtureMove",
+        Duration::from_secs(45),
+    )
+    .await;
+    wait_for_subscribed_collections(a.node.as_ref(), &control_a, Duration::from_secs(30)).await;
+    wait_for_subscribed_collections(b.node.as_ref(), &control_b, Duration::from_secs(30)).await;
+
+    write_fixture_move(&a.node, "move-a", "X").await;
+    wait_for_fixture_move(&b.node, "move-a", "X").await;
+    write_fixture_move(&b.node, "move-b", "O").await;
+    wait_for_fixture_move(&a.node, "move-b", "O").await;
+    wait_for_fixture_move(&a.node, "move-a", "X").await;
+    wait_for_fixture_move(&b.node, "move-b", "O").await;
+
+    let _ = stop_a.send(true);
+    let _ = stop_b.send(true);
+    task_a.await.unwrap().unwrap();
+    task_b.await.unwrap().unwrap();
+    a.node.shutdown().await;
+    b.node.shutdown().await;
+}

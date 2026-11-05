@@ -14,6 +14,7 @@ export {
   type ClientUpdateEvent,
   type OauthProvider,
   type Unlisten,
+  type UxDataWatchEvent,
 } from "./transport.js";
 export {
   BridgeInvokeError,

@@ -508,6 +508,10 @@ export type DesktopApiAdapter = {
     request: PackPluginCallRequest,
   ) => Promise<{ output: unknown }>;
   callUxData: (request: UxDataCallRequest) => Promise<UxDataCallResult>;
+  watchUxData?: (
+    request: UxDataCallRequest,
+    listener: (event: import("../transport.js").UxDataWatchEvent) => void,
+  ) => Promise<() => void>;
   listUxDataSurfaces: (
     request: UxDataSurfacesRequest,
   ) => Promise<{ surfaces: unknown[] }>;

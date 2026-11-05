@@ -80,6 +80,16 @@ export function listenToWindow<T>(
   return getCurrentWindow().listen<T>(event, ({ payload }) => handler(payload));
 }
 
+/** Sent to the main view when the system opens the app with links; it
+    takes them with `takeOpenedLinks`. */
+export const OPEN_LINK_EVENT = "desktop://open-link";
+
+/** The `gents:` links the system has opened the app with since the last
+    take. Only the main view takes them. */
+export function takeOpenedLinks(): Promise<string[]> {
+  return invoke<string[]>("desktop_take_links");
+}
+
 export function reportSwipeScrollEdges(edges: { left: boolean; right: boolean }) {
   return invoke<void>("swipe_scroll_edges", edges);
 }

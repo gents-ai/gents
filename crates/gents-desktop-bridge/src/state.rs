@@ -30,6 +30,7 @@ pub struct DesktopAppState {
     pub policy: ResolvedBridgePolicy,
     pub managed_server: tokio::sync::Mutex<ManagedServerState>,
     pub pending_oauth_credentials: Arc<PendingOAuthCredentials>,
+    pub(crate) ux_watches: crate::ux_watch::UxWatchRegistry,
 }
 
 pub use crate::accounts::{CredentialSave, IssuedOAuthCredential, PendingOAuthCredentials};
@@ -102,12 +103,25 @@ impl DesktopBridge {
         self.selected_nodes_by_window.contains_key(label)
     }
 
-    pub(crate) fn set_window_selected_node(&mut self, label: &str, node_did: Option<String>) {
+    pub(crate) fn window_selects_node(&self, label: &str, node_did: &str) -> bool {
+        self.selected_nodes_by_window
+            .get(label)
+            .and_then(Option::as_deref)
+            == Some(node_did)
+    }
+
+    pub(crate) fn set_window_selected_node(
+        &mut self,
+        label: &str,
+        node_did: Option<String>,
+    ) -> bool {
         let Some(selected) = self.selected_nodes_by_window.get_mut(label) else {
-            return;
+            return false;
         };
+        let changed = *selected != node_did;
         *selected = node_did;
         self.apply_window_selection();
+        changed
     }
 }
 
@@ -135,6 +149,7 @@ impl DesktopAppState {
             policy,
             managed_server: tokio::sync::Mutex::new(ManagedServerState::default()),
             pending_oauth_credentials: Arc::default(),
+            ux_watches: Default::default(),
         }
     }
 
@@ -159,6 +174,7 @@ impl DesktopAppState {
         if !matches!(event, tauri::WindowEvent::Destroyed) {
             return;
         }
+        self.ux_watches.cancel_window(label);
         if label == crate::navigation::EXPLORER_WINDOW {
             *self
                 .explorer_origin

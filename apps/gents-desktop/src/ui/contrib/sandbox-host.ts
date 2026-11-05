@@ -184,7 +184,10 @@ function watchShell() {
   shellSubscribed = true;
   host.onShellChange(() => {
     const shell = snapshot(host);
-    for (const live of liveHosts) live.post({ t: "shell", shell });
+    for (const live of liveHosts) {
+      live.selectionChanged(shell);
+      live.post({ t: "shell", shell });
+    }
   });
 }
 
@@ -228,6 +231,10 @@ export class SandboxHost {
   private readonly disposersByHandle = new Map<string, () => void>();
   private readonly anchors = new Map<string, HTMLElement>();
   private readonly offEvents: Array<() => void> = [];
+  private readonly watches = new Map<
+    string,
+    { node: string; cancelled: boolean; stop?: () => void }
+  >();
   private loadedMeta: LoadedPlugin | null = null;
   private waiting: {
     loaded?: { resolve: (p: LoadedPlugin) => void; reject: (e: Error) => void };
@@ -245,6 +252,28 @@ export class SandboxHost {
 
   post(message: HostToFrame): void {
     this.transport?.post(message);
+  }
+
+  private closeWatch(id: string): void {
+    const watch = this.watches.get(id);
+    if (!watch) return;
+    this.watches.delete(id);
+    watch.cancelled = true;
+    try {
+      watch.stop?.();
+    } catch (error) {
+      console.error(
+        `[ux-plugins] ${this.options.pluginId}: data watch cleanup failed`,
+        error,
+      );
+    }
+    this.post({ t: "data-watch-closed", id });
+  }
+
+  selectionChanged(shell: ShellSnapshot): void {
+    const node = (shell.selectedDeployment as { nodeDid?: string } | null)?.nodeDid;
+    for (const [id, watch] of this.watches)
+      if (watch.node !== node) this.closeWatch(id);
   }
 
   /** build the frame and evaluate the module; the plugin's own meta */
@@ -334,6 +363,7 @@ export class SandboxHost {
   }
 
   dispose(): void {
+    for (const id of this.watches.keys()) this.closeWatch(id);
     for (const off of this.offEvents.splice(0)) off();
     for (const dispose of this.disposersByHandle.values()) {
       try {
@@ -608,6 +638,48 @@ export class SandboxHost {
           );
         case "data.surfaces":
           return reply(await ctx.data.surfaces());
+        case "data.watch": {
+          const watchId = args[0];
+          if (
+            typeof watchId !== "string" ||
+            !watchId ||
+            watchId.length > 128 ||
+            this.watches.has(watchId)
+          )
+            throw new Error("invalid data watch id");
+          const node = uxHost()?.shell.selectedDeployment()?.nodeDid;
+          if (!node) throw new Error("no node is selected");
+          const watch = {
+            node,
+            cancelled: false,
+            stop: undefined as (() => void) | undefined,
+          };
+          this.watches.set(watchId, watch);
+          try {
+            const stop = await ctx.data.watch(
+              String(args[1]),
+              String(args[2]),
+              (args[3] ?? {}) as Record<string, unknown>,
+              (value) => {
+                if (!watch.cancelled && this.watches.get(watchId) === watch) {
+                  this.post({ t: "data-watch", id: watchId, value });
+                  if (value.kind === "error") this.closeWatch(watchId);
+                }
+              },
+            );
+            if (watch.cancelled) {
+              stop();
+              throw new Error("data watch closed");
+            } else watch.stop = stop;
+          } catch (error) {
+            this.closeWatch(watchId);
+            throw error;
+          }
+          return reply(undefined);
+        }
+        case "data.unwatch":
+          this.closeWatch(String(args[0]));
+          return reply(undefined);
       }
     } catch (error) {
       refuse(error);

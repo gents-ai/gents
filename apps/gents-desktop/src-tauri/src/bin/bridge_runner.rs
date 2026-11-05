@@ -59,10 +59,10 @@ struct ReadyMessage {
 }
 
 fn main() -> Result<()> {
-    live_fixture::run_on_live_runtime(run(RunnerArgs::parse()))?
+    live_fixture::run_on_live_runtime_with_handle(|handle| run(RunnerArgs::parse(), handle))?
 }
 
-async fn run(args: RunnerArgs) -> Result<()> {
+async fn run(args: RunnerArgs, runtime: tokio::runtime::Handle) -> Result<()> {
     let fixture = if args.desktop_only {
         tokio::spawn(LiveBridgeFixture::start_desktop_only())
             .await
@@ -89,7 +89,7 @@ async fn run(args: RunnerArgs) -> Result<()> {
         .await
         .map_err(|_| anyhow!("bridge runner panicked during startup"))??
     };
-    let server = BridgeRunnerServer::start(Arc::clone(&fixture)).await?;
+    let server = BridgeRunnerServer::start(Arc::clone(&fixture), runtime).await?;
     let ready = ReadyMessage {
         kind: "ready",
         base_url: server.base_url(),

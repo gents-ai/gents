@@ -144,6 +144,87 @@ describe("ux plugin context", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("releases stopped watches without accumulating plugin disposers", async () => {
+    const disposers: Array<() => void> = [];
+    const stop = vi.fn();
+    host.shell.selectedDeployment = () => ({ nodeDid: "did:key:node" }) as never;
+    host.data = {
+      call: async () => ({ kind: "query", output: {} }),
+      surfaces: async () => [],
+      watch: async () => stop,
+    };
+    const ctx = createUxContext("board", {
+      listing: "example/pack/board",
+      onDispose: (dispose) => disposers.push(dispose),
+    });
+    for (let i = 0; i < 200; i++) {
+      const close = await ctx.data.watch("board", "list", {}, () => {});
+      close();
+      close();
+    }
+    expect(stop).toHaveBeenCalledTimes(200);
+    expect(disposers).toHaveLength(1);
+    const active = await ctx.data.watch("board", "list", {}, () => {});
+    disposers[0]();
+    active();
+    expect(stop).toHaveBeenCalledTimes(201);
+    const afterUnload = await ctx.data.watch("board", "list", {}, () => {});
+    afterUnload();
+    expect(stop).toHaveBeenCalledTimes(202);
+    expect(disposers).toHaveLength(1);
+  });
+
+  it("stops the remaining watches if one cleanup fails", async () => {
+    const disposers: Array<() => void> = [];
+    const bad = vi.fn(() => {
+      throw new Error("cleanup failed");
+    });
+    const good = vi.fn();
+    host.shell.selectedDeployment = () => ({ nodeDid: "did:key:node" }) as never;
+    host.data = {
+      call: async () => ({ kind: "query", output: {} }),
+      surfaces: async () => [],
+      watch: vi.fn().mockResolvedValueOnce(bad).mockResolvedValueOnce(good),
+    };
+    const ctx = createUxContext("board", {
+      listing: "example/pack/board",
+      onDispose: (dispose) => disposers.push(dispose),
+    });
+    await ctx.data.watch("board", "list", {}, () => {});
+    await ctx.data.watch("board", "list", {}, () => {});
+    expect(() => disposers[0]()).toThrow("cleanup failed");
+    expect(bad).toHaveBeenCalledOnce();
+    expect(good).toHaveBeenCalledOnce();
+  });
+
+  it("stops a watch whose startup completes after the context is retired", async () => {
+    let retired = false;
+    let complete: ((stop: () => void) => void) | undefined;
+    const stop = vi.fn();
+    host.shell.selectedDeployment = () => ({ nodeDid: "did:key:node" }) as never;
+    host.data = {
+      call: async () => ({ kind: "query", output: {} }),
+      surfaces: async () => [],
+      watch: () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    };
+    const disposers: Array<() => void> = [];
+    const ctx = createUxContext("board", {
+      listing: "example/pack/board",
+      onDispose: (dispose) => (retired ? dispose() : disposers.push(dispose)),
+    });
+    const pending = ctx.data.watch("board", "list", {}, () => {});
+    retired = true;
+    complete!(stop);
+    const close = await pending;
+    expect(stop).toHaveBeenCalledOnce();
+    close();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(disposers).toHaveLength(0);
+  });
+
   it("refuses a contribution into an undeclared area, by name", () => {
     const ctx = createUxContext("acme", {
       onDispose: (d) => collected.push(d),

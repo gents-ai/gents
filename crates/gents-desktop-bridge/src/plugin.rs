@@ -127,6 +127,8 @@ where
             tauri_commands::ux_plugins::desktop_plugin_call,
             tauri_commands::ux_plugins::desktop_ux_data_call,
             tauri_commands::ux_plugins::desktop_ux_data_surfaces,
+            tauri_commands::ux_plugins::desktop_ux_data_watch,
+            tauri_commands::ux_plugins::desktop_ux_data_unwatch,
             tauri_commands::packs::desktop_pack_wire,
             tauri_commands::packs::desktop_pack_wire_sources,
             tauri_commands::packs::desktop_workflows_dynamic,
