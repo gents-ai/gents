@@ -5,4 +5,16 @@ export type EvalFixtureDocument = { collection: string,
  * `$trial` values bind to the trial's DID at install; keys and other
  * strings stay literal.
  */
-document: unknown, };
+document: unknown,
+/**
+ * Agent slots granted native read access to this session.
+ */
+session_readers?: Array<string> | null,
+/**
+ * Create this session as its selected Agent instead of the evaluator.
+ */
+session_agent_owned?: boolean | null,
+/**
+ * Publish this request as its client, then expire it before trial execution.
+ */
+expired_client_request?: boolean | null, };

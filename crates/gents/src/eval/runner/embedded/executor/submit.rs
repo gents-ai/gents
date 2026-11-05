@@ -82,6 +82,10 @@ pub(super) async fn seed_and_await_fire(
     trial_id: &str,
     stage_id: &str,
 ) -> Result<StageSubmission> {
+    anyhow::ensure!(
+        !seed.expired_client_request,
+        "expired client requests are trial fixtures, not event seeds"
+    );
     let reconciled = tokio::time::timeout(
         RUNTIME_READY_TIMEOUT,
         ready.clone().wait_for(Option::is_some),

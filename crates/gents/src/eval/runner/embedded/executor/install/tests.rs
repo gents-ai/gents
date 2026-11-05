@@ -271,6 +271,7 @@ async fn subject_schemas_are_installed_before_documents_without_fixture_copies()
                 document: json!({"message": "from the fixture"}),
                 session_readers: Vec::new(),
                 session_agent_owned: false,
+                expired_client_request: false,
             }],
             ..Default::default()
         },
@@ -338,6 +339,7 @@ async fn session_fixtures_publish_only_declared_cross_agent_readers() {
             "agent_did": format!("gents:agent-slot:{slot}"), "created_at":"2025-01-01T00:00:00Z"}),
         session_readers: readers,
         session_agent_owned: slot == "partner",
+        expired_client_request: false,
     };
     let spec = TrialSpec {
         pack_digest: materialized_digest(&pack_dir),
@@ -430,5 +432,143 @@ async fn session_fixtures_publish_only_declared_cross_agent_readers() {
     let outsider = "did:key:eval-fixture-outsider";
     grant_trial_operations(&home, outsider).await.unwrap();
     assert!(visible(outsider.into()).await.is_empty());
+    home.node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn expired_request_fixtures_are_signed_published_and_expired_without_inference() {
+    let transition = crate::lean_vocab_test::lean_request_transition_cases()
+        .iter()
+        .find(|case| case.from == "pending" && case.to == "dead")
+        .expect("Lean models pending expiry");
+    assert_eq!(transition.classification, "legal");
+    assert_eq!(transition.action.as_deref(), Some("expire"));
+    let dir = tempfile::tempdir().unwrap();
+    let pack_dir = dir.path().join("pack");
+    write_slot_pack(&pack_dir, "gents:inference-slot:primary");
+    let session = FixtureDocument {
+        collection: "AgentSession".into(),
+        document: json!({"node_did":"$trial", "requester_did":"$evaluator", "session_id":"traffic-session", "agent_did":"gents:agent-slot:subject", "created_at":"2025-01-01T00:00:00Z"}),
+        session_readers: vec![],
+        session_agent_owned: false,
+        expired_client_request: false,
+    };
+    let request = |request_id: &str| FixtureDocument {
+        collection: "AgentRequest".into(),
+        document: json!({"node_did":"$trial", "requester_did":"$evaluator", "session_id":"traffic-session", "agent_did":"gents:agent-slot:subject", "request_id": request_id, "purpose":"normal", "lifecycle_state":"dead", "created_at":"2025-02-01T00:00:00Z", "valid_until":"2025-02-02T00:00:00Z"}),
+        session_readers: vec![],
+        session_agent_owned: false,
+        expired_client_request: true,
+    };
+    let spec = TrialSpec {
+        pack_digest: materialized_digest(&pack_dir),
+        pack_dir,
+        agent_slot: "subject".into(),
+        inference: frozen_binding(json!("frozen-profile")),
+        fixtures: TrialFixtures {
+            documents: vec![session, request("traffic-1"), request("traffic-2")],
+            ..Default::default()
+        },
+        ..TrialSpec::empty_for_tests("expired-fixtures")
+    };
+    let home = EmbeddedHome::create_trial_temp("expired-fixtures")
+        .await
+        .unwrap();
+    let agent = install(&spec, &home, &dir.path().join("workspace"))
+        .await
+        .unwrap();
+    let subject = ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(&agent).unwrap());
+    let rows = subject.execute(&format!("{{ AgentRequest {{ {} relationships_pending claimed_at }} InferenceCall {{ _docID }} AgentToolCall {{ _docID }} }}", crate::SIGNED_REQUEST_FIELDS)).await.unwrap();
+    let requests = rows["data"]["AgentRequest"].as_array().unwrap();
+    assert_eq!(requests.len(), 2);
+    let mut ids = Vec::new();
+    for row in requests {
+        assert_eq!(row["lifecycle_state"], transition.to);
+        assert_eq!(row["relationships_pending"], false);
+        assert!(row["claimed_at"].is_null());
+        assert_eq!(row["requester_did"], spec.evaluator_did);
+        assert_eq!(row["agent_did"], agent);
+        let native: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(row.clone()).unwrap();
+        crate::verify_request_receipt_signature(&native).unwrap();
+        ids.push(native.doc_id.unwrap());
+    }
+    assert!(rows["data"]["InferenceCall"].as_array().unwrap().is_empty());
+    assert!(rows["data"]["AgentToolCall"].as_array().unwrap().is_empty());
+    let evaluator = ConfigAccess::local_as(
+        home.node.clone(),
+        ::identity::Did::new(&spec.evaluator_did).unwrap(),
+    );
+    let owners = evaluator
+        .transact_readonly("eval.test.expired_request_owners", |txn| {
+            let ids = &ids;
+            Box::pin(async move { txn.document_owners("AgentRequest", ids).await })
+        })
+        .await
+        .unwrap();
+    assert!(owners
+        .iter()
+        .all(|owner| owner.owner.as_ref().map(::identity::Did::as_str)
+            == Some(spec.evaluator_did.as_str())));
+    let outsider = "did:key:expired-fixture-outsider";
+    grant_trial_operations(&home, outsider).await.unwrap();
+    let outsider =
+        ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(outsider).unwrap());
+    assert_eq!(
+        outsider.execute("{AgentRequest {_docID}}").await.unwrap()["data"]["AgentRequest"],
+        json!([])
+    );
+    home.node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "materializes all 5001 signed historical requests"]
+async fn discover_old_fixture_publishes_full_expired_traffic() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/configurator_evals/sessions");
+    let case: Value =
+        serde_json::from_slice(&std::fs::read(root.join("cases/discover_old.json")).unwrap())
+            .unwrap();
+    let documents: Vec<FixtureDocument> =
+        serde_json::from_value(case["fixtures"]["documents"].clone()).unwrap();
+    assert_eq!(
+        documents
+            .iter()
+            .filter(|fixture| fixture.expired_client_request)
+            .count(),
+        5001
+    );
+    let pack_dir = root.join("subject");
+    let spec = TrialSpec {
+        pack_digest: materialized_digest(&pack_dir),
+        pack_dir,
+        agent_slot: "engineer".into(),
+        inference: frozen_binding(json!("frozen-profile")),
+        fixtures: TrialFixtures {
+            documents,
+            ..Default::default()
+        },
+        ..TrialSpec::empty_for_tests("discover-old-full")
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let home = EmbeddedHome::create_trial_temp("discover-old-full")
+        .await
+        .unwrap();
+    let agent = install(&spec, &home, &dir.path().join("workspace"))
+        .await
+        .unwrap();
+    let subject = ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(&agent).unwrap());
+    let rows = subject.execute("{ AgentRequest { request_id lifecycle_state relationships_pending claimed_at } InferenceCall { _docID } AgentToolCall { _docID } }").await.unwrap();
+    let requests = rows["data"]["AgentRequest"].as_array().unwrap();
+    assert_eq!(requests.len(), 5001);
+    let mut ids = std::collections::BTreeSet::new();
+    for row in requests {
+        assert!(ids.insert(row["request_id"].as_str().unwrap()));
+        assert_eq!(row["lifecycle_state"], "dead");
+        assert_eq!(row["relationships_pending"], false);
+        assert!(row["claimed_at"].is_null());
+    }
+    assert!(rows["data"]["InferenceCall"].as_array().unwrap().is_empty());
+    assert!(rows["data"]["AgentToolCall"].as_array().unwrap().is_empty());
     home.node.shutdown().await.unwrap();
 }

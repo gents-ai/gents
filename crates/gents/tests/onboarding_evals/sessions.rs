@@ -21,7 +21,7 @@ fn session_investigation_eval_pack_validates_all_splits_and_shipped_checks() {
     .unwrap();
     let definition = &config.eval_definitions[0];
     definition.validate().unwrap();
-    assert_eq!(definition.comparability_version, 7);
+    assert_eq!(definition.comparability_version, 8);
     let registry = CheckRegistry::builtin();
     for split in [EvalSplit::Train, EvalSplit::Validation, EvalSplit::HeldOut] {
         assert!(definition.cases.iter().any(|case| case.split == split));
@@ -43,16 +43,18 @@ fn session_investigation_eval_pack_validates_all_splits_and_shipped_checks() {
         .iter()
         .find(|case| case.case_id == "discover-old")
         .unwrap();
-    assert!(
-        old.fixtures
-            .as_ref()
-            .unwrap()
-            .documents
-            .iter()
-            .filter(|doc| doc.collection == "AgentRequest")
-            .count()
-            > 5000
-    );
+    let traffic: Vec<_> = old
+        .fixtures
+        .as_ref()
+        .unwrap()
+        .documents
+        .iter()
+        .filter(|doc| doc.collection == "AgentRequest")
+        .collect();
+    assert_eq!(traffic.len(), 5001);
+    assert!(traffic.iter().all(|doc| doc.expired_client_request
+        && doc.document["lifecycle_state"] == "dead"
+        && doc.document["valid_until"] == "2025-02-02T00:00:00Z"));
 }
 
 #[test]

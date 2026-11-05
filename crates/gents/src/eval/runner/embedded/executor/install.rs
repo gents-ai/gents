@@ -1,3 +1,5 @@
+mod expired_request;
+
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
@@ -368,6 +370,16 @@ async fn install_fixtures(
     }
     for fixture in &fixtures.documents {
         let mut document = bind_fixture_owner(&fixture.document, trial_did);
+        if fixture.expired_client_request {
+            anyhow::ensure!(
+                fixture.collection == "AgentRequest"
+                    && fixture.session_readers.is_empty()
+                    && !fixture.session_agent_owned,
+                "expired client request publication requires an AgentRequest fixture"
+            );
+            expired_request::install(access, &document, trial_did).await?;
+            continue;
+        }
         if fixture.collection == "AgentSession" {
             anyhow::ensure!(
                 document["node_did"] == trial_did,

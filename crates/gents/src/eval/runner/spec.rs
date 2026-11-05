@@ -54,6 +54,7 @@ pub(super) fn stage_specs(case: &EvalCase, fallback: &[Capture]) -> Vec<StageSpe
                 document: seed.document.clone(),
                 session_readers: seed.session_readers.clone(),
                 session_agent_owned: seed.session_agent_owned,
+                expired_client_request: seed.expired_client_request,
             }),
             deadline_secs: stage.deadline_secs,
             settle: stage.settle,
@@ -83,6 +84,7 @@ pub(super) fn fixtures(
                 document: document.document.clone(),
                 session_readers: document.session_readers.clone(),
                 session_agent_owned: document.session_agent_owned,
+                expired_client_request: document.expired_client_request,
             }));
         for asset in &declared.assets {
             fixtures.files.extend(asset_files(pack_dir, asset)?);

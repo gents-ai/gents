@@ -17,6 +17,7 @@ async fn a_seed_wait_resolves_as_soon_as_reconciliation_reports_an_error() {
         document: json!({"label": "not submitted"}),
         session_readers: Vec::new(),
         session_agent_owned: false,
+        expired_client_request: false,
     };
     let error = {
         let waiting = seed_and_await_fire(
@@ -61,7 +62,12 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
     )
     .await
     .unwrap();
-    assert_eq!(fired_request(&home.node, &doc_id, home.did()).await.unwrap(), None);
+    assert_eq!(
+        fired_request(&home.node, &doc_id, home.did())
+            .await
+            .unwrap(),
+        None
+    );
 
     create_document(
         &access,

@@ -104,6 +104,8 @@ pub struct FixtureDocument {
     pub session_readers: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub session_agent_owned: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub expired_client_request: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
