@@ -21,6 +21,7 @@ import { RegistryPack } from "./RegistryPack";
 import { errorText } from "../../../lib/errorText";
 import { href } from "@/lib/router";
 import { packContents } from "./packContents";
+import { refreshRuntimePackUxPlugins } from "@/contrib/runtime-door";
 
 /** An install or update that would replace documents someone edited stops and
  * names them; the person chooses keep or overwrite. */
@@ -119,6 +120,14 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
     /* only a change of query searches again; search reads the rest fresh */
   }, [query]);
 
+  async function refreshPages(pack: string) {
+    try {
+      await refreshRuntimePackUxPlugins(pack);
+    } catch (error) {
+      toast.error(`Couldn't refresh pack pages: ${errorText(error)}`);
+    }
+  }
+
   async function install(
     pack: string,
     edited: PackEditedChoice = "refuse",
@@ -128,6 +137,7 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
     try {
       await actions.installPack({ package: pack, edited, grantAuthority });
       toast.success(`Installed ${pack}`);
+      await refreshPages(pack);
       await refresh();
     } catch (error) {
       const text = errorText(error);
@@ -154,6 +164,7 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
     try {
       await actions.updatePack(pack, edited);
       toast.success(`Updated ${pack}`);
+      await refreshPages(pack);
       await refresh();
     } catch (error) {
       if (editedChoice(error)) {
@@ -174,6 +185,7 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
     try {
       await actions.removePack(pack);
       toast.success(`Removed ${pack}`);
+      await refreshPages(pack);
       await refresh();
     } catch (error) {
       toast.error(errorText(error));

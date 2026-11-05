@@ -198,7 +198,7 @@ async function loadListing(entry: UxPluginListing): Promise<void> {
 
 /* reconcile disk with the inventory; `reloadKnown` re-reads every entry,
    a plain scan re-reads only what is new or broken */
-async function reconcile(reloadKnown: boolean): Promise<void> {
+async function reconcile(reloadKnown: boolean, reloadPack?: string): Promise<void> {
   let listings: UxPluginListing[];
   try {
     listings = await listRuntimeUxPlugins();
@@ -221,7 +221,12 @@ async function reconcile(reloadKnown: boolean): Promise<void> {
     known.delete(id);
   }
   for (const entry of listings.sort((a, b) => a.id.localeCompare(b.id))) {
-    if (known.get(entry.id) && !reloadKnown) continue;
+    if (
+      known.get(entry.id) &&
+      !reloadKnown &&
+      (reloadPack === undefined || entry.pack !== reloadPack)
+    )
+      continue;
     if (!enabledByListing(entry)) {
       /* off: the row says so from the manifest; nothing of it runs */
       const previous = known.get(entry.id) ?? null;
@@ -234,14 +239,22 @@ async function reconcile(reloadKnown: boolean): Promise<void> {
 }
 
 /** scan the doors; a scan asked for while one runs follows it, never drops */
-export function scanRuntimeUxPlugins(reloadKnown = false): Promise<void> {
-  const run = () => reconcile(reloadKnown);
+function queueScan(reloadKnown: boolean, reloadPack?: string): Promise<void> {
+  const run = () => reconcile(reloadKnown, reloadPack);
   const scan: Promise<void> = (inFlight ?? Promise.resolve()).then(run, run);
   inFlight = scan;
   void scan.finally(() => {
     if (inFlight === scan) inFlight = null;
   });
   return scan;
+}
+
+export function scanRuntimeUxPlugins(reloadKnown = false): Promise<void> {
+  return queueScan(reloadKnown);
+}
+
+export function refreshRuntimePackUxPlugins(pack: string): Promise<void> {
+  return queueScan(false, pack);
 }
 
 /** the panel's Reload button */
