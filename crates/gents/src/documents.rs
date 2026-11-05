@@ -36,7 +36,7 @@ pub use principal::{load_node, Node};
 
 pub use callback::{
     BuiltInCallback, Callback, CallbackBinding, CallbackHandler, CallbackInvocationOrigin,
-    CallbackModule, PortCardinality, PortSpec, WorkspaceAgentSelection,
+    CallbackModule, PortCardinality, PortSpec, WorkspaceAgentSelection, WorkspaceReaderSelection,
 };
 pub use compaction::CompactionConfig;
 pub use context::AgentContext;

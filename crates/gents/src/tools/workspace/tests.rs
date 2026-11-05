@@ -112,6 +112,7 @@ impl Fixture {
             writer_agent_doc_id: None,
             integrator_agent_did: None,
             integrator_agent_doc_id: None,
+            readers: Vec::new(),
             path_capability: WorkspacePathCapability::exact_paths(
                 [
                     "README.md",
@@ -183,6 +184,7 @@ fn builtin_emitter_omits_absolute_destination() {
         writer_agent_doc_id: None,
         integrator_agent_did: None,
         integrator_agent_doc_id: None,
+        readers: Vec::new(),
         path_capability: WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
         workspace_id: "ws-1".into(),
         work_unit_id: "unit-1".into(),

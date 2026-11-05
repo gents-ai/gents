@@ -45,6 +45,16 @@ pub(crate) async fn flush_workspace_docs(
                     let rows = response["data"]["Agent"].as_array().context("workspace Agent query omitted rows")?;
                     anyhow::ensure!(matches!(rows.as_slice(), [row] if row["_docID"] == doc && row["node_did"] == workspace.owner_node_did && row["agent_did"] == did), "frozen workspace Agent is unavailable or changed");
                 }
+                for reader in &action.readers {
+                    let doc = reader.agent_doc_id.as_deref().context("workspace reader physical Agent missing")?;
+                    let query = format!(r#"{{ Agent(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{ _docID node_did agent_did enabled }} }}"#, escape_graphql_string(doc));
+                    let response = txn.execute(&query).await?;
+                    let rows = response["data"]["Agent"].as_array().context("workspace reader Agent query omitted rows")?;
+                    anyhow::ensure!(matches!(rows.as_slice(), [row] if row["_docID"] == doc
+                        && row["node_did"] == workspace.owner_node_did
+                        && row["agent_did"] == reader.agent_did && row["enabled"] != false),
+                        "frozen workspace reader Agent is unavailable or changed");
+                }
                 Some(workspace_agent_parent_in_txn(txn, &workspace.owner_node_did, agent_did).await?)
             } else { None };
             let response = txn.execute(&isolated_workspace_upsert_mutation(workspace)).await?;
@@ -53,6 +63,9 @@ pub(crate) async fn flush_workspace_docs(
                 txn.add_resource_relationship("IsolatedWorkspace", &id, "parent", "agents", &parent).await?;
                 txn.add_actor_relationship("IsolatedWorkspace", &id, "writer", &workspace.writer_principal.parse()?).await?;
                 txn.add_actor_relationship("IsolatedWorkspace", &id, "integrator", &workspace.integrator_principal.parse()?).await?;
+                for reader in &action.readers {
+                    txn.add_actor_relationship("IsolatedWorkspace", &id, "reader", &reader.agent_did.parse()?).await?;
+                }
             } else {
                 anyhow::ensure!(existing.as_deref() == Some(id.as_str()), "workspace upsert changed physical identity");
             }

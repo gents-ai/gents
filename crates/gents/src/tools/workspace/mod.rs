@@ -20,6 +20,7 @@ pub use action_plan::{
     emit_cleanup_workspace_plan, emit_create_workspace_plan, emit_freeze_workspace_base_plan,
     emit_integrate_workspace_plan, emit_seal_workspace_plan, ActionPlan, CleanupWorkspaceAction,
     CreateWorkspaceAction, CreationPolicy, FreezeWorkspaceBaseAction, HostAction, IntegrateMode,
+    WorkspaceReaderBinding,
     IntegrateWorkspaceAction, SealWorkspaceAction, WorkspaceAdapterKind, CAP_CLEANUP_WORKSPACE,
     CAP_CLONE_ARTIFACTS, CAP_CREATE_WORKSPACE, CAP_INTEGRATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE,
     CAP_SEAL_WORKSPACE, DEFAULT_MAKE_WORKTREE_ARTIFACTS,

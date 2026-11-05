@@ -139,11 +139,25 @@ pub fn plan_from_callback(
                 || action.writer_agent_doc_id.is_some()
                 || action.integrator_agent_did.is_some()
                 || action.integrator_agent_doc_id.is_some()
+                || !action.readers.is_empty()
             {
                 return Err("workspace planner cannot select its own Agent authorities".into());
             }
             action.writer_agent_did = Some(selected.writer_agent_did.clone());
             action.integrator_agent_did = Some(selected.integrator_agent_did.clone());
+            for reader in &selected.readers {
+                let did = &reader.agent_did;
+                if did.is_empty() || did.trim() != did || did == &callback.node_did {
+                    return Err("workspace reader must name an explicit Agent DID".into());
+                }
+                identity::Did::new(did).map_err(|error| error.to_string())?;
+                action
+                    .readers
+                    .push(crate::tools::workspace::WorkspaceReaderBinding {
+                        agent_did: did.clone(),
+                        agent_doc_id: None,
+                    });
+            }
         }
     }
     Ok(plan)
@@ -191,6 +205,31 @@ pub(super) async fn bind_workspace_agent_documents(
                     .as_str()
                     .filter(|id| !id.is_empty())
                     .context("workspace Agent lacks a physical document ID")?
+                    .to_owned(),
+            );
+        }
+        for reader in &mut action.readers {
+            let did = &reader.agent_did;
+            let query = format!(
+                r#"{{ Agent(filter: {{node_did: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}}}, limit: 2) {{ _docID node_did agent_did enabled }} }}"#,
+                crate::store::graphql::escape_graphql_string(node_did),
+                crate::store::graphql::escape_graphql_string(did)
+            );
+            let response = access.execute(&query).await?;
+            let rows = response
+                .pointer("/data/Agent")
+                .and_then(Value::as_array)
+                .context("workspace reader Agent lookup omitted rows")?;
+            anyhow::ensure!(
+                matches!(rows.as_slice(), [row] if row["node_did"] == node_did
+                && row["agent_did"] == *did && row["enabled"] != false),
+                "configured workspace reader Agent is unavailable or ambiguous"
+            );
+            reader.agent_doc_id = Some(
+                rows[0]["_docID"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .context("workspace reader Agent lacks a physical document ID")?
                     .to_owned(),
             );
         }
@@ -255,6 +294,7 @@ fn emit_create_workspace_from_source(source: &Value) -> Result<ActionPlan, Strin
         writer_agent_doc_id: None,
         integrator_agent_did: None,
         integrator_agent_doc_id: None,
+        readers: Vec::new(),
         workspace_id,
         path_capability,
         work_unit_id,

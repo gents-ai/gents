@@ -603,10 +603,12 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
     let creator_key = crate::store::identity::provision_agent_identity(&user)?;
     let writer_key = crate::store::identity::provision_agent_identity(&user)?;
     let integrator_key = crate::store::identity::provision_agent_identity(&user)?;
+    let reader_key = crate::store::identity::provision_agent_identity(&user)?;
     let other_key = crate::store::identity::provision_agent_identity(&user)?;
     let creator = crate::store::identity::resolve_agent_identity(&user, &creator_key)?;
     let writer = crate::store::identity::resolve_agent_identity(&user, &writer_key)?;
     let integrator = crate::store::identity::resolve_agent_identity(&user, &integrator_key)?;
+    let reader = crate::store::identity::resolve_agent_identity(&user, &reader_key)?;
     let other = crate::store::identity::resolve_agent_identity(&user, &other_key)?;
     let node = Arc::new(
         defra_node::Node::builder()
@@ -654,7 +656,13 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         node.add_collection_as(&ctx, &schema).await?;
     }
     let admin = crate::ConfigAccess::local_as(node.clone(), user.did().parse()?);
-    for actor in [creator.did(), writer.did(), integrator.did(), other.did()] {
+    for actor in [
+        creator.did(),
+        writer.did(),
+        integrator.did(),
+        reader.did(),
+        other.did(),
+    ] {
         for permission in [
             crate::store::config_client::NodePermission::DocumentRead,
             crate::store::config_client::NodePermission::DocumentUpdate,
@@ -669,7 +677,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         }
     }
     let mut agent_docs = Vec::new();
-    for binding in [&creator_key, &writer_key, &integrator_key] {
+    for binding in [&creator_key, &writer_key, &integrator_key, &reader_key] {
         let response = admin.write("test.workspace.agent", &format!(r#"mutation {{create_Agent(input: {{node_did: "{}", agent_did: "{}", creation_nonce: "{}", enabled: true}}) {{_docID}}}}"#, user.did(), binding.agent_did, binding.creation_nonce)).await?;
         let doc = crate::store::graphql::created_doc_id(&response, "Agent")?;
         admin
@@ -701,6 +709,10 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         writer_agent_doc_id: Some(agent_docs[1].clone()),
         integrator_agent_did: Some(integrator.did().into()),
         integrator_agent_doc_id: Some(agent_docs[2].clone()),
+        readers: vec![WorkspaceReaderBinding {
+            agent_did: reader.did().into(),
+            agent_doc_id: Some(agent_docs[3].clone()),
+        }],
     };
     let fx = tokio::task::spawn_blocking(Fixture::new).await?;
     let mut invalid_action = action.clone();
@@ -874,6 +886,42 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             &writer.did().parse()?,
         )
         .await?;
+    creator_access
+        .delete_actor_relationship(
+            "IsolatedWorkspace",
+            &workspace_doc,
+            "reader",
+            &reader.did().parse()?,
+        )
+        .await?;
+    crate::triggers::callback::flush_workspace_docs(&creator_access, &docs, creator.did(), &action)
+        .await?;
+    let reader_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        reader.did().parse()?,
+        reader.as_ref(),
+    )?;
+    let visible = !reader_access
+        .execute("{ IsolatedWorkspace {_docID} }")
+        .await?["data"]["IsolatedWorkspace"]
+        .as_array()
+        .unwrap()
+        .is_empty();
+    assert_eq!(
+        visible,
+        crate::lean_vocab_test::lean_contract_snapshot().workspace_publication_cases
+            ["revoked_reader_restored"]
+            .as_bool()
+            .unwrap()
+    );
+    creator_access
+        .add_actor_relationship(
+            "IsolatedWorkspace",
+            &workspace_doc,
+            "reader",
+            &reader.did().parse()?,
+        )
+        .await?;
     overlapping_native_workspace_fences_conflict(
         &node,
         writer.as_ref(),
@@ -925,6 +973,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             "creator" => creator.did(),
             "writer" => writer.did(),
             "integrator" => integrator.did(),
+            "reader" => reader.did(),
             "other" => other.did(),
             name => panic!("unknown actor {name}"),
         };
@@ -1106,6 +1155,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             "creator" => creator.did(),
             "writer" => writer.did(),
             "integrator" => integrator.did(),
+            "reader" => reader.did(),
             "other" => other.did(),
             name => panic!("unknown actor {name}"),
         };

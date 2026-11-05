@@ -609,6 +609,7 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
             writer_agent_doc_id: None,
             integrator_agent_did: None,
             integrator_agent_doc_id: None,
+            readers: Vec::new(),
             path_capability: WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
             workspace_id: "artifact-workspace".into(),
             work_unit_id: "artifact-unit".into(),

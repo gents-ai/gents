@@ -1,4 +1,5 @@
 mod event_grants;
+mod workspace_selection;
 pub(super) mod plan;
 pub(super) mod projection;
 pub(super) mod read;
@@ -131,6 +132,7 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
 ) -> Result<DesiredStateApplyCounts> {
     ensure_expectations_hold(txn, plan).await?;
     let event_grants = event_grants::capture(txn, plan).await?;
+    let workspace_selection = workspace_selection::capture(txn, plan).await?;
     let mut introspected = IntrospectedFields::new();
     prefetch_declared_fields(txn, plan, &mut introspected).await?;
     let document_identities = plan
@@ -425,6 +427,7 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
         }
     }
     event_grants::grant_changes(txn, event_grants).await?;
+    workspace_selection::apply(txn, workspace_selection).await?;
     for document in plan.documents() {
         let (owner, id) = document_identity(document.collection, &document.add)?;
         match document.collection {

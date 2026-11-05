@@ -26,6 +26,7 @@ pub struct WorkspaceProvisioningSelection {
     pub creator_agent_did: String,
     pub writer_agent_did: String,
     pub integrator_agent_did: String,
+    pub reader_agent_dids: Vec<String>,
 }
 
 fn repository_id(path: &Path, node_did: &str) -> String {
@@ -41,7 +42,7 @@ async fn publish_repository_and_resolve_agents(
     operator: &ConfigAccess,
     repository: &RepositoryPlacementRef,
     selected: &WorkspaceProvisioningSelection,
-) -> Result<(String, String)> {
+) -> Result<(String, String, Vec<super::WorkspaceReaderBinding>)> {
     let host_path = repository
         .host_path
         .to_str()
@@ -62,11 +63,15 @@ async fn publish_repository_and_resolve_agents(
                     "repository publication requires the authenticated user"
                 );
                 let mut targets = Vec::new();
-                for did in [
+                let dids = [
                     &selected.creator_agent_did,
                     &selected.writer_agent_did,
                     &selected.integrator_agent_did,
-                ] {
+                ]
+                .into_iter()
+                .chain(selected.reader_agent_dids.iter())
+                .collect::<Vec<_>>();
+                for &did in &dids {
                     anyhow::ensure!(
                         !did.is_empty() && did != &selected.node_did,
                         "workspace role must select an Agent DID"
@@ -105,11 +110,20 @@ async fn publish_repository_and_resolve_agents(
                 .await?
                 .context("published repository unavailable")?;
                 if previous.is_none() {
-                    for did in BTreeSet::from([
-                        &selected.creator_agent_did,
-                        &selected.writer_agent_did,
-                        &selected.integrator_agent_did,
-                    ]) {
+                    for target in targets.iter().skip(1).collect::<BTreeSet<_>>() {
+                        if target != &targets[0] {
+                            txn.add_entity_set_relationship(
+                                "Agent",
+                                target,
+                                "workspace_selected_by",
+                                "agents",
+                                &targets[0],
+                                "executor",
+                            )
+                            .await?;
+                        }
+                    }
+                    for did in dids.iter().copied().collect::<BTreeSet<_>>() {
                         txn.add_actor_relationship(
                             "RepositoryPlacement",
                             &doc,
@@ -126,7 +140,16 @@ async fn publish_repository_and_resolve_agents(
                         "repository physical identity changed"
                     );
                 }
-                Ok::<_, anyhow::Error>((targets[1].clone(), targets[2].clone()))
+                let readers = selected
+                    .reader_agent_dids
+                    .iter()
+                    .zip(targets.iter().skip(3))
+                    .map(|(did, doc)| super::WorkspaceReaderBinding {
+                        agent_did: did.clone(),
+                        agent_doc_id: Some(doc.clone()),
+                    })
+                    .collect();
+                Ok::<_, anyhow::Error>((targets[1].clone(), targets[2].clone(), readers))
             })
         })
         .await
@@ -169,7 +192,7 @@ pub async fn provision_read_only_workspace(
         host_path: repository_path.clone(),
         enabled: true,
     };
-    let (writer_doc, integrator_doc) =
+    let (writer_doc, integrator_doc, readers) =
         publish_repository_and_resolve_agents(operator, &repository, selected).await?;
     let visible =
         super::runtime::load_repository_with_access(agent, &repository_id, &selected.node_did)
@@ -184,6 +207,7 @@ pub async fn provision_read_only_workspace(
         writer_agent_doc_id: Some(writer_doc),
         integrator_agent_did: Some(selected.integrator_agent_did.clone()),
         integrator_agent_doc_id: Some(integrator_doc),
+        readers,
         path_capability: super::WorkspacePathCapability::exact_paths(Vec::new())?,
         workspace_id: workspace_id.clone(),
         work_unit_id: workspace_id.clone(),

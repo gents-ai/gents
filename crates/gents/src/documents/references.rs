@@ -373,6 +373,13 @@ impl ConfigReferences {
                         &selection.integrator_agent_did,
                         "handler.workspace_agents.integrator_agent_did",
                     );
+                    for reader in &selection.readers {
+                        push(
+                            Collection::Agent,
+                            &reader.agent_did,
+                            "handler.workspace_agents.readers.agent_did",
+                        );
+                    }
                 }
             }
             Collection::CallbackBinding => {

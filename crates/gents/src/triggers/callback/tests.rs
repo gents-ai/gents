@@ -47,6 +47,7 @@ fn test_workspace_agents() -> crate::documents::WorkspaceAgentSelection {
     crate::documents::WorkspaceAgentSelection {
         writer_agent_did: crate::triggers::callback::test_agent_did(),
         integrator_agent_did: crate::triggers::callback::test_agent_did(),
+        readers: Vec::new(),
     }
 }
 
@@ -79,6 +80,9 @@ fn workspace_agent_selection_is_configured_and_frozen() {
                 crate::documents::WorkspaceAgentSelection {
                     writer_agent_did: writer.into(),
                     integrator_agent_did: integrator.into(),
+                    readers: vec![crate::documents::WorkspaceReaderSelection {
+                        agent_did: integrator.into(),
+                    }],
                 }
             }),
         };
@@ -95,6 +99,9 @@ fn workspace_agent_selection_is_configured_and_frozen() {
                 Some(expected_integrator)
             );
             assert!(action.writer_agent_doc_id.is_none());
+            assert_eq!(action.readers.len(), 1);
+            assert_eq!(action.readers[0].agent_did, expected_integrator);
+            assert!(action.readers[0].agent_doc_id.is_none());
             let mut invocation = CallbackInvocationDoc {
                 invocation_id: "invocation".into(),
                 agent_did: writer.did().into(),
@@ -188,6 +195,9 @@ async fn workspace_agent_selection_binds_visible_physical_targets() -> anyhow::R
         workspace_agents: Some(crate::documents::WorkspaceAgentSelection {
             writer_agent_did: writer_binding.agent_did.clone(),
             integrator_agent_did: integrator_binding.agent_did.clone(),
+            readers: vec![crate::documents::WorkspaceReaderSelection {
+                agent_did: integrator_binding.agent_did.clone(),
+            }],
         }),
     };
     let source = json!({"work_unit_id":"unit", "repository_id":"repo", "base_sha":"base", "branch":"topic", "owned_files":["src/a.rs"]});
@@ -210,6 +220,10 @@ async fn workspace_agent_selection_binds_visible_physical_targets() -> anyhow::R
     );
     assert_eq!(
         action.integrator_agent_doc_id.as_deref(),
+        Some(docs[1].as_str())
+    );
+    assert_eq!(
+        action.readers[0].agent_doc_id.as_deref(),
         Some(docs[1].as_str())
     );
     node.shutdown().await?;
@@ -769,6 +783,7 @@ fn callback_result_only_after_workspace_docs_are_durable() {
         writer_agent_doc_id: None,
         integrator_agent_did: None,
         integrator_agent_doc_id: None,
+        readers: Vec::new(),
         path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(Vec::new())
             .unwrap(),
         workspace_id: "ws-result".into(),

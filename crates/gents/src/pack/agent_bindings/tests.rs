@@ -341,3 +341,50 @@ async fn dependency_slot_is_provisioned_once_and_owned_by_its_installation() {
     );
     node.shutdown().await.expect("node shutdown");
 }
+
+#[test]
+fn workspace_callback_agent_slots_bind_writer_integrator_and_readers() {
+    let bindings = PackAgentBindings::from([
+        (
+            "writer".into(),
+            AgentIdentityBinding {
+                agent_did: "did:key:writer".into(),
+                creation_nonce: "writer-nonce".into(),
+            },
+        ),
+        (
+            "integrator".into(),
+            AgentIdentityBinding {
+                agent_did: "did:key:integrator".into(),
+                creation_nonce: "integrator-nonce".into(),
+            },
+        ),
+        (
+            "reviewer".into(),
+            AgentIdentityBinding {
+                agent_did: "did:key:reviewer".into(),
+                creation_nonce: "reviewer-nonce".into(),
+            },
+        ),
+    ]);
+    let mut callback = json!({"workspace_agents":{
+        "writer_agent_did":"gents:agent-slot:writer",
+        "integrator_agent_did":"gents:agent-slot:integrator",
+        "readers":[{"agent_did":"gents:agent-slot:reviewer"}]
+    }});
+    rewrite_references(&mut callback, &bindings).unwrap();
+    assert_eq!(
+        callback["workspace_agents"]["writer_agent_did"],
+        bindings["writer"].agent_did
+    );
+    assert_eq!(
+        callback["workspace_agents"]["integrator_agent_did"],
+        bindings["integrator"].agent_did
+    );
+    assert_eq!(
+        callback["workspace_agents"]["readers"][0]["agent_did"],
+        bindings["reviewer"].agent_did
+    );
+    let mut invalid = json!({"unknown":"gents:agent-slot:writer"});
+    assert!(rewrite_references(&mut invalid, &bindings).is_err());
+}

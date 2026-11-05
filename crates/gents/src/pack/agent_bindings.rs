@@ -139,7 +139,10 @@ pub(crate) fn rewrite_references(value: &mut Value, bindings: &PackAgentBindings
     match value {
         Value::Object(object) => {
             for (field, value) in object {
-                if matches!(field.as_str(), "agent_did" | "default_agent_did") {
+                if matches!(
+                    field.as_str(),
+                    "agent_did" | "default_agent_did" | "writer_agent_did" | "integrator_agent_did"
+                ) {
                     if let Some(slot) = value
                         .as_str()
                         .and_then(|v| v.strip_prefix(AGENT_SLOT_REFERENCE_PREFIX))
@@ -517,7 +520,15 @@ fn validate_slot_references(
         Value::String(value) => {
             if let Some(slot) = value.strip_prefix(AGENT_SLOT_REFERENCE_PREFIX) {
                 anyhow::ensure!(
-                    matches!(field, Some("agent_did" | "default_agent_did")),
+                    matches!(
+                        field,
+                        Some(
+                            "agent_did"
+                                | "default_agent_did"
+                                | "writer_agent_did"
+                                | "integrator_agent_did"
+                        )
+                    ),
                     "agent slot references are only valid in agent DID fields"
                 );
                 if let Some((dependency, target)) = slot.split_once('#') {

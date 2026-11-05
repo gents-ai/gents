@@ -26,9 +26,19 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
+    let writer_binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
+    let reader_binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
     let agent = crate::store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
+    let writer = crate::store::identity::resolve_agent_identity(&runtime, &writer_binding).unwrap();
+    let reader = crate::store::identity::resolve_agent_identity(&runtime, &reader_binding).unwrap();
     let admin = crate::ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
-    for actor in [user.did(), agent.did(), outsider.did()] {
+    for actor in [
+        user.did(),
+        agent.did(),
+        writer.did(),
+        reader.did(),
+        outsider.did(),
+    ] {
         for permission in [
             crate::store::config_client::NodePermission::DocumentRead,
             crate::store::config_client::NodePermission::DocumentUpdate,
@@ -63,8 +73,29 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         let agent_doc = crate::store::graphql::created_doc_id(&agent_result, "Agent")?;
         Ok::<_, anyhow::Error>((node_doc, agent_doc))
     })).await.unwrap();
+    for target in [&writer_binding, &reader_binding] {
+        operator.transact_write("test.quickstart.target_agent", |txn| Box::pin(async {
+            let response = txn.execute_client_signed_create(
+                "mutation($input: AgentMutationInputArg!) { create_Agent(input:$input) {_docID} }",
+                &serde_json::json!({"input":{"node_did":runtime.did(), "agent_did":target.agent_did,
+                    "creation_nonce":target.creation_nonce, "enabled":true}}), gents_protocol::schemas::AGENT).await?;
+            let doc = crate::store::graphql::created_doc_id(&response, "Agent")?;
+            txn.add_resource_relationship("Agent", &doc, "parent", "nodes", &node_doc).await?;
+            txn.add_actor_relationship("Agent", &doc, "executor", &target.agent_did.parse()?).await?;
+            Ok::<_, anyhow::Error>(())
+        })).await.unwrap();
+    }
     operator
         .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
+        .await
+        .unwrap();
+    operator
+        .add_actor_relationship(
+            "Agent",
+            &agent_doc,
+            "executor",
+            &agent.did().parse().unwrap(),
+        )
         .await
         .unwrap();
     operator
@@ -81,8 +112,9 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         workspace_id: uuid::Uuid::new_v4().to_string(),
         node_did: runtime.did().into(),
         creator_agent_did: agent.did().into(),
-        writer_agent_did: agent.did().into(),
-        integrator_agent_did: agent.did().into(),
+        writer_agent_did: writer.did().into(),
+        integrator_agent_did: writer.did().into(),
+        reader_agent_dids: vec![reader.did().into()],
     };
     let before_head = git(&fx.repo, &["rev-parse", "HEAD"]);
     let before_index = git(&fx.repo, &["write-tree"]);
@@ -94,6 +126,29 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         provision_read_only_workspace(&operator, &access, &fx.repo, &fx.base_sha, &selection)
             .await
             .unwrap();
+    let target_query = format!(
+        "{{Agent(filter:{{agent_did:{{_eq:\"{}\"}}}}) {{_docID}}}}",
+        crate::store::graphql::escape_graphql_string(writer.did())
+    );
+    let target_doc = operator.execute(&target_query).await.unwrap()["data"]["Agent"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let quickstart_cases =
+        &crate::lean_vocab_test::lean_contract_snapshot().workspace_quickstart_selection_cases;
+    for case in quickstart_cases {
+        let actor = match case["actor"].as_str().unwrap() {
+            "user" => &operator,
+            "creator" => &access,
+            "other" => &outsider_access,
+            name => panic!("unknown modeled actor {name}"),
+        };
+        let visible = !actor.execute(&target_query).await.unwrap()["data"]["Agent"]
+            .as_array()
+            .unwrap()
+            .is_empty();
+        assert_eq!(visible, case["before"].as_bool().unwrap(), "{case}");
+    }
     let modeled = crate::lean_vocab_test::lean_workspace_cases()
         .iter()
         .find(|case| case.name == "provision_frozen_base")
@@ -231,6 +286,43 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
             .await
             .unwrap();
     assert_eq!(replayed, outcome);
+    operator
+        .transact_write("test.quickstart.revoke_target", |txn| {
+            let (target_doc, agent_doc) = (&target_doc, &agent_doc);
+            Box::pin(async move {
+                txn.delete_entity_set_relationship(
+                    "Agent",
+                    target_doc,
+                    "workspace_selected_by",
+                    "agents",
+                    agent_doc,
+                    "executor",
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    provision_read_only_workspace(&operator, &access, &fx.repo, &fx.base_sha, &selection)
+        .await
+        .unwrap();
+    for case in quickstart_cases {
+        let actor = match case["actor"].as_str().unwrap() {
+            "user" => &operator,
+            "creator" => &access,
+            "other" => &outsider_access,
+            name => panic!("unknown modeled actor {name}"),
+        };
+        let visible = !actor.execute(&target_query).await.unwrap()["data"]["Agent"]
+            .as_array()
+            .unwrap()
+            .is_empty();
+        assert_eq!(
+            visible,
+            case["after_revocation"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
     operator
         .delete_actor_relationship(
             "RepositoryPlacement",

@@ -83,6 +83,16 @@ pub enum CallbackHandler {
 pub struct WorkspaceAgentSelection {
     pub writer_agent_did: String,
     pub integrator_agent_did: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<WorkspaceReaderSelection>>", optional = nullable))]
+    pub readers: Vec<WorkspaceReaderSelection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct WorkspaceReaderSelection {
+    pub agent_did: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
