@@ -223,6 +223,7 @@ mod tests {
         node.add_collection(gents_protocol::schemas::NODE_READINESS)
             .await?;
         for schema in [
+            gents_protocol::schemas::NETWORK,
             gents_protocol::schemas::ENROLLMENT_OPERATOR_NONCE,
             gents_protocol::schemas::NETWORK_ADMIN_PIN,
             gents_protocol::schemas::PEER_PAIRING_APPLIED,
@@ -295,6 +296,12 @@ mod tests {
             escape_graphql_string(runtime.did())
         );
         let mutations = [
+            (
+                "Network",
+                Some(
+                    r#"mutation { create_Network(input: {network_id:"network", admin_did:"did:test:admin", parent_linked:false}) {_docID} }"#,
+                ),
+            ),
             (
                 "EnrollmentOperatorNonce",
                 Some(
