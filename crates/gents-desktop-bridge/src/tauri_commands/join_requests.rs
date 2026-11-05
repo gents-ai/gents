@@ -108,12 +108,8 @@ fn not_co_hosted() -> BridgeError {
     BridgeError::new(BridgeErrorCode::Unsupported, NOT_CO_HOSTED)
 }
 
-fn query_error(error: anyhow::Error) -> BridgeError {
-    let too_old = gents_protocol::error_chain::find_source::<
-        gents_server::server_host::EnrollmentQueryRejected,
-    >(error.as_ref())
-    .is_some_and(|rejected| rejected.query_is_unknown_to_runtime());
-    if too_old {
+fn query_error(error: gents_server::server_host::EnrollmentQueryError) -> BridgeError {
+    if error.query_is_unknown_to_runtime() {
         BridgeError::new(BridgeErrorCode::Unsupported, RUNTIME_TOO_OLD)
     } else {
         BridgeError::untyped(format!("{error:#}"))
@@ -136,9 +132,9 @@ mod tests {
         EnrollmentDecisionRefusalCode, MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
     };
     use gents_server::server_host::{
-        EnrollmentDecisionRejected, EnrollmentQueryRejected, ManagedEnrollmentDecision,
-        ManagedEnrollmentHistory, ManagedEnrollmentHistoryEntry, ManagedEnrollmentHistoryState,
-        ManagedEnrollmentMember, ManagedPendingEnrollment,
+        EnrollmentDecisionRejected, EnrollmentQueryError, EnrollmentQueryRejected,
+        ManagedEnrollmentDecision, ManagedEnrollmentHistory, ManagedEnrollmentHistoryEntry,
+        ManagedEnrollmentHistoryState, ManagedEnrollmentMember, ManagedPendingEnrollment,
     };
 
     fn remote_only_state() -> (tempfile::TempDir, DesktopAppState) {
@@ -311,11 +307,10 @@ mod tests {
     #[test]
     fn only_a_query_the_runtime_lacks_reads_as_unsupported() {
         let refused = |status, message: &str| {
-            anyhow::Error::from(EnrollmentQueryRejected {
+            EnrollmentQueryError::from(EnrollmentQueryRejected {
                 status,
                 message: message.into(),
             })
-            .context("loading")
         };
         let older = query_error(refused(
             reqwest::StatusCode::UNPROCESSABLE_ENTITY,
@@ -329,7 +324,9 @@ mod tests {
                 reqwest::StatusCode::SERVICE_UNAVAILABLE,
                 "enrollment authority is not ready",
             ),
-            anyhow::anyhow!("error sending request: connection refused"),
+            EnrollmentQueryError::from(anyhow::anyhow!(
+                "error sending request: connection refused"
+            )),
         ] {
             let error = query_error(failed);
             assert_eq!(error.code, BridgeErrorCode::Unknown);

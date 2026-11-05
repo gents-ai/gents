@@ -12,7 +12,7 @@ use crate::cli::{Cli, Command};
 
 pub use crate::cli::args::ToolCeilingArg as ManagedToolCeiling;
 pub use crate::commands::p2p::enrollment_admin::{
-    EnrollmentDecisionRejected, EnrollmentQueryRejected,
+    EnrollmentDecisionRejected, EnrollmentQueryError, EnrollmentQueryRejected,
 };
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
@@ -215,7 +215,7 @@ pub async fn pending_managed_enrollments(
 pub async fn managed_enrollment_members(
     home: &Path,
     graphql: &str,
-) -> Result<Vec<ManagedEnrollmentMember>> {
+) -> Result<Vec<ManagedEnrollmentMember>, EnrollmentQueryError> {
     let body = crate::commands::p2p::enrollment_admin::load_enrollment_query(
         home,
         graphql,
@@ -230,7 +230,7 @@ pub async fn managed_enrollment_members(
 pub async fn managed_enrollment_history(
     home: &Path,
     graphql: &str,
-) -> Result<ManagedEnrollmentHistory> {
+) -> Result<ManagedEnrollmentHistory, EnrollmentQueryError> {
     let body = crate::commands::p2p::enrollment_admin::load_enrollment_query(
         home,
         graphql,
