@@ -14,6 +14,8 @@ export function RuntimeBackgroundItem({ item }: { item: AutomatedInput }) {
       {open &&
         (item.reconstruction.state === "ready" ? (
           <pre>{item.content || "No additional details."}</pre>
+        ) : item.reconstruction.state === "loading" ? (
+          <p role="status">Loading background details…</p>
         ) : (
           <p>Background details are unavailable.</p>
         ))}

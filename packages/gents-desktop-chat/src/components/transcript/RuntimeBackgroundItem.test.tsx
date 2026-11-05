@@ -42,6 +42,24 @@ it("does not expose stale output when reconstruction is denied", async () => {
   ).toBeTruthy();
 });
 
+it("keeps expanded background details open while they load", async () => {
+  const view = render(
+    <UserMessageItem
+      item={{ ...background, reconstruction: { state: "loading" } }}
+    />,
+  );
+  fireEvent.click(screen.getByText("Background activity"));
+  expect((await screen.findByRole("status")).textContent).toBe(
+    "Loading background details…",
+  );
+  expect(screen.queryByText("Background details are unavailable.")).toBeNull();
+  view.rerender(<UserMessageItem item={background} />);
+  expect(await screen.findByText(envelope)).toBeTruthy();
+  expect(screen.getByText("Background activity").closest("details")?.open).toBe(
+    true,
+  );
+});
+
 it("omits internal Goal continuations but preserves user-authored lookalikes", () => {
   const goal: RenderedTimelineItem = {
     ...background,
