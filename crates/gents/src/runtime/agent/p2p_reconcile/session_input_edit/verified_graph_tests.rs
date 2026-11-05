@@ -398,6 +398,67 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 node.verified_block_signer_did(&claim_version.cid).await?,
                 agent.did()
             );
+            let mut removed_request = original.clone();
+            removed_request.request_id = "removal-only".into();
+            removed_request.content = "remove this pending message".into();
+            crate::sign_agent_request_create(&user, &mut removed_request).await?;
+            crate::request::lifecycle::submit_client_request(&access, &removed_request).await?;
+            let pending = access
+                .execute(
+                    r#"{ AgentRequest(filter: {request_id: {_eq: "removal-only"}}) {_docID} }"#,
+                )
+                .await?;
+            let removed_doc = pending["data"]["AgentRequest"][0]["_docID"]
+                .as_str()
+                .context("removal request missing")?
+                .to_owned();
+            let mut removal = SessionInputEdit {
+                version: SESSION_INPUT_EDIT_VERSION,
+                command_id: uuid::Uuid::new_v4().to_string(),
+                requester_did: user.did().into(),
+                requester_peer_id: None,
+                node_did: root.did().into(),
+                session_id: command.session_id.clone(),
+                session_doc_id: command.session_doc_id.clone(),
+                agent_did: command.agent_did.clone(),
+                agent_doc_id: command.agent_doc_id.clone(),
+                issued_at: (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
+                expires_at: (Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
+                edit: PendingQueueEdit {
+                    expected_request_doc_ids: vec![removed_doc.clone()],
+                    selected_request_doc_ids: vec![removed_doc.clone()],
+                    messages: vec![],
+                },
+                replacements: vec![],
+                replacement_evidence: vec![],
+                signature: vec![],
+            };
+            removal.signature = user.sign(&removal.signing_payload()).await?;
+            let removal_doc =
+                crate::request::lifecycle::queue::publish_edit_command(&access, &removal).await?;
+            process_command(&node, &root, &removal_doc, agent.as_ref()).await?;
+            let removed = access
+                .execute(&format!(
+                    r#"{{ AgentRequest(docID: "{}") {{ lifecycle_state failure_reason }} }}"#,
+                    escape_graphql_string(&removed_doc)
+                ))
+                .await?;
+            assert_eq!(
+                removed["data"]["AgentRequest"][0]["lifecycle_state"],
+                "interrupted"
+            );
+            agent_access.write("test.edit.lost_removal_receipt", &format!(r#"mutation {{ update_AgentSessionInputEdit(docID: "{}", input: {{ receipt_json: "{{}}" }}) {{ _docID }} }}"#, escape_graphql_string(&removal_doc))).await?;
+            process_command(&node, &root, &removal_doc, agent.as_ref()).await?;
+            let uncertain = access.execute(&format!(r#"{{ AgentSessionInputEdit(docID: "{}") {{ receipt_json }} AgentRequest(docID: "{}") {{ lifecycle_state failure_reason }} }}"#, escape_graphql_string(&removal_doc), escape_graphql_string(&removed_doc))).await?;
+            assert_eq!(
+                uncertain["data"]["AgentSessionInputEdit"][0]["receipt_json"],
+                "{}"
+            );
+            assert_eq!(
+                uncertain["data"]["AgentRequest"][0],
+                removed["data"]["AgentRequest"][0]
+            );
+            assert_eq!(case["unprovenRemovalPending"], true);
             access
                 .delete_actor_relationship(
                     "AgentRequest",
