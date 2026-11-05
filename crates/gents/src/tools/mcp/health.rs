@@ -847,7 +847,13 @@ fn parse_updated_at(value: Option<&str>) -> Option<DateTime<Utc>> {
 /// survives only in that wording.
 fn classify_last_error(error: &str) -> &'static str {
     let lower = error.to_lowercase();
-    if lower.contains("timed out") || lower.contains("timeout") {
+    // Health keeps only the message; these phrases are McpAuthRefusal's own
+    // Display, bound to McpAuthRefusal::class by a test.
+    if lower.contains("authorization required (http 401)") {
+        "auth_required"
+    } else if lower.contains("insufficient scope (http 403)") {
+        "insufficient_scope"
+    } else if lower.contains("timed out") || lower.contains("timeout") {
         "timeout"
     } else if lower.contains("connection refused") || lower.contains("refused") {
         "connection_refused"
@@ -1872,5 +1878,82 @@ mod tests {
         .await
         .unwrap();
         assert!(health.snapshot().await.is_empty());
+    }
+
+    #[test]
+    fn auth_refusals_classify_from_their_own_message() {
+        use crate::tools::mcp::pool::{McpAuthRefusal, McpHandshakeRefused};
+        for refusal in [
+            McpAuthRefusal::Required {
+                resource_metadata: Some("https://mcp.example.com/.well-known/x".into()),
+                scope: None,
+            },
+            McpAuthRefusal::InsufficientScope {
+                scope: Some("read".into()),
+            },
+        ] {
+            let message = McpHandshakeRefused {
+                service_id: "svc".into(),
+                endpoint: "https://mcp.example.com/mcp".into(),
+                refusal: refusal.clone(),
+            }
+            .to_string();
+            assert_eq!(super::classify_last_error(&message), refusal.class());
+        }
+    }
+
+    #[tokio::test]
+    async fn health_cycle_records_an_auth_refusal_from_an_https_style_endpoint() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buffer = [0_u8; 4096];
+                    let _ = stream.read(&mut buffer).await;
+                    let _ = stream
+                        .write_all(
+                            b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer scope=\"read\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .await;
+                });
+            }
+        });
+        let service = McpHealthCheckService {
+            service_id: "remote".into(),
+            hostname: String::new(),
+            tailscale_ip: String::new(),
+            lan_ip: String::new(),
+            mcp_port: None,
+            mcp_path: String::new(),
+            endpoint_url: format!("http://{addr}/mcp"),
+            send_node_did: false,
+            updated_at: None,
+        };
+        let health_map = ServiceHealthMap::new();
+        run_health_check_cycle(
+            vec![service],
+            chrono::Utc::now(),
+            &crate::tools::mcp::pool::McpPool::new(),
+            &health_map,
+            "local",
+            None,
+            &HealthCheckerOptions::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        let entry = health_map.get_entry("remote").await.expect("health entry");
+        let error = entry.health.last_error.expect("probe failure recorded");
+        assert_eq!(
+            super::classify_last_error(&error),
+            "auth_required",
+            "{error}"
+        );
+        assert_eq!(
+            entry.endpoint.as_deref(),
+            Some(format!("http://{addr}/mcp").as_str())
+        );
     }
 }
