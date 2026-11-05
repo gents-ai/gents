@@ -131,6 +131,18 @@ pub(super) async fn handle_request(
     request: HttpRequestData,
 ) -> Result<HttpResponse> {
     match (request.method.as_str(), request.path.as_str()) {
+        ("GET", "/desktop/packs/plugin-slots") => {
+            let home = fixture.node_home().to_path_buf();
+            json(run_pack(move || packs::plugin_slots(home)).await?)
+        }
+        ("GET", "/desktop/packs/wire-sources") => {
+            let home = fixture.node_home().to_path_buf();
+            json(run_pack(move || packs::wire_sources(home)).await?)
+        }
+        ("GET", "/desktop/packs/account") => {
+            let home = fixture.node_home().to_path_buf();
+            json(run_pack(move || packs::whoami(home, None)).await?)
+        }
         ("GET", "/desktop/packs/installed") => {
             let home = fixture.node_home().to_path_buf();
             json(run_pack(move || packs::installed(home, None)).await?)
