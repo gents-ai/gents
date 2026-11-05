@@ -24,6 +24,7 @@ members = [
     "crates/gents-fs-runner",
     "crates/gents-protocol",
     "crates/gents-schemas",
+    "crates/gents-shell",
 ]
 # Patched noq 1.4.0 (gents#634) is pulled only via [patch.crates-io].
 # Keep it out of the workspace so `cargo fmt --all` / workspace tests don't own
@@ -50,6 +51,7 @@ default-members = [
     "crates/gents-migration",
     "crates/gents-protocol",
     "crates/gents-schemas",
+    "crates/gents-shell",
 ]
 
 [workspace.package]

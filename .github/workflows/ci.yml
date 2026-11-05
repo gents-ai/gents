@@ -354,6 +354,7 @@ jobs:
             -p gents-claude \
             -p gents-claude-login \
             -p gents-fs-runner \
+            -p gents-shell \
             -p gents-lean-contract
 
       - name: Collect migration lens diagnostics on support failure

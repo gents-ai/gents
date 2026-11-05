@@ -46,6 +46,7 @@ case "${suite}" in
       gents-claude
       gents-claude-login
       gents-login-ui
+      gents-shell
       gents-codex-protocol
     )
     ;;
