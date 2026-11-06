@@ -309,23 +309,23 @@ resources:
         .unwrap();
     let before = read_as(&node, &owner).await.unwrap();
     assert!(
-        set_session_archived(&node, "runtime", "archive-session", &denied, 0, true)
+        set_session_archived(&node, "runtime", "archive-session", &*denied, 0, true)
             .await
             .is_err()
     );
-    assert!(read_as(&node, &denied).await.is_err());
+    assert!(read_as(&node, &*denied).await.is_err());
     assert!(
-        set_session_archived(&node, "runtime", "archive-session", &reader, 0, true)
+        set_session_archived(&node, "runtime", "archive-session", &*reader, 0, true)
             .await
             .is_err()
     );
     assert_eq!(read_as(&node, &owner).await.unwrap(), before);
-    let result = set_session_archived(&node, "runtime", "archive-session", &writer, 0, true)
+    let result = set_session_archived(&node, "runtime", "archive-session", &*writer, 0, true)
         .await
         .unwrap();
     assert_eq!(result.outcome, SessionArchiveOutcome::Applied);
     assert_eq!(
-        read_as(&node, &reader).await.unwrap().archived_at,
+        read_as(&node, &*reader).await.unwrap().archived_at,
         result.archived_at
     );
     node.shutdown().await.expect("shut down test node");

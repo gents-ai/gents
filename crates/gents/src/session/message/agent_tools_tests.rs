@@ -1435,7 +1435,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
         candidate.node_did = owner.to_owned();
         candidate.requester_did = Some(requester.to_owned());
         candidate.caused_by_parent_request_doc_id = parent;
-        materialize_session(&owner(&message), &candidate).await;
+        materialize_session(&self::owner(&message), &candidate).await;
         candidates.push(candidate.session_id);
     }
     candidates.push(caused.session_id.clone());

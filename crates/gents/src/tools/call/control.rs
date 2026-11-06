@@ -718,7 +718,7 @@ mod tests {
         let node = Arc::new(
             defra_node::Node::builder()
                 .data_path(&data_path)
-                .with_node_identity_did(node_identity.did())
+                .with_node_identity_did(crate::store::identity::NodeIdentity::did(node_identity.as_ref()))
                 .build()
                 .await
                 .unwrap(),
