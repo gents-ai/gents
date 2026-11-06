@@ -736,6 +736,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
         )
         .await
         .unwrap();
+        let session_doc_id = create.session_doc_id.clone().unwrap();
         crate::request::lifecycle::submit_client_request(&owner, &create)
             .await
             .unwrap();
@@ -835,7 +836,24 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                 agent_did = escape_graphql_string(&agent.agent_did),
             );
             access
-                .write("test.budget_call", &seed)
+                .transact_write("test.budget_call", |txn| {
+                    let seed = &seed;
+                    let session_doc_id = &session_doc_id;
+                    Box::pin(async move {
+                        let response = txn.execute(seed).await?;
+                        let doc_id =
+                            crate::store::graphql::created_doc_id(&response, "InferenceCall")?;
+                        txn.add_resource_relationship(
+                            "InferenceCall",
+                            &doc_id,
+                            "parent",
+                            "sessions",
+                            session_doc_id,
+                        )
+                        .await?;
+                        Ok::<_, anyhow::Error>(())
+                    })
+                })
                 .await
                 .unwrap_or_else(|error| panic!("{}: {error}", case.name));
         }
@@ -1262,6 +1280,40 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
     .unwrap();
     let did = agent.node_did().to_string();
     let session = "session-calibration";
+    let mut sessions = Vec::new();
+    for session_id in [session, "other-session"] {
+        let create = crate::request::lifecycle::build_signed_client_request(
+            &owner,
+            crate::request::lifecycle::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                crate::request::lifecycle::RequestIdentity {
+                    request_id: format!("seed-{session_id}"),
+                    node_did: did.clone(),
+                    requester_did: Some(user.did().into()),
+                    agent_did: agent.agent_did.clone(),
+                    session_id: session_id.into(),
+                    content: "calibration".into(),
+                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: chrono::Utc::now()
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                },
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+            ),
+            crate::request::lifecycle::RequestSigner::Identity(&user),
+        )
+        .await
+        .unwrap();
+        sessions.push(create.session_doc_id.unwrap());
+    }
+    owner
+        .add_actor_relationship(
+            "AgentSession",
+            &sessions[0],
+            "reader",
+            &identity::Did::new(other.did()).unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(
         context_calibration_for_session(&access, &agent, &did, session)
             .await
@@ -1346,7 +1398,30 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
         } else {
             &access
         };
-        writer.write("test.calibration_call", &seed).await.unwrap();
+        let session_doc_id = if session_id == session {
+            &sessions[0]
+        } else {
+            &sessions[1]
+        };
+        writer
+            .transact_write("test.calibration_call", |txn| {
+                let seed = &seed;
+                Box::pin(async move {
+                    let response = txn.execute(seed).await?;
+                    let doc_id = crate::store::graphql::created_doc_id(&response, "InferenceCall")?;
+                    txn.add_resource_relationship(
+                        "InferenceCall",
+                        &doc_id,
+                        "parent",
+                        "sessions",
+                        session_doc_id,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
     }
     assert_eq!(
         context_calibration_for_session(&access, &agent, &did, session)
