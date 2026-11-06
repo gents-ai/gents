@@ -904,12 +904,34 @@ async fn usage_collection_write_never_reloads_the_runtime_view() {
 
 #[tokio::test]
 async fn load_document_runtime_view_populates_tasks_and_schedules() {
-    let (db, _user, access, _agent) =
+    let (db, user, access, agent) =
         crate::test_support::signed_test_node("document-view-tasks-schedules").await;
     let node = &db.node;
     let node_did = db.node_identity.did();
-    let response = access.execute("{ Node { _docID } }").await.unwrap();
+    assert_eq!(
+        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &agent)
+            .unwrap()
+            .did(),
+        agent.agent_did
+    );
+    let response = access
+        .execute("{ Node { _docID _version { cid } } }")
+        .await
+        .unwrap();
     let node_doc = response["data"]["Node"][0]["_docID"].as_str().unwrap();
+    let node_cid = response["data"]["Node"][0]["_version"][0]["cid"]
+        .as_str()
+        .unwrap();
+    let (block, signature) = node
+        .authorized_signed_block_bytes(node_cid, Some(user.did()))
+        .await
+        .unwrap();
+    let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();
+    let signature = defra_core::block::Signature::from_dag_cbor(&signature).unwrap();
+    assert_eq!(
+        db::block::verify::verified_signature_signer_did(&block, &signature).unwrap(),
+        user.did()
+    );
     let documents = [
         (
             "Task",
