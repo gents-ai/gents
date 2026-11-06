@@ -222,6 +222,18 @@ impl ScopedWatcherFixture {
             })
             .await
             .unwrap();
+        // Production projects the AgentBaseline from each live Agent document
+        // (tool permission projection); this fixture has no projection pass, so
+        // it grants the same set as the node admin, as the other Agent fixtures do.
+        let admin =
+            crate::ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
+        crate::store::identity::GrantSet::AgentBaseline
+            .grant(
+                &admin,
+                &identity::Did::new(&binding.agent_did).unwrap(),
+            )
+            .await
+            .unwrap();
         let agent =
             crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
         let access = crate::ConfigAccess::local_managed_agent(
