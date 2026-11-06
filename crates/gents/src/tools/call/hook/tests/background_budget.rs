@@ -4,18 +4,18 @@ use crate::store::identity::NodeIdentity;
 
 struct PendingTool;
 
-struct BudgetHookFixture {
-    db: crate::support::TestDb,
-    user: crate::KeyIdentity,
-    owner: crate::ConfigAccess,
-    agent: Arc<dyn NodeIdentity>,
-    access: crate::ConfigAccess,
-    hook: DefraSessionHook,
-    request_id: String,
-    session_id: String,
+pub(super) struct BudgetHookFixture {
+    pub(super) db: crate::support::TestDb,
+    pub(super) user: crate::KeyIdentity,
+    pub(super) owner: crate::ConfigAccess,
+    pub(super) agent: Arc<dyn NodeIdentity>,
+    pub(super) access: crate::ConfigAccess,
+    pub(super) hook: DefraSessionHook,
+    pub(super) request_id: String,
+    pub(super) session_id: String,
 }
 
-async fn budget_hook_fixture(
+pub(super) async fn budget_hook_fixture(
     name: &str,
     registry: BackgroundToolRegistry,
     executions: BackgroundExecutionRegistry,
@@ -90,7 +90,11 @@ async fn budget_hook_fixture(
     }
 }
 
-async fn tool_row(access: &crate::ConfigAccess, session: &str, tool: &str) -> serde_json::Value {
+pub(super) async fn tool_row(
+    access: &crate::ConfigAccess,
+    session: &str,
+    tool: &str,
+) -> serde_json::Value {
     let session = crate::store::graphql::escape_graphql_string(session);
     let tool = crate::store::graphql::escape_graphql_string(tool);
     let response = access.execute(&format!(r#"{{ AgentToolCall(filter: {{session_id: {{_eq: "{session}"}}, tool_call_id: {{_eq: "{tool}"}}}}, limit: 2) {{ _docID request_doc_id node_did requester_did session_id lifecycle_state await_mode deadline_at selected_service_id selected_tool_name }} }}"#)).await.unwrap();
