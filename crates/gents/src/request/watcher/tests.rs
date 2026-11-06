@@ -891,7 +891,7 @@ async fn pending_requests_are_scoped_by_node_did_without_host_identity() {
     );
     let continuation = crate::request::lifecycle::queue::prepare_goal_continuation(
         &pending[0],
-        "general".to_string(),
+        pending[0].agent_did.clone(),
         "goal-workspace-owner",
         "continue",
         1,
