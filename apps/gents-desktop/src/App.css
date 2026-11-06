@@ -11,6 +11,49 @@
   [role="button"]:not([aria-disabled="true"]) {
     cursor: pointer;
   }
+
+  /* Text selection is off across the app's controls and chrome, as in a
+     native app, and on where people copy: what they type, messages and
+     other written content, code and output, diffs, identifiers and paths
+     (set in mono), errors, and anything marked data-selectable. WebKit
+     needs the prefixed property. */
+  body {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  :is(
+    input,
+    textarea,
+    [contenteditable]:not([contenteditable="false"]),
+    [data-slot="user-message"],
+    [data-slot="assistant-message"],
+    .prose-app,
+    pre,
+    code,
+    kbd,
+    samp,
+    .font-mono,
+    diffs-container,
+    [role="alert"],
+    [data-selectable]
+  ) {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  /* a control's own label, mono or not, is part of the control */
+  :is(
+      button,
+      [role="button"],
+      [role="menuitem"],
+      [role="menuitemradio"],
+      [role="menuitemcheckbox"],
+      [role="option"],
+      [role="tab"]
+    )
+    :is(.font-mono, code, kbd) {
+    -webkit-user-select: none;
+    user-select: none;
+  }
 }
 
 html,
