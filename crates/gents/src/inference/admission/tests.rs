@@ -1396,22 +1396,24 @@ async fn dropped_permit_without_cancelled_token_persists_failed_terminal() {
     assert_reconstructed_slot_count(&rows, "backend-a", 0);
 }
 
-fn pending_call(
+async fn pending_call(
+    node: &Arc<EmbeddedNode>,
     request_id: &str,
     backend_id: &str,
     signer: &crate::store::identity::ManagedAgentSigner,
 ) -> super::controller::PendingCallMetadata {
+    let request = seeded_request(node, signer, request_id).await;
     super::controller::PendingCallMetadata {
         agent_signer: Some(signer.clone()),
-        session_id: "session-test".to_string(),
-        requester_did: None,
+        session_id: request.session_id,
+        requester_did: request.requester_did,
         request_purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         model_name: None,
         profile_id: None,
         call_id: format!("call-{request_id}"),
         runtime_instance_id: "runtime-test".to_string(),
         request_id: request_id.to_string(),
-        request_doc_id: format!("doc-{request_id}"),
+        request_doc_id: request.doc_id,
         call_seq: 1,
         backend_id: backend_id.to_string(),
         agent_did: signer.did().to_string(),
@@ -1452,7 +1454,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
         .clone()
         .acquire(
             node.clone(),
-            pending_call("req-leak-a", "backend-queue-leak", &signer),
+            pending_call(&node, "req-leak-a", "backend-queue-leak", &signer).await,
             "backend-queue-leak:connection",
             None,
             None,
@@ -1463,7 +1465,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
         .clone()
         .acquire(
             schemaless,
-            pending_call("req-leak-b", "backend-queue-leak", &signer),
+            pending_call(&node, "req-leak-b", "backend-queue-leak", &signer).await,
             "backend-queue-leak:connection",
             None,
             None,
@@ -1486,7 +1488,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
     );
     let queued = tokio::spawn(controller.clone().acquire(
         node.clone(),
-        pending_call("req-leak-c", "backend-queue-leak", &signer),
+        pending_call(&node, "req-leak-c", "backend-queue-leak", &signer).await,
         "backend-queue-leak:connection",
         None,
         None,
