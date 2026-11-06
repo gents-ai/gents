@@ -474,16 +474,6 @@ pub async fn create_goal_for_session_from_access(
     .await
 }
 
-#[cfg(test)]
-pub(crate) async fn create_goal_for_request(
-    node: &std::sync::Arc<EmbeddedNode>,
-    caller: &gents_protocol::row::AgentRequestRow,
-    objective: &str,
-    token_budget: Option<i64>,
-) -> std::result::Result<CreateGoalForSessionOutcome, CreateGoalForSessionError> {
-    create_goal_for_request_from_access(node, None, caller, objective, token_budget).await
-}
-
 pub(crate) async fn create_goal_for_request_from_access(
     node: &std::sync::Arc<EmbeddedNode>,
     access: Option<&crate::ConfigAccess>,

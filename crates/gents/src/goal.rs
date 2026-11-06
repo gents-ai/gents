@@ -104,8 +104,6 @@ pub(crate) use controller::{
     claim_continuation_from_access, claim_retry_continuation_from_access,
     fence_goal_continuation_claim_in_txn, update_goal_fields_if_status_from_access,
 };
-#[cfg(test)]
-pub(crate) use creation::create_goal_for_request;
 use creation::stage_goal_and_claim;
 pub(crate) use creation::{
     create_goal_for_request_from_access, load_goal_creation_claim_fingerprint_in_txn,
