@@ -20,7 +20,6 @@ pub(super) async fn started(
     })
     .await
     .unwrap();
-    let node = message.admission.node.clone();
     let caller = crate::request::binding::load_agent_request_by_doc_id_with_access(
         &message.admission.tool.access().unwrap(),
         message.admission.tool.request_doc_id().unwrap(),
@@ -35,50 +34,62 @@ pub(super) async fn started(
     .await
     .unwrap()
     .unwrap();
-    materialize_session(&node, &caused).await;
+    materialize_session(&message.admission.tool.access().unwrap(), &caused).await;
     (message, caller, caused)
 }
 
-async fn materialize_session(node: &std::sync::Arc<EmbeddedNode>, caused: &crate::AgentRequest) {
-    materialize_session_at(node, caused, &chrono::Utc::now().to_rfc3339()).await;
+/// The calling Agent's signed access. Its session-message rows are Agent-owned, so
+/// ACP hides them from the node identity.
+fn owner(message: &PublishedSessionMessage) -> ConfigAccess {
+    message.admission.tool.access().unwrap()
+}
+
+/// `commit` already materializes the caused session; this is the idempotent
+/// re-check, which must read the session through its owning Agent.
+async fn materialize_session(access: &ConfigAccess, caused: &crate::AgentRequest) {
+    materialize_session_at(access, caused, &chrono::Utc::now().to_rfc3339()).await;
 }
 
 async fn materialize_session_at(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &ConfigAccess,
     caused: &crate::AgentRequest,
     created_at: &str,
 ) {
     let caused = caused.clone();
     let created_at = created_at.to_owned();
-    ConfigAccess::transact_local_write(node, None, "test.materialize_session", move |txn| {
-        let caused = caused.clone();
-        let created_at = created_at.clone();
-        Box::pin(async move {
-            crate::session::ensure_session_in_txn(
-                txn,
-                &caused.session_id,
-                &caused.node_did,
-                &caused.agent_did,
-                caused.requester_did.as_deref(),
-                None,
-                crate::request::lifecycle::materialize::created_session_provenance(&caused),
-                &created_at,
-            )
-            .await
+    access
+        .transact_write("test.materialize_session", move |txn| {
+            let caused = caused.clone();
+            let created_at = created_at.clone();
+            Box::pin(async move {
+                crate::session::ensure_session_in_txn(
+                    txn,
+                    &caused.session_id,
+                    &caused.node_did,
+                    &caused.agent_did,
+                    caused.requester_did.as_deref(),
+                    None,
+                    crate::request::lifecycle::materialize::created_session_provenance(&caused),
+                    &created_at,
+                )
+                .await
+            })
         })
-    })
-    .await
-    .unwrap();
+        .await
+        .unwrap();
 }
 
-async fn set_state(node: &EmbeddedNode, doc_id: &str, state: &str) {
-    let response = node
-        .execute(&format!(
-            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#,
-            escape_graphql_string(doc_id)
-        ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+async fn set_state(access: &ConfigAccess, doc_id: &str, state: &str) {
+    access
+        .write(
+            "test.set_state",
+            &format!(
+                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#,
+                escape_graphql_string(doc_id)
+            ),
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -159,7 +170,7 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
         let (message, caller, caused) = started("interrupt-delivery-atomic").await;
         let node = message.admission.node.clone();
         set_state(
-            &node,
+            &owner(&message),
             &caused.doc_id,
             if case.planned.is_some() {
                 "processing"
@@ -232,7 +243,7 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
             None
         };
         set_state(
-            &node,
+            &owner(&message),
             &caused.doc_id,
             if case.active == Some(1) {
                 "processing"
@@ -242,7 +253,7 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
         )
         .await;
         if let Some(doc_id) = &replacement {
-            set_state(&node, doc_id, "processing").await;
+            set_state(&owner(&message), doc_id, "processing").await;
         }
         let receipt = message
             .admission
@@ -255,7 +266,7 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
             })
             .await
             .unwrap();
-        let response = ConfigAccess::local(node.clone()).execute(&format!(
+        let response = owner(&message).execute(&format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID interrupt_requested_at }} }}"#,
             escape_graphql_string(&target.session_id),
         )).await.unwrap();
@@ -301,7 +312,7 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
 async fn explicit_steer_checks_the_physical_head_at_publication() {
     let (message, caller, caused) = started("agent-steer-head-change").await;
     let node = message.admission.node.clone();
-    set_state(&node, &caused.doc_id, "processing").await;
+    set_state(&owner(&message), &caused.doc_id, "processing").await;
     let cause = SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
         caller_agent_did: caller.agent_did.clone(),
@@ -337,7 +348,7 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         .unwrap()
     };
     let stale = make_plan().await;
-    set_state(&node, &caused.doc_id, "completed").await;
+    set_state(&owner(&message), &caused.doc_id, "completed").await;
     let (cause_ref, stale_ref) = (&cause, &stale);
     let result = message
         .admission
@@ -352,7 +363,7 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         .unwrap_err()
         .to_string()
         .contains("changed while the steer was planned"));
-    set_state(&node, &caused.doc_id, "processing").await;
+    set_state(&owner(&message), &caused.doc_id, "processing").await;
     let queued = plan_with_delivery(
         &node,
         &cause,
@@ -403,19 +414,15 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         gents_protocol::request_input::QueueDelivery::Steer
     );
     let (node_did, session_id) = (&caused.node_did, &caused.session_id);
-    let snapshot = crate::store::config_client::ConfigAccess::transact_local_readonly(
-        &node,
-        None,
-        "test.steer.predecessor_order",
-        move |txn| {
+    let snapshot = owner(&message)
+        .transact_readonly("test.steer.predecessor_order", move |txn| {
             Box::pin(async move {
                 crate::request::lifecycle::queue::pending_rows_in_txn(txn, node_did, session_id)
                     .await
             })
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .await
+        .unwrap();
     assert!(snapshot
         .iter()
         .any(|row| row.doc_id.as_deref() == Some(queued_receipt.doc_id.as_str())));
@@ -550,7 +557,7 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
     .await
     .unwrap()
     .unwrap();
-    let access = ConfigAccess::local(node.clone());
+    let access = owner(&message);
     let call_doc = message.admission.tool.doc_id().unwrap();
     let set_name = |name: &str| {
         format!(
@@ -562,7 +569,7 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
         .write("test.hide_creation_cause", &set_name("agent_message"))
         .await
         .unwrap();
-    materialize_session(&node, &caused).await;
+    materialize_session(&owner(&message), &caused).await;
     let target = SessionScope::of_request(&caused);
     let source = SessionScope::of_request(&caller);
     let session = crate::session::origin::load_session(
@@ -911,7 +918,7 @@ async fn forged_descriptive_provenance_and_altered_creation_receipt_cannot_grant
     let node = message.admission.node.clone();
     let caller_scope = SessionScope::of_request(&caller);
     let target_scope = SessionScope::of_request(&caused);
-    let access = ConfigAccess::local(node.clone());
+    let access = owner(&message);
     let session = crate::session::origin::load_session(
         &access,
         &target_scope.session_id,
@@ -1047,7 +1054,7 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         Some(crate::goal::GoalStatus::Paused),
         "an idle same-node interrupt pauses autonomous Goal work"
     );
-    set_state(&node, &message.caused_request_doc_id, "processing").await;
+    set_state(&owner(&message), &message.caused_request_doc_id, "processing").await;
 
     let cause = SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
@@ -1315,7 +1322,7 @@ async fn session_listing_pages_by_logical_labels_and_compares_timestamp_instants
         let mut candidate = caused.clone();
         candidate.session_id = label.to_owned();
         candidate.caused_by_parent_request_doc_id = None;
-        materialize_session_at(&node, &candidate, "2026-10-13T00:00:00Z").await;
+        materialize_session_at(&owner(&message), &candidate, "2026-10-13T00:00:00Z").await;
     }
     let tools = AgentToolConfig {
         enabled: true,
@@ -1401,7 +1408,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     .await
     .unwrap()
     .unwrap();
-    materialize_session(&node, &caused).await;
+    materialize_session(&owner(&message), &caused).await;
     let tools = AgentToolConfig {
         enabled: true,
         targets: Vec::new(),
@@ -1428,7 +1435,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
         candidate.node_did = owner.to_owned();
         candidate.requester_did = Some(requester.to_owned());
         candidate.caused_by_parent_request_doc_id = parent;
-        materialize_session(&node, &candidate).await;
+        materialize_session(&owner(&message), &candidate).await;
         candidates.push(candidate.session_id);
     }
     candidates.push(caused.session_id.clone());
@@ -1577,7 +1584,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
 async fn caused_session_records_its_opening_request() {
     let (message, caller, caused) = started("opening-provenance").await;
     let node = message.admission.node.clone();
-    let access = ConfigAccess::local(node.clone());
+    let access = owner(&message);
     let signed = access
         .execute(&format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
@@ -1634,7 +1641,7 @@ async fn caused_session_records_its_opening_request() {
 
     let mut later = caused.clone();
     later.doc_id = "bae-later-message".to_owned();
-    materialize_session(&node, &later).await;
+    materialize_session(&owner(&message), &later).await;
     assert_eq!(provenance().await, recorded);
 
     let mut without_call = caused.clone();
@@ -1658,7 +1665,7 @@ async fn caused_session_records_its_opening_request() {
             .as_deref(),
         Some(without_call.doc_id.as_str())
     );
-    materialize_session(&node, &without_call).await;
+    materialize_session(&owner(&message), &without_call).await;
     assert_eq!(provenance().await, recorded);
     node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
