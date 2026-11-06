@@ -446,9 +446,13 @@ async fn canonical_background_fixture_with_input(
         authority,
     );
     let (request, admission) = verifier
-        .verify_fresh_for_claim(&request, db.agent_did())
+        .verify_fresh_for_claim_with_identity(&request, db.agent_identity.as_ref())
         .await
         .expect("verify canonical fixture client admission");
+    assert!(
+        admission.is_some(),
+        "fixture must retain client claim admission"
+    );
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
         db.agent_did(),
