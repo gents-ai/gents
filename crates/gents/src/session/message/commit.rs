@@ -63,6 +63,11 @@ pub(crate) async fn commit(
     report_delivery: bool,
 ) -> std::result::Result<SessionMessageReceipt, CommitError> {
     let new_child = agent_new_create(&plan).cloned();
+    let expected_request = match &plan.write {
+        PlannedWrite::Request { create, .. } | PlannedWrite::Goal { create, .. } => {
+            (create.request_id.clone(), create.session_id.clone())
+        }
+    };
     let mut changes = new_child
         .as_ref()
         .map(|_| crate::subscribe_collections(node, ["AgentToolCall"]))
@@ -113,6 +118,15 @@ pub(crate) async fn commit(
     .await?
     .filter(|_| durable.is_running())
     .with_context(|| format!("session-message commit outcome is unknown after: {error:#}"))?;
+    if receipt.request_id != expected_request.0
+        || receipt.session_id != expected_request.1
+        || receipt.tool_call_id != lifecycle.tool_call_id()
+    {
+        return Err(anyhow::anyhow!(
+            "committed session-message receipt differs from the planned request"
+        )
+        .into());
+    }
     if let Some(expected) = new_child {
         if receipt.request_id != expected.request_id || receipt.session_id != expected.session_id {
             return Err(anyhow::anyhow!(
@@ -343,8 +357,17 @@ async fn commit_once(
     let binding = lifecycle.background_receipt_binding()?;
     let start = lifecycle.dispatch_start()?;
     let (start, binding, plan, receipt_for) = (&start, &binding, &plan, &receipt_for);
-    if lifecycle.actor().as_str() != cause.caller_agent_did {
-        return Err(anyhow::anyhow!("caller agent does not match tool actor").into());
+    if lifecycle.actor().as_str() != cause.caller_agent_did
+        || lifecycle.node_did() != cause.caller_node_did
+        || lifecycle.session_id() != cause.caller_session_id
+        || lifecycle.requester_did() != cause.caller_requester_did.as_deref()
+        || lifecycle.request_doc_id() != Some(cause.caller_request_doc_id.as_str())
+        || lifecycle.doc_id() != Some(cause.tool_call_doc_id.as_str())
+        || lifecycle.tool_call_id() != cause.tool_call_id
+    {
+        return Err(
+            anyhow::anyhow!("session-message cause differs from the accepted tool call").into(),
+        );
     }
     let label = match &plan.write {
         PlannedWrite::Request { .. } => "session_message.commit_request",
@@ -508,13 +531,66 @@ pub(crate) async fn stage_planned_write_in_txn(
     }
     match &plan.write {
         PlannedWrite::Request { create, .. } => {
-            ensure_planned_hop_current(txn, create).await?;
-            let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-            let response = txn.execute(&mutation).await?;
-            let doc_id = crate::store::graphql::created_doc_id(&response, "AgentRequest")
-                .map_err(anyhow::Error::from)?;
+            let (create, doc_id) = async {
+                anyhow::ensure!(
+                    create.node_did == cause.caller_node_did
+                        && create.requester_did == cause.caller_agent_did,
+                    "session message must be authored by its local calling Agent"
+                );
+                let signer = txn
+                    .managed_agent_signer()
+                    .context("session message requires the held calling Agent")?;
+                anyhow::ensure!(
+                    signer.did() == cause.caller_agent_did,
+                    "session message signer differs from caller"
+                );
+                let mut create = create.clone();
+                create.admission =
+                    gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
+                        &cause.caller_agent_did,
+                    );
+                crate::request::lifecycle::bind_client_targets_in_txn(txn, &mut create).await?;
+                crate::sign_agent_request_create(&signer, &mut create).await?;
+                ensure_planned_hop_current(txn, &create).await?;
+                let session = create
+                    .session_doc_id
+                    .as_deref()
+                    .context("session message lacks a visible session")?;
+                let agent = create
+                    .agent_doc_id
+                    .as_deref()
+                    .context("session message lacks a visible Agent")?;
+                let doc_id = crate::request::lifecycle::stage_client_request_in_txn(
+                    txn, &create, session, agent,
+                )
+                .await?;
+                let response = txn.execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
+                escape_graphql_string(&doc_id), crate::SIGNED_REQUEST_FIELDS,
+            )).await?;
+                let [row] = response["data"]["AgentRequest"]
+                    .as_array()
+                    .context("session message observation unavailable")?
+                    .as_slice()
+                else {
+                    anyhow::bail!("session message observation ambiguous")
+                };
+                let row: gents_protocol::row::AgentRequestRow =
+                    serde_json::from_value(row.clone())?;
+                let source = crate::session::origin::verified_agent_source(txn, &row)
+                    .await?
+                    .context("session message source is unavailable")?;
+                anyhow::ensure!(
+                    source.node_did == cause.caller_node_did
+                        && source.session_id == cause.caller_session_id
+                        && source.requester_did == cause.caller_requester_did,
+                    "session message source differs from the accepted call"
+                );
+                Ok::<_, anyhow::Error>((create, doc_id))
+            }
+            .await?;
             if let Some(expected_head) = &plan.steer_head {
-                validate_steer_in_txn(txn, create, &doc_id, expected_head.as_deref()).await??;
+                validate_steer_in_txn(txn, &create, &doc_id, expected_head.as_deref()).await??;
             }
             Ok(crate::request::lifecycle::EnqueuedAgentRequest {
                 doc_id,

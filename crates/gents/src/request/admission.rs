@@ -755,6 +755,12 @@ impl AgentRequestAdmissionVerifier {
         if row.purpose.is_some_and(RequestPurpose::is_auxiliary) {
             verify_auxiliary_request_shape(&row, &admission)?;
         }
+        let local_agent_message = admission.kind == AgentRequestAdmissionKind::Client
+            && row.caused_by_parent_tool_call_doc_id.is_some()
+            && row
+                .input
+                .as_ref()
+                .is_some_and(|input| input.session_creation.is_none());
         let mut denied = None;
         if admission.kind == AgentRequestAdmissionKind::Peer
             || (matches!(
@@ -769,6 +775,9 @@ impl AgentRequestAdmissionVerifier {
                     && row.input.as_ref().is_none_or(|input| {
                         input.queue.as_ref().is_none_or(|queue| {
                             queue.source == gents_protocol::request_input::QueueSource::User
+                                || (local_agent_message
+                                    && queue.source
+                                        == gents_protocol::request_input::QueueSource::Steering)
                         })
                     })))
         {
@@ -780,6 +789,25 @@ impl AgentRequestAdmissionVerifier {
             AgentRequestAdmissionKind::Client => {
                 observation.requester_matches_session_scope =
                     client_requester_scope_matches(&self.node, &row, &admission).await?;
+                if local_agent_message {
+                    let source = crate::session::origin::verified_agent_source(
+                        &crate::ConfigAccess::local_as(
+                            self.node.clone(),
+                            identity::Did::new(admission.signer_did.clone())
+                                .map_err(AgentRequestAdmissionError::denied)?,
+                        ),
+                        &row,
+                    )
+                    .await
+                    .map_err(AgentRequestAdmissionError::unavailable)?;
+                    if !source.is_some_and(|source| {
+                        Some(source.node_did.as_str()) == row.node_did.as_deref()
+                    }) {
+                        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
+                            "local agent-message source is unavailable"
+                        )));
+                    }
+                }
             }
             AgentRequestAdmissionKind::LocalSelf => {
                 observation.signer_matches_requester =

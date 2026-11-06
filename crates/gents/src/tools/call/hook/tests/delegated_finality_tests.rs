@@ -607,7 +607,7 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
                 1,
                 crate::tools::native::AGENT_MESSAGE_TOOL_NAME,
                 "followup-tool",
-                json!({"session_id":first.session_id,"message":"follow up"}),
+                json!({"session_id":first.session_id.clone(),"message":"follow up"}),
                 AwaitMode::Background,
                 false,
             )
@@ -622,6 +622,38 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
             session_id: first.session_id.clone(),
         };
         let signer = fixture.parent.managed_agent_signer().unwrap();
+        if !active && !deny {
+            let mut forged = cause.clone();
+            forged.tool_call_doc_id = "unrelated-tool-document".into();
+            let forged_plan = crate::session::message::plan_with_delivery(
+                &fixture.node,
+                &forged,
+                &target,
+                RenderedBody {
+                    content: "forged".into(),
+                    goal: None,
+                },
+                None,
+                AgentMessageDelivery::Queue,
+                &signer,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(crate::session::message::commit(
+                &fixture.node,
+                &forged,
+                &mut tool,
+                forged_plan,
+                true,
+            )
+            .await
+            .is_err());
+            let rows = fixture.access.execute(
+                "{ AgentRequest(filter: { caused_by_parent_tool_call_doc_id: { _eq: \"unrelated-tool-document\" } }) { _docID } }",
+            ).await.unwrap();
+            assert!(rows["data"]["AgentRequest"].as_array().unwrap().is_empty());
+        }
         let plan = crate::session::message::plan_with_delivery(
             &fixture.node,
             &cause,
@@ -667,6 +699,8 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
             .agent_doc_id
             .as_deref()
             .is_some_and(|value| !value.is_empty()));
+        let session_doc_id = row.session_doc_id.clone();
+        let agent_doc_id = row.agent_doc_id.clone();
         crate::request::admission::verify_request_receipt_signature(&row).unwrap();
         let request = AgentRequest::try_from(row).unwrap();
         let (request, admission) = verifier
@@ -746,6 +780,52 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
             assert_eq!(
                 observed["data"]["AgentRequest"][0]["lifecycle_state"],
                 if deny { "failed" } else { "claimed" }
+            );
+        }
+        if !active && !deny {
+            let mut forged = gents_protocol::request_admission::AgentRequestCreate::base(
+                RequestPurpose::Normal,
+                "forged-source",
+                fixture.runtime.did(),
+                fixture.parent.did(),
+                fixture.child.did(),
+                &first.session_id,
+                "forged source",
+                "interactive",
+                chrono::Utc::now().to_rfc3339(),
+                AgentRequestAdmissionRecord::client(fixture.parent.did()),
+            );
+            forged.session_doc_id = session_doc_id;
+            forged.agent_doc_id = agent_doc_id;
+            forged.caused_by_parent_request_id = Some(cause.caller_request_id.clone());
+            forged.caused_by_parent_request_doc_id = Some(cause.caller_request_doc_id.clone());
+            forged.caused_by_parent_tool_call_id = Some(cause.tool_call_id.clone());
+            forged.caused_by_parent_tool_call_doc_id = Some("unrelated-tool-document".into());
+            crate::sign_agent_request_create(fixture.parent.as_ref(), &mut forged)
+                .await
+                .unwrap();
+            let parent_access = ConfigAccess::local_managed_agent(
+                fixture.node.clone(),
+                fixture.parent.did().parse().unwrap(),
+                fixture.parent.as_ref(),
+            )
+            .unwrap();
+            submit_client_request(&parent_access, &forged)
+                .await
+                .unwrap();
+            let response = child_access.execute(&format!(
+                "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"forged-source\" }} }}) {{ {} }} }}",
+                crate::SIGNED_REQUEST_FIELDS,
+            )).await.unwrap();
+            let row: gents_protocol::row::AgentRequestRow =
+                serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+            let forged = AgentRequest::try_from(row).unwrap();
+            assert!(
+                verifier
+                    .verify_fresh_for_claim_with_identity(&forged, fixture.child.as_ref())
+                    .await
+                    .is_err(),
+                "a signed request with an unrelated source call must not receive a claim witness"
             );
         }
         fixture.node.shutdown().await.unwrap();

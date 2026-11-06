@@ -123,8 +123,12 @@ theorem active_steer_and_idle_use_same_claim (intent : Intent) (observation : Ob
 
 /-- An existing-session message is authored by the held calling Agent. The
 source witness binds its actual parent request and tool call; descriptive IDs
-alone do not establish that edge. Cross-runtime delivery requires the separate
-authenticated HTTP and distributed receipt owner, which is not assumed here. -/
+alone do not establish that edge. The source is observed at publication and
+again before claim; current session and Agent permissions are observed in the
+claim transaction. The source observation is not modeled as a claim-time
+transaction fence: in particular, the source tool call's session ID is not
+declared immutable. Cross-runtime delivery requires the separate authenticated
+HTTP and distributed receipt owner, which is not assumed here. -/
 def decideLocalAgentMessage (local sourceVerified sessionVisible : Bool) (intent : Intent)
     (observation : Observation) (commit : NativeCommit) : Decision :=
   if !local || !sourceVerified || !sessionVisible then .unavailable else decideClaim intent observation commit
