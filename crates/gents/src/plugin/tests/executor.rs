@@ -2258,6 +2258,18 @@ mod job_calls {
         )
         .await;
         assert!(refusal(&call).contains("scope"), "{}", refusal(&call));
+        let missing_access =
+            JobCaller::new(ours.node.clone(), row_scope(&ours), tool_output_for(&ours));
+        let call = run(
+            json!([child_output("c", &["slot-a"], 0, 100)]),
+            true,
+            missing_access,
+        )
+        .await;
+        assert!(matches!(
+            &answers::<ChildOutputResponse>(&call)["c"],
+            RoundResult::Error { error } if error.contains("scope")
+        ));
         let mut outside_scope = row_scope(&ours);
         outside_scope.session_id = "another-session".into();
         let outsider = JobCaller::new(ours.node.clone(), outside_scope, tool_output_for(&ours))

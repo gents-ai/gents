@@ -1009,6 +1009,12 @@ impl Stepper {
                 chain_root_doc_id: input.job.chain_root_doc_id.clone(),
             },
         )
+        .with_agent_access(
+            self.job
+                .runtime
+                .agent_access(&identity::Did::new(caller.agent_did.clone()).unwrap())
+                .unwrap(),
+        )
         .with_children(input.job.chain.clone(), input.ceiling.result_bytes);
         let agent_identity = self
             .job

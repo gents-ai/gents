@@ -255,9 +255,11 @@ async fn child_output_slots(
     caller: &JobCaller,
     request: &ChildOutputRequest,
 ) -> Result<ChildOutputResponse> {
-    let access = ConfigAccess::local(caller.node.clone());
+    let access = caller
+        .caller_access()
+        .map_err(|_| anyhow::anyhow!("child output is not in this call's scope"))?;
     let mut latest: BTreeMap<String, JobChildView> = BTreeMap::new();
-    for (child, view) in derive_children(&access, &caller.chain, caller.result_bytes).await? {
+    for (child, view) in derive_children(access, &caller.chain, caller.result_bytes).await? {
         if latest
             .get(&child.slot)
             .is_none_or(|kept| kept.attempt <= view.attempt)
@@ -289,7 +291,7 @@ async fn child_output_slots(
         .filter_map(|row| Some((row["request_id"].as_str()?, row["_docID"].as_str()?)))
         .collect();
     let terminals = load_caused_request_terminals(
-        &access,
+        access,
         &doc_ids
             .values()
             .map(|doc_id| (*doc_id).to_owned())
