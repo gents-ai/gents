@@ -1424,7 +1424,7 @@ pub(super) mod tests {
                 session_id: uuid::Uuid::new_v4().to_string(),
                 content: "route this reply".into(),
                 execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
-                created_at: chrono::Utc::now().to_rfc3339(),
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             },
             AgentRequestAdmissionRecord::client(user.did()),
         );

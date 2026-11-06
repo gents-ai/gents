@@ -587,7 +587,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
                 session_id: "recovery-cas-session".into(),
                 content: "Resume the request".into(),
                 execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
-                created_at: chrono::Utc::now().to_rfc3339(),
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             },
             AgentRequestAdmissionRecord::client(user.did()),
         ),

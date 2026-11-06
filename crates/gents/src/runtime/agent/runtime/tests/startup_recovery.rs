@@ -875,7 +875,7 @@ async fn submit_capacity_request(
                 session_id: session_id.to_owned(),
                 content: "hello".to_owned(),
                 execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
-                created_at: chrono::Utc::now().to_rfc3339(),
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             },
             AgentRequestAdmissionRecord::client(user_did),
         ),
