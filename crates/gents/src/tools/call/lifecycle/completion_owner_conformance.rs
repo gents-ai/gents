@@ -597,15 +597,24 @@ async fn background_wake_is_visible_to_the_owning_user_and_selected_agent() {
     })
     .await
     .unwrap();
-    let sibling = crate::test_support::install_test_agent_as(
+    let user_did = identity::Did::new(admission.requester_identity.did()).unwrap();
+    let binding = crate::store::identity::provision_agent_identity_authorized(
         &admission.node,
         admission.runtime.as_ref(),
-        admission.requester_identity.as_ref(),
+        &user_did,
+    )
+    .await
+    .unwrap();
+    crate::test_support::install_test_agent_binding_with_access(
+        &admission.node,
+        admission.runtime.did(),
         "Unrelated agent",
+        &binding,
+        &admission.client,
     )
     .await;
     let sibling =
-        crate::store::identity::resolve_agent_identity(admission.runtime.as_ref(), &sibling)
+        crate::store::identity::resolve_agent_identity(admission.runtime.as_ref(), &binding)
             .unwrap();
     let admin = ConfigAccess::local_as(
         admission.node.clone(),
