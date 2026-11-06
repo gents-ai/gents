@@ -273,17 +273,19 @@ async fn saturated_command_queue_cannot_block_owner_close_forever() {
     );
 }
 
-async fn test_publisher(
-    node_did: &str,
-) -> (NodeReadinessPublisherOwner, NodeReadinessPublisherHandle) {
+async fn test_publisher() -> (NodeReadinessPublisherOwner, NodeReadinessPublisherHandle) {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node has an identity")
+        .to_owned();
     NodeReadinessPublisherHandle::start(node, node_did)
 }
 
 #[tokio::test]
 async fn replacement_ready_cannot_clear_demotion_until_source_generation_advances() {
-    let (owner, publisher) = test_publisher("did:test:readiness-slot-cas").await;
+    let (owner, publisher) = test_publisher().await;
     publisher.initialize("general").await.unwrap();
     publisher.register_slot("general", 1).await.unwrap();
     publisher
@@ -352,7 +354,7 @@ async fn replacement_ready_cannot_clear_demotion_until_source_generation_advance
 
 #[tokio::test]
 async fn invalid_source_leaves_committed_standing_and_observation_usable() {
-    let (owner, publisher) = test_publisher("did:test:readiness-invalid-source").await;
+    let (owner, publisher) = test_publisher().await;
     publisher.initialize("general").await.unwrap();
     publisher.register_slot("general", 1).await.unwrap();
     publisher
@@ -434,7 +436,7 @@ async fn invalid_source_leaves_committed_standing_and_observation_usable() {
 
 #[tokio::test]
 async fn unchanged_demoted_slot_stays_demoted_across_unrelated_global_generation() {
-    let (owner, publisher) = test_publisher("did:test:readiness-reused-slot").await;
+    let (owner, publisher) = test_publisher().await;
     publisher.initialize("general").await.unwrap();
     publisher.register_slot("general", 1).await.unwrap();
 
@@ -479,7 +481,7 @@ async fn unchanged_demoted_slot_stays_demoted_across_unrelated_global_generation
 
 #[tokio::test]
 async fn semantic_noop_and_stale_commands_do_not_emit_watch_revisions() {
-    let (owner, publisher) = test_publisher("did:test:readiness-noop-watch").await;
+    let (owner, publisher) = test_publisher().await;
     publisher.initialize("general").await.unwrap();
     publisher.register_slot("general", 2).await.unwrap();
     let mut observation = publisher.observation.clone();
