@@ -430,15 +430,23 @@ pub(crate) async fn append_in_txn(
     }});
     let current = txn
         .execute(&format!(
-            "{{ OptimizationJob(filter: {{ {} }}) {{ _docID }} }}",
+            "{{ OptimizationJob(filter: {{ {} }}) {{ _docID journal_len }} }}",
             filter(&job.owner, &job.job_id)
         ))
         .await?;
-    let doc_id = current["data"]["OptimizationJob"]
+    let row = current["data"]["OptimizationJob"]
         .as_array()
         .and_then(|rows| rows.first())
-        .and_then(|row| row["_docID"].as_str())
         .context("optimization job is not available")?;
+    let doc_id = row["_docID"]
+        .as_str()
+        .context("optimization job has no document ID")?;
+    let observed = row["journal_len"]
+        .as_u64()
+        .context("optimization job has no journal length")?;
+    if u64::try_from(expected)? != observed {
+        return Err(anyhow::Error::new(JournalConflict { expected }));
+    }
     let response = txn.execute_client_signed_update(
         &format!(
             "mutation($input: OptimizationJobMutationInputArg!) {{ update_OptimizationJob(filter: {{ _docID: {{ _eq: \"{}\" }}, {}, journal_len: {{ _eq: {expected} }} }}, input: $input) {{ _docID }} }}",
