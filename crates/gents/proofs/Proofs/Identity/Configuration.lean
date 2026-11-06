@@ -146,8 +146,7 @@ theorem aborted_plugin_install_unchanged (state : PluginDeleteProjection) (coord
 theorem plugin_install_preserves_direct (state : PluginDeleteProjection) (coordinate : String)
     (next : Option PluginDeleteRoot) (reviewed authorized committed : Bool) :
     (replaceInstalledPluginRoot state coordinate next reviewed authorized committed).direct = state.direct := by
-  unfold replaceInstalledPluginRoot
-  split <;> simp
+  cases next <;> simp only [replaceInstalledPluginRoot] <;> split <;> rfl
 
 theorem plugin_selection_preserves_direct (state : PluginDeleteProjection)
     (next : List PluginDeleteSelection) (authorized committed : Bool) :
