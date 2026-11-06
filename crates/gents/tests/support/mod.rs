@@ -183,11 +183,36 @@ pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
         "inference_profile_id": format!("{}:inference", binding.agent_did),
         "enabled": true,
     });
-    let agent_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: gents::Collection::Agent,
-        add: document.clone(),
-        update: document,
-    }])
+    let backend_id = format!("{}:backend", binding.agent_did);
+    let profile_id = format!("{}:inference", binding.agent_did);
+    let backend = serde_json::json!({
+        "node_did": runtime.did(),
+        "backend_id": backend_id,
+        "name": "Test inference",
+        "provider_kind": "OpenAiCompatible",
+        "endpoint": "http://127.0.0.1:1/v1",
+        "auth": {"kind": "unauthenticated"},
+    });
+    let profile = serde_json::json!({
+        "node_did": runtime.did(),
+        "profile_id": profile_id,
+        "backend_id": backend_id,
+        "model_name": "test-model",
+    });
+    let agent_plan = DesiredStateApplyPlan::new(
+        [
+            (gents::Collection::InferenceBackend, backend),
+            (gents::Collection::InferenceProfile, profile),
+            (gents::Collection::Agent, document),
+        ]
+        .into_iter()
+        .map(|(collection, value)| DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        })
+        .collect(),
+    )
     .expect("render test Agent");
     access
         .transact_write("test.managed_agent", |txn| {
