@@ -265,23 +265,30 @@ pub(super) async fn run(case: &Value) {
         process_command(node, &identity, &doc_id, fixture.agent.as_ref())
             .await
             .unwrap();
-        let result = receipt(&access, &doc_id).await.unwrap();
-        result.validate_for(&command).unwrap();
-        assert!(identity
-            .verify(
-                &result.agent_did,
-                &result.signing_payload().unwrap(),
-                &result.signature
-            )
-            .await
-            .unwrap());
-        assert_eq!(
-            matches!(result.outcome, GoalControlOutcome::Applied { .. }),
-            accepted,
-            "{}: {:?}",
-            case["name"],
-            result.outcome
-        );
+        let result = receipt(&access, &doc_id).await;
+        if start["first_request_valid"] == false || start["signature_valid"] == false {
+            assert!(!accepted, "{}", case["name"]);
+            assert!(result.is_none(), "{}", case["name"]);
+        } else {
+            let result = result
+                .unwrap_or_else(|| panic!("{}: expected signed control receipt", case["name"]));
+            result.validate_for(&command).unwrap();
+            assert!(identity
+                .verify(
+                    &result.agent_did,
+                    &result.signing_payload().unwrap(),
+                    &result.signature
+                )
+                .await
+                .unwrap());
+            assert_eq!(
+                matches!(result.outcome, GoalControlOutcome::Applied { .. }),
+                accepted,
+                "{}: {:?}",
+                case["name"],
+                result.outcome
+            );
+        }
     } else {
         let txn = ConfigApplyTxn::begin_local_with_signer(
             node,
@@ -445,6 +452,18 @@ pub(super) async fn run(case: &Value) {
             case["name"]
         );
         assert_eq!(claims_after, claims_before);
+        let requests = access
+            .execute("{AgentRequest(filter: {request_id: {_eq: \"replacement-first\"}}) {_docID}}")
+            .await
+            .unwrap();
+        assert!(
+            requests["data"]["AgentRequest"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "{} must not publish a replacement request",
+            case["name"]
+        );
     }
     if let Some(id) = historical_doc {
         let rows = access
