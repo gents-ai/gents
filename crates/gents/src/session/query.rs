@@ -359,8 +359,10 @@ async fn stop_latch_reads_as_the_selected_actor() {
     crate::store::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
+    // Embedded writes need the node identity or a managed Agent; the requester
+    // user is recorded as data on the session, not used as the writer.
     let access =
-        crate::ConfigAccess::local_as(node.clone(), ::identity::Did::new(user.did()).unwrap());
+        crate::ConfigAccess::local_as(node.clone(), ::identity::Did::new(runtime.did()).unwrap());
     let doc = access.transact_write("test.session.stop_latch", |txn| {
         Box::pin(async {
             let response = txn.execute_with_variables(
