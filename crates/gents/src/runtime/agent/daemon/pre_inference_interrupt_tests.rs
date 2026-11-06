@@ -370,6 +370,9 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         origin,
         agent_config.backend_id.clone().unwrap_or_default(),
     );
+    lifecycle
+        .bind_managed_agent(agent_config.agent_identity.as_ref())
+        .unwrap();
     lifecycle.set_execution_lease_duration(agent_config.stream_liveness_timeout);
     lifecycle.set_configured_max_total_tokens(agent_config.max_total_tokens);
     assert_eq!(
