@@ -1,5 +1,4 @@
 use super::*;
-use crate::store::identity::NodeIdentity;
 
 struct CycleFixture {
     db: crate::support::TestDb,
