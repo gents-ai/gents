@@ -97,7 +97,7 @@ structure PluginDeleteSelection where
   agent : String
   derived : String
   enabled : Bool
-  deriving BEq, DecidableEq, Repr
+  deriving BEq, DecidableEq, Repr, Lean.FromJson
 
 structure PluginDeleteProjection where
   roots : List PluginDeleteRoot := []
