@@ -331,6 +331,8 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
 
 #[tokio::test]
 async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::Result<()> {
+    use crate::store::config_client::{GraphqlEndpoint, NodePermission};
+
     let case = lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
@@ -342,26 +344,59 @@ async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::
         .unwrap()
         .owner;
     let directory = tempfile::tempdir()?;
-    let key_path = directory.path().join("node");
-    let owner =
-        tokio::task::spawn_blocking(move || crate::KeyIdentity::load_or_create(key_path, None))
-            .await??;
-    let user = owner.did();
+    let key_path = directory.path().to_owned();
+    let (runtime, user) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        Ok((
+            crate::KeyIdentity::load_or_create(key_path.join("runtime"), None)?,
+            crate::KeyIdentity::load_or_create(key_path.join("user"), None)?,
+        ))
+    })
+    .await??;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await?
+        .into_std()?;
+    let address = listener.local_addr()?;
     let node = Arc::new(
         defra_node::Node::builder()
-            .with_node_identity_did(user)
+            .enable_signing()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_enabled()
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
             .build()
             .await?,
     );
-    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user)?);
+    let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     let actor = identity::Did::new(agent)?;
-    let context = defra_core::RequestContext::default().with_identity(Some(user.to_owned()));
+    for (subject, permissions) in [
+        (
+            identity::Did::new(user.did())?,
+            vec![
+                NodePermission::DocumentRead,
+                NodePermission::DocumentUpdate,
+                NodePermission::DacRelationAdd,
+                NodePermission::DacRelationDelete,
+                NodePermission::CollectionGet,
+            ],
+        ),
+        (
+            actor.clone(),
+            vec![NodePermission::DocumentRead, NodePermission::CollectionGet],
+        ),
+    ] {
+        for permission in permissions {
+            admin.grant_node_permission(&subject, permission).await?;
+        }
+    }
+    let access = ConfigAccess::Graphql(
+        GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), user.did())
+            .with_client_signing_capability(user.client_signing_capability()?)?
+            .with_client_signed_agent_creates(),
+    );
+    let context =
+        defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned()));
     let policy = node
         .add_dac_policy_with_counter_as(&context, &case.policy_yaml, 0)
         .await?;
-    access.add_collection(&format!(
-        "type Agent @policy(id: \"{policy}\", resource: \"agents\") {{ agent_did: String }}\ntype InferenceProfile @policy(id: \"{policy}\", resource: \"configuration\") {{ profile_id: String }}\ntype InferenceBackendMetadata @policy(id: \"{policy}\", resource: \"configuration\") {{ backend_id: String }}"
-    )).await?;
     let mut docs = Vec::new();
     for (collection, field) in [
         (crate::Collection::Agent, "agent_did"),
@@ -369,11 +404,28 @@ async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::
         (crate::Collection::InferenceBackend, "backend_id"),
     ] {
         let name = collection.graphql_type();
+        let resource = if collection == crate::Collection::Agent {
+            "agents"
+        } else {
+            "configuration"
+        };
+        let schema = format!(
+            "type {name} @policy(id: \"{}\", resource: \"{resource}\") {{ {field}: String }}",
+            escape_graphql_string(&policy)
+        );
+        admin.add_collection(&schema).await?;
+        let mutation = format!("mutation($input: {name}MutationInputArg!) {{ create_{name}(input: $input) {{_docID}} }}");
+        let variables = serde_json::json!({"input": {(field): "value"}});
         let response = access
-            .write(
-                "test.provider_metadata.create",
-                &format!("mutation {{ create_{name}(input: {{{field}: \"value\"}}) {{_docID}} }}"),
-            )
+            .transact_write("test.provider_metadata.create", |txn| {
+                let mutation = &mutation;
+                let variables = &variables;
+                let schema = &schema;
+                Box::pin(async move {
+                    txn.execute_client_signed_create(mutation, variables, schema)
+                        .await
+                })
+            })
             .await?;
         docs.push(created_doc_id(&response, name)?);
     }
