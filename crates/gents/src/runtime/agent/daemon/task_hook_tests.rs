@@ -404,6 +404,8 @@ impl Harness {
         self.run_with_capacity(request, fail, None).await
     }
 
+    /// Keep the daemon request state machine out of the test future, as the
+    /// runtime worker does when it dispatches a request.
     async fn run_with_capacity(
         &self,
         request: AgentRequest,
@@ -413,13 +415,12 @@ impl Harness {
         let doc_id = request.doc_id.clone();
         let mut daemon = self.daemon(fail);
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        tokio::time::timeout(
-            Duration::from_secs(90),
-            daemon.process_request_with_capacity(request, capacity, shutdown_rx),
-        )
-        .await
-        .expect("request processing finished")
-        .expect("request processing returned");
+        let process =
+            Box::pin(daemon.process_request_with_capacity(request, capacity, shutdown_rx));
+        tokio::time::timeout(Duration::from_secs(90), process)
+            .await
+            .expect("request processing finished")
+            .expect("request processing returned");
         self.request_row(&doc_id).await
     }
 
