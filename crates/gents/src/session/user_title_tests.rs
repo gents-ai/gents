@@ -7,6 +7,69 @@ use super::*;
 use gents_protocol::session::{SessionTitle, SessionTitleSource};
 
 #[tokio::test]
+async fn user_title_update_is_signed_on_authenticated_http() -> anyhow::Result<()> {
+    use crate::store::identity::NodeIdentity;
+    let case = crate::lean_vocab_test::lean_contract_snapshot()
+        .session_document_cases
+        .projection
+        .iter()
+        .find(|case| case["operation"] == "rename" && case["title"]["text"].is_string())
+        .expect("modeled user rename");
+    let title = case["title"]["text"].as_str().unwrap();
+    let (db, user, access, binding) =
+        crate::test_support::signed_test_node("http-user-title").await;
+    let node_did = db.node_identity.did();
+    crate::request::lifecycle::build_signed_client_request(
+        &access,
+        crate::request::lifecycle::RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            crate::request::lifecycle::RequestIdentity {
+                request_id: "http-title-request".into(),
+                node_did: node_did.into(),
+                requester_did: Some(user.did().into()),
+                agent_did: binding.agent_did,
+                session_id: "http-title-session".into(),
+                content: "work".into(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: "2026-09-22T00:00:00Z".into(),
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+        ),
+        crate::request::lifecycle::RequestSigner::Identity(&user),
+    )
+    .await?;
+    let user_did = user.did().to_owned();
+    access
+        .transact_write("test.http_user_title", |txn| {
+            let user_did = &user_did;
+            Box::pin(async move {
+                apply_title_in_txn(
+                    txn,
+                    node_did,
+                    Some(user_did),
+                    "http-title-session",
+                    Some(title),
+                    SessionTitleSource::User,
+                    "2026-09-23T00:00:00Z",
+                )
+                .await
+            })
+        })
+        .await?;
+    let response = access.execute(
+        r#"{ AgentSession(filter: {session_id: {_eq: "http-title-session"}}) {title _version {cid}} }"#,
+    ).await?;
+    let row = &response["data"]["AgentSession"][0];
+    assert_eq!(row["title"], case["after"]["title"]);
+    let cid = row["_version"][0]["cid"]
+        .as_str()
+        .expect("signed title version");
+    assert_eq!(db.node.verified_block_signer_did(cid).await?, user.did());
+    db.node.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn title_transitions_preserve_session_and_request_observation() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     node.add_collection(gents_protocol::schemas::AGENT_SESSION)

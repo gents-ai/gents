@@ -637,9 +637,13 @@ async fn ensure_session_with_pending_in_txn(
         )
         .await?;
         if origin.creation_receipt.is_some() {
-            let mutation = format!("mutation($provenance: JSON) {{update_AgentSession(docID: \"{}\", input: {{provenance: $provenance}}) {{_docID}}}}", crate::store::graphql::escape_graphql_string(doc_id));
+            let mutation = format!("mutation($input: AgentSessionMutationInputArg!) {{update_AgentSession(docID: \"{}\", input: $input) {{_docID}}}}", crate::store::graphql::escape_graphql_string(doc_id));
             let response = txn
-                .execute_with_variables(&mutation, &serde_json::json!({"provenance": origin}))
+                .execute_client_signed_update(
+                    &mutation,
+                    &serde_json::json!({"input": {"provenance": origin}}),
+                    gents_protocol::schemas::AGENT_SESSION,
+                )
                 .await?;
             let response = defra_node::QueryResponse::success(
                 response
@@ -868,11 +872,15 @@ pub(super) async fn patch_session_in_txn(
     let doc_id = escape_graphql_string(doc_id);
     let mutation = format!(
         r#"mutation($input: AgentSessionMutationInputArg!) {{
-        update_AgentSession(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: $input) {{ _docID }}
+        update_AgentSession(docID: "{doc_id}", input: $input) {{ _docID }}
     }}"#
     );
     let response = txn
-        .execute_with_variables(&mutation, &serde_json::json!({"input": input}))
+        .execute_client_signed_update(
+            &mutation,
+            &serde_json::json!({"input": input}),
+            gents_protocol::schemas::AGENT_SESSION,
+        )
         .await?;
     anyhow::ensure!(
         response

@@ -199,7 +199,12 @@ pub async fn publish_fork_relationships(
             anyhow::ensure!(rows[0]["parent_linked"] == false, "fork relationship marker is missing");
             access.add_resource_relationship("AgentMessage", doc_id, "parent", "sessions", &intent.session_doc_id).await?;
             access.add_actor_relationship("AgentMessage", doc_id, "working_agent", &identity::Did::new(&intent.agent_did)?).await?;
-            let response = access.write("session.mark_fork_parent_linked", &format!(r#"mutation {{ update_AgentMessage(docID: "{doc}", filter: {{ creator_did: {{ _eq: "{creator}" }}, parent_linked: {{ _eq: false }} }}, input: {{ parent_linked: true }}) {{ _docID }} }}"#)).await?;
+            let response = access.transact_write("session.mark_fork_parent_linked", |txn| {
+                let mutation = format!(r#"mutation($input: AgentMessageMutationInputArg!) {{ update_AgentMessage(docID: "{doc}", filter: {{ creator_did: {{ _eq: "{creator}" }}, parent_linked: {{ _eq: false }} }}, input: $input) {{ _docID }} }}"#);
+                Box::pin(async move { txn.execute_client_signed_update(
+                    &mutation, &json!({"input": {"parent_linked": true}}), gents_protocol::schemas::AGENT_MESSAGE,
+                ).await })
+            }).await?;
             let rows = crate::store::graphql::mutation_documents(&response, "update_AgentMessage")?.context("fork relationship marker omitted mutation result")?;
             anyhow::ensure!(rows.len() == 1 && rows[0]["_docID"].as_str() == Some(doc_id.as_str()), "fork relationship marker lost its creation binding");
             intent.message_doc_ids.pop();
@@ -646,10 +651,11 @@ async fn fork_in_txn(
             &origin.message,
         );
         let response = txn
-            .execute_with_variables(
+            .execute_client_signed_create(
                 CREATE_AGENT_MESSAGE_MUTATION,
                 &crate::session::canonical_rows::fork_message_bound_variables(txn, &child_header)
                     .await?,
+                gents_protocol::schemas::AGENT_MESSAGE,
             )
             .await?;
         message_doc_ids.push(crate::store::graphql::created_doc_id(

@@ -194,6 +194,15 @@ pub(super) fn signing_schema(sdl: &str, collection: &str) -> Result<::schema::Co
         .and_then(trusted_create_schema)
         .or_else(|| trusted_delete_schema(collection))
         .or(match collection {
+            gents_protocol::schemas::AGENT_SESSION_NAME => {
+                Some(gents_protocol::schemas::AGENT_SESSION)
+            }
+            gents_protocol::schemas::AGENT_MESSAGE_NAME => {
+                Some(gents_protocol::schemas::AGENT_MESSAGE)
+            }
+            gents_protocol::schemas::COMPACTION_ENTRY_NAME => {
+                Some(gents_protocol::schemas::COMPACTION_ENTRY)
+            }
             gents_protocol::schemas::AGENT_REQUEST_NAME => {
                 Some(gents_protocol::schemas::AGENT_REQUEST)
             }

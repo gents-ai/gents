@@ -2,7 +2,7 @@ use crate::client::store::ClientStore;
 use anyhow::Result;
 use gents::store::config_client::ConfigAccess;
 
-use super::super::graphql::{escape_graphql_string, normalize_required};
+use super::super::graphql::normalize_required;
 
 pub async fn rename_session(
     access: &ConfigAccess,
@@ -12,21 +12,6 @@ pub async fn rename_session(
     session_id: &str,
     title: &str,
 ) -> Result<()> {
-    let mutation =
-        build_rename_session_mutation(store, node_did, requester_did, session_id, title)?;
-    Ok(access
-        .write("rename_session", &mutation)
-        .await
-        .map(|_| ())?)
-}
-
-fn build_rename_session_mutation(
-    store: &ClientStore,
-    node_did: &str,
-    requester_did: &str,
-    session_id: &str,
-    title: &str,
-) -> Result<String> {
     let node_did = normalize_required("node_did", node_did)?;
     let requester_did = normalize_required("requester_did", requester_did)?;
     let session_id = normalize_required("session_id", session_id)?;
@@ -41,23 +26,22 @@ fn build_rename_session_mutation(
         })
         .ok_or_else(|| anyhow::anyhow!("session {} not found", session_id))?;
 
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_node_did = escape_graphql_string(node_did);
-    let escaped_requester_did = escape_graphql_string(requester_did);
-    let escaped_title = escape_graphql_string(title);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentSession(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
-                    node_did: {{ _eq: "{escaped_node_did}" }},
-                    requester_did: {{ _eq: "{escaped_requester_did}" }}
-                }},
-                input: {{
-                    title: {{ text: "{escaped_title}", source: "user" }}
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    Ok(mutation)
+    let now = chrono::Utc::now().to_rfc3339();
+    access
+        .transact_write("rename_session", |txn| {
+            let now = &now;
+            Box::pin(async move {
+                gents::session::apply_title_in_txn(
+                    txn,
+                    node_did,
+                    Some(requester_did),
+                    session_id,
+                    Some(title),
+                    gents_protocol::session::SessionTitleSource::User,
+                    now,
+                )
+                .await
+            })
+        })
+        .await
 }
