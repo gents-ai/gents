@@ -1122,19 +1122,47 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
                     .as_mut()
                     .unwrap()["composite_signature"][0] = json!(256);
             }
-            let txn = if case["actor"] == true {
-                ConfigApplyTxn::begin_local_with_signer(
-                    &node,
-                    ::identity::Did::new(agent.did()).unwrap(),
-                    agent.managed_agent_signer().unwrap(),
-                )
-                .await
-                .unwrap()
-            } else {
-                ConfigApplyTxn::begin_local(&node, Some(::identity::Did::new(user.did()).unwrap()))
+            if case["actor"] == false {
+                let outcome = client
+                    .transact_readonly("test.goal_graph_non_agent_actor", |txn| {
+                        let initial = initial.clone();
+                        let replacement = old.clone().map(|goal| {
+                            (
+                                goal,
+                                replacement_goal_identity(runtime.did(), SESSION, "graph-handoff"),
+                            )
+                        });
+                        let command = &command;
+                        let user_did = user.did();
+                        Box::pin(async move {
+                            assert_eq!(txn.actor_did(), Some(user_did));
+                            assert!(txn.managed_agent_signer().is_none());
+                            let mut prepared = PreparedGoalControl::Create {
+                                objective: "new User work".into(),
+                                token_budget: None,
+                                request: Box::new(initial),
+                                replacement,
+                                client_graphs: None,
+                            };
+                            attach_client_goal_graphs(txn, command, &mut prepared).await
+                        })
+                    })
                     .await
-                    .unwrap()
-            };
+                    .unwrap();
+                assert_eq!(
+                    outcome.is_ok(),
+                    case["allowed"].as_bool().unwrap(),
+                    "{case}"
+                );
+                continue;
+            }
+            let txn = ConfigApplyTxn::begin_local_with_signer(
+                &node,
+                ::identity::Did::new(agent.did()).unwrap(),
+                agent.managed_agent_signer().unwrap(),
+            )
+            .await
+            .unwrap();
             let mut prepared = PreparedGoalControl::Create {
                 objective: "new User work".into(),
                 token_budget: None,
