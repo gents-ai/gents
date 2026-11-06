@@ -1,8 +1,6 @@
 use super::*;
 
-use gents::NodeIdentity;
-
-async fn seed_agent_session(
+pub(super) async fn seed_agent_session(
     db: &support::TestDb,
     fixture: &support::ManagedAgentFixture,
     session_id: &str,
@@ -57,7 +55,7 @@ async fn seed_agent_session(
     clippy::too_many_arguments,
     reason = "the signed fixture binds a request to its physical session and Agent"
 )]
-async fn seed_agent_request(
+pub(super) async fn seed_agent_request(
     db: &support::TestDb,
     fixture: &support::ManagedAgentFixture,
     access: &gents::ConfigAccess,

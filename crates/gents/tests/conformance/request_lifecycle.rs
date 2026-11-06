@@ -39,57 +39,142 @@ fn rust_request_recovery_sweep_writer(from: &str, to: &str) -> Option<&'static s
 
 #[tokio::test]
 async fn ordinary_completion_rejects_claimed_without_execution() {
-    let db = test_db("ordinary-complete-from-claimed").await;
+    let db = support::test_signed_db("ordinary-complete-from-claimed").await;
+    let fixture = support::managed_agent_fixture(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-    let mut lifecycle =
-        request_lifecycle_for_case(&db, doc_id.clone(), request_id, session_id, created_at);
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let (access, agent_doc, session_doc) =
+        super::session_control::seed_agent_session(&db, &fixture, &session_id, &created_at).await;
+    let doc_id = super::session_control::seed_agent_request(
+        &db,
+        &fixture,
+        &access,
+        &agent_doc,
+        &session_doc,
+        &session_id,
+        &request_id,
+        &created_at,
+    )
+    .await;
+    let mut request = build_request(doc_id.clone(), request_id, session_id, created_at);
+    request.node_did = db.node_identity.did().to_owned();
+    request.agent_did = fixture.agent.did().to_owned();
+    request.requester_did = Some(fixture.agent.did().to_owned());
+    request.content = "session control witness".into();
+    request.execution_origin = Some("interactive".into());
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        fixture.agent.did(),
+        db.node_identity.did(),
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+    lifecycle
+        .bind_managed_agent(fixture.agent.as_ref())
+        .unwrap();
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
     assert_eq!(
         lifecycle
             .terminalize_owned(
                 RequestTerminalOutcome::Completed,
                 gents_protocol::output::TerminalOutput::NoMessage,
-                None
+                None,
             )
             .await
             .unwrap(),
         gents::request::lifecycle::TerminalizeResult::Lost,
     );
+    let response = access
+        .execute(&format!(
+            "{{ AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{lifecycle_state}} }}",
+            escape_graphql_string(&doc_id),
+        ))
+        .await
+        .unwrap();
     assert_eq!(
-        fetch_request_snapshot(&db.node, &doc_id)
-            .await
-            .lifecycle_state,
-        RequestLifecycleState::Claimed
+        response["data"]["AgentRequest"][0]["lifecycle_state"],
+        "claimed"
     );
 }
 
 #[tokio::test]
 async fn claim_atomically_projects_the_request_owned_session() {
-    let db = test_db("claim-atomically-projects-session").await;
+    let db = support::test_signed_db("claim-atomically-projects-session").await;
+    let fixture = support::managed_agent_fixture(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-    let mut lifecycle = request_lifecycle_for_case(
+    let (access, agent_doc, session_doc) =
+        super::session_control::seed_agent_session(&db, &fixture, &session_id, &created_at).await;
+    let doc_id = super::session_control::seed_agent_request(
         &db,
-        doc_id,
+        &fixture,
+        &access,
+        &agent_doc,
+        &session_doc,
+        &session_id,
+        &request_id,
+        &created_at,
+    )
+    .await;
+    let mut request = build_request(
+        doc_id.clone(),
         request_id.clone(),
         session_id.clone(),
         created_at,
     );
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-
-    assert_session_observes_request(
-        &db.node,
-        &session_id,
-        &request_id,
-        RequestLifecycleState::Claimed,
-    )
-    .await;
+    request.node_did = db.node_identity.did().to_owned();
+    request.agent_did = fixture.agent.did().to_owned();
+    request.requester_did = Some(fixture.agent.did().to_owned());
+    request.content = "session control witness".into();
+    request.execution_origin = Some("interactive".into());
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        fixture.agent.did(),
+        db.node_identity.did(),
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+    lifecycle
+        .bind_managed_agent(fixture.agent.as_ref())
+        .unwrap();
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let response = access
+        .execute(&format!(
+            "{{ AgentSession(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {} }} }}",
+            escape_graphql_string(&session_doc),
+            gents::session::AGENT_SESSION_FIELDS,
+        ))
+        .await
+        .unwrap();
+    let session = gents::session::decode_session_row(&response["data"]["AgentSession"][0]).unwrap();
+    assert_eq!(session.session.session_id, session_id);
+    assert_eq!(session.session.node_did, db.node_identity.did());
+    assert_eq!(session.session.agent_did, fixture.agent.did());
+    assert_eq!(
+        session.session.requester_did.as_deref(),
+        Some(fixture.agent.did())
+    );
+    let latest = session
+        .session
+        .observation
+        .expect("session observation")
+        .latest_request
+        .expect("latest request");
+    assert_eq!(latest.request_doc_id, doc_id);
+    assert_eq!(latest.request_id, request_id);
+    assert_eq!(latest.lifecycle_state, RequestLifecycleState::Claimed);
 }
 
 #[tokio::test]
