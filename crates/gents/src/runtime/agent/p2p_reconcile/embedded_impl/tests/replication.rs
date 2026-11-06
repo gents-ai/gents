@@ -652,6 +652,26 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         count(&http(reopened_address, &user)?.execute(&query).await?) != 0,
         case("after-repair")?["user_read"] == true
     );
+    let reopened_write = http(reopened_address, &user)?
+        .write(
+            "test.transport.revoked_registry_after_restart",
+            &registry_mutation(&runtime_registry),
+        )
+        .await;
+    assert_eq!(
+        reopened_write.as_ref().is_ok_and(|value| {
+            gents_protocol::graphql::extract_mutation_doc_id(value, "PeerRegistry").is_ok()
+        }),
+        discovery_expected("revoked-user-write")?["allowed"] == true
+    );
+    assert_eq!(
+        !gents_protocol::graphql::graphql_rows_from_response(
+            &reopened_local.execute(&session_query).await?,
+            "AgentSession"
+        )
+        .is_empty(),
+        case("after-repair")?["app_read"] == true
+    );
     reopened.shutdown().await?;
     Ok(())
 }
