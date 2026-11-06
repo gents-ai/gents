@@ -73,7 +73,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
     let (mut server, _) =
         spawn_server_with_ready_json(&runtime_home, port, &["--home", home], &owner_env)?;
     wait_for_port(port, &mut server)?;
-    let (bindings, owned) = server.capturing(async {
+    let (bindings, owned, root_doc) = server.capturing(async {
         wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
         let core = ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
@@ -124,7 +124,10 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             agent.display_name = Some(label.into());
             core.save_agent(&agent).await?;
         }
-        grant_configured_workspace_root_readers(&access, &graphql, &init, &owner_home, &[&a, &b]).await?;
+        let roots = access.execute("{ WorkspaceRoot {_docID} }").await?;
+        let root_rows = roots["data"]["WorkspaceRoot"].as_array().context("User cannot observe WorkspaceRoot")?;
+        let [root] = root_rows.as_slice() else { anyhow::bail!("expected one configured WorkspaceRoot: {roots}") };
+        let root_doc = root["_docID"].as_str().context("WorkspaceRoot missing physical ID")?.to_owned();
         let target = gents::documents::AgentTargetDocument {
             target_id: "live-delegation-child".into(), node_did: node_did.clone(),
             target_node_did: node_did.clone(), agent_did: b.agent_did.clone(),
@@ -269,7 +272,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         assert_eq!(denial["message"], "selected agent is unavailable");
         assert_eq!(denial["retryable"], false);
         Arc::new(core).shutdown().await?;
-        Ok(([a, b], (child_doc, session_doc, tool_doc, inference_docs)))
+        Ok(([a, b], (child_doc, session_doc, tool_doc, inference_docs), root_doc))
     }).await?;
     drop(server);
     let runtime_identity = identity_from_init(&init)?;
@@ -287,6 +290,14 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             .build()
             .await?,
     );
+    let contract: Value = gents_lean_contract::load_contract_snapshot()?;
+    let root_expected = contract["workspace_root_access_cases"]
+        .as_array()
+        .context("modeled WorkspaceRoot cases")?
+        .iter()
+        .find(|case| case["actor"] == "other" && case["permission"] == "read")
+        .and_then(|case| case["expected"].as_bool())
+        .context("modeled unrelated Agent root access")?;
     for (binding, documents) in [
         (
             &bindings[0],
@@ -311,6 +322,35 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             binding.agent_did.parse()?,
             signer.as_ref(),
         )?;
+        let principal = gents::defra_node::AcpIdentity::Authenticated(binding.agent_did.parse()?);
+        let permitted = node
+            .document_acp()
+            .check_doc_access(
+                &principal,
+                gents::defra_node::DocumentPermission::Read,
+                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                "workspace_roots",
+                &root_doc,
+            )
+            .await?;
+        assert_eq!(
+            permitted, root_expected,
+            "unexpected Agent WorkspaceRoot access"
+        );
+        let roots = access
+            .execute(&format!(
+                "{{ WorkspaceRoot(filter: {{_docID: {{_eq: \"{}\"}}}}) {{_docID}} }}",
+                escape_graphql_string(&root_doc)
+            ))
+            .await?;
+        let visible = roots["data"]["WorkspaceRoot"]
+            .as_array()
+            .context("Agent WorkspaceRoot query")?;
+        assert_eq!(
+            !visible.is_empty(),
+            root_expected,
+            "unexpected Agent WorkspaceRoot visibility: {roots}"
+        );
         for (collection, doc) in documents {
             let owners = access
                 .transact_readonly("test.live_delegation_owner", |txn| {
