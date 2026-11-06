@@ -46,8 +46,8 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
     .await
     .unwrap();
     let node = message.admission.node.clone();
-    let caused = crate::request::binding::load_agent_request_by_doc_id(
-        &node,
+    let caused = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
         &message.caused_request_doc_id,
     )
     .await
@@ -143,8 +143,8 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
     let node = message.admission.node.clone();
     let tool = &message.admission.tool;
     let tool_doc_id = tool.doc_id().unwrap().to_owned();
-    let caused = crate::request::binding::load_agent_request_by_doc_id(
-        &node,
+    let caused = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
         &message.caused_request_doc_id,
     )
     .await
@@ -194,7 +194,8 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
         })
         .await
         .unwrap();
-    let staged = crate::request::binding::load_agent_request_by_doc_id(&node, &enqueued.doc_id)
+    let staged = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(), &enqueued.doc_id)
         .await
         .unwrap()
         .unwrap();
@@ -231,8 +232,8 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
     .await
     .unwrap();
     let node = message.admission.node.clone();
-    let caused = crate::request::binding::load_agent_request_by_doc_id(
-        &node,
+    let caused = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
         &message.caused_request_doc_id,
     )
     .await

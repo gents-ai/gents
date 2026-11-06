@@ -182,8 +182,11 @@ pub(super) async fn claim_head(
     head: u64,
     admitted: &[u64],
 ) -> ActiveTurn {
-    let request = crate::request::binding::load_agent_request_by_doc_id(&db.node, &bound[&head])
-        .await
+    let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &db.agent_access,
+        &bound[&head],
+    )
+    .await
         .unwrap()
         .unwrap();
     claim_request(db, bound, request, admitted).await

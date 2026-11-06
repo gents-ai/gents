@@ -21,15 +21,15 @@ pub(super) async fn started(
     .await
     .unwrap();
     let node = message.admission.node.clone();
-    let caller = crate::request::binding::load_agent_request_by_doc_id(
-        &node,
+    let caller = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
         message.admission.tool.request_doc_id().unwrap(),
     )
     .await
     .unwrap()
     .unwrap();
-    let caused = crate::request::binding::load_agent_request_by_doc_id(
-        &node,
+    let caused = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
         &message.caused_request_doc_id,
     )
     .await
@@ -391,8 +391,11 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         })
         .await
         .expect("compatible steer is published");
-    let row = crate::request::binding::load_agent_request_by_doc_id(&node, &receipt.doc_id)
-        .await
+    let row = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
+        &receipt.doc_id,
+    )
+    .await
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -533,15 +536,15 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
     .await
     .unwrap();
     let node = message.admission.node.clone();
-    let caller = crate::request::binding::load_agent_request_by_doc_id(
-        &node,
+    let caller = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
         message.admission.tool.request_doc_id().unwrap(),
     )
     .await
     .unwrap()
     .unwrap();
-    let caused = crate::request::binding::load_agent_request_by_doc_id(
-        &node,
+    let caused = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
         &message.caused_request_doc_id,
     )
     .await
@@ -1391,8 +1394,8 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
         .unwrap();
     let caller = caller_owner.request().clone();
     let node = message.admission.node.clone();
-    let caused = crate::request::binding::load_agent_request_by_doc_id(
-        &node,
+    let caused = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
         &message.caused_request_doc_id,
     )
     .await
