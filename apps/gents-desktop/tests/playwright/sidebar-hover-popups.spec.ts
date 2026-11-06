@@ -113,4 +113,31 @@ test.describe("the hover panel and what opens from it", () => {
     await expect(peek).toHaveAttribute("aria-hidden", "true");
     await expect(menu).toBeHidden();
   });
+
+  test("draws over a plugin page's frame", async ({ page }) => {
+    await hoverMode(page);
+    const nav = page.locator("nav").first();
+    const railEdge = (await nav.boundingBox())!;
+    /* a frame where plugin pages' frames are staged, over the page beside
+       the rail, as a plugin page's frame sits */
+    await page.evaluate(async (left) => {
+      const { stageElement } = await import("/src/ui/contrib/frame-stage.ts");
+      const frame = document.createElement("iframe");
+      frame.style.cssText = `position:fixed;top:0;bottom:0;left:${left}px;right:0;width:calc(100vw - ${left}px);height:100vh;border:0;pointer-events:auto`;
+      stageElement().appendChild(frame);
+    }, railEdge.x + railEdge.width);
+    const panel = page.locator("[data-ground=raised]");
+    const rail = await centre(nav);
+    await page.mouse.move(rail.x, rail.y);
+    await expect(panel).toHaveAttribute("aria-hidden", "false");
+    const box = (await panel.boundingBox())!;
+    const onTop = (x: number, y: number) =>
+      page.evaluate(
+        ([x, y]) => document.elementFromPoint(x, y)?.closest("iframe") === null,
+        [x, y],
+      );
+    expect(await onTop(box.x + box.width - 24, box.y + box.height / 2)).toBe(true);
+    /* and the frame still covers the page beside it */
+    expect(await onTop(box.x + box.width + 200, box.y + box.height / 2)).toBe(false);
+  });
 });
