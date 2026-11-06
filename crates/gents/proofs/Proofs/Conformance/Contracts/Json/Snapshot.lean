@@ -31,6 +31,7 @@ import Proofs.Identity.ClientAgentJournal
 import Proofs.Identity.NodeFileRequests
 import Proofs.Identity.MailboxAccess
 import Proofs.Identity.WorkspaceAndFileRequests
+import Proofs.Identity.SessionInputEdit
 import Proofs.EventDelivery.WatcherConformance
 import Proofs.Conformance.ClientInstallation
 import Proofs.Conformance.RuntimeServiceReplacement
@@ -635,6 +636,8 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"mailbox_native_policy\":" ++ Identity.MailboxAccess.nativeCasesJson ++ ","
     ++ "\"node_file_request_access_cases\":" ++ Identity.NodeFileRequests.requestAccessCasesJson ++ ","
     ++ "\"callback_workspace_actor_cases\":" ++ Identity.WorkspaceAndFileRequests.callbackActorCasesJson ++ ","
+    ++ "\"session_input_edit_native_discovery_cases\":" ++ Identity.SessionInputEdit.discoveryCasesJson ++ ","
+    ++ "\"session_input_edit_native_claim_cases\":" ++ Identity.SessionInputEdit.claimCasesJson ++ ","
     ++ "\"identity_private_journal_policy\":"
       ++ Identity.ClientAgentJournal.privatePolicyCasesJson ++ ","
     ++ "\"client_submission_cleanup_cases\":"

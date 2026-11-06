@@ -19,6 +19,7 @@ const SESSION: &str = "edit-session";
 struct Fixture {
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
+    endpoint: String,
     _dir: tempfile::TempDir,
     original: String,
     agent_did: String,
@@ -30,10 +31,13 @@ impl Fixture {
         let dir = tempfile::tempdir().unwrap();
         let identity: Arc<dyn NodeIdentity> =
             Arc::new(KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(dir.path())
                 .with_node_identity_did(identity.did())
+                .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
                 .build()
                 .await
                 .unwrap(),
@@ -44,17 +48,62 @@ impl Fixture {
             .await;
         let agent_identity =
             crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
-        let access = ConfigAccess::local(node.clone());
-        access.write("test.edit.session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{SESSION}", node_did: "{}", requester_did: "{}", agent_did: "{}", created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,
-            escape_graphql_string(identity.did()), escape_graphql_string(identity.did()), escape_graphql_string(&binding.agent_did))).await.unwrap();
+        let access = ConfigAccess::Graphql(
+            crate::store::config_client::GraphqlEndpoint::as_principal(&endpoint, identity.did())
+                .with_client_signing_capability(identity.client_signing_capability().unwrap())
+                .unwrap()
+                .with_client_signed_agent_creates(),
+        );
+        let agent_doc = access
+            .transact_readonly("test.edit.agent", |txn| {
+                Box::pin(async {
+                    Ok::<_, anyhow::Error>(
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::Agent,
+                            identity.did(),
+                            &binding.agent_did,
+                        )
+                        .await?
+                        .context("Agent missing")?
+                        .0,
+                    )
+                })
+            })
+            .await
+            .unwrap();
+        let agent = ::identity::Did::new(&binding.agent_did).unwrap();
+        access.transact_write("test.edit.session", |txn| Box::pin(async {
+            let response = txn.execute_client_signed_create(
+                "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                &serde_json::json!({"input": {"session_id":SESSION,"node_did":identity.did(),"requester_did":identity.did(),"agent_did":binding.agent_did,"relationships_pending":false,"created_at":"2026-10-10T00:00:00Z"}}),
+                gents_protocol::schemas::AGENT_SESSION).await?;
+            let doc = crate::store::graphql::created_doc_id(&response, "AgentSession")?;
+            txn.add_resource_relationship("AgentSession", &doc, "parent", "agents", &agent_doc).await?;
+            txn.add_actor_relationship("AgentSession", &doc, "working_agent", &agent).await?;
+            Ok::<_, anyhow::Error>(())
+        })).await.unwrap();
         Self {
             node,
             identity,
+            endpoint,
             _dir: dir,
             original: String::new(),
             agent_did: binding.agent_did,
             agent_identity,
         }
+    }
+
+    fn client_access(&self) -> ConfigAccess {
+        ConfigAccess::Graphql(
+            crate::store::config_client::GraphqlEndpoint::as_principal(
+                &self.endpoint,
+                self.identity.did(),
+            )
+            .with_client_signing_capability(self.identity.client_signing_capability().unwrap())
+            .unwrap()
+            .with_client_signed_agent_creates(),
+        )
     }
 
     async fn new() -> Self {
@@ -89,17 +138,49 @@ impl Fixture {
     }
 
     async fn write_request(&self, mut create: AgentRequestCreate) -> String {
+        let access = self.client_access();
+        let (session, agent) = access
+            .transact_readonly("test.edit.targets", |txn| {
+                Box::pin(async move {
+                    let session = crate::session::load_agent_session_owner_in_txn(
+                        txn,
+                        self.identity.did(),
+                        SESSION,
+                    )
+                    .await?
+                    .context("session missing")?;
+                    let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Agent,
+                        self.identity.did(),
+                        &self.agent_did,
+                    )
+                    .await?
+                    .context("agent missing")?;
+                    Ok::<_, anyhow::Error>((session.doc_id, agent))
+                })
+            })
+            .await
+            .unwrap();
+        create.session_doc_id = Some(session.clone());
+        create.agent_doc_id = Some(agent.clone());
         crate::sign_agent_request_create(self.identity.as_ref(), &mut create)
             .await
             .unwrap();
-        let response = ConfigAccess::local_as(
-            self.node.clone(),
-            ::identity::Did::new(self.identity.did().to_owned()).unwrap(),
-        )
-        .write("test.edit.request", &create.graphql_mutation().unwrap())
-        .await
-        .unwrap();
-        crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
+        access
+            .transact_write("test.edit.request", |txn| {
+                let create = &create;
+                let session = &session;
+                let agent = &agent;
+                Box::pin(async move {
+                    crate::request::lifecycle::stage_client_request_in_txn(
+                        txn, create, session, agent,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap()
     }
 
     async fn command(&self) -> SessionInputEdit {
@@ -113,10 +194,7 @@ impl Fixture {
             }],
         };
         let replacements = crate::request::lifecycle::queue::prepare_pending_user_edit(
-            &ConfigAccess::local_as(
-                self.node.clone(),
-                ::identity::Did::new(self.identity.did().to_owned()).unwrap(),
-            ),
+            &self.client_access(),
             self.identity.as_ref(),
             AgentRequestAdmissionRecord::client(self.identity.did()),
             self.identity.did(),
@@ -126,6 +204,15 @@ impl Fixture {
         )
         .await
         .unwrap();
+        let (session_doc_id, agent_did, agent_doc_id, replacement_evidence) =
+            test_signed_replacement_fields(
+                &self.client_access(),
+                self.identity.as_ref(),
+                self.identity.did(),
+                SESSION,
+                &replacements,
+            )
+            .await;
         let mut command = SessionInputEdit {
             version: SESSION_INPUT_EDIT_VERSION,
             command_id: uuid::Uuid::new_v4().to_string(),
@@ -133,10 +220,14 @@ impl Fixture {
             requester_peer_id: None,
             node_did: self.identity.did().to_owned(),
             session_id: SESSION.into(),
+            session_doc_id,
+            agent_did,
+            agent_doc_id,
             issued_at: (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
             expires_at: (Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
             edit,
             replacements,
+            replacement_evidence,
             signature: Vec::new(),
         };
         command.signature = self
@@ -148,9 +239,23 @@ impl Fixture {
     }
 
     async fn submit(&self, command: &SessionInputEdit) -> String {
-        let response = ConfigAccess::local_as(self.node.clone(), ::identity::Did::new(self.identity.did().to_owned()).unwrap()).write("test.edit.intent", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{ command_id: "{}", requester_did: "{}", node_did: "{}", session_id: "{}", intent_json: "{}" }}) {{ _docID }} }}"#,
-            escape_graphql_string(&command.command_id), escape_graphql_string(&command.requester_did), escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id), escape_graphql_string(&serde_json::to_string(command).unwrap()))).await.unwrap();
-        crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap()
+        let access = self.client_access();
+        let input = serde_json::json!({"command_id":command.command_id, "requester_did":command.requester_did,
+            "requester_peer_id":command.requester_peer_id, "node_did":command.node_did,
+            "session_id":command.session_id, "intent_json":serde_json::to_string(command).unwrap()});
+        access.transact_write("test.edit.intent", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                let response = txn.execute_client_signed_create(
+                    "mutation($input: AgentSessionInputEditMutationInputArg!) { create_AgentSessionInputEdit(input: $input) { _docID } }",
+                    &serde_json::json!({"input":input}), gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT,
+                ).await?;
+                let doc = crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
+                txn.add_resource_relationship("AgentSessionInputEdit", &doc, "parent", "sessions", &command.session_doc_id).await?;
+                txn.add_actor_relationship("AgentSessionInputEdit", &doc, "working_agent", &::identity::Did::new(&command.agent_did)?).await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        }).await.unwrap()
     }
 
     async fn receipt(&self, id: &str) -> SessionInputEditReceipt {
@@ -254,13 +359,32 @@ impl ModeledQueue {
             .await
             .unwrap()
             .unwrap();
-            let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
+            let (_owner, authority) =
+                crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+            let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
                 queue.fixture.node.clone(),
-                &queue.fixture.agent_did,
-                &did,
-                request,
-                600,
+                queue.fixture.identity.clone(),
+                authority,
             );
+            let (request, admission) = verifier
+                .verify_fresh_for_claim(&request, &queue.fixture.agent_did)
+                .await
+                .unwrap();
+            assert!(admission.is_some());
+            let mut lifecycle =
+                crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+                    queue.fixture.node.clone(),
+                    &queue.fixture.agent_did,
+                    &did,
+                    request,
+                    600,
+                    crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    String::new(),
+                );
+            lifecycle
+                .bind_managed_agent(queue.fixture.agent_identity.as_ref())
+                .unwrap();
+            lifecycle.set_client_claim_admission(admission);
             lifecycle.set_fold_admitted(
                 state
                     .folding
@@ -269,7 +393,7 @@ impl ModeledQueue {
                     .collect(),
             );
             assert_eq!(
-                lifecycle.claim().await.unwrap(),
+                lifecycle.claim_with_identity().await.unwrap(),
                 crate::request::lifecycle::ClaimOutcome::Claimed
             );
             queue.active = Some(lifecycle);
@@ -373,10 +497,10 @@ impl ModeledQueue {
         let mut replacements = crate::request::lifecycle::queue::prepare_pending_user_edit(
             &ConfigAccess::local_as(
                 self.fixture.node.clone(),
-                ::identity::Did::new(requester.did().to_owned()).unwrap(),
+                ::identity::Did::new(self.fixture.identity.did().to_owned()).unwrap(),
             ),
-            requester,
-            AgentRequestAdmissionRecord::client(requester.did()),
+            self.fixture.identity.as_ref(),
+            AgentRequestAdmissionRecord::client(self.fixture.identity.did()),
             self.fixture.identity.did(),
             SESSION,
             self.fixture.identity.did(),
@@ -384,6 +508,14 @@ impl ModeledQueue {
         )
         .await
         .unwrap();
+        if requester.did() != self.fixture.identity.did() {
+            for create in &mut replacements {
+                create.admission = AgentRequestAdmissionRecord::client(requester.did());
+                crate::sign_agent_request_create(requester, create)
+                    .await
+                    .unwrap();
+            }
+        }
         edit.expected_request_doc_ids = model
             .expected
             .iter()
@@ -392,6 +524,18 @@ impl ModeledQueue {
         if !authority.replacements_valid {
             replacements[0].admission.signature[0] ^= 1;
         }
+        let (session_doc_id, agent_did, agent_doc_id, replacement_evidence) =
+            test_signed_replacement_fields(
+                &ConfigAccess::local_as(
+                    self.fixture.node.clone(),
+                    ::identity::Did::new(self.fixture.identity.did()).unwrap(),
+                ),
+                requester,
+                self.fixture.identity.did(),
+                SESSION,
+                &replacements,
+            )
+            .await;
         let mut command = SessionInputEdit {
             version: SESSION_INPUT_EDIT_VERSION,
             command_id: format!("command-{}", model.id),
@@ -403,10 +547,14 @@ impl ModeledQueue {
             } else {
                 "another-session".into()
             },
+            session_doc_id,
+            agent_did,
+            agent_doc_id,
             issued_at: self.instant(model.issued_at).to_rfc3339(),
             expires_at: self.instant(model.expires_at).to_rfc3339(),
             edit,
             replacements,
+            replacement_evidence,
             signature: Vec::new(),
         };
         command.signature = requester.sign(&command.signing_payload()).await.unwrap();
@@ -448,7 +596,7 @@ impl ModeledQueue {
             &self.fixture.node,
             &self.fixture.identity,
             &doc,
-            &[self.fixture.agent_identity.clone()],
+            self.fixture.agent_identity.as_ref(),
         )
         .await
         .unwrap();
@@ -471,24 +619,36 @@ impl ModeledQueue {
 #[tokio::test]
 async fn unanswered_sweep_discovers_malformed_command_for_transactional_validation() {
     let fixture = Fixture::empty().await;
-    let response = ConfigAccess::local(fixture.node.clone())
-        .write(
-            "test.edit.malformed_intent",
-            &format!(
-                r#"mutation {{ create_AgentSessionInputEdit(input: {{ command_id: "malformed", requester_did: "{}", node_did: "{}", session_id: "{}", intent_json: "not-json" }}) {{ _docID }} }}"#,
-                escape_graphql_string(fixture.identity.did()),
-                escape_graphql_string(fixture.identity.did()),
-                escape_graphql_string(SESSION),
-            ),
-        )
-        .await
-        .unwrap();
-    let doc_id = crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap();
+    let (session, _, _, _) = test_signed_replacement_fields(
+        &fixture.client_access(),
+        fixture.identity.as_ref(),
+        fixture.identity.did(),
+        SESSION,
+        &[],
+    )
+    .await;
+    let identity = &fixture.identity;
+    let agent_did = &fixture.agent_did;
+    let doc_id = fixture.client_access().transact_write("test.edit.malformed_intent", |txn| {
+        let session = &session;
+        Box::pin(async move {
+            let response = txn.execute_client_signed_create(
+                "mutation($input: AgentSessionInputEditMutationInputArg!) { create_AgentSessionInputEdit(input: $input) { _docID } }",
+                &serde_json::json!({"input": {"command_id":"malformed", "requester_did":identity.did(), "node_did":identity.did(), "session_id":SESSION, "intent_json":"not-json"}}),
+                gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT,
+            ).await?;
+            let doc = crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
+            txn.add_resource_relationship("AgentSessionInputEdit", &doc, "parent", "sessions", session).await?;
+            txn.add_actor_relationship("AgentSessionInputEdit", &doc, "working_agent", &::identity::Did::new(agent_did)?).await?;
+            Ok::<_, anyhow::Error>(doc)
+        })
+    }).await.unwrap();
 
     let unanswered = unanswered_commands(
         CommandKind::InputEdit,
         &fixture.node,
         fixture.identity.as_ref(),
+        fixture.agent_identity.as_ref(),
         Sweep::Unanswered,
     )
     .await
@@ -498,7 +658,7 @@ async fn unanswered_sweep_discovers_malformed_command_for_transactional_validati
         &fixture.node,
         &fixture.identity,
         &doc_id,
-        &[fixture.agent_identity.clone()]
+        fixture.agent_identity.as_ref()
     )
     .await
     .is_err());
@@ -615,7 +775,7 @@ async fn invalid_receipt_cannot_suppress_a_valid_edit_and_stale_edit_never_write
         &fixture.node,
         &fixture.identity,
         &first_id,
-        &[fixture.agent_identity.clone()],
+        fixture.agent_identity.as_ref(),
     )
     .await
     .unwrap();
@@ -628,7 +788,7 @@ async fn invalid_receipt_cannot_suppress_a_valid_edit_and_stale_edit_never_write
         &fixture.node,
         &fixture.identity,
         &stale_id,
-        &[fixture.agent_identity.clone()],
+        fixture.agent_identity.as_ref(),
     )
     .await
     .unwrap();
@@ -661,7 +821,7 @@ async fn valid_author_signature_cannot_install_replacement_with_wrong_admission_
         &fixture.node,
         &fixture.identity,
         &id,
-        &[fixture.agent_identity.clone()],
+        fixture.agent_identity.as_ref(),
     )
     .await
     .unwrap();
@@ -684,7 +844,7 @@ async fn edit_effect_and_receipt_rollback_together_after_a_write_failure() {
             &fixture.node,
             &fixture.identity,
             &id,
-            &[fixture.agent_identity.clone()],
+            fixture.agent_identity.as_ref(),
         ),
     )
     .await;
@@ -697,7 +857,7 @@ async fn edit_effect_and_receipt_rollback_together_after_a_write_failure() {
         &fixture.node,
         &fixture.identity,
         &id,
-        &[fixture.agent_identity.clone()],
+        fixture.agent_identity.as_ref(),
     )
     .await
     .unwrap();
@@ -741,7 +901,7 @@ async fn cryptographically_invalid_receipt_cannot_suppress_valid_edit() {
         &fixture.node,
         &fixture.identity,
         &id,
-        &[fixture.agent_identity.clone()],
+        fixture.agent_identity.as_ref(),
     )
     .await
     .unwrap();

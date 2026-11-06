@@ -277,7 +277,7 @@ async fn unbound_pairing_overlay_is_rejected_without_data_changes() {
 #[tokio::test(flavor = "multi_thread")]
 async fn unbound_identity_collections_are_rejected_without_data_changes() {
     use gents_protocol::schemas::{
-        AGENT_OWNERSHIP_POLICY_ID, ENROLLMENT_OPERATOR_NONCE, ENROLLMENT_OPERATOR_NONCE_NAME,
+        AGENT_OWNERSHIP_POLICY_ID, AGENT_SESSION_INPUT_EDIT, AGENT_SESSION_INPUT_EDIT_NAME, ENROLLMENT_OPERATOR_NONCE, ENROLLMENT_OPERATOR_NONCE_NAME,
         FILE_IMAGE_HYDRATION_REQUEST, FILE_IMAGE_HYDRATION_REQUEST_NAME,
         FILE_INVENTORY_IMAGE_REQUEST, FILE_INVENTORY_IMAGE_REQUEST_NAME, FILE_INVENTORY_REQUEST,
         FILE_INVENTORY_REQUEST_NAME, ISOLATED_WORKSPACE, ISOLATED_WORKSPACE_NAME,
@@ -291,6 +291,12 @@ async fn unbound_identity_collections_are_rejected_without_data_changes() {
         WORKSPACE_ROOT, WORKSPACE_ROOT_NAME,
     };
     for (name, sdl, resource, key) in [
+        (
+            AGENT_SESSION_INPUT_EDIT_NAME,
+            AGENT_SESSION_INPUT_EDIT,
+            "goal_controls",
+            "command_id",
+        ),
         (
             PEER_PAIRING_DESIRED_NAME,
             PEER_PAIRING_DESIRED,

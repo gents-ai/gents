@@ -1,11 +1,12 @@
 mod client;
 pub(crate) use client::{
-    bind_client_targets_in_txn, client_request_input, complete_client_request_relationships,
+    bind_client_targets_in_txn, complete_client_request_relationships,
     recover_delegated_client_request_relationships_with_access, stage_client_request_in_txn,
 };
 pub use client::{
-    build_signed_client_request, build_signed_client_request_in_txn, reconcile_client_request,
-    reconcile_client_retry, reserve_goal_session, submit_client_request, ClientSubmissionError,
+    build_signed_client_request, build_signed_client_request_in_txn, client_request_input,
+    reconcile_client_request, reconcile_client_retry, reserve_goal_session, submit_client_request,
+    ClientSubmissionError,
 };
 use std::sync::Arc;
 
@@ -78,8 +79,8 @@ pub(crate) use materialize::{
 pub use queue::enqueue_local_steering_request;
 pub use queue::validate_position as validate_queue_position;
 pub use queue::{
-    pending_steer_edit, submit_pending_user_edit, submit_pending_user_steer, PendingMessageEdit,
-    PendingQueueEdit, PendingQueueReceipt,
+    pending_steer_edit, publish_edit_command, submit_pending_user_edit, submit_pending_user_steer,
+    PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,
 };
 pub use queue::{
     pending_user_queue, pending_user_queue_projection, PendingQueueEntry, PendingQueueProjection,

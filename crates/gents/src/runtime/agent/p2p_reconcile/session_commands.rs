@@ -9,6 +9,7 @@ use gents_protocol::session_input_edit::SessionInputEdit;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
+pub use crate::runtime::snapshot::ActiveRuntimeSnapshot as SessionCommandAgentSnapshot;
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
 
@@ -58,8 +59,9 @@ pub(crate) enum Sweep {
 
 pub(super) async fn unanswered_commands(
     kind: CommandKind,
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
+    agent_identity: &dyn NodeIdentity,
     sweep: Sweep,
 ) -> Result<Vec<String>> {
     let collection = kind.collection();
@@ -67,13 +69,16 @@ pub(super) async fn unanswered_commands(
         Sweep::Unanswered => (", receipt_json: { _eq: null }", "_docID"),
         Sweep::Unverified => ("", "_docID intent_json receipt_json"),
     };
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        ::identity::Did::new(agent_identity.did())?,
+        agent_identity,
+    )?;
+    let response = access.execute(
         &format!(
             r#"{{ {collection}(filter: {{ node_did: {{ _eq: "{}" }}{receipt_filter} }}) {{ {fields} }} }}"#,
             escape_graphql_string(identity.did())
         ),
-        "session.signed_commands",
     )
     .await?;
     if matches!(sweep, Sweep::Unanswered) {
@@ -134,24 +139,20 @@ pub(super) async fn unanswered_commands(
 pub(crate) async fn unanswered_goal_commands(
     node: &Arc<EmbeddedNode>,
     runtime: &dyn NodeIdentity,
-    agent: &::identity::Did,
+    agent_identity: &dyn NodeIdentity,
     _sweep: Sweep,
 ) -> Result<Vec<String>> {
     let query = format!(
         r#"{{ AgentSessionGoalControl(filter: {{ node_did: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }} }}) {{ _docID intent_json }} AgentSessionGoalReceipt {{ command_doc_id receipt_json relationships_pending }} }}"#,
         escape_graphql_string(runtime.did()),
-        escape_graphql_string(agent.as_str())
+        escape_graphql_string(agent_identity.did())
     );
-    let response = crate::ConfigAccess::transact_local_readonly(
-        node,
-        Some(agent.clone()),
-        "goal_control.agent_sweep",
-        |txn| {
-            let query = &query;
-            Box::pin(async move { txn.execute(query).await })
-        },
-    )
-    .await?;
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        ::identity::Did::new(agent_identity.did())?,
+        agent_identity,
+    )?;
+    let response = access.execute(&query).await?;
     let rows = response["data"]["AgentSessionGoalControl"]
         .as_array()
         .context("goal command observation omitted rows")?;
@@ -199,13 +200,14 @@ pub(crate) async fn unanswered_goal_commands(
     Ok(pending)
 }
 
-/// Agent-scoped commands remain pending until a runtime snapshot supplies their signing identities.
+/// Agent-scoped commands use the active runtime's held signing identities.
 pub async fn run_session_command_reconciler(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
+    agents: tokio::sync::watch::Receiver<Arc<SessionCommandAgentSnapshot>>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    run_session_command_reconciler_with_agents(node, identity, None, cancel).await
+    run_session_command_reconciler_with_agents(node, identity, Some(agents), cancel).await
 }
 
 pub(crate) async fn run_session_command_reconciler_with_agents(
@@ -279,38 +281,53 @@ where
         if let Some(sweep) = sweep {
             let mut sweep_failed = false;
             for kind in CommandKind::ALL {
-                if kind == CommandKind::GoalControl {
-                    let selected = agents
-                        .as_ref()
-                        .map(|snapshot| {
-                            snapshot.borrow().agents.keys().cloned().collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-                    for agent in selected {
-                        let actor = ::identity::Did::new(&agent)?;
-                        match unanswered_goal_commands(&node, identity.as_ref(), &actor, sweep)
+                let selected = agents
+                    .as_ref()
+                    .map(|snapshot| {
+                        snapshot
+                            .borrow()
+                            .agents
+                            .iter()
+                            .map(|(did, agent)| (did.clone(), agent.agent_identity.clone()))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                for (agent, agent_identity) in selected {
+                    anyhow::ensure!(
+                        agent_identity.did() == agent,
+                        "session command Agent identity differs from snapshot"
+                    );
+                    let result = match kind {
+                        CommandKind::GoalControl => {
+                            unanswered_goal_commands(
+                                &node,
+                                identity.as_ref(),
+                                agent_identity.as_ref(),
+                                sweep,
+                            )
                             .await
-                        {
-                            Ok(unanswered) => ids.extend(
-                                unanswered
-                                    .into_iter()
-                                    .map(|id| (kind, id, Some(agent.clone()))),
-                            ),
-                            Err(error) => {
-                                sweep_failed = true;
-                                tracing::warn!(agent_did = %agent, %error, "goal command sweep failed");
-                            }
                         }
-                    }
-                    continue;
-                }
-                match unanswered_commands(kind, &node, identity.as_ref(), sweep).await {
-                    Ok(unanswered) => {
-                        ids.extend(unanswered.into_iter().map(|id| (kind, id, None)));
-                    }
-                    Err(error) => {
-                        sweep_failed = true;
-                        tracing::warn!(collection = kind.collection(), %error, "session command sweep failed");
+                        CommandKind::InputEdit => {
+                            unanswered_commands(
+                                kind,
+                                &node,
+                                identity.as_ref(),
+                                agent_identity.as_ref(),
+                                sweep,
+                            )
+                            .await
+                        }
+                    };
+                    match result {
+                        Ok(unanswered) => ids.extend(
+                            unanswered
+                                .into_iter()
+                                .map(|id| (kind, id, Some(agent.clone()))),
+                        ),
+                        Err(error) => {
+                            sweep_failed = true;
+                            tracing::warn!(agent_did = %agent, collection = kind.collection(), %error, "session command sweep failed");
+                        }
                     }
                 }
             }
@@ -324,29 +341,38 @@ where
             if cancel.is_cancelled() {
                 return Ok(());
             }
-            if kind == CommandKind::GoalControl
-                && !agents.as_ref().is_some_and(|snapshot| {
-                    actor
-                        .as_ref()
-                        .is_some_and(|did| snapshot.borrow().agents.contains_key(did))
-                })
-            {
+            if !agents.as_ref().is_some_and(|snapshot| {
+                actor
+                    .as_ref()
+                    .is_some_and(|did| snapshot.borrow().agents.contains_key(did))
+            }) {
                 deferred.remove(&(kind, id, actor));
                 continue;
             }
             let processed = match kind {
                 CommandKind::InputEdit => {
                     async {
-                        let agent_identities = agents
+                        let selected = actor
+                            .as_deref()
+                            .context("session edit lacks its selected Agent")?;
+                        let agent_identity = agents
                             .as_ref()
-                            .map(|snapshot| snapshot.borrow().watcher_identities())
-                            .transpose()?
-                            .context("session edit reconciliation requires Agent identities")?;
+                            .and_then(|snapshot| {
+                                snapshot
+                                    .borrow()
+                                    .agent(selected)
+                                    .map(|agent| agent.agent_identity.clone())
+                            })
+                            .context("session edit Agent identity is unavailable")?;
+                        anyhow::ensure!(
+                            agent_identity.did() == selected,
+                            "session edit Agent identity differs from snapshot"
+                        );
                         super::session_input_edit::process_command(
                             &node,
                             &identity,
                             &id,
-                            &agent_identities,
+                            agent_identity.as_ref(),
                         )
                         .await
                     }
@@ -439,22 +465,21 @@ where
             }
             event = changes.next(), if subscription_open => match event {
                 Some(event) => {
-                    let mut goal_command_changed = false;
+                    let mut command_changed = false;
                     for change in event.changes {
                         // Branchable collection-block updates have no document identity.
                         if change.doc_id.is_empty() {
                             continue;
                         }
-                        if let Some(kind) = collections.get(&change.collection_id) {
-                            if *kind == CommandKind::GoalControl { goal_command_changed = true; }
-                            else { ids.push((*kind, change.doc_id.clone(), None)); }
+                        if collections.contains_key(&change.collection_id) {
+                            command_changed = true;
                         }
                         if let Some(source) = goal_sources.get(&change.collection_id) {
                             changed_goals.push((*source, change.doc_id));
                         }
                     }
                     if event.resync_required { Some(Sweep::Unverified) }
-                    else if goal_command_changed { Some(Sweep::Unanswered) }
+                    else if command_changed { Some(Sweep::Unanswered) }
                     else { None }
                 }
                 None => {
@@ -478,49 +503,66 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn incomplete_intent_does_not_block_the_unverified_command_sweep() {
-        let fixture = crate::goal::operator_resume_test_support::Fixture::new(&serde_json::json!({
-            "status": "active", "sequence": 0, "blocked_audits": 0,
-            "wrapup_requested": false, "wrapup_completed": false,
-            "tokens_used": 0, "token_budget": 1000, "last_continued_from": null
-        }))
-        .await;
-        let identity = &fixture.identity;
-        let node = fixture.node.clone();
-        let actor = ::identity::Did::new(&fixture.parent.agent_did).unwrap();
-        let access = ConfigAccess::local_as(
-            node.clone(),
-            ::identity::Did::new(fixture.user.did()).unwrap(),
+    async fn generated_session_command_discovery_uses_held_agent_and_native_visibility() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity = Arc::new(
+            crate::store::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
+                .unwrap(),
         );
-        let session = access
-            .transact_readonly("test.sweep.session", |txn| {
-                Box::pin(async {
-                    crate::session::load_agent_session_owner_in_txn(
-                        txn,
-                        identity.did(),
-                        crate::goal::operator_resume_test_support::SESSION,
-                    )
-                    .await
-                })
-            })
+        let user =
+            crate::store::identity::KeyIdentity::load_or_create(temp.path().join("user.key"), None)
+                .unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::store::schema::ensure_runtime_schemas(&node)
             .await
-            .unwrap()
             .unwrap();
+        let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+        let agent =
+            crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
+        let access = ConfigAccess::Graphql(
+            crate::store::config_client::GraphqlEndpoint::as_principal(
+                format!("http://{address}/api/v0/graphql"),
+                user.did(),
+            )
+            .with_client_signing_capability(user.client_signing_capability().unwrap())
+            .unwrap()
+            .with_client_signed_agent_creates(),
+        );
+        let (session_doc_id, agent_doc_id) = access.transact_write("test.sweep.session", |txn| Box::pin(async {
+            let root = txn.execute_client_signed_create("mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                &serde_json::json!({"input": {"node_did":identity.did()}}), gents_protocol::schemas::NODE).await?;
+            let node_doc = crate::store::graphql::created_doc_id(&root, "Node")?;
+            let selected = txn.execute_client_signed_create("mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                &serde_json::json!({"input": {"node_did":identity.did(),"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"enabled":true}}), gents_protocol::schemas::AGENT).await?;
+            let agent_doc = crate::store::graphql::created_doc_id(&selected, "Agent")?;
+            txn.add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc).await?;
+            txn.add_actor_relationship("Agent", &agent_doc, "executor", &::identity::Did::new(agent.did())?).await?;
+            let response = txn.execute_client_signed_create("mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                &serde_json::json!({"input": {"session_id": "session", "node_did": identity.did(), "requester_did": user.did(), "agent_did": agent.did(), "created_at": "2026-10-10T00:00:00Z", "relationships_pending":false}}), gents_protocol::schemas::AGENT_SESSION).await?;
+            let session = crate::store::graphql::created_doc_id(&response, "AgentSession")?;
+            txn.add_resource_relationship("AgentSession", &session, "parent", "agents", &agent_doc).await?;
+            txn.add_actor_relationship("AgentSession", &session, "working_agent", &::identity::Did::new(agent.did())?).await?;
+            Ok::<_, anyhow::Error>((session, agent_doc))
+        })).await.unwrap();
         let mut command = SessionGoalControl {
             version: SESSION_GOAL_CONTROL_VERSION,
             command_id: "valid-command".into(),
-            requester_did: fixture.user.did().into(),
+            requester_did: user.did().into(),
             requester_peer_id: None,
             node_did: identity.did().into(),
-            agent_did: fixture.parent.agent_did.clone(),
-            agent_doc_id: crate::goal::agent_document_for_test(
-                &access,
-                identity.did(),
-                &fixture.parent.agent_did,
-            )
-            .await,
-            session_id: crate::goal::operator_resume_test_support::SESSION.into(),
-            session_doc_id: Some(session.doc_id.clone()),
+            agent_did: agent.did().into(),
+            agent_doc_id,
+            session_id: "session".into(),
+            session_doc_id: Some(session_doc_id.clone()),
             issued_at: "2000-01-01T00:00:00Z".into(),
             expires_at: "2100-01-01T00:00:00Z".into(),
             expected: Some(GoalRevision {
@@ -532,8 +574,7 @@ mod tests {
             native_evidence: None,
             signature: Vec::new(),
         };
-        command.signature = fixture
-            .user
+        command.signature = user
             .sign(&command.signing_payload().unwrap())
             .await
             .unwrap();
@@ -541,21 +582,64 @@ mod tests {
         let mut expected = access.transact_write("test.sparse_goal_commands", |txn| Box::pin(async {
             let mut ids = Vec::new();
             for (id, intent) in [("incomplete-command", None), ("valid-command", Some(valid.as_str()))] {
-                let response = txn.execute_with_variables("mutation($input: AgentSessionGoalControlMutationInputArg!) { create_AgentSessionGoalControl(input: $input) { _docID } }",
+                let response = txn.execute_client_signed_create("mutation($input: AgentSessionGoalControlMutationInputArg!) { create_AgentSessionGoalControl(input: $input) { _docID } }",
                     &serde_json::json!({"input": {"command_id": id, "node_did":identity.did(),
-                        "requester_did": fixture.user.did(), "agent_did": fixture.parent.agent_did,
-                        "session_id": crate::goal::operator_resume_test_support::SESSION, "session_doc_id": session.doc_id, "intent_json":intent}})).await?;
-                ids.push(crate::store::graphql::created_doc_id(&response, "AgentSessionGoalControl")?);
+                        "requester_did": user.did(), "agent_did": agent.did(),
+                        "session_id": "session", "session_doc_id": session_doc_id, "intent_json":intent}}), gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL).await?;
+                let doc = crate::store::graphql::created_doc_id(&response, "AgentSessionGoalControl")?;
+                txn.add_resource_relationship("AgentSessionGoalControl", &doc, "parent", "sessions", &session_doc_id).await?;
+                txn.add_actor_relationship("AgentSessionGoalControl", &doc, "working_agent", &::identity::Did::new(agent.did())?).await?;
+                ids.push(doc);
             }
             Ok::<_, anyhow::Error>(ids)
         })).await.unwrap();
-        let mut actual =
-            unanswered_goal_commands(&node, identity.as_ref(), &actor, Sweep::Unverified)
-                .await
-                .unwrap();
         expected.sort();
-        actual.sort();
-        assert_eq!(actual, expected);
+        let other_binding =
+            crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+        let other =
+            crate::store::identity::resolve_agent_identity(identity.as_ref(), &other_binding)
+                .unwrap();
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot()
+            .session_input_edit_native_discovery_cases;
+        assert!(!cases.is_empty());
+        for case in cases {
+            let agent = match case["actor"].as_str().unwrap() {
+                "agent" => agent.as_ref(),
+                "other" => other.as_ref(),
+                role => panic!("unknown modeled actor {role}"),
+            };
+            let access = ConfigAccess::local_managed_agent(
+                node.clone(),
+                ::identity::Did::new(agent.did()).unwrap(),
+                agent,
+            )
+            .unwrap();
+            let query = format!(
+                r#"{{ AgentSessionGoalControl(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                escape_graphql_string(&expected[0])
+            );
+            let response = access.execute(&query).await.unwrap();
+            let visible = !crate::store::graphql::rows::<serde_json::Value>(
+                &response,
+                "AgentSessionGoalControl",
+            )
+            .unwrap()
+            .is_empty();
+            assert_eq!(visible, case["visible"].as_bool().unwrap());
+            let mut actual =
+                unanswered_goal_commands(&node, identity.as_ref(), agent, Sweep::Unverified)
+                    .await
+                    .unwrap();
+            actual.sort();
+            assert_eq!(
+                actual,
+                if case["selected"].as_bool().unwrap() {
+                    expected.clone()
+                } else {
+                    Vec::new()
+                }
+            );
+        }
         node.shutdown().await.expect("node shutdown");
     }
 }

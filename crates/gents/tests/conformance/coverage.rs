@@ -1643,6 +1643,21 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         }
     }
     if !snapshot
+        .session_input_edit_native_discovery_cases
+        .is_empty()
+    {
+        emitted.insert((
+            "session_input_edit_native_discovery_cases".to_string(),
+            "SessionCommandNativeDiscovery".to_string(),
+        ));
+    }
+    if !snapshot.session_input_edit_native_claim_cases.is_empty() {
+        emitted.insert((
+            "session_input_edit_native_claim_cases".to_string(),
+            "SessionInputEditNativeClaim".to_string(),
+        ));
+    }
+    if !snapshot
         .session_input_edit_client_observation_cases
         .is_empty()
     {

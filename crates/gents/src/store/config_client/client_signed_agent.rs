@@ -510,7 +510,8 @@ pub(super) async fn execute_delete(
     .map_err(ConfigClientError::ClientAgentTimeout)??;
     graphql::validate_txn_response(serde_json::to_value(response)?)
 }
-pub(crate) async fn prepare_request_evidence(
+/// Prepare the public native graph for one exact AgentRequest input using the held client key.
+pub async fn prepare_request_evidence(
     signer: &dyn crate::store::identity::NodeIdentity,
     input: Value,
 ) -> Result<Value> {

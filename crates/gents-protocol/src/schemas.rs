@@ -114,6 +114,7 @@ pub const IDENTITY_POLICY_BINDINGS: &[(&str, &str)] = &[
     (AGENT_REQUEST_NAME, "delivered_requests"),
     (AGENT_SESSION_NAME, "sessions"),
     (AGENT_SESSION_GOAL_CONTROL_NAME, "goal_controls"),
+    (AGENT_SESSION_INPUT_EDIT_NAME, "goal_controls"),
     (AGENT_SESSION_GOAL_RECEIPT_NAME, "goal_receipts"),
     (AGENT_MESSAGE_NAME, "children"),
     (AGENT_OUTPUT_SEGMENT_NAME, "children"),

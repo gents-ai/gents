@@ -50,9 +50,7 @@ fn request_actor(access: &ConfigAccess, create: &AgentRequestCreate) -> anyhow::
 
 /// Translate the canonical request owner's GraphQL input into the native
 /// signed-create adapter's variables without constructing another wire shape.
-pub(crate) fn client_request_input(
-    create: &AgentRequestCreate,
-) -> anyhow::Result<serde_json::Value> {
+pub fn client_request_input(create: &AgentRequestCreate) -> anyhow::Result<serde_json::Value> {
     let document = create
         .graphql_client_publication_mutation()
         .map_err(anyhow::Error::msg)?;
@@ -274,34 +272,53 @@ pub async fn build_signed_client_request_in_txn(
     Ok(create)
 }
 
+pub(crate) async fn build_signed_edit_request_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    mut create: AgentRequestCreate,
+    signer: super::RequestSigner<'_>,
+) -> anyhow::Result<AgentRequestCreate> {
+    anyhow::ensure!(
+        txn.actor_did() == Some(create.admission.signer_did.as_str()),
+        "edit signer differs from transaction actor"
+    );
+    bind_existing_targets_in_txn(txn, &mut create).await?;
+    super::materialize::sign_request(&mut create, signer).await?;
+    Ok(create)
+}
+
 pub(crate) async fn bind_client_targets_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     create: &mut AgentRequestCreate,
 ) -> anyhow::Result<()> {
     if create.admission.kind == AgentRequestAdmissionKind::Client {
-        let session = crate::session::load_agent_session_owner_in_txn(
-            txn,
-            &create.node_did,
-            &create.session_id,
-        )
-        .await?
-        .context("client request session is unavailable")?;
-        anyhow::ensure!(
-            session.session.agent_did == create.agent_did
-                && session.session.requester_did.as_deref() == Some(create.requester_did.as_str()),
-            "client request session scope changed"
-        );
-        let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
-            txn,
-            crate::Collection::Agent,
-            &create.node_did,
-            &create.agent_did,
-        )
-        .await?
-        .context("selected agent is unavailable")?;
-        create.session_doc_id = Some(session.doc_id);
-        create.agent_doc_id = Some(agent);
+        bind_existing_targets_in_txn(txn, create).await?;
     }
+    Ok(())
+}
+
+async fn bind_existing_targets_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    create: &mut AgentRequestCreate,
+) -> anyhow::Result<()> {
+    let session =
+        crate::session::load_agent_session_owner_in_txn(txn, &create.node_did, &create.session_id)
+            .await?
+            .context("client request session is unavailable")?;
+    anyhow::ensure!(
+        session.session.agent_did == create.agent_did
+            && session.session.requester_did.as_deref() == Some(create.requester_did.as_str()),
+        "client request session scope changed"
+    );
+    let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+        txn,
+        crate::Collection::Agent,
+        &create.node_did,
+        &create.agent_did,
+    )
+    .await?
+    .context("selected agent is unavailable")?;
+    create.session_doc_id = Some(session.doc_id);
+    create.agent_doc_id = Some(agent);
     Ok(())
 }
 
