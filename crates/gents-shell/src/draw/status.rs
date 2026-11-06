@@ -56,7 +56,7 @@ fn hints(app: &App) -> &'static str {
     let stepped_in = app.tabs[app.active].parent.is_some();
     if stepped_in && (app.mode == Mode::Normal || app.keymap.set() == KeySet::Emacs) {
         return match app.keymap.set() {
-            KeySet::Vim => "esc step out · i message this agent · : jump · ? keys",
+            KeySet::Vim => "esc step out · : jump · ? keys",
             KeySet::Emacs => "ctrl-g step out · ctrl-x x jump · ctrl-x ? keys",
         };
     }
@@ -67,6 +67,7 @@ fn hints(app: &App) -> &'static str {
         };
     }
     match (app.keymap.set(), app.mode) {
+        (KeySet::Vim, Mode::Input) if stepped_in => "esc normal mode · / commands",
         (KeySet::Vim, Mode::Input) => "esc normal mode · / commands · enter send",
         (KeySet::Vim, Mode::Normal) => "h/l move · [ ] sidebars · : jump · ? keys",
         (KeySet::Emacs, _) => "ctrl-x o next pane · ctrl-x x jump · ctrl-x ? keys",

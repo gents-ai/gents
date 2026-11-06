@@ -37,7 +37,10 @@ fn clicks_reach_the_app() {
     click(&s, 6, 5);
     s.wait_for_all(&["Reviewer · auth", "Triage · inbox", "NORMAL"]);
     click(&s, 29, 40);
-    s.wait_for_all(&["Message Triage", "packs · Engineer › Triage"]);
+    s.wait_for_all(&[
+        "subagents take input from their parent",
+        "packs · Engineer › Triage",
+    ]);
     click(&s, 1, 35);
     s.wait_for_all(&["Message Engineer", "AGENTS"]);
     s.send("\x1b");
@@ -301,7 +304,10 @@ fn capture_screens_for_review() {
     s.wait_for_all(&["AGENTS"]);
     shot(&s, "16-running-selected");
     s.send("\r");
-    s.wait_for_all(&["Engineer › Reviewer", "Message Reviewer"]);
+    s.wait_for_all(&[
+        "Engineer › Reviewer",
+        "subagents take input from their parent",
+    ]);
     shot(&s, "17-subagent");
     s.send("\x1b");
     s.wait_for_all(&["AGENTS"]);

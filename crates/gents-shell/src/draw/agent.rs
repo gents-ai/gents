@@ -22,6 +22,7 @@ const SLASH_H: u16 = 13;
 const SLASH_FOOTER: &str = " tab complete · enter run · esc close";
 const RUNNING_STATUS_X: u16 = 32;
 const RUNNING_HINT_MIN_W: u16 = 64;
+const READ_ONLY: &str = "subagents take input from their parent";
 
 pub fn draw(app: &App, area: Rect, sessions_docked: bool, buf: &mut Buffer) {
     let focused = app.focus == Pane::Agent;
@@ -174,10 +175,11 @@ fn running_rows(app: &App, tab: &Tab, pane: Rect, buf: &mut Buffer) {
     let rows = tab.running.iter().zip(area.top()..area.bottom());
     for (index, (running, y)) in rows.enumerate() {
         let selected = tab.running_sel == Some(index);
-        let (mark, tone) = match (running.opens, running.state) {
+        let (mark, tone) = match (&running.opens, running.state) {
             (Opens::Workflow(_), _) => ("▸", Tone::Plain),
             (Opens::Agent(_), RunState::Working) => ("◆", Tone::Plain),
             (Opens::Agent(_), RunState::Done) => ("◇", Tone::Label),
+            (Opens::Agent(_), RunState::Failed) => ("✗", Tone::Warn),
         };
         let head = format!(" {mark} {} · {}", running.name, running.job);
         draw_row(buf, area, y, &head, tone, selected);
@@ -191,7 +193,7 @@ fn running_rows(app: &App, tab: &Tab, pane: Rect, buf: &mut Buffer) {
             theme::tone(Tone::Label)
         };
         let room = usize::from(area.width.saturating_sub(RUNNING_STATUS_X));
-        buf.set_stringn(area.x + RUNNING_STATUS_X, y, running.status, room, style);
+        buf.set_stringn(area.x + RUNNING_STATUS_X, y, &running.status, room, style);
     }
     let hint = if app.can_fall_into_running() {
         Some("j select ")
@@ -219,6 +221,10 @@ fn message_box(tab: &Tab, area: Rect, focused: bool, buf: &mut Buffer) {
     if !tab.input.is_empty() {
         let (text, _) = tab.input.view(room);
         buf.set_stringn(text_x, y, text, room as usize, theme::tone(Tone::Plain));
+        return;
+    }
+    if tab.parent.is_some() {
+        buf.set_stringn(text_x, y, READ_ONLY, room as usize, label);
         return;
     }
     let placeholder = format!("Message {}", tab.agent);

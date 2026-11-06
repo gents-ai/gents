@@ -233,31 +233,36 @@ pub const SUBAGENT_MARK: &str = " ◆";
 pub enum RunState {
     Working,
     Done,
+    Failed,
 }
 
-/// What `enter` on a running row reaches: a subagent's conversation, or a row of the Workflows view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What `enter` on a running row reaches: a subagent's session, which opens on its parent tab's
+/// connection, or a row of the Workflows view.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Opens {
-    Agent(&'static [(&'static str, Tone)]),
+    Agent(String),
     Workflow(usize),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Running {
-    pub name: &'static str,
-    pub job: &'static str,
-    pub status: &'static str,
+    pub name: String,
+    pub job: String,
+    pub status: String,
     pub state: RunState,
     pub opens: Opens,
 }
 
-pub const RUNNING: &[Running] = &[
-    Running {
-        name: "Reviewer",
-        job: "auth grouping",
-        status: "reading crates/gents-cli",
-        state: RunState::Working,
-        opens: Opens::Agent(&[
+type Chat = &'static [(&'static str, Tone)];
+
+/// Name, job, status, state and conversation. Each is the session `child:<name>`.
+const SUBAGENTS: [(&str, &str, &str, RunState, Chat); 3] = [
+    (
+        "Reviewer",
+        "auth grouping",
+        "reading crates/gents-cli",
+        RunState::Working,
+        &[
             (
                 "Review the `gents auth` grouping and report only real problems.",
                 Tone::You,
@@ -271,14 +276,14 @@ pub const RUNNING: &[Running] = &[
             ("  ✓ read  crates/gents-cli/src/cli/args.rs", Tone::Label),
             ("  … read  crates/gents-cli/src/cli/mod.rs", Tone::Warn),
             ("", Tone::Plain),
-        ]),
-    },
-    Running {
-        name: "Researcher",
-        job: "registry login",
-        status: "running for 4m",
-        state: RunState::Working,
-        opens: Opens::Agent(&[
+        ],
+    ),
+    (
+        "Researcher",
+        "registry login",
+        "running for 4m",
+        RunState::Working,
+        &[
             (
                 "Find out how the pack registry expects clients to sign in.",
                 Tone::You,
@@ -291,14 +296,14 @@ pub const RUNNING: &[Running] = &[
             ("", Tone::Plain),
             ("  … search  registry token refresh", Tone::Warn),
             ("", Tone::Plain),
-        ]),
-    },
-    Running {
-        name: "Triage",
-        job: "inbox",
-        status: "finished 2m ago",
-        state: RunState::Done,
-        opens: Opens::Agent(&[
+        ],
+    ),
+    (
+        "Triage",
+        "inbox",
+        "finished 2m ago",
+        RunState::Done,
+        &[
             ("Sort the new issues by area.", Tone::You),
             ("", Tone::Plain),
             (
@@ -306,16 +311,39 @@ pub const RUNNING: &[Running] = &[
                 Tone::Reply,
             ),
             ("", Tone::Plain),
-        ]),
-    },
-    Running {
-        name: "change unit",
-        job: "cli ux",
-        status: "build · step 3 of 5",
-        state: RunState::Working,
-        opens: Opens::Workflow(2),
-    },
+        ],
+    ),
 ];
+
+pub fn running() -> Vec<Running> {
+    let row = |name: &str, job: &str, status: &str, state, opens| Running {
+        name: name.to_string(),
+        job: job.to_string(),
+        status: status.to_string(),
+        state,
+        opens,
+    };
+    let workflow = row(
+        "change unit",
+        "cli ux",
+        "build · step 3 of 5",
+        RunState::Working,
+        Opens::Workflow(2),
+    );
+    SUBAGENTS
+        .iter()
+        .map(|&(name, job, status, state, _)| {
+            row(
+                name,
+                job,
+                status,
+                state,
+                Opens::Agent(format!("child:{name}")),
+            )
+        })
+        .chain([workflow])
+        .collect()
+}
 
 fn agent(name: &str, text: &str, tone: Tone) -> Agent {
     Agent {
@@ -352,16 +380,39 @@ pub fn agents() -> Vec<Agent> {
 }
 
 const SAMPLE_REPLY: &str = " sample reply: nothing is wired to an agent yet.";
-const SAMPLE_SUBAGENT_REPLY: &str = " ◆ sample reply: nothing is wired to an agent yet.";
+
+fn chat_lines(chat: Chat) -> Vec<ChatLine> {
+    chat.iter()
+        .map(|&(text, tone)| ChatLine {
+            text: text.to_string(),
+            tone,
+            item: None,
+        })
+        .collect()
+}
 
 /// What a source would answer, at once. Its lines carry no transcript item, so each appends.
-pub fn answer(intent: &Intent, subagent: bool) -> Vec<Update> {
+pub fn answer(intent: &Intent) -> Vec<Update> {
     match intent {
-        Intent::Open { session, agent } => vec![Update::Opened {
-            session: session.clone(),
-            lines: sample_chat(agent),
-            running: RUNNING,
-        }],
+        Intent::Open { session, agent } => {
+            let child = SUBAGENTS
+                .iter()
+                .find(|(name, ..)| session.strip_prefix("child:") == Some(name));
+            let (lines, rows) = match child {
+                Some(&(.., chat)) => (chat_lines(chat), Vec::new()),
+                None => (sample_chat(agent), running()),
+            };
+            vec![
+                Update::Opened {
+                    session: session.clone(),
+                    lines,
+                },
+                Update::Running {
+                    session: session.clone(),
+                    rows,
+                },
+            ]
+        }
         Intent::Send {
             tab, session, text, ..
         } => {
@@ -377,12 +428,7 @@ pub fn answer(intent: &Intent, subagent: bool) -> Vec<Update> {
                     session
                 }
             };
-            let reply = if subagent {
-                SAMPLE_SUBAGENT_REPLY
-            } else {
-                SAMPLE_REPLY
-            };
-            for (text, tone) in [(text.as_str(), Tone::You), (reply, Tone::Reply)] {
+            for (text, tone) in [(text.as_str(), Tone::You), (SAMPLE_REPLY, Tone::Reply)] {
                 let line = ChatLine {
                     text: text.to_string(),
                     tone,

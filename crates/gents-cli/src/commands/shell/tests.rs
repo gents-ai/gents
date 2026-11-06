@@ -10,7 +10,7 @@ use axum::{Json, Router};
 use gents_codex_protocol as codex;
 use gents_shell::app::{App, ChatLine};
 use gents_shell::keys::KeySet;
-use gents_shell::sample::Tone;
+use gents_shell::sample::{Opens, RunState, Running, Tone};
 use gents_shell::source::{Connection, Input, Intent, Session, Update};
 use rapidhash::RapidHashMap;
 use ratatui::buffer::Buffer;
@@ -786,7 +786,6 @@ async fn opening_a_session_sends_its_transcript_and_running_turn() {
             line("and now?", Tone::You, "u2"),
             blank(),
         ],
-        running: &[],
     };
     assert_eq!(shell.next().await, opened);
     let running = Update::Turn {
@@ -794,11 +793,290 @@ async fn opening_a_session_sends_its_transcript_and_running_turn() {
         turn: "t2".to_string(),
     };
     assert_eq!(shell.next().await, running);
+    assert_eq!(shell.next().await, rows("s1", Vec::new()));
     let item = Update::Item {
         session: "s1".to_string(),
         line: line("still going", Tone::Reply, "r2"),
     };
     assert_eq!(shell.next().await, item);
+}
+
+/// A subagent's thread as the endpoint lists it: under its root `s1`, named after its job, on
+/// the agent `local:researcher`.
+pub(super) fn child(id: &str, parent: &str, status: Value) -> Value {
+    let mut thread = thread(id, 100);
+    thread["sessionId"] = json!("s1");
+    thread["name"] = json!(format!("{id} job"));
+    thread["status"] = status;
+    thread["source"] = json!({
+        "subAgent": {
+            "thread_spawn": {
+                "parent_thread_id": parent,
+                "depth": 1,
+                "agent_nickname": "local:researcher",
+                "agent_role": "local:researcher",
+            }
+        }
+    });
+    thread["threadSource"] = json!("subagent");
+    thread["agentNickname"] = json!("local:researcher");
+    thread["agentRole"] = json!("local:researcher");
+    thread
+}
+
+fn active() -> Value {
+    json!({ "type": "active", "activeFlags": [] })
+}
+
+fn idle() -> Value {
+    json!({ "type": "idle" })
+}
+
+fn is_child_list(method: &str, params: &Value) -> bool {
+    method == "thread/list" && !params["sourceKinds"].is_null()
+}
+
+/// `thread/resume` answers each thread as `threads` has it, and `s1` as a plain session.
+fn resumed(params: &Value, threads: &[Value]) -> Answer {
+    let id = params["threadId"].as_str().unwrap();
+    let found = threads.iter().find(|thread| thread["id"] == id).cloned();
+    Some(Ok(thread_answer(found.unwrap_or_else(|| thread(id, 100)))))
+}
+
+fn rows(session: &str, rows: Vec<Running>) -> Update {
+    Update::Running {
+        session: session.to_string(),
+        rows,
+    }
+}
+
+fn row(id: &str, status: &str, state: RunState) -> Running {
+    Running {
+        name: "researcher".to_string(),
+        job: format!("{id} job"),
+        status: status.to_string(),
+        state,
+        opens: Opens::Agent(id.to_string()),
+    }
+}
+
+fn open_s1(shell: &Shell) {
+    shell.intend(Intent::Open {
+        session: "s1".to_string(),
+        agent: "a".to_string(),
+    });
+}
+
+fn resumes_of(fake: &FakeRuntime, thread: &str) -> usize {
+    let calls = fake.calls().into_iter();
+    calls
+        .filter(|call| call.method == "thread/resume" && call.params["threadId"] == thread)
+        .count()
+}
+
+#[tokio::test]
+async fn opening_a_session_lists_its_subagents_as_running_rows() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |agent, method, params| {
+        let error = json!({ "type": "systemError" });
+        let children = [
+            child("c1", "s1", idle()),
+            child("c2", "s2", idle()),
+            child("c3", "s1", error),
+        ];
+        match method {
+            "thread/resume" => resumed(params, &children),
+            _ if agent == "a" && is_child_list(method, params) => page(&children, None),
+            _ => quiet(method),
+        }
+    })
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+
+    open_s1(&shell);
+
+    let opened = shell.next().await;
+    assert!(
+        matches!(&opened, Update::Opened { session, .. } if session == "s1"),
+        "{opened:?}"
+    );
+    let expected = vec![
+        row("c1", "finished", RunState::Done),
+        row("c3", "error", RunState::Failed),
+    ];
+    assert_eq!(shell.next().await, rows("s1", expected));
+    let lists: Vec<_> = fake
+        .calls()
+        .into_iter()
+        .filter(|call| is_child_list(&call.method, &call.params))
+        .map(|call| (call.agent, call.params["sourceKinds"].clone()))
+        .collect();
+    let kinds = json!(["subAgent", "subAgentThreadSpawn"]);
+    assert_eq!(lists, [("a".to_string(), kinds)]);
+    assert_eq!(resumes_of(&fake, "c1") + resumes_of(&fake, "c3"), 0);
+}
+
+#[tokio::test]
+async fn a_working_subagent_is_resumed_once_and_its_end_refreshes_the_rows() {
+    let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ends = ended.clone();
+    let fake = FakeRuntime::start(agents_a_and_b(), move |agent, method, params| {
+        let status = if ends.load(std::sync::atomic::Ordering::SeqCst) {
+            idle()
+        } else {
+            active()
+        };
+        let children = [child("c1", "s1", status)];
+        match method {
+            "thread/resume" => resumed(params, &children),
+            _ if agent == "a" && is_child_list(method, params) => page(&children, None),
+            _ => quiet(method),
+        }
+    })
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+
+    open_s1(&shell);
+    let opened = shell.next().await;
+    assert!(matches!(opened, Update::Opened { .. }), "{opened:?}");
+    let working = vec![row("c1", "working", RunState::Working)];
+    assert_eq!(shell.next().await, rows("s1", working));
+    let resume = fake.calls().pop().unwrap();
+    assert_eq!(
+        (resume.agent.as_str(), resume.method.as_str()),
+        ("a", "thread/resume")
+    );
+    assert_eq!(resume.params["threadId"], "c1");
+
+    ended.store(true, std::sync::atomic::Ordering::SeqCst);
+    let completed = json!({ "threadId": "c1", "turn": turn("t1", "completed", json!([])) });
+    fake.push(
+        "a",
+        &json!({ "method": "turn/completed", "params": completed }),
+    );
+
+    let done = Update::TurnEnded {
+        session: "c1".to_string(),
+        turn: "t1".to_string(),
+    };
+    assert_eq!(shell.next().await, done, "no Opened for the resumed child");
+    let relisted = shell.next().await;
+    assert!(matches!(relisted, Update::Sessions(_)), "{relisted:?}");
+    let finished = vec![row("c1", "finished", RunState::Done)];
+    assert_eq!(shell.next().await, rows("s1", finished));
+    assert_eq!(resumes_of(&fake, "c1"), 1);
+}
+
+#[tokio::test]
+async fn a_subagent_that_ended_before_its_resume_reads_finished() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |agent, method, params| match method {
+        "thread/resume" => resumed(params, &[child("c1", "s1", idle())]),
+        _ if agent == "a" && is_child_list(method, params) => {
+            page(&[child("c1", "s1", active())], None)
+        }
+        _ => quiet(method),
+    })
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+
+    open_s1(&shell);
+
+    shell.next().await;
+    let finished = vec![row("c1", "finished", RunState::Done)];
+    assert_eq!(shell.next().await, rows("s1", finished));
+}
+
+#[tokio::test]
+async fn a_spawn_on_the_open_session_relists_its_subagents() {
+    let lists = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let listed = lists.clone();
+    let fake = FakeRuntime::start(
+        agents_a_and_b(),
+        move |agent, method, params| match method {
+            "thread/resume" => resumed(params, &[]),
+            _ if agent == "a" && is_child_list(method, params) => {
+                match listed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                    0 => page(&[], None),
+                    _ => page(&[child("c1", "s1", idle())], None),
+                }
+            }
+            _ => quiet(method),
+        },
+    )
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+    open_s1(&shell);
+    shell.next().await;
+    assert_eq!(shell.next().await, rows("s1", Vec::new()));
+
+    let spawn = json!({
+        "type": "collabAgentToolCall",
+        "id": "k1",
+        "tool": "spawnAgent",
+        "status": "inProgress",
+        "senderThreadId": "s1",
+        "receiverThreadIds": [],
+        "prompt": "look into it",
+        "agentsStates": {},
+    });
+    fake.push("a", &item_note("item/started", "s1", spawn));
+
+    let item = shell.next().await;
+    assert!(matches!(item, Update::Item { .. }), "{item:?}");
+    let spawned = vec![row("c1", "finished", RunState::Done)];
+    assert_eq!(shell.next().await, rows("s1", spawned));
+}
+
+#[tokio::test]
+async fn stepping_into_a_subagent_resumes_it_and_streams_it() {
+    let fake = FakeRuntime::start(agents_a_and_b(), |_, method, params| {
+        let mut stepped = child("c1", "s1", active());
+        stepped["turns"] = json!([turn(
+            "t1",
+            "inProgress",
+            json!([user_message("u1", "look into it")])
+        )]);
+        match method {
+            "thread/resume" => resumed(params, &[stepped]),
+            _ => quiet(method),
+        }
+    })
+    .await;
+    let shell = open_shell(&fake);
+    shell.ready().await;
+
+    shell.intend(Intent::Open {
+        session: "c1".to_string(),
+        agent: "a".to_string(),
+    });
+
+    let opened = Update::Opened {
+        session: "c1".to_string(),
+        lines: vec![line("look into it", Tone::You, "u1"), blank()],
+    };
+    assert_eq!(shell.next().await, opened);
+    let turn = Update::Turn {
+        session: "c1".to_string(),
+        turn: "t1".to_string(),
+    };
+    assert_eq!(shell.next().await, turn);
+    assert_eq!(shell.next().await, rows("c1", Vec::new()));
+    let params = json!({ "threadId": "c1", "turnId": "t1", "itemId": "r1", "delta": "found" });
+    fake.push(
+        "a",
+        &json!({ "method": "item/agentMessage/delta", "params": params }),
+    );
+    let delta = Update::Delta {
+        session: "c1".to_string(),
+        item: "r1".to_string(),
+        text: "found".to_string(),
+        tone: Tone::Reply,
+    };
+    assert_eq!(shell.next().await, delta);
+    assert_eq!(resumes_of(&fake, "c1"), 1);
 }
 
 #[tokio::test]

@@ -39,7 +39,11 @@ pub enum Update {
     Opened {
         session: String,
         lines: Vec<ChatLine>,
-        running: &'static [Running],
+    },
+    /// The session's running rows, replaced whole.
+    Running {
+        session: String,
+        rows: Vec<Running>,
     },
     Started {
         tab: u64,

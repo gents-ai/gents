@@ -1,18 +1,23 @@
 use chrono::{Local, NaiveDate, TimeZone};
 use gents_codex_protocol as codex;
 use gents_shell::app::ChatLine;
-use gents_shell::sample::Tone;
+use gents_shell::sample::{Opens, RunState, Running, Tone};
 use gents_shell::source::{Agent, Day, Session, SessionState, Update};
 
 use crate::commands::codex_shim::RuntimeIdentity;
 
-pub(super) fn session(thread: &codex::Thread, agent: &str, today: NaiveDate) -> Session {
-    let name = [thread.name.as_deref(), thread.preview.lines().next()]
+/// The thread's name, or the first line of its preview.
+fn title(thread: &codex::Thread) -> String {
+    [thread.name.as_deref(), thread.preview.lines().next()]
         .into_iter()
         .flatten()
         .map(clean)
         .find(|name| !name.is_empty())
-        .unwrap_or_else(|| "untitled".to_string());
+        .unwrap_or_else(|| "untitled".to_string())
+}
+
+pub(super) fn session(thread: &codex::Thread, agent: &str, today: NaiveDate) -> Session {
+    let name = title(thread);
     let updated = Local.timestamp_opt(thread.updated_at, 0).single();
     let day = match updated.map(|at| at.date_naive()) {
         Some(date) if date == today => Day::Today,
@@ -26,6 +31,41 @@ pub(super) fn session(thread: &codex::Thread, agent: &str, today: NaiveDate) -> 
         name,
         day,
         state: state(&thread.status),
+    }
+}
+
+/// The session a subagent's thread was spawned from.
+pub(super) fn parent(thread: &codex::Thread) -> Option<&str> {
+    match &thread.source {
+        codex::SessionSource::SubAgent(codex::SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            ..
+        }) => Some(parent_thread_id),
+        _ => None,
+    }
+}
+
+/// A subagent's running row, named by its agent as the agent picker names agents.
+pub(super) fn subagent(thread: &codex::Thread) -> Running {
+    let agent = thread
+        .agent_nickname
+        .as_deref()
+        .or(thread.agent_role.as_deref());
+    let agent = clean(agent.unwrap_or("subagent"));
+    let (status, state) = match thread.status {
+        codex::ThreadStatus::Active { .. } => ("working", RunState::Working),
+        codex::ThreadStatus::Idle | codex::ThreadStatus::NotLoaded => ("finished", RunState::Done),
+        codex::ThreadStatus::SystemError => ("error", RunState::Failed),
+    };
+    Running {
+        name: agent
+            .rsplit_once(':')
+            .map_or(agent.as_str(), |(_, name)| name)
+            .to_string(),
+        job: title(thread),
+        status: status.to_string(),
+        state,
+        opens: Opens::Agent(thread.id.clone()),
     }
 }
 
@@ -277,11 +317,11 @@ fn clean(text: &str) -> String {
 mod tests {
     use chrono::{Local, NaiveDate, TimeZone};
     use gents_codex_protocol as codex;
-    use gents_shell::sample::Tone;
+    use gents_shell::sample::{Opens, RunState, Running, Tone};
     use gents_shell::source::{Agent, Day, SessionState, Update};
     use serde_json::{json, Value};
 
-    use super::{agents, lines, session, updates};
+    use super::{agents, lines, parent, session, subagent, updates};
     use crate::commands::codex::tests::identity;
     use crate::commands::shell::tests::line;
 
@@ -354,6 +394,56 @@ mod tests {
             thread.status = status;
             assert_eq!(session(&thread, "a", today()).state, state);
         }
+    }
+
+    #[test]
+    fn a_spawned_thread_becomes_a_subagent_row() {
+        let spawned = |status: Value| -> codex::Thread {
+            serde_json::from_value(crate::commands::shell::tests::child("c1", "s1", status))
+                .unwrap()
+        };
+        let row = |status: &str, state| Running {
+            name: "researcher".to_string(),
+            job: "c1 job".to_string(),
+            status: status.to_string(),
+            state,
+            opens: Opens::Agent("c1".to_string()),
+        };
+        for (status, expected) in [
+            (
+                json!({ "type": "active", "activeFlags": [] }),
+                row("working", RunState::Working),
+            ),
+            (json!({ "type": "idle" }), row("finished", RunState::Done)),
+            (
+                json!({ "type": "notLoaded" }),
+                row("finished", RunState::Done),
+            ),
+            (
+                json!({ "type": "systemError" }),
+                row("error", RunState::Failed),
+            ),
+        ] {
+            let thread = spawned(status);
+            assert_eq!(parent(&thread), Some("s1"));
+            assert_eq!(subagent(&thread), expected);
+        }
+
+        let mut unnamed = spawned(json!({ "type": "idle" }));
+        unnamed.name = None;
+        unnamed.preview = "look into it\nthen report".to_string();
+        unnamed.agent_nickname = None;
+        unnamed.agent_role = Some("local:triage".to_string());
+        let row = subagent(&unnamed);
+        assert_eq!(
+            (row.name.as_str(), row.job.as_str()),
+            ("triage", "look into it")
+        );
+    }
+
+    #[test]
+    fn a_root_thread_has_no_parent() {
+        assert_eq!(parent(&thread(None, "x", noon(today()))), None);
     }
 
     fn item(value: Value) -> codex::ThreadItem {

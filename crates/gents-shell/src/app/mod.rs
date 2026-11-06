@@ -19,7 +19,7 @@ use crate::layout::{
 };
 use crate::sample::{
     answer, diff, note, row, view_rows, Opens, RowAction, Running, SidebarRow, Tone, View, CHAT,
-    DIFF_BACK_ROW, PROMPT_ROW, START_SESSION,
+    DIFF_BACK_ROW, PROMPT_ROW, START_SESSION, SUBAGENT_MARK,
 };
 use crate::source::{Agent, Connection, Day, Intent, Session, SessionState, Update};
 use input::LineInput;
@@ -31,6 +31,7 @@ const SOURCE_GONE: &str = "the runtime source stopped: reopen the shell";
 const CONNECTING: &str = "still connecting to the runtime";
 const STOPPING: &str = "stopping the turn";
 const STARTING: &str = "starting the session, try again in a moment";
+const READ_ONLY: &str = "a subagent takes input from its parent";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
@@ -75,7 +76,7 @@ pub struct Tab {
     pub scroll: usize,
     pub input: LineInput,
     pub agent_picked: bool,
-    pub running: &'static [Running],
+    pub running: Vec<Running>,
     /// The selected running row, while those rows have the keys.
     pub running_sel: Option<usize>,
     /// The session's turn in progress.
@@ -100,7 +101,7 @@ impl Tab {
             scroll: 0,
             input: LineInput::default(),
             agent_picked: false,
-            running: &[],
+            running: Vec::new(),
             running_sel: None,
             turn: None,
             starting: false,
@@ -124,8 +125,26 @@ impl Tab {
             .collect()
     }
 
+    /// This tab or the parent it boxes that shows `session`.
+    fn showing(&mut self, session: &str) -> Option<&mut Tab> {
+        if self.session.as_deref() == Some(session) {
+            return Some(self);
+        }
+        self.parent.as_mut()?.showing(session)
+    }
+
+    /// A subagent's replies carry the mark its running row has.
+    fn marked(&self, mut line: ChatLine) -> ChatLine {
+        let reply = line.tone == Tone::Reply && !line.text.starts_with(SUBAGENT_MARK);
+        if reply && self.parent.is_some() {
+            line.text = format!("{SUBAGENT_MARK} {}", line.text);
+        }
+        line
+    }
+
     /// An unseen item appends its line and a blank, and a seen one replaces its line.
     fn put(&mut self, line: ChatLine) {
+        let line = self.marked(line);
         let seen = line.item.as_deref().and_then(|item| self.item_line(item));
         match seen {
             Some(index) => self.lines[index] = line,
@@ -192,16 +211,6 @@ fn bubble(text: &str, width: usize) -> Vec<String> {
     let left = width.saturating_sub(widest.unwrap_or(0) + 1);
     rows.iter()
         .map(|row| format!("{:left$}{row}", ""))
-        .collect()
-}
-
-fn chat_lines(chat: &[(&str, Tone)]) -> Vec<ChatLine> {
-    chat.iter()
-        .map(|&(text, tone)| ChatLine {
-            text: text.to_string(),
-            tone,
-            item: None,
-        })
         .collect()
 }
 
@@ -368,8 +377,7 @@ impl App {
 
     fn emit(&mut self, intent: Intent) {
         let Some(intents) = &self.intents else {
-            let subagent = self.tabs[self.active].parent.is_some();
-            for update in answer(&intent, subagent) {
+            for update in answer(&intent) {
                 self.apply(update);
             }
             return;
@@ -381,16 +389,19 @@ impl App {
 
     pub fn apply(&mut self, update: Update) {
         match update {
-            Update::Opened {
-                session,
-                lines,
-                running,
-            } => self.opened(&session, lines, running),
+            Update::Opened { session, lines } => self.opened(&session, lines),
+            Update::Running { session, rows } => {
+                if let Some(tab) = self.showing(&session) {
+                    let last = rows.len().checked_sub(1);
+                    tab.running_sel = tab.running_sel.zip(last).map(|(sel, last)| sel.min(last));
+                    tab.running = rows;
+                }
+            }
             Update::Started { tab, session } => self.started(tab, session),
             Update::StartFailed { tab, message } => self.start_failed(tab, message),
             Update::Item { session, line } => {
-                if let Some(index) = self.showing(&session) {
-                    self.tabs[index].put(line);
+                if let Some(tab) = self.showing(&session) {
+                    tab.put(line);
                 }
             }
             Update::Delta {
@@ -400,13 +411,12 @@ impl App {
                 tone,
             } => self.delta(&session, item, &text, tone),
             Update::Turn { session, turn } => {
-                if let Some(index) = self.showing(&session) {
-                    self.tabs[index].turn = Some(turn);
+                if let Some(tab) = self.showing(&session) {
+                    tab.turn = Some(turn);
                 }
             }
             Update::TurnEnded { session, turn } => {
-                if let Some(index) = self.showing(&session) {
-                    let tab = &mut self.tabs[index];
+                if let Some(tab) = self.showing(&session) {
                     if tab.turn.as_ref() == Some(&turn) {
                         tab.turn = None;
                     }
@@ -426,10 +436,9 @@ impl App {
     }
 
     fn delta(&mut self, session: &str, item: String, text: &str, tone: Tone) {
-        let Some(index) = self.showing(session) else {
+        let Some(tab) = self.showing(session) else {
             return;
         };
-        let tab = &mut self.tabs[index];
         match tab.item_line(&item) {
             Some(line) => tab.lines[line].text.push_str(text),
             None => tab.put(ChatLine {
@@ -518,23 +527,22 @@ impl App {
         }
     }
 
-    fn showing(&self, session: &str) -> Option<usize> {
-        self.tabs
-            .iter()
-            .position(|tab| tab.session.as_deref() == Some(session))
+    /// The tab showing `session`, or the parent a tab boxes: a parent shows what came while a
+    /// subagent was stepped into.
+    fn showing(&mut self, session: &str) -> Option<&mut Tab> {
+        self.tabs.iter_mut().find_map(|tab| tab.showing(session))
     }
 
-    fn opened(&mut self, session: &str, lines: Vec<ChatLine>, running: &'static [Running]) {
-        let Some(index) = self.showing(session) else {
+    fn opened(&mut self, session: &str, lines: Vec<ChatLine>) {
+        let Some(tab) = self.showing(session) else {
             return;
         };
-        let tab = &mut self.tabs[index];
-        tab.lines = lines;
-        tab.running = running;
+        tab.lines = lines.into_iter().map(|line| tab.marked(line)).collect();
         // Opening left an empty tab in input mode; a user who has acted since keeps their mode.
-        let untouched = index == self.active
+        let active = &self.tabs[self.active];
+        let untouched = active.session.as_deref() == Some(session)
             && self.mode == Mode::Input
-            && self.tabs[index].input.is_empty()
+            && active.input.is_empty()
             && self.search.is_none()
             && self.slash.is_none()
             && self.layers.is_empty();
@@ -668,25 +676,34 @@ impl App {
         }
     }
 
+    /// A subagent opens on its parent tab's connection, which serves the whole session tree.
     pub(crate) fn activate_running(&mut self) {
-        let tab = &mut self.tabs[self.active];
-        let running = tab.running;
-        let Some(row) = tab.running_sel.and_then(|row| running.get(row)) else {
+        let tab = &self.tabs[self.active];
+        let Some(row) = tab
+            .running_sel
+            .and_then(|row| tab.running.get(row))
+            .cloned()
+        else {
             return;
         };
         match row.opens {
-            Opens::Agent(chat) => {
+            Opens::Agent(session) => {
+                if self.says_lost() {
+                    return;
+                }
+                let tab = &mut self.tabs[self.active];
                 let mut child = Tab::new_session();
                 child.id = tab.id;
-                child.session = tab.session.clone();
-                child.name = row.job.to_string();
-                child.agent = row.name.to_string();
-                child.agent_id = row.name.to_string();
-                child.lines = chat_lines(chat);
+                child.session = Some(session.clone());
+                child.name = row.job;
+                child.agent = row.name;
+                child.agent_id = tab.agent_id.clone();
                 child.sidebar = tab.sidebar;
+                let agent = child.agent_id.clone();
                 let parent = std::mem::replace(tab, child);
                 tab.parent = Some(Box::new(parent));
                 self.activate_tab(self.active);
+                self.emit(Intent::Open { session, agent });
             }
             Opens::Workflow(row) => self.show_workflow(row),
         }
@@ -961,7 +978,12 @@ impl App {
         }
     }
 
+    /// The runtime refuses a turn on a subagent's thread.
     fn send(&mut self) {
+        if self.tabs[self.active].parent.is_some() {
+            self.notice = Some(READ_ONLY.to_string());
+            return;
+        }
         if self.tabs[self.active].input.text().trim().is_empty() || self.says_lost() {
             return;
         }
@@ -1178,9 +1200,17 @@ impl App {
         let session = self.sessions[index].clone();
         let shown = self
             .tabs
-            .iter()
-            .position(|tab| tab.session.as_ref() == Some(&session.id));
+            .iter_mut()
+            .position(|tab| tab.showing(&session.id).is_some());
         if let Some(index) = shown {
+            // A parent boxed behind a subagent is stepped out to, so one tab shows the session.
+            let tab = &mut self.tabs[index];
+            while tab.session.as_ref() != Some(&session.id) {
+                let Some(parent) = tab.parent.take() else {
+                    break;
+                };
+                *tab = *parent;
+            }
             self.activate_tab(index);
             return;
         }
@@ -1364,7 +1394,7 @@ mod tests {
     use crate::draw;
     use crate::draw::theme;
     use crate::keys::KeySet::{Emacs, Vim};
-    use crate::sample::{RUNNING, SUBAGENT_MARK};
+    use crate::sample::RunState;
     use crate::testing::{
         buffer, find, keys, numbered, press, screen, session_row, type_text, with_right_pane,
     };
@@ -1862,10 +1892,11 @@ mod tests {
         let s = screen(&app);
         assert_eq!(app.tabs[0].agent, "Reviewer");
         assert!(find(&s, "packs · Engineer › Reviewer").is_some());
-        assert!(find(&s, "Message Reviewer").is_some());
+        assert!(find(&s, "subagents take input from their parent").is_some());
         assert!(find(&s, "◆ Checking the new subcommands").is_some());
         assert_eq!(app.ctx(), KeyCtx::Normal);
         assert!(find(&s, "esc step out").is_some());
+        assert_eq!(find(&s, "message this agent"), None);
         press(&mut app, "esc");
         assert_eq!(app.tabs[0], selected);
         press(&mut app, "esc");
@@ -1873,15 +1904,222 @@ mod tests {
     }
 
     #[test]
-    fn a_subagents_reply_carries_the_mark() {
+    fn a_subagents_replies_carry_the_mark() {
+        let (mut app, _intents) = with_subagents();
+        press(&mut app, "up up enter");
+        app.apply(Update::Opened {
+            session: "c1".to_string(),
+            lines: vec![
+                said("looking", Tone::Reply, "r1"),
+                said("go on", Tone::You, "u1"),
+            ],
+        });
+        app.apply(Update::Delta {
+            session: "c1".to_string(),
+            item: "r2".to_string(),
+            text: "found".to_string(),
+            tone: Tone::Reply,
+        });
+        let texts = |app: &App| -> Vec<String> {
+            let lines = &app.tabs[0].lines;
+            lines.iter().map(|line| line.text.clone()).collect()
+        };
+        assert_eq!(texts(&app), [" ◆ looking", "go on", " ◆ found", ""]);
+        app.apply(item("c1", said("found it", Tone::Reply, "r2")));
+        assert_eq!(texts(&app)[2], " ◆ found it", "a completed reply keeps it");
+        let (row, column) = find(&screen(&app), "◆ looking").expect("the reply");
+        assert_eq!(buffer(&app)[(column, row)].fg, theme::ACCENT);
+
+        press(&mut app, "esc esc");
+        app.apply(item("s1", said("plain", Tone::Reply, "r9")));
+        assert_eq!(app.tabs[0].lines[0].text, "plain", "the parent's own");
+    }
+
+    #[test]
+    fn opening_a_boxed_parent_steps_out_to_it() {
         let mut app = session_app();
-        press(&mut app, "j enter i");
+        press(&mut app, "j enter");
+        app.open_session(session_row("pack registry"));
+        assert_eq!((app.tabs.len(), app.active), (1, 0));
+        assert_eq!(app.tabs[0].parent, None);
+        assert_eq!(app.tabs[0].agent, "Engineer");
+
+        let (mut app, intents) = with_subagents();
+        let listed = Session {
+            agent: "local:default".to_string(),
+            ..listed("s1", Day::Today, SessionState::Idle)
+        };
+        app.apply(Update::Sessions(vec![listed]));
+        press(&mut app, "up up enter");
+        intents.try_recv().expect("the subagent's open");
+        let row = app
+            .session_rows()
+            .iter()
+            .position(|row| row.text.contains("s1"));
+        app.open_session(row.expect("the session's row"));
+        assert!(intents.try_recv().is_err(), "it is already open");
+        assert_eq!(
+            (app.tabs.len(), app.tabs[0].session.as_deref()),
+            (1, Some("s1"))
+        );
+        app.apply(item("s1", said("later", Tone::Reply, "r9")));
+        assert_eq!(
+            app.tabs[0].lines,
+            [said("later", Tone::Reply, "r9"), blank()]
+        );
+    }
+
+    fn subagent(name: &str, state: RunState, session: &str) -> Running {
+        Running {
+            name: name.to_string(),
+            job: format!("{name} job"),
+            status: "working".to_string(),
+            state,
+            opens: Opens::Agent(session.to_string()),
+        }
+    }
+
+    fn running(session: &str, rows: Vec<Running>) -> Update {
+        Update::Running {
+            session: session.to_string(),
+            rows,
+        }
+    }
+
+    /// A connected tab on session `s1` of agent `local:default`, with two subagents.
+    fn with_subagents() -> (App, std::sync::mpsc::Receiver<Intent>) {
+        let (mut app, intents) = with_runtime_agents();
+        app.tabs[0].session = Some("s1".to_string());
+        app.tabs[0].name = "fix login".to_string();
+        app.apply(running(
+            "s1",
+            vec![
+                subagent("researcher", RunState::Working, "c1"),
+                subagent("triage", RunState::Done, "c2"),
+            ],
+        ));
+        (app, intents)
+    }
+
+    #[test]
+    fn stepping_into_a_subagent_opens_its_session_on_the_parents_connection() {
+        let (mut app, intents) = with_subagents();
+        press(&mut app, "up up enter");
+        let open = Intent::Open {
+            session: "c1".to_string(),
+            agent: "local:default".to_string(),
+        };
+        assert_eq!(intents.try_recv(), Ok(open));
+        assert_eq!(app.tabs[0].session.as_deref(), Some("c1"));
+        assert!(find(&screen(&app), "fix login · default › researcher").is_some());
+
+        app.apply(Update::Opened {
+            session: "c1".to_string(),
+            lines: vec![said("looking", Tone::Reply, "r1")],
+        });
+        assert_eq!(app.tabs[0].lines, [said(" ◆ looking", Tone::Reply, "r1")]);
+    }
+
+    #[test]
+    fn a_lost_connection_keeps_the_parent_in_front() {
+        let (mut app, intents) = with_subagents();
+        app.apply(Update::Connection(Connection::Lost("gone".to_string())));
+        press(&mut app, "up up enter");
+        assert!(intents.try_recv().is_err());
+        assert_eq!(app.tabs[0].parent, None);
+        assert_eq!(app.notice.as_deref(), Some("gone"));
+    }
+
+    #[test]
+    fn a_subagents_box_is_read_only() {
+        let (mut app, intents) = with_subagents();
+        press(&mut app, "up up enter");
+        intents.try_recv().expect("the open");
+        let s = screen(&app);
+        assert!(find(&s, "subagents take input from their parent").is_some());
+        assert_eq!(find(&s, "enter send"), None);
+
         type_text(&mut app, "hi");
         press(&mut app, "enter");
-        let lines = &app.tabs[0].lines;
-        assert!(lines[lines.len() - 2].text.starts_with(SUBAGENT_MARK));
-        let (row, column) = find(&screen(&app), "◆ sample reply").expect("the reply");
-        assert_eq!(buffer(&app)[(column, row)].fg, theme::ACCENT);
+        assert!(intents.try_recv().is_err(), "nothing is sent");
+        assert_eq!(app.tabs[0].input.text(), "hi");
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("a subagent takes input from its parent")
+        );
+
+        app.apply(Update::Turn {
+            session: "c1".to_string(),
+            turn: "t1".to_string(),
+        });
+        press(&mut app, "ctrl-c ctrl-c");
+        let stop = Intent::Interrupt {
+            session: "c1".to_string(),
+            agent: "local:default".to_string(),
+            turn: "t1".to_string(),
+        };
+        assert_eq!(intents.try_recv(), Ok(stop));
+
+        type_text(&mut app, "/jobs");
+        press(&mut app, "enter");
+        assert_eq!(app.view, View::Agents);
+        assert!(right_is_shown(&app));
+    }
+
+    #[test]
+    fn the_parent_keeps_its_updates_while_stepped_into() {
+        let (mut app, _intents) = with_subagents();
+        press(&mut app, "up up enter");
+        app.apply(item("s1", said("still going", Tone::Reply, "r1")));
+        app.apply(running(
+            "s1",
+            vec![subagent("researcher", RunState::Done, "c1")],
+        ));
+        assert!(app.tabs[0].lines.is_empty(), "the subagent shows its own");
+
+        press(&mut app, "esc esc");
+        let parent = &app.tabs[0];
+        assert_eq!(parent.session.as_deref(), Some("s1"));
+        assert_eq!(
+            parent.lines,
+            [said("still going", Tone::Reply, "r1"), blank()]
+        );
+        assert_eq!(parent.running[0].state, RunState::Done);
+        assert_eq!(parent.running_sel, Some(0));
+    }
+
+    #[test]
+    fn running_rows_follow_their_update() {
+        let (mut app, _intents) = with_subagents();
+        app.apply(running(
+            "s1",
+            vec![
+                subagent("researcher", RunState::Working, "c1"),
+                subagent("triage", RunState::Done, "c2"),
+                subagent("scout", RunState::Failed, "c3"),
+            ],
+        ));
+        let s = screen(&app);
+        let drawn = buffer(&app);
+        for (text, color) in [
+            ("◆ researcher · researcher job", theme::ACCENT),
+            ("◇ triage · triage job", theme::LABEL),
+            ("✗ scout · scout job", theme::WARN),
+        ] {
+            let (row, column) = find(&s, text).expect(text);
+            assert_eq!(drawn[(column, row)].fg, color, "{text}");
+        }
+
+        press(&mut app, "up");
+        assert_eq!(app.tabs[0].running_sel, Some(2));
+        app.apply(running(
+            "s1",
+            vec![subagent("researcher", RunState::Done, "c1")],
+        ));
+        assert_eq!(app.tabs[0].running_sel, Some(0));
+        app.apply(running("s1", Vec::new()));
+        assert_eq!(app.tabs[0].running_sel, None);
+        assert!(app.tabs[0].running.is_empty());
     }
 
     #[test]
@@ -3329,7 +3567,6 @@ mod tests {
         app.apply(Update::Opened {
             session: "flaky recovery test".to_string(),
             lines: sample_chat("Reviewer"),
-            running: &[],
         });
         assert_eq!(app.tabs[0].lines, sample_chat("Reviewer"));
         assert_eq!(app.mode, Mode::Normal);
@@ -3349,8 +3586,8 @@ mod tests {
             Update::Opened {
                 session: "s1".to_string(),
                 lines: sample_chat("Engineer"),
-                running: RUNNING,
             },
+            running("s1", crate::sample::running()),
             Update::Delta {
                 session: "s1".to_string(),
                 item: "r1".to_string(),
@@ -3594,7 +3831,6 @@ mod tests {
         Update::Opened {
             session: session.to_string(),
             lines: sample_chat("Engineer"),
-            running: &[],
         }
     }
 
