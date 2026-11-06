@@ -105,6 +105,118 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn user_grants_selected_backend_manager_without_backend_write() -> Result<()> {
+        let (db, user, owner, binding) =
+            crate::test_support::signed_test_node("backend-selection-manager").await;
+        let runtime = db.node_identity.did().to_owned();
+        let agent_identity =
+            crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)?;
+        let actor = identity::Did::new(agent_identity.did())?;
+        let agent = ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            actor.clone(),
+            agent_identity.as_ref(),
+        )?;
+        let backend_id = format!("{}:backend", binding.agent_did);
+        let backend_query = format!(
+            r#"{{ InferenceBackendMetadata(filter: {{backend_id:{{_eq:"{}"}}}}) {{_docID name}} }}"#,
+            crate::store::graphql::escape_graphql_string(&backend_id)
+        );
+        let before = owner.execute(&backend_query).await?;
+        let backend = before["data"]["InferenceBackendMetadata"][0]["_docID"]
+            .as_str()
+            .context("User-owned backend missing")?
+            .to_owned();
+        let owners = owner
+            .transact_readonly("test.backend.owner", |txn| {
+                let backend = &backend;
+                Box::pin(async move {
+                    txn.document_owners("InferenceBackendMetadata", std::slice::from_ref(backend))
+                        .await
+                })
+            })
+            .await?;
+        assert_eq!(
+            owners[0].owner.as_ref().map(|did| did.as_str()),
+            Some(user.did())
+        );
+        let input = serde_json::json!({"node_did":runtime,"profile_id":"other-profile","backend_id":backend_id,"model_name":"test-model"});
+        let created = owner.transact_write("test.backend.other_profile", |txn| {
+            let input = &input;
+            Box::pin(async move { txn.execute_client_signed_create(
+                "mutation($input: InferenceProfileMutationInputArg!) { create_InferenceProfile(input:$input) {_docID} }",
+                &serde_json::json!({"input":input}), gents_protocol::schemas::INFERENCE_PROFILE,
+            ).await })
+        }).await?;
+        let profile = crate::store::graphql::created_doc_id(&created, "InferenceProfile")?;
+        let case = crate::lean_vocab_test::lean_identity_household_cases()
+            .iter()
+            .find(|case| case.name == "configuration-explicit-grants")
+            .unwrap();
+        let expected = |phase: &str| {
+            case.configuration_inference_self_config_cases
+                .iter()
+                .find(|value| {
+                    value["phase"] == phase
+                        && value["actor"] == "agent"
+                        && value["document"] == "backend-metadata"
+                })
+                .unwrap()["manager_expected"]
+                .as_bool()
+                .unwrap()
+        };
+        let link = || {
+            agent.transact_write("test.backend.selected_by", |txn| {
+                let backend = &backend;
+                let profile = &profile;
+                Box::pin(async move {
+                    txn.add_entity_set_relationship(
+                        "InferenceBackendMetadata",
+                        backend,
+                        "selected_by",
+                        "configuration",
+                        profile,
+                        "selected_by",
+                    )
+                    .await
+                })
+            })
+        };
+        assert_eq!(link().await.is_ok(), expected("before"));
+        owner
+            .transact_write("test.backend.grant", |txn| {
+                let runtime = &runtime;
+                let agent_did = &binding.agent_did;
+                Box::pin(async move {
+                    super::super::grant_selected_self_configuration(txn, runtime, agent_did).await
+                })
+            })
+            .await?;
+        assert_eq!(link().await.is_ok(), expected("granted"));
+        let mutation = format!(
+            r#"mutation {{ update_InferenceBackendMetadata(docID:"{}",input:{{name:"forged"}}) {{_docID}} }}"#,
+            crate::store::graphql::escape_graphql_string(&backend)
+        );
+        let response = agent.write("test.backend.write_denied", &mutation).await?;
+        assert!(!updated(
+            &response,
+            "update_InferenceBackendMetadata",
+            &backend
+        )?);
+        assert_eq!(owner.execute(&backend_query).await?, before);
+        owner
+            .set_agent_self_config_permission(
+                &runtime,
+                &binding.agent_did,
+                crate::store::config_client::AgentSelfConfigPermission::Revoke,
+            )
+            .await?;
+        assert_eq!(link().await.is_ok(), expected("revoked"));
+        db.node.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn selected_inference_self_config_requires_explicit_user_grant_and_preserves_revoke(
     ) -> Result<()> {
         let directory = tempfile::tempdir()?;
@@ -136,6 +248,7 @@ mod tests {
         let tools = crate::store::graphql::created_doc_id(&tools, "Tools")?;
         let context = owner.write("test.inference.context", &format!(r#"mutation {{ create_AgentContext(input: {{node_did:"{node_did}",context_id:"context",tools_id:"tools"}}) {{_docID}} }}"#)).await?;
         let context = crate::store::graphql::created_doc_id(&context, "AgentContext")?;
+        owner.write("test.inference.backend", &format!(r#"mutation {{ create_InferenceBackendMetadata(input: {{node_did:"{node_did}",backend_id:"backend",name:"backend",provider_kind:"OpenAiCompatible",endpoint:"http://localhost:8000/v1",auth_kind:"unauthenticated"}}) {{_docID}} }}"#)).await?;
         let profile = owner.write("test.inference.profile", &format!(r#"mutation {{ create_InferenceProfile(input: {{node_did:"{node_did}",profile_id:"profile",backend_id:"backend",model_name:"model",execution_id:"execution"}}) {{_docID}} }}"#)).await?;
         let profile = crate::store::graphql::created_doc_id(&profile, "InferenceProfile")?;
         let agent_doc = owner.write("test.inference.agent", &format!(r#"mutation {{ create_Agent(input: {{node_did:"{node_did}",agent_did:"{agent_did}",creation_nonce:"{nonce}",context_id:"context",inference_profile_id:"profile"}}) {{_docID}} }}"#)).await?;
