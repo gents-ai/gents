@@ -51,13 +51,15 @@ impl Fixture {
         let agent = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
         let agent_did: identity::Did = agent.did().parse().unwrap();
         let admin = ConfigAccess::local_as(node.clone(), identity.did().parse().unwrap());
-        admin
-            .grant_node_permission(
-                &agent_did,
-                crate::store::config_client::NodePermission::DocumentDelete,
-            )
-            .await
-            .unwrap();
+        for permission in [
+            crate::store::config_client::NodePermission::DocumentDelete,
+            crate::store::config_client::NodePermission::DacRelationAdd,
+        ] {
+            admin
+                .grant_node_permission(&agent_did, permission)
+                .await
+                .unwrap();
+        }
         let access =
             ConfigAccess::local_managed_agent(node.clone(), agent_did, agent.as_ref()).unwrap();
         let mut create = AgentRequestCreate::base(
@@ -90,7 +92,24 @@ impl Fixture {
             .await
             .unwrap();
         let request = super::row_into_agent_request(row, &doc_id).unwrap();
+        let workspace_doc = access
+            .transact_write("test.workspace_rejection_workspace", |txn| {
+                let agent_did = agent.did();
+                let node_did = identity.did();
+                Box::pin(async move {
+                    let response = txn.execute(&format!(
+                        r#"mutation {{ create_IsolatedWorkspace(input: {{workspace_id:"cleanup-workspace", owner_node_did:"{}", writer_principal:"{}", integrator_principal:"{}", lifecycle_state:"ready"}}) {{_docID}} }}"#,
+                        escape_graphql_string(node_did), escape_graphql_string(agent_did), escape_graphql_string(agent_did),
+                    )).await?;
+                    let doc = crate::store::graphql::created_doc_id(&response, "IsolatedWorkspace")?;
+                    txn.add_actor_relationship("IsolatedWorkspace", &doc, "writer", &agent_did.parse()?).await?;
+                    Ok::<_, anyhow::Error>(doc)
+                })
+            })
+            .await
+            .unwrap();
         let binding = WorkspaceBindingDoc {
+            workspace_doc_id: Some(workspace_doc),
             binding_id: "exact-binding".to_string(),
             workspace_id: create.workspace_id.unwrap(),
             request_id: request.request_id.clone(),
@@ -114,10 +133,35 @@ impl Fixture {
 
     pub(crate) async fn write_binding(&self, binding: &WorkspaceBindingDoc) {
         self.access
-            .write(
-                "test.workspace_rejection_binding",
-                &crate::tools::workspace::workspace_binding_upsert_mutation(binding),
-            )
+            .transact_write("test.workspace_rejection_binding", |txn| {
+                Box::pin(async move {
+                    let parent = binding
+                        .workspace_doc_id
+                        .as_deref()
+                        .expect("fixture workspace binding");
+                    let response = txn
+                        .execute(&crate::tools::workspace::workspace_binding_upsert_mutation(
+                            binding,
+                        ))
+                        .await?;
+                    let rows = crate::store::graphql::mutation_documents(
+                        &response,
+                        "upsert_WorkspaceBinding",
+                    )?
+                    .expect("binding mutation returned a document");
+                    assert_eq!(rows.len(), 1);
+                    let doc = rows[0]["_docID"].as_str().expect("binding physical ID");
+                    txn.add_resource_relationship(
+                        "WorkspaceBinding",
+                        doc,
+                        "parent",
+                        "workspaces",
+                        parent,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
             .await
             .unwrap();
     }
