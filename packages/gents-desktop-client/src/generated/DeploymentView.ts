@@ -26,12 +26,12 @@ import type { ToolServiceRegistry } from "./ToolServiceRegistry.js";
 import type { Tools } from "./Tools.js";
 import type { TriggerView } from "./TriggerView.js";
 
-export type DeploymentView = { peerId: string, label: string, nodeDid: string, addr: string, source: string | null, graphql: string | null, dialSucceeded: boolean, chatSafe: boolean, 
+export type DeploymentView = { peerId: string, label: string, nodeDid: string, addr: string, source: string | null, graphql: string | null, dialSucceeded: boolean, chatSafe: boolean,
 /**
  * When this desktop's authorization on a joined node runs out; none for
  * a node this desktop reaches without enrollment.
  */
-leaseExpiresAt: string | null, 
+leaseExpiresAt: string | null,
 /**
  * Whether this desktop can change the node's configuration directly,
  * which only its own runtime or a local node allows.
