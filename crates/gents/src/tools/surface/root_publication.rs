@@ -340,7 +340,7 @@ mod tests {
             owner.transact_write("test.root.agent", |txn| Box::pin(async {
                 txn.execute_client_signed_create(
                     "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
-                    &json!({"input":{"node_did":runtime.did(),"agent_did":agent.did(),"creation_nonce":nonce,"enabled":true}}),
+                    &json!({"input":{"node_did":runtime.did(),"agent_did":agent.did(),"creation_nonce":nonce,"context_id":format!("{}:context", agent.did()),"inference_profile_id":format!("{}:inference", agent.did()),"enabled":true}}),
                     gents_protocol::schemas::AGENT).await?;
                 Ok::<_, anyhow::Error>(())
             })).await?;
