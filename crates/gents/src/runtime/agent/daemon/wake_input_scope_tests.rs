@@ -498,8 +498,8 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                     .await
                     .unwrap();
                 assert_eq!(
-                    result["data"]["update_AgentRequest"]
-                        .as_array()
+                    crate::store::graphql::mutation_documents(&result, "update_AgentRequest")
+                        .unwrap()
                         .unwrap()
                         .len(),
                     1
