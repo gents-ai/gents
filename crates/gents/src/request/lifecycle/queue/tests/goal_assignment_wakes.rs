@@ -38,17 +38,39 @@ async fn parent(
     crate::sign_agent_request_create(db.agent_identity.as_ref(), &mut create)
         .await
         .unwrap();
-    ConfigAccess::write_local(
-        &db.node,
-        "test.signed_scope_parent",
-        &create.graphql_mutation().unwrap(),
+    let mutation = create.graphql_mutation().unwrap();
+    let node_did = db.node_did().to_owned();
+    let agent_did = db.agent_did().to_owned();
+    let now = chrono::Utc::now().to_rfc3339();
+    // The parent's session and request are both Agent-owned rows, written as the Agent.
+    db.agent_access
+        .transact_write("test.signed_scope_parent", |txn| {
+            let mutation = &mutation;
+            let (node_did, agent_did, now) = (node_did.as_str(), agent_did.as_str(), now.as_str());
+            Box::pin(async move {
+                crate::session::ensure_session_in_txn(
+                    txn,
+                    session,
+                    node_did,
+                    agent_did,
+                    Some(agent_did),
+                    None,
+                    None,
+                    now,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(txn.execute(mutation).await?)
+            })
+        })
+        .await
+        .unwrap();
+    let request = crate::request::binding::load_agent_request_with_access(
+        &db.agent_access,
+        &create.request_id,
     )
     .await
+    .unwrap()
     .unwrap();
-    let request = crate::request::binding::load_agent_request(&db.node, &create.request_id)
-        .await
-        .unwrap()
-        .unwrap();
     documents.insert(id, request.clone());
     request
 }
