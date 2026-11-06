@@ -807,40 +807,100 @@ async fn read_installed_pack_fails_loudly_on_a_malformed_record() {
 
 #[tokio::test]
 async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
-    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+    use crate::NodeIdentity as _;
+    let home = tempfile::tempdir().unwrap();
+    let runtime = crate::KeyIdentity::load_or_create(home.path().join("node"), None).unwrap();
+    let user = crate::KeyIdentity::load_or_create(home.path().join("user"), None).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_owner(runtime.did().to_owned())
+            .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
+            .build()
+            .await
+            .unwrap(),
+    );
+    let context =
+        defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned()));
+    node.add_dac_policy_with_counter_as(
+        &context,
+        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+        0,
+    )
+    .await
+    .unwrap();
+    node.add_collection(gents_protocol::schemas::NODE)
+        .await
+        .unwrap();
     let schema = gents_protocol::schemas::PACK_INSTALLATION.replace(
         r#"@index(fields: ["node_did", "coordinate"], unique: true)"#,
         "",
     );
     node.add_collection(&schema).await.unwrap();
-    let access = ConfigAccess::local(node);
-
-    for digest_seed in ["1", "2"] {
-        let input = json!({
-            "node_did": OWNER,
-            "coordinate": "acme/duplicated",
-            "version": "1",
-            "digest": format!("sha256:{}", digest_seed.repeat(64)),
-        });
-        access
-            .write(
-                "test.duplicate_installation",
-                &format!(
-                    "mutation {{ create_{RECORD}(input: {}) {{ _docID }} }}",
-                    gents_protocol::graphql::graphql_input_literal(&input).unwrap()
-                ),
-            )
+    let runtime_access =
+        ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
+    let user_did = identity::Did::new(user.did()).unwrap();
+    for permission in [
+        acp::nac::NodePermission::CollectionGet,
+        acp::nac::NodePermission::DocumentRead,
+        acp::nac::NodePermission::DocumentUpdate,
+        acp::nac::NodePermission::DocumentDelete,
+        acp::nac::NodePermission::DacRelationAdd,
+        acp::nac::NodePermission::DacRelationDelete,
+    ] {
+        runtime_access
+            .grant_node_permission(&user_did, permission)
             .await
             .unwrap();
     }
-
-    let error = read_installed_pack(&access, OWNER, "acme/duplicated")
+    let access = ConfigAccess::Graphql(
+        crate::store::config_client::GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"),
+            user.did(),
+        )
+        .with_client_signing_capability(user.client_signing_capability().unwrap())
+        .unwrap()
+        .with_client_signed_agent_creates(),
+    );
+    let input = json!({"node_did":runtime.did()});
+    access
+        .transact_write("test.duplicate_installation.node", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                txn.execute_client_signed_create(
+                    "mutation($input: NodeMutationInputArg!) {create_Node(input:$input){_docID}}",
+                    &json!({"input":input}),
+                    gents_protocol::schemas::NODE,
+                )
+                .await
+                .map(|_| ())
+            })
+        })
+        .await
+        .unwrap();
+    for digest_seed in ["1", "2"] {
+        let input = json!({"node_did": runtime.did(), "coordinate":"acme/duplicated",
+            "version":"1", "digest":format!("sha256:{}", digest_seed.repeat(64))});
+        access.transact_write("test.duplicate_installation", |txn| {
+            let input = &input;
+            let schema = &schema;
+            Box::pin(async move {
+                txn.execute_client_signed_create(
+                    "mutation($input: PackInstallationMutationInputArg!) {create_PackInstallation(input:$input){_docID}}",
+                    &json!({"input":input}), schema).await.map(|_| ())
+            })
+        }).await.unwrap();
+    }
+    let error = read_installed_pack(&access, runtime.did(), "acme/duplicated")
         .await
         .unwrap_err();
     assert!(
         format!("{error:#}").contains("has more than one installation record"),
         "{error:#}"
     );
+    node.shutdown().await.expect("node shutdown");
 }
 
 async fn dependency_fixture() -> (Arc<defra_node::Node>, ConfigAccess) {
