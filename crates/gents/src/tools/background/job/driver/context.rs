@@ -1,8 +1,7 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents_protocol::job::{JobPin, JobStepInput, JobStepOutput};
-use serde_json::Value;
 
 use super::super::admit::{HostFacts, StepContext};
 use super::super::origin::engine_guard;
@@ -10,7 +9,6 @@ use super::super::settings::effective_ceiling;
 use super::JobRuntime;
 use crate::plugin::store::{parse_coordinate, read_published_record, InstalledPlugin};
 use crate::store::config_client::ConfigApplyTxn;
-use crate::store::graphql::escape_graphql_string;
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use crate::tools::surface::EndpointScope;
@@ -140,7 +138,10 @@ pub(in crate::tools::background::job) async fn step_context_for(
         engine_provenance_operator: installed
             .as_ref()
             .is_some_and(|plugin| engine_guard(&runtime.home, plugin).is_ok()),
-        max_hop: max_request_hop_in_txn(txn, &caller.node_did).await?,
+        max_hop: crate::request::lifecycle::RequestHopCapObservation::of(
+            txn.runtime_max_request_hop(&caller.node_did).await?,
+        )
+        .bound(),
         target_hops,
         target_ids: targets
             .iter()
@@ -163,27 +164,4 @@ pub(in crate::tools::background::job) async fn step_context_for(
         resume_facts: facts,
     };
     Ok((ctx, installed))
-}
-
-/// The target node's optional `max_request_hop`, read through `txn`.
-async fn max_request_hop_in_txn(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Result<Option<u32>> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 2) {{ max_request_hop }} }}"#,
-            escape_graphql_string(node_did)
-        ))
-        .await?;
-    let rows = response
-        .pointer("/data/Node")
-        .and_then(Value::as_array)
-        .context("Node hop-cap query returned no row array")?;
-    anyhow::ensure!(rows.len() <= 1, "multiple Node rows matched a DID");
-    match rows.first().map(|row| &row["max_request_hop"]) {
-        None | Some(Value::Null) => Ok(None),
-        Some(hop) => hop
-            .as_u64()
-            .and_then(|hop| u32::try_from(hop).ok())
-            .map(Some)
-            .context("Node.max_request_hop must be a nonnegative u32"),
-    }
 }

@@ -590,6 +590,38 @@ pub fn request_hop_within_bound(max_request_hop: Option<u32>, hop: u32) -> bool 
     max_request_hop.is_none_or(|bound| hop <= bound)
 }
 
+/// Lean `CausalHop` observation of a Node's `max_request_hop`: only a Node the
+/// reader can see supplies a cap, so a hidden or absent Node is unavailable
+/// rather than unset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestHopCapObservation {
+    Unavailable,
+    Visible(Option<u32>),
+}
+
+impl RequestHopCapObservation {
+    /// The cap a reader observed: `None` when it could not read the Node.
+    pub fn of(observed: Option<Option<u32>>) -> Self {
+        observed.map_or(Self::Unavailable, Self::Visible)
+    }
+
+    /// Lean `CausalHop.admitObservedHop`: no decision without a visible Node.
+    pub fn admit(self, hop: u32) -> Option<bool> {
+        match self {
+            Self::Unavailable => None,
+            Self::Visible(cap) => Some(request_hop_within_bound(cap, hop)),
+        }
+    }
+
+    /// Lean `CausalHop.observedHopBound`.
+    pub fn bound(self) -> Option<u32> {
+        match self {
+            Self::Unavailable => Some(0),
+            Self::Visible(cap) => cap,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct SessionMessageCause {
     pub(crate) caller_node_did: String,

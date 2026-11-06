@@ -1807,6 +1807,18 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_hop_cap_refuses_every_spawn() {
+        use crate::request::lifecycle::RequestHopCapObservation;
+        let job = running_row(Vec::new());
+        let out = effects(vec![spawn("s1", 0, "a")], &[]);
+        let mut ctx = base_context();
+        ctx.max_hop = RequestHopCapObservation::Unavailable.bound();
+        assert_eq!(code(&ctx, &job, &out), Some("plugin_job_depth_exceeded"));
+        ctx.max_hop = RequestHopCapObservation::Visible(None).bound();
+        assert!(admit_step(&ctx, &job, &out).is_ok());
+    }
+
+    #[test]
     fn spawn_cwd_outside_the_pinned_cwd_is_refused() {
         let job = running_row(Vec::new());
         let mut step = spawn("s1", 0, "a");

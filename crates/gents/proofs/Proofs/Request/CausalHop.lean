@@ -33,6 +33,39 @@ def admitHop (maxHop : Option Nat) (hop : Nat) : Bool :=
   | none => true
   | some bound => decide (hop ≤ bound)
 
+/-- An unreadable or absent runtime Node is not an unset limit. Only a
+runtime-visible Node supplies a cap, including an explicitly unset cap. -/
+def admitObservedHop (observation : Option (Option Nat)) (hop : Nat) : Option Bool :=
+  observation.map (fun maxHop => admitHop maxHop hop)
+
+theorem unavailable_cap_cannot_admit (hop : Nat) :
+    admitObservedHop none hop = none := rfl
+
+theorem visible_unset_cap_admits (hop : Nat) :
+    admitObservedHop (some none) hop = some true := rfl
+
+theorem visible_bound_refuses_above (bound hop : Nat) (h : bound < hop) :
+    admitObservedHop (some (some bound)) hop = some false := by
+  simp [admitObservedHop, admitHop]; omega
+
+/-- The bound a host context carries for an observation. An unavailable cap is
+the most restrictive bound: it admits no causal hop, since every outward edge
+advances past its cause. -/
+def observedHopBound (observation : Option (Option Nat)) : Option Nat :=
+  observation.getD (some 0)
+
+theorem observed_bound_refuses_outward_when_unavailable (causeHop own : Nat) :
+    admitHop (observedHopBound none) (nextHop (.crossSession causeHop) own) = false := by
+  simp [observedHopBound, admitHop, nextHop]; omega
+
+theorem observed_bound_decides_causal_hops (observation : Option (Option Nat)) (hop : Nat)
+    (h : 0 < hop) :
+    admitHop (observedHopBound observation) hop =
+      (admitObservedHop observation hop).getD false := by
+  cases observation with
+  | none => simp [observedHopBound, admitObservedHop, admitHop]; omega
+  | some cap => simp [observedHopBound, admitObservedHop]
+
 def sendTargetAllowed (callerSession targetSession : String) : Bool :=
   callerSession != targetSession
 

@@ -75,7 +75,8 @@ pub use materialize::{
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
     build_signed_request, next_request_hop, request_hop_within_bound, task_fire_key,
     write_task_delivery, write_task_delivery_local, EnqueuedAgentRequest, ParentLink,
-    RequestHopCause, RequestIdentity, RequestSigner, RequestSpec, RetryLink, TaskDeliveryAdmission,
+    RequestHopCapObservation, RequestHopCause, RequestIdentity, RequestSigner, RequestSpec,
+    RetryLink, TaskDeliveryAdmission,
 };
 pub(crate) use materialize::{
     build_session_message_request,
