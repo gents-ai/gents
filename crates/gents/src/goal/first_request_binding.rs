@@ -122,8 +122,7 @@ pub(crate) async fn bind_goal_first_request_in_txn(
     let response = txn
         .execute_client_signed_update(
             &format!(
-                r#"mutation($input: GoalMutationInputArg!) {{ update_Goal(docID: "{}", filter: {{ _docID: {{_eq: "{}"}}, node_did: {{_eq: "{}"}}, assignment_root_request_doc_id: {{_eq: null}} }}, input: $input) {{_docID}} }}"#,
-                escape_graphql_string(&goal.doc_id),
+                r#"mutation($input: GoalMutationInputArg!) {{ update_Goal(filter: {{ _docID: {{_eq: "{}"}}, node_did: {{_eq: "{}"}}, assignment_root_request_doc_id: {{_eq: null}} }}, input: $input) {{_docID}} }}"#,
                 escape_graphql_string(&goal.doc_id),
                 escape_graphql_string(&goal.node_did),
             ),

@@ -85,7 +85,7 @@ pub(crate) async fn finish_goal_relationships(
                     stage_goal_relationships_in_txn(txn, collection, doc, &session.doc_id, &session.session.agent_did).await?;
                     let escaped_doc = escape_graphql_string(doc);
                     let mutation = format!(r#"mutation($input: {collection}MutationInputArg!) {{
-                        update_{collection}(docID: "{escaped_doc}", filter: {{creator_did: {{_eq: "{creator}"}}, session_doc_id: {{_eq: "{parent}"}}, parent_linked: {{_eq: false}}}}, input: $input) {{_docID}}
+                        update_{collection}(filter: {{_docID: {{_eq: "{escaped_doc}"}}, creator_did: {{_eq: "{creator}"}}, session_doc_id: {{_eq: "{parent}"}}, parent_linked: {{_eq: false}}}}, input: $input) {{_docID}}
                     }}"#);
                     let changed = txn.execute_client_signed_update(&mutation, &serde_json::json!({"input": {"parent_linked": true}}), schema).await?;
                     let changed_rows = changed["data"][format!("update_{collection}")].as_array().context("Goal relationship marker omitted rows")?;

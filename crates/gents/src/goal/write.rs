@@ -176,7 +176,7 @@ pub(super) async fn set_goal_in_txn(
         let escaped_node_did = escape_graphql_string(node_did);
         let response = txn.execute_client_signed_update(
             &format!(r#"mutation($input: GoalMutationInputArg!) {{
-                update_Goal(docID: "{doc_id}", filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{escaped_node_did}" }} }}, input: $input) {{ _docID }}
+                update_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{escaped_node_did}" }} }}, input: $input) {{ _docID }}
             }}"#),
             &serde_json::json!({"input": input}),
             gents_protocol::schemas::GOAL,
