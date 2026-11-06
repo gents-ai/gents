@@ -505,7 +505,7 @@ async fn oauth_kinds_fresh_grok_credential_stays_healthy_and_promotes() {
 
 #[tokio::test]
 async fn oauth_kinds_stale_credential_without_refresh_token_still_demotes_after_k() {
-    let (db, _user, _user_access, _binding) =
+    let (db, _user, user_access, _binding) =
         crate::test_support::signed_test_node("health-oauth").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
@@ -530,6 +530,7 @@ async fn oauth_kinds_stale_credential_without_refresh_token_still_demotes_after_
         "https://cli-chat-proxy.grok.com/v1",
     );
     grok.node_did = did.to_owned();
+    oauth_backend_configuration(&user_access, &grok).await;
     for cycle in 1..=3u32 {
         let outcome = probe_backends_cycle(
             &node,
@@ -740,7 +741,7 @@ async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
 
 #[tokio::test]
 async fn oauth_kinds_missing_credential_fails_with_login_hint() {
-    let (db, _user, _user_access, _binding) =
+    let (db, _user, user_access, _binding) =
         crate::test_support::signed_test_node("health-missing").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
@@ -755,6 +756,7 @@ async fn oauth_kinds_missing_credential_fails_with_login_hint() {
         "https://chatgpt.com/backend-api/codex",
     );
     codex.node_did = did.to_owned();
+    oauth_backend_configuration(&user_access, &codex).await;
     probe_backends_cycle(
         &node,
         &client,
@@ -802,7 +804,7 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
             (403, r#"{"error":"forbidden"}"#, forbidden_event),
             (500, r#"{"error":"unavailable"}"#, "probeFail"),
         ] {
-            let (db, _user, _user_access, _binding) =
+            let (db, _user, user_access, _binding) =
                 crate::test_support::signed_test_node("health-rejection").await;
             let node = db.node.clone();
             let did = db.node_identity.did().to_owned();
@@ -817,6 +819,7 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
             .await;
             let mut backend = oauth_backend(kind, provider, &models.endpoint());
             backend.node_did = did.clone();
+            oauth_backend_configuration(&user_access, &backend).await;
             let (url, server) = one_shot_token_server(status, body).await;
             std::env::set_var(override_env, url);
             let health = BackendHealthMap::new();
