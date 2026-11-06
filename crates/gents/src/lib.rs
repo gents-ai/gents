@@ -153,16 +153,51 @@ pub(crate) mod test_support {
         }
     }
 
+    /// Recovers the runtime root held by this process for `node_did`. Loading a
+    /// `KeyIdentity` registers its signing key with DefraDB; Agent derivation
+    /// needs the held key, which `RegisteredIdentity` never carries.
+    pub(crate) fn held_runtime_identity(node_did: &str) -> crate::store::identity::KeyIdentity {
+        use crate::store::identity::NodeIdentity as _;
+        let config = defra_core::signing::get_identity(node_did).unwrap_or_else(|| {
+            panic!("fixture node identity {node_did} is not held in this process")
+        });
+        assert!(
+            config.has_local_private_key(),
+            "fixture node identity {node_did} has no local private key"
+        );
+        let dir = tempfile::tempdir().expect("held identity directory");
+        let path = dir.path().join("runtime.key");
+        std::fs::write(&path, &config.private_key_bytes).expect("write held identity key");
+        let identity = crate::store::identity::KeyIdentity::load_existing(path.clone(), None)
+            .expect("reload held runtime identity");
+        assert_eq!(identity.did(), node_did);
+        identity
+    }
+
     pub(crate) fn agent_did(node: &defra_node::Node) -> String {
-        let root = crate::store::identity::RegisteredIdentity::from_registered_did(
-            node.node_identity_did()
-                .expect("fixture node has an identity"),
-            None,
-        )
-        .unwrap();
+        let node_did = node
+            .node_identity_did()
+            .expect("fixture node has an identity");
+        let root = held_runtime_identity(node_did);
         crate::store::identity::provision_agent_identity(&root)
             .unwrap()
             .agent_did
+    }
+
+    /// Creates the fixture Node through the runtime owner's signed access.
+    /// `ensure_node` only loads; production Nodes are created by an authenticated client.
+    pub(crate) async fn ensure_test_node(
+        node: &std::sync::Arc<defra_node::Node>,
+        node_did: &str,
+    ) {
+        if crate::load_node(node, node_did).await.unwrap().is_some() {
+            return;
+        }
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(node_did).unwrap(),
+        );
+        bootstrap_signed_test_node(&access, node_did).await;
     }
 
     pub(crate) async fn bootstrap_signed_test_node(
@@ -309,6 +344,7 @@ pub(crate) mod test_support {
         node: &std::sync::Arc<defra_node::Node>,
         owner: &str,
     ) -> gents_protocol::agent_identity::AgentIdentityBinding {
+        ensure_test_node(node, owner).await;
         let principal = crate::ensure_node(node, owner).await.unwrap();
         if let Some(did) = principal.default_agent_did {
             let agent = crate::load_agent(node, &did)
@@ -321,9 +357,11 @@ pub(crate) mod test_support {
             };
         }
         let binding = install_test_agent(node, owner, "Default fixture agent").await;
-        crate::upsert_node(node, owner, None, Some(&binding.agent_did), true, None)
-            .await
-            .unwrap();
+        let access = crate::store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(owner).unwrap(),
+        );
+        set_test_default_agent_as(&access, owner, &binding.agent_did).await;
         binding
     }
 
@@ -332,12 +370,10 @@ pub(crate) mod test_support {
         owner: &str,
         display_name: &str,
     ) -> gents_protocol::agent_identity::AgentIdentityBinding {
-        let root = crate::store::identity::RegisteredIdentity::from_registered_did(
-            node.node_identity_did()
-                .expect("fixture node has an identity"),
-            None,
-        )
-        .unwrap();
+        let node_did = node
+            .node_identity_did()
+            .expect("fixture node has an identity");
+        let root = held_runtime_identity(node_did);
         let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
         install_test_agent_binding(node, owner, display_name, &binding).await;
         binding
@@ -349,7 +385,7 @@ pub(crate) mod test_support {
         display_name: &str,
         binding: &gents_protocol::agent_identity::AgentIdentityBinding,
     ) {
-        crate::ensure_node(node, owner).await.unwrap();
+        ensure_test_node(node, owner).await;
         let actor = node
             .node_identity_did()
             .expect("fixture node has an identity");
