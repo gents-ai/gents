@@ -1680,7 +1680,6 @@ def json : Json := Json.mkObj
         ("observation", toJson observation), ("credential", toJson credential)])),
    ("backend_genesis_distinct", toJson (Configuration.backendGenesis "backend" "credential" "nonce-a" !=
       Configuration.backendGenesis "backend" "credential" "nonce-b")),
-   ("legacy_backend_lockdown_unavailable", toJson (Configuration.legacyBackendAdmissionAllowed false)),
    ("fresh_backend_admission_cases", toJson ([(true, true, true), (false, true, true),
        (true, false, true), (true, true, false)].map fun (origin, binding, intact) =>
       Json.mkObj [("origin", toJson origin), ("binding", toJson binding),

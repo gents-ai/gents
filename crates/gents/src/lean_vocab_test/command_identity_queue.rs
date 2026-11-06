@@ -530,8 +530,6 @@ pub(crate) struct LeanIdentityHouseholdCase {
     #[serde(default)]
     pub(crate) runtime_default_choice_cases: Vec<serde_json::Value>,
     #[serde(default)]
-    pub(crate) legacy_backend_lockdown_unavailable: bool,
-    #[serde(default)]
     pub(crate) fresh_backend_admission_cases: Vec<serde_json::Value>,
     #[serde(default, rename = "fresh_backend_origin_cases")]
     pub(crate) _fresh_backend_origin_cases: Vec<serde_json::Value>,

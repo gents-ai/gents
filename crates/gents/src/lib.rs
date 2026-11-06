@@ -577,8 +577,7 @@ pub use runtime::agent::{
     ProcessLifecycleState, RuntimeSnapshotObserver,
 };
 pub use runtime::oneshot::{
-    run_openai_oneshot, run_openai_oneshot_admitted, run_openai_oneshot_with_tools,
-    run_openai_oneshot_with_tools_admitted, OneshotRunResult,
+    run_openai_oneshot_admitted, run_openai_oneshot_with_tools_admitted, OneshotRunResult,
 };
 pub use runtime::p2p::observability::{
     JsonP2pSyncStatusAdapter, P2pInboundClassSnapshot, P2pPeerBacklogSnapshot,

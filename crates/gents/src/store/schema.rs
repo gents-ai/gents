@@ -31,16 +31,6 @@ pub enum LegacyBackendPreflightError {
     Collection(#[source] defra_node::Error),
     #[error("cannot inspect legacy InferenceBackend documents")]
     Query(#[source] crate::store::config_client::ConfigClientError),
-    #[error(
-        "Agent admission is unavailable until the legacy backend lineage is durably locked down"
-    )]
-    LockdownUnavailable,
-}
-
-/// Admission stays closed until native storage can atomically prove empty
-/// legacy history and durably deny old-lineage reads, writes and recreation.
-pub fn require_legacy_backend_lockdown() -> Result<(), LegacyBackendPreflightError> {
-    Err(LegacyBackendPreflightError::LockdownUnavailable)
 }
 
 /// Diagnostic only: this separate schema observation and scan cannot fence a
@@ -96,18 +86,6 @@ pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
 mod legacy_backend_tests {
     use super::*;
     use std::sync::Arc;
-
-    #[test]
-    fn admission_stays_closed_when_native_lockdown_is_unavailable() {
-        let modeled = crate::lean_vocab_test::lean_identity_household_cases()
-            .iter()
-            .find(|case| case.name == "configuration-explicit-grants")
-            .unwrap();
-        assert_eq!(
-            require_legacy_backend_lockdown().is_ok(),
-            modeled.legacy_backend_lockdown_unavailable
-        );
-    }
 
     #[tokio::test]
     async fn legacy_history_preflight_leaves_existing_document_untouched() -> anyhow::Result<()> {

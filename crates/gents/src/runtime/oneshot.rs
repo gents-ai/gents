@@ -27,14 +27,6 @@ pub struct OneshotRunResult {
     pub response_text: String,
 }
 
-pub async fn run_openai_oneshot(
-    node: Arc<EmbeddedNode>,
-    agent: &ResolvedAgent,
-    prompt: &str,
-) -> Result<OneshotRunResult> {
-    run_openai_oneshot_with_tools(node, agent, Vec::new(), prompt).await
-}
-
 pub async fn run_openai_oneshot_admitted(
     node: Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
@@ -42,15 +34,6 @@ pub async fn run_openai_oneshot_admitted(
     admission: &crate::store::local::backend_protection::BackendAdmission,
 ) -> Result<OneshotRunResult> {
     run_openai_oneshot_with_tools_admitted(node, agent, Vec::new(), prompt, admission).await
-}
-
-pub async fn run_openai_oneshot_with_tools(
-    _node: Arc<EmbeddedNode>,
-    _agent: &ResolvedAgent,
-    _extra_tools: Vec<Box<dyn ToolDyn>>,
-    _prompt: &str,
-) -> Result<OneshotRunResult> {
-    Err(crate::store::schema::LegacyBackendPreflightError::LockdownUnavailable.into())
 }
 
 pub async fn run_openai_oneshot_with_tools_admitted(
