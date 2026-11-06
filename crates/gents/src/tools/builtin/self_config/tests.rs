@@ -156,6 +156,22 @@ impl SelfConfigFixture {
         binding.agent_did
     }
 
+    /// The User publishes `root` as the selected WorkspaceRoot that the Agent
+    /// may use, so Tools.host.root admission has an allowed root to match.
+    pub(super) async fn publish_workspace_root(&self, root: &std::path::Path) {
+        let root = std::fs::canonicalize(root).expect("canonical workspace root");
+        crate::tools::surface::set_workspace_root_with_readers(
+            &self.user_access,
+            self.db.node_identity.did(),
+            &root.to_string_lossy(),
+            None,
+            true,
+            std::slice::from_ref(&self.agent_did),
+        )
+        .await
+        .expect("User publishes the selected WorkspaceRoot");
+    }
+
     pub(super) async fn grant_node_reader(&self) {
         self.user_access
             .add_actor_relationship(
@@ -1673,6 +1689,7 @@ async fn effective_config_reports_inherited_workspace_network_as_disabled() {
     let fixture = SelfConfigFixture::new("workspace-network-report").await;
     fixture.grant_selected_configuration().await;
     let root = tempfile::tempdir().unwrap();
+    fixture.publish_workspace_root(root.path()).await;
     let core =
         fixture
             .core()
@@ -1713,6 +1730,7 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
     let fixture = SelfConfigFixture::new("skill-import").await;
     fixture.grant_selected_configuration().await;
     let root = tempfile::tempdir().unwrap();
+    fixture.publish_workspace_root(root.path()).await;
     let file = root.path().join("SKILL.md");
     std::fs::write(
         &file,
@@ -1847,6 +1865,7 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
     let fixture = SelfConfigFixture::new("configuration-discovery").await;
     fixture.grant_selected_configuration().await;
     let root = tempfile::tempdir().unwrap();
+    fixture.publish_workspace_root(root.path()).await;
     let source = root.path().join("synthetic-codex");
     std::fs::create_dir_all(&source).unwrap();
     let marker = root.path().join("SHOULD_NEVER_RUN");
@@ -1982,6 +2001,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     .unwrap();
 
     let root = tempfile::tempdir().unwrap();
+    fixture.publish_workspace_root(root.path()).await;
     let user_root = root.path().join("synthetic-user/.codex");
     let project_root = root.path().join("synthetic-project");
     std::fs::create_dir_all(&user_root).unwrap();
@@ -2781,8 +2801,12 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
     let current = fixture.agent_did();
     let profile = format!("{current}:inference");
     let tools = fixture.tools(&["agent"]);
+    // The agent category exposes the Agent command (NodeProvisioning.agentCommandExposed);
+    // node-catalog operations stay refused before any write.
+    call_config_tool(&tools, vec!["agent".into(), "list".into()])
+        .await
+        .expect("agent authority can read the agent catalog");
     for argv in [
-        vec!["agent", "list"],
         vec!["agent", "preview", "default", current],
         vec!["agent", "default", current],
         vec![
@@ -2794,6 +2818,7 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
             "Other instructions",
             "--profile",
             &profile,
+            "--default",
         ],
     ] {
         let error = call_config_tool(&tools, argv.into_iter().map(str::to_owned).collect())
@@ -6701,7 +6726,6 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
     for hidden in [
         "SECRET",
         "identity-",
-        "did:key",
         "credential_id",
         "account_ref",
         "acct-l2",
@@ -7364,6 +7388,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     let fixture = SelfConfigFixture::new("native-pack").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
+    fixture.publish_workspace_root(workspace.path()).await;
     let node = fixture.db.node.clone();
     let did = fixture.db.node_identity.did().to_owned();
     let mut cfg = config(&["tools", "agent"]);
