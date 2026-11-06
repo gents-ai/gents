@@ -48,30 +48,38 @@ fn provider_account_key(kind: OAuthRefreshKind, credential: &OAuthCredential) ->
     }
 }
 
-pub(super) fn get_or_insert_arc<T>(
-    registry: &std::sync::Mutex<rapidhash::RapidHashMap<String, Arc<T>>>,
-    key: &str,
-    make: impl FnOnce() -> T,
-) -> Arc<T> {
-    let mut map = registry.lock().expect("bearer registry mutex poisoned");
-    map.entry(key.to_string())
-        .or_insert_with(|| Arc::new(make()))
-        .clone()
-}
-
+/// Live bearers by credential id. Entries are weak: a bearer holds its node, so
+/// a strong entry would keep every node that ever bootstrapped OAuth alive for
+/// the rest of the process.
 pub(super) fn bearer_registry(
-) -> &'static std::sync::Mutex<rapidhash::RapidHashMap<String, Arc<DbCredentialBearer>>> {
+) -> &'static std::sync::Mutex<rapidhash::RapidHashMap<String, std::sync::Weak<DbCredentialBearer>>>
+{
     static REGISTRY: std::sync::OnceLock<
-        std::sync::Mutex<rapidhash::RapidHashMap<String, Arc<DbCredentialBearer>>>,
+        std::sync::Mutex<rapidhash::RapidHashMap<String, std::sync::Weak<DbCredentialBearer>>>,
     > = std::sync::OnceLock::new();
     REGISTRY.get_or_init(|| std::sync::Mutex::new(rapidhash::RapidHashMap::default()))
 }
 
+/// The live bearer for this credential on this node, or a new one. A credential
+/// id is shared only with the node that holds it, so the same id on another node
+/// never reuses a bearer bound to a different node.
 pub fn shared_bearer(
+    node: &Arc<EmbeddedNode>,
     credential_id: &str,
     make: impl FnOnce() -> DbCredentialBearer,
 ) -> Arc<DbCredentialBearer> {
-    get_or_insert_arc(bearer_registry(), credential_id, make)
+    let mut registry = bearer_registry()
+        .lock()
+        .expect("bearer registry mutex poisoned");
+    if let Some(bearer) = registry.get(credential_id).and_then(std::sync::Weak::upgrade) {
+        if Arc::ptr_eq(&bearer.node, node) {
+            return bearer;
+        }
+    }
+    registry.retain(|_, bearer| bearer.strong_count() > 0);
+    let bearer = Arc::new(make());
+    registry.insert(credential_id.to_string(), Arc::downgrade(&bearer));
+    bearer
 }
 
 pub trait BearerSource: Send + Sync {
