@@ -394,8 +394,8 @@ impl ConfigApplyTxn<'_> {
         let context = defra_core::RequestContext::default()
             .with_identity(Some(actor.to_string()))
             .with_txn(Some(txn));
-        let mut edges = Vec::new();
-        for (records, delete) in [(previous, true), (installed, false)] {
+        let roots = |records: &[crate::plugin::store::InstalledPlugin]| {
+            let mut roots = std::collections::BTreeSet::new();
             for record in records {
                 if !record
                     .declaration
@@ -407,25 +407,38 @@ impl ConfigApplyTxn<'_> {
                 }
                 let coordinate = format!("{}/{}", record.namespace, record.name);
                 for pin in [None, Some(record.digest.as_str())] {
-                    let root = source::root(node_did, &coordinate, pin);
-                    if !delete {
-                        edges.push(query::txn::SourcePermission {
-                            permission: acp::NodePermission::DocumentDelete.as_str().to_owned(),
-                            parent_source: Some(source::index(node_did)),
-                            subject_kind: "source".into(),
-                            subject: root.clone(),
-                            delete: false,
-                        });
-                    }
-                    edges.push(query::txn::SourcePermission {
-                        permission: acp::NodePermission::DocumentDelete.as_str().to_owned(),
-                        parent_source: None,
-                        subject_kind: "source".into(),
-                        subject: root,
-                        delete,
-                    });
+                    roots.insert(source::root(node_did, &coordinate, pin));
                 }
             }
+            roots
+        };
+        let before = roots(previous);
+        let after = roots(installed);
+        let mut edges = Vec::new();
+        for root in before.difference(&after) {
+            edges.push(query::txn::SourcePermission {
+                permission: acp::NodePermission::DocumentDelete.as_str().to_owned(),
+                parent_source: None,
+                subject_kind: "source".into(),
+                subject: root.clone(),
+                delete: true,
+            });
+        }
+        for root in after {
+            edges.push(query::txn::SourcePermission {
+                permission: acp::NodePermission::DocumentDelete.as_str().to_owned(),
+                parent_source: Some(source::index(node_did)),
+                subject_kind: "source".into(),
+                subject: root.clone(),
+                delete: false,
+            });
+            edges.push(query::txn::SourcePermission {
+                permission: acp::NodePermission::DocumentDelete.as_str().to_owned(),
+                parent_source: None,
+                subject_kind: "source".into(),
+                subject: root,
+                delete: false,
+            });
         }
         let node = std::sync::Arc::clone(node);
         execute_owned_native(

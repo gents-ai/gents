@@ -1582,6 +1582,80 @@ mod tests {
                 })
             })
             .await?;
+        let non_admin = crate::ConfigAccess::local_as(node.clone(), outsider_did.clone());
+        assert!(!node.nac_manager().is_admin(&outsider_did).await?);
+        let modeled = &crate::lean_vocab_test::lean_identity_household_cases()
+            .iter()
+            .find(|case| case.name == "configuration-explicit-grants")
+            .expect("configuration model")
+            .tool_source_change_cases;
+        let expected_change = |name: &str| {
+            modeled
+                .iter()
+                .find(|case| case["name"] == name)
+                .expect("modeled source change")["allowed"]
+                .as_bool()
+                .expect("modeled decision")
+        };
+        let repeat = non_admin
+            .transact_write("test.plugin_delete.same", |txn| {
+                let record = &record;
+                Box::pin(async move {
+                    txn.stage_plugin_delete_roots(
+                        std::slice::from_ref(record),
+                        std::slice::from_ref(record),
+                    )
+                    .await
+                })
+            })
+            .await;
+        assert_eq!(repeat.is_ok(), expected_change("present-noop"));
+
+        let txn = node.database().new_txn(false).await?;
+        let store = Arc::new(acp::zanzibar::store::TransactionZanzibarStore::new(
+            txn.datastore()?.sibling(Namespace::Acpstore),
+        ));
+        let nac = acp::NodeACP::new(store.clone());
+        nac.load().await?;
+        let index = super::super::plugin_delete_source::index(runtime.did());
+        let root = super::super::plugin_delete_source::root(runtime.did(), "team/worker", None);
+        nac.change_source_permission(
+            &identity::Did::new(runtime.did())?,
+            NodePermission::DocumentDelete,
+            Some(&index),
+            "source",
+            &root,
+            true,
+        )
+        .await?;
+        drop(nac);
+        drop(store);
+        txn.commit().await?;
+        let missing = non_admin
+            .transact_write("test.plugin_delete.missing", |txn| {
+                let record = &record;
+                Box::pin(async move {
+                    txn.stage_plugin_delete_roots(
+                        std::slice::from_ref(record),
+                        std::slice::from_ref(record),
+                    )
+                    .await
+                })
+            })
+            .await;
+        assert_eq!(missing.is_ok(), expected_change("add-denied"));
+        owner
+            .transact_write("test.plugin_delete.repair", |txn| {
+                let record = &record;
+                Box::pin(async move {
+                    txn.stage_plugin_delete_roots(
+                        std::slice::from_ref(record),
+                        std::slice::from_ref(record),
+                    )
+                    .await
+                })
+            })
+            .await?;
         observe_plugin_permission(
             &mut observations,
             &owner,
