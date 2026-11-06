@@ -1,7 +1,7 @@
 use super::ConfigApplyTxn;
-use crate::runtime::agent::document_view::is_retired_reserved_id;
 use crate::store::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
+use gents_protocol::canonical::is_retired_reserved_id;
 use gents_protocol::event_delivery::EventConsumer;
 use gents_protocol::trigger_delivery::EventSourceCursor;
 use serde_json::json;

@@ -15,12 +15,6 @@ use crate::documents::*;
 use crate::inference::auth::credential::OAuthCredential;
 use rapidhash::RapidHashMap;
 
-/// Ids in these namespaces were minted only by the retired graph publisher and
-/// are never authored; a stored document carrying one stays inert forever.
-pub(crate) fn is_retired_reserved_id(id: &str) -> bool {
-    id.starts_with("graph-trigger-") || id.starts_with("pkg-")
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentRecord<T> {
     pub(crate) doc_id: String,

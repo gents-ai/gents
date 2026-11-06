@@ -176,7 +176,7 @@ fn collection_named(name: &str) -> Result<Collection> {
 }
 
 fn is_reserved(document: &RecordedDocument) -> bool {
-    crate::runtime::agent::document_view::is_retired_reserved_id(&document.id)
+    gents_protocol::canonical::is_retired_reserved_id(&document.id)
 }
 
 async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) -> Result<Record> {

@@ -73,7 +73,7 @@ pub(crate) async fn load_document_runtime_view_as(
                     unknown_kind_backends,
                     oauth_credentials: RapidHashMap::new(),
                 };
-                let visible = |id: &str| !super::is_retired_reserved_id(id);
+                let visible = |id: &str| !gents_protocol::canonical::is_retired_reserved_id(id);
                 macro_rules! retain_visible {
                     ($($field:ident),+ $(,)?) => { $(view.$field.retain(|id, _| visible(id));)+ };
                 }
