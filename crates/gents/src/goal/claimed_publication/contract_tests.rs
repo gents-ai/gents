@@ -12,6 +12,41 @@ use crate::tools::call::lifecycle::{AwaitMode, SpawnedBackgroundToolAdmission};
 
 use super::super::operator_resume::support::*;
 
+async fn verified_client_lifecycle(
+    fixture: &Fixture,
+    request: crate::request::watcher::AgentRequest,
+) -> crate::RequestLifecycle {
+    assert_eq!(request.requester_did.as_deref(), Some(fixture.user.did()));
+    assert_eq!(request.agent_did, fixture.agent.did());
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        fixture.node.clone(),
+        fixture.identity.clone(),
+        authority,
+    );
+    let (request, admission) = verifier
+        .verify_fresh_for_claim_with_identity(&request, fixture.agent.as_ref())
+        .await
+        .expect("verify signed client request before goal fixture claim");
+    assert!(
+        admission.is_some(),
+        "client request must retain its native claim admission"
+    );
+    let mut lifecycle = crate::RequestLifecycle::new_with_node_did(
+        fixture.node.clone(),
+        fixture.agent.did(),
+        fixture.identity.did(),
+        request,
+        60,
+    );
+    lifecycle
+        .bind_managed_agent(fixture.agent.as_ref())
+        .unwrap();
+    lifecycle.set_client_claim_admission(admission);
+    lifecycle
+}
+
 #[derive(Deserialize)]
 struct PublicationContracts {
     goal_claimed_publication_cases: Vec<PublicationCase>,
@@ -140,14 +175,7 @@ async fn run_generated_running_wait() {
     assert_eq!(case.observation["waits"][0]["reply"], "timed_out_running");
     assert_eq!(case.observation["backgrounds"][0]["state"], "running");
     let fixture = Fixture::new_with_parent_state(&case.before, false).await;
-    let mut request = crate::RequestLifecycle::new_with_node_did(
-        fixture.node.clone(),
-        &fixture.parent.agent_did,
-        fixture.identity.did(),
-        fixture.parent.clone(),
-        60,
-    );
-    request.bind_managed_agent(fixture.agent.as_ref()).unwrap();
+    let mut request = verified_client_lifecycle(&fixture, fixture.parent.clone()).await;
     assert_eq!(request.claim().await.unwrap(), ClaimOutcome::Claimed);
     let mut spawn = publish_accepted_on_claimed_request(
         fixture.node.clone(),
@@ -338,16 +366,7 @@ async fn run_generated_wait_observations() {
                     .unwrap(),
             )
             .unwrap();
-            let mut older_request = crate::RequestLifecycle::new_with_node_did(
-                fixture.node.clone(),
-                &fixture.parent.agent_did,
-                fixture.identity.did(),
-                older,
-                60,
-            );
-            older_request
-                .bind_managed_agent(fixture.agent.as_ref())
-                .unwrap();
+            let mut older_request = verified_client_lifecycle(&fixture, older).await;
             assert_eq!(older_request.claim().await.unwrap(), ClaimOutcome::Claimed);
             let unrelated_handle = "unrelated-background-handle";
             let mut unrelated = publish_accepted_on_claimed_request(
@@ -387,14 +406,7 @@ async fn run_generated_wait_observations() {
                 TerminalizeResult::Won
             );
         }
-        let mut request = crate::RequestLifecycle::new_with_node_did(
-            fixture.node.clone(),
-            &fixture.parent.agent_did,
-            fixture.identity.did(),
-            fixture.parent.clone(),
-            60,
-        );
-        request.bind_managed_agent(fixture.agent.as_ref()).unwrap();
+        let mut request = verified_client_lifecycle(&fixture, fixture.parent.clone()).await;
         assert_eq!(
             request.claim().await.unwrap(),
             ClaimOutcome::Claimed,
