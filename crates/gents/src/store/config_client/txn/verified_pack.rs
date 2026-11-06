@@ -39,6 +39,15 @@ impl VerifiedPackTxn<'_, '_> {
     pub(crate) fn interpreter(&self) -> &ConfigApplyTxn<'_> {
         self.inner
     }
+
+    /// Use the desired-state interpreter only while its effects require the
+    /// client approver bound to this native transaction.
+    pub fn approved_interpreter(&self) -> Result<&ConfigApplyTxn<'_>> {
+        if !self.inner.has_pack_interpreter() {
+            return Err(ConfigClientError::TransactionAuthorizationUnsupported);
+        }
+        Ok(self.inner)
+    }
     pub async fn read(&self, document: &str) -> Result<Value> {
         self.read_with_variables(document, &serde_json::json!({}))
             .await
