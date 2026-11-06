@@ -33,6 +33,21 @@ def admitHop (maxHop : Option Nat) (hop : Nat) : Bool :=
   | none => true
   | some bound => decide (hop ≤ bound)
 
+/-- An unreadable or absent runtime Node is not an unset limit. Only a
+runtime-visible Node supplies a cap, including an explicitly unset cap. -/
+def admitObservedHop (observation : Option (Option Nat)) (hop : Nat) : Option Bool :=
+  observation.map (fun maxHop => admitHop maxHop hop)
+
+theorem unavailable_cap_cannot_admit (hop : Nat) :
+    admitObservedHop none hop = none := rfl
+
+theorem visible_unset_cap_admits (hop : Nat) :
+    admitObservedHop (some none) hop = some true := rfl
+
+theorem visible_bound_refuses_above (bound hop : Nat) (h : bound < hop) :
+    admitObservedHop (some (some bound)) hop = some false := by
+  simp [admitObservedHop, admitHop]; omega
+
 def sendTargetAllowed (callerSession targetSession : String) : Bool :=
   callerSession != targetSession
 
