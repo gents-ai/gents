@@ -1,7 +1,16 @@
 import Proofs.Configuration
+import Proofs.Identity.State
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.Contracts.PackInstallation
+
+def schemaCasesJson : String := jsonArray (
+  [false, true].flatMap fun scope => [false, true].flatMap fun signed =>
+    [false, true].map fun nativeUpdate =>
+      "{\"scope_matches\":" ++ toString scope ++
+      ",\"signed\":" ++ toString signed ++
+      ",\"native_update\":" ++ toString nativeUpdate ++
+      ",\"allowed\":" ++ toString (Identity.hostedSchemaAllowed scope signed nativeUpdate) ++ "}")
 
 def homeCasesJson : String := jsonArray (Configuration.hostedPackHomeCases.map fun written =>
   "{\"home_written\":" ++ toString written ++ ",\"reported_success\":" ++

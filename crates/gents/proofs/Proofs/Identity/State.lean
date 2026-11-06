@@ -33,6 +33,15 @@ inductive SchemaOperation where
 
 def schemaActor (node : Node) (_operation : SchemaOperation) : DID := node.did
 
+/-- A hosted pack's reviewed schema is applied by its Node only after the
+client signs the exact archive scope and native ACP admits Node update. -/
+def hostedSchemaAllowed (scopeMatches signed nativeNodeUpdate : Bool) : Bool :=
+  scopeMatches && signed && nativeNodeUpdate
+
+theorem hosted_schema_requires_native_update (scopeMatches signed : Bool) :
+    hostedSchemaAllowed scopeMatches signed false = false := by
+  cases scopeMatches <;> cases signed <;> decide
+
 theorem schema_operations_use_runtime (node : Node) (operation : SchemaOperation) :
     schemaActor node operation = node.did := by rfl
 
