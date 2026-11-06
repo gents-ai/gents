@@ -62,7 +62,7 @@ fn validate_trigger_provenance(trigger_lineage: &TriggerLineage) -> Result<()> {
 }
 
 async fn resolve_created_agent_request_doc_id(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     mutation_response: &defra_node::QueryResponse,
     mutation_field: &str,
     escaped_request_id: &str,
@@ -76,11 +76,12 @@ async fn resolve_created_agent_request_doc_id(
     let query = format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 2) {{ _docID request_id }} }}"#
     );
-    let query_resp =
-        crate::store::graphql::graphql_with_transaction_retry(node, &query, lookup_error).await?;
-
+    let query_resp = access
+        .execute(&query)
+        .await
+        .context(lookup_error.to_owned())?;
     let rows: Vec<gents_protocol::row::AgentRequestRow> =
-        crate::store::graphql::rows(&query_resp, "AgentRequest")?;
+        serde_json::from_value(query_resp["data"]["AgentRequest"].clone())?;
     if rows.len() != 1 {
         anyhow::bail!(
             "{missing_doc_id_error}: request_id lookup returned {} documents",
@@ -185,7 +186,7 @@ pub(crate) async fn write_pending_agent_request_with_identity(
         .await?;
 
     let doc_id = resolve_created_agent_request_doc_id(
-        node,
+        &access,
         &response,
         "create_AgentRequest",
         &escaped_request_id,
@@ -1975,6 +1976,47 @@ async fn stage_task_delivery_with_receipt(
 mod task_delivery_tests {
     use super::*;
     use crate::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
+
+    #[tokio::test]
+    async fn pending_receipt_lookup_uses_the_selected_agent() {
+        use crate::tools::call::lifecycle::admission_fixture::{
+            published_admission_with_owner, PublishedAdmissionOptions,
+        };
+
+        let (admission, parent) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "pending-receipt-agent".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let access = admission.tool.access().unwrap();
+        let receipt = defra_node::QueryResponse::success(serde_json::json!({
+            "create_AgentRequest": [{}]
+        }));
+        let escaped = escape_graphql_string(&parent.request().request_id);
+        let resolved = resolve_created_agent_request_doc_id(
+            &access,
+            &receipt,
+            "create_AgentRequest",
+            &escaped,
+            "lookup failed",
+            "missing receipt",
+        )
+        .await
+        .unwrap();
+        assert_eq!(resolved, parent.request().doc_id);
+        assert!(resolve_created_agent_request_doc_id(
+            &crate::ConfigAccess::local(admission.node.clone()),
+            &receipt,
+            "create_AgentRequest",
+            &escaped,
+            "lookup failed",
+            "missing receipt",
+        )
+        .await
+        .is_err());
+        admission.node.shutdown().await.unwrap();
+    }
 
     #[test]
     fn task_provenance_matches_generated_opening_cases() {
