@@ -122,9 +122,15 @@ pub(crate) enum AgentCommand {
         about = "Disable an Agent through the shared agent materializer"
     )]
     Disable(AgentDisableArgs),
-    #[command(name = "grant-self-config", about = "Grant an agent permission to update its own Agent document")]
+    #[command(
+        name = "grant-self-config",
+        about = "Grant an agent permission to update its own Agent document"
+    )]
     GrantSelfConfig(AgentSelfConfigPermissionArgs),
-    #[command(name = "revoke-self-config", about = "Revoke an agent's permission to update its own Agent document")]
+    #[command(
+        name = "revoke-self-config",
+        about = "Revoke an agent's permission to update its own Agent document"
+    )]
     RevokeSelfConfig(AgentSelfConfigPermissionArgs),
     #[command(name = "list", about = "List Agent documents")]
     List(ConfigListArgs),
@@ -138,9 +144,15 @@ pub(crate) enum AgentCommand {
 pub(crate) enum WorkspaceRootCommand {
     #[command(name = "set")]
     Set(WorkspaceRootUpsertArgs),
-    #[command(name = "grant-reader", about = "Grant a selected Agent access to a workspace root")]
+    #[command(
+        name = "grant-reader",
+        about = "Grant a selected Agent access to a workspace root"
+    )]
     GrantReader(WorkspaceRootReaderArgs),
-    #[command(name = "revoke-reader", about = "Revoke a selected Agent's access to a workspace root")]
+    #[command(
+        name = "revoke-reader",
+        about = "Revoke a selected Agent's access to a workspace root"
+    )]
     RevokeReader(WorkspaceRootReaderArgs),
     #[command(name = "list", about = "List WorkspaceRoot documents")]
     List(ConfigListArgs),
@@ -342,7 +354,10 @@ pub(crate) struct WorkspaceRootUpsertArgs {
     pub(crate) graphql: String,
     #[arg(long)]
     pub(crate) node_did: String,
-    #[arg(long = "reader-agent", help = "Grant read access to this explicitly selected Agent DID")]
+    #[arg(
+        long = "reader-agent",
+        help = "Grant read access to this explicitly selected Agent DID"
+    )]
     pub(crate) reader_agents: Vec<String>,
     #[arg(long, help = "Absolute path to register as a workspace root")]
     pub(crate) path: PathBuf,

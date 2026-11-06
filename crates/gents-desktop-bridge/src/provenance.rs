@@ -312,11 +312,7 @@ mod tests {
     use gents::store::graphql::escape_graphql_string;
     use gents_protocol::request_admission::RequestPurpose;
 
-    async fn run(
-        node: &gents::defra_node::Node,
-        mutation: String,
-        collection: &str,
-    ) -> String {
+    async fn run(node: &gents::defra_node::Node, mutation: String, collection: &str) -> String {
         let response = node.execute(&mutation).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))

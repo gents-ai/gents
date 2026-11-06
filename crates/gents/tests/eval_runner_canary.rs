@@ -843,10 +843,8 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
     let evaluator_did = evaluator.did().to_owned();
     let capability = evaluator.client_signing_capability().unwrap();
     home.set_evaluator(evaluator, capability);
-    let admin = ConfigAccess::local_as(
-        home.node.clone(),
-        ::identity::Did::new(home.did()).unwrap(),
-    );
+    let admin =
+        ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(home.did()).unwrap());
     let evaluator_actor = ::identity::Did::new(&evaluator_did).unwrap();
     for permission in [
         NodePermission::CollectionGet,

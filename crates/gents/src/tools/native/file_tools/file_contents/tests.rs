@@ -217,7 +217,11 @@ async fn observations_in_one_session_have_separate_file_documents_and_read_back_
             .await
             .is_err());
     }
-    admission.node.shutdown().await.expect("shut down test node");
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -277,7 +281,11 @@ async fn concurrent_edits_of_one_path_keep_observation_documents_distinct() {
             .0,
         right
     );
-    admission.node.shutdown().await.expect("shut down test node");
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 

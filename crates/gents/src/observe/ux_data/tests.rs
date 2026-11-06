@@ -2,17 +2,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use defra_node::Node as EmbeddedNode;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use super::*;
-use crate::Collection;
 use crate::pack::{
-    HomePackInstall, PackKind, PackUxPlugin, UxContributions, UxDataSurface, write_home_install,
+    write_home_install, HomePackInstall, PackKind, PackUxPlugin, UxContributions, UxDataSurface,
 };
 use crate::store::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, GraphqlEndpoint,
-    NodePermission, apply_desired_state_plan,
+    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    GraphqlEndpoint, NodePermission,
 };
+use crate::Collection;
 
 const NODE: &str = "did:key:z";
 const BOARD: &str = "acme/board/board";
@@ -641,14 +641,12 @@ async fn cached_operator_tools_recheck_current_source_and_roll_back() {
         .write_surface(board_surface(&fixture.node_did, "board", false))
         .await;
     assert!(query.call(BoundedQueryParams(Map::new())).await.is_err());
-    assert!(
-        write
-            .call(BoundedWriteParams(
-                serde_json::from_value(json!({"title":"denied", "lane":"doing"})).unwrap()
-            ))
-            .await
-            .is_err()
-    );
+    assert!(write
+        .call(BoundedWriteParams(
+            serde_json::from_value(json!({"title":"denied", "lane":"doing"})).unwrap()
+        ))
+        .await
+        .is_err());
     assert_eq!(
         fixture
             .access
@@ -753,18 +751,20 @@ async fn cached_http_operator_query_refuses_after_native_reader_revocation() {
         denied.to_string().contains("surface is unavailable"),
         "{denied}"
     );
-    assert!(
-        call(fixture.home.path(), &fixture.client_access, request())
-            .await
-            .is_err()
-    );
+    assert!(call(fixture.home.path(), &fixture.client_access, request())
+        .await
+        .is_err());
     fixture.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
 async fn http_operator_signs_ux_create_from_the_verified_installed_pack() {
     let fixture = Fixture::new().await;
-    install_verified_board_schema(fixture.home.path(), "type BoardTask { title: String lane: String }").await;
+    install_verified_board_schema(
+        fixture.home.path(),
+        "type BoardTask { title: String lane: String }",
+    )
+    .await;
     let model = crate::lean_vocab_test::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
@@ -789,10 +789,14 @@ async fn http_operator_signs_ux_create_from_the_verified_installed_pack() {
     );
     let outcome = outcome.unwrap();
     let doc_id = outcome["output"]["document_id"].as_str().unwrap();
-    let history = fixture.client_access.execute(&format!(
+    let history = fixture
+        .client_access
+        .execute(&format!(
         "{{ _commits(docID: \"{}\") {{ cid height fieldName signature {{ identity type }} }} }}",
         crate::store::graphql::escape_graphql_string(doc_id),
-    )).await.unwrap();
+    ))
+        .await
+        .unwrap();
     let commits =
         crate::store::graphql::composite_commits_at(history["data"].get("_commits"), "_commits")
             .unwrap();
@@ -846,7 +850,11 @@ async fn http_operator_signs_ux_create_from_the_verified_installed_pack() {
 #[tokio::test]
 async fn http_operator_refuses_ux_manifest_tampering_before_signing() {
     let fixture = Fixture::new().await;
-    install_verified_board_schema(fixture.home.path(), "type BoardTask { title: String lane: String }").await;
+    install_verified_board_schema(
+        fixture.home.path(),
+        "type BoardTask { title: String lane: String }",
+    )
+    .await;
     let mut record = crate::pack::read_home_install(fixture.home.path(), "acme/board")
         .unwrap()
         .unwrap();
@@ -892,11 +900,29 @@ async fn http_operator_never_signs_a_server_graph_outside_the_verified_schema() 
     ] {
         let fixture = Fixture::new().await;
         install_verified_board_schema(fixture.home.path(), schema).await;
-        let before = fixture.access.execute("{ BoardTask { _docID title lane } }").await.unwrap();
-        let request = UxDataCall { ux:BOARD.into(), node_did:fixture.node_did.clone(),
-            surface:"board".into(), tool:"add_task".into(), args:json!({"title":"must-not-sign", "lane":"doing"}) };
-        assert!(call(fixture.home.path(), &fixture.client_access, request).await.is_err());
-        assert_eq!(fixture.access.execute("{ BoardTask { _docID title lane } }").await.unwrap(), before);
+        let before = fixture
+            .access
+            .execute("{ BoardTask { _docID title lane } }")
+            .await
+            .unwrap();
+        let request = UxDataCall {
+            ux: BOARD.into(),
+            node_did: fixture.node_did.clone(),
+            surface: "board".into(),
+            tool: "add_task".into(),
+            args: json!({"title":"must-not-sign", "lane":"doing"}),
+        };
+        assert!(call(fixture.home.path(), &fixture.client_access, request)
+            .await
+            .is_err());
+        assert_eq!(
+            fixture
+                .access
+                .execute("{ BoardTask { _docID title lane } }")
+                .await
+                .unwrap(),
+            before
+        );
         fixture.node.shutdown().await.expect("node shutdown");
     }
 }

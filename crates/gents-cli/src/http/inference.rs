@@ -44,8 +44,7 @@ async fn inference_settings(state: RuntimeHttpState, identity: ExtractIdentity) 
         );
     }
     let access = ConfigAccess::local_as(runtime.observation_node().clone(), member.clone());
-    match load_inference_setup_state(&access, &state.node_did).await
-    {
+    match load_inference_setup_state(&access, &state.node_did).await {
         Ok(settings) => Json(InferenceSettingsResponse {
             contract_version: INFERENCE_SETTINGS_CONTRACT_VERSION,
             state: settings.for_client_observation(),

@@ -264,12 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn ux_plugin_writes_are_scoped_and_atomic() {
-        let node = Arc::new(
-            gents::defra_node::Node::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node = Arc::new(gents::defra_node::Node::builder().build().await.unwrap());
         node.add_collection("type UxNote { body: String }")
             .await
             .unwrap();

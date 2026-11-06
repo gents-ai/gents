@@ -90,7 +90,9 @@ async fn load_bound_agent_document(state: &ShimState) -> Result<gents::AgentDocu
             read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_did)
                 .await?
                 .map(|(_, value)| value)
-                .ok_or_else(|| anyhow::anyhow!("bound Agent {agent_did:?} missing for {node_did:?}"))
+                .ok_or_else(|| {
+                    anyhow::anyhow!("bound Agent {agent_did:?} missing for {node_did:?}")
+                })
         })
     })
     .await?;

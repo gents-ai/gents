@@ -169,6 +169,6 @@ pub(super) async fn apply_selection_changes(
 }
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod compaction_tests;
+#[cfg(test)]
+mod tests;

@@ -11,7 +11,6 @@ use super::fault_injection::{after_successful_mutation_for_test, SUCCESSFUL_MUTA
 use super::native::execute_owned_native;
 use super::{graphql, graphql_api_base, retry, ConfigApplyTxn, ConfigClientError, Result};
 use crate::store::config_client::write_telemetry::{record_slow_native_phase, ConflictSource};
-use crate::store::identity::NodeIdentity;
 
 impl ConfigApplyTxn<'_> {
     pub(crate) async fn delete_verified_configuration_document(

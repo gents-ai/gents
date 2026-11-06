@@ -15,4 +15,3 @@ async fn p2p_crash_reopens_same_durable_peer_identity() {
     );
     assert_eq!(db.process_generation, 1);
 }
-

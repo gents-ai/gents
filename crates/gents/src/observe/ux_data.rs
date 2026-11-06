@@ -15,9 +15,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 use crate::documents::{
     list_datastore_tool_surfaces, DatastoreToolSurfaceDocument, QueryToolDecl, SurfaceToolDecl,
@@ -25,8 +25,8 @@ use crate::documents::{
 use crate::inference::llm::tool::Tool;
 use crate::plugin::ux::UxListing;
 use crate::store::config_client::ConfigAccess;
-use crate::tools::builtin::defra_query::BoundedQueryTool;
 use crate::tools::builtin::defra_query::bounded::BoundedQueryParams;
+use crate::tools::builtin::defra_query::BoundedQueryTool;
 use crate::tools::builtin::defra_write::{BoundedWriteParams, BoundedWriteTool};
 
 /// One call from a page, as `desktop_ux_data_call` receives it.
@@ -328,7 +328,9 @@ pub async fn watch_local(
     node: Arc<crate::defra_node::Node>,
     request: UxDataCall,
 ) -> Result<UxDataWatch> {
-    let node_did = node.node_identity_did().context("runtime Node identity is unavailable")?;
+    let node_did = node
+        .node_identity_did()
+        .context("runtime Node identity is unavailable")?;
     anyhow::ensure!(
         node_did == request.node_did,
         "selected node does not own this runtime"

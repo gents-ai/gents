@@ -461,7 +461,9 @@ fn projection_participants(
             .iter()
             .filter_map(|item| match item {
                 OpenAiCodexTraceItem::Request {
-                    node_did, agent_did, ..
+                    node_did,
+                    agent_did,
+                    ..
                 } => participant(node_did.clone(), agent_did.clone()),
                 _ => None,
             })
@@ -489,7 +491,10 @@ fn participant(
     if node_did.is_none() && agent_did.is_none() {
         return None;
     }
-    Some(ProjectionParticipant { node_did, agent_did })
+    Some(ProjectionParticipant {
+        node_did,
+        agent_did,
+    })
 }
 
 #[test]

@@ -1,5 +1,5 @@
-use anyhow::{Result, anyhow, bail, ensure};
-use serde_json::{Map, Value, json};
+use anyhow::{anyhow, bail, ensure, Result};
+use serde_json::{json, Map, Value};
 
 use crate::documents::QueryToolDecl;
 use crate::inference::llm::tool::{Tool, ToolDefinition};

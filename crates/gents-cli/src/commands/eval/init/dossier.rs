@@ -282,9 +282,7 @@ pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
     })
 }
 
-pub(super) fn read_pack(
-    pack_dir: &Path,
-) -> Result<(PackManifest, BTreeMap<String, Vec<u8>>)> {
+pub(super) fn read_pack(pack_dir: &Path) -> Result<(PackManifest, BTreeMap<String, Vec<u8>>)> {
     let manifest_path = pack_dir.join("manifest.json");
     let manifest: PackManifest = serde_json::from_slice(
         &std::fs::read(&manifest_path)

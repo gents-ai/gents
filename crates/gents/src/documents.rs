@@ -77,6 +77,8 @@ pub use serde_helpers::deserialize_dual_shape;
 pub(crate) use serde_helpers::{
     accepts_null, deserialize_default_on_null, noted, string_list_schema, widen_schema,
 };
+#[cfg(test)]
+pub(crate) use surface_tool::{confirm_visible_datastore_tool, revalidate_datastore_tool_in_txn};
 #[allow(unused_imports)]
 pub(crate) use surface_tool::{
     deserialize_optional_surface_tools, validate_query_tool_declarations,
@@ -85,8 +87,6 @@ pub(crate) use surface_tool::{
 pub use surface_tool::{
     merge_datastore_tool_surfaces, MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl,
 };
-#[cfg(test)]
-pub(crate) use surface_tool::{confirm_visible_datastore_tool, revalidate_datastore_tool_in_txn};
 pub(crate) use surface_tool::{
     validate_datastore_surface, DatastoreSurfaceScope, DatastoreToolSource,
 };

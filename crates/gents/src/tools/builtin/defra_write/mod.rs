@@ -1,6 +1,6 @@
 use crate::inference::llm::tool::ToolDefinition;
-use anyhow::{Context, Result, anyhow, bail};
-use serde_json::{Map, Value, json};
+use anyhow::{anyhow, bail, Context, Result};
+use serde_json::{json, Map, Value};
 
 use crate::documents::WriteToolDecl;
 use crate::store::config_client::ConfigAccess;
@@ -338,7 +338,9 @@ impl crate::inference::llm::tool::Tool for BoundedWriteTool {
         });
         if self.client_schema.is_some() {
             if !matches!(self.access, ConfigAccess::Graphql(_)) || self.surface_scope.is_none() {
-                return Err(anyhow!("UX client signing requires a scoped remote transaction").into());
+                return Err(
+                    anyhow!("UX client signing requires a scoped remote transaction").into(),
+                );
             }
             if self.decl.fields.iter().any(|field| field.fill.is_some()) {
                 return Err(anyhow!("UX client writes cannot use runtime-filled fields").into());

@@ -69,7 +69,9 @@ impl TaskInventory {
     fn task_summary(&self, task: &Value) -> Value {
         let task_id = string_field(task, "task_id").unwrap_or_default();
         let agent_did = string_field(task, "agent_did");
-        let agent = agent_did.as_deref().and_then(|id| self.agents_by_id.get(id));
+        let agent = agent_did
+            .as_deref()
+            .and_then(|id| self.agents_by_id.get(id));
         let triggers = self.triggers_for_task(&task_id);
         let (runnable, unavailable_reason) = runnable_status(task, agent);
 

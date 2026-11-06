@@ -21,7 +21,6 @@ pub mod package_tools;
 pub mod plugin;
 pub mod plugin_access;
 pub mod process_control;
-mod tool_control;
 pub mod provenance;
 pub mod provider_recovery;
 #[cfg(feature = "tauri-host")]
@@ -31,6 +30,7 @@ pub mod snapshot;
 pub mod state;
 #[cfg(feature = "tauri-host")]
 pub mod tauri_commands;
+mod tool_control;
 pub mod types;
 #[cfg(feature = "tauri-host")]
 mod ux_watch;

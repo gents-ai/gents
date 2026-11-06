@@ -3259,11 +3259,10 @@ async fn configure_inference(
         .await;
     *id += 1;
     ensure!(
-        observed["agentConfigs"].as_array().is_some_and(|rows| rows
-            .iter()
-            .any(
-                |row| row["agent_did"] == agent_did && row["inference_profile_id"] == "editor-setup"
-            )),
+        observed["agentConfigs"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["agent_did"] == agent_did
+                && row["inference_profile_id"] == "editor-setup")),
         "the selected model was not bound to the default agent: {observed}"
     );
     Ok(())

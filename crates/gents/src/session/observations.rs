@@ -739,7 +739,10 @@ pub(crate) async fn session_needs_generated_title(
     let Some(row) = access
         .transact_readonly("session.needs_generated_title", |txn| {
             Box::pin(load_agent_session_row_in_txn(
-                txn, node_did, session_id, requester_did,
+                txn,
+                node_did,
+                session_id,
+                requester_did,
             ))
         })
         .await?

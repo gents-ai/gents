@@ -34,11 +34,7 @@ pub async fn boot_core() -> (Arc<ClientCore>, TempDir) {
     (Arc::new(core), tempdir)
 }
 
-pub async fn runtime_core() -> (
-    Arc<ClientCore>,
-    Arc<gents::defra_node::Node>,
-    TempDir,
-) {
+pub async fn runtime_core() -> (Arc<ClientCore>, Arc<gents::defra_node::Node>, TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let core = Arc::new(
         ClientCore::start_with_paths_and_options(

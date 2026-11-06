@@ -146,7 +146,9 @@ pub async fn claim_invocation(
                     )? == expected,
                     "callback configuration changed before claim"
                 );
-                if let crate::documents::CallbackHandler::Module { module_id, .. } = &current.handler {
+                if let crate::documents::CallbackHandler::Module { module_id, .. } =
+                    &current.handler
+                {
                     let (prepared_doc, prepared) =
                         prepared_module.context("callback module missing before claim")?;
                     let (module_doc, module) =

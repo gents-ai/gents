@@ -484,11 +484,31 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         ));
     }
     for (present, key, class) in [
-        (!snapshot.workspace_quickstart_selection_cases.is_empty(), "workspace_quickstart_selection_cases", "WorkspaceQuickstartSelectionCases"),
-        (!snapshot.workspace_callback_selection_cases.is_empty(), "workspace_callback_selection_cases", "WorkspaceCallbackSelectionCases"),
-        (!snapshot.workspace_datastore_write_cases.is_empty(), "workspace_datastore_write_cases", "WorkspaceDatastoreWriteCases"),
-        (!snapshot.node_file_request_access_cases.is_empty(), "node_file_request_access_cases", "NodeFileRequestAccessCases"),
-        (!snapshot.workspace_root_access_cases.is_empty(), "workspace_root_access_cases", "WorkspaceRootAccessCases"),
+        (
+            !snapshot.workspace_quickstart_selection_cases.is_empty(),
+            "workspace_quickstart_selection_cases",
+            "WorkspaceQuickstartSelectionCases",
+        ),
+        (
+            !snapshot.workspace_callback_selection_cases.is_empty(),
+            "workspace_callback_selection_cases",
+            "WorkspaceCallbackSelectionCases",
+        ),
+        (
+            !snapshot.workspace_datastore_write_cases.is_empty(),
+            "workspace_datastore_write_cases",
+            "WorkspaceDatastoreWriteCases",
+        ),
+        (
+            !snapshot.node_file_request_access_cases.is_empty(),
+            "node_file_request_access_cases",
+            "NodeFileRequestAccessCases",
+        ),
+        (
+            !snapshot.workspace_root_access_cases.is_empty(),
+            "workspace_root_access_cases",
+            "WorkspaceRootAccessCases",
+        ),
         (
             !snapshot.workspace_child_revocation_cases.is_empty(),
             "workspace_child_revocation_cases",
@@ -563,7 +583,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         .as_array()
         .is_some_and(|cases| !cases.is_empty())
     {
-        emitted.insert(("mailbox_native_policy".into(), "MailboxNativePolicyCases".into()));
+        emitted.insert((
+            "mailbox_native_policy".into(),
+            "MailboxNativePolicyCases".into(),
+        ));
     }
     if !snapshot.callback_workspace_actor_cases.is_empty() {
         emitted.insert((
@@ -825,13 +848,22 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert(("pack_wire_lock_cases".into(), "PackWireLockCases".into()));
     }
     if !snapshot.hosted_pack_evidence_cases.is_empty() {
-        emitted.insert(("hosted_pack_evidence_cases".into(), "HostedPackEvidenceCases".into()));
+        emitted.insert((
+            "hosted_pack_evidence_cases".into(),
+            "HostedPackEvidenceCases".into(),
+        ));
     }
     if !snapshot.hosted_pack_schema_cases.is_empty() {
-        emitted.insert(("hosted_pack_schema_cases".into(), "HostedPackSchemaCases".into()));
+        emitted.insert((
+            "hosted_pack_schema_cases".into(),
+            "HostedPackSchemaCases".into(),
+        ));
     }
     if !snapshot.hosted_pack_home_cases.is_empty() {
-        emitted.insert(("hosted_pack_home_cases".into(), "HostedPackHomeCases".into()));
+        emitted.insert((
+            "hosted_pack_home_cases".into(),
+            "HostedPackHomeCases".into(),
+        ));
     }
     if !snapshot.agent_folded_binding_cases.is_empty() {
         emitted.insert((

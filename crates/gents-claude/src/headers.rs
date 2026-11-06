@@ -317,7 +317,10 @@ pub fn request_headers(ctx: &HeaderContext<'_>) -> Vec<(&'static str, HeaderValu
         push("x-client-app", app.into());
     }
     if let Some(agent) = ctx.agent.filter(|agent| !agent.agent_did.is_empty()) {
-        push("x-claude-code-agent-did", escape_agent_value(agent.agent_did));
+        push(
+            "x-claude-code-agent-did",
+            escape_agent_value(agent.agent_did),
+        );
         if let Some(parent) = agent.parent_agent_did.filter(|parent| !parent.is_empty()) {
             push("x-claude-code-parent-agent-did", escape_agent_value(parent));
         }

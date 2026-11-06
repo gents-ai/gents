@@ -45,6 +45,8 @@ pub(crate) use inference::{
     inspect_pack_inference_bindings_with_node_binding,
     preview_pack_inference_bindings_with_node_binding,
 };
+#[cfg(test)]
+pub(crate) use installation::record_plugin_store_change_as_with_node_binding;
 pub use installation::{
     apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
     document_pack_schema_paths, ensure_plugins_unreferenced, hosted_document_graph,
@@ -63,8 +65,6 @@ pub(crate) use installation::{
     prepare_document_pack_archive_with_provisioner,
     record_staged_plugin_store_change_as_with_node_binding, sdl_paths, PluginStageContext,
 };
-#[cfg(test)]
-pub(crate) use installation::record_plugin_store_change_as_with_node_binding;
 pub use installation::{
     stage_hosted_pack, HostedHomePublication, HostedPackStage, HostedPackStageError,
 };

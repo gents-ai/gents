@@ -12,9 +12,13 @@ async fn sessions_get_reports_timeline_tools_usage_and_compactions() {
         .unwrap(),
     );
 
-    let parsed = load_session_investigation(&crate::store::config_client::ConfigAccess::local(tool.node.clone()), &tool.node_did, "session-a")
-        .await
-        .unwrap();
+    let parsed = load_session_investigation(
+        &crate::store::config_client::ConfigAccess::local(tool.node.clone()),
+        &tool.node_did,
+        "session-a",
+    )
+    .await
+    .unwrap();
 
     assert_eq!(parsed.session_id, "session-a");
     assert_eq!(parsed.requests.len(), 2);

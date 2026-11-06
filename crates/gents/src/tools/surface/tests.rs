@@ -1322,7 +1322,6 @@ async fn write_tools_register_under_declared_names() {
     );
 }
 
-
 #[tokio::test]
 async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registration() {
     use crate::documents::{
@@ -1368,7 +1367,6 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
         "{error:#}"
     );
 }
-
 
 #[tokio::test]
 async fn plugin_only_bindings_are_captured_for_trigger_execution() {
@@ -1436,31 +1434,24 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
     .resolve(&node, &runtime.node_did, &Default::default())
     .await
     .unwrap();
-    assert!(
-        granted
-            .tool_names()
-            .contains(&crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string())
-    );
+    assert!(granted
+        .tool_names()
+        .contains(&crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
     assert!(granted.source_fill_fields().contains("requester_did"));
     let built = granted.build_tools(&runtime).await.unwrap();
-    assert!(
-        built
-            .iter()
-            .any(|tool| tool.name() == crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME)
-    );
+    assert!(built
+        .iter()
+        .any(|tool| tool.name() == crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME));
 
     let without_grant = AgentToolSurfaceConfig::meta_only()
         .resolve(&runtime.node, &runtime.node_did, &Default::default())
         .await
         .unwrap();
-    assert!(
-        !without_grant
-            .tool_names()
-            .contains(&crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string())
-    );
+    assert!(!without_grant
+        .tool_names()
+        .contains(&crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
     assert!(!without_grant.source_fill_fields().contains("requester_did"));
 }
-
 
 #[tokio::test]
 async fn query_tool_is_advertised_and_registered() {
@@ -1520,22 +1511,17 @@ async fn query_tool_is_advertised_and_registered() {
         Ok(_) => panic!("node identity cannot substitute for selected agent identity"),
         Err(error) => error,
     };
-    assert!(
-        error
-            .to_string()
-            .contains("cannot use the runtime node identity")
-    );
+    assert!(error
+        .to_string()
+        .contains("cannot use the runtime node identity"));
     let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
     runtime.agent_identity =
         Some(crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap());
     let built = surface.build_tools(&runtime).await.unwrap();
-    assert!(
-        built
-            .iter()
-            .any(|tool| tool.name() == "query_candidate_finding")
-    );
+    assert!(built
+        .iter()
+        .any(|tool| tool.name() == "query_candidate_finding"));
 }
-
 
 #[test]
 fn document_tool_config_expands_linked_datastore_surfaces() {

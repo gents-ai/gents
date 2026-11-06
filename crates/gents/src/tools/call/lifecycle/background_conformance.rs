@@ -22,7 +22,11 @@ async fn row(node: &EmbeddedNode, doc_id: &str) -> serde_json::Value {
 }
 
 async fn teardown(admission: PublishedAdmission) {
-    admission.node.shutdown().await.expect("shut down test node");
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 

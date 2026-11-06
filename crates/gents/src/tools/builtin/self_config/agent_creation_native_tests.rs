@@ -339,7 +339,8 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     assert_eq!(configured["data"]["Tools"][0]["display_name"], "configured");
     user_access
         .set_agent_self_config_permission(
-            runtime.did(), &creator.agent_did,
+            runtime.did(),
+            &creator.agent_did,
             crate::store::config_client::AgentSelfConfigPermission::Revoke,
         )
         .await?;
@@ -350,7 +351,8 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     assert_eq!(user_access.execute(&tools_query).await?, configured);
     user_access
         .set_agent_self_config_permission(
-            runtime.did(), &creator.agent_did,
+            runtime.did(),
+            &creator.agent_did,
             crate::store::config_client::AgentSelfConfigPermission::Grant,
         )
         .await?;
@@ -844,13 +846,30 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         "{{ Tools(filter: {{tools_id: {{_eq: \"{}\"}}}}) {{ _docID integrations }} }}",
         crate::store::graphql::escape_graphql_string(&sibling_tools),
     );
-    assert!(creator_access.execute(&sibling_tools_query).await?["data"]["Tools"].as_array().unwrap().is_empty());
-    assert_eq!(user_access.execute(&sibling_tools_query).await?["data"]["Tools"].as_array().unwrap().len(), 1);
+    assert!(
+        creator_access.execute(&sibling_tools_query).await?["data"]["Tools"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        user_access.execute(&sibling_tools_query).await?["data"]["Tools"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     let retirement = crate::pack::ensure_plugins_unreferenced(
-        &creator_access, runtime.did(), &std::collections::BTreeSet::from(["acme/hidden-plugin".to_owned()]),
-    ).await.unwrap_err();
-    assert!(matches!(retirement.downcast_ref::<crate::pack::PackRemovalError>(),
-        Some(crate::pack::PackRemovalError::ReferenceInventoryUnavailable)));
+        &creator_access,
+        runtime.did(),
+        &std::collections::BTreeSet::from(["acme/hidden-plugin".to_owned()]),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        retirement.downcast_ref::<crate::pack::PackRemovalError>(),
+        Some(crate::pack::PackRemovalError::ReferenceInventoryUnavailable)
+    ));
     let surface_row = user_access
         .execute(
             "{ DatastoreToolSurface(filter: {surface_id: {_eq: \"fixture/surface\"}}) { _docID } }",
@@ -886,27 +905,61 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         )?)
         .await
         .map_err(|error| anyhow::anyhow!("cached write failed: {error}"))?;
-    let write_case = |name: &str| modeled.configuration_datastore_write_cases.iter()
-        .find(|case| case["name"] == name).with_context(|| format!("missing modeled write case {name}"));
+    let write_case = |name: &str| {
+        modeled
+            .configuration_datastore_write_cases
+            .iter()
+            .find(|case| case["name"] == name)
+            .with_context(|| format!("missing modeled write case {name}"))
+    };
     assert!(write_case("committed")?["expected"].as_bool().unwrap());
     assert!(written.contains("selected-agent-write"));
-    let before_failed_write = sibling_writer.execute("{ FixtureEntry { _docID name } }").await?;
-    let (failed_write, mutations) = crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
-        Some(1), cached_write.call(serde_json::from_value(json!({"name":"rolled-back-write"}))?),
-    ).await;
+    let before_failed_write = sibling_writer
+        .execute("{ FixtureEntry { _docID name } }")
+        .await?;
+    let (failed_write, mutations) =
+        crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+            Some(1),
+            cached_write.call(serde_json::from_value(json!({"name":"rolled-back-write"}))?),
+        )
+        .await;
     assert_eq!(mutations, 1);
-    assert_eq!(failed_write.is_ok(), write_case("mutation-failed")?["expected"].as_bool().unwrap());
-    assert_eq!(sibling_writer.execute("{ FixtureEntry { _docID name } }").await?, before_failed_write);
+    assert_eq!(
+        failed_write.is_ok(),
+        write_case("mutation-failed")?["expected"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        sibling_writer
+            .execute("{ FixtureEntry { _docID name } }")
+            .await?,
+        before_failed_write
+    );
     let written: Value = serde_json::from_str(&written)?;
-    let written_doc = written["document_id"].as_str().context("cached write document ID missing")?;
+    let written_doc = written["document_id"]
+        .as_str()
+        .context("cached write document ID missing")?;
     let write_signer = crate::store::identity::commit_signer_identity_for_did(&sibling.agent_did)?;
-    let history = sibling_writer.execute(&format!(
+    let history = sibling_writer
+        .execute(&format!(
         "{{ _commits(docID: \"{}\") {{ cid height fieldName signature {{ identity type }} }} }}",
         crate::store::graphql::escape_graphql_string(written_doc),
-    )).await?;
-    let commits = crate::store::graphql::composite_commits_at(history["data"].get("_commits"), "_commits")?;
-    let genesis = commits.iter().min_by_key(|commit| commit.height).context("cached write genesis missing")?;
-    assert_eq!(genesis.signature.as_ref().map(|signature| signature.identity.as_str()), Some(write_signer.as_str()));
+    ))
+        .await?;
+    let commits =
+        crate::store::graphql::composite_commits_at(history["data"].get("_commits"), "_commits")?;
+    let genesis = commits
+        .iter()
+        .min_by_key(|commit| commit.height)
+        .context("cached write genesis missing")?;
+    assert_eq!(
+        genesis
+            .signature
+            .as_ref()
+            .map(|signature| signature.identity.as_str()),
+        Some(write_signer.as_str())
+    );
     let found = cached_tool
         .call(crate::tools::builtin::defra_query::bounded::BoundedQueryParams(Default::default()))
         .await
@@ -952,14 +1005,28 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     .map_err(|error| anyhow::anyhow!("cached mailbox failed: {error}"))?;
     assert!(mailbox.contains("Selected Agent notice"));
     let mailbox: Value = serde_json::from_str(&mailbox)?;
-    let mailbox_doc = mailbox["item"]["_docID"].as_str().context("cached mailbox document ID missing")?;
-    let history = sibling_writer.execute(&format!(
+    let mailbox_doc = mailbox["item"]["_docID"]
+        .as_str()
+        .context("cached mailbox document ID missing")?;
+    let history = sibling_writer
+        .execute(&format!(
         "{{ _commits(docID: \"{}\") {{ cid height fieldName signature {{ identity type }} }} }}",
         crate::store::graphql::escape_graphql_string(mailbox_doc),
-    )).await?;
-    let commits = crate::store::graphql::composite_commits_at(history["data"].get("_commits"), "_commits")?;
-    let genesis = commits.iter().min_by_key(|commit| commit.height).context("cached mailbox genesis missing")?;
-    assert_eq!(genesis.signature.as_ref().map(|signature| signature.identity.as_str()), Some(write_signer.as_str()));
+    ))
+        .await?;
+    let commits =
+        crate::store::graphql::composite_commits_at(history["data"].get("_commits"), "_commits")?;
+    let genesis = commits
+        .iter()
+        .min_by_key(|commit| commit.height)
+        .context("cached mailbox genesis missing")?;
+    assert_eq!(
+        genesis
+            .signature
+            .as_ref()
+            .map(|signature| signature.identity.as_str()),
+        Some(write_signer.as_str())
+    );
     let rollback_request = admin.write("test.surface.mailbox_rollback_request", &format!(
         "mutation {{ create_AgentRequest(input: {{request_id: \"surface-mailbox-rollback\", purpose: \"normal\", node_did: \"{}\", requester_did: \"{}\", agent_did: \"{}\"}}) {{ _docID }} }}",
         crate::store::graphql::escape_graphql_string(runtime.did()),
@@ -967,22 +1034,43 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         crate::store::graphql::escape_graphql_string(&sibling.agent_did),
     )).await?;
     crate::store::graphql::created_doc_id(&rollback_request, "AgentRequest")?;
-    let before_failed_mailbox = sibling_writer.execute("{ MailboxItem { _docID title } }").await?;
-    let (failed_mailbox, mutations) = crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
-        Some(1), crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
-            Some(runtime.did().to_owned()), Some(runtime.did().to_owned()), Some(sibling.agent_did.clone()),
-            Some("surface-mailbox-rollback".into()),
-            crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
-                None, tokio_util::sync::CancellationToken::new(),
-                cached_mailbox.call(crate::session::mailbox::MailboxContentArgs {
-                    title: "Rolled back notice".into(), summary: None, payload: None, question: None,
-                }),
+    let before_failed_mailbox = sibling_writer
+        .execute("{ MailboxItem { _docID title } }")
+        .await?;
+    let (failed_mailbox, mutations) =
+        crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+            Some(1),
+            crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
+                Some(runtime.did().to_owned()),
+                Some(runtime.did().to_owned()),
+                Some(sibling.agent_did.clone()),
+                Some("surface-mailbox-rollback".into()),
+                crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
+                    None,
+                    tokio_util::sync::CancellationToken::new(),
+                    cached_mailbox.call(crate::session::mailbox::MailboxContentArgs {
+                        title: "Rolled back notice".into(),
+                        summary: None,
+                        payload: None,
+                        question: None,
+                    }),
+                ),
             ),
-        ),
-    ).await;
+        )
+        .await;
     assert_eq!(mutations, 1);
-    assert_eq!(failed_mailbox.is_ok(), write_case("mutation-failed")?["expected"].as_bool().unwrap());
-    assert_eq!(sibling_writer.execute("{ MailboxItem { _docID title } }").await?, before_failed_mailbox);
+    assert_eq!(
+        failed_mailbox.is_ok(),
+        write_case("mutation-failed")?["expected"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(
+        sibling_writer
+            .execute("{ MailboxItem { _docID title } }")
+            .await?,
+        before_failed_mailbox
+    );
     let mut changed_declaration = declaration.clone();
     if let crate::documents::SurfaceToolDecl::Query(query) = &mut changed_declaration {
         query.fields = vec!["changed".into()];
@@ -1099,8 +1187,9 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             anyhow::bail!("cached tool source read did not start");
         }
     }
-    let revocation = tokio::time::timeout(std::time::Duration::from_secs(10), user_access
-        .transact_write("test.surface.revoke", |txn| {
+    let revocation = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        user_access.transact_write("test.surface.revoke", |txn| {
             Box::pin(async move {
                 txn.delete_entity_set_relationship(
                     "DatastoreToolSurface",
@@ -1113,9 +1202,12 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
                 .await?;
                 Ok::<_, anyhow::Error>(())
             })
-        })).await;
+        }),
+    )
+    .await;
     resume.notify_one();
-    let raced = match tokio::time::timeout(std::time::Duration::from_secs(10), &mut in_flight).await {
+    let raced = match tokio::time::timeout(std::time::Duration::from_secs(10), &mut in_flight).await
+    {
         Ok(result) => result?,
         Err(_) => {
             in_flight.abort();
@@ -1124,10 +1216,18 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         }
     };
     revocation.context("surface revocation was blocked by cached tool transaction")??;
-    assert_eq!(raced.is_ok(), surface_case("revoked")?["expected"].as_bool().unwrap(),
-        "revocation did not fence a source observation and write: {raced:?}");
-    let raced_rows = sibling_writer.execute("{ FixtureEntry(filter: {name: {_eq: \"raced-revocation\"}}) { _docID } }").await?;
-    assert!(raced_rows["data"]["FixtureEntry"].as_array().context("raced entries missing")?.is_empty());
+    assert_eq!(
+        raced.is_ok(),
+        surface_case("revoked")?["expected"].as_bool().unwrap(),
+        "revocation did not fence a source observation and write: {raced:?}"
+    );
+    let raced_rows = sibling_writer
+        .execute("{ FixtureEntry(filter: {name: {_eq: \"raced-revocation\"}}) { _docID } }")
+        .await?;
+    assert!(raced_rows["data"]["FixtureEntry"]
+        .as_array()
+        .context("raced entries missing")?
+        .is_empty());
     assert_eq!(
         cached_surface_usable(&sibling_writer, runtime.did(), &declaration).await,
         surface_case("revoked")?["expected"].as_bool().unwrap()
@@ -1144,23 +1244,58 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             .contains("missing same-agent DatastoreToolSurface"),
         "{error}"
     );
-    let before_entries = sibling_writer.execute("{ FixtureEntry { _docID name } }").await?;
-    let before_mailbox = sibling_writer.execute("{ MailboxItem { _docID title } }").await?;
-    let denied = cached_write.call(serde_json::from_value(json!({"name":"denied"}))?).await.unwrap_err();
-    assert!(denied.to_string().contains("missing same-agent DatastoreToolSurface"), "{denied}");
+    let before_entries = sibling_writer
+        .execute("{ FixtureEntry { _docID name } }")
+        .await?;
+    let before_mailbox = sibling_writer
+        .execute("{ MailboxItem { _docID title } }")
+        .await?;
+    let denied = cached_write
+        .call(serde_json::from_value(json!({"name":"denied"}))?)
+        .await
+        .unwrap_err();
+    assert!(
+        denied
+            .to_string()
+            .contains("missing same-agent DatastoreToolSurface"),
+        "{denied}"
+    );
     let denied = crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
-        Some(runtime.did().to_owned()), Some(runtime.did().to_owned()), Some(sibling.agent_did.clone()),
+        Some(runtime.did().to_owned()),
+        Some(runtime.did().to_owned()),
+        Some(sibling.agent_did.clone()),
         Some("surface-mailbox-request".into()),
         crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
-            None, tokio_util::sync::CancellationToken::new(),
+            None,
+            tokio_util::sync::CancellationToken::new(),
             cached_mailbox.call(crate::session::mailbox::MailboxContentArgs {
-                title: "Denied notice".into(), summary: None, payload: None, question: None,
+                title: "Denied notice".into(),
+                summary: None,
+                payload: None,
+                question: None,
             }),
         ),
-    ).await.unwrap_err();
-    assert!(denied.to_string().contains("missing same-agent DatastoreToolSurface"), "{denied}");
-    assert_eq!(sibling_writer.execute("{ FixtureEntry { _docID name } }").await?, before_entries);
-    assert_eq!(sibling_writer.execute("{ MailboxItem { _docID title } }").await?, before_mailbox);
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        denied
+            .to_string()
+            .contains("missing same-agent DatastoreToolSurface"),
+        "{denied}"
+    );
+    assert_eq!(
+        sibling_writer
+            .execute("{ FixtureEntry { _docID name } }")
+            .await?,
+        before_entries
+    );
+    assert_eq!(
+        sibling_writer
+            .execute("{ MailboxItem { _docID title } }")
+            .await?,
+        before_mailbox
+    );
     let before_denied = user_access
         .execute(&format!(
             "{{ PackInstallation(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ _docID version }} }}",

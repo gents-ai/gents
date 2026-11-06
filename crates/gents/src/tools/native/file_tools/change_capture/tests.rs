@@ -408,7 +408,11 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     ] {
         assert!(load(request, node, session, requester).await.is_err());
     }
-    admission.node.shutdown().await.expect("shut down test node");
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -460,7 +464,11 @@ async fn maximum_images_survive_the_terminal_transaction_and_scoped_read() {
     assert_eq!(decoded_image(&images["before"]), before.as_bytes());
     assert_eq!(decoded_image(&images["after"]), after.as_bytes());
     assert_eq!(std::fs::read(&path).unwrap(), after.as_bytes());
-    admission.node.shutdown().await.expect("shut down test node");
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
@@ -655,7 +663,11 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
     competing.complete("write failed").await.unwrap();
     assert_eq!(access.execute(&query).await.unwrap()["data"], row);
     assert_eq!(std::fs::read(&path).unwrap(), b"later user edit");
-    admission.node.shutdown().await.expect("shut down test node");
+    admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 

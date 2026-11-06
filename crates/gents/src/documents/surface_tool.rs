@@ -4,15 +4,15 @@
 
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
 use super::datastore_tool_surface::DatastoreToolSurfaceDocument;
 use super::serde_helpers;
 use super::tools::Tools;
 use super::write_tool::{
-    WriteToolDecl, WriteToolField, WriteToolFieldFill, reject_protected_collection_name,
-    reject_tool_name_surface_collisions, validate_write_tool_declarations,
+    reject_protected_collection_name, reject_tool_name_surface_collisions,
+    validate_write_tool_declarations, WriteToolDecl, WriteToolField, WriteToolFieldFill,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

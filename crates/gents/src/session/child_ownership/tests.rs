@@ -21,7 +21,8 @@ async fn publication_matches_atomic_session_child_model() {
         );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let actor = identity::Did::new(agent.did()).unwrap();
-        let access = ConfigAccess::local_managed_agent(node.clone(), actor.clone(), agent.as_ref()).unwrap();
+        let access =
+            ConfigAccess::local_managed_agent(node.clone(), actor.clone(), agent.as_ref()).unwrap();
         let reader_access =
             ConfigAccess::local_as(node.clone(), identity::Did::new(reader.did()).unwrap());
         let session = access.write("test.child.session", &format!(

@@ -425,12 +425,7 @@ mod pack_schema_tests {
     async fn cli_sdl_apply_checks_contracts_and_reports_reinstall_accurately() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("widget.graphql");
-        let node = std::sync::Arc::new(
-            gents::defra_node::Node::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
+        let node = std::sync::Arc::new(gents::defra_node::Node::builder().build().await.unwrap());
         let access = ConfigAccess::local(node.clone());
         fs::write(&path, "type Widget { message: String }").unwrap();
         assert_eq!(

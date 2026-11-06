@@ -169,34 +169,55 @@ impl ClientCore {
             )
             .await?;
             if session_doc_id.is_none() {
-                anyhow::ensure!(expected.is_none(), "replacing a goal requires its observed session");
-                session_doc_id = Some(gents::request::lifecycle::reserve_goal_session(
-                    &self.session_queue_access(node_did)?,
-                    &request,
-                ).await?);
+                anyhow::ensure!(
+                    expected.is_none(),
+                    "replacing a goal requires its observed session"
+                );
+                session_doc_id = Some(
+                    gents::request::lifecycle::reserve_goal_session(
+                        &self.session_queue_access(node_did)?,
+                        &request,
+                    )
+                    .await?,
+                );
             }
             Some(Box::new(request))
         } else {
             None
         };
         let access = self.session_queue_access(node_did)?;
-        let (session, agent_doc_id) = access.transact_readonly("goal.command.selected_session", |txn| {
-            Box::pin(async move {
-                let session = gents::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
-                    .await?.ok_or_else(|| anyhow::anyhow!("selected session is not available"))?;
-                let (agent_doc_id, _) = gents::store::config_client::read_desired_state_record_in_txn(
-                    txn, gents::Collection::Agent, node_did, &session.session.agent_did,
-                ).await?.ok_or_else(|| anyhow::anyhow!("selected agent is not available"))?;
-                Ok::<_, anyhow::Error>((session, agent_doc_id))
+        let (session, agent_doc_id) = access
+            .transact_readonly("goal.command.selected_session", |txn| {
+                Box::pin(async move {
+                    let session =
+                        gents::session::load_agent_session_owner_in_txn(txn, node_did, session_id)
+                            .await?
+                            .ok_or_else(|| anyhow::anyhow!("selected session is not available"))?;
+                    let (agent_doc_id, _) =
+                        gents::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            gents::Collection::Agent,
+                            node_did,
+                            &session.session.agent_did,
+                        )
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("selected agent is not available"))?;
+                    Ok::<_, anyhow::Error>((session, agent_doc_id))
+                })
             })
-        }).await?;
-        anyhow::ensure!(session_doc_id.as_deref() == Some(session.doc_id.as_str()),
-            "session changed; refresh before changing its goal");
-        anyhow::ensure!(initial_request.as_ref().is_none_or(|request|
-            request.agent_did == session.session.agent_did
-                && request.agent_doc_id.as_deref() == Some(agent_doc_id.as_str())
-                && request.session_doc_id.as_deref() == Some(session.doc_id.as_str())),
-            "goal request targets changed; refresh before starting its goal");
+            .await?;
+        anyhow::ensure!(
+            session_doc_id.as_deref() == Some(session.doc_id.as_str()),
+            "session changed; refresh before changing its goal"
+        );
+        anyhow::ensure!(
+            initial_request
+                .as_ref()
+                .is_none_or(|request| request.agent_did == session.session.agent_did
+                    && request.agent_doc_id.as_deref() == Some(agent_doc_id.as_str())
+                    && request.session_doc_id.as_deref() == Some(session.doc_id.as_str())),
+            "goal request targets changed; refresh before starting its goal"
+        );
         let now = Utc::now();
         let command = SessionGoalControl {
             version: SESSION_GOAL_CONTROL_VERSION,
@@ -216,7 +237,8 @@ impl ClientCore {
             native_evidence: None,
             signature: Vec::new(),
         };
-        let command = gents::goal::prepare_session_goal_control(&access, signer.as_ref(), command).await?;
+        let command =
+            gents::goal::prepare_session_goal_control(&access, signer.as_ref(), command).await?;
         Ok((signer, command))
     }
 }

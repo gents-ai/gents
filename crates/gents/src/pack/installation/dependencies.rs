@@ -89,8 +89,12 @@ pub(super) async fn claim_in_txn(
             let record = read_record(txn, owner, &coordinate).await?;
             let removed = remove_record_in_txn(txn, owner, &coordinate, &record, policy).await?;
             let (namespace, _) = crate::pack::registry::split_pack_coordinate(&coordinate);
-            let plugins = removed.documents.plugins.iter()
-                .map(|plugin| format!("{namespace}/{}", plugin.name)).collect();
+            let plugins = removed
+                .documents
+                .plugins
+                .iter()
+                .map(|plugin| format!("{namespace}/{}", plugin.name))
+                .collect();
             super::ensure_plugins_unreferenced(txn, owner, &plugins).await?;
         } else {
             let doc_id = row["_docID"].as_str().context("record missing _docID")?;

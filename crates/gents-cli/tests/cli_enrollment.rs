@@ -1,15 +1,15 @@
-#[path = "cli_enrollment/live_plugin_denial.rs"]
-mod live_plugin_denial;
-#[path = "cli_enrollment/live_delegation.rs"]
-mod live_delegation;
-#[path = "cli_enrollment/live_two_agent.rs"]
-mod live_two_agent;
-#[path = "cli_enrollment/live_goal.rs"]
-mod live_goal;
 #[path = "cli_enrollment/contract.rs"]
 mod contract;
 #[path = "cli_enrollment/household.rs"]
 mod household;
+#[path = "cli_enrollment/live_delegation.rs"]
+mod live_delegation;
+#[path = "cli_enrollment/live_goal.rs"]
+mod live_goal;
+#[path = "cli_enrollment/live_plugin_denial.rs"]
+mod live_plugin_denial;
+#[path = "cli_enrollment/live_two_agent.rs"]
+mod live_two_agent;
 mod support;
 use support::*;
 
@@ -119,12 +119,12 @@ async fn grant_configured_workspace_root_readers(
             gents::store::config_client::GraphqlEndpoint::as_principal(graphql, &binding.agent_did)
                 .with_client_signing_capability(agent.client_signing_capability()?)?,
         );
-        let visible = reader
-            .execute(&query)
-            .await
-            .with_context(|| {
-                format!("reading configured WorkspaceRoot as Agent {}", binding.agent_did)
-            })?;
+        let visible = reader.execute(&query).await.with_context(|| {
+            format!(
+                "reading configured WorkspaceRoot as Agent {}",
+                binding.agent_did
+            )
+        })?;
         let rows = visible["data"]["WorkspaceRoot"]
             .as_array()
             .context("selected Agent cannot read WorkspaceRoot")?;
@@ -612,8 +612,8 @@ async fn wait_for_complete_agent_response_with_access(
     let deadline = Instant::now() + timeout;
     let mut empty_terminal_since = None::<Instant>;
     loop {
-        let response = access.execute(
-            &format!(
+        let response = access
+            .execute(&format!(
                 r#"{{
                     AgentRequest(
                         filter: {{
@@ -629,9 +629,8 @@ async fn wait_for_complete_agent_response_with_access(
                 }}"#,
                 escape_graphql_string(request_id),
                 escape_graphql_string(session),
-            ),
-        )
-        .await?;
+            ))
+            .await?;
         if let Ok(row) = first_graphql_row(&response, "AgentRequest") {
             let request: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone())
                 .context("decoding canonical AgentRequest row")?;
@@ -657,11 +656,7 @@ async fn wait_for_complete_agent_response_with_access(
                 );
             }
             if request.is_terminal() {
-                let output = gents::session::observe_request_output(
-                    access,
-                    &request,
-                )
-                .await?;
+                let output = gents::session::observe_request_output(access, &request).await?;
                 let visible = match &output {
                     gents::session::CanonicalRequestOutput::TerminalMessage {
                         header,

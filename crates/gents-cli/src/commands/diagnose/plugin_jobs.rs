@@ -173,15 +173,14 @@ fn plugin_rows(
         ));
     }
     for id in &block.policy.dynamic_targets {
-        let tools =
-            find_target(bundle, agent, id)
-                .and_then(|target| {
-                    bundle.config.agents.iter().find(|a| {
-                        a.node_did == target.target_node_did && a.agent_did == target.agent_did
-                    })
+        let tools = find_target(bundle, agent, id)
+            .and_then(|target| {
+                bundle.config.agents.iter().find(|a| {
+                    a.node_did == target.target_node_did && a.agent_did == target.agent_did
                 })
-                .and_then(|a| agent_tools_document(bundle, &a.node_did, a).ok())
-                .and_then(|(_, tools)| tools);
+            })
+            .and_then(|a| agent_tools_document(bundle, &a.node_did, a).ok())
+            .and_then(|(_, tools)| tools);
         if tools.is_some_and(reads_files_and_reaches_network) {
             rows.push(row(
                 "dynamic_target_exfiltration",

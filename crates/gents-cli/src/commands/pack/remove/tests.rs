@@ -55,11 +55,19 @@ fn assets_fixture_spec() -> String {
 #[tokio::test]
 async fn unconfigured_home_does_not_prove_a_plugin_is_unreferenced() {
     let home = tempfile::tempdir().unwrap();
-    super::ensure_home_plugins_unreferenced(home.path(), &BTreeSet::new()).await.unwrap();
-    let error = super::ensure_home_plugins_unreferenced(home.path(),
-        &BTreeSet::from(["acme/plugin".to_owned()])).await.unwrap_err();
-    assert!(matches!(error.downcast_ref::<gents::pack::PackRemovalError>(),
-        Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)));
+    super::ensure_home_plugins_unreferenced(home.path(), &BTreeSet::new())
+        .await
+        .unwrap();
+    let error = super::ensure_home_plugins_unreferenced(
+        home.path(),
+        &BTreeSet::from(["acme/plugin".to_owned()]),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<gents::pack::PackRemovalError>(),
+        Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
+    ));
 }
 
 #[tokio::test]
@@ -424,9 +432,13 @@ async fn a_plugins_pack_keeps_records_and_bytes_without_complete_inventory() {
 
     for coordinate in ["acme/tools", "zeta/tools"] {
         let error = remove_pkg(home.path(), coordinate).await.unwrap_err();
-        assert!(matches!(error.downcast_ref::<gents::pack::PackRemovalError>(),
-            Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)));
-        assert!(gents::pack::read_home_install(home.path(), coordinate).unwrap().is_some());
+        assert!(matches!(
+            error.downcast_ref::<gents::pack::PackRemovalError>(),
+            Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
+        ));
+        assert!(gents::pack::read_home_install(home.path(), coordinate)
+            .unwrap()
+            .is_some());
     }
     assert!(gents::plugin::store::read_bytes(home.path(), &digest_hex).is_ok());
     assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_ok());
@@ -601,7 +613,12 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
         crate::commands::pack::wire::wire_in(&access, &owner, home.path(), &request)
             .await
             .unwrap();
-        access.local_node().unwrap().shutdown().await.expect("node shutdown");
+        access
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("node shutdown");
         drop(access);
         if !documents {
             let error = crate::request_helpers::capture_report(crate::commands::plugin::dispatch(
@@ -637,11 +654,18 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
         crate::commands::pack::wire::wire_in(&access, &owner, home.path(), &request)
             .await
             .unwrap();
-        access.local_node().unwrap().shutdown().await.expect("node shutdown");
+        access
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("node shutdown");
         drop(access);
         let error = remove_pkg(home.path(), "acme/tools").await.unwrap_err();
-        assert!(matches!(error.downcast_ref::<gents::pack::PackRemovalError>(),
-            Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)));
+        assert!(matches!(
+            error.downcast_ref::<gents::pack::PackRemovalError>(),
+            Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
+        ));
         assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_ok());
     }
 }
@@ -758,7 +782,12 @@ async fn wiring_holds_store_lock_through_pin_commit() {
         .unwrap()
         .digest;
     assert_eq!(pin.as_deref(), Some(expected_digest.as_str()));
-    access.local_node().unwrap().shutdown().await.expect("node shutdown");
+    access
+        .local_node()
+        .unwrap()
+        .shutdown()
+        .await
+        .expect("node shutdown");
 }
 
 #[tokio::test]
@@ -811,7 +840,12 @@ async fn documents_pack_with_schema_patch_installs_after_schema_application() {
         .await
         .unwrap();
     assert_eq!(tools["data"]["Tools"].as_array().unwrap().len(), 1);
-    access.local_node().unwrap().shutdown().await.expect("node shutdown");
+    access
+        .local_node()
+        .unwrap()
+        .shutdown()
+        .await
+        .expect("node shutdown");
 }
 
 #[tokio::test]
@@ -971,12 +1005,19 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
         .unwrap();
     assert_eq!(result.is_ok(), allowed, "{result:?}");
     assert!(format!("{:#}", result.unwrap_err()).contains("plugin store is busy"));
-    access.local_node().unwrap().shutdown().await.expect("node shutdown");
+    access
+        .local_node()
+        .unwrap()
+        .shutdown()
+        .await
+        .expect("node shutdown");
     drop(access);
     pause.release.notify_one();
     let error = remover.await.unwrap().unwrap_err();
-    assert!(matches!(error.downcast_ref::<gents::pack::PackRemovalError>(),
-        Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)));
+    assert!(matches!(
+        error.downcast_ref::<gents::pack::PackRemovalError>(),
+        Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
+    ));
     *super::REMOVAL_TEST_PAUSE.lock().unwrap() = None;
     assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_ok());
 }
@@ -993,7 +1034,9 @@ async fn delegated_home_removal_uses_the_existing_store_guard() {
     let error = super::remove_home_install_with_guard(home.path(), "acme/tools", guard)
         .await
         .unwrap_err();
-    assert!(matches!(error.downcast_ref::<gents::pack::PackRemovalError>(),
-        Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)));
+    assert!(matches!(
+        error.downcast_ref::<gents::pack::PackRemovalError>(),
+        Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
+    ));
     assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_ok());
 }
