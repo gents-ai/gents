@@ -23,6 +23,15 @@ theorem same_node_next_request_authorized
     authorized { owner with requestId := nextRequestId } owner = true := by
   simp [authorized]
 
+/-- The comparator also applies to retained historical scopes; matching absent
+requesters does not establish that a new request may be admitted. -/
+theorem absent_requester_scopes_match
+    (requestId nextRequestId sessionId nodeDid : String) :
+    authorized
+      { requestId := nextRequestId, sessionId, nodeDid, requesterDid := none }
+      { requestId, sessionId, nodeDid, requesterDid := none } = true := by
+  simp [authorized]
+
 theorem empty_requester_does_not_alias_absent
     (requestId nextRequestId sessionId nodeDid : String) :
     authorized

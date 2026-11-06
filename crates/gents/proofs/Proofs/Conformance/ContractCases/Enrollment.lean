@@ -124,6 +124,8 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
   , requestAdmissionCase "valid-signed-local-self" (requestAdmissionBase .localSelf)
   , requestAdmissionCase "forged-local-self"
       { requestAdmissionBase .localSelf with signerMatchesRequester := false }
+  , requestAdmissionCase "local-self-absent-requester"
+      { requestAdmissionBase .localSelf with signerMatchesRequester := false, requesterMatchesTarget := false }
   , requestAdmissionCase "valid-runtime-local-control"
       { requestAdmissionBase .runtimeInternal with
           runtimeEvidencePresent := true, targetRuntimeAttestationValid := true

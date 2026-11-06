@@ -537,6 +537,15 @@ def projectAgentRequestAdmission (observation : AgentRequestAdmissionObservation
           observation.requesterMatchesSessionScope &&
           observation.triggerConfigDocumentBindingCurrent && observation.targetPolicyAllows
 
+/-- A historical local-self request with no requester cannot match its nonempty
+Agent signer, even though optional scope comparison remains meaningful for retained data. -/
+theorem local_self_without_requester_is_denied
+    (observation : AgentRequestAdmissionObservation)
+    (kind : observation.kind = .localSelf)
+    (missing : observation.signerMatchesRequester = false) :
+    projectAgentRequestAdmission observation = false := by
+  simp [projectAgentRequestAdmission, kind, missing]
+
 /-- The claim boundary distinguishes an authoritative negative observation from an
 unavailable observation. Only the former may terminalize a durable request. -/
 inductive AgentRequestAdmissionDisposition where

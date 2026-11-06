@@ -2184,7 +2184,7 @@ def caseCoverage : List CoverageEntry :=
       "r6_background_cases"
       "R6BackgroundingCases"
       "tool_call_lifecycle::background_hook_conformance::generated_absent_requester_process_control_uses_accepted_hook_calls"
-      "Three requester-scope cases use a persisted background process, the production authorization owner and canonical accepted hook calls. A forged nonempty requester fails at immutable header authorization; absent and empty requester calls exercise the native result envelopes. The metadata-only inventory test is not native behavior coverage for the other rows.")
+      "The scope comparator preserves absent-versus-empty behavior for retained history. Native signed admission rejects a requester-less local-self request before any hook effect; accepted hook envelopes use a real admitted requester, and a forged requester fails against its immutable physical header.")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "r6_background_cases"
