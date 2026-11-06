@@ -96,28 +96,85 @@ async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership
 
 #[tokio::test]
 async fn timeline_batches_request_local_events_and_restores_request_sequence_order() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let response = node
-        .execute(
-            r#"mutation {
-                seed_InferenceCall_1: create_InferenceCall(input: { call_id: "call-b-2", request_id: "req-b", request_doc_id: "doc-b", call_seq: 2, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
-                seed_InferenceCall_2: create_InferenceCall(input: { call_id: "call-b-1", request_id: "req-b", request_doc_id: "doc-b", call_seq: 1, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
-                seed_InferenceCall_3: create_InferenceCall(input: { call_id: "call-a-1", request_id: "req-a", request_doc_id: "doc-a", call_seq: 1, attempt: 0, call_state: "completed", call_kind: "chat" }) { _docID }
-                seed_ProviderContextReduction_1: create_ProviderContextReduction(input: { reduction_key: "reduction-b-2", request_id: "req-b", request_doc_id: "doc-b", session_id: "s-1", reduction_index: 2, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
-                seed_ProviderContextReduction_2: create_ProviderContextReduction(input: { reduction_key: "reduction-b-1", request_id: "req-b", request_doc_id: "doc-b", session_id: "s-1", reduction_index: 1, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
-                seed_ProviderContextReduction_3: create_ProviderContextReduction(input: { reduction_key: "reduction-a-1", request_id: "req-a", request_doc_id: "doc-a", session_id: "s-1", reduction_index: 1, turn_index: 1, messages_compacted: 0, original_tokens: 0, compacted_tokens: 0 }) { _docID }
-            }"#,
-        )
-        .await;
-    assert!(
-        !response.has_errors(),
-        "seed request-local timeline rows: {:?}",
-        response.errors
-    );
-
-    let access = ConfigAccess::local(node.clone());
-    let request_doc_ids = vec!["doc-a".to_owned(), "doc-b".to_owned()];
+    use crate::store::identity::NodeIdentity;
+    let (db, user, access, binding) = crate::test_support::signed_test_node("timeline-batch").await;
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let agent_access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let session_id = "timeline-batch-session";
+    crate::session::publish_signed_history(
+        &db,
+        &user,
+        &access,
+        &binding,
+        session_id,
+        &["a".into(), "b".into()],
+    )
+    .await;
+    let session_response = agent_access.execute(r#"{AgentSession(filter: {session_id: {_eq: "timeline-batch-session"}}, limit: 2) {_docID}}"#).await.unwrap();
+    let [session] = session_response["data"]["AgentSession"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("fixture session must be unique")
+    };
+    let session_doc = session["_docID"].as_str().unwrap().to_owned();
+    let mut request_doc_ids = Vec::new();
+    for index in 0..2 {
+        let id = format!("{session_id}-request-{index}");
+        let response = agent_access
+            .execute(&format!(
+                r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{_docID}}}}"#,
+                escape_graphql_string(&id)
+            ))
+            .await
+            .unwrap();
+        let [row] = response["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .as_slice()
+        else {
+            panic!("fixture request must be unique")
+        };
+        request_doc_ids.push(row["_docID"].as_str().unwrap().to_owned());
+    }
+    for (slot, seq, label) in [(1, 2, "b"), (1, 1, "b"), (0, 1, "a")] {
+        let request_id = format!("{session_id}-request-{slot}");
+        let call = serde_json::json!({
+            "call_id": format!("call-{label}-{seq}"), "request_id": request_id,
+            "request_doc_id": request_doc_ids[slot], "session_id": session_id,
+            "node_did": db.node_identity.did(), "agent_did": binding.agent_did,
+            "call_seq": seq, "attempt": 0, "call_state": "completed", "call_kind": "chat",
+        });
+        let reduction = serde_json::json!({
+            "reduction_key": format!("reduction-{label}-{seq}"), "request_id": request_id,
+            "request_doc_id": request_doc_ids[slot], "session_id": session_id,
+            "session_doc_id": session_doc, "node_did": db.node_identity.did(),
+            "requester_did": user.did(), "agent_did": binding.agent_did,
+            "reduction_index": seq, "turn_index": 1,
+            "messages_compacted": 0, "original_tokens": 0, "compacted_tokens": 0,
+        });
+        agent_access.transact_write("test.timeline.batch_rows", |txn| {
+            let call = &call; let reduction = &reduction; let session_doc = &session_doc;
+            Box::pin(async move {
+                for (collection, mutation, input) in [
+                    ("InferenceCall", "mutation($input: InferenceCallMutationInputArg!) { create_InferenceCall(input: $input) { _docID } }", call),
+                    ("ProviderContextReduction", "mutation($input: ProviderContextReductionMutationInputArg!) { create_ProviderContextReduction(input: $input) { _docID } }", reduction),
+                ] {
+                    let response = txn.execute_with_variables(mutation, &serde_json::json!({"input": input})).await?;
+                    let doc = crate::store::graphql::created_doc_id(&response, collection)?;
+                    txn.add_resource_relationship(collection, &doc, "parent", "sessions", session_doc).await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+        }).await.unwrap();
+    }
     let inference_calls =
         super::event_loaders::load_timeline_inference_calls_for_requests(&access, &request_doc_ids)
             .await
@@ -142,7 +199,7 @@ async fn timeline_batches_request_local_events_and_restores_request_sequence_ord
             .collect::<Vec<_>>(),
         vec!["reduction-a-1", "reduction-b-1", "reduction-b-2"]
     );
-    node.shutdown().await.expect("node shutdown");
+    db.node.shutdown().await.expect("node shutdown");
 }
 
 #[test]
