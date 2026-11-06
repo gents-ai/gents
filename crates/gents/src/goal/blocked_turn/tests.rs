@@ -1,7 +1,6 @@
-use std::sync::Arc;
+use std::sync::OnceLock;
 
 use chrono::{Duration, TimeZone};
-use defra_node::Node as EmbeddedNode;
 use gents_loop::provider_limit::{persisted_failure_reason, ProviderLimitHeaders};
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -12,9 +11,57 @@ use crate::inference::auth::credential::{
     account_failure, account_failure_state, XAI_OAUTH_PRODUCT,
 };
 use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use crate::store::identity::NodeIdentity;
 use crate::Collection;
 
-const DID: &str = "did:key:z6MkTestBlockedTurn";
+struct ModelIdentities {
+    _directory: tempfile::TempDir,
+    _runtime: crate::KeyIdentity,
+    node_did: String,
+    agents: std::collections::BTreeMap<
+        &'static str,
+        gents_protocol::agent_identity::AgentIdentityBinding,
+    >,
+}
+
+fn model_identities() -> &'static ModelIdentities {
+    static IDENTITIES: OnceLock<ModelIdentities> = OnceLock::new();
+    IDENTITIES.get_or_init(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime =
+            crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+        let node_did = runtime.did().to_owned();
+        let agents = ["x", "y", "z", "pack-w"]
+            .into_iter()
+            .map(|name| {
+                (
+                    name,
+                    crate::store::identity::provision_agent_identity(&runtime).unwrap(),
+                )
+            })
+            .collect();
+        ModelIdentities {
+            _directory: directory,
+            _runtime: runtime,
+            node_did,
+            agents,
+        }
+    })
+}
+
+fn agent(name: &str) -> &gents_protocol::agent_identity::AgentIdentityBinding {
+    &model_identities().agents[name]
+}
+
+fn agent_ids(names: &[&str]) -> Vec<String> {
+    let mut ids = names
+        .iter()
+        .map(|name| agent(name).agent_did.clone())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
+}
+
 const A: &str = "claude";
 const B: &str = "claude-subscription-acct-b";
 const RIG_429: &str = "HttpError: Invalid status code 429 Too Many Requests with message: ";
@@ -23,7 +70,12 @@ fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 25, 16, 0, 0).unwrap()
 }
 
-fn backend(backend_id: &str, account_ref: Option<&str>, name: &str) -> (Collection, Value) {
+fn backend_for(
+    node_did: &str,
+    backend_id: &str,
+    account_ref: Option<&str>,
+    name: &str,
+) -> (Collection, Value) {
     let auth = match account_ref {
         Some(account_ref) => json!({"kind": "node_oauth", "account_ref": account_ref}),
         None => json!({"kind": "node_oauth"}),
@@ -31,25 +83,33 @@ fn backend(backend_id: &str, account_ref: Option<&str>, name: &str) -> (Collecti
     (
         Collection::InferenceBackend,
         json!({
-            "node_did": DID, "backend_id": backend_id, "name": name,
+            "node_did": node_did, "backend_id": backend_id, "name": name,
             "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
             "auth": auth,
         }),
     )
 }
 
-fn profile(profile_id: &str, backend_id: &str) -> (Collection, Value) {
+fn profile_for(node_did: &str, profile_id: &str, backend_id: &str) -> (Collection, Value) {
     (
         Collection::InferenceProfile,
-        json!({"node_did": DID, "profile_id": profile_id, "backend_id": backend_id, "model_name": "model-x"}),
+        json!({"node_did": node_did, "profile_id": profile_id,
+        "backend_id": backend_id, "model_name": "model-x"}),
     )
 }
 
-fn behavior(agent_did: &str, profile: &str, compaction: Option<&str>) -> Vec<(Collection, Value)> {
+fn behavior_for(
+    node_did: &str,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    profile: &str,
+    compaction: Option<&str>,
+) -> Vec<(Collection, Value)> {
+    let agent_did = &binding.agent_did;
     let Some(compaction) = compaction else {
         return vec![(
             Collection::Agent,
-            json!({"node_did": DID, "agent_did": agent_did, "inference_profile_id": profile}),
+            json!({"node_did": node_did, "agent_did": agent_did,
+            "creation_nonce": binding.creation_nonce, "inference_profile_id": profile}),
         )];
     };
     let context = format!("context-{agent_did}");
@@ -57,33 +117,59 @@ fn behavior(agent_did: &str, profile: &str, compaction: Option<&str>) -> Vec<(Co
     vec![
         (
             Collection::Compaction,
-            json!({"node_did": DID, "compaction_id": compaction_id, "inference_profile_id": compaction}),
+            json!({"node_did": node_did, "compaction_id": compaction_id, "inference_profile_id": compaction}),
         ),
         (
             Collection::AgentContext,
-            json!({"node_did": DID, "context_id": context, "compaction_id": compaction_id}),
+            json!({"node_did": node_did, "context_id": context, "compaction_id": compaction_id}),
         ),
         (
             Collection::Agent,
-            json!({"node_did": DID, "agent_did": agent_did, "context_id": context, "inference_profile_id": profile}),
+            json!({"node_did": node_did, "agent_did": agent_did,
+            "creation_nonce": binding.creation_nonce, "context_id": context, "inference_profile_id": profile}),
         ),
     ]
 }
 
-fn documents(main_backend: &str, summ_backend: &str) -> Vec<(Collection, Value)> {
+fn behavior(name: &str, profile: &str, compaction: Option<&str>) -> Vec<(Collection, Value)> {
+    behavior_for(
+        &model_identities().node_did,
+        agent(name),
+        profile,
+        compaction,
+    )
+}
+
+fn documents_for(
+    node_did: &str,
+    primary: &gents_protocol::agent_identity::AgentIdentityBinding,
+    sibling: &gents_protocol::agent_identity::AgentIdentityBinding,
+    main_backend: &str,
+    summ_backend: &str,
+) -> Vec<(Collection, Value)> {
     let mut documents = vec![
-        backend(A, None, "Claude"),
-        backend(B, Some("acct-b"), "label-b"),
-        profile("main", main_backend),
-        profile("summ", summ_backend),
+        backend_for(node_did, A, None, "Claude"),
+        backend_for(node_did, B, Some("acct-b"), "label-b"),
+        profile_for(node_did, "main", main_backend),
+        profile_for(node_did, "summ", summ_backend),
     ];
-    documents.extend(behavior("x", "main", Some("summ")));
-    documents.extend(behavior("y", "main", None));
+    documents.extend(behavior_for(node_did, primary, "main", Some("summ")));
+    documents.extend(behavior_for(node_did, sibling, "main", None));
     documents
 }
 
+fn documents(main_backend: &str, summ_backend: &str) -> Vec<(Collection, Value)> {
+    documents_for(
+        &model_identities().node_did,
+        agent("x"),
+        agent("y"),
+        main_backend,
+        summ_backend,
+    )
+}
+
 fn references(documents: Vec<(Collection, Value)>) -> ConfigReferences {
-    ConfigReferences::from_documents(DID, documents).unwrap()
+    ConfigReferences::from_documents(&model_identities().node_did, documents).unwrap()
 }
 
 fn account(account_ref: Option<&str>, label: &str) -> AccountSummary {
@@ -108,8 +194,8 @@ fn accounts() -> Vec<AccountSummary> {
 fn failed_request(failure_reason: &str) -> AgentRequestRow {
     AgentRequestRow {
         request_id: "request-1".into(),
-        node_did: Some(DID.into()),
-        agent_did: Some("x".into()),
+        node_did: Some(model_identities().node_did.clone()),
+        agent_did: Some(agent("x").agent_did.clone()),
         lifecycle_state: Some(RequestLifecycleState::Failed),
         failure_reason: Some(failure_reason.into()),
         ..Default::default()
@@ -120,7 +206,7 @@ fn call(backend_id: &str, call_kind: &str, failure_reason: String) -> FailedCall
     let at = (now() - Duration::minutes(5)).to_rfc3339();
     FailedCall {
         backend_id: Some(backend_id.into()),
-        agent_did: Some("x".into()),
+        agent_did: Some(agent("x").agent_did.clone()),
         call_kind: Some(call_kind.into()),
         failure_reason: Some(failure_reason),
         queued_at: Some(at.clone()),
@@ -181,7 +267,7 @@ fn rejected_headers_limit() {
             reason: BlockedReason::UsageLimit,
             account: label_b(),
             profile: Some("main".into()),
-            agents_on_profile: vec!["x".into(), "y".into()],
+            agents_on_profile: agent_ids(&["x", "y"]),
             resets_at: Utc.timestamp_opt(1_790_354_400, 0).single(),
             switch_command: Some("gents config profile set-account main".into()),
         })
@@ -220,7 +306,7 @@ fn compaction_call_names_the_compaction_profile() {
     .expect("blocked");
     assert_eq!(turn.account, label_b());
     assert_eq!(turn.profile.as_deref(), Some("summ"));
-    assert_eq!(turn.agents_on_profile, ["x"]);
+    assert_eq!(turn.agents_on_profile, agent_ids(&["x"]));
     assert_eq!(
         turn.switch_command.as_deref(),
         Some("gents config profile set-account summ")
@@ -242,7 +328,7 @@ fn call_kind_picks_the_profile_when_both_share_the_backend() {
     };
     let compaction = stopped("compaction");
     assert_eq!(compaction.profile.as_deref(), Some("summ"));
-    assert_eq!(compaction.agents_on_profile, ["x"]);
+    assert_eq!(compaction.agents_on_profile, agent_ids(&["x"]));
     assert_eq!(
         compaction.switch_command.as_deref(),
         Some("gents config profile set-account summ")
@@ -271,18 +357,21 @@ fn a_moved_profile_is_not_replaced_by_its_sibling() {
 fn agents_on_profile_counts_direct_and_compaction_users() {
     let mut documents = documents(B, A);
     documents.extend(behavior("z", "summ", Some("main")));
-    documents.push((
-        Collection::Agent,
-        json!({"node_did": DID, "agent_did": "pack-w", "inference_profile_id": "main"}),
-    ));
+    documents.extend(behavior("pack-w", "main", None));
     let references = references(documents);
     assert_eq!(
         references.agents_on_profile("main"),
-        ["pack-w", "x", "y", "z"]
+        agent_ids(&["pack-w", "x", "y", "z"])
     );
-    assert_eq!(references.agent_profiles("x"), ["main", "summ"]);
-    assert_eq!(references.agent_profiles("z"), ["summ", "main"]);
-    assert_eq!(references.agent_profiles("y"), ["main"]);
+    assert_eq!(
+        references.agent_profiles(&agent("x").agent_did),
+        ["main", "summ"]
+    );
+    assert_eq!(
+        references.agent_profiles(&agent("z").agent_did),
+        ["summ", "main"]
+    );
+    assert_eq!(references.agent_profiles(&agent("y").agent_did), ["main"]);
 }
 
 #[test]
@@ -452,14 +541,31 @@ fn the_value_holds_no_secret() {
     }
 }
 
-async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::ensure_node(&node, DID).await.unwrap();
-    let access = ConfigAccess::local(node.clone());
+async fn embedded() -> (
+    crate::support::TestDb,
+    crate::KeyIdentity,
+    ConfigAccess,
+    Vec<String>,
+) {
+    use crate::request::lifecycle::{
+        ClaimOutcome, ExecutionOrigin, RequestIdentity, RequestLifecycle, RequestSigner,
+        RequestSpec,
+    };
+
+    let (db, user, access, primary) = crate::test_support::signed_test_node("blocked-turn").await;
+    let node_did = db.node_identity.did();
+    let sibling = crate::test_support::install_test_agent_as(
+        &db.node,
+        db.node_identity.as_ref(),
+        &user,
+        "Sibling agent",
+    )
+    .await;
+    let mut agents = vec![primary.agent_did.clone(), sibling.agent_did.clone()];
+    agents.sort();
     let sign_in = |who: &str| {
         crate::inference::auth::claude::credential_from_login_tokens(
-            DID,
+            node_did,
             crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
             &crate::inference::auth::claude::ClaudeLoginTokens {
                 access_token: "access-SECRET".into(),
@@ -473,7 +579,7 @@ async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
             Utc::now() - Duration::hours(1),
         )
     };
-    let (_, original) = backend(A, None, "Claude");
+    let (_, original) = backend_for(node_did, A, None, "Claude");
     crate::store::config_client::write_inference_backend_document(
         &access,
         &serde_json::from_value(original).unwrap(),
@@ -492,7 +598,7 @@ async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
         crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         b.credential.account_ref.as_deref().unwrap()
     );
-    let documents = documents(&b_backend, A)
+    let documents = documents_for(node_did, &primary, &sibling, &b_backend, A)
         .into_iter()
         .filter(|(collection, _)| *collection != Collection::InferenceBackend)
         .map(|(collection, value)| DesiredStateApplyDocument {
@@ -513,51 +619,135 @@ async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
         })
         .await
         .unwrap();
+
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &primary)
+        .unwrap();
+    let agent_access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
     let at = Utc::now().to_rfc3339();
+    let create = crate::request::lifecycle::build_signed_client_request(
+        &access,
+        RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            RequestIdentity {
+                request_id: "request-1".into(),
+                node_did: node_did.into(),
+                requester_did: Some(user.did().into()),
+                agent_did: primary.agent_did.clone(),
+                session_id: "session-1".into(),
+                content: "run".into(),
+                execution_origin: ExecutionOrigin::Interactive,
+                created_at: at.clone(),
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+        ),
+        RequestSigner::Identity(&user),
+    )
+    .await
+    .unwrap();
+    crate::request::lifecycle::submit_client_request(&access, &create)
+        .await
+        .unwrap();
+    let response = agent_access
+        .execute(&format!(
+            r#"{{AgentRequest(filter: {{request_id: {{_eq: "request-1"}}}}, limit: 2) {{{}}}}}"#,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
+        ))
+        .await
+        .unwrap();
+    let [row] = response["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("blocked request must be unique");
+    };
+    let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone()).unwrap();
+    let request: crate::AgentRequest = row.try_into().unwrap();
+    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        db.node.clone(),
+        db.node_identity.clone(),
+        authority,
+    );
+    let (request, admission) = verifier
+        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
+        .await
+        .unwrap();
+    assert!(
+        admission.is_some(),
+        "client claim requires verified admission"
+    );
+    let mut lifecycle =
+        RequestLifecycle::new_with_node_did(db.node.clone(), agent.did(), node_did, request, 60);
+    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+    lifecycle.set_client_claim_admission(admission);
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+        db.node.clone(),
+        &lifecycle,
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
     let failure = anthropic_rejected();
-    let request_failure = escape_graphql_string(&failure);
-    access
-        .write(
-            "test.blocked_turn.rows",
-            &format!(
-                r#"mutation {{
-                    create_AgentRequest(input: {{
-                        request_id: "request-1" purpose: "normal" node_did: "{DID}"
-                        agent_did: "x" session_id: "session-1" content: "run"
-                        lifecycle_state: "failed" failure_reason: "{request_failure}"
-                        created_at: "{at}"
-                    }}) {{ _docID }}
-                    create_InferenceCall(input: {{
-                        call_id: "call-1" request_id: "request-1" call_seq: 1
-                        backend_id: "{b_backend}" agent_did: "x" node_did: "{DID}"
-                        call_kind: "inference" attempt: 1 call_state: "failed"
-                        failure_reason: "{request_failure}"
-                        queued_at: "{at}" started_at: "{at}" ended_at: "{at}"
-                    }}) {{ _docID }}
-                }}"#
-            ),
+    let request_doc = lifecycle.request().doc_id.clone();
+    let input = json!({
+        "call_id": "call-1", "request_id": "request-1", "request_doc_id": request_doc,
+        "session_id": "session-1", "node_did": node_did, "agent_did": agent.did(),
+        "call_seq": 1, "backend_id": b_backend, "call_kind": "inference", "attempt": 1,
+        "call_state": "failed", "failure_reason": failure, "queued_at": at,
+        "started_at": at, "ended_at": at,
+    });
+    let session_doc = create.session_doc_id.as_deref().expect("reserved session");
+    agent_access.transact_write("test.blocked_turn.call", |txn| {
+        let input = &input;
+        Box::pin(async move {
+            let response = txn.execute_with_variables(
+                "mutation($input: InferenceCallMutationInputArg!) { create_InferenceCall(input: $input) { _docID } }",
+                &json!({"input": input}),
+            ).await?;
+            let doc = crate::store::graphql::created_doc_id(&response, "InferenceCall")?;
+            txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
+            Ok::<_, anyhow::Error>(())
+        })
+    }).await.unwrap();
+    lifecycle
+        .terminalize_owned(
+            crate::request::lifecycle::RequestTerminalOutcome::Failed,
+            gents_protocol::output::TerminalOutput::NoMessage,
+            Some(&failure),
         )
         .await
         .unwrap();
-    (node, access)
+    drop(lifecycle);
+    (db, user, access, agents)
 }
 
 #[tokio::test]
 async fn wrappers_read_the_stored_turn() {
-    let (node, access) = embedded().await;
-    let turn = blocked_turn(&access, DID, "request-1")
+    let (db, _user, access, agents) = embedded().await;
+    let node_did = db.node_identity.did();
+    let turn = blocked_turn(&access, node_did, "request-1")
         .await
         .unwrap()
         .expect("blocked request");
     assert_eq!(turn.reason, BlockedReason::UsageLimit);
     assert_eq!(turn.account, label_b());
     assert_eq!(turn.profile.as_deref(), Some("main"));
-    assert_eq!(turn.agents_on_profile, ["x", "y"]);
+    assert_eq!(turn.agents_on_profile, agents);
     assert_eq!(turn.resets_at, Utc.timestamp_opt(1_790_354_400, 0).single());
 
     crate::goal::set_goal_from_access(
         &access,
-        DID,
+        node_did,
         "session-1",
         Some("ship it"),
         Some(crate::goal::GoalStatus::UsageLimited),
@@ -567,9 +757,13 @@ async fn wrappers_read_the_stored_turn() {
     .await
     .unwrap();
     assert_eq!(
-        blocked_goal_turn(&access, DID, "session-1").await.unwrap(),
+        blocked_goal_turn(&access, node_did, "session-1")
+            .await
+            .unwrap(),
         Some(turn)
     );
-    assert!(blocked_turn(&access, DID, "request-unknown").await.is_err());
-    node.shutdown().await.expect("node shutdown");
+    assert!(blocked_turn(&access, node_did, "request-unknown")
+        .await
+        .is_err());
+    db.node.shutdown().await.expect("node shutdown");
 }
