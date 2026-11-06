@@ -136,11 +136,10 @@ async fn begin_writer(
     lifecycle: &mut RequestLifecycle,
     node: &Arc<EmbeddedNode>,
 ) -> DefraStreamWriter {
-    let writer = DefraStreamWriter::new(
-        node.clone(),
-        &lifecycle.request().agent_did,
-        Duration::from_millis(1),
-    );
+    // The writer carries the lifecycle's managed Agent signer, as production does.
+    let writer =
+        DefraStreamWriter::new_for_lifecycle(node.clone(), &*lifecycle, Duration::from_millis(1))
+            .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     writer
 }

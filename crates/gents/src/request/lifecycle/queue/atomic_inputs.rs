@@ -190,29 +190,6 @@ async fn persist_background_completion_with_message_canonical_inner(
 }
 
 #[cfg(test)]
-pub(crate) async fn persist_background_completion_with_message(
-    node: &std::sync::Arc<EmbeddedNode>,
-    parent: &AgentRequest,
-    notification_content: &str,
-    message_key: &str,
-    wake_content: &str,
-    queue: RequestQueue,
-    existing_notification_doc_id: Option<&str>,
-) -> Result<EnqueuedBackgroundCompletionInput> {
-    persist_background_completion_with_message_waking(
-        node,
-        parent,
-        notification_content,
-        message_key,
-        wake_content,
-        queue,
-        existing_notification_doc_id,
-        crate::request::lifecycle::RequestHopCause::Continuation,
-    )
-    .await
-}
-
-#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn persist_background_completion_with_message_waking(
     node: &std::sync::Arc<EmbeddedNode>,

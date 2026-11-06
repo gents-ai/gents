@@ -94,7 +94,14 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
     .await
     .expect("invalid origin must be terminalized, not escape the router");
 
-    let response = node
+    // The Agent-owned request row is read through the owning Agent's managed access.
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let response = access
         .execute(
             r#"{
                 AgentRequest(
@@ -103,17 +110,10 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
                 ) { lifecycle_state failure_reason }
             }"#,
         )
-        .await;
-    assert!(
-        !response.has_errors(),
-        "reload terminal row: {:?}",
-        response.errors
-    );
-    let row = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|rows| rows.as_array())
+        .await
+        .expect("reload terminal row");
+    let row = response["data"]["AgentRequest"]
+        .as_array()
         .and_then(|rows| rows.first())
         .expect("terminal request row");
     assert_eq!(
