@@ -769,13 +769,13 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
         };
         let ceiling =
             crate::documents::skills::skill_tool_ceiling(Vec::<String>::new(), &[], false);
-        let tool = crate::documents::skills::LoadSkillTool::for_agent(
+        let tool = crate::tools::native::skills::LoadSkillTool::for_agent(
             vec![skill],
             ceiling,
             &configuration,
         );
         let loaded = tool
-            .call(crate::documents::skills::LoadSkillArgs {
+            .call(crate::tools::native::skills::LoadSkillArgs {
                 name: "skill".into(),
             })
             .await;
@@ -789,7 +789,7 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
             assert!(output.contains("private skill"));
         }
         let catalog = tool
-            .call(crate::documents::skills::LoadSkillArgs {
+            .call(crate::tools::native::skills::LoadSkillArgs {
                 name: "missing".into(),
             })
             .await;

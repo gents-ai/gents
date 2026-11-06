@@ -26,6 +26,7 @@ pub use title_audit_usage::{ParentAuditUsage, ParentAuditUsageObservation};
 mod shared;
 pub(crate) use shared::is_secret_env_name;
 mod session_message;
+pub(crate) mod skills;
 #[cfg(test)]
 mod tests;
 

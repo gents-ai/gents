@@ -151,7 +151,7 @@ impl RuntimeContext {
                 tool_surface.includes_meta_tools(),
             );
             loop_tools.push(Box::new(
-                crate::documents::skills::LoadSkillTool::for_agent(
+                crate::tools::native::skills::LoadSkillTool::for_agent(
                     agent_config.skills.clone(),
                     ceiling,
                     &agent_config.configuration,

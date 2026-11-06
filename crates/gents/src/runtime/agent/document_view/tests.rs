@@ -333,9 +333,9 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     let ceiling =
         crate::documents::skills::skill_tool_ceiling(tool_surface.tool_names(), &[], false);
     let load_skill =
-        crate::documents::skills::LoadSkillTool::new(agent_config.skills.clone(), ceiling);
+        crate::tools::native::skills::LoadSkillTool::new(agent_config.skills.clone(), ceiling);
     let loaded = load_skill
-        .call(crate::documents::skills::LoadSkillArgs {
+        .call(crate::tools::native::skills::LoadSkillArgs {
             name: "Research".to_string(),
         })
         .await
