@@ -40,8 +40,9 @@ pub(crate) use commit::load_receipt;
 pub(crate) use commit::{commit, stage_planned_write_in_txn, CommitError, SessionMessageReceipt};
 pub(crate) use discovery::{agent_session_list, AgentSessionListArgs};
 pub(crate) use inspection::{agent_session_read, AgentSessionReadArgs};
-pub(crate) use interrupt::interrupt_session_with_access;
-pub use interrupt::{agent_interrupt_allowed, interrupt_refusal, interrupt_session};
+pub use interrupt::{
+    agent_interrupt_allowed, interrupt_refusal, interrupt_session, interrupt_session_with_access,
+};
 #[cfg(test)]
 pub(crate) use plan::plan;
 pub(crate) use plan::{plan_with_delivery, Plan};

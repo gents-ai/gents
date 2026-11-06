@@ -46,7 +46,7 @@ pub async fn interrupt_session(
     interrupt_session_with_access(node, &access, target).await
 }
 
-pub(crate) async fn interrupt_session_with_access(
+pub async fn interrupt_session_with_access(
     node: &Arc<EmbeddedNode>,
     access: &ConfigAccess,
     target: &SessionScope,

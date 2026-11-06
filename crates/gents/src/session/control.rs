@@ -21,7 +21,7 @@ pub async fn stop_session(
     stop_session_with_access(node, &access, node_did, session_id, requester_did).await
 }
 
-pub(crate) async fn stop_session_with_access(
+pub async fn stop_session_with_access(
     node: &Arc<EmbeddedNode>,
     access: &crate::ConfigAccess,
     node_did: &str,
@@ -134,7 +134,7 @@ pub async fn resume_session(
     .await
 }
 
-pub(crate) async fn resume_session_with_access(
+pub async fn resume_session_with_access(
     node: &Arc<EmbeddedNode>,
     access: &crate::ConfigAccess,
     node_did: &str,
