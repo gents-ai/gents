@@ -1095,6 +1095,7 @@ async fn signed_pack_tool(
     let fixture = SelfConfigFixture::new(label).await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
+    fixture.grant_agent_schema().await;
     let mut tool_config = config(&[]);
     tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.enable_pack_install = true;
@@ -2600,7 +2601,7 @@ async fn config_errors_name_the_next_call() {
     fixture.grant_selected_configuration().await;
     let builder = fixture.install_sibling("Builder").await;
     fixture.grant_node_reader().await;
-    let tools = fixture.tools(&["node", "tools"]);
+    let tools = fixture.tools(&["node", "tools", "agent"]);
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -2952,6 +2953,7 @@ async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
 
     let fixture = SelfConfigFixture::new("local-backend-create").await;
     fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
     let tools = fixture.tools(&["backend", "profile"]);
     let endpoint = format!("http://{address}/v1");
     let profiles_before: Value = serde_json::from_str(
@@ -6959,7 +6961,7 @@ async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
         )
         .await;
     let current = fixture.agent_did();
-    let mut grants = config(&["node"]);
+    let mut grants = config(&["node", "agent"]);
     grants.agent_did = current.to_owned();
     grants.no_lockout = true;
     grants.preview = true;
@@ -7670,6 +7672,7 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
     let fixture = SelfConfigFixture::new("native-pack-refusals").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
+    fixture.publish_workspace_root(workspace.path()).await;
     let mut cfg = config(&["tools"]);
     cfg.agent_did = fixture.agent_did().to_owned();
     cfg.enable_pack_install = true;
@@ -8015,6 +8018,7 @@ async fn pack_tool_with_local_read(
     let fixture = SelfConfigFixture::new(label).await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
+    fixture.publish_workspace_root(root).await;
     let mut tool_config = config(&["tools"]);
     tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.enable_pack_install = true;
