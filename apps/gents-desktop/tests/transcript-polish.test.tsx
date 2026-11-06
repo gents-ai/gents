@@ -338,13 +338,14 @@ describe("a group with a failure in it", () => {
     const button = screen.getByRole("button", { name: /1 failed/i });
     expect(button).toHaveAttribute("aria-expanded", "true");
     expect(button).toHaveAttribute("data-failed", "true");
-    const step = document.querySelector('[data-step-key="plugin"]')!;
+    const step = document.querySelector('[data-step-key="plugin"]');
+    if (!(step instanceof HTMLElement)) throw new Error("plugin step is missing");
     expect(step).toHaveAttribute("data-open");
     expect(within(step).getByText(/The job policy refused this call/)).toBeVisible();
     expect(
       within(step).getByText(/Ask the operator for the required capability/),
     ).toBeVisible();
-    fireEvent.click(within(step).getByRole("button", { name: /plugin_tool/ }));
+    fireEvent.click(within(step).getByRole("button", { name: "Hide detail" }));
     expect(step).not.toHaveAttribute("data-open");
     expect(button).toHaveAttribute("aria-expanded", "true");
     fireEvent.click(button);
