@@ -2,7 +2,7 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::{HttpConfig, Node as EmbeddedNode};
+use gents::defra_node::Node as EmbeddedNode;
 use gents::goal::{
     claim_continuation, session_token_usage, set_goal_from_access, update_goal_fields_if_status,
     CreateGoalForSessionError, CreateGoalForSessionOutcome, GoalStatus,
@@ -1835,121 +1835,31 @@ async fn fresh_goal_with_zero_prior_usage_starts_charging_from_zero() {
 
 #[tokio::test]
 async fn set_goal_over_http_transactions_computes_the_same_baseline() {
-    // C1 regression: set_goal_from_access and stage_goal_backed_request can
-    // run over an HTTP ConfigAccess; the baseline helper must not require
-    // embedded-only native responses inside the transaction.
-    let address = free_address();
-    let home = tempfile::tempdir().expect("temp dir");
-    let identity = gents::KeyIdentity::load_or_create(home.path().join("principal.key"), None)
-        .expect("key identity");
-    let did = identity.did().to_string();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(home.path().join("data"))
-            .with_http(HttpConfig::with_addr(address))
-            .with_node_identity_did(&did)
-            .build()
-            .await
-            .expect("served node"),
-    );
-    // Canonical runtime schema bootstrap (AgentRequest, InferenceCall, Goal,
-    // migrations): raw served nodes have an empty schema, matching
-    // EmbeddedHome::open_with_identity's initialize_schemas path.
-    gents::store::schema::ensure_runtime_schemas(&node)
-        .await
-        .expect("runtime schemas");
-    let endpoint = format!("http://{address}/api/v0/graphql");
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while !gents_protocol::graphql::graphql_endpoint_available(
-            &endpoint,
-            gents_protocol::graphql::GraphqlRequestOptions {
-                timeout: Duration::from_secs(1),
-                max_attempts: 1,
-                retry_backoff: Duration::ZERO,
-            },
-        )
-        .await
-        {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("HTTP listener");
-    let access = ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(&endpoint, &did)
-            .with_client_signing_capability(identity.client_signing_capability().unwrap())
-            .unwrap(),
-    );
-    let binding = gents::store::identity::provision_agent_identity(&identity).unwrap();
-    let selected_agent =
-        gents::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
-    let local = ConfigAccess::local_as(node.clone(), did.parse().unwrap());
-    let agent_input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
-        "node_did": did, "agent_did": binding.agent_did, "creation_nonce": binding.creation_nonce,
-        "display_name": "HTTP Goal Agent", "inference_profile_id": "http-goal-profile", "enabled": true,
-    })).unwrap();
-    let agent_row = local
-        .write(
-            "test.http_goal_agent",
-            &format!("mutation {{create_Agent(input: {agent_input}) {{_docID}}}}",),
-        )
-        .await
-        .unwrap();
-    let agent_doc = gents::store::graphql::created_doc_id(&agent_row, "Agent").unwrap();
-    local
-        .add_actor_relationship(
-            "Agent",
-            &agent_doc,
-            "executor",
-            &selected_agent.did().parse().unwrap(),
-        )
-        .await
-        .unwrap();
-    use gents::request::lifecycle::{
-        build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
-        RequestSigner, RequestSpec,
-    };
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
-    let spec = RequestSpec::new(
-        RequestPurpose::Normal,
-        RequestIdentity {
-            node_did: did.clone(),
-            requester_did: Some(did.clone()),
-            agent_did: selected_agent.did().into(),
-            session_id: SESSION.into(),
-            request_id: "http-baseline-request".into(),
-            content: "baseline".into(),
-            execution_origin: ExecutionOrigin::Interactive,
-            created_at: "2026-07-15T00:00:00Z".into(),
-        },
-        AgentRequestAdmissionRecord::client(&did),
-    );
-    let request = build_signed_client_request(&access, spec, RequestSigner::Identity(&identity))
-        .await
-        .unwrap();
-    let session_doc = request.session_doc_id.clone().unwrap();
-    submit_client_request(&access, &request).await.unwrap();
-    let request_rows = access.execute("{ AgentRequest(filter: { request_id: { _eq: \"http-baseline-request\" } }) { _docID } }").await.unwrap();
-    let request_doc = request_rows["data"]["AgentRequest"][0]["_docID"]
-        .as_str()
-        .unwrap();
+    let db = test_db("http-goal-baseline").await;
+    let (user, agent) = goal_creation_actors(&db).await;
+    let access = db.client_access(&user);
+    let did = db.node_identity.did();
+    let request_doc = goal_fixture_request(&db, &user, &agent, "http-baseline-request").await;
     goal_fixture_usage_for_node(
-        &node,
-        &did,
+        &db.node,
+        did,
         SESSION,
-        &selected_agent,
+        &agent,
         "http-baseline-request",
-        request_doc,
+        &request_doc,
         "http-baseline-call",
         1000,
         50,
         0,
     )
     .await;
-
+    let request = access.execute("{AgentRequest(filter: {request_id: {_eq: \"http-baseline-request\"}}) {session_doc_id}}").await.unwrap();
+    let session_doc = request["data"]["AgentRequest"][0]["session_doc_id"]
+        .as_str()
+        .unwrap();
     let goal = set_goal_from_access(
         &access,
-        &did,
+        did,
         SESSION,
         Some("HTTP baseline"),
         None,
@@ -1961,96 +1871,64 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
     assert_eq!(goal.token_usage_baseline, Some(1050));
     assert_eq!(goal.tokens_used, Some(0));
     let escaped = escape_graphql_string(&goal.doc_id);
-    let rows = access.execute(&format!(r#"{{ Goal(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ session_doc_id agent_did creator_did parent_linked }} _commits(docID: "{escaped}", filter: {{ fieldName: {{ _eq: "_C" }} }}, order: {{ height: ASC }}, limit: 1) {{ cid }} }}"#)).await.unwrap();
+    let rows = access.execute(&format!(r#"{{ Goal(filter: {{_docID: {{_eq: "{escaped}"}}}}) {{session_doc_id agent_did creator_did parent_linked}} _commits(docID: "{escaped}", filter: {{fieldName: {{_eq: "_C"}}}}, order: {{height: ASC}}, limit: 1) {{cid}} }}"#)).await.unwrap();
     let goal_row = &rows["data"]["Goal"][0];
     assert_eq!(goal_row["session_doc_id"], session_doc);
-    assert_eq!(goal_row["agent_did"], selected_agent.did());
-    assert_eq!(goal_row["creator_did"], did);
+    assert_eq!(goal_row["agent_did"], agent.did());
+    assert_eq!(goal_row["creator_did"], user.did());
     let modeled = atomic_goal_link_case("user", "Goal").await;
     assert_eq!(goal_row["parent_linked"], modeled["initial"]["linked"]);
     let cid = rows["data"]["_commits"][0]["cid"].as_str().unwrap();
     assert_eq!(
-        node.verified_block_signer_did(cid).await.unwrap(),
-        identity.did()
+        db.node.verified_block_signer_did(cid).await.unwrap(),
+        user.did()
     );
 
     let client_session = "http-client-goal";
-    let mut session = crate::support::session_document_in_scope(
-        &did,
-        client_session,
-        selected_agent.did(),
-        "2026-07-15T00:00:00Z",
-    );
-    session.requester_did = Some(did.clone());
-    let input =
-        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
-            .unwrap();
-    let session = local
-        .write(
-            "test.http_client_goal_session",
-            &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}",),
-        )
-        .await
-        .unwrap();
-    let client_session_doc =
-        gents::store::graphql::created_doc_id(&session, "AgentSession").unwrap();
-    local
-        .add_actor_relationship(
-            "AgentSession",
-            &client_session_doc,
-            "working_agent",
-            &selected_agent.did().parse().unwrap(),
-        )
-        .await
-        .unwrap();
+    let client_session_doc = reserve_goal_session(&db, &user, &agent, client_session).await;
     let created = gents::goal::create_goal_for_session_from_access(
         &access,
-        &did,
+        did,
         client_session,
         "Client-authored Goal",
         Some(500),
     )
     .await
-    .expect("create client Goal and claim over authenticated HTTP");
+    .expect("create client Goal over HTTP");
     assert!(matches!(created, CreateGoalForSessionOutcome::Created(_)));
     let retried = gents::goal::create_goal_for_session_from_access(
         &access,
-        &did,
+        did,
         client_session,
         "Client-authored Goal",
         Some(500),
     )
     .await
-    .expect("retry client Goal over the same authenticated access");
+    .expect("retry client Goal over HTTP");
     assert!(matches!(
         retried,
         CreateGoalForSessionOutcome::Idempotent(_)
     ));
     assert_eq!(created.goal().doc_id, retried.goal().doc_id);
     for collection in ["Goal", "GoalCreationClaim"] {
-        let session_doc = escape_graphql_string(&client_session_doc);
-        let rows = access.execute(&format!(r#"{{ {collection}(filter: {{session_doc_id: {{_eq: "{session_doc}"}}}}) {{_docID session_doc_id agent_did creator_did parent_linked}} }}"#)).await.unwrap();
+        let session = escape_graphql_string(&client_session_doc);
+        let rows = access.execute(&format!(r#"{{ {collection}(filter: {{session_doc_id: {{_eq: "{session}"}}}}) {{_docID session_doc_id agent_did creator_did parent_linked}} }}"#)).await.unwrap();
         let rows = rows["data"][collection].as_array().unwrap();
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
         assert_eq!(row["session_doc_id"], client_session_doc);
-        assert_eq!(row["agent_did"], selected_agent.did());
-        assert_eq!(row["creator_did"], did);
+        assert_eq!(row["agent_did"], agent.did());
+        assert_eq!(row["creator_did"], user.did());
         let modeled = atomic_goal_link_case("user", collection).await;
         assert_eq!(row["parent_linked"], modeled["initial"]["linked"]);
         let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
-        let history = access.execute(&format!(r#"{{ _commits(docID: "{doc}", filter: {{fieldName: {{_eq: "_C"}}}}, order: {{height: ASC}}, limit: 1) {{cid}} }}"#)).await.unwrap();
+        let history = access.execute(&format!(r#"{{_commits(docID: "{doc}", filter: {{fieldName: {{_eq: "_C"}}}}, order: {{height: ASC}}, limit: 1) {{cid}}}}"#)).await.unwrap();
         let cid = history["data"]["_commits"][0]["cid"].as_str().unwrap();
         assert_eq!(
-            node.verified_block_signer_did(cid).await.unwrap(),
-            identity.did()
+            db.node.verified_block_signer_did(cid).await.unwrap(),
+            user.did()
         );
     }
-}
-
-fn free_address() -> std::net::SocketAddr {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-    listener.local_addr().expect("ephemeral address")
 }
 
 async fn signed_goal_backed_request(
@@ -2242,23 +2120,10 @@ async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publish
         agent.as_ref(),
     )
     .unwrap();
-    let mut session = crate::support::session_document_in_scope(
-        db.node_identity.did(),
-        SESSION,
-        agent.did(),
-        "2026-07-15T00:00:00Z",
-    );
-    session.requester_did = Some(agent.did().to_owned());
-    let input =
-        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
-            .unwrap();
-    access
-        .write(
-            "test.goal_backed_terminal_session",
-            &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}",),
-        )
+    let create = signed_goal_backed_request(&db, &agent, "goal-backed-terminal").await;
+    gents::request::lifecycle::reserve_goal_session(&access, &create)
         .await
-        .unwrap();
+        .expect("reserve Agent-owned session");
     set_goal_from_access(
         &access,
         db.node_identity.did(),
@@ -2270,7 +2135,6 @@ async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publish
     )
     .await
     .expect("set terminal goal");
-    let create = signed_goal_backed_request(&db, &agent, "goal-backed-terminal").await;
     let error = gents::goal::submit_goal_backed_request(
         &access,
         db.node_identity.did(),
@@ -4865,7 +4729,7 @@ async fn reserve_goal_session(
     user: &gents::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     session: &str,
-) {
+) -> String {
     use gents::request::lifecycle::{
         build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
     };
@@ -4888,7 +4752,9 @@ async fn reserve_goal_session(
     );
     build_signed_client_request(&access, spec, RequestSigner::Identity(user))
         .await
-        .expect("reserve user-owned goal session");
+        .expect("reserve user-owned goal session")
+        .session_doc_id
+        .expect("reserved physical session")
 }
 
 async fn publish_owned_terminal_activity(
