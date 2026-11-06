@@ -624,7 +624,7 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
         .collect::<BTreeMap<_, _>>();
     assert_eq!(
         serde_json::from_str::<Value>(&accepted[&first_doc]).unwrap(),
-        serde_json::json!({"agent": "general", "prompt": "work"})
+        serde_json::json!({"agent": owner.request().agent_did, "prompt": "work"})
     );
     assert_eq!(
         serde_json::from_str::<Value>(&accepted[&second_doc]).unwrap(),
