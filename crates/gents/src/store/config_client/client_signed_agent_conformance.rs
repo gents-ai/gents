@@ -825,14 +825,18 @@ fn modeled_configuration_delete_collections_use_trusted_schemas() {
 }
 
 #[test]
-fn modeled_signed_write_dispatch_never_replays() {
+fn modeled_signed_write_replay_requires_confirmed_abort_and_authority() {
     let case = crate::lean_vocab_test::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
     for observation in &case.configuration_signed_write_retry_cases {
         assert_eq!(
-            super::txn::client_signed_write_may_retry(observation.dispatched),
+            super::txn::client_signed_write_may_retry(
+                observation.dispatched,
+                observation.confirmed_abort,
+                observation.replay_authorized,
+            ),
             observation.may_retry,
         );
     }

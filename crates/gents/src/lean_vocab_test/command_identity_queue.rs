@@ -700,6 +700,8 @@ pub(crate) struct LeanConfigurationImmutableCase {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanConfigurationSignedWriteRetryCase {
     pub(crate) dispatched: bool,
+    pub(crate) confirmed_abort: bool,
+    pub(crate) replay_authorized: bool,
     pub(crate) may_retry: bool,
 }
 
