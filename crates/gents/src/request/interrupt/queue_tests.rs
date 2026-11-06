@@ -822,3 +822,60 @@ async fn interrupted_queue_drain_rolls_back_with_latch() {
     assert_eq!(wake_row["lifecycle_state"], "pending");
     node.shutdown().await.expect("shut down test node");
 }
+
+#[tokio::test]
+async fn desktop_user_signed_interrupt_latches_and_drains_the_modeled_wake() {
+    let case = crate::lean_vocab_test::lean_interrupt_queue_cases()
+        .iter()
+        .find(|case| case.name == "completion_before_interrupt")
+        .expect("modeled completion before interrupt");
+    let entry = case
+        .inputs
+        .iter()
+        .find_map(|event| match event {
+            LeanInterruptQueueInput::Enqueue { entry } => Some(entry),
+            _ => None,
+        })
+        .expect("modeled pending wake");
+    let fixture = fixture(case).await;
+    let parent = &fixture.parent;
+    let wake =
+        enqueue_generated_wake(&fixture.agent_access, &fixture.db.node, parent, case, entry).await;
+
+    interrupt_request_by_doc_id_with_access(
+        &fixture.client,
+        &parent.doc_id,
+        &parent.node_did,
+        parent.requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
+    let first = latch(&fixture.agent_access, parent).await;
+    assert_eq!(first.is_some(), case.expected.latched);
+    let after = rows(&fixture.agent_access, &parent.session_id).await;
+    let state = &after.iter().find(|row| row["_docID"] == wake).unwrap()["lifecycle_state"];
+    assert_eq!(
+        state == "interrupted",
+        case.expected.terminal.contains(&entry.request_id)
+    );
+    assert_eq!(
+        state == "pending",
+        case.expected.pending.contains(&entry.request_id)
+    );
+
+    interrupt_request_by_doc_id_with_access(
+        &fixture.client,
+        &parent.doc_id,
+        &parent.node_did,
+        parent.requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(latch(&fixture.agent_access, parent).await, first);
+    fixture
+        .db
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
+}

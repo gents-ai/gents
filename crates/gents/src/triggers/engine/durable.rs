@@ -330,7 +330,11 @@ pub(crate) async fn stage_outcome(
         attempt: fire.attempt,
         created_at: now.into(),
     };
-    let response = txn.execute_with_variables("mutation($input: FireOutcomeMutationInputArg!) { create_FireOutcome(input: $input) { _docID } }", &serde_json::json!({"input":outcome})).await?;
+    let response = txn.execute_client_signed_create(
+        "mutation($input: FireOutcomeMutationInputArg!) { create_FireOutcome(input: $input) { _docID } }",
+        &serde_json::json!({"input":outcome}),
+        gents_protocol::schemas::FIRE_OUTCOME,
+    ).await?;
     let doc_id = crate::store::graphql::created_doc_id(&response, "FireOutcome")?;
     let session = crate::session::load_agent_session_owner_in_txn(
         txn,

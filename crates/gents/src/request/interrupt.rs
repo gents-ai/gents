@@ -195,8 +195,14 @@ async fn interrupt_request_matching_in_txn(
         return Ok(Vec::new());
     }
     let physical = escape_graphql_string(physical);
-    let now = escape_graphql_string(&Utc::now().to_rfc3339());
-    let result = txn.execute(&format!(r#"mutation {{update_AgentRequest(docID: "{physical}", filter: {{_docID: {{_eq: "{physical}"}}}}, input: {{interrupt_requested_at: "{now}"}}) {{_docID}}}}"#)).await?;
+    let now = Utc::now().to_rfc3339();
+    let result = txn
+        .execute_client_signed_update(
+            &format!(r#"mutation($input: AgentRequestMutationInputArg!) {{ update_AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}}}, input: $input) {{_docID}} }}"#),
+            &serde_json::json!({"input": {"interrupt_requested_at": now}}),
+            gents_protocol::schemas::AGENT_REQUEST,
+        )
+        .await?;
     let updated = result["data"]["update_AgentRequest"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("interrupt mutation omitted affected rows"))?;
@@ -285,7 +291,13 @@ fn active_session_request_query(
     requester_did: Option<&str>,
 ) -> String {
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
-    format!(r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:{claimed_or_processing}}}}},limit:2){{_docID request_id node_did requester_did session_id lifecycle_state}}}}"#, claimed_or_processing = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing]))
+    format!(
+        r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:{claimed_or_processing}}}}},limit:2){{_docID request_id node_did requester_did session_id lifecycle_state}}}}"#,
+        claimed_or_processing = RequestLifecycleState::graphql_list([
+            RequestLifecycleState::Claimed,
+            RequestLifecycleState::Processing
+        ])
+    )
 }
 
 fn active_session_request_rows(
