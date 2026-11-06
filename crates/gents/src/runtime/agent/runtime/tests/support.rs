@@ -7,7 +7,6 @@ use std::thread;
 use std::thread::JoinHandle;
 
 pub(super) use crate::documents::Tools;
-pub(super) use crate::ensure_runtime_schemas;
 pub(super) use crate::request::watcher::AgentRequest;
 pub(super) use crate::runtime::status::RuntimeStatusHandle;
 pub(super) use crate::store::graphql::escape_graphql_string;

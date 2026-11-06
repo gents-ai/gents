@@ -3,7 +3,6 @@ use std::sync::Arc;
 use super::model_test_support::{model_session, model_time};
 use super::observations::apply_title_in_txn;
 use super::query::load_agent_session;
-use super::*;
 use gents_protocol::session::{SessionTitle, SessionTitleSource};
 
 async fn verified_signer_as_user(

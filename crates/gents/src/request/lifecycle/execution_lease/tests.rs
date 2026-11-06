@@ -399,7 +399,7 @@ async fn stale_execution_owner_drop_does_not_expire_successor_generation() {
     let doc_id = lifecycle.request().doc_id.clone();
     let successor_generation = uuid::Uuid::new_v4().to_string();
     let successor_deadline = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
-    let response = access
+    access
         .write(
             "test.agent_graphql_mutation",
             &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "{}", execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
@@ -733,7 +733,7 @@ async fn owned_begin_rejects_expiry_without_materializing_response() {
     let mut lifecycle = claimed_owner(&node, &identity, &agent).await;
     let doc_id = lifecycle.request.doc_id.clone();
     let expired = (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-    let result = access
+    access
         .write(
             "test.agent_graphql_mutation",
             &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,

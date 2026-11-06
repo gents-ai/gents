@@ -22,7 +22,6 @@ use crate::runtime::agent::p2p_reconcile::{
 };
 
 mod desired_state;
-use desired_state::desired_row;
 
 include!("tests/support.rs");
 include!("tests/admin.rs");

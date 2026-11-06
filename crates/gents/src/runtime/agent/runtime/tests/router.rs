@@ -61,7 +61,6 @@ fn routed_snapshot(
 
 #[tokio::test]
 async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_router() {
-    use crate::store::identity::NodeIdentity as _;
     let (db, _user, _access, binding) =
         crate::test_support::signed_test_node("invalid-origin-route").await;
     let node = db.node.clone();
