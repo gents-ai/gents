@@ -47,11 +47,9 @@ pub use crate::tools::call::lifecycle::query::{
 #[cfg(test)]
 pub(crate) use compaction_entries::load_prompt_compaction_state;
 pub(crate) use compaction_entries::load_prompt_compaction_state_with_access;
-pub use compaction_entries::{compaction_key, load_compaction_entries};
 #[cfg(test)]
-pub(crate) use compaction_entries::{
-    save_compaction_entry, save_compaction_entry_with_requester_did,
-};
+pub(crate) use compaction_entries::save_compaction_entry;
+pub use compaction_entries::{compaction_key, load_compaction_entries};
 pub(crate) use compaction_entries::{
     save_exact_compaction_entry, NewExactSessionCompaction, StaleCompactionGeneration,
 };

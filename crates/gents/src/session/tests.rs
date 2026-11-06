@@ -1,5 +1,4 @@
 use super::*;
-use crate::ensure_runtime_schemas;
 use crate::inference::llm::message::{Text, ToolResult, ToolResultContent, UserContent};
 use crate::test_support::first_content;
 
