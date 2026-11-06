@@ -201,7 +201,9 @@ impl ConfigCommandTool {
         let mut bound = false;
         if contextual && !create {
             if let Some(agent) = self.document_agent(target, &id, shared_ack).await? {
-                core = self.target_core(Some(&agent)).await?;
+                core = self
+                    .target_core(Some(&agent), Some(target.category()))
+                    .await?;
                 bound = true;
             }
         }
@@ -308,7 +310,7 @@ impl ConfigCommandTool {
             || !matches!(target, SelfConfigTarget::Task | SelfConfigTarget::Trigger)
             || target == SelfConfigTarget::Task && create
         {
-            return self.target_core(agent).await;
+            return self.target_core(agent, Some(target.category())).await;
         }
         let owner = &self.node_did;
         let task = crate::store::config_client::ConfigAccess::transact_local_readonly(
@@ -352,7 +354,7 @@ impl ConfigCommandTool {
             .as_ref()
             .and_then(|(_, doc)| doc.get("agent_did"))
             .and_then(Value::as_str);
-        self.target_core(agent).await
+        self.target_core(agent, Some(target.category())).await
     }
 
     fn ensure_crud_resource(&self, target: SelfConfigTarget) -> Result<()> {

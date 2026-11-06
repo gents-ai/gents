@@ -341,6 +341,11 @@ async fn agent_apply_in_txn(
                 Some(id) => Some(serde_json::from_value(load(crate::Collection::Tools, id)?)?),
                 None => None,
             };
+            if operation == "clone" {
+                if let Some(tools) = tools.as_mut() {
+                    tools.self_config = None;
+                }
+            }
             if let Some(preset) = args.preset.value() {
                 anyhow::ensure!(
                     operation != "clone",

@@ -1,6 +1,7 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.SelfConfig.Cases
 import Proofs.SelfConfig.Auth
+import Proofs.SelfConfig.Scope
 
 namespace Conformance.Contracts
 
@@ -113,5 +114,55 @@ def schemaPublicationCasesJson : String := Id.run do
             ++ ",\"native_allowed\":" ++ scBool nativeAllowed
             ++ ",\"accepted\":" ++ scBool (SelfConfig.schemaPublicationAllowed grant artifact compatible nativeAllowed) ++ "}"]
   return jsonArray rows
+
+/-- Edit authority by category, scope and held self-config categories. -/
+def selfConfigScopeEditCasesJson : String := Id.run do
+  let categorySets : List (String × List String) :=
+    [("none", []), ("agent-only", ["agent"]), ("tools-only", ["tools"]),
+     ("catalog-only", ["node"]), ("catalog-and-agent", ["node", "agent"]),
+     ("catalog-and-tools", ["node", "tools"]), ("agent-and-tools", ["agent", "tools"]),
+     ("engineer", ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation"])]
+  let documents := ["agent", "tools", "profile", "backend", "automation"]
+  let scopes : List (String × SelfConfig.Scope) := [("own", .own), ("foreign", .foreign)]
+  let mut rows : List String := []
+  for (setName, categories) in categorySets do
+    for document in documents do
+      for (scopeName, scope) in scopes do
+        rows := rows ++ ["{\"name\":" ++ jsonString (setName ++ "/" ++ document ++ "/" ++ scopeName)
+          ++ ",\"categories\":" ++ jsonStringArray categories
+          ++ ",\"category\":" ++ jsonString document
+          ++ ",\"scope\":" ++ jsonString scopeName
+          ++ ",\"allowed\":" ++ scBool (SelfConfig.mayEdit categories document scope) ++ "}"]
+  return jsonArray rows
+
+def selfConfigScopeGroupCasesJson : String := Id.run do
+  let groups : List (String × SelfConfig.SelfConfigGroup) :=
+    [("created", SelfConfig.createdGroup), ("clone-of-engineer", SelfConfig.cloneGroup SelfConfig.engineerGroup),
+     ("engineer", SelfConfig.engineerGroup), ("enabled-default", ⟨true, none⟩),
+     ("disabled-with-list", ⟨false, some ["node", "tools"]⟩),
+     ("enabled-catalog", ⟨true, some ["node"]⟩)]
+  let rows := groups.map fun (name, g) =>
+    "{\"name\":" ++ jsonString name
+      ++ ",\"enabled\":" ++ scBool g.enabled
+      ++ ",\"categories\":" ++ jsonOptionalStringArray g.categories
+      ++ ",\"effective\":" ++ jsonStringArray (SelfConfig.effectiveCategories g)
+      ++ ",\"may_create_agent\":" ++ scBool (SelfConfig.mayCreateAgent (SelfConfig.effectiveCategories g)) ++ "}"
+  return jsonArray rows
+
+def selfConfigScopeOfCasesJson : String := Id.run do
+  let rows : List (String × String × String × Bool) :=
+    [("self-exclusive", "agent-a", "agent-a", false), ("self-shared", "agent-a", "agent-a", true),
+     ("other-exclusive", "agent-a", "agent-b", false), ("other-shared", "agent-a", "agent-b", true)]
+  return jsonArray (rows.map fun (name, invoking, target, shared) =>
+    "{\"name\":" ++ jsonString name
+      ++ ",\"invoking_agent\":" ++ jsonString invoking
+      ++ ",\"target_agent\":" ++ jsonString target
+      ++ ",\"shared\":" ++ scBool shared
+      ++ ",\"scope\":" ++ jsonString (if SelfConfig.scopeOf invoking target shared == .own then "own" else "foreign") ++ "}")
+
+def selfConfigScopeCasesJson : String :=
+  "{\"edit\":" ++ selfConfigScopeEditCasesJson
+    ++ ",\"groups\":" ++ selfConfigScopeGroupCasesJson
+    ++ ",\"scope_of\":" ++ selfConfigScopeOfCasesJson ++ "}"
 
 end Conformance.Contracts
