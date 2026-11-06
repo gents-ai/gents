@@ -158,8 +158,8 @@ tokio::task_local! {
     static BETWEEN_CHECK_AND_WRITE: std::sync::Arc<(tokio::sync::Notify, tokio::sync::Notify)>;
 }
 
-/// A conflicted signed promotion is not replayed. A fresh authorized read may
-/// establish that its frozen closure moved and justify a stale refusal.
+/// A conflicted signed promotion is not replayed. After a confirmed rollback,
+/// a fresh authorized read may establish closure drift and justify a stale refusal.
 pub async fn promote(
     access: &ConfigAccess,
     owner: &str,
@@ -210,7 +210,7 @@ pub async fn promote(
     }
 
     let applied = access
-        .transact_write("optimization.promote", |txn| {
+        .transact_write_with_finality("optimization.promote", |txn| {
             let (job, text, by) = (&job, &retained.text, &by);
             Box::pin(async move {
                 let live = capture_closure(txn, &job.owner).await?;
@@ -249,7 +249,11 @@ pub async fn promote(
             tracing::info!(job_id, by = %by, "optimization checkpoint promoted");
             Ok(promotion)
         }
-        Err(error) => {
+        Err(failure) => {
+            if failure.unconfirmed {
+                return Err(failure.error);
+            }
+            let error = failure.error;
             let drifted = if let Some(drifted) = drift_of(&error) {
                 drifted
             } else if error
