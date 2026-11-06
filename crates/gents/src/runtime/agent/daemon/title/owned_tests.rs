@@ -2008,7 +2008,7 @@ async fn crashed_title_recovers_committed_reasoning_without_publication() {
     let first = crate::RequestLifecycle::recover_all_with_identities(
         &fixture.node,
         fixture.identity.did(),
-        &[fixture.agent_config.agent_identity.clone()],
+        std::slice::from_ref(&fixture.agent_config.agent_identity),
     )
     .await
     .expect("recover crashed title");
@@ -2035,7 +2035,7 @@ async fn crashed_title_recovers_committed_reasoning_without_publication() {
     let replay = crate::RequestLifecycle::recover_all_with_identities(
         &fixture.node,
         fixture.identity.did(),
-        &[fixture.agent_config.agent_identity.clone()],
+        std::slice::from_ref(&fixture.agent_config.agent_identity),
     )
     .await
     .expect("repeat title recovery");

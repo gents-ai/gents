@@ -121,9 +121,8 @@ async fn managed_signing_selection_conforms_to_lean() {
                     );
                     resolved.ok()
                 }
-                .map(|identity| {
+                .inspect(|identity| {
                     assert_eq!(identity.did(), selected.did());
-                    identity
                 })
             });
             match identity::Did::new(actor).ok().and_then(|did| {

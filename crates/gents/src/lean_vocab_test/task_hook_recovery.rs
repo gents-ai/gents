@@ -303,7 +303,7 @@ async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_reco
             crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
                 &fixture.node,
                 fixture.did(),
-                &[fixture.agent_identity.clone()],
+                std::slice::from_ref(&fixture.agent_identity),
                 &restarted,
             )
             .await;
@@ -341,7 +341,7 @@ async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_reco
             crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
                 &fixture.node,
                 fixture.did(),
-                &[fixture.agent_identity.clone()],
+                std::slice::from_ref(&fixture.agent_identity),
                 &restarted,
             )
             .await;
@@ -379,7 +379,7 @@ async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
             RequestLifecycle::recover_all_with_identities(
                 &fixture.node,
                 fixture.did(),
-                &[fixture.agent_identity.clone()],
+                std::slice::from_ref(&fixture.agent_identity),
             )
             .await
             .unwrap();
@@ -400,7 +400,7 @@ async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
         let report = recover_task_hook_records(
             &fixture.node,
             fixture.did(),
-            &[fixture.agent_identity.clone()],
+            std::slice::from_ref(&fixture.agent_identity),
             &store,
         )
         .await
@@ -474,7 +474,7 @@ async fn recovery_stops_a_surviving_hook_command_before_cleanup() {
         crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
             &fixture.node,
             fixture.did(),
-            &[fixture.agent_identity.clone()],
+            std::slice::from_ref(&fixture.agent_identity),
             &restarted,
         )
         .await;
@@ -521,7 +521,7 @@ async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
         crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
             &fixture.node,
             fixture.did(),
-            &[fixture.agent_identity.clone()],
+            std::slice::from_ref(&fixture.agent_identity),
             &running,
         )
         .await;
@@ -555,7 +555,7 @@ async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
     crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
         &fixture.node,
         fixture.did(),
-        &[fixture.agent_identity.clone()],
+        std::slice::from_ref(&fixture.agent_identity),
         &restarted,
     )
     .await;
@@ -612,7 +612,7 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
         RequestLifecycle::recover_all_with_identities(
             &fixture.node,
             fixture.did(),
-            &[fixture.agent_identity.clone()],
+            std::slice::from_ref(&fixture.agent_identity),
         )
         .await
         .unwrap();
@@ -631,7 +631,7 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
         let report = recover_task_hook_records(
             &fixture.node,
             fixture.did(),
-            &[fixture.agent_identity.clone()],
+            std::slice::from_ref(&fixture.agent_identity),
             &store,
         )
         .await

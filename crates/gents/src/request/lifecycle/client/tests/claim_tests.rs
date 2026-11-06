@@ -602,7 +602,7 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             let recovery = RequestLifecycle::repair_terminal_requests_with_identities(
                 &node,
                 runtime.did(),
-                &[agent_identity.clone()],
+                std::slice::from_ref(&agent_identity),
             )
             .await
             .unwrap();
@@ -613,7 +613,7 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             let terminal = RequestLifecycle::redrive_terminal_convergence_with_identities(
                 &node,
                 runtime.did(),
-                &[agent_identity.clone()],
+                std::slice::from_ref(&agent_identity),
             )
             .await
             .unwrap();
@@ -625,7 +625,7 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                 let wake = RequestLifecycle::redrive_failed_background_wakeups_with_identities(
                     &node,
                     runtime.did(),
-                    &[agent_identity.clone()],
+                    std::slice::from_ref(&agent_identity),
                 )
                 .await
                 .unwrap();

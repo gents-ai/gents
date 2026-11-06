@@ -1318,9 +1318,7 @@ async fn overlapping_native_workspace_fences_conflict(
         anyhow::bail!("only one overlapping binding should commit")
     };
     assert_eq!(winner["binding_id"], "native-overlap-one");
-    let delete = format!(
-        r#"mutation {{ delete_WorkspaceBinding(filter: {{binding_id: {{_eq: "native-overlap-one"}}}}) {{_docID}} }}"#
-    );
+    let delete = r#"mutation { delete_WorkspaceBinding(filter: {binding_id: {_eq: "native-overlap-one"}}) {_docID} }"#.to_string();
     writer_access
         .write("test.workspace.conflict.cleanup", &delete)
         .await?;

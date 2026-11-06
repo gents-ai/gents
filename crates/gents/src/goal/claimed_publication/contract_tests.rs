@@ -245,7 +245,7 @@ async fn run_generated_running_wait() {
         crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
             &fixture.node,
             fixture.identity.did(),
-            &[fixture.agent.clone()],
+            std::slice::from_ref(&fixture.agent),
         )
         .await
         .unwrap();

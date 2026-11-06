@@ -670,6 +670,6 @@ mod tests {
             "{{ WorkspaceRoot(filter: {{root_path: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
             escape_graphql_string(path)
         );
-        Ok(value_rows(&access.execute(&query).await?, "WorkspaceRoot")?)
+        value_rows(&access.execute(&query).await?, "WorkspaceRoot")
     }
 }

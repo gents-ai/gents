@@ -197,7 +197,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     .unwrap();
     expire_observed_execution(&node, &parent.doc_id).await;
     assert_eq!(
-        RequestLifecycle::recover_all_with_identities(&node, did, &[agent.clone()])
+        RequestLifecycle::recover_all_with_identities(&node, did, std::slice::from_ref(&agent))
             .await
             .unwrap()
             .requests_recovered,
@@ -344,7 +344,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     drop(source);
     for _ in 0..2 {
         assert_eq!(
-            RequestLifecycle::recover_all_with_identities(&node, did, &[agent.clone()])
+            RequestLifecycle::recover_all_with_identities(&node, did, std::slice::from_ref(&agent))
                 .await
                 .unwrap()
                 .requests_recovered,

@@ -416,7 +416,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     crate::session::create_session_with_id(
         &admission.node,
         &other_session,
-        &tool.actor().to_string(),
+        tool.actor().as_ref(),
         &node_did,
     )
     .await

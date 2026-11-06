@@ -243,7 +243,7 @@ async fn owner(
     let mut lifecycle = claimed_owner(node, identity, agent).await;
     let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        crate::store::identity::resolve_agent_identity(identity.as_ref(), &agent)
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), agent)
             .unwrap()
             .as_ref(),
         Duration::ZERO,

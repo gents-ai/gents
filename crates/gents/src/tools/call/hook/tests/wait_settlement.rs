@@ -93,7 +93,7 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
             ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
                 &node,
                 agent,
-                &[signer.clone()]
+                std::slice::from_ref(&signer)
             )
             .await
             .unwrap()
@@ -125,7 +125,7 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
         let report = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
             &node,
             agent,
-            &[signer.clone()],
+            std::slice::from_ref(&signer),
         )
         .await
         .unwrap();
@@ -153,7 +153,7 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
             ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
                 &node,
                 agent,
-                &[signer.clone()]
+                std::slice::from_ref(&signer)
             )
             .await
             .unwrap()

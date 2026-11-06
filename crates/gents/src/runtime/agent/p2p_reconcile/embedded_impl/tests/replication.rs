@@ -438,7 +438,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         .context("missing public discovery case")?["allowed"]
         == true;
     assert_eq!(
-        gents_protocol::graphql::graphql_rows_from_response(&public, "PeerRegistry").len() != 0,
+        !gents_protocol::graphql::graphql_rows_from_response(&public, "PeerRegistry").is_empty(),
         public_expected
     );
     assert_eq!(public["data"]["PeerRegistry"][0]["peer_id"], candidate_peer);

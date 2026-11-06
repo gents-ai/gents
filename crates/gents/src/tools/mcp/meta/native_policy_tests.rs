@@ -17,17 +17,14 @@ use crate::Collection;
 use super::shared::{lookup_service, MetaToolContext};
 use crate::inference::llm::tool::Tool;
 
-async fn invoke(
-    tool: &super::CallToolTool,
-    service: &str,
-    name: &str,
-) -> std::result::Result<String, super::MetaToolError> {
+async fn invoke(tool: &super::CallToolTool, service: &str, name: &str) -> Result<String> {
     tool.call(super::CallToolArgs {
         service_id: service.into(),
         tool_name: name.into(),
         arguments: json!({}),
     })
     .await
+    .map_err(anyhow::Error::new)
 }
 
 fn plan(documents: Vec<(Collection, Value)>) -> Result<DesiredStateApplyPlan> {

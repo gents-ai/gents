@@ -697,7 +697,7 @@ async fn session_fixtures_publish_only_declared_cross_agent_readers() {
         .transact_readonly("eval.test.fixture_owner", |txn| {
             let shared_id = &shared_id;
             Box::pin(async move {
-                txn.document_owners("AgentSession", &[shared_id.clone()])
+                txn.document_owners("AgentSession", std::slice::from_ref(shared_id))
                     .await
             })
         })

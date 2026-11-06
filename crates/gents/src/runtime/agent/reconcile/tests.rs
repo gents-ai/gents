@@ -870,8 +870,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
         .acquire_with_connection_and_signer_for_test(
             "req-rotated-slot",
             "backend-general",
-            &agent_did,
-            &node_did,
+            &agent_config,
             crate::inference::admission::CallKind::Inference,
             &new_connection,
             Some(signer),

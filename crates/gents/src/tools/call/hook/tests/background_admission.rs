@@ -105,7 +105,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
     crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
         &harness.node,
         &key.node_did,
-        &[agent.clone()],
+        std::slice::from_ref(&agent),
         &executions,
     )
     .await

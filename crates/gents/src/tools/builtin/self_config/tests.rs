@@ -3841,7 +3841,7 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
         &selected_text,
         None,
         true,
-        &[agent_did.clone()],
+        std::slice::from_ref(&agent_did),
     )
     .await
     .unwrap();
@@ -3983,7 +3983,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         &selected_text,
         None,
         true,
-        &[seed_agent.clone()],
+        std::slice::from_ref(&seed_agent),
     )
     .await
     .expect("publish selected WorkspaceRoot");

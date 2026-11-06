@@ -884,7 +884,7 @@ impl Harness {
             let outcome = crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
                 &self.node,
                 self.owner(),
-                &[self.agent_config.agent_identity.clone()],
+                std::slice::from_ref(&self.agent_config.agent_identity),
                 &registry,
             )
             .await;
@@ -904,7 +904,7 @@ impl Harness {
             crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
                 &self.node,
                 self.owner(),
-                &[self.agent_config.agent_identity.clone()],
+                std::slice::from_ref(&self.agent_config.agent_identity),
                 &registry,
             )
             .await;
@@ -1062,7 +1062,7 @@ async fn shutdown_before_any_hook_launches_leaves_no_record_to_recover() {
         crate::runtime::startup_recovery::run_startup_recovery_with_executions_and_identities(
             &harness.node,
             harness.owner(),
-            &[harness.agent_config.agent_identity.clone()],
+            std::slice::from_ref(&harness.agent_config.agent_identity),
             &restarted,
         )
         .await;

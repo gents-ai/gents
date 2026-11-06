@@ -731,14 +731,14 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     crate::ConfigAccess::local_managed_agent(node.clone(), identity::Did::new(signer.did()).unwrap(), signer.as_ref()).unwrap().write("test.terminal_parent_with_retained_process", &format!(
         r#"mutation {{ update_AgentRequest(docID: "{escaped}", input: {{ lifecycle_state: "failed" }}) {{ _docID }} }}"#
     )).await.unwrap();
-    let report = crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_terminal_parent_owned_tools_with_executions(&node, &hook.node_did, &[signer.clone()], &registry).await.unwrap();
+    let report = crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_terminal_parent_owned_tools_with_executions(&node, &hook.node_did, std::slice::from_ref(&signer), &registry).await.unwrap();
     assert_eq!(report.tool_calls_terminalized, 0);
     let row = fetch_tool_call_row(&node, &session, "failed-handoff").await;
     assert_eq!(row["lifecycle_state"], modeled.terminal_state);
     crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
         &node,
         &hook.node_did,
-        &[signer.clone()],
+        std::slice::from_ref(&signer),
         &registry,
     )
     .await
@@ -782,7 +782,7 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
         &node,
         &hook.node_did,
-        &[signer.clone()],
+        std::slice::from_ref(&signer),
         &registry,
     )
     .await

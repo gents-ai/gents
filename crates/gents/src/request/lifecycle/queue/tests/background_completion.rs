@@ -775,7 +775,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
     let recovery = crate::RequestLifecycle::recover_all_with_identities(
         &node,
         db.node_did(),
-        &[db.agent_identity.clone()],
+        std::slice::from_ref(&db.agent_identity),
     )
     .await
     .unwrap();
@@ -936,7 +936,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     let first_repair = crate::RequestLifecycle::repair_terminal_requests_with_identities(
         &node,
         db.node_did(),
-        &[db.agent_identity.clone()],
+        std::slice::from_ref(&db.agent_identity),
     )
     .await
     .unwrap();
@@ -954,7 +954,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     let second_repair = crate::RequestLifecycle::repair_terminal_requests_with_identities(
         &node,
         db.node_did(),
-        &[db.agent_identity.clone()],
+        std::slice::from_ref(&db.agent_identity),
     )
     .await
     .unwrap();
