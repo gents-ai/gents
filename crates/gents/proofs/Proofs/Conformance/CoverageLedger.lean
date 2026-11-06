@@ -808,6 +808,12 @@ def caseCoverage : List CoverageEntry :=
       "plugin::tests::executor::staged_plugin_resolution_conforms_to_lean")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "hosted_pack_schema_cases"
+      "HostedPackSchemaCases"
+      "store::config_client::client_pack_evidence::tests::hosted_schema_approval_conforms_to_lean"
+      "Binds scope signatures to the model; native Node authorization is checked by the runtime admission owner.")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "hosted_pack_home_cases"
       "HostedPackHomeCases"
       "pack::installation::hosted::tests::hosted_home_publication_conforms_to_lean"
