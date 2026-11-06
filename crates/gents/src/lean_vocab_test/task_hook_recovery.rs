@@ -620,7 +620,8 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
             let unavailable = recover_task_hook_records(&fixture.node, fixture.did(), &[], &store)
                 .await
                 .unwrap();
-            assert_eq!(unavailable, 0);
+            assert_eq!(unavailable, 1);
+            store.wait_for_recoveries().await;
             assert_eq!(
                 store.list().len(),
                 1,

@@ -312,9 +312,10 @@ async fn recover_record(
     let admitted = match &record.root_guard {
         Some(guard) => match agent_identity.as_deref() {
             Some(identity) => guard.validate(&node, identity).await,
-            None => Err(anyhow::anyhow!(
-                "workspace root requires a held Agent identity"
-            )),
+            None => {
+                tracing::warn!(agent_did = %guard.agent_did, "task hook cleanup awaits the selected Agent identity");
+                return;
+            }
         },
         None => Ok(()),
     };
@@ -394,10 +395,7 @@ pub(crate) async fn recover_task_hook_records(
                 {
                     Some(identity.clone())
                 }
-                _ => {
-                    tracing::warn!(agent_did = %guard.agent_did, "task hook recovery requires the selected Agent identity");
-                    continue;
-                }
+                _ => None,
             },
             None => None,
         };
