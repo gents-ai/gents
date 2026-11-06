@@ -548,6 +548,89 @@ mod tests {
         Ok((directory, runtime, node))
     }
 
+    async fn observed_plugin_input(
+        owner: &crate::ConfigAccess,
+        runtime: &crate::KeyIdentity,
+        installed: &[crate::plugin::store::InstalledPlugin],
+        actor: &identity::Did,
+        direct: bool,
+    ) -> anyhow::Result<serde_json::Value> {
+        use serde_json::json;
+        let snapshot = owner.execute(r#"{ Agent { node_did agent_did creation_nonce context_id enabled } AgentContext { _docID node_did context_id tools_id } Tools { _docID node_did tools_id integrations } }"#).await?;
+        let rows = |kind: &str| -> anyhow::Result<Vec<serde_json::Value>> {
+            Ok(snapshot["data"][kind]
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!("missing observed {kind}"))?
+                .clone())
+        };
+        let mut agents = Vec::new();
+        for agent in rows("Agent")? {
+            let text = |field: &str| agent[field].as_str().unwrap_or_default().to_owned();
+            let binding = gents_protocol::agent_identity::AgentIdentityBinding {
+                agent_did: text("agent_did"),
+                creation_nonce: text("creation_nonce"),
+            };
+            let derived = match crate::store::identity::resolve_agent_identity(runtime, &binding) {
+                Ok(signer) => signer.did().to_owned(),
+                Err(crate::store::identity::IdentityError::AgentIdentityMismatch {
+                    derived_did,
+                    ..
+                }) => derived_did,
+                Err(_) => String::new(),
+            };
+            agents.push(
+                json!({"nodeDid":text("node_did"), "agentDid":binding.agent_did,
+                "derived":derived, "contextId":text("context_id"),
+                "enabled":agent["enabled"].as_bool().unwrap_or(true)}),
+            );
+        }
+        let contexts = rows("AgentContext")?
+            .into_iter()
+            .map(|context| {
+                json!({
+                    "nodeDid":context["node_did"].as_str().unwrap_or_default(),
+                    "docId":context["_docID"].as_str().unwrap_or_default(),
+                    "contextId":context["context_id"].as_str().unwrap_or_default(),
+                    "toolsId":context["tools_id"].as_str().unwrap_or_default(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let tools = rows("Tools")?.into_iter().map(|tools| {
+            let plugins = tools["integrations"]["plugins"].as_array().into_iter().flatten().map(|plugin| json!({
+                "coordinate":plugin["plugin"].as_str().unwrap_or_default(), "pin":plugin["digest"].as_str(),
+            })).collect::<Vec<_>>();
+            json!({"nodeDid":tools["node_did"].as_str().unwrap_or_default(),
+                "docId":tools["_docID"].as_str().unwrap_or_default(),
+                "toolsId":tools["tools_id"].as_str().unwrap_or_default(), "plugins":plugins})
+        }).collect::<Vec<_>>();
+        let installed = installed.iter().map(|plugin| json!({
+            "coordinate":format!("{}/{}", plugin.namespace, plugin.name), "digest":plugin.digest,
+            "operations":plugin.declaration.data.as_ref().map(|data| data.ops.clone()).unwrap_or_default(),
+        })).collect::<Vec<_>>();
+        Ok(
+            json!({"node":runtime.did(), "installed":installed, "agents":agents,
+            "contexts":contexts, "tools":tools, "actor":actor.as_str(), "direct":direct}),
+        )
+    }
+
+    async fn observe_plugin_permission(
+        observations: &mut Vec<(serde_json::Value, bool)>,
+        owner: &crate::ConfigAccess,
+        runtime: &crate::KeyIdentity,
+        node: &defra_node::Node,
+        installed: &[crate::plugin::store::InstalledPlugin],
+        actor: &identity::Did,
+        direct: bool,
+    ) -> anyhow::Result<()> {
+        let input = observed_plugin_input(owner, runtime, installed, actor, direct).await?;
+        let observed = node
+            .nac_manager()
+            .check_permission(actor, NodePermission::DocumentDelete)
+            .await?;
+        observations.push((input, observed));
+        Ok(())
+    }
+
     #[tokio::test]
     async fn selected_datastore_query_grants_collection_access_until_removed() -> anyhow::Result<()>
     {
@@ -1124,26 +1207,17 @@ mod tests {
         ] {
             owner.write("test.plugin_delete.create", &mutation).await?;
         }
-        let model = crate::lean_vocab_test::lean_identity_household_cases()
-            .iter()
-            .find(|case| case.name == "configuration-explicit-grants")
-            .unwrap();
-        let expected = |name: &str| {
-            model
-                .plugin_delete_cases
-                .iter()
-                .find(|case| case["name"] == name)
-                .unwrap()["source_count"]
-                .as_u64()
-                .unwrap()
-                > 0
-        };
-        assert_eq!(
-            node.nac_manager()
-                .check_permission(&agent, NodePermission::DocumentDelete)
-                .await?,
-            expected("uninstalled")
-        );
+        let mut observations = Vec::new();
+        observe_plugin_permission(
+            &mut observations,
+            &owner,
+            &runtime,
+            &node,
+            &[],
+            &agent,
+            false,
+        )
+        .await?;
         owner
             .transact_write("test.plugin_delete.install", |txn| {
                 let record = &record;
@@ -1153,18 +1227,26 @@ mod tests {
                 })
             })
             .await?;
-        assert_eq!(
-            node.nac_manager()
-                .check_permission(&agent, NodePermission::DocumentDelete)
-                .await?,
-            expected("selected-installed")
-        );
-        assert_eq!(
-            node.nac_manager()
-                .check_permission(&outsider_did, NodePermission::DocumentDelete)
-                .await?,
-            expected("foreign-actor")
-        );
+        observe_plugin_permission(
+            &mut observations,
+            &owner,
+            &runtime,
+            &node,
+            std::slice::from_ref(&record),
+            &agent,
+            false,
+        )
+        .await?;
+        observe_plugin_permission(
+            &mut observations,
+            &owner,
+            &runtime,
+            &node,
+            std::slice::from_ref(&record),
+            &outsider_did,
+            false,
+        )
+        .await?;
         let mut replacement = record.clone();
         replacement.digest = format!("sha256:{}", "b".repeat(64));
         owner
@@ -1179,22 +1261,30 @@ mod tests {
                 })
             })
             .await?;
-        assert_eq!(
-            node.nac_manager()
-                .check_permission(&agent, NodePermission::DocumentDelete)
-                .await?,
-            expected("replaced-digest")
-        );
+        observe_plugin_permission(
+            &mut observations,
+            &owner,
+            &runtime,
+            &node,
+            std::slice::from_ref(&replacement),
+            &agent,
+            false,
+        )
+        .await?;
         let unpinned = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
             "plugins": [{"plugin":"team/worker"}]
         }))?;
         owner.write("test.plugin_delete.unpinned", &format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"plugin-tools"}}}},input:{{integrations:{unpinned}}}) {{_docID}} }}"#)).await?;
-        assert_eq!(
-            node.nac_manager()
-                .check_permission(&agent, NodePermission::DocumentDelete)
-                .await?,
-            expected("unpinned-upgrade")
-        );
+        observe_plugin_permission(
+            &mut observations,
+            &owner,
+            &runtime,
+            &node,
+            std::slice::from_ref(&replacement),
+            &agent,
+            false,
+        )
+        .await?;
         owner.write("test.plugin_delete.restore_pin", &format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"plugin-tools"}}}},input:{{integrations:{integration}}}) {{_docID}} }}"#)).await?;
         owner
             .transact_write("test.plugin_delete.downgrade", |txn| {
@@ -1208,12 +1298,16 @@ mod tests {
                 })
             })
             .await?;
-        assert_eq!(
-            node.nac_manager()
-                .check_permission(&agent, NodePermission::DocumentDelete)
-                .await?,
-            expected("selected-installed")
-        );
+        observe_plugin_permission(
+            &mut observations,
+            &owner,
+            &runtime,
+            &node,
+            std::slice::from_ref(&record),
+            &agent,
+            false,
+        )
+        .await?;
         owner
             .transact_write("test.plugin_delete.uninstall", |txn| {
                 let record = &record;
@@ -1223,12 +1317,16 @@ mod tests {
                 })
             })
             .await?;
-        assert_eq!(
-            node.nac_manager()
-                .check_permission(&agent, NodePermission::DocumentDelete)
-                .await?,
-            expected("uninstalled")
-        );
+        observe_plugin_permission(
+            &mut observations,
+            &owner,
+            &runtime,
+            &node,
+            &[],
+            &agent,
+            false,
+        )
+        .await?;
         owner.write("test.plugin_delete.disable", &format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"plugin-tools"}}}},input:{{integrations:null}}) {{_docID}} }}"#)).await?;
         owner
             .transact_write("test.plugin_delete.reinstall", |txn| {
@@ -1239,12 +1337,16 @@ mod tests {
                 })
             })
             .await?;
-        assert_eq!(
-            node.nac_manager()
-                .check_permission(&agent, NodePermission::DocumentDelete)
-                .await?,
-            expected("disabled")
-        );
+        observe_plugin_permission(
+            &mut observations,
+            &owner,
+            &runtime,
+            &node,
+            std::slice::from_ref(&record),
+            &agent,
+            false,
+        )
+        .await?;
         owner
             .grant_node_permission(&agent, NodePermission::DocumentDelete)
             .await?;
@@ -1257,11 +1359,35 @@ mod tests {
                 })
             })
             .await?;
-        assert!(
-            node.nac_manager()
-                .check_permission(&agent, NodePermission::DocumentDelete)
-                .await?
-        );
+        observe_plugin_permission(
+            &mut observations,
+            &owner,
+            &runtime,
+            &node,
+            &[],
+            &agent,
+            true,
+        )
+        .await?;
+        let inputs = observations
+            .iter()
+            .map(|(input, _)| input.clone())
+            .collect::<Vec<_>>();
+        let serialized = serde_json::to_string(&inputs)?;
+        let output = tokio::task::spawn_blocking(move || {
+            gents_lean_contract::run_prepared_generator_with_input(
+                &gents_lean_contract::proofs_dir()?,
+                "Proofs.Conformance.PluginDelete:olean",
+                "Proofs/Conformance/PluginDelete.lean",
+                &serialized,
+            )
+        })
+        .await??;
+        let modeled: Vec<bool> = serde_json::from_str(&output)?;
+        assert_eq!(modeled.len(), observations.len());
+        for (expected, (input, actual)) in modeled.into_iter().zip(observations) {
+            assert_eq!(actual, expected, "observed fixture: {input}");
+        }
         node.shutdown().await?;
         Ok(())
     }
