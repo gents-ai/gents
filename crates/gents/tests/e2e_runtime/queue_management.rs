@@ -5,6 +5,7 @@ use gents::request::lifecycle::{
 use gents::runtime::agent::p2p_reconcile::session_commands::run_session_command_reconciler;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
+use gents::NodeIdentity;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -68,28 +69,30 @@ pub(super) async fn insert_signed(db: &TestDb, mut request: AgentRequestCreate) 
 
 async fn enqueue_owned(
     db: &TestDb,
-    agent: &str,
+    fixture: &support::ManagedAgentFixture,
     session: &str,
     id: &str,
     text: &str,
     delivery: QueueDelivery,
 ) -> String {
     let did = db.node_identity.did();
-    let access = db.client_access(db.node_identity.as_ref());
+    let access = &fixture.access;
+    let requester = fixture.user.did();
+    let agent = fixture.binding.agent_did.as_str();
     let mut request = AgentRequestCreate::base(
         RequestPurpose::Normal,
         id,
         did,
-        did,
+        requester,
         agent,
         session,
         text,
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::client(did),
+        AgentRequestAdmissionRecord::client(requester),
     );
     request.input = gents::request::lifecycle::prepare_user_message_input(
-        &access,
+        access,
         did,
         session,
         request.input,
@@ -98,7 +101,7 @@ async fn enqueue_owned(
     .await
     .unwrap();
     request.session_doc_id = Some(
-        gents::request::lifecycle::reserve_goal_session(&access, &request)
+        gents::request::lifecycle::reserve_goal_session(access, &request)
             .await
             .unwrap(),
     );
@@ -121,10 +124,10 @@ async fn enqueue_owned(
         .await
         .unwrap();
     request.agent_doc_id = Some(agent_doc);
-    gents::sign_agent_request_create(db.node_identity.as_ref(), &mut request)
+    gents::sign_agent_request_create(&fixture.user, &mut request)
         .await
         .unwrap();
-    gents::request::lifecycle::submit_client_request(&access, &request)
+    gents::request::lifecycle::submit_client_request(access, &request)
         .await
         .unwrap();
     let response = access
@@ -142,28 +145,28 @@ async fn enqueue_owned(
 
 async fn submit_edit(
     db: &TestDb,
+    fixture: &support::ManagedAgentFixture,
     session_id: &str,
     edit: PendingQueueEdit,
 ) -> anyhow::Result<SessionInputEditReceipt> {
-    submit_edit_inner(db, session_id, edit, None).await
+    submit_edit_inner(db, fixture, session_id, edit, None).await
 }
 
 async fn submit_edit_inner(
     db: &TestDb,
+    fixture: &support::ManagedAgentFixture,
     session_id: &str,
     edit: PendingQueueEdit,
     steer: Option<&str>,
 ) -> anyhow::Result<SessionInputEditReceipt> {
     let did = db.node_identity.did();
-    let existing = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    )
-    .execute(&format!(
-        r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-        escape_graphql_string(session_id)
-    ))
-    .await?;
+    let existing = fixture
+        .access
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(session_id)
+        ))
+        .await?;
     anyhow::ensure!(
         existing["data"]["AgentSession"]
             .as_array()
@@ -174,16 +177,16 @@ async fn submit_edit_inner(
     let worker = tokio::spawn(run_session_command_reconciler(
         db.node.clone(),
         db.node_identity.clone(),
-        support::fixtures::session_command_agent_snapshot(&db).await,
+        support::fixtures::session_command_agent_snapshot(db).await,
         cancel.clone(),
     ));
-    let access = db.client_access(db.node_identity.as_ref());
+    let access = &fixture.access;
     let result = match steer {
         Some(selected) => {
             submit_pending_user_steer(
-                &access,
-                db.node_identity.as_ref(),
-                AgentRequestAdmissionRecord::client(did),
+                access,
+                &fixture.user,
+                AgentRequestAdmissionRecord::client(fixture.user.did()),
                 None,
                 did,
                 session_id,
@@ -195,9 +198,9 @@ async fn submit_edit_inner(
         }
         None => {
             submit_pending_user_edit(
-                &access,
-                db.node_identity.as_ref(),
-                AgentRequestAdmissionRecord::client(did),
+                access,
+                &fixture.user,
+                AgentRequestAdmissionRecord::client(fixture.user.did()),
                 None,
                 did,
                 session_id,
@@ -218,18 +221,56 @@ pub(super) async fn row(db: &TestDb, doc: &str) -> serde_json::Value {
     rows[0].clone()
 }
 
+async fn row_as(fixture: &support::ManagedAgentFixture, doc: &str) -> serde_json::Value {
+    let response = fixture.access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id content input lifecycle_state failure_reason admission_signature superseded_by_request_doc_id terminal_output }} }}"#,
+        escape_graphql_string(doc),
+    )).await.unwrap();
+    let rows = response["data"]["AgentRequest"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    rows[0].clone()
+}
+
+async fn install_review_skill(db: &TestDb, fixture: &support::ManagedAgentFixture) {
+    use gents::store::config_client::{
+        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+        DesiredStateApplyPlan,
+    };
+    let owner = db.node_identity.did();
+    let selected = fixture.binding.agent_did.as_str();
+    fixture.access.transact_write("test.queue_review_skill", |txn| {
+        Box::pin(async move {
+            let (_, mut agent) = read_desired_state_record_in_txn(
+                txn, gents::Collection::Agent, owner, selected,
+            ).await?.expect("selected Agent");
+            agent["context_id"] = "test-context".into();
+            let documents = [
+                (gents::Collection::Skill, serde_json::json!({
+                    "node_did": owner, "skill_id": "review", "name": "review",
+                    "description": "test", "instructions": "review", "enabled": true,
+                })),
+                (gents::Collection::AgentContext, serde_json::json!({
+                    "node_did": owner, "context_id": "test-context", "skill_ids": ["review"],
+                })),
+                (gents::Collection::Agent, agent),
+            ];
+            let plan = DesiredStateApplyPlan::new(documents.into_iter().map(|(collection, value)| {
+                DesiredStateApplyDocument { collection, add: value.clone(), update: value }
+            }).collect())?;
+            apply_desired_state_plan(txn, &plan).await
+        })
+    }).await.expect("install User-authored review skill");
+}
+
 #[tokio::test]
 async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
     let db = test_db("signed-queue-management").await;
-    let agent = support::managed_agent(&db).await;
+    let fixture = support::managed_agent_fixture(&db).await;
     let did = db.node_identity.did();
-    let access = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    );
+    let access = fixture.access.clone();
     let first = enqueue_owned(
         &db,
-        agent.did(),
+        &fixture,
         "edit-session",
         "edit-first",
         "first original",
@@ -238,16 +279,16 @@ async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
     .await;
     let second = enqueue_owned(
         &db,
-        agent.did(),
+        &fixture,
         "edit-session",
         "edit-second",
         "second original",
         QueueDelivery::Steer,
     )
     .await;
-    let original_first = row(&db, &first).await;
-    let original_second = row(&db, &second).await;
-    let snapshot = pending_user_queue(&access, did, "edit-session", did)
+    let original_first = row_as(&fixture, &first).await;
+    let original_second = row_as(&fixture, &second).await;
+    let snapshot = pending_user_queue(&access, did, "edit-session", fixture.user.did())
         .await
         .unwrap();
     assert_eq!(
@@ -261,6 +302,7 @@ async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
     assert!(snapshot.entries.iter().all(|entry| entry.editable));
     let receipt = submit_edit(
         &db,
+        &fixture,
         "edit-session",
         PendingQueueEdit {
             expected_request_doc_ids: vec![first.clone(), second.clone()],
@@ -286,7 +328,7 @@ async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
         .into_iter()
         .enumerate()
     {
-        let old_after = row(&db, old_id).await;
+        let old_after = row_as(&fixture, old_id).await;
         assert_eq!(old_after["content"], old["content"]);
         assert_eq!(old_after["admission_signature"], old["admission_signature"]);
         assert_eq!(old_after["lifecycle_state"], "superseded");
@@ -294,7 +336,7 @@ async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
             old_after["superseded_by_request_doc_id"],
             receipt.request_doc_ids[index]
         );
-        let replacement = row(&db, &receipt.request_doc_ids[index]).await;
+        let replacement = row_as(&fixture, &receipt.request_doc_ids[index]).await;
         assert_eq!(
             replacement["content"],
             ["second edited", "first edited"][index]
@@ -315,7 +357,7 @@ async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
             *old_id
         );
     }
-    let snapshot = pending_user_queue(&access, did, "edit-session", did)
+    let snapshot = pending_user_queue(&access, did, "edit-session", fixture.user.did())
         .await
         .unwrap();
     assert_eq!(
@@ -333,6 +375,7 @@ async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
         .collect::<Vec<_>>();
     let cancelled = submit_edit(
         &db,
+        &fixture,
         "edit-session",
         PendingQueueEdit {
             expected_request_doc_ids: ids.clone(),
@@ -343,13 +386,15 @@ async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
     .await
     .unwrap();
     assert!(cancelled.request_doc_ids.is_empty());
-    assert!(pending_user_queue(&access, did, "edit-session", did)
-        .await
-        .unwrap()
-        .entries
-        .is_empty());
+    assert!(
+        pending_user_queue(&access, did, "edit-session", fixture.user.did())
+            .await
+            .unwrap()
+            .entries
+            .is_empty()
+    );
     for id in ids {
-        let cancelled = row(&db, &id).await;
+        let cancelled = row_as(&fixture, &id).await;
         assert_eq!(cancelled["lifecycle_state"], "interrupted");
         assert_eq!(
             cancelled["terminal_output"],
@@ -361,25 +406,22 @@ async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
 #[tokio::test]
 async fn stale_queue_snapshot_rejects_edit_without_mutating_signed_requests() {
     let db = test_db("stale-queue-management").await;
-    let agent = support::managed_agent(&db).await;
+    let fixture = support::managed_agent_fixture(&db).await;
     let did = db.node_identity.did();
-    let access = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    );
+    let access = fixture.access.clone();
     let first = enqueue_owned(
         &db,
-        agent.did(),
+        &fixture,
         "stale-session",
         "stale-first",
         "unchanged first",
         QueueDelivery::Queue,
     )
     .await;
-    let before = row(&db, &first).await;
+    let before = row_as(&fixture, &first).await;
     let second = enqueue_owned(
         &db,
-        agent.did(),
+        &fixture,
         "stale-session",
         "stale-second",
         "concurrent append",
@@ -388,6 +430,7 @@ async fn stale_queue_snapshot_rejects_edit_without_mutating_signed_requests() {
     .await;
     let error = submit_edit(
         &db,
+        &fixture,
         "stale-session",
         PendingQueueEdit {
             expected_request_doc_ids: vec![first.clone()],
@@ -402,8 +445,8 @@ async fn stale_queue_snapshot_rejects_edit_without_mutating_signed_requests() {
     .await
     .unwrap_err();
     assert!(error.to_string().contains("queue changed"));
-    assert_eq!(row(&db, &first).await, before);
-    let pending = pending_user_queue(&access, did, "stale-session", did)
+    assert_eq!(row_as(&fixture, &first).await, before);
+    let pending = pending_user_queue(&access, did, "stale-session", fixture.user.did())
         .await
         .unwrap();
     assert_eq!(
@@ -423,19 +466,20 @@ async fn stale_queue_snapshot_rejects_edit_without_mutating_signed_requests() {
 #[tokio::test]
 async fn invalid_edited_attachment_does_not_supersede_the_original() {
     let db = test_db("invalid-edited-attachment").await;
-    let agent = support::managed_agent(&db).await;
+    let fixture = support::managed_agent_fixture(&db).await;
     let original = enqueue_owned(
         &db,
-        agent.did(),
+        &fixture,
         "invalid-edit-session",
         "invalid-edit-original",
         "original message",
         QueueDelivery::Queue,
     )
     .await;
-    let before = row(&db, &original).await;
+    let before = row_as(&fixture, &original).await;
     let result = submit_edit(
         &db,
+        &fixture,
         "invalid-edit-session",
         PendingQueueEdit {
             expected_request_doc_ids: vec![original.clone()],
@@ -456,25 +500,26 @@ async fn invalid_edited_attachment_does_not_supersede_the_original() {
     )
     .await;
     assert!(result.is_err());
-    assert_eq!(row(&db, &original).await, before);
+    assert_eq!(row_as(&fixture, &original).await, before);
 }
 
 #[tokio::test]
 async fn edited_skill_outside_context_does_not_supersede_the_original() {
     let db = test_db("invalid-edited-skill").await;
-    let agent = support::managed_agent(&db).await;
+    let fixture = support::managed_agent_fixture(&db).await;
     let original = enqueue_owned(
         &db,
-        agent.did(),
+        &fixture,
         "invalid-skill-session",
         "original",
         "original message",
         QueueDelivery::Queue,
     )
     .await;
-    let before = row(&db, &original).await;
+    let before = row_as(&fixture, &original).await;
     let error = submit_edit(
         &db,
+        &fixture,
         "invalid-skill-session",
         PendingQueueEdit {
             expected_request_doc_ids: vec![original.clone()],
@@ -492,17 +537,17 @@ async fn edited_skill_outside_context_does_not_supersede_the_original() {
     .await
     .unwrap_err();
     assert!(error.to_string().contains("skill"));
-    assert_eq!(row(&db, &original).await, before);
+    assert_eq!(row_as(&fixture, &original).await, before);
 }
 
 #[tokio::test]
 async fn authored_edit_keeps_queue_slot_and_retains_new_attachment_bytes() {
     let db = test_db("authored-queue-edit").await;
-    let agent = support::managed_agent(&db).await;
+    let fixture = support::managed_agent_fixture(&db).await;
     let did = db.node_identity.did();
     let original = enqueue_owned(
         &db,
-        agent.did(),
+        &fixture,
         "authored-edit-session",
         "authored-original",
         "original",
@@ -516,6 +561,7 @@ async fn authored_edit_keeps_queue_slot_and_retains_new_attachment_bytes() {
     };
     let receipt = submit_edit(
         &db,
+        &fixture,
         "authored-edit-session",
         PendingQueueEdit {
             expected_request_doc_ids: vec![original.clone()],
@@ -533,8 +579,11 @@ async fn authored_edit_keeps_queue_slot_and_retains_new_attachment_bytes() {
     .await
     .unwrap();
     assert_eq!(receipt.request_doc_ids.len(), 1);
-    assert_eq!(row(&db, &original).await["lifecycle_state"], "superseded");
-    let replacement = row(&db, &receipt.request_doc_ids[0]).await;
+    assert_eq!(
+        row_as(&fixture, &original).await["lifecycle_state"],
+        "superseded"
+    );
+    let replacement = row_as(&fixture, &receipt.request_doc_ids[0]).await;
     let input: gents_protocol::request_input::RequestInput =
         serde_json::from_value(replacement["input"].clone()).unwrap();
     assert_eq!(input.attachments, vec![attachment]);
@@ -543,13 +592,10 @@ async fn authored_edit_keeps_queue_slot_and_retains_new_attachment_bytes() {
         original
     );
     let pending = pending_user_queue(
-        &ConfigAccess::local_as(
-            db.node.clone(),
-            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-        ),
+        &fixture.access,
         did,
         "authored-edit-session",
-        did,
+        fixture.user.did(),
     )
     .await
     .unwrap();
@@ -562,29 +608,13 @@ async fn authored_edit_keeps_queue_slot_and_retains_new_attachment_bytes() {
 #[tokio::test]
 async fn authored_edit_changes_allowed_skills_without_losing_queue_position() {
     let db = test_db("allowed-edited-skill").await;
-    let agent = support::managed_agent(&db).await;
+    let fixture = support::managed_agent_fixture(&db).await;
     let did = db.node_identity.did();
-    let access = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    );
-    let owner = escape_graphql_string(did);
-    let selected = escape_graphql_string(agent.did());
-    let context = access.write("test.skill_context", &format!(r#"mutation {{ create_AgentContext(input: {{ node_did: "{owner}", context_id: "test-context", skill_ids: ["review"] }}) {{ _docID }} }}"#)).await.unwrap();
-    let context_doc = gents::store::graphql::created_doc_id(&context, "AgentContext").unwrap();
-    access
-        .add_actor_relationship(
-            "AgentContext",
-            &context_doc,
-            "reader",
-            &::identity::Did::new(agent.did()).unwrap(),
-        )
-        .await
-        .unwrap();
-    access.write("test.attach_context", &format!(r#"mutation {{ update_Agent(filter: {{ node_did: {{ _eq: "{owner}" }}, agent_did: {{ _eq: "{selected}" }} }}, input: {{ context_id: "test-context" }}) {{ _docID }} }}"#)).await.unwrap();
+    let access = fixture.access.clone();
+    install_review_skill(&db, &fixture).await;
     let original = enqueue_owned(
         &db,
-        agent.did(),
+        &fixture,
         "allowed-skill-session",
         "original",
         "original message",
@@ -593,6 +623,7 @@ async fn authored_edit_changes_allowed_skills_without_losing_queue_position() {
     .await;
     let receipt = submit_edit(
         &db,
+        &fixture,
         "allowed-skill-session",
         PendingQueueEdit {
             expected_request_doc_ids: vec![original.clone()],
@@ -609,7 +640,7 @@ async fn authored_edit_changes_allowed_skills_without_losing_queue_position() {
     )
     .await
     .unwrap();
-    let pending = pending_user_queue(&access, did, "allowed-skill-session", did)
+    let pending = pending_user_queue(&access, did, "allowed-skill-session", fixture.user.did())
         .await
         .unwrap();
     assert_eq!(pending.entries.len(), 1);
@@ -618,7 +649,7 @@ async fn authored_edit_changes_allowed_skills_without_losing_queue_position() {
         receipt.request_doc_ids[0]
     );
     assert_eq!(pending.entries[0].selected_skill_ids, ["review"]);
-    let replacement = row(&db, &receipt.request_doc_ids[0]).await;
+    let replacement = row_as(&fixture, &receipt.request_doc_ids[0]).await;
     let input: gents_protocol::request_input::RequestInput =
         serde_json::from_value(replacement["input"].clone()).unwrap();
     assert_eq!(
@@ -630,29 +661,13 @@ async fn authored_edit_changes_allowed_skills_without_losing_queue_position() {
 #[tokio::test]
 async fn queued_edit_accepts_skill_only_but_rejects_truly_empty_input() {
     let db = test_db("skill-only-queue-edit").await;
-    let agent = support::managed_agent(&db).await;
+    let fixture = support::managed_agent_fixture(&db).await;
     let did = db.node_identity.did();
-    let access = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    );
-    let owner = escape_graphql_string(did);
-    let selected = escape_graphql_string(agent.did());
-    let context = access.write("test.skill_context", &format!(r#"mutation {{ create_AgentContext(input: {{ node_did: "{owner}", context_id: "test-context", skill_ids: ["review"] }}) {{ _docID }} }}"#)).await.unwrap();
-    let context_doc = gents::store::graphql::created_doc_id(&context, "AgentContext").unwrap();
-    access
-        .add_actor_relationship(
-            "AgentContext",
-            &context_doc,
-            "reader",
-            &::identity::Did::new(agent.did()).unwrap(),
-        )
-        .await
-        .unwrap();
-    access.write("test.attach_context", &format!(r#"mutation {{ update_Agent(filter: {{ node_did: {{ _eq: "{owner}" }}, agent_did: {{ _eq: "{selected}" }} }}, input: {{ context_id: "test-context" }}) {{ _docID }} }}"#)).await.unwrap();
+    let access = fixture.access.clone();
+    install_review_skill(&db, &fixture).await;
     let original = enqueue_owned(
         &db,
-        agent.did(),
+        &fixture,
         "skill-only-session",
         "original",
         "original message",
@@ -671,14 +686,19 @@ async fn queued_edit_accepts_skill_only_but_rejects_truly_empty_input() {
             }),
         }],
     };
-    let error = submit_edit(&db, "skill-only-session", edit(vec![]))
+    let error = submit_edit(&db, &fixture, "skill-only-session", edit(vec![]))
         .await
         .unwrap_err();
     assert!(error.to_string().contains("A message cannot be empty"));
-    let receipt = submit_edit(&db, "skill-only-session", edit(vec!["review".into()]))
-        .await
-        .unwrap();
-    let pending = pending_user_queue(&access, did, "skill-only-session", did)
+    let receipt = submit_edit(
+        &db,
+        &fixture,
+        "skill-only-session",
+        edit(vec!["review".into()]),
+    )
+    .await
+    .unwrap();
+    let pending = pending_user_queue(&access, did, "skill-only-session", fixture.user.did())
         .await
         .unwrap();
     assert_eq!(pending.entries.len(), 1);
@@ -688,7 +708,7 @@ async fn queued_edit_accepts_skill_only_but_rejects_truly_empty_input() {
     );
     assert_eq!(pending.entries[0].content, "");
     assert_eq!(pending.entries[0].selected_skill_ids, ["review"]);
-    let replacement = row(&db, &receipt.request_doc_ids[0]).await;
+    let replacement = row_as(&fixture, &receipt.request_doc_ids[0]).await;
     let input: gents_protocol::request_input::RequestInput =
         serde_json::from_value(replacement["input"].clone()).unwrap();
     assert_eq!(
@@ -700,15 +720,12 @@ async fn queued_edit_accepts_skill_only_but_rejects_truly_empty_input() {
 #[tokio::test]
 async fn signed_pending_replacement_authenticates_delivery_and_each_position_field() {
     let db = test_db("queue-signature-tampering").await;
-    let agent = support::managed_agent(&db).await;
+    let fixture = support::managed_agent_fixture(&db).await;
     let _did = db.node_identity.did();
-    let access = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    );
+    let access = fixture.access.clone();
     let original = enqueue_owned(
         &db,
-        agent.did(),
+        &fixture,
         "signature-session",
         "signature-original",
         "original signed message",
@@ -717,6 +734,7 @@ async fn signed_pending_replacement_authenticates_delivery_and_each_position_fie
     .await;
     let receipt = submit_edit(
         &db,
+        &fixture,
         "signature-session",
         PendingQueueEdit {
             expected_request_doc_ids: vec![original.clone()],
@@ -744,7 +762,7 @@ async fn signed_pending_replacement_authenticates_delivery_and_each_position_fie
     assert_eq!(rows.len(), 1);
     let signed = &rows[0];
     gents::verify_request_receipt_signature(signed)
-        .expect("the actual replacement signed by the node must authenticate");
+        .expect("the actual replacement signed by the user must authenticate");
     let queue = signed.input.as_ref().unwrap().queue.as_ref().unwrap();
     assert_eq!(queue.delivery, QueueDelivery::Steer);
     let position = queue.position.as_ref().unwrap();
@@ -802,7 +820,7 @@ async fn signed_pending_replacement_authenticates_delivery_and_each_position_fie
 #[tokio::test]
 async fn explicit_steering_prioritizes_one_message_without_losing_other_queued_input() {
     let db = test_db("explicit-pending-steer").await;
-    let agent = support::managed_agent(&db).await;
+    let fixture = support::managed_agent_fixture(&db).await;
     let did = db.node_identity.did();
     let session = "explicit-pending-steer-session";
     let mut originals = Vec::new();
@@ -811,24 +829,21 @@ async fn explicit_steering_prioritizes_one_message_without_losing_other_queued_i
         ("second", "Keep second queued"),
         ("selected", "Steer this message"),
     ] {
-        originals.push(
-            enqueue_owned(&db, agent.did(), session, id, content, QueueDelivery::Queue).await,
-        );
+        originals
+            .push(enqueue_owned(&db, &fixture, session, id, content, QueueDelivery::Queue).await);
     }
-    let access = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    );
-    let snapshot = pending_user_queue(&access, did, session, did)
+    let access = fixture.access.clone();
+    let snapshot = pending_user_queue(&access, did, session, fixture.user.did())
         .await
         .unwrap();
     let target = originals[2].clone();
     let edit = pending_steer_edit(&snapshot, originals.clone(), &target).unwrap();
-    let original_rows = futures::future::join_all(originals.iter().map(|id| row(&db, id))).await;
-    let receipt = submit_edit_inner(&db, session, edit.clone(), Some(&target))
+    let original_rows =
+        futures::future::join_all(originals.iter().map(|id| row_as(&fixture, id))).await;
+    let receipt = submit_edit_inner(&db, &fixture, session, edit.clone(), Some(&target))
         .await
         .unwrap();
-    let pending = pending_user_queue(&access, did, session, did)
+    let pending = pending_user_queue(&access, did, session, fixture.user.did())
         .await
         .unwrap();
     assert_eq!(
@@ -860,16 +875,18 @@ async fn explicit_steering_prioritizes_one_message_without_losing_other_queued_i
         receipt.request_doc_ids.iter().collect::<Vec<_>>()
     );
     for (id, original) in originals.iter().zip(&original_rows) {
-        let current = row(&db, id).await;
+        let current = row_as(&fixture, id).await;
         assert_eq!(current["lifecycle_state"], "superseded");
         for key in ["content", "input", "admission_signature"] {
             assert_eq!(current[key], original[key]);
         }
     }
-    assert!(submit_edit_inner(&db, session, edit, Some(&target))
-        .await
-        .is_err());
-    let after_retry = pending_user_queue(&access, did, session, did)
+    assert!(
+        submit_edit_inner(&db, &fixture, session, edit, Some(&target))
+            .await
+            .is_err()
+    );
+    let after_retry = pending_user_queue(&access, did, session, fixture.user.did())
         .await
         .unwrap();
     assert_eq!(
