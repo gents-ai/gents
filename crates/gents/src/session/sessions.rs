@@ -1078,3 +1078,279 @@ mod relationship_publication_tests {
         node.shutdown().await.unwrap();
     }
 }
+
+#[cfg(test)]
+mod invoke_session_isolation_tests {
+    use std::sync::Arc;
+
+    use crate::lean_vocab_test::{
+        lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
+    };
+    use crate::store::config_client::{ConfigAccess, NodePermission};
+    use crate::store::identity::NodeIdentity;
+
+    async fn create_session(
+        access: &ConfigAccess,
+        session: &str,
+        target_doc: &str,
+        node_did: &str,
+        target_did: &str,
+    ) -> anyhow::Result<String> {
+        access.transact_write("test.invoke.session", |txn| Box::pin(async move {
+            let result = txn.execute_with_variables(
+                "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                &serde_json::json!({"input":{"node_did":node_did, "session_id":session,
+                    "requester_did":txn.actor_did(), "agent_did":target_did}}),
+            ).await?;
+            let doc = crate::store::graphql::created_doc_id(&result, "AgentSession")?;
+            super::stage_session_relationships_in_txn(txn, &doc, target_doc, &identity::Did::new(target_did)?).await?;
+            Ok::<_, anyhow::Error>(doc)
+        })).await
+    }
+
+    async fn visible(access: &ConfigAccess, doc: &str) -> anyhow::Result<bool> {
+        let doc = crate::store::graphql::escape_graphql_string(doc);
+        let response = access
+            .execute(&format!(
+                "{{ AgentSession(filter: {{_docID: {{_eq: \"{doc}\"}}}}) {{_docID}} }}"
+            ))
+            .await?;
+        Ok(response["data"]["AgentSession"]
+            .as_array()
+            .is_some_and(|rows| rows.len() == 1))
+    }
+
+    #[tokio::test]
+    async fn invoke_only_agent_creates_own_session_without_access_to_other_sessions(
+    ) -> anyhow::Result<()> {
+        let model = lean_identity_household_cases()
+            .iter()
+            .find(|case| case.name == "user-node-agents-mixed-session-ownership-policy-followup")
+            .expect("household model");
+        let modeled_actor = |id: &str| {
+            model
+                .relations
+                .iter()
+                .find_map(|relation| {
+                    if relation.resource == "agents"
+                        && relation.id == id
+                        && relation.relation == "executor"
+                    {
+                        if let LeanIdentitySubject::Actor { actor } = &relation.subject {
+                            return Some(actor.as_str());
+                        }
+                    }
+                    None
+                })
+                .expect("modeled Agent executor")
+        };
+        let caller_model = modeled_actor("general");
+        let target_model = modeled_actor("sibling");
+        let expected = |actor: &str, resource: &str, id: &str, permission: &str| {
+            model
+                .invoke_session_actions
+                .iter()
+                .find_map(|action| match action {
+                    LeanIdentityAction::Check {
+                        actor: a,
+                        resource: r,
+                        id: i,
+                        permission: p,
+                        expected,
+                    } if a == actor && r == resource && i == id && p == permission => {
+                        Some(*expected)
+                    }
+                    _ => None,
+                })
+                .expect("modeled invoke/session observation")
+        };
+        let directory = tempfile::tempdir()?;
+        let root_path = directory.path().join("root");
+        let root = crate::KeyIdentity::load_or_create(&root_path, None)?;
+        let key = crate::store::identity::load_file_identity(&root_path)?.private_key_bytes();
+        let caller_binding = crate::store::identity::provision_agent_identity(&root)?;
+        let target_binding = crate::store::identity::provision_agent_identity(&root)?;
+        let caller = crate::store::identity::resolve_agent_identity(&root, &caller_binding)?;
+        let target = crate::store::identity::resolve_agent_identity(&root, &target_binding)?;
+        let node = Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(root.did())
+                .with_node_acp_owner(root.did().to_owned())
+                .with_signing_key(defra_node::SigningKey::Ed25519(key))
+                .build()
+                .await?,
+        );
+        let root_context =
+            defra_core::RequestContext::default().with_identity(Some(root.did().to_owned()));
+        let policy = node
+            .add_dac_policy_with_counter_as(&root_context, &model.policy_yaml, 0)
+            .await?;
+        let policy_id = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+        node.add_collection_as(
+            &root_context,
+            &gents_protocol::schemas::AGENT.replace(policy_id, &policy),
+        )
+        .await?;
+        node.add_collection_as(
+            &root_context,
+            &gents_protocol::schemas::AGENT_SESSION.replace(policy_id, &policy),
+        )
+        .await?;
+        let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(root.did())?);
+        for actor in [caller.did(), target.did()] {
+            for permission in [
+                NodePermission::DocumentRead,
+                NodePermission::DocumentUpdate,
+                NodePermission::CollectionGet,
+                NodePermission::DacRelationAdd,
+                NodePermission::DacRelationDelete,
+            ] {
+                owner
+                    .grant_node_permission(&identity::Did::new(actor)?, permission)
+                    .await?;
+            }
+        }
+        let caller_access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            caller.did().parse()?,
+            caller.as_ref(),
+        )?;
+        let target_access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            target.did().parse()?,
+            target.as_ref(),
+        )?;
+        let target_doc = owner.transact_write("test.invoke.target", |txn| Box::pin(async {
+            let caller_result = txn.execute_with_variables(
+                "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                &serde_json::json!({"input":{"node_did":root.did(), "agent_did":caller.did(), "creation_nonce":caller_binding.creation_nonce, "enabled":true}}),
+            ).await?;
+            crate::store::graphql::created_doc_id(&caller_result, "Agent")?;
+            let result = txn.execute_with_variables(
+                "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                &serde_json::json!({"input":{"node_did":root.did(), "agent_did":target.did(), "creation_nonce":target_binding.creation_nonce, "enabled":true}}),
+            ).await?;
+            let doc = crate::store::graphql::created_doc_id(&result, "Agent")?;
+            txn.add_actor_relationship("Agent", &doc, "session_writer", &identity::Did::new(caller.did())?).await?;
+            txn.add_actor_relationship("Agent", &doc, "executor", &identity::Did::new(target.did())?).await?;
+            Ok::<_, anyhow::Error>(doc)
+        })).await?;
+        let invoke = owner
+            .transact_readonly("test.invoke.permission", |txn| {
+                let target_doc = &target_doc;
+                let caller = &caller;
+                Box::pin(async move {
+                    txn.observe_document_access(
+                        &identity::Did::new(caller.did())?,
+                        "Agent",
+                        std::slice::from_ref(target_doc),
+                        defra_node::DocumentAccessMode::Named {
+                            permission: "invoke".into(),
+                            node_permission: acp::nac::NodePermission::DocumentUpdate,
+                        },
+                    )
+                    .await
+                    .map_err(anyhow::Error::from)
+                })
+            })
+            .await?;
+        assert_eq!(
+            matches!(
+                invoke.as_slice(),
+                [defra_node::DocumentAccessDecision::Allowed]
+            ),
+            expected(caller_model, "agents", "sibling", "invoke")
+        );
+        let existing = create_session(
+            &owner,
+            "other-session",
+            &target_doc,
+            root.did(),
+            target.did(),
+        )
+        .await?;
+        let child = create_session(
+            &caller_access,
+            "own-child",
+            &target_doc,
+            root.did(),
+            target.did(),
+        )
+        .await?;
+        assert_eq!(
+            visible(&caller_access, &existing).await?,
+            expected(caller_model, "sessions", "sibling-session", "read")
+        );
+        assert_eq!(
+            visible(&caller_access, &child).await?,
+            expected(caller_model, "sessions", "nested-session", "read")
+        );
+        assert_eq!(
+            visible(&target_access, &existing).await?,
+            expected(target_model, "sessions", "sibling-session", "read")
+        );
+        let reader_cases: Vec<bool> = model
+            .invoke_session_actions
+            .iter()
+            .filter_map(|action| match action {
+                LeanIdentityAction::Check {
+                    actor,
+                    resource,
+                    id,
+                    permission,
+                    expected,
+                } if actor == caller_model
+                    && resource == "sessions"
+                    && id == "sibling-session"
+                    && permission == "read" =>
+                {
+                    Some(*expected)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            reader_cases.len(),
+            3,
+            "modeled direct session reader lifecycle"
+        );
+        let caller_did = identity::Did::new(caller.did())?;
+        owner
+            .add_actor_relationship("AgentSession", &existing, "reader", &caller_did)
+            .await?;
+        assert_eq!(visible(&caller_access, &existing).await?, reader_cases[1]);
+        owner
+            .delete_actor_relationship("AgentSession", &existing, "reader", &caller_did)
+            .await?;
+        assert_eq!(visible(&caller_access, &existing).await?, reader_cases[2]);
+        let denied = caller_access.write("test.invoke.unrelated_update", &format!(
+            "mutation {{ update_AgentSession(docID: \"{}\", input: {{archived_at: \"2026-01-01T00:00:00Z\"}}) {{_docID}} }}",
+            crate::store::graphql::escape_graphql_string(&existing),
+        )).await;
+        let applied = denied
+            .as_ref()
+            .ok()
+            .and_then(|v| v["data"]["update_AgentSession"].as_array())
+            .is_some_and(|rows| !rows.is_empty());
+        assert_eq!(
+            applied,
+            expected(caller_model, "sessions", "sibling-session", "update")
+        );
+        let owners = caller_access
+            .transact_readonly("test.invoke.child_owner", |txn| {
+                let child = &child;
+                Box::pin(async move {
+                    txn.document_owners("AgentSession", std::slice::from_ref(child))
+                        .await
+                        .map_err(anyhow::Error::from)
+                })
+            })
+            .await?;
+        assert_eq!(
+            owners[0].owner.as_ref().map(|did| did.as_str()),
+            Some(caller.did())
+        );
+        node.shutdown().await?;
+        Ok(())
+    }
+}

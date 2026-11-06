@@ -583,6 +583,7 @@ def json : Json := Json.mkObj
    ("policy_registrations", toJson policyRegistrations),
    ("task_checkpoint_cases", toJson taskCheckpointCases),
    ("self_config_actions", toJson (traceJson initial selfConfigChanges)),
+   ("invoke_session_actions", toJson (traceJson initial invokeOnlySessionActions)),
    ("self_config_lookup_cases", toJson (selfConfigLookupCases.map fun (name, attempt) =>
      selfConfigLookupCaseJson name attempt)),
    ("actions", toJson (traceJson initial (nodeAdministratorChanges ++ runtimeReaderChanges ++ invokeChanges ++ invokeOnlySessionActions ++ requestSessionChanges ++ receiptAuthorChanges ++ matrix ++ managementChanges ++ selfConfigChanges ++ changes)))]

@@ -491,6 +491,8 @@ pub(crate) struct LeanIdentityHouseholdCase {
     #[serde(default)]
     pub(crate) task_checkpoint_cases: Vec<LeanTaskCheckpointCase>,
     pub(crate) self_config_actions: Vec<LeanIdentityAction>,
+    #[serde(default)]
+    pub(crate) invoke_session_actions: Vec<LeanIdentityAction>,
     pub(crate) self_config_lookup_cases: Vec<LeanSelfConfigLookupCase>,
     pub(crate) actions: Vec<LeanIdentityAction>,
     #[serde(default)]
