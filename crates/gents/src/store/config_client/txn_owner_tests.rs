@@ -2491,7 +2491,11 @@ async fn signed_statement_conflict_rebuilds_only_after_successful_discard() {
 
 #[tokio::test]
 async fn ambiguous_signed_conflict_does_not_rebuild() {
-    for first_commit in [FirstCommit::Conflict, FirstCommit::CanonicalUnconfirmed] {
+    for first_commit in [
+        FirstCommit::Conflict,
+        FirstCommit::CanonicalUnconfirmed,
+        FirstCommit::ServerError,
+    ] {
         let (endpoint, state, server) = fake_transaction_server(first_commit).await;
         let access = held_fake_access(endpoint).await;
         let attempts = Arc::new(AtomicUsize::new(0));
