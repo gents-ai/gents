@@ -286,14 +286,30 @@ impl ToolCallLifecycle {
         )
         .await?;
 
-        ToolCallLifecycle::load_by_doc_id(
-            self.node.clone(),
-            &created,
-            &self.node_did,
-            &self.session_id,
-            self.requester_did.as_deref(),
-        )
-        .await?
-        .context("spawned admission created child could not be rehydrated by physical provenance")
+        let access = self.access()?;
+        let node = self.node.clone();
+        let node_did = &self.node_did;
+        let session_id = &self.session_id;
+        let requester_did = self.requester_did.as_deref();
+        access
+            .transact_readonly("tool_call.rehydrate_spawned_background", |txn| {
+                let node = node.clone();
+                let created = &created;
+                Box::pin(async move {
+                    ToolCallLifecycle::load_by_doc_id_in_txn(
+                        txn,
+                        node,
+                        created,
+                        node_did,
+                        session_id,
+                        requester_did,
+                    )
+                    .await
+                })
+            })
+            .await?
+            .context(
+                "spawned admission created child could not be rehydrated by physical provenance",
+            )
     }
 }
