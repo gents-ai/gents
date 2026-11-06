@@ -1477,8 +1477,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     .unwrap();
     assert_eq!(all, stale);
     let identity =
-        crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
-            .unwrap();
+        crate::KeyIdentity::load_existing(message.admission.path.join("node.key"), None).unwrap();
     let mut worker = crate::tools::call::lifecycle::admission_fixture::claimed_signed_request_with_trigger_correlation(
         &node, "trigger-worker-request", "correlated-worker", &identity, None,
         Some("shard-assignment"), Some("R3a"),
@@ -1689,8 +1688,7 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
     let caller = request.request();
     let caller_access = admission.tool.access().unwrap();
     let signer = caller_access.managed_agent_signer().unwrap();
-    let root =
-        crate::KeyIdentity::load_or_create(admission.path.join("test-agent.key"), None).unwrap();
+    let root = crate::KeyIdentity::load_existing(admission.path.join("node.key"), None).unwrap();
     let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
     let target = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
     let agent_input = serde_json::json!({

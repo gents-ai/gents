@@ -256,7 +256,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
                 let key_path = fixture.path.join("foreign-projection.key");
                 Some(
                     tokio::task::spawn_blocking(move || {
-                        crate::store::identity::KeyIdentity::load_or_create(key_path, None)
+                        crate::store::identity::KeyIdentity::load_existing(key_path, None)
                     })
                     .await
                     .unwrap()
@@ -563,9 +563,9 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             &before_later_parent_work,
             &[(origin_tool.doc_id().unwrap(), 90)],
         );
-        let key_path = fixture.path.join("test-agent.key");
+        let key_path = fixture.path.join("node.key");
         let identity =
-            tokio::task::spawn_blocking(move || crate::KeyIdentity::load_or_create(key_path, None))
+            tokio::task::spawn_blocking(move || crate::KeyIdentity::load_existing(key_path, None))
                 .await
                 .unwrap()
                 .unwrap();

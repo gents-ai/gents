@@ -1821,7 +1821,7 @@ pub(super) mod tests {
             "watcher selection must not preclaim the wake"
         );
         let identity: Arc<dyn NodeIdentity> = Arc::new(
-            KeyIdentity::load_or_create(admission.path.join("test-agent.key"), None)
+            KeyIdentity::load_existing(admission.path.join("node.key"), None)
                 .expect("load the signed fixture's original identity"),
         );
         let signer = admission

@@ -237,12 +237,24 @@ pub(crate) mod test_support {
         crate::store::config_client::ConfigAccess,
         gents_protocol::agent_identity::AgentIdentityBinding,
     ) {
+        let db = crate::support::test_db(name).await;
+        signed_test_node_from_db(db, name).await
+    }
+
+    pub(crate) async fn signed_test_node_from_db(
+        db: crate::support::TestDb,
+        name: &str,
+    ) -> (
+        crate::support::TestDb,
+        crate::KeyIdentity,
+        crate::store::config_client::ConfigAccess,
+        gents_protocol::agent_identity::AgentIdentityBinding,
+    ) {
         use crate::store::config_client::{
             ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
         };
         use crate::store::identity::NodeIdentity;
 
-        let db = crate::support::test_db(name).await;
         let fixture_name = name.to_owned();
         let user = tokio::task::spawn_blocking(move || {
             crate::support::fixtures::test_identity(&fixture_name)

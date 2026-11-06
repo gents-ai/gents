@@ -16,8 +16,7 @@ async fn published_job_row(name: &str) -> PublishedAdmission {
     })
     .await
     .unwrap();
-    let root =
-        crate::KeyIdentity::load_existing(admission.path.join("test-agent.key"), None).unwrap();
+    let root = crate::KeyIdentity::load_existing(admission.path.join("node.key"), None).unwrap();
     assert_eq!(root.did(), admission.node_did);
     let agent = crate::load_agent(&admission.node, admission.tool.actor().as_str())
         .await

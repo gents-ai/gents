@@ -552,7 +552,7 @@ mod tests {
             super::super::agent_tools_tests::started("agent-session-inspection").await;
         let node = message.admission.node.clone();
         let identity =
-            crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
+            crate::KeyIdentity::load_existing(message.admission.path.join("node.key"), None)
                 .unwrap();
         let caller_access = message.admission.tool.access().unwrap();
         let signer = caller_access.managed_agent_signer().unwrap();

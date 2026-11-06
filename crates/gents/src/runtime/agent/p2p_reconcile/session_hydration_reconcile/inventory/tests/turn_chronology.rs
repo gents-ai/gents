@@ -101,9 +101,9 @@ async fn check_turn_chronology(retry: bool) {
     })
     .await
     .unwrap();
-    let key_path = fixture.path.join("test-agent.key");
+    let key_path = fixture.path.join("node.key");
     let signer =
-        tokio::task::spawn_blocking(move || crate::KeyIdentity::load_or_create(key_path, None))
+        tokio::task::spawn_blocking(move || crate::KeyIdentity::load_existing(key_path, None))
             .await
             .unwrap()
             .unwrap();

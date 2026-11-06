@@ -801,7 +801,7 @@ mod turn_assignment_tests {
             "the Node cannot substitute for the held Agent"
         );
         let runtime = Arc::new(
-            crate::KeyIdentity::load_or_create(admission.path.join("test-agent.key"), None)
+            crate::KeyIdentity::load_existing(admission.path.join("node.key"), None)
                 .expect("open the retained fixture runtime identity"),
         );
         crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(

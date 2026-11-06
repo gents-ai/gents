@@ -151,8 +151,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let identity: Arc<dyn NodeIdentity> = Arc::new(
-        crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
-            .unwrap(),
+        crate::KeyIdentity::load_existing(message.admission.path.join("node.key"), None).unwrap(),
     );
     let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
@@ -362,8 +361,7 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
         .unwrap();
 
     let identity: Arc<dyn NodeIdentity> = Arc::new(
-        crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
-            .unwrap(),
+        crate::KeyIdentity::load_existing(message.admission.path.join("node.key"), None).unwrap(),
     );
     let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
