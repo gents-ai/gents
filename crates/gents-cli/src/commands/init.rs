@@ -2188,6 +2188,17 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["auth_kind"], "credential");
         assert!(!rows[0].to_string().contains("unused-init-test-key"));
+        let bundle = crate::build_config_export_bundle(&access, identity.did()).await?;
+        assert_eq!(bundle.config.inference_backends.len(), 1);
+        assert!(matches!(
+            &bundle.config.inference_backends[0].auth,
+            gents::documents::BackendAuth::Credential { .. }
+        ));
+        assert!(!serde_json::to_string(&bundle)?.contains("unused-init-test-key"));
+        let desired = crate::desired_state::manifest_from_export_bundle(&bundle)?;
+        assert!(crate::build_desired_state_live_bundle(&access, &desired)
+            .await?
+            .is_some());
         for field in ["auth", "catalogs", "probe_status", "last_probe"] {
             assert!(
                 access
