@@ -280,6 +280,9 @@ async fn test_publisher() -> (NodeReadinessPublisherOwner, NodeReadinessPublishe
         .node_identity_did()
         .expect("fixture node has an identity")
         .to_owned();
+    // Readiness is published under the Node document; production creates it
+    // through the runtime owner's signed access before the publisher starts.
+    crate::test_support::ensure_test_node(&node, &node_did).await;
     NodeReadinessPublisherHandle::start(node, node_did)
 }
 

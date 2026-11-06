@@ -26,19 +26,24 @@ async fn supervision_restarts_panicking_behavior_while_sibling_continues() {
         ),
     ];
 
+    // Agent DIDs derive from each identity, so the panicking behavior is
+    // selected by its fixture DID rather than its profile name.
+    let panic_did = agents[0].agent_did.clone();
     let runner = {
+        let panic_did = panic_did.clone();
         let panic_attempts = panic_attempts.clone();
         let sibling_ticks = sibling_ticks.clone();
         let panic_attempt_tx = panic_attempt_tx.clone();
         let sibling_tick_tx = sibling_tick_tx.clone();
         move |behavior: Arc<crate::inference::resolved::ResolvedAgent>,
               mut shutdown: watch::Receiver<bool>| {
+            let panic_did = panic_did.clone();
             let panic_attempts = panic_attempts.clone();
             let sibling_ticks = sibling_ticks.clone();
             let panic_attempt_tx = panic_attempt_tx.clone();
             let sibling_tick_tx = sibling_tick_tx.clone();
             async move {
-                if behavior.agent_did == "panic-profile" {
+                if behavior.agent_did == panic_did {
                     let attempt = panic_attempts.fetch_add(1, Ordering::SeqCst);
                     panic_attempt_tx.send_replace(attempt + 1);
                     if attempt < 2 {

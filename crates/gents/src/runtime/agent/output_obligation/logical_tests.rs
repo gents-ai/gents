@@ -10,9 +10,38 @@ use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
 use std::{sync::Arc, time::Duration};
 
-async fn persist_request(node: &Arc<EmbeddedNode>, create: &AgentRequestCreate) -> AgentRequestRow {
+/// A Node whose runtime root is `root`. Agents derived from `root` are then the
+/// Node's own Agents, and their rows are written through their managed signer.
+async fn rooted_node(root: &KeyIdentity) -> Arc<EmbeddedNode> {
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(root.did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    node
+}
+
+/// An Agent DID derives from the runtime root and a creation nonce.
+fn derived_agent(root: &KeyIdentity) -> Arc<dyn NodeIdentity> {
+    let binding = crate::store::identity::provision_agent_identity(root).unwrap();
+    crate::store::identity::resolve_agent_identity(root, &binding).unwrap()
+}
+
+async fn persist_request(
+    node: &Arc<EmbeddedNode>,
+    agent: &dyn NodeIdentity,
+    create: &AgentRequestCreate,
+) -> AgentRequestRow {
     let actor = identity::Did::new(&create.agent_did).unwrap();
-    let access = crate::ConfigAccess::local_as(node.clone(), actor.clone());
+    let access = crate::ConfigAccess::local_with_optional_agent_signer(
+        node.clone(),
+        actor.clone(),
+        agent.managed_agent_signer(),
+    )
+    .unwrap();
     let session = escape_graphql_string(&create.session_id);
     let node_did = escape_graphql_string(&create.node_did);
     let existing = access.execute(&format!(
@@ -69,6 +98,7 @@ async fn persist_request(node: &Arc<EmbeddedNode>, create: &AgentRequestCreate) 
 
 async fn claimed(
     node: &Arc<EmbeddedNode>,
+    agent: &dyn NodeIdentity,
     request: &AgentRequestRow,
     previous: Option<(RequestLifecycle, Option<String>)>,
 ) -> RequestLifecycle {
@@ -95,6 +125,9 @@ async fn claimed(
         request.clone().try_into().unwrap(),
         60,
     );
+    if agent.managed_agent_signer().is_some() {
+        lifecycle.bind_managed_agent(agent).unwrap();
+    }
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     lifecycle
 }
@@ -196,10 +229,9 @@ async fn terminalize_accepted_tool(
 #[tokio::test]
 async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
     for interrupted in [true, false] {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(&node).await.unwrap();
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
+        let node = rooted_node(&identity).await;
         let now = chrono::Utc::now();
         let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let valid_until =
@@ -225,8 +257,8 @@ async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
         crate::sign_agent_request_create(&identity, &mut create)
             .await
             .unwrap();
-        let row = persist_request(&node, &create).await;
-        let mut lifecycle = claimed(&node, &row, None).await;
+        let row = persist_request(&node, &identity, &create).await;
+        let mut lifecycle = claimed(&node, &identity, &row, None).await;
         let writer = begin_writer(&mut lifecycle, &node).await;
         let (accepted, message_doc_id) = publish_accepted_turn(
             &writer,
@@ -301,11 +333,10 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().logical_output_obligation_cases;
     assert_eq!(cases.len(), 11);
     for case in cases {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(&node).await.unwrap();
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
-        let agent = KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap();
+        let node = rooted_node(&identity).await;
+        let agent = derived_agent(&identity);
         assert_ne!(identity.did(), agent.did());
         let automated = case["automated_root"].as_bool().unwrap();
         let mut root = AgentRequestCreate::base(
@@ -339,10 +370,10 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             root.caused_by_trigger_context =
                 Some(json!({"source_fields":{"area_id":"area-a","expected_total":2}}).to_string());
         }
-        crate::sign_agent_request_create(&agent, &mut root)
+        crate::sign_agent_request_create(agent.as_ref(), &mut root)
             .await
             .unwrap();
-        let root_row = persist_request(&node, &root).await;
+        let root_row = persist_request(&node, agent.as_ref(), &root).await;
         let root_request =
             crate::request::watcher::AgentRequest::try_from(root_row.clone()).unwrap();
         let mut child = crate::request::lifecycle::queue::prepare_goal_continuation(
@@ -359,10 +390,10 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
         if !case["authenticated_child"].as_bool().unwrap() {
             child.caused_by_parent_request_doc_id = Some("wrong-physical-parent".into());
         }
-        crate::sign_agent_request_create(&agent, &mut child)
+        crate::sign_agent_request_create(agent.as_ref(), &mut child)
             .await
             .unwrap();
-        let child_row = persist_request(&node, &child).await;
+        let child_row = persist_request(&node, agent.as_ref(), &child).await;
         assert_eq!(
             child_row.caused_by_trigger_context,
             root_row.caused_by_trigger_context
@@ -384,10 +415,10 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             "2026-09-05T00:00:02Z",
             AgentRequestAdmissionRecord::local_self(agent.did()),
         );
-        crate::sign_agent_request_create(&agent, &mut outsider)
+        crate::sign_agent_request_create(agent.as_ref(), &mut outsider)
             .await
             .unwrap();
-        let outsider_row = persist_request(&node, &outsider).await;
+        let outsider_row = persist_request(&node, agent.as_ref(), &outsider).await;
         let mut stored = rapidhash::RapidHashSet::default();
         let mut previous: Option<(RequestLifecycle, Option<String>)> = None;
         let mut writes_by_request: std::collections::BTreeMap<u64, Vec<&Value>> =
@@ -410,7 +441,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                 other => panic!("unmapped request {other}"),
             };
             let writes = writes_by_request.remove(&request_doc).unwrap_or_default();
-            let mut lifecycle = claimed(&node, row, previous.take()).await;
+            let mut lifecycle = claimed(&node, agent.as_ref(), row, previous.take()).await;
             if writes.is_empty() {
                 previous = Some((lifecycle, None));
                 continue;
@@ -531,10 +562,9 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
             "a negative count is not a canonical positive integer",
         ),
     ] {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(&node).await.unwrap();
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
+        let node = rooted_node(&identity).await;
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "request-count-fail-closed",
@@ -550,7 +580,7 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
         crate::sign_agent_request_create(&identity, &mut create)
             .await
             .unwrap();
-        let row = persist_request(&node, &create).await;
+        let row = persist_request(&node, &identity, &create).await;
         let gate = OutputObligationGate::new(
             node.clone(),
             identity::Did::new(identity.did()).unwrap(),
@@ -566,7 +596,7 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
                 },
             }],
         );
-        let mut lifecycle = claimed(&node, &row, None).await;
+        let mut lifecycle = claimed(&node, &identity, &row, None).await;
         let writer = begin_writer(&mut lifecycle, &node).await;
         let (accepted, _) = publish_accepted_turn(
             &writer,
@@ -594,10 +624,9 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
 
 #[tokio::test]
 async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
+    let node = rooted_node(&identity).await;
     let mut create = AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "request-count-conflict",
@@ -613,8 +642,8 @@ async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
     crate::sign_agent_request_create(&identity, &mut create)
         .await
         .unwrap();
-    let row = persist_request(&node, &create).await;
-    let mut lifecycle = claimed(&node, &row, None).await;
+    let row = persist_request(&node, &identity, &create).await;
+    let mut lifecycle = claimed(&node, &identity, &row, None).await;
     let writer = begin_writer(&mut lifecycle, &node).await;
     writer
         .start_provider_attempt(
