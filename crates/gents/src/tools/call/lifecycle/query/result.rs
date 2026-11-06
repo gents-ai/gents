@@ -1084,8 +1084,9 @@ mod tests {
                     },
                 ],
             };
-            let mut replay = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
+            let mut replay = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
                 node.clone(),
+                child.actor().clone(),
                 child.doc_id().unwrap(),
                 parent.node_did(),
                 parent.session_id(),
@@ -1170,8 +1171,9 @@ mod tests {
             arguments
         );
         child.start_running().await.unwrap();
-        let mut replay = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
+        let mut replay = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            child.actor().clone(),
             &child_doc,
             &node_did,
             &session_id,

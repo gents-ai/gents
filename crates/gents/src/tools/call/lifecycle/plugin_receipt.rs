@@ -138,8 +138,9 @@ mod persistence_tests {
                 ..
             } = fixture;
             let doc_id = tool.doc_id().unwrap().to_owned();
-            let mut replay = ToolCallLifecycle::load_by_doc_id(
+            let mut replay = ToolCallLifecycle::load_by_doc_id_as(
                 node.clone(),
+                tool.actor().clone(),
                 &doc_id,
                 &tool.node_did,
                 &tool.session_id,
@@ -191,8 +192,9 @@ mod persistence_tests {
                 assert_eq!(presented.result.as_deref(), Some("model output"));
                 replay.stage_plugin_receipt(Some(evidence.clone()));
                 replay.complete("model output").await.unwrap();
-                let mut conflict = ToolCallLifecycle::load_by_doc_id(
+                let mut conflict = ToolCallLifecycle::load_by_doc_id_as(
                     node.clone(),
+                    tool.actor().clone(),
                     &doc_id,
                     &tool.node_did,
                     &tool.session_id,
@@ -338,8 +340,9 @@ mod persistence_tests {
             ..
         } = fixture;
         let doc_id = winner.doc_id().unwrap().to_owned();
-        let mut loser = ToolCallLifecycle::load_by_doc_id(
+        let mut loser = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            winner.actor().clone(),
             &doc_id,
             &winner.node_did,
             &winner.session_id,
