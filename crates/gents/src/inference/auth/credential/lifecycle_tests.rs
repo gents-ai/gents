@@ -83,9 +83,9 @@ async fn access() -> (crate::support::TestDb, crate::KeyIdentity, ConfigAccess) 
         crate::test_support::signed_test_node_without_agent("credential-interactive-sign-in").await;
     let runtime = ConfigAccess::local_as(
         db.node.clone(),
-        identity::Did::new(db.node_identity.did()).unwrap(),
+        ::identity::Did::new(db.node_identity.did()).unwrap(),
     );
-    let actor = identity::Did::new(user.did()).unwrap();
+    let actor = ::identity::Did::new(user.did()).unwrap();
     for permission in [
         NodePermission::DocumentDelete,
         NodePermission::DacRelationDelete,
