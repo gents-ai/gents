@@ -67,7 +67,9 @@ export function SyncHealth({
           )}
         </span>
         {!compact && (
-          <span className={cn(!row && "max-sm:hidden")}>{status.shortLabel}</span>
+          <span className={cn(row ? "min-w-0 truncate" : "max-sm:hidden")}>
+            {status.shortLabel}
+          </span>
         )}
       </PopoverTrigger>
       <PopoverContent

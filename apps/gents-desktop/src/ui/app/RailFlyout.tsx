@@ -2,6 +2,7 @@ import { createContext } from "react";
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronRight, CornerDownRight, Lock, Waypoints } from "lucide-react";
 import { cn } from "@gents/ui/lib/utils";
+import { MorphProvider, stillMorph, useMorph } from "@/lib/morph";
 import { PortalContainerProvider } from "@gents/ui/lib/portal-container";
 import { isLocalNode } from "@/lib/firstRun";
 import { href, type Route } from "@/lib/router";
@@ -28,10 +29,12 @@ import {
 } from "./navLayout";
 import { useMailboxList } from "@/screens/MailboxStack";
 import { NavMenu } from "./CustomizeNav";
+import { useKeysHint } from "@/commands/commands";
 import { NavScroll } from "./NavScroll";
 import { NavMailbox } from "./NavMailbox";
 import { NavNodes } from "./NavNodes";
 import { ContribBoundary } from "@/contrib/react/boundary";
+import { ICON_PART } from "./sidebarChange";
 import {
   useMailboxCount,
   useNodeCount,
@@ -62,14 +65,16 @@ export function KeyHint({ keys }: { keys?: string }) {
 }
 
 function Item({
+  id,
   to,
   active,
   count,
   tally,
   icon,
-  keys,
+  command,
   children,
 }: {
+  id: string;
   to: string;
   active?: boolean;
   /** what waits for the person here, in the brand badge */
@@ -77,16 +82,18 @@ function Item({
   /** how many there are here, a plain fact, in quiet text */
   tally?: number;
   icon: ReactNode;
-  /** the key that goes here, named on hover */
-  keys?: string;
+  /** the command whose key goes here, named on hover */
+  command?: string;
   children: ReactNode;
 }) {
+  const { part } = useMorph();
+  const keys = useKeysHint(command ?? "");
   return (
     <a
       href={to}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "group/item mx-3 flex h-8 items-center gap-2 rounded-lg border border-transparent pr-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+        "group/item mx-3 flex h-8 items-center gap-2 rounded-lg border border-transparent pe-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
         active && "border-border/60 bg-background text-ink shadow-xs",
         /* on the window's ground the page colour wouldn't show; the rail's
            fill alone marks the page there */
@@ -94,7 +101,11 @@ function Item({
           "in-data-[ground=window]:border-transparent in-data-[ground=window]:bg-raised in-data-[ground=window]:shadow-none",
       )}
     >
-      <span className="grid size-[30px] shrink-0 place-items-center">{icon}</span>
+      <span className="grid size-[30px] shrink-0 place-items-center">
+        <span ref={part(`icon:${id}`)} className={ICON_PART}>
+          {icon}
+        </span>
+      </span>
       <span className="min-w-0 flex-1 truncate">{children}</span>
       <KeyHint keys={keys} />
       {tally ? (
@@ -116,14 +127,20 @@ export function NavPanel({
   settings,
   syncRow,
   railAligned = false,
+  morphIcons = false,
 }: {
   route: Route;
   settings: ReactNode;
   syncRow: boolean;
+  /** its icons morph to and from the rail's as the sidebar's mode changes:
+      only while it is the sidebar, never beside a rail that holds them */
+  morphIcons?: boolean;
   /** beside the rail, over it or pinned in its place: each row's icon
       sits at the rail's height for it */
   railAligned?: boolean;
 }) {
+  const shellMorph = useMorph();
+  const { part } = morphIcons ? shellMorph : stillMorph;
   const online = useOnline();
   const mailboxCount = useMailboxCount();
   const pinned = usePinnedSessionList();
@@ -154,8 +171,9 @@ export function NavPanel({
     const drawn = (
       <Item
         key={item.id}
+        id={item.id}
         to={href(to)}
-        keys={item.keys}
+        command={item.command}
         active={active}
         count={count}
         /* one node, the person's own, is no news */
@@ -200,7 +218,7 @@ export function NavPanel({
     if (section.id === "pinned")
       return pinned.length > 0 ? (
         <Fragment key="pinned">
-          <p className="mt-2 mb-0 px-5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+          <p className="mt-2 mb-0 px-5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase truncate">
             Pinned
           </p>
           <ul className="px-3">
@@ -212,8 +230,8 @@ export function NavPanel({
       ) : null;
     return recent.length > 0 || recentFiltered ? (
       <Fragment key="recent">
-        <div className="mt-2 flex items-center gap-1 pr-3 pl-5">
-          <p className="m-0 min-w-0 flex-1 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+        <div className="mt-2 flex items-center gap-1 ps-5 pe-3">
+          <p className="m-0 min-w-0 flex-1 truncate font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
             Recent
           </p>
           <RecentFilter sessions={recentCandidates} />
@@ -239,9 +257,10 @@ export function NavPanel({
         </div>
         <a
           href={href({ name: "sessions" })}
-          className="flex items-center gap-1 px-5 py-1 text-xs text-muted-foreground hover:text-foreground"
+          className="flex items-center gap-1 px-5 py-1 text-xs whitespace-nowrap text-muted-foreground hover:text-foreground"
         >
-          All sessions <ChevronRight className="size-3" />
+          <span className="min-w-0 truncate">All sessions</span>
+          <ChevronRight className="size-3 shrink-0 rtl:-scale-x-100" />
         </a>
       </Fragment>
     ) : null;
@@ -249,12 +268,12 @@ export function NavPanel({
   const selectedCurrent =
     selected !== null && route.name === "agent" && route.nodeDid === selected.nodeDid;
   return (
-    <>
+    <MorphProvider value={morphIcons ? shellMorph : stillMorph}>
       {selected ? (
         /* the node goes to its page; the caret beside it switches node */
         <div
           className={cn(
-            "mr-3 ml-[14px] flex items-center gap-1",
+            "ms-[14px] me-3 flex items-center gap-1",
             railAligned ? "mb-1" : "mb-2",
           )}
         >
@@ -273,8 +292,9 @@ export function NavPanel({
             )}
           >
             <span
+              ref={part("icon:node")}
               className={cn(
-                "relative block size-7 shrink-0 rounded-full ring-1 ring-border ring-offset-2 ring-offset-[color:var(--nav-ground,var(--color-raised))] transition-shadow group-hover:ring-muted-foreground",
+                "relative block size-7 shrink-0 rounded-full ring-1 ring-border [view-transition-class:morph-icon] ring-offset-2 ring-offset-[color:var(--nav-ground,var(--color-raised))] transition-shadow group-hover:ring-muted-foreground",
                 selectedCurrent && "ring-2 ring-ink",
               )}
             >
@@ -285,7 +305,7 @@ export function NavPanel({
               />
               <span
                 className={cn(
-                  "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-[color:var(--nav-ground,var(--color-raised))]",
+                  "absolute -end-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-[color:var(--nav-ground,var(--color-raised))]",
                   online ? "bg-brand" : "bg-border",
                 )}
                 aria-hidden="true"
@@ -295,9 +315,13 @@ export function NavPanel({
               <span className="block truncate font-heading font-medium text-heading">
                 {selected.node.displayName ?? selected.label}
               </span>
-              <span className="block text-xs text-muted-foreground">
-                {isLocalNode(selected, homeDid) ? "Local node" : "Remote node"} ·{" "}
-                {selected.nodeDid.slice(-8)}
+              {/* one line at any width: the id gives way before its kind */}
+              <span className="flex text-xs whitespace-nowrap text-muted-foreground">
+                <span className="shrink-0">
+                  {isLocalNode(selected, homeDid) ? "Local node" : "Remote node"}{" "}
+                  ·&nbsp;
+                </span>
+                <span className="min-w-0 truncate">{selected.nodeDid.slice(-8)}</span>
               </span>
             </span>
           </a>
@@ -308,7 +332,7 @@ export function NavPanel({
           href={href({ name: "nodes" })}
           data-testid="no-working-node"
           className={cn(
-            "group mr-3 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm text-muted-foreground transition-colors hover:text-foreground",
+            "group ms-[14px] me-3 flex h-9 items-center gap-3 rounded-lg text-sm text-muted-foreground transition-colors hover:text-foreground",
             railAligned ? "mb-1" : "mb-2",
           )}
         >
@@ -319,11 +343,11 @@ export function NavPanel({
             <span className="block truncate font-heading font-medium">
               No active node
             </span>
-            <span className="block text-xs">Choose a node to continue</span>
+            <span className="block truncate text-xs">Choose a node to continue</span>
           </span>
         </a>
       )}
-      <div className="mb-1 ml-[18px] h-px w-5 bg-border" />
+      <div className="ms-[18px] mb-1 h-px w-5 bg-border" />
       {/* the top items and the sections scroll together when the window
           is too short for them, and the foot stays */}
       <NavScroll>
@@ -359,22 +383,47 @@ export function NavPanel({
         {footer.rows.map(drawRow)}
         {settings}
       </div>
-    </>
+    </MorphProvider>
   );
 }
 
 export const FlyoutOpenContext = createContext(false);
 
+/** A number that changes when `open` turns false while `within` holds an
+    open menu, popover or hover card. The panel's content is keyed by it, so
+    whatever opened from inside the panel closes with it: those popups
+    portal into the panel's container, but their open state is their own. */
+function useClosings(open: boolean, within: HTMLElement | null) {
+  const [closings, setClosings] = useState(0);
+  const was = useRef(open);
+  useEffect(() => {
+    if (was.current && !open && within?.querySelector("[data-open]"))
+      setClosings((n) => n + 1);
+    was.current = open;
+  }, [open, within]);
+  return closings;
+}
+
 export function RailFlyout({
   route,
   mode = "hover",
+  width,
+  peek = false,
+  peekOpen = false,
   settings,
   children,
 }: {
   route: Route;
   mode?: NavMode;
+  /** the expanded sidebar's column, which the panel fills short of its margins */
+  width?: number;
+  /** drawn over the page from a hidden sidebar's edge: the panel alone,
+      floating as the hover panel does, without the rail */
+  peek?: boolean;
+  /** whether the peek shows now */
+  peekOpen?: boolean;
   settings: ReactNode;
-  children: ReactNode;
+  children?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [portal, setPortal] = useState<HTMLElement | null>(null);
@@ -390,9 +439,26 @@ export function RailFlyout({
     },
     [],
   );
+  const hover = mode === "hover" && !peek;
+  const closings = useClosings(peek ? peekOpen : hover ? open : true, portal);
+  /* a menu from the panel draws inside it, so the pointer on the menu is
+     inside; when the menu goes away from under the pointer (a choice was
+     made), no leave event follows, so the next move outside closes it */
+  useEffect(() => {
+    if (!hover || !open || !portal) return;
+    const moved = (e: PointerEvent) => {
+      if (e.pointerType !== "mouse" || !(e.target instanceof Node)) return;
+      const inside = portal.contains(e.target);
+      if (inside === pointerInside.current) return;
+      pointerInside.current = inside;
+      later(inside, inside ? 0 : CLOSE_AFTER);
+    };
+    document.addEventListener("pointermove", moved);
+    return () => document.removeEventListener("pointermove", moved);
+  }, [hover, open, portal]);
   if (mode === "collapsed") return <>{children}</>;
-  const shown = mode === "expanded" || open;
-  const hover = mode === "hover";
+  const shown = mode === "expanded" || open || peek;
+  const floating = hover || peek;
   return (
     <div
       ref={setPortal}
@@ -430,13 +496,13 @@ export function RailFlyout({
 
         <div
           aria-hidden={!shown}
-          data-ground={hover ? "raised" : "window"}
+          data-ground={floating ? "raised" : "window"}
           className={cn(
             "absolute top-1 bottom-2 flex w-72 flex-col gap-2 overflow-hidden pb-2",
-            "left-1.5 pt-3.5",
+            "start-1.5 pt-3.5",
             /* floating over the page it is a surface of its own; always there,
                it is part of the window, on the window's ground */
-            hover
+            floating
               ? "z-30 rounded-2xl border border-border/60 bg-(--nav-ground) shadow-lg transition-opacity duration-200 ease-out [--nav-ground:var(--color-raised)] dark:[--nav-ground:color-mix(in_oklab,var(--color-raised),var(--color-surface))]"
               : "[--nav-ground:var(--color-background)]",
             hover &&
@@ -444,14 +510,22 @@ export function RailFlyout({
                  not move while it opens or closes */
               (open ? "opacity-100" : "pointer-events-none opacity-0"),
           )}
+          style={mode === "expanded" && width ? { width: width - 16 } : undefined}
         >
           {/* the panel keeps its margin from the window's edge, and its
               content moves left by the rest, so each icon sits where the
               rail's does */}
           <NavMenu
+            key={closings}
             render={<div className="-mx-[7px] flex min-h-0 flex-1 flex-col gap-1" />}
           >
-            <NavPanel route={route} settings={settings} syncRow={!hover} railAligned />
+            <NavPanel
+              route={route}
+              settings={settings}
+              syncRow={!hover}
+              railAligned
+              morphIcons={mode === "expanded" && !peek}
+            />
           </NavMenu>
         </div>
       </PortalContainerProvider>

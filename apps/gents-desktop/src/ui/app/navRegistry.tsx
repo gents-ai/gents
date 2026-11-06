@@ -52,6 +52,7 @@ function isRoute(value: unknown): value is Route {
     case "mailbox":
     case "nodes":
     case "agents":
+    case "automations":
     case "packs":
       return true;
     case "session":

@@ -16,6 +16,20 @@ test.describe("moving between turns", () => {
       .waitFor();
   });
 
+  /* ⌥⌘↑/↓ on a Mac; elsewhere Alt+↑/↓, which a text field keeps, so the
+     key goes to the page with nothing focused */
+  const stepTurn = async (
+    page: import("@playwright/test").Page,
+    way: "Up" | "Down",
+  ) => {
+    const mac = await page.evaluate(() =>
+      navigator.platform.toUpperCase().includes("MAC"),
+    );
+    if (!mac)
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press(mac ? `Alt+Meta+Arrow${way}` : `Alt+Arrow${way}`);
+  };
+
   const current = (page: import("@playwright/test").Page) =>
     page.evaluate(() => {
       const scroller = document.querySelector<HTMLElement>(
@@ -56,14 +70,14 @@ test.describe("moving between turns", () => {
     await expect(viewport).toHaveAttribute("data-following", "true");
     const start = await current(page);
     await page.getByTestId("transcript-panel").hover();
-    await page.keyboard.press("Alt+ControlOrMeta+ArrowUp");
+    await stepTurn(page, "Up");
     const up = await landed(page, start?.key);
     expect(up.following).toBe("false");
 
-    await page.keyboard.press("Alt+ControlOrMeta+ArrowUp");
+    await stepTurn(page, "Up");
     await landed(page, up.key);
 
-    await page.keyboard.press("Alt+ControlOrMeta+ArrowDown");
+    await stepTurn(page, "Down");
     await expect
       .poll(async () => {
         const turn = await current(page);

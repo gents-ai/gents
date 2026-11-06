@@ -7,7 +7,7 @@ use crate::inference::compaction::CompactionStrategy;
 /// provider budgets and pair-safe transcript splitting can further constrain them.
 /// Checkpoint instructions/schema remain runtime-owned. Request deadlines,
 /// aggregate token accounting, seeds, and generated checkpoints are execution state.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct CompactionConfig {
@@ -21,6 +21,7 @@ pub struct CompactionConfig {
         deserialize_with = "super::serde_helpers::deserialize_default_on_null"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<CompactionStrategy>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub strategy: CompactionStrategy,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -47,6 +48,7 @@ pub struct CompactionConfig {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
 }
 

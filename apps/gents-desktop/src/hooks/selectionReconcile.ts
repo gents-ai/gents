@@ -3,7 +3,7 @@ import { selectedAgentIdForDeployment } from "@source-inc/gents-desktop-client";
 import { toast } from "sonner";
 import { routeMoves } from "../ui/lib/router";
 import { openOnNode } from "../ui/preferences";
-import { rememberedNode, rememberNode } from "./activeNode";
+import { noteActiveNode, rememberedNode, rememberNode } from "./activeNode";
 import type { DraftStore } from "./draftStore";
 import { firstNode, type FleetState, nodeOf, type NodeView } from "./fleetStore";
 import { selection } from "./selectionStore";
@@ -15,10 +15,10 @@ export const OPEN_ON_WAIT_MS = 5000;
 
 /* a dial that failed leaves its error; before the first dial there is
    neither a connection nor an error */
-const reachOf = (node: NodeView) =>
+export const reachOf = (node: NodeView) =>
   node.dialSucceeded ? "reachable" : node.lastError ? "failed" : "unknown";
 
-const nameOf = (node: NodeView) => node.node.displayName ?? node.label;
+export const nameOf = (node: NodeView) => node.node.displayName ?? node.label;
 
 /* the node used last on this device, else this machine's own, else the
    first listed, passing over the chosen node the app couldn't open on */
@@ -122,10 +122,12 @@ export function reconcileSelection(
   });
   store.subscribe(settle);
   let kept = store.getState().nodeDid;
+  if (kept) noteActiveNode(kept);
   store.subscribe(({ nodeDid }) => {
     if (!nodeDid || nodeDid === kept) return;
     kept = nodeDid;
     rememberNode(nodeDid);
+    noteActiveNode(nodeDid);
   });
   settle();
 }

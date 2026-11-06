@@ -36,7 +36,7 @@ export function NavNodes({ route, current }: { route: Route; current: string | n
   };
   return (
     <>
-      <p className="mt-2 mb-0 px-5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+      <p className="mt-2 mb-0 px-5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase truncate">
         Nodes
       </p>
       <ul className="px-3" aria-label="Nodes">
@@ -83,9 +83,10 @@ export function NavNodes({ route, current }: { route: Route; current: string | n
       </ul>
       <a
         href={href({ name: "nodes" })}
-        className="flex items-center gap-1 px-5 py-1 text-xs text-muted-foreground hover:text-foreground"
+        className="flex items-center gap-1 px-5 py-1 text-xs whitespace-nowrap text-muted-foreground hover:text-foreground"
       >
-        All nodes <ChevronRight className="size-3" />
+        <span className="min-w-0 truncate">All nodes</span>
+        <ChevronRight className="size-3 shrink-0 rtl:-scale-x-100" />
       </a>
     </>
   );
