@@ -177,6 +177,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) pairing_reconcile_cases: Vec<LeanPairingReconcileCase>,
     pub(crate) goal_claimed_publication_cases: Vec<serde_json::Value>,
     pub(crate) goal_claimed_identity_cases: Vec<serde_json::Value>,
+    pub(crate) goal_claimed_target_cases: Vec<serde_json::Value>,
     pub(crate) goal_wake_coalescing_cases: Vec<serde_json::Value>,
     pub(crate) goal_wake_ancestry_cases: Vec<serde_json::Value>,
     pub(crate) goal_request_scope_cases: Vec<serde_json::Value>,

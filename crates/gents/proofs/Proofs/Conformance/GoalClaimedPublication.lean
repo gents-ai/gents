@@ -241,4 +241,27 @@ def identityCaseJson (c : String × String × String × String) : String :=
 
 def identityCasesJson : String := Conformance.Contracts.jsonArray (identityCases.map identityCaseJson)
 
+def targetCases : List (String × String × String × String × String × Bool × Bool) :=
+  [("created", "session", "session", "agent", "agent", true, true),
+   ("aborted", "session", "session", "agent", "agent", true, false),
+   ("duplicate-after-revocation", "session", "session", "agent", "agent", false, true),
+   ("wrong-session", "other", "session", "agent", "agent", true, true),
+   ("wrong-agent", "session", "session", "other", "agent", true, true),
+   ("missing-session", "", "session", "agent", "agent", true, true),
+   ("missing-agent", "session", "session", "", "agent", true, true)]
+
+def targetCaseJson (c : String × String × String × String × String × Bool × Bool) : Lean.Json :=
+  let (name, session, observedSession, agent, observedAgent, fresh, commit) := c
+  let before : Identity.SessionChild.ClientRequestPublication :=
+    if fresh then ⟨false, false, false⟩ else ⟨true, false, false⟩
+  let after := commitClaimedRequest before "agent" "agent" "agent" "agent"
+    session observedSession agent observedAgent fresh commit
+  Lean.Json.mkObj [("name", Lean.toJson name), ("session", Lean.toJson session),
+    ("observed_session", Lean.toJson observedSession), ("agent", Lean.toJson agent),
+    ("observed_agent", Lean.toJson observedAgent), ("fresh", Lean.toJson fresh),
+    ("commit", Lean.toJson commit), ("committed", Lean.toJson after.committed),
+    ("grants", Lean.toJson after.grants)]
+
+def targetCasesJson : String := (Lean.toJson (targetCases.map targetCaseJson)).compress
+
 end Conformance.GoalClaimedPublicationContracts

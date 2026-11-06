@@ -445,6 +445,8 @@ def snapshotGoalMutationCasesJson : String :=
       ++ Conformance.GoalClaimedPublicationContracts.casesJson ++ ","
     ++ "\"goal_claimed_identity_cases\":"
       ++ Conformance.GoalClaimedPublicationContracts.identityCasesJson ++ ","
+    ++ "\"goal_claimed_target_cases\":"
+      ++ Conformance.GoalClaimedPublicationContracts.targetCasesJson ++ ","
     ++ "\"goal_resume_publication_cases\":" ++ Conformance.GoalOperatorResumeContracts.publicationCasesJson ++ ","
     ++ "\"goal_operator_resume_cases\":"
       ++ Conformance.GoalOperatorResumeContracts.resumeCasesJson ++ ","
