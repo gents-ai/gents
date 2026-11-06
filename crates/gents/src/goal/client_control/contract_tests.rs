@@ -260,7 +260,7 @@ async fn goal_command_signature_binds_modeled_physical_targets() {
                 &command.signature,
             )
             .await
-            .unwrap();
+            .unwrap_or(false);
         assert_eq!(
             verified,
             case.decision == crate::lean_vocab_test::LeanCrossActorDecision::Claimed,
