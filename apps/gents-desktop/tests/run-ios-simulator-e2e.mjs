@@ -578,7 +578,15 @@ try {
       const launchedAt = process.hrtime.bigint();
       const launchResult = capture(
         "xcrun",
-        ["simctl", "launch", "--terminate-running-process", device.udid, APP_BUNDLE_ID],
+        [
+          "simctl",
+          "launch",
+          "--terminate-running-process",
+          `--stdout=${join(artifactRoot, `app-${index}.stdout.log`)}`,
+          `--stderr=${join(artifactRoot, `app-${index}.stderr.log`)}`,
+          device.udid,
+          APP_BUNDLE_ID,
+        ],
         { env: launchEnvironment },
       );
       const pid = Number.parseInt(launchResult.match(/: (\d+)\s*$/)?.[1] ?? "", 10);
