@@ -194,7 +194,7 @@ async fn generated_repeated_tool_failure_cases_drive_owned_loop() {
                     row["_docID"].as_str().unwrap(),
                     &lifecycle.request().doc_id,
                     &lifecycle.request().session_id,
-                    "did:test:test",
+                    &lifecycle.request().node_did,
                     None,
                 )
                 .await

@@ -117,7 +117,7 @@ async fn signed_claude_tool_round_trip_with_scope(
         crate::tools::call::lifecycle::ToolCallLifecycle::load_accepted_for_dispatch(
             &node,
             &tool_doc_id,
-            "did:test:test",
+            &lifecycle.request().node_did,
             &session_id,
             None,
         ),
@@ -135,7 +135,7 @@ async fn signed_claude_tool_round_trip_with_scope(
     let arguments = crate::session::load_canonical_payload_from_node(
         &node,
         &accepted.request_doc_id,
-        "did:test:test",
+        &lifecycle.request().node_did,
         None,
         &accepted.arguments,
     )
@@ -155,7 +155,7 @@ async fn signed_claude_tool_round_trip_with_scope(
     let native = crate::session::load_tool_call_result(
         &crate::store::config_client::ConfigAccess::local(node.clone()),
         &tool_doc_id,
-        "did:test:test",
+        &lifecycle.request().node_did,
         &session_id,
         None,
     )

@@ -704,16 +704,22 @@ async fn owned_test_hook_with_identity_policy(
     crate::request::lifecycle::RequestLifecycle,
     rapidhash::RapidHashMap<u64, String>,
 ) {
+    // Unsigned fixtures still need a well-formed node DID: every loop and
+    // provider-input owner parses it as a DID.
+    let unsigned_node_key_dir = tempfile::tempdir().unwrap();
+    let unsigned_node_identity = crate::KeyIdentity::load_or_create(
+        unsigned_node_key_dir.path().join("node.key"),
+        None,
+    )
+    .unwrap();
+    let unsigned_node_did = crate::NodeIdentity::did(&unsigned_node_identity).to_owned();
     let node_did = identity
         .as_ref()
-        .map_or("did:test:test", |identity| identity.did());
+        .map_or(unsigned_node_did.as_str(), |identity| identity.did());
     let requester_did = identity.as_ref().map(|_| node_did);
     let agent_did = crate::triggers::callback::test_agent_did();
     let data_path = std::env::temp_dir().join(format!("agent-owned-loop-{}", uuid::Uuid::new_v4()));
-    let builder = match identity.as_ref() {
-        Some(identity) => defra_node::Node::builder().with_node_identity_did(identity.did()),
-        None => crate::test_support::node_builder(),
-    };
+    let builder = defra_node::Node::builder().with_node_identity_did(node_did);
     let node = Arc::new(builder.data_path(&data_path).build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -754,8 +760,9 @@ async fn owned_test_hook_with_identity_policy(
         .unwrap()
     } else {
         format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "did:test:test", agent_did: "{}", session_id: "{}", request_hop: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "{}", agent_did: "{}", session_id: "{}", request_hop: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
             crate::store::graphql::escape_graphql_string(&request_id),
+            crate::store::graphql::escape_graphql_string(node_did),
             crate::store::graphql::escape_graphql_string(&agent_did),
             crate::store::graphql::escape_graphql_string(&session_id),
             crate::store::graphql::escape_graphql_string(&request_id),

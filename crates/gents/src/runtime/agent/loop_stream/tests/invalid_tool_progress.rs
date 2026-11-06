@@ -149,7 +149,7 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
                 row["_docID"].as_str().unwrap(),
                 &lifecycle.request().doc_id,
                 &lifecycle.request().session_id,
-                "did:test:test",
+                &lifecycle.request().node_did,
                 None,
             )
             .await
@@ -241,7 +241,7 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
                 row["_docID"].as_str().unwrap(),
                 &lifecycle.request().doc_id,
                 &lifecycle.request().session_id,
-                "did:test:test",
+                &lifecycle.request().node_did,
                 None,
             )
             .await
@@ -367,7 +367,7 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
         tool_doc_id,
         &lifecycle.request().doc_id,
         &lifecycle.request().session_id,
-        "did:test:test",
+        &lifecycle.request().node_did,
         None,
     )
     .await
@@ -450,7 +450,7 @@ async fn empty_bash_arguments_exhaust_owned_loop_without_side_effects() {
                 row["_docID"].as_str().unwrap(),
                 &lifecycle.request().doc_id,
                 &lifecycle.request().session_id,
-                "did:test:test",
+                &lifecycle.request().node_did,
                 None,
             )
             .await
