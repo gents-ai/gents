@@ -99,53 +99,6 @@ impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for ExhaustRe
     }
 }
 
-async fn wait_for_request_state(
-    node: &defra_node::Node,
-    doc_id: &str,
-    expected_lifecycle_state: &str,
-) {
-    let escaped_doc_id = escape_graphql_string(doc_id);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let query = format!(
-            r#"{{
-                AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{
-                    lifecycle_state
-                }}
-            }}"#
-        );
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "AgentRequest query failed: {:?}",
-            response.errors
-        );
-        let row = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .cloned()
-            .expect("AgentRequest row");
-        let lifecycle_state = row
-            .get("lifecycle_state")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if lifecycle_state == expected_lifecycle_state {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for AgentRequest {} to reach lifecycle_state={}, last row={:?}",
-            doc_id,
-            expected_lifecycle_state,
-            row
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
 async fn wait_for_held_request_state(access: &crate::ConfigAccess, doc_id: &str, expected: &str) {
     let doc_id = escape_graphql_string(doc_id);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -900,94 +853,173 @@ async fn run_agent_recovers_backend_availability_without_restart() {
         .expect("agent run should return ok");
 }
 
+async fn submit_capacity_request(
+    fixture: &HeldRuntimeFixture,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+) -> String {
+    use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    let user_did = fixture.user.did();
+    let node_did = fixture.db.node_identity.did();
+    let create = crate::request::lifecycle::build_signed_client_request(
+        &fixture.user_access,
+        RequestSpec::new(
+            RequestPurpose::Normal,
+            RequestIdentity {
+                request_id: request_id.to_owned(),
+                node_did: node_did.to_owned(),
+                requester_did: Some(user_did.to_owned()),
+                agent_did: agent_did.to_owned(),
+                session_id: session_id.to_owned(),
+                content: "hello".to_owned(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339(),
+            },
+            AgentRequestAdmissionRecord::client(user_did),
+        ),
+        RequestSigner::Identity(&fixture.user),
+    )
+    .await
+    .unwrap();
+    crate::session::update_session_title_with_source(
+        &fixture.user_access,
+        node_did,
+        Some(user_did),
+        session_id,
+        "capacity shutdown test",
+        gents_protocol::session::SessionTitleSource::User,
+    )
+    .await
+    .unwrap();
+    crate::request::lifecycle::submit_client_request(&fixture.user_access, &create)
+        .await
+        .unwrap();
+    let request = escape_graphql_string(request_id);
+    let response = fixture
+        .user_access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{request}"}}}}) {{_docID}} }}"#
+        ))
+        .await
+        .unwrap();
+    let rows = response["data"]["AgentRequest"].as_array().unwrap();
+    let [row] = rows.as_slice() else {
+        panic!("submitted request must be unique")
+    };
+    row["_docID"].as_str().unwrap().to_owned()
+}
+
+async fn wait_for_held_inference_state(
+    access: &crate::ConfigAccess,
+    request_id: &str,
+    expected: &str,
+) {
+    let request = escape_graphql_string(request_id);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let response = access.execute(&format!(
+            r#"{{ InferenceCall(filter: {{request_id: {{_eq: "{request}"}}}}) {{call_state}} }}"#
+        )).await.unwrap();
+        let rows = response["data"]["InferenceCall"].as_array().unwrap();
+        if rows.iter().any(|row| row["call_state"] == expected) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "inference call {request} did not reach {expected}: {rows:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[tokio::test]
 async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("shutdown-waiting-request"));
     let mock_endpoint = MockModelEndpoint::start_blocking_chat("default").unwrap();
-    for (session_id, agent_did) in [
-        ("session-shutdown-running", "general"),
-        ("session-shutdown-waiting", "code"),
-    ] {
-        crate::session::ensure_session_with_agent_did_and_requester_did(
-            &node,
-            session_id,
-            identity.did(),
-            agent_did,
-            Some(identity.did()),
-        )
-        .await
-        .unwrap();
-        crate::session::update_session_title_with_source(
-            &crate::ConfigAccess::local_as(
-                node.clone(),
-                identity::Did::new(identity.did()).unwrap(),
-            ),
-            identity.did(),
-            Some(identity.did()),
-            session_id,
-            "capacity shutdown test",
-            gents_protocol::session::SessionTitleSource::User,
-        )
-        .await
-        .unwrap();
-    }
-    bind_default_agent_backend_with_capacity(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "shutdown-waiting-request",
         "backend-blocked",
         mock_endpoint.endpoint(),
         1,
+        "healthy",
     )
     .await;
-    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
-    crate::test_support::install_test_agent(&node, identity.did(), "code").await;
-    let agent = crate::Gents::builder()
-        .node(node.clone())
-        .identity(identity.clone())
-        .default_agent_did("general")
-        .tool_ceiling(ToolCeiling::meta_only())
-        .agent("general")
-        .backend_id("backend-blocked")
-        .model_name("default")
-        .done()
-        .agent("code")
-        .backend_id("backend-blocked")
-        .model_name("default")
-        .done()
-        .build()
-        .await
-        .unwrap();
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let first_agent = fixture.agent.clone();
+    let second_binding = crate::store::identity::provision_agent_identity_authorized(
+        &node,
+        identity.as_ref(),
+        &fixture.user.did().parse().unwrap(),
+    )
+    .await
+    .unwrap();
+    let second_agent =
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &second_binding).unwrap();
+    grant_held_agent_operations(&node, identity.as_ref(), second_agent.as_ref()).await;
+    let first_did = first_agent.did().to_owned();
+    let second_did = second_agent.did().to_owned();
+    write_runtime_documents(
+        &fixture.user_access,
+        vec![(
+            crate::Collection::Agent,
+            serde_json::json!({
+                "node_did": identity.did(), "agent_did": second_did,
+                "creation_nonce": second_binding.creation_nonce,
+                "inference_profile_id": format!("{first_did}:inference"),
+            }),
+        )],
+    )
+    .await;
+    let first_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        first_did.parse().unwrap(),
+        first_agent.as_ref(),
+    )
+    .unwrap();
+    let second_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        second_did.parse().unwrap(),
+        second_agent.as_ref(),
+    )
+    .unwrap();
+    let agent = crate::Gents::from_default_agent_documents(
+        node.clone(),
+        identity.clone(),
+        crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
     wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
 
-    let first_request_doc_id = create_agent_request_for_agent(
-        node.as_ref(),
-        identity.did(),
-        Some("general"),
+    let first_request_doc_id = submit_capacity_request(
+        &fixture,
+        &first_did,
         "req-shutdown-running",
         "session-shutdown-running",
-        "hello",
     )
     .await;
-    wait_for_request_state(node.as_ref(), &first_request_doc_id, "processing").await;
-    wait_for_inference_call_state(node.as_ref(), "req-shutdown-running", "running").await;
+    wait_for_held_request_state(&fixture.user_access, &first_request_doc_id, "processing").await;
+    wait_for_held_inference_state(&first_access, "req-shutdown-running", "running").await;
 
-    let queued_request_doc_id = create_agent_request_for_agent(
-        node.as_ref(),
-        identity.did(),
-        Some("code"),
+    let queued_request_doc_id = submit_capacity_request(
+        &fixture,
+        &second_did,
         "req-shutdown-waiting",
         "session-shutdown-waiting",
-        "hello",
     )
     .await;
-    wait_for_request_state(node.as_ref(), &queued_request_doc_id, "processing").await;
-    wait_for_inference_call_state(node.as_ref(), "req-shutdown-waiting", "queued").await;
+    wait_for_held_request_state(&fixture.user_access, &queued_request_doc_id, "processing").await;
+    wait_for_held_inference_state(&second_access, "req-shutdown-waiting", "queued").await;
 
     let _ = shutdown_tx.send(true);
     tokio::time::timeout(Duration::from_secs(2), handle)
@@ -996,17 +1028,14 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         .expect("agent task should join")
         .expect("agent run should return ok");
 
-    wait_for_request_state(node.as_ref(), &first_request_doc_id, "failed").await;
-    wait_for_request_state(node.as_ref(), &queued_request_doc_id, "failed").await;
+    wait_for_held_request_state(&fixture.user_access, &first_request_doc_id, "failed").await;
+    wait_for_held_request_state(&fixture.user_access, &queued_request_doc_id, "failed").await;
     for request_doc_id in [&first_request_doc_id, &queued_request_doc_id] {
-        let response = node.execute(&format!(
+        let response = fixture.user_access.execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ request_id lifecycle_state terminalized_at terminal_output }} }}"#,
             crate::store::graphql::escape_graphql_string(request_doc_id),
-        )).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let rows = response.data.as_ref().unwrap()["AgentRequest"]
-            .as_array()
-            .unwrap();
+        )).await.unwrap();
+        let rows = response["data"]["AgentRequest"].as_array().unwrap();
         assert_eq!(
             rows.len(),
             1,
