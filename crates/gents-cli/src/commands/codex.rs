@@ -31,7 +31,7 @@ enum RemoteEndpoint {
 
 pub(crate) async fn codex(args: CodexArgs) -> Result<()> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        bail!("`gents codex` is interactive and needs a terminal; use `gents chat` for scripted turns");
+        bail!("`gents codex` is interactive and needs a terminal; use `gents -p MESSAGE` for scripted turns");
     }
     open_codex(args).await
 }
@@ -245,6 +245,21 @@ async fn preflight_agent(
     }
 }
 
+/// Waits until the runtime at `remote` publishes `agent`, so a just-made agent is not refused
+/// as unknown by the preflight that opening it runs. The preflight still decides.
+pub(crate) async fn wait_for_agent_to_publish(remote: &str, agent: &str, publish_wait: Duration) {
+    let Ok(RemoteEndpoint::WebSocket { authority, .. }) = resolve_endpoint(remote) else {
+        return;
+    };
+    read_identity_until(&authority, None, publish_wait, |identity| {
+        identity
+            .runnable_agents
+            .as_ref()
+            .is_none_or(|runnable| admits_connection(agent, runnable.iter().map(String::as_str)))
+    })
+    .await;
+}
+
 /// Plain `gents` opens the bound agent, so that one has to be runnable. An agent named with
 /// `--agent` gets its own check when it opens, so here only an empty set stops it.
 fn can_open(identity: &RuntimeIdentity, agent_given: bool) -> bool {
@@ -379,8 +394,10 @@ fn codex_command_args(args: &CodexArgs, cd: Option<&Path>) -> Vec<String> {
         command.push("--cd".to_string());
         command.push(cd.display().to_string());
     }
+    // Codex's prompt is a positional beside its subcommands, so without the separator a
+    // prompt that is a subcommand's name, such as `login`, would run that subcommand.
     if let Some(prompt) = &args.prompt {
-        command.push(prompt.clone());
+        command.extend(["--".to_string(), prompt.clone()]);
     }
     command
 }
@@ -558,6 +575,7 @@ pub(crate) mod tests {
                 "--remote-auth-token-env",
                 "GENTS_TOKEN",
                 "--no-alt-screen",
+                "--",
                 "hello",
             ]
         );
@@ -916,8 +934,8 @@ pub(crate) mod tests {
         let command = codex_command_args(&args, Some(Path::new("/srv/root/project")));
 
         assert_eq!(
-            command[command.len() - 3..],
-            ["--cd", "/srv/root/project", "hello"]
+            command[command.len() - 4..],
+            ["--cd", "/srv/root/project", "--", "hello"]
         );
     }
 }

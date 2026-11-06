@@ -536,7 +536,7 @@ pub async fn init_standard_local_runtime(
         next_steps: vec![
             "Run `gents-desktop` and leave the desktop app open.".to_string(),
             "Wait for the status bar to show `replication subscriptions armed`.".to_string(),
-            "Then submit prompts from Chat, or run `gents chat` in another terminal.".to_string(),
+            "Then submit prompts from Chat, or run `gents` in another terminal.".to_string(),
         ],
     })
 }
@@ -677,7 +677,7 @@ and replication bootstrap on launch.
 Next:
   1. Run `gents-desktop` and leave it open.
   2. Wait for the status bar to show `replication subscriptions armed`.
-  3. Then submit prompts from Chat, or run `gents chat` in another terminal.
+  3. Then submit prompts from Chat, or run `gents` in another terminal.
 ",
         discovery_line = discovery_line,
         graphql = summary.graphql,

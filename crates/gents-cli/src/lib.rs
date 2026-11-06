@@ -108,7 +108,6 @@ const ROOT_HELP_TEMPLATE: &str = "\
 \x1b[1;4mCommands:\x1b[0m
   accounts    Sign in to providers and gents cloud, and manage accounts
   automation  Goals, tasks, plugin jobs and the mailbox
-  chat        Chat with the selected or default agent in the terminal
   config      Agents, backends, tools, MCP services and packs
   runtime     Run, install, diagnose and reset the local runtime
   sessions    List, show and fork sessions
@@ -116,6 +115,8 @@ const ROOT_HELP_TEMPLATE: &str = "\
   utils       Data, debugging, evals and optimization
 
 Run `gents` with no command to set up a home and open a conversation.
+Run `gents PROMPT` to open it with PROMPT as the first message.
+Run `gents -p MESSAGE` to send one message and print the reply.
 Run `gents <command> --help` for details.
 
 \x1b[1;4mOptions:\x1b[0m
@@ -181,15 +182,6 @@ listener and advertise that endpoint:
 Identity note:
   Standalone server startup supports file keys, macOS keychain software-key homes initialized with identity_backend=macos-keychain, and macOS Secure Enclave homes initialized with identity_backend=macos-secure-enclave.
   Homes with a real node DID and no key_path must include a supported identity_backend and label in init.json.";
-const CHAT_AFTER_HELP: &str = "\
-Examples:
-  gents chat
-  gents chat \"summarize this repo\"
-  gents chat --session-id SESSION_ID \"continue the previous conversation\"
-
-Diagnostics:
-  gents status
-  gents utils debug response show REQUEST_ID";
 const CODEX_AFTER_HELP: &str = "\
 Launches the `codex` terminal UI as a separate process connected to the local
 node's Codex shim. Codex-side approvals and sandboxing are bypassed: the tool
@@ -321,7 +313,7 @@ Examples:
   gents config agent set --graphql URL --node-did <NODE_DID> --context-id <context-id> --inference-profile-id <profile-id>
   gents config tools set --graphql URL --file tools.json";
 const REQUEST_AFTER_HELP: &str = "\
-`utils debug request` is the low-level document path. Most users should prefer `gents chat`.
+`utils debug request` is the low-level document path. Most users should prefer `gents -p MESSAGE`.
 
 Examples:
   gents utils debug request submit --content \"summarize this repo\"
@@ -428,7 +420,17 @@ pub fn run_cli() -> Result<()> {
 async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     let cli = Cli::parse();
     let command = match cli.command {
-        None => return commands::start::run(cli.home, cli.store_key_custody, cli.agent).await,
+        None => {
+            return commands::start::run(commands::start::StartArgs {
+                home: cli.home,
+                store_key_custody: cli.store_key_custody,
+                agent: cli.agent,
+                print: cli.print,
+                prompt: cli.prompt,
+                yolo: cli.yolo,
+            })
+            .await
+        }
         Some(Command::NativeFsRunner(args)) => {
             return commands::native_fs_runner::native_fs_runner(args);
         }
@@ -455,7 +457,6 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Server(args) => commands::serve::serve(args, runtime).await,
         Command::Service { command } => service_command(command).await,
         Command::PrepareRuntime(args) => commands::prepare_runtime::prepare(args, runtime).await,
-        Command::Chat(args) => commands::chat::chat(args).await,
         Command::Status(args) => commands::status::status(args).await,
         Command::Sessions { command } => commands::session::dispatch(command).await,
         Command::Automation { command } => match command {

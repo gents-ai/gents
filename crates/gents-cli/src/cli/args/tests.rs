@@ -29,7 +29,6 @@ fn init_uses_the_runtime_backend_defaults_and_preserves_overrides() {
 #[test]
 fn grouped_commands_parse() {
     const PATHS: &[&[&str]] = &[
-        &["chat"],
         &["status"],
         &["sessions", "list"],
         &["sessions", "show"],
@@ -83,6 +82,44 @@ fn grouped_commands_parse() {
 }
 
 #[test]
+fn print_sends_one_message_to_the_chosen_agent() {
+    let cli = Cli::try_parse_from(["gents", "-p", "hi", "--agent", "a"]).expect("-p parses");
+    assert_eq!(cli.print.as_deref(), Some("hi"));
+    assert_eq!(cli.agent.as_deref(), Some("a"));
+    assert!(cli.command.is_none());
+    let cli = Cli::try_parse_from(["gents", "--yolo", "--print", "hi"]).expect("--yolo -p parses");
+    assert!(cli.yolo);
+    assert_eq!(cli.print.as_deref(), Some("hi"));
+    let empty = Cli::try_parse_from(["gents", "-p", "  "])
+        .err()
+        .expect("an empty message");
+    assert_eq!(empty.kind(), ErrorKind::ValueValidation);
+    let conflict = Cli::try_parse_from(["gents", "--yolo", "--agent", "a"])
+        .err()
+        .expect("--yolo names its own agent");
+    assert_eq!(conflict.kind(), ErrorKind::ArgumentConflict);
+    assert!(Cli::try_parse_from(["gents", "-p", "hi", "status"]).is_err());
+}
+
+#[test]
+fn a_bare_prompt_opens_the_interface_with_it_and_commands_still_win() {
+    let cli =
+        Cli::try_parse_from(["gents", "hello there", "--agent", "a"]).expect("a prompt parses");
+    assert_eq!(cli.prompt.as_deref(), Some("hello there"));
+    assert_eq!(cli.agent.as_deref(), Some("a"));
+    assert!(cli.command.is_none());
+    let cli = Cli::try_parse_from(["gents", "--yolo", "hi"]).expect("--yolo with a prompt parses");
+    assert_eq!(cli.prompt.as_deref(), Some("hi"));
+    let cli = Cli::try_parse_from(["gents", "status"]).expect("a command name stays a command");
+    assert!(cli.prompt.is_none());
+    assert!(matches!(cli.command, Some(Command::Status(_))));
+    let conflict = Cli::try_parse_from(["gents", "hi", "-p", "there"])
+        .err()
+        .expect("a prompt opens an interface, -p does not");
+    assert_eq!(conflict.kind(), ErrorKind::ArgumentConflict);
+}
+
+#[test]
 fn installed_services_and_updaters_keep_their_root_names() {
     let cli = Cli::try_parse_from(["gents", "server", "--home", "/h"]).expect("server parses");
     assert!(matches!(cli.command, Some(Command::Server(_))));
@@ -93,40 +130,62 @@ fn installed_services_and_updaters_keep_their_root_names() {
 
 #[test]
 fn old_names_stop_working() {
-    const OLD_NAMES: &[&[&str]] = &[
-        &["codex-login"],
-        &["claude-login"],
-        &["query"],
-        &["plugin"],
-        &["auth"],
-        &["cloud"],
-        &["session"],
-        &["goal"],
-        &["task"],
-        &["job"],
-        &["mailbox"],
-        &["tools"],
-        &["mcp"],
-        &["pack"],
-        &["provision"],
-        &["reset"],
-        &["diagnose"],
-        &["p2p"],
-        &["desktop"],
-        &["version"],
-        &["data"],
-        &["debug"],
-        &["eval"],
-        &["optimization"],
+    const OLD_COMMANDS: &[&[&str]] = &[
+        &["codex-login", "--manual"],
+        &["claude-login", "--manual"],
+        &["query", "find"],
+        &["plugin", "list"],
+        &["auth", "login", "claude"],
+        &["cloud", "login"],
+        &["session", "list"],
+        &["goal", "show"],
+        &["task", "list"],
+        &["job", "list"],
+        &["mailbox", "list"],
+        &["tools", "explain"],
+        &["mcp", "probe"],
+        &["pack", "install"],
+        &["provision", "--root", "r"],
+        &["reset", "--home", "h"],
+        &["diagnose", "--home", "h"],
+        &["p2p", "status"],
+        &["desktop", "reset"],
+        &["version", "--json"],
+        &["data", "query"],
+        &["debug", "request"],
+        &["eval", "run"],
+        &["optimization", "run"],
         &["accounts", "accounts"],
+        &["chat", "--session-id", "s"],
     ];
-    for path in OLD_NAMES {
+    for path in OLD_COMMANDS {
         let argv = [&["gents"], *path].concat();
-        let Err(error) = Cli::try_parse_from(argv) else {
-            panic!("`gents {path:?}` should no longer parse");
-        };
-        assert_eq!(error.kind(), ErrorKind::InvalidSubcommand, "{path:?}");
+        assert!(
+            Cli::try_parse_from(argv).is_err(),
+            "`gents {path:?}` should no longer parse"
+        );
     }
+    for (former, now) in [
+        ("reset", "gents runtime reset"),
+        ("auth", "gents accounts"),
+        ("query", "gents utils data query"),
+        ("chat", "gents -p MESSAGE"),
+    ] {
+        let refused = Cli::try_parse_from(["gents", former])
+            .err()
+            .expect("a former command's name is not sent as a prompt");
+        assert_eq!(refused.kind(), ErrorKind::ValueValidation, "{former}");
+        assert!(refused.to_string().contains(now), "{former}: {refused}");
+    }
+    let misplaced = Cli::try_parse_from(["gents", "--home", "h", "status"])
+        .err()
+        .expect("a command after a root option is not a prompt");
+    assert!(
+        misplaced.to_string().contains("gents status --home"),
+        "{misplaced}"
+    );
+    let cli = Cli::try_parse_from(["gents", "reset the demo"]).expect("more words are a prompt");
+    assert_eq!(cli.prompt.as_deref(), Some("reset the demo"));
 }
 
 #[test]
@@ -141,7 +200,7 @@ fn root_help_lists_every_visible_command_exactly_once() {
             (name, about.trim_start())
         })
         .collect();
-    assert_eq!(rows.len(), 8, "{rows:?}");
+    assert_eq!(rows.len(), 7, "{rows:?}");
     assert!(
         rows.windows(2).all(|pair| pair[0].0 < pair[1].0),
         "root help lists commands alphabetically: {rows:?}"

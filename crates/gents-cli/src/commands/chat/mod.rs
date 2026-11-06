@@ -1,302 +1,87 @@
 mod approvals;
-mod interactive;
 pub(crate) mod streaming;
 
-use gents::store::config_client::GraphqlEndpoint;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
-use serde_json::{json, Value};
+use anyhow::{bail, Result};
+use gents::plugin::approval::Answer;
+use gents::store::config_client::GraphqlEndpoint;
 
-use crate::cli::args::ChatArgs;
-use crate::cli::output_format::OutputFormat;
-use crate::request_helpers::{create_goal_backed_agent_request, ensure_local_request_signer};
-use crate::{
-    create_agent_request, print_json, require_non_empty, resolve_home_dir,
-    wait_for_terminal_response, write_json_output_file, RequestOutputEnvelope,
-    RequestSubmitOptions, SubmittedRequest,
+use crate::request_helpers::{
+    ensure_local_request_signer, wait_for_terminal_response_with_progress,
 };
+use crate::{create_agent_request, RequestOutputEnvelope, RequestSubmitOptions};
 
-pub(crate) use streaming::{load_existing_tool_call_keys, stream_turn_progress, ApprovalHandling};
-use streaming::{sanitize_summary_text, SUMMARY_ARGUMENT_MAX_CHARS};
+pub(crate) use streaming::{load_existing_tool_call_keys, stream_turn_progress};
 
-pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
-    let home_dir = resolve_home_dir(args.home.as_deref());
-    let runtime_state = crate::read_runtime_state(&home_dir)?;
-    let init_config = crate::read_init_config(&home_dir)?;
-    let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let node_did = match args
-        .node_did
-        .clone()
-        .or_else(|| runtime_state.as_ref().map(|state| state.node_did.clone()))
-        .or_else(|| init_config.as_ref().map(|config| config.node_did.clone()))
-    {
-        Some(node_did) => node_did,
-        None => bail!(
-            "node DID is required; run `gents init`, start `gents runtime server`, then retry `gents chat`, or pass --node-did explicitly"
-        ),
-    };
-    let session_id = args
-        .session_id
-        .clone()
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    ensure_local_request_signer(args.home.as_deref(), &node_did)?;
-    let goal = args
-        .goal_objective
-        .as_deref()
-        .map(|objective| GoalBackedSubmission {
-            objective,
-            token_budget: args.goal_token_budget,
-        });
+/// A turn's own deadlines end it sooner; this only bounds a runtime that stops answering.
+const PRINT_TIMEOUT_SECS: u64 = 86_400;
+const PRINT_POLL_SECS: u64 = 1;
 
-    if let Some(message) = resolve_chat_message(&args.message, args.message_file.as_deref())? {
-        match args
-            .output_format
-            .ensure_supported("chat", &[OutputFormat::Text, OutputFormat::Json])?
-        {
-            OutputFormat::Text => {
-                let envelope = submit_chat_turn_with_goal(
-                    &home_dir,
-                    &graphql,
-                    &node_did,
-                    &session_id,
-                    args.agent_id.as_deref(),
-                    &message,
-                    goal,
-                    args.timeout_secs,
-                    args.poll_secs,
-                    args.verbose,
-                )
-                .await?;
-                if let Some(path) = args.output_file.as_deref() {
-                    write_text_output_file(path, chat_turn_text_content(&envelope))?;
-                }
-            }
-            OutputFormat::Json => {
-                let output = submit_chat_turn_json(
-                    &graphql,
-                    &node_did,
-                    &session_id,
-                    args.agent_id.as_deref(),
-                    &message,
-                    goal,
-                    args.timeout_secs,
-                    args.poll_secs,
-                )
-                .await?;
-                print_json(&output)?;
-                if let Some(path) = args.output_file.as_deref() {
-                    write_json_output_file(path, &output)?;
-                }
-            }
-            _ => unreachable!("ensure_supported restricts chat output formats"),
-        }
-        return Ok(());
-    }
-
-    if args.output_format != OutputFormat::Text {
-        anyhow::bail!("interactive chat only supports --output text");
-    }
-    if let Some(path) = args.output_file.as_deref() {
-        anyhow::bail!(
-            "--output-file {} requires a one-shot message via MESSAGE or --message-file",
-            path.display()
-        );
-    }
-
-    let prompt_label = chat_prompt_label(&args, runtime_state.as_ref());
-
-    interactive::run(
-        &home_dir,
-        &graphql,
-        &node_did,
+/// Sends `message` as the first turn of a new session and prints the reply. Only the reply
+/// reaches stdout, so `gents -p` can feed a pipe, and an approval the turn asks for is
+/// denied because nobody is there to answer it.
+pub(crate) async fn print_reply(
+    home: &Path,
+    graphql: &GraphqlEndpoint,
+    node_did: &str,
+    agent_id: Option<&str>,
+    message: &str,
+) -> Result<()> {
+    ensure_local_request_signer(Some(home), node_did)?;
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let input = gents::request::lifecycle::prepare_user_message_input(
+        &gents::ConfigAccess::Graphql(graphql.clone()),
+        node_did,
         &session_id,
-        args.agent_id.as_deref(),
-        goal,
-        &prompt_label,
-        args.timeout_secs,
-        args.poll_secs,
-        args.verbose,
-    )
-    .await
-}
-
-fn chat_prompt_label(
-    args: &ChatArgs,
-    runtime_state: Option<&crate::shared::StoredRuntimeState>,
-) -> String {
-    sanitize_prompt_label(
-        args.node_name
-            .clone()
-            .or_else(|| runtime_state.map(|state| state.node_name.clone())),
-    )
-}
-
-fn sanitize_prompt_label(name: Option<String>) -> String {
-    name.and_then(|name| sanitize_summary_text(&name, SUMMARY_ARGUMENT_MAX_CHARS))
-        .unwrap_or_else(|| "gents".to_string())
-}
-
-#[derive(Clone, Copy)]
-struct GoalBackedSubmission<'a> {
-    objective: &'a str,
-    token_budget: Option<i64>,
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn submit_chat_turn_with_goal(
-    home_dir: &Path,
-    graphql: &GraphqlEndpoint,
-    node_did: &str,
-    session_id: &str,
-    agent_id: Option<&str>,
-    content: &str,
-    goal: Option<GoalBackedSubmission<'_>>,
-    timeout_secs: u64,
-    poll_secs: u64,
-    verbose: bool,
-) -> Result<RequestOutputEnvelope> {
-    let existing_tool_calls = load_existing_tool_call_keys(graphql, session_id).await?;
-    let input = gents::request::lifecycle::prepare_user_message_input(
-        &gents::ConfigAccess::Graphql(graphql.clone()),
-        node_did,
-        session_id,
         Default::default(),
         gents_protocol::request_input::QueueDelivery::Steer,
     )
     .await?;
-    let submitted = match goal {
-        Some(goal) => {
-            create_goal_backed_agent_request(
-                graphql,
-                node_did,
-                content,
-                session_id,
-                agent_id,
-                goal.objective,
-                goal.token_budget,
-                input,
-            )
-            .await?
-        }
-        None => {
-            create_agent_request(
-                graphql,
-                node_did,
-                content,
-                Some(session_id),
-                agent_id,
-                RequestSubmitOptions {
-                    input: Some(input),
-                    ..Default::default()
-                },
-            )
-            .await?
-        }
-    };
-    stream_turn_progress(
+    let submitted = create_agent_request(
         graphql,
-        &submitted,
-        existing_tool_calls,
-        timeout_secs,
-        poll_secs,
-        verbose,
-        ApprovalHandling::Answer(home_dir),
-        true,
-    )
-    .await
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "request fields plus the CLI's timeout and poll settings"
-)]
-async fn submit_chat_turn_json(
-    graphql: &GraphqlEndpoint,
-    node_did: &str,
-    session_id: &str,
-    agent_id: Option<&str>,
-    content: &str,
-    goal: Option<GoalBackedSubmission<'_>>,
-    timeout_secs: u64,
-    poll_secs: u64,
-) -> Result<Value> {
-    let input = gents::request::lifecycle::prepare_user_message_input(
-        &gents::ConfigAccess::Graphql(graphql.clone()),
         node_did,
-        session_id,
-        Default::default(),
-        gents_protocol::request_input::QueueDelivery::Steer,
+        message,
+        Some(&session_id),
+        agent_id,
+        RequestSubmitOptions {
+            input: Some(input),
+            ..Default::default()
+        },
     )
     .await?;
-    let submitted = match goal {
-        Some(goal) => {
-            create_goal_backed_agent_request(
-                graphql,
-                node_did,
-                content,
-                session_id,
-                agent_id,
-                goal.objective,
-                goal.token_budget,
-                input,
-            )
-            .await?
-        }
-        None => {
-            create_agent_request(
-                graphql,
-                node_did,
-                content,
-                Some(session_id),
-                agent_id,
-                RequestSubmitOptions {
-                    input: Some(input),
-                    ..Default::default()
-                },
-            )
-            .await?
-        }
-    };
-    let envelope =
-        wait_for_terminal_response(graphql, &submitted.request_id, timeout_secs, poll_secs)
-            .await
-            .with_context(|| {
-                format!(
-                    "waiting for request {} to reach a terminal lifecycle state",
-                    submitted.request_id
-                )
-            })?;
-    Ok(chat_turn_output(&submitted, envelope))
-}
-
-fn resolve_chat_message(message: &[String], message_file: Option<&Path>) -> Result<Option<String>> {
-    if !message.is_empty() && message_file.is_some() {
-        anyhow::bail!("provide either MESSAGE or --message-file, not both");
+    let envelope = wait_for_terminal_response_with_progress(
+        graphql,
+        &submitted.request_id,
+        PRINT_TIMEOUT_SECS,
+        PRINT_POLL_SECS,
+        || deny_pending_approvals(home, &session_id),
+    )
+    .await?;
+    if let Some(reason) = envelope
+        .request
+        .failure_reason
+        .as_deref()
+        .filter(|reason| !reason.trim().is_empty())
+    {
+        bail!("the agent's turn failed: {reason}");
     }
-    if !message.is_empty() {
-        return Ok(Some(
-            require_non_empty("message", &message.join(" "))?.to_string(),
-        ));
+    let reply = chat_turn_text_content(&envelope);
+    if !reply.trim().is_empty() {
+        println!("{reply}");
     }
-    if let Some(path) = message_file {
-        let message = std::fs::read_to_string(path)
-            .with_context(|| format!("reading chat message from {}", path.display()))?;
-        return Ok(Some(
-            require_non_empty("message-file", &message)?.to_string(),
-        ));
-    }
-    Ok(None)
-}
-
-fn write_text_output_file(path: &Path, content: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating output directory {}", parent.display()))?;
-    }
-    std::fs::write(path, content)
-        .with_context(|| format!("writing text output file {}", path.display()))?;
     Ok(())
+}
+
+async fn deny_pending_approvals(home: &Path, session_id: &str) -> Result<bool> {
+    let (home, session_id) = (home.to_path_buf(), session_id.to_owned());
+    tokio::task::spawn_blocking(move || {
+        approvals::answer_pending(&home, &session_id, |request| {
+            eprintln!("{} Denied: `gents -p` has no one to ask.", request.prompt());
+            Answer::Deny
+        })
+    })
+    .await?
 }
 
 fn terminal_presentation(
@@ -313,41 +98,4 @@ pub(crate) fn chat_turn_text_content(envelope: &RequestOutputEnvelope) -> &str {
     terminal_presentation(envelope)
         .map(|presentation| presentation.body_markdown.as_str())
         .unwrap_or("")
-}
-
-fn chat_turn_output(submitted: &SubmittedRequest, envelope: RequestOutputEnvelope) -> Value {
-    let request = serde_json::to_value(&envelope.request).unwrap_or(serde_json::Value::Null);
-    let output = serde_json::to_value(&envelope.output).unwrap_or(serde_json::Value::Null);
-    json!({
-        "request_id": submitted.request_id,
-        "session_id": submitted.session_id,
-        "node_did": submitted.node_did,
-        "agent_id": submitted.agent_id,
-        "request": request,
-        "output": output,
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn prompt_label_strips_control_characters_and_bounds_a_hostile_node_name() {
-        let hostile = format!("gents\x1b[31mHACKED\x1b[0m\r\n{}", "x".repeat(200));
-        let label = sanitize_prompt_label(Some(hostile));
-        assert!(!label.contains('\u{1b}'), "ESC leaked: {label:?}");
-        assert!(!label.contains('\r'), "CR leaked: {label:?}");
-        assert!(
-            !label.contains('\n'),
-            "prompt label must stay one line: {label:?}"
-        );
-        assert!(label.chars().count() <= SUMMARY_ARGUMENT_MAX_CHARS + 3);
-    }
-
-    #[test]
-    fn prompt_label_falls_back_to_gents_when_nothing_printable_remains() {
-        assert_eq!(sanitize_prompt_label(None), "gents");
-        assert_eq!(sanitize_prompt_label(Some("\x1b\x07".to_string())), "gents");
-    }
 }

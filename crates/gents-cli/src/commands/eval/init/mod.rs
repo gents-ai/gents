@@ -352,7 +352,7 @@ pub(crate) async fn run(
     .await;
     writeln!(
         out,
-        "session {id}: continue it with `gents chat --session-id {id} --agent-id {}`",
+        "session {id}: continue it with `gents utils debug request submit --session-id {id} --agent-id {} --content MESSAGE`",
         author_agent,
         id = turn.session_id()
     )?;

@@ -6,13 +6,15 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
-- The CLI has eight top-level commands: `accounts`, `automation`,
-  `chat`, `config`, `runtime`, `sessions`, `status` and `utils`, and `gents --help`
-  lists them with a description each. The old names stop working; there are no
+- The CLI has seven top-level commands: `accounts`, `automation`, `config`,
+  `runtime`, `sessions`, `status` and `utils`, and `gents --help` lists them
+  with a description each. The old names stop working; there are no
   aliases, so update scripts that call them.
 
   | Old | New |
   | --- | --- |
+  | `chat MESSAGE` | `gents -p MESSAGE`; interactive `chat` is gone |
+  | `chat --session-id`, `--message-file`, `--output json` | `utils debug request submit --session-id`, `--content-file` |
   | `codex-login`, `grok-login`, `claude-login`, `claude-gateway-login` | `accounts login codex`, `grok`, `claude`, `claude-gateway` |
   | `cloud login` | `accounts login cloud` |
   | `codex-auth-probe`, `grok-auth-probe` | `accounts probe codex`, `grok` |
@@ -32,6 +34,20 @@ source consistency checks, not a separate runtime compatibility version.
   `gents server` and `gents service` also still work, hidden: installed service
   definitions run `gents server`, and an updater of another version runs
   `gents service update-check`.
+- `gents -p MESSAGE` sends one message to the home's default agent, or to
+  `--agent ID`, prints only the reply and exits, as `claude -p` does. It brings
+  up the runtime as bare `gents` does, needs no terminal on a home that is set
+  up, and denies any approval the turn asks for.
+- `gents PROMPT` opens the configured interface, Codex or Grok, with PROMPT as
+  its first message, as `claude "query"` does. A PROMPT that is only a former
+  command's name, such as `reset`, is refused with the command's new name rather
+  than sent. Codex and Grok get the prompt after `--`, so one that names their
+  own subcommand, such as `update`, is sent instead of run; this also covers
+  `gents codex PROMPT`.
+- `gents --yolo` opens the yolo agent, and `gents --yolo -p MESSAGE` messages it:
+  a general-purpose agent with a copy of the default agent's tools, The
+  Engineer's on a home `gents` set up. The first use makes it, later uses reuse
+  it.
 - `gents` with no command sets up a home on first run, brings up its runtime
   through the native service without enabling it at login, and opens the
   configured interface. Setup seeds The Engineer with the desktop's default

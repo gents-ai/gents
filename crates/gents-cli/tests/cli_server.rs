@@ -2372,7 +2372,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
     let output = run_cli_text(
         &home_dir,
         &[
-            "chat",
+            "-p",
             "backend auth should flow through the configured env var",
         ],
     )?;

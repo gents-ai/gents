@@ -14,12 +14,10 @@ use crate::{
     request_output_envelope, RequestOutputEnvelope,
 };
 
-use super::SubmittedRequest;
+use crate::SubmittedRequest;
 
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
-const SPINNER_FRAMES: [char; 4] = ['-', '\\', '|', '/'];
-const SPINNER_INTERVAL: Duration = Duration::from_millis(120);
 
 #[derive(Debug, Clone)]
 pub(super) struct ToolCallProgress {
@@ -157,121 +155,10 @@ fn dim(text: &str, colors: bool) -> String {
     }
 }
 
-struct WorkingIndicator {
-    stop: Option<tokio::sync::oneshot::Sender<()>>,
-    task: Option<tokio::task::JoinHandle<()>>,
-}
-
-fn spinner_enabled(stdout_tty: bool, stderr_tty: bool) -> bool {
-    stdout_tty && stderr_tty
-}
-
-impl WorkingIndicator {
-    fn start_if_tty() -> Option<Self> {
-        if !spinner_enabled(io::stdout().is_terminal(), io::stderr().is_terminal()) {
-            return None;
-        }
-        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
-        let task = tokio::spawn(spin(stop_rx));
-        Some(Self {
-            stop: Some(stop_tx),
-            task: Some(task),
-        })
-    }
-
-    async fn clear(mut self) {
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
-        if let Some(task) = self.task.take() {
-            let _ = task.await;
-        }
-    }
-}
-
-impl Drop for WorkingIndicator {
-    fn drop(&mut self) {
-        if let Some(task) = self.task.take() {
-            task.abort();
-        }
-    }
-}
-
-async fn spin(mut stop: tokio::sync::oneshot::Receiver<()>) {
-    let mut ticker = tokio::time::interval(SPINNER_INTERVAL);
-    let mut frame = 0usize;
-    loop {
-        tokio::select! {
-            _ = ticker.tick() => {
-                eprint!("\r{} working...", SPINNER_FRAMES[frame % SPINNER_FRAMES.len()]);
-                let _ = io::stderr().flush();
-                frame += 1;
-            }
-            _ = &mut stop => break,
-        }
-    }
-    eprint!("\r\x1b[2K");
-    let _ = io::stderr().flush();
-}
-
-async fn clear_indicator(indicator: &mut Option<WorkingIndicator>) {
-    if let Some(indicator) = indicator.take() {
-        indicator.clear().await;
-    }
-}
-
 fn folded_input_completed(state: RequestLifecycleState, reason: &str) -> bool {
     state == RequestLifecycleState::Superseded && reason == gents::request::lifecycle::FOLDED_REASON
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum ApprovalHandling<'a> {
-    None,
-    Answer(&'a std::path::Path),
-    Observe(&'a std::path::Path),
-}
-
-fn pending_approvals_home<'a>(
-    mode: ApprovalHandling<'a>,
-    session: &str,
-) -> Result<Option<&'a std::path::Path>> {
-    let home = match mode {
-        ApprovalHandling::None => return Ok(None),
-        ApprovalHandling::Answer(home) | ApprovalHandling::Observe(home) => home,
-    };
-    Ok(super::approvals::has_pending(home, session)?.then_some(home))
-}
-
-async fn approval_progress(mode: ApprovalHandling<'_>, session: &str) -> Result<bool> {
-    let Some(home) = pending_approvals_home(mode, session)? else {
-        return Ok(false);
-    };
-    answer_pending_approvals(mode, home, session).await?;
-    Ok(true)
-}
-
-async fn answer_pending_approvals(
-    mode: ApprovalHandling<'_>,
-    home: &std::path::Path,
-    session: &str,
-) -> Result<()> {
-    if matches!(mode, ApprovalHandling::Answer(_)) {
-        let home = home.to_path_buf();
-        let session = session.to_owned();
-        tokio::task::spawn_blocking(move || {
-            super::approvals::answer_pending(&home, &session, |request| {
-                super::approvals::ask_on_terminal(request)
-            })
-        })
-        .await??;
-    }
-    Ok(())
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the submitted request plus independent CLI polling and rendering options"
-)]
 pub(crate) async fn stream_turn_progress(
     graphql: &GraphqlEndpoint,
     submitted: &SubmittedRequest,
@@ -279,7 +166,6 @@ pub(crate) async fn stream_turn_progress(
     timeout_secs: u64,
     poll_secs: u64,
     verbose: bool,
-    approval_handling: ApprovalHandling<'_>,
     render_folded_output: bool,
 ) -> Result<RequestOutputEnvelope> {
     let idle_timeout = Duration::from_secs(timeout_secs);
@@ -288,16 +174,8 @@ pub(crate) async fn stream_turn_progress(
     let mut thinking_printed = false;
     let mut tool_output_fingerprints = std::collections::BTreeMap::new();
     let colors = colors_enabled();
-    let mut indicator = matches!(approval_handling, ApprovalHandling::Answer(_))
-        .then(WorkingIndicator::start_if_tty)
-        .flatten();
 
     loop {
-        if let Some(home) = pending_approvals_home(approval_handling, &submitted.session_id)? {
-            clear_indicator(&mut indicator).await;
-            answer_pending_approvals(approval_handling, home, &submitted.session_id).await?;
-            last_progress_at = tokio::time::Instant::now();
-        }
         let query = chat_progress_query(submitted);
         let response = post_graphql(graphql, &query).await?;
         let rows = response
@@ -334,13 +212,12 @@ pub(crate) async fn stream_turn_progress(
                 .as_ref()
                 .is_some_and(|row| gents::request::lifecycle::replaced_by(row).is_some())
         {
-            clear_indicator(&mut indicator).await;
             let envelope = crate::request_helpers::wait_for_terminal_response_with_progress(
                 graphql,
                 &submitted.request_id,
                 timeout_secs,
                 poll_secs,
-                || approval_progress(approval_handling, &submitted.session_id),
+                || async { Ok(false) },
             )
             .await?;
             if render_folded_output {
@@ -399,7 +276,6 @@ pub(crate) async fn stream_turn_progress(
                 if previous_fingerprint != output_fingerprint {
                     tool_output_fingerprints.insert(tool.tool_call_key.clone(), output_fingerprint);
                     last_progress_at = tokio::time::Instant::now();
-                    clear_indicator(&mut indicator).await;
                     println!("{}", render_live_tool_line(&tool, verbose, colors));
                     io::stdout().flush()?;
                 }
@@ -420,7 +296,6 @@ pub(crate) async fn stream_turn_progress(
             tool_output_fingerprints.insert(tool.tool_call_key.clone(), output_fingerprint);
             known_tool_calls.insert(tool.tool_call_key.clone(), tool.status.clone());
             last_progress_at = tokio::time::Instant::now();
-            clear_indicator(&mut indicator).await;
             if previous_status.is_none() && matches!(tool.status.as_str(), "completed" | "error") {
                 println!("{}", render_tool_start_line(&tool, verbose, colors));
             }
@@ -453,7 +328,6 @@ pub(crate) async fn stream_turn_progress(
         }
         if let Some(output) = observed_output.as_ref() {
             if !thinking_printed && should_print_thinking(lifecycle_state, output) {
-                clear_indicator(&mut indicator).await;
                 println!("{}", dim("[thinking]", colors));
                 io::stdout().flush()?;
                 thinking_printed = true;
@@ -515,7 +389,6 @@ pub(crate) async fn stream_turn_progress(
                         crate::CliOutputObservation::TerminalNoMessage => None,
                         _ => unreachable!("exact terminal selection produced another variant"),
                     };
-                    clear_indicator(&mut indicator).await;
                     if let Some(presentation) = presentation {
                         if !presentation.body_markdown.trim().is_empty() {
                             println!("{}", presentation.body_markdown);
@@ -1264,14 +1137,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn spinner_enabled_requires_both_stdout_and_stderr_to_be_terminals() {
-        assert!(spinner_enabled(true, true));
-        assert!(!spinner_enabled(true, false));
-        assert!(!spinner_enabled(false, true));
-        assert!(!spinner_enabled(false, false));
-    }
-
     mod account_problem {
         use super::*;
         use gents::inference::auth::credential::{AccountState, AccountSummary, ServingAccount};
@@ -1401,56 +1266,5 @@ mod folded_input_tests {
             RequestLifecycleState::Superseded,
             "another failure"
         ));
-    }
-}
-
-#[cfg(test)]
-mod approval_progress_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn observing_pending_approval_reports_progress_without_answering() {
-        use gents::pack::BindAccess;
-        use gents::plugin::{allowed::Resolved, approval};
-        let home = tempfile::tempdir().unwrap();
-        let request = approval::Request::new(
-            "fixture/plugin",
-            &Resolved {
-                target: home.path().join("requested-file"),
-                is_dir: false,
-            },
-            BindAccess::Read,
-            Some("held-session".into()),
-        );
-        let dir = approval::queue_dir(home.path());
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join(format!("{}.json", request.id)),
-            serde_json::to_vec(&request).unwrap(),
-        )
-        .unwrap();
-        assert!(!approval_progress(ApprovalHandling::None, "held-session")
-            .await
-            .unwrap());
-        assert!(
-            !approval_progress(ApprovalHandling::Observe(home.path()), "other-session")
-                .await
-                .unwrap()
-        );
-        assert!(
-            approval_progress(ApprovalHandling::Observe(home.path()), "held-session")
-                .await
-                .unwrap()
-        );
-        assert_eq!(
-            approval::pending(home.path()).unwrap(),
-            vec![request.clone()]
-        );
-        approval::decide(home.path(), &request.id, approval::Answer::Deny).unwrap();
-        assert!(
-            !approval_progress(ApprovalHandling::Observe(home.path()), "held-session")
-                .await
-                .unwrap()
-        );
     }
 }

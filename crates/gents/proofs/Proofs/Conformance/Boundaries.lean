@@ -257,7 +257,7 @@ def boundaries : List Boundary :=
     , statement :=
         "The modeled CaptureKey is a five-component tuple (nodeDid, sessionId, requestId, turnIndex, attempt) with componentwise decidable equality, so \"the same key\" means \"the same five facts\" and there is no delimiter to collide on. The durable column is a single string. The model does not prove that the Rust encoding is injective on the tuple; that obligation sits entirely on the encoder."
     , acceptedFailureMode :=
-        some "A non-injective encoder merges two distinct attempts into one capture key. The existing composite key in the tree shows this is a live class rather than a hypothetical one: AgentToolCall.tool_call_key is an unescaped \"{session_id}:{tool_call_id}\" concatenation, and session_id reaches it unvalidated from `gents chat --session-id`, so a crafted session id can shadow or pre-claim another session's key."
+        some "A non-injective encoder merges two distinct attempts into one capture key. The existing composite key in the tree shows this is a live class rather than a hypothetical one: AgentToolCall.tool_call_key is an unescaped \"{session_id}:{tool_call_id}\" concatenation, and session_id reaches it unvalidated from `gents utils debug request submit --session-id`, so a crafted session id can shadow or pre-claim another session's key."
     , acceptedFollowUp :=
         some "Derive capture_key from a canonical encoding of the tuple (length-prefixed or canonical-JSON, then hashed) and fence injectivity with an adversarial Rust property test, rather than concatenating with a delimiter."
     }

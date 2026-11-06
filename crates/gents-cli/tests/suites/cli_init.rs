@@ -1191,7 +1191,7 @@ async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Re
     wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
     let reply = run_cli_text(
         &home_dir,
-        &["chat", "Reply with exactly the configured token."],
+        &["-p", "Reply with exactly the configured token."],
     )?;
     assert!(
         reply.contains(&expected_reply),

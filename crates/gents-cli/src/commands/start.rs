@@ -4,22 +4,27 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use clap::CommandFactory as _;
+use gents::store::config_client::GraphqlEndpoint;
 
 use crate::cli::args::{CodexArgs, StoreKeyCustodyArg};
 use crate::cli::Cli;
 use crate::client_settings::{ensure_client_supported, ClientSettings, InterfaceClient};
 use crate::commands::codex::{
     endpoint_answers, ensure_an_agent_can_run, ensure_endpoint_is_this_homes, interface_bin,
-    launch_interface, open_codex, runtime_identity_at, PUBLISH_WAIT,
+    launch_interface, open_codex, runtime_identity_at, wait_for_agent_to_publish, PUBLISH_WAIT,
 };
 use crate::graphql_access::graphql_endpoint_available;
 use crate::home_state::{read_finished_init_config, read_runtime_state, resolve_home_dir};
 use crate::native_service::{NativeServiceConfig, NativeServiceManager, NativeServicePlatform};
 
 mod setup;
+mod yolo;
 
 const GROK_BIN_ENV: &str = "GENTS_GROK_BIN";
 const ENDPOINT_WAIT: Duration = Duration::from_secs(60);
+/// A runtime publishes an agent it did not have at start once it reconciles the new
+/// documents, and nothing tells another process when that has happened.
+const YOLO_PUBLISH_WAIT: Duration = Duration::from_secs(30);
 
 enum InterfaceEndpoint {
     Codex {
@@ -104,7 +109,7 @@ impl InterfaceEndpoint {
         }
     }
 
-    async fn open(self, agent: Option<String>) -> Result<()> {
+    async fn open(self, agent: Option<String>, prompt: Option<String>) -> Result<()> {
         match self {
             Self::Codex { remote } => {
                 open_codex(CodexArgs {
@@ -112,7 +117,7 @@ impl InterfaceEndpoint {
                     remote_auth_token_env: None,
                     agent,
                     no_alt_screen: false,
-                    prompt: None,
+                    prompt,
                 })
                 .await
             }
@@ -120,7 +125,7 @@ impl InterfaceEndpoint {
                 launch_interface(
                     "Grok",
                     &interface_bin(GROK_BIN_ENV, "grok"),
-                    &grok_command_args(&socket, agent.as_deref()),
+                    &grok_command_args(&socket, agent.as_deref(), prompt.as_deref()),
                     &interface_install_message(InterfaceClient::Grok),
                     None,
                 )
@@ -130,39 +135,115 @@ impl InterfaceEndpoint {
     }
 }
 
+pub(crate) struct StartArgs {
+    pub(crate) home: Option<PathBuf>,
+    pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
+    pub(crate) agent: Option<String>,
+    pub(crate) print: Option<String>,
+    pub(crate) prompt: Option<String>,
+    pub(crate) yolo: bool,
+}
+
 /// Dispatched before telemetry, so nothing writes over the interface.
-pub(crate) async fn run(
-    home: Option<PathBuf>,
-    store_key_custody: Option<StoreKeyCustodyArg>,
-    agent: Option<String>,
-) -> Result<()> {
+pub(crate) async fn run(args: StartArgs) -> Result<()> {
     // Setup prompts go to stderr, so a redirected stderr would hide them.
-    if !std::io::stdin().is_terminal()
-        || !std::io::stdout().is_terminal()
-        || !std::io::stderr().is_terminal()
-    {
+    let terminal = std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+        && std::io::stderr().is_terminal();
+    if !terminal && args.print.is_none() {
         eprint!("{}", Cli::command().render_help());
         std::process::exit(2);
     }
-    let home_given = home.map(crate::absolutize).transpose()?;
+    let home_given = args.home.map(crate::absolutize).transpose()?;
     let mut home = crate::absolutize(resolve_home_dir(home_given.as_deref()))?;
     let config = match read_finished_init_config(&home)? {
         Some(config) => config,
         None => {
-            home = setup::setup(home_given, store_key_custody).await?;
+            ensure!(
+                terminal,
+                "{} is not set up yet; run `gents` in a terminal to set it up, then run this again",
+                crate::shell_word(&home)
+            );
+            home = setup::setup(home_given, args.store_key_custody).await?;
             read_finished_init_config(&home)?.context("setup left this home uninitialized")?
         }
     };
-    let mut endpoint = InterfaceEndpoint::for_client(ClientSettings::read(&home)?.client)?;
-    ensure_runtime(&home, &config.node_did, &mut endpoint).await?;
-    ensure_an_agent_can_run(
-        crate::DEFAULT_CODEX_REMOTE,
+    let Some(message) = args.print else {
+        let mut endpoint = InterfaceEndpoint::for_client(ClientSettings::read(&home)?.client)?;
+        ensure_runtime(&home, &config.node_did, &mut endpoint).await?;
+        let agent = match args.yolo {
+            true => {
+                let graphql = crate::resolve_graphql_endpoint(None, Some(&home))?;
+                let (agent, made) = yolo::ensure_agent(&home, &config, &graphql).await?;
+                if made {
+                    wait_for_agent_to_publish(
+                        crate::DEFAULT_CODEX_REMOTE,
+                        &agent,
+                        YOLO_PUBLISH_WAIT,
+                    )
+                    .await;
+                }
+                Some(agent)
+            }
+            false => args.agent,
+        };
+        ensure_an_agent_can_run(
+            crate::DEFAULT_CODEX_REMOTE,
+            &home,
+            agent.is_some(),
+            PUBLISH_WAIT,
+        )
+        .await?;
+        return endpoint.open(agent, args.prompt).await;
+    };
+    let graphql = ensure_graphql(&home).await?;
+    let agent = match args.yolo {
+        true => Some(yolo::ensure_agent(&home, &config, &graphql).await?.0),
+        false => args.agent,
+    };
+    crate::commands::chat::print_reply(
         &home,
-        agent.is_some(),
-        PUBLISH_WAIT,
+        &graphql,
+        &config.node_did,
+        agent.as_deref(),
+        &message,
     )
-    .await?;
-    endpoint.open(agent).await
+    .await
+}
+
+/// `-p` needs only GraphQL, so a runtime with its interface endpoints off still answers it.
+async fn ensure_graphql(home: &Path) -> Result<GraphqlEndpoint> {
+    if let Some(graphql) = answering_graphql(home).await? {
+        return Ok(graphql);
+    }
+    start_service(home).await?;
+    eprintln!(
+        "Waiting for this home's runtime to answer (up to {} s).",
+        ENDPOINT_WAIT.as_secs()
+    );
+    let deadline = Instant::now() + ENDPOINT_WAIT;
+    loop {
+        if let Some(graphql) = answering_graphql(home).await? {
+            return Ok(graphql);
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "the runtime did not answer within {} s; it was left running, check `gents runtime service status --home {}`",
+                ENDPOINT_WAIT.as_secs(),
+                crate::shell_word(home)
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn answering_graphql(home: &Path) -> Result<Option<GraphqlEndpoint>> {
+    match read_runtime_state(home)? {
+        Some(state) if graphql_endpoint_available(&state.graphql).await => Ok(Some(
+            crate::resolve_graphql_endpoint(Some(&state.graphql), Some(home))?,
+        )),
+        _ => Ok(None),
+    }
 }
 
 async fn ensure_runtime(
@@ -178,6 +259,13 @@ async fn ensure_runtime(
             return ensure_up_runtime_opens(home, expected_did, endpoint, ENDPOINT_WAIT).await;
         }
     }
+    start_service(home).await?;
+    wait_for_endpoint(home, endpoint, ENDPOINT_WAIT).await?;
+    endpoint.ensure_is_this_homes(home, expected_did).await
+}
+
+/// Starts this home's native service, installing it first if it is not installed.
+async fn start_service(home: &Path) -> Result<()> {
     let hint = no_service_manager_message(home);
     let platform = NativeServicePlatform::current().map_err(|_| anyhow!("{hint}"))?;
     let service_home = home.to_path_buf();
@@ -192,9 +280,7 @@ async fn ensure_runtime(
         manager.start(false)
     })
     .await?
-    .map_err(|error| anyhow!("{error:#}\n{hint}"))?;
-    wait_for_endpoint(home, endpoint, ENDPOINT_WAIT).await?;
-    endpoint.ensure_is_this_homes(home, expected_did).await
+    .map_err(|error| anyhow!("{error:#}\n{hint}"))
 }
 
 /// A runtime answers GraphQL before it opens its interface endpoints, so one still starting
@@ -251,7 +337,7 @@ fn no_service_manager_message(home: &Path) -> String {
     )
 }
 
-fn grok_command_args(socket: &Path, agent: Option<&str>) -> Vec<String> {
+fn grok_command_args(socket: &Path, agent: Option<&str>, prompt: Option<&str>) -> Vec<String> {
     let mut args = vec![
         "--leader".to_string(),
         "--leader-socket".to_string(),
@@ -260,6 +346,9 @@ fn grok_command_args(socket: &Path, agent: Option<&str>) -> Vec<String> {
     if let Some(agent) = agent {
         args.push("--agent".to_string());
         args.push(agent.to_string());
+    }
+    if let Some(prompt) = prompt {
+        args.extend(["--".to_string(), prompt.to_string()]);
     }
     args
 }
@@ -275,7 +364,7 @@ pub(crate) fn interface_install_message(client: InterfaceClient) -> String {
             GROK_BIN_ENV,
         ),
     };
-    format!("{how}, or set {override_env} to its path. `gents chat` works without it.")
+    format!("{how}, or set {override_env} to its path. `gents -p MESSAGE` works without it.")
 }
 
 #[cfg(test)]
@@ -542,7 +631,7 @@ mod tests {
     #[test]
     fn grok_args_are_exact() {
         assert_eq!(
-            grok_command_args(Path::new("/tmp/leader.sock"), None),
+            grok_command_args(Path::new("/tmp/leader.sock"), None, None),
             ["--leader", "--leader-socket", "/tmp/leader.sock"]
         );
     }
@@ -550,13 +639,29 @@ mod tests {
     #[test]
     fn grok_args_carry_the_agent() {
         assert_eq!(
-            grok_command_args(Path::new("/tmp/leader.sock"), Some("did:key:z:other")),
+            grok_command_args(Path::new("/tmp/leader.sock"), Some("did:key:z:other"), None),
             [
                 "--leader",
                 "--leader-socket",
                 "/tmp/leader.sock",
                 "--agent",
                 "did:key:z:other"
+            ]
+        );
+    }
+
+    /// Grok's prompt is a positional beside its subcommands, so a prompt that is a
+    /// subcommand's name, such as `update`, would run that subcommand without the separator.
+    #[test]
+    fn grok_args_end_with_the_prompt_after_a_separator() {
+        assert_eq!(
+            grok_command_args(Path::new("/tmp/leader.sock"), None, Some("update")),
+            [
+                "--leader",
+                "--leader-socket",
+                "/tmp/leader.sock",
+                "--",
+                "update"
             ]
         );
     }

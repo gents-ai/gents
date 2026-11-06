@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use crate::{
-    CHAT_AFTER_HELP, CODEX_AFTER_HELP, CONFIG_AFTER_HELP, DIAGNOSE_AFTER_HELP, INIT_AFTER_HELP,
-    P2P_AFTER_HELP, PROVISION_AFTER_HELP, RESET_AFTER_HELP, ROOT_HELP_TEMPLATE, SERVER_AFTER_HELP,
+    CODEX_AFTER_HELP, CONFIG_AFTER_HELP, DIAGNOSE_AFTER_HELP, INIT_AFTER_HELP, P2P_AFTER_HELP,
+    PROVISION_AFTER_HELP, RESET_AFTER_HELP, ROOT_HELP_TEMPLATE, SERVER_AFTER_HELP,
     SESSION_AFTER_HELP, STATUS_AFTER_HELP, TASK_AFTER_HELP,
 };
 
@@ -60,6 +60,77 @@ fn parse_env_var_name(value: &str) -> Result<String, String> {
     Ok(value.to_string())
 }
 
+fn parse_message(value: &str) -> Result<String, String> {
+    crate::require_non_empty("message", value)
+        .map(str::to_string)
+        .map_err(|error| error.to_string())
+}
+
+/// Root commands from before the regrouping, and where each went. A bare `gents PROMPT`
+/// sends the prompt to an agent that may run commands as the user, so one that is only a
+/// former command's name, typed from habit, is refused instead of sent: `gents reset` must
+/// not become a message saying "reset".
+const FORMER_COMMANDS: &[(&str, &str)] = &[
+    ("auth", "accounts"),
+    ("cloud", "accounts login cloud"),
+    ("codex-login", "accounts login codex"),
+    ("grok-login", "accounts login grok"),
+    ("claude-login", "accounts login claude"),
+    ("claude-gateway-login", "accounts login claude-gateway"),
+    ("codex-auth-probe", "accounts probe codex"),
+    ("grok-auth-probe", "accounts probe grok"),
+    ("session", "sessions"),
+    ("goal", "automation goal"),
+    ("task", "automation task"),
+    ("job", "automation job"),
+    ("mailbox", "automation mailbox"),
+    ("tools", "config tools"),
+    ("mcp", "config mcp"),
+    ("pack", "config pack"),
+    ("plugin", "config pack plugin"),
+    ("ux", "config pack ux"),
+    ("provision", "runtime provision"),
+    ("reset", "runtime reset"),
+    ("diagnose", "runtime diagnose"),
+    ("p2p", "runtime p2p"),
+    ("desktop", "runtime desktop"),
+    ("version", "runtime version"),
+    ("data", "utils data"),
+    ("query", "utils data query"),
+    ("write", "utils data write"),
+    ("export", "utils data export"),
+    ("document", "utils data document"),
+    ("schema", "utils data schema"),
+    ("debug", "utils debug"),
+    ("request", "utils debug request"),
+    ("response", "utils debug response"),
+    ("trace", "utils debug trace"),
+    ("background", "utils debug background"),
+    ("fleet", "utils debug fleet"),
+    ("eval", "utils eval"),
+    ("optimization", "utils optimization"),
+    ("chat", "-p MESSAGE"),
+];
+
+/// A command name reaches the prompt only when a root option comes before it, as in
+/// `gents --home H status`, which meant `gents status --home H`.
+fn parse_prompt(value: &str) -> Result<String, String> {
+    use clap::CommandFactory as _;
+    let prompt = parse_message(value)?;
+    let word = prompt.trim();
+    if Cli::command().find_subcommand(word).is_some() {
+        return Err(format!(
+            "`{word}` is a command; put options after it, as in `gents {word} --home HOME`"
+        ));
+    }
+    match FORMER_COMMANDS.iter().find(|(former, _)| *former == word) {
+        Some((former, now)) => Err(format!(
+            "`gents {former}` is now `gents {now}`; a prompt that is only a former command's name is not sent"
+        )),
+        None => Ok(prompt),
+    }
+}
+
 fn parse_agent_id(value: &str) -> Result<String, String> {
     crate::require_non_empty("agent", value)
         .map(str::to_string)
@@ -79,9 +150,18 @@ pub(crate) struct Cli {
     /// Node home to set up or open. Defaults to GENTS_HOME, the folder chosen at setup, then ~/.gents.
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
-    /// Agent to open instead of the node's default. See `gents config agent list`.
+    /// Agent to open or message instead of the node's default. See `gents config agent list`.
     #[arg(long, value_name = "AGENT_ID", value_parser = parse_agent_id)]
     pub(crate) agent: Option<String>,
+    /// Send MESSAGE to the agent, print its reply and exit, without opening an interface.
+    #[arg(short = 'p', long = "print", value_name = "MESSAGE", value_parser = parse_message)]
+    pub(crate) print: Option<String>,
+    /// Use the yolo agent: a general-purpose agent with The Engineer's tools, made on first use.
+    #[arg(long, conflicts_with = "agent")]
+    pub(crate) yolo: bool,
+    /// Open the interface with PROMPT as its first message. A PROMPT that names a command runs it.
+    #[arg(value_name = "PROMPT", value_parser = parse_prompt, conflicts_with = "print")]
+    pub(crate) prompt: Option<String>,
     /// As on `init`: tests pass `file` so they never write login-keychain items.
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
@@ -89,11 +169,6 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
-    #[command(
-        about = "Chat with the selected or default agent in the terminal",
-        after_help = CHAT_AFTER_HELP
-    )]
-    Chat(ChatArgs),
     #[command(about = "Show the current local runtime status", after_help = STATUS_AFTER_HELP)]
     Status(StatusArgs),
     #[command(about = "List, show and fork sessions", after_help = SESSION_AFTER_HELP)]

@@ -268,7 +268,7 @@ mod no_model {
         )?;
 
         terminal.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
-        terminal.expect("gents chat", EXIT).await?;
+        terminal.expect("gents -p MESSAGE", EXIT).await?;
         terminal.expect_exit(1).await?;
         ensure!(live.plist().is_file(), "the service was not installed");
         ensure!(
@@ -479,7 +479,7 @@ mod no_model {
             .answer_scanned_inference(backend.endpoint(), NO_MODEL_NAME)
             .await?;
         terminal.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
-        terminal.expect("gents chat", EXIT).await?;
+        terminal.expect("gents -p MESSAGE", EXIT).await?;
         terminal.expect_exit(1).await?;
 
         let init = read_json_file(&folder.join("init.json"))?;
@@ -1104,6 +1104,56 @@ mod with_model {
         format!("Reply with exactly this token: {}", uuid::Uuid::new_v4())
     }
 
+    /// `doctor` is a Codex subcommand, so it reaches the agent only past the separator.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "needs a local model, real launchd and real Codex; run through `make live-onboarding`"]
+    async fn a_prompt_opens_real_codex_with_it_even_when_it_names_a_codex_command() -> Result<()> {
+        let (endpoint, model) = live_model().await?;
+        let Some(codex) = real_interface("codex") else {
+            return Ok(());
+        };
+        let codex = codex.to_string_lossy();
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", &endpoint, &model)?;
+        live.bring_up(&home.home).await?;
+        crate::support::graphql::register_served_home(&home.home, HTTP_PORT)?;
+
+        let mut command = live.bare_gents(&codex, &home.home);
+        command.arg("doctor");
+        let window = Terminal::spawn(&command, &live.log("window-prompt"))?;
+        let graphql = graphql_url(HTTP_PORT);
+        let turn: Result<()> = async {
+            let (request, _, _) = wait_for_request(&graphql, &home.node_did, "doctor").await?;
+            wait_for_request_lifecycle_state(&graphql, &request, &["completed"], TURN).await?;
+            Ok(())
+        }
+        .await;
+        turn.with_context(|| format!("the window:\n{}", window.transcript()))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "needs a local model, real launchd and real Codex; run through `make live-onboarding`"]
+    async fn yolo_makes_its_agent_and_opens_it_in_real_codex() -> Result<()> {
+        let (endpoint, model) = live_model().await?;
+        let Some(codex) = real_interface("codex") else {
+            return Ok(());
+        };
+        let codex = codex.to_string_lossy();
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", &endpoint, &model)?;
+        live.bring_up(&home.home).await?;
+        crate::support::graphql::register_served_home(&home.home, HTTP_PORT)?;
+        let route = agent_route(&format!("{}:yolo", home.node_did));
+
+        let mut command = live.bare_gents(&codex, &home.home);
+        command.arg("--yolo");
+        let window = Terminal::spawn(&command, &live.log("window-yolo"))?;
+        wait_for_loaded_thread(&window, &route, &[])
+            .await
+            .with_context(|| format!("the yolo window:\n{}", window.transcript()))?;
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "needs a local model, real launchd and real Codex; run through `make live-onboarding`"]
     async fn two_real_codex_windows_keep_agents_apart() -> Result<()> {
@@ -1270,6 +1320,20 @@ mod with_model {
         let agent = turn_in_grok(&live, &home, &by_agent, "grok-agent").await?;
         assert_eq!(agent, b);
 
+        // `doctor` is a Grok subcommand, so it reaches the agent only past the separator.
+        let mut by_prompt = live.bare_gents_grok(&grok, &home.home);
+        by_prompt.arg("doctor");
+        let window = Terminal::spawn(&by_prompt, &live.log("grok-prompt"))?;
+        let graphql = graphql_url(HTTP_PORT);
+        let turn: Result<()> = async {
+            let (request, _, _) = wait_for_request(&graphql, &home.node_did, "doctor").await?;
+            wait_for_request_lifecycle_state(&graphql, &request, &["completed"], TURN).await?;
+            Ok(())
+        }
+        .await;
+        turn.with_context(|| format!("Grok transcript:\n{}", window.transcript()))?;
+        drop(window);
+
         drop(live);
         ensure!(
             !socket.exists(),
@@ -1297,7 +1361,7 @@ mod with_model {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "needs a local model and real launchd; run through `make live-onboarding`"]
-    async fn first_run_then_chat_completes_a_turn() -> Result<()> {
+    async fn first_run_then_print_completes_a_turn() -> Result<()> {
         let (endpoint, model) = live_model().await?;
         let live = LiveBox::new()?;
         let folder = live.folder("data");
@@ -1308,21 +1372,19 @@ mod with_model {
         crate::support::graphql::register_served_home(&folder, HTTP_PORT)?;
 
         let prompt = format!("Reply with exactly this token: {}", uuid::Uuid::new_v4());
-        let mut chat = live.gents();
-        chat.args(["chat", "--home"])
-            .arg(&folder)
-            .args(["--output", "json", &prompt]);
+        let mut print = live.gents();
+        print.args(["-p", &prompt, "--home"]).arg(&folder);
         let output = tokio::time::timeout(
             TURN,
-            tokio::process::Command::from(chat)
+            tokio::process::Command::from(print)
                 .kill_on_drop(true)
                 .output(),
         )
         .await
-        .context("gents chat did not finish")??;
+        .context("gents -p did not finish")??;
         ensure!(
             output.status.success(),
-            "gents chat failed: {}",
+            "gents -p failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
 
