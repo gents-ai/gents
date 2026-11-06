@@ -2109,12 +2109,16 @@ mod job_calls {
             plugin_ref: plugin_ref.to_owned(),
             ..fixture_job_pin()
         }});
-        ConfigAccess::transact_local_write(&admission.node, None, "test.job_calls.pin", |txn| {
-            let (mutation, pin) = (&mutation, &pin);
-            Box::pin(async move { txn.execute_with_variables(mutation, pin).await })
-        })
-        .await
-        .unwrap();
+        admission
+            .tool
+            .access()
+            .unwrap()
+            .transact_write("test.job_calls.pin", |txn| {
+                let (mutation, pin) = (&mutation, &pin);
+                Box::pin(async move { txn.execute_with_variables(mutation, pin).await })
+            })
+            .await
+            .unwrap();
         admission
     }
 
@@ -2127,6 +2131,14 @@ mod job_calls {
     async fn finish(admission: PublishedAdmission) {
         admission.node.shutdown().await.expect("node shutdown");
         let _ = std::fs::remove_dir_all(admission.path);
+    }
+
+    fn tool_output_for(admission: &PublishedAdmission) -> StampContext {
+        let mut stamp = tool_output();
+        if let StampContext::ToolOutput { caller_did, .. } = &mut stamp {
+            *caller_did = admission.tool.actor().as_str().to_owned();
+        }
+        stamp
     }
 
     fn row_scope(admission: &PublishedAdmission) -> ProcessControlScope {
@@ -2205,8 +2217,11 @@ mod job_calls {
         let row = admission.tool.doc_id().unwrap().to_owned();
         let mut paged = String::new();
         loop {
-            let caller =
-                JobCaller::new(admission.node.clone(), row_scope(&admission), tool_output());
+            let caller = JobCaller::new(
+                admission.node.clone(),
+                row_scope(&admission),
+                tool_output_for(&admission),
+            );
             let offset = paged.len() as u64;
             let call = run(
                 json!([result_request("r", &row, offset, 4000)]),
@@ -2233,10 +2248,12 @@ mod job_calls {
         let mut ours = job_row("job-calls-result-ours", "team/plugin").await;
         settle(&mut ours, "done").await;
         let row = ours.tool.doc_id().unwrap().to_owned();
-        let outsider = JobCaller::new(ours.node.clone(), scope("another-session"), tool_output());
+        let mut outside_scope = row_scope(&ours);
+        outside_scope.session_id = "another-session".into();
+        let outsider = JobCaller::new(ours.node.clone(), outside_scope, tool_output_for(&ours));
         let call = run(json!([result_request("r", &row, 0, 100)]), true, outsider).await;
         assert!(refusal(&call).contains("scope"), "{}", refusal(&call));
-        let missing = JobCaller::new(ours.node.clone(), row_scope(&ours), tool_output());
+        let missing = JobCaller::new(ours.node.clone(), row_scope(&ours), tool_output_for(&ours));
         let call = run(
             json!([result_request("r", "no-such-row", 0, 100)]),
             true,
@@ -2244,12 +2261,32 @@ mod job_calls {
         )
         .await;
         assert!(refusal(&call).contains("scope"), "{}", refusal(&call));
+        let mut node_stamp = tool_output_for(&ours);
+        if let StampContext::ToolOutput { caller_did, .. } = &mut node_stamp {
+            *caller_did = ours.node_did.clone();
+        }
+        let node_caller = JobCaller::new(ours.node.clone(), row_scope(&ours), node_stamp);
+        let call = run(
+            json!([result_request("r", &row, 0, 100)]),
+            true,
+            node_caller,
+        )
+        .await;
+        assert!(
+            refusal(&call).contains("distinct agent identity"),
+            "{}",
+            refusal(&call)
+        );
         finish(ours).await;
 
         let mut theirs = job_row("job-calls-result-theirs", "other/plugin").await;
         settle(&mut theirs, "done").await;
         let row = theirs.tool.doc_id().unwrap().to_owned();
-        let caller = JobCaller::new(theirs.node.clone(), row_scope(&theirs), tool_output());
+        let caller = JobCaller::new(
+            theirs.node.clone(),
+            row_scope(&theirs),
+            tool_output_for(&theirs),
+        );
         let call = run(json!([result_request("r", &row, 0, 100)]), true, caller).await;
         assert!(
             refusal(&call).contains("another plugin"),
@@ -2263,7 +2300,11 @@ mod job_calls {
     async fn job_calls_result_on_a_running_row_is_not_terminal_with_the_next_call() {
         let admission = job_row("job-calls-result-running", "team/plugin").await;
         let row = admission.tool.doc_id().unwrap().to_owned();
-        let caller = JobCaller::new(admission.node.clone(), row_scope(&admission), tool_output());
+        let caller = JobCaller::new(
+            admission.node.clone(),
+            row_scope(&admission),
+            tool_output_for(&admission),
+        );
         let call = run(json!([result_request("r", &row, 0, 100)]), true, caller).await;
         let error = refusal(&call);
         assert!(error.starts_with("not_terminal"), "{error}");
@@ -2312,8 +2353,12 @@ mod job_calls {
             "child text",
         )
         .await;
-        let caller = JobCaller::new(admission.node.clone(), row_scope(&admission), tool_output())
-            .with_children(vec![CHAIN.into()], 64);
+        let caller = JobCaller::new(
+            admission.node.clone(),
+            row_scope(&admission),
+            tool_output_for(&admission),
+        )
+        .with_children(vec![CHAIN.into()], 64);
         let call = run(
             json!([
                 child_output("c", &["slot-a"], 0, 100),
@@ -2347,7 +2392,11 @@ mod job_calls {
         };
         assert_eq!(result.result, "stored");
 
-        let caller = JobCaller::new(admission.node.clone(), row_scope(&admission), tool_output());
+        let caller = JobCaller::new(
+            admission.node.clone(),
+            row_scope(&admission),
+            tool_output_for(&admission),
+        );
         let mut unknown = result_request("r", &row, 0, 1);
         unknown["extra"] = json!(true);
         let call = run(json!([unknown]), true, caller).await;

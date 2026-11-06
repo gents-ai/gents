@@ -14,13 +14,13 @@ use gents_protocol::job::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::data::{Invocation, StampContext};
+use super::data::{DataCaller, Invocation, Stamp, StampContext};
 use crate::defra_node::Node as EmbeddedNode;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::tools::background::job::input::derive_children;
 use crate::tools::background::status::{
-    load_caused_request_terminals, read_tool_output_slice, LiveToolOutputRegistry,
+    load_caused_request_terminals, read_tool_output_slice_with_access, LiveToolOutputRegistry,
     ProcessControlScope, ReadToolOutputOutcome,
 };
 use crate::tools::call::lifecycle::{CausedRequestTerminal, ToolCallState};
@@ -47,6 +47,23 @@ impl JobCaller {
             chain: Vec::new(),
             result_bytes: 0,
         }
+    }
+
+    fn caller_access(&self) -> Result<ConfigAccess> {
+        anyhow::ensure!(
+            self.node.node_identity_did() == Some(self.scope.node_did.as_str()),
+            "job caller belongs to another runtime"
+        );
+        let caller = self
+            .stamp
+            .value(Stamp::CallerDid)
+            .context("job caller has no identity")?;
+        let bound = DataCaller::for_agent(self.node.clone(), &self.scope.node_did, caller)?;
+        let actor = bound
+            .actor()
+            .context("job caller has no agent actor")?
+            .clone();
+        Ok(ConfigAccess::local_as(self.node.clone(), actor))
     }
 
     /// A job step's chain rows, whose caused requests are its children, and
@@ -332,7 +349,8 @@ pub async fn result(
             "job row {row_doc_id} is not in this call's scope; read only the results of this session's jobs"
         )
     };
-    let response = ConfigAccess::local(caller.node.clone())
+    let access = caller.caller_access()?;
+    let response = access
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ tool_call_id session_id node_did requester_did lifecycle_state job_pin job_progress }} }}"#,
             escape_graphql_string(row_doc_id)
@@ -373,8 +391,8 @@ pub async fn result(
     let limit = usize::try_from(request.limit)
         .unwrap_or(usize::MAX)
         .min(max_bytes);
-    let ReadToolOutputOutcome::Found(page) = read_tool_output_slice(
-        &caller.node,
+    let ReadToolOutputOutcome::Found(page) = read_tool_output_slice_with_access(
+        &access,
         &caller.scope,
         &LiveToolOutputRegistry::default(),
         &row.tool_call_id,
@@ -441,6 +459,8 @@ mod tests {
             job_row_doc_id: "j".to_owned(),
             chain_root_doc_id: "c".to_owned(),
         }));
-        assert!(!result_offer(&StampContext::Callback { caller_did: node_did }));
+        assert!(!result_offer(&StampContext::Callback {
+            caller_did: node_did
+        }));
     }
 }
