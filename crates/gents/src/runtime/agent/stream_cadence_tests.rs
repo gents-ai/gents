@@ -2,8 +2,6 @@
 //! auxiliary sink, on a simulated batch clock, with the persisted bytes
 //! reconstructed afterwards.
 
-use std::path::PathBuf;
-
 use super::*;
 use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use gents_loop::provider_audit::{
@@ -57,67 +55,29 @@ fn audit_item(
     }))
 }
 
-async fn fixture(
-    name: &str,
-) -> (
-    Arc<defra_node::Node>,
-    PathBuf,
-    DefraSessionHook,
-    RequestLifecycle,
-    DefraStreamWriter,
-) {
-    let data_path =
-        std::env::temp_dir().join(format!("stream-cadence-{name}-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        crate::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:test", FailurePolicy::default());
+async fn fixture(name: &str) -> SignedRun {
+    let run = signed_run(
+        name,
+        Duration::from_millis(crate::inference::resolved::DEFAULT_STREAM_BATCH_MS),
+    )
+    .await;
     assert!(matches!(
-        hook.on_completion_call(&user_text_message(name), &[]).await,
+        run.hook
+            .on_completion_call(&user_text_message(name), &[])
+            .await,
         HookAction::Continue
     ));
-    let session_id = hook.session_id().await.unwrap();
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
-    hook.set_active_request_lineage(Some(request_id.clone()), None)
-        .await
-        .unwrap();
-    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
-        .await;
-    let request = fixture_agent_request(request_doc_id, &request_id, &session_id, name);
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        "test-agent",
-        "did:test:test",
-        request,
-        30,
-        ExecutionOrigin::Interactive,
-        "test-backend",
-    );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let writer = DefraStreamWriter::new(
-        node.clone(),
-        "did:test:test",
-        Duration::from_millis(crate::inference::resolved::DEFAULT_STREAM_BATCH_MS),
-    );
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
-    (node, data_path, hook, lifecycle, writer)
+    bind_active_request(&run.hook, &run.lifecycle).await;
+    run
 }
 
 async fn persisted(
-    node: &defra_node::Node,
+    access: &crate::ConfigAccess,
     request_doc_id: &str,
     source: &OutputSource,
     writer: &OutputWriter,
 ) -> Persisted {
-    let result = node
-        .execute(&format!(
+    let result = exec(access, &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
             crate::store::graphql::escape_graphql_string(request_doc_id)
         ))
@@ -159,8 +119,15 @@ async fn persisted(
 /// Streams reasoning through the owned processor the way the inference loop
 /// does: each chunk is processed, then a due batch is flushed.
 async fn processor_stream(stream: Stream, end: End, chunks_per_second: u32) -> Persisted {
-    let (node, data_path, hook, mut lifecycle, writer) =
-        fixture(&format!("processor-{stream:?}-{end:?}")).await;
+    let SignedRun {
+        db: _db,
+        node,
+        access,
+        hook,
+        mut lifecycle,
+        writer,
+        ..
+    } = fixture(&format!("processor-{stream:?}-{end:?}")).await;
     let doc_id = lifecycle.request().doc_id.clone();
     let generation = lifecycle.execution_generation().unwrap().to_owned();
     let scope: CaptureScope = "inference.1".parse().unwrap();
@@ -247,24 +214,32 @@ async fn processor_stream(stream: Stream, end: End, chunks_per_second: u32) -> P
     let output_writer = OutputWriter::RequestExecution {
         execution_generation: generation,
     };
-    let result = persisted(&node, &doc_id, &source, &output_writer).await;
+    let result = persisted(&access, &doc_id, &source, &output_writer).await;
     node.shutdown().await.expect("node shutdown");
-    let _ = std::fs::remove_dir_all(data_path);
     result
 }
 
 /// Streams Claude thinking audits through the auxiliary sink, driving its
 /// deadline the way the auxiliary loop does.
 async fn auxiliary_stream(end: End, chunks_per_second: u32) -> Persisted {
-    let (node, data_path, _hook, lifecycle, _writer) = fixture(&format!("auxiliary-{end:?}")).await;
+    let SignedRun {
+        db: _db,
+        node,
+        access,
+        lifecycle,
+        ..
+    } = fixture(&format!("auxiliary-{end:?}")).await;
     let request = lifecycle.request().clone();
     let generation = lifecycle.execution_generation().unwrap().to_owned();
     let scope: CaptureScope = "compaction.1".parse().unwrap();
-    let auxiliary_writer = Arc::new(DefraStreamWriter::new(
-        node.clone(),
-        "did:test:test",
-        Duration::from_millis(crate::inference::resolved::DEFAULT_STREAM_BATCH_MS),
-    ));
+    let auxiliary_writer = Arc::new(
+        DefraStreamWriter::new_for_lifecycle(
+            node.clone(),
+            &lifecycle,
+            Duration::from_millis(crate::inference::resolved::DEFAULT_STREAM_BATCH_MS),
+        )
+        .unwrap(),
+    );
     let sink = crate::request::streaming::auxiliary::sink_with_writer(
         Arc::clone(&auxiliary_writer),
         request.clone(),
@@ -328,9 +303,8 @@ async fn auxiliary_stream(end: End, chunks_per_second: u32) -> Persisted {
     let output_writer = OutputWriter::RequestExecution {
         execution_generation: generation,
     };
-    let result = persisted(&node, &request.doc_id, &source, &output_writer).await;
+    let result = persisted(&access, &request.doc_id, &source, &output_writer).await;
     node.shutdown().await.expect("node shutdown");
-    let _ = std::fs::remove_dir_all(data_path);
     result
 }
 
