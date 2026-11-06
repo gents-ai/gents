@@ -77,69 +77,47 @@ async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
 
 #[tokio::test]
 async fn history_reconstruction_scans_a_shared_request_once() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
+    use crate::store::identity::NodeIdentity;
+    let (db, user, client, binding) =
+        crate::test_support::signed_test_node("history-shared-scan").await;
     let session_id = "session-shared-request-scan";
-    for sequence in 1..=3 {
-        let key = format!("prompt-{sequence}");
-        import_history_observation(
-            &node,
-            "doc-shared",
-            session_id,
-            "did:test:test",
-            None,
-            &format!("message {sequence}"),
-            &canonical_rows::authored_message_key("doc-shared", &key),
-            sequence,
-            None,
-        )
-        .await;
-    }
-
+    let messages = (1..=3)
+        .map(|sequence| format!("message {sequence}"))
+        .collect::<Vec<_>>();
+    publish_shared_signed_history(&db, &user, &client, &binding, session_id, &messages).await;
     let (history, scans) = count_request_output_scans(history::load_history_projection(
-        &node,
+        &db.node,
         session_id,
-        "did:test:test",
-        None,
+        db.node_identity.did(),
+        Some(user.did()),
         None,
         None,
     ))
     .await;
-
     assert_eq!(history.unwrap().len(), 3);
     assert_eq!(
         scans, 1,
         "one history pass scans a shared request's output once"
     );
-    node.shutdown().await.expect("shut down test node");
+    db.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
 async fn history_reconstruction_batches_distinct_requests() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
+    use crate::store::identity::NodeIdentity;
+    let (db, user, client, binding) =
+        crate::test_support::signed_test_node("history-batch-scan").await;
     let session_id = "session-many-request-scans";
     let count = crate::inference::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH + 3;
-    for index in 0..count {
-        let request = format!("doc-{index}");
-        import_history_observation(
-            &node,
-            &request,
-            session_id,
-            "did:test:test",
-            None,
-            &format!("message {index}"),
-            &canonical_rows::authored_message_key(&request, "prompt"),
-            index as u32 + 1,
-            None,
-        )
-        .await;
-    }
+    let messages = (0..count)
+        .map(|index| format!("message {index}"))
+        .collect::<Vec<_>>();
+    publish_signed_history(&db, &user, &client, &binding, session_id, &messages).await;
     let (history, scans) = count_request_output_scans(history::load_history_projection(
-        &node,
+        &db.node,
         session_id,
-        "did:test:test",
-        None,
+        db.node_identity.did(),
+        Some(user.did()),
         None,
         None,
     ))
@@ -153,7 +131,7 @@ async fn history_reconstruction_batches_distinct_requests() {
         scans <= 2,
         "history used {scans} output scans for {count} requests"
     );
-    node.shutdown().await.expect("shut down test node");
+    db.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -1683,6 +1661,46 @@ async fn reserve_signed_session(
     )
     .await
     .unwrap();
+}
+
+pub(crate) async fn publish_shared_signed_history(
+    db: &crate::support::TestDb,
+    user: &dyn crate::store::identity::NodeIdentity,
+    client: &crate::ConfigAccess,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    session_id: &str,
+    messages: &[String],
+) {
+    let mut lifecycle = signed_claimed_authored_request(
+        db,
+        user,
+        client,
+        binding,
+        &format!("{session_id}-shared"),
+        session_id,
+    )
+    .await;
+    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+        db.node.clone(),
+        &lifecycle,
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    for (index, text) in messages.iter().enumerate() {
+        writer
+            .publish_authored_message(&lifecycle, &format!("prompt-{index}"), &Message::user(text))
+            .await
+            .unwrap();
+    }
+    lifecycle
+        .terminalize_owned(
+            crate::request::lifecycle::RequestTerminalOutcome::Completed,
+            gents_protocol::output::TerminalOutput::NoMessage,
+            None,
+        )
+        .await
+        .unwrap();
 }
 
 pub(crate) async fn publish_signed_history(

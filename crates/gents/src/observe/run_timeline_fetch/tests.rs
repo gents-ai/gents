@@ -10,31 +10,27 @@ fn bindings() -> BTreeMap<String, String> {
 
 #[tokio::test]
 async fn timeline_canonical_messages_share_one_request_payload_scan() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    for sequence in 1..=3 {
-        let key = format!("timeline-message-{sequence}");
-        crate::session::import_history_observation(
-            &node,
-            "doc-timeline-shared",
-            "session-timeline-shared",
-            "did:test:timeline-shared",
-            None,
-            &format!("message {sequence}"),
-            &crate::session::canonical_rows::authored_message_key("doc-timeline-shared", &key),
-            sequence,
-            None,
-        )
-        .await;
-    }
-
-    let access = ConfigAccess::local(node.clone());
+    use crate::store::identity::NodeIdentity;
+    let (db, user, access, binding) =
+        crate::test_support::signed_test_node("timeline-shared-scan").await;
+    let messages = (1..=3)
+        .map(|sequence| format!("message {sequence}"))
+        .collect::<Vec<_>>();
+    crate::session::publish_shared_signed_history(
+        &db,
+        &user,
+        &access,
+        &binding,
+        "session-timeline-shared",
+        &messages,
+    )
+    .await;
     let (messages, scans) = crate::session::count_request_output_scans(
         super::event_loaders::resolve_timeline_messages_for_session(
             &access,
-            "did:test:timeline-shared",
+            db.node_identity.did(),
             "session-timeline-shared",
-            None,
+            Some(user.did()),
         ),
     )
     .await;
@@ -43,7 +39,7 @@ async fn timeline_canonical_messages_share_one_request_payload_scan() {
         scans, 1,
         "one timeline session pass scans a shared request once"
     );
-    node.shutdown().await.expect("node shutdown");
+    db.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
