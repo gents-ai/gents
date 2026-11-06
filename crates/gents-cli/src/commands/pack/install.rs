@@ -47,30 +47,36 @@ async fn install_documents_pack_inner(
             .collect::<Result<Vec<_>>>()?;
     if let gents::store::config_client::ConfigAccess::Graphql(endpoint) = access {
         let mut needs_runtime_store = false;
-        if args.scope.graphql.is_some() {
-            for source in std::iter::once(pack).chain(dependencies.iter()) {
-                if !source.manifest().metadata.plugins.is_empty() {
-                    needs_runtime_store = true;
-                    break;
-                }
-                let config = gents::pack::load_pack_authoring_config(
-                    source.manifest(),
-                    &gents::pack::PackInstallOptions {
-                        node_did: owner.to_owned(),
-                    },
-                    &|path| Ok(source.asset(path)?.to_vec()),
-                    &|name| std::env::var(name).ok(),
-                )?;
-                if config.documents.tools.iter().any(|tools| {
-                    tools
-                        .integrations
-                        .as_ref()
-                        .and_then(|integrations| integrations.plugins.as_ref())
-                        .is_some_and(|plugins| !plugins.is_empty())
-                }) {
-                    needs_runtime_store = true;
-                    break;
-                }
+        for source in std::iter::once(pack).chain(dependencies.iter()) {
+            if !source.manifest().metadata.plugins.is_empty()
+                || !source.manifest().schemas.is_empty()
+                || source
+                    .manifest()
+                    .metadata
+                    .assets
+                    .iter()
+                    .any(|path| path.starts_with("schemas/"))
+            {
+                needs_runtime_store = true;
+                break;
+            }
+            let config = gents::pack::load_pack_authoring_config(
+                source.manifest(),
+                &gents::pack::PackInstallOptions {
+                    node_did: owner.to_owned(),
+                },
+                &|path| Ok(source.asset(path)?.to_vec()),
+                &|name| std::env::var(name).ok(),
+            )?;
+            if config.documents.tools.iter().any(|tools| {
+                tools
+                    .integrations
+                    .as_ref()
+                    .and_then(|integrations| integrations.plugins.as_ref())
+                    .is_some_and(|plugins| !plugins.is_empty())
+            }) {
+                needs_runtime_store = true;
+                break;
             }
         }
         if needs_runtime_store && args.preview {
