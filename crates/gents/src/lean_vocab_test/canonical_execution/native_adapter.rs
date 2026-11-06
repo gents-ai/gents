@@ -1708,7 +1708,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 );
             }
             let scoped_session = fixture_query(&access, &format!(
-                r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}, limit: 2) {{ _docID session_id node_did requester_did agent_did created_at observation }} }}"#,
+                r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}, limit: 2) {{ session_id node_did requester_did agent_did created_at observation }} }}"#,
                 crate::store::graphql::escape_graphql_string(&session_id),
                 crate::store::graphql::escape_graphql_string(&node_did),
                 crate::store::graphql::escape_graphql_string(&requester_did),
@@ -1720,7 +1720,13 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             );
             let sessions: Vec<gents_protocol::session::AgentSession> =
                 crate::store::graphql::rows(&scoped_session, "AgentSession")?;
-            let session_doc_id = scoped_session
+            let session_query = format!(
+                r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
+                crate::store::graphql::escape_graphql_string(&node_did),
+                crate::store::graphql::escape_graphql_string(&session_id)
+            );
+            let session_response = fixture_query(&access, &session_query).await?;
+            let session_doc_id = session_response
                 .data
                 .as_ref()
                 .and_then(|data| data["AgentSession"][0]["_docID"].as_str())
