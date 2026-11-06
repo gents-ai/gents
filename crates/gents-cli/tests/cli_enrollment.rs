@@ -137,12 +137,19 @@ async fn grant_configured_workspace_root_readers(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> Result<()> {
+async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node() -> Result<()> {
     let _guard = enrollment_e2e_lock().lock().await;
 
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("agent-home");
     let desktop_home = tempdir.path().join("desktop-home");
+    let owner_home = tempdir.path().join("bootstrap-owner");
+    let owner_env = [(
+        "GENTS_DESKTOP_HOME",
+        owner_home
+            .to_str()
+            .context("bootstrap owner path is not UTF-8")?,
+    )];
     fs::create_dir_all(&home_dir)?;
     let home_arg = home_dir
         .to_str()
@@ -157,9 +164,12 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
         Uuid::new_v4().simple()
     );
 
-    let init = run_init_json(
+    let init = run_cli_json_with_env(
         &home_dir,
         &[
+            "init",
+            "--store-key-custody",
+            "file",
             "--home",
             home_arg,
             "--node-name",
@@ -173,12 +183,22 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
             "--inference-url",
             &model_endpoint,
         ],
+        &owner_env,
     )?;
+    let bootstrap_user = gents_desktop_core::client::PrincipalIdentity::load_existing(
+        &DesktopPaths::from_root(owner_home.join("cli")),
+    )
+    .context("loading held bootstrap CLI User")?;
     let node_did = node_did_from_init(&init)?;
+    assert_ne!(
+        bootstrap_user.did(),
+        node_did,
+        "bootstrap User and runtime must hold distinct identities"
+    );
     let default_agent_did = agent_did_from_init(&init)?;
 
     let (mut serve, _readiness) =
-        spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[])?;
+        spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &owner_env)?;
     wait_for_port(port, &mut serve)?;
 
     serve
@@ -238,7 +258,49 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
             let requests = gents_server::server_host::pending_managed_enrollments(&home_dir, &graphql)
                 .await
                 .context("listing managed pending enrollments")?;
-            assert!(requests.iter().any(|item| item.request_id == pending.request_id));
+            let client_did = core.node_identity().did();
+            assert_ne!(client_did, node_did);
+            assert_ne!(client_did, bootstrap_user.did());
+            let matching = requests.iter().filter(|item| item.request_id == pending.request_id).collect::<Vec<_>>();
+            let [request] = matching.as_slice() else {
+                bail!("expected exactly one pending request for the fresh desktop: {requests:?}");
+            };
+            assert_eq!(request.owner_node_did, node_did);
+            assert_eq!(request.candidate_did, client_did);
+            let owner_endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+                &graphql, bootstrap_user.did(),
+            ).with_client_signing_capability(gents::NodeIdentity::client_signing_capability(&bootstrap_user)?)?;
+            let owner_access = gents::ConfigAccess::Graphql(owner_endpoint);
+            let nodes = owner_access.execute(&format!(
+                r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
+                escape_graphql_string(&node_did),
+            )).await?;
+            let [node] = nodes["data"]["Node"].as_array().context("bootstrap User cannot observe Node")?.as_slice() else {
+                bail!("bootstrap User must observe exactly the initialized Node: {nodes}");
+            };
+            let node_doc = node["_docID"].as_str().context("Node has no physical identity")?.to_owned();
+            let owners = owner_access.transact_readonly("test.enrollment.bootstrap_owner", |txn| {
+                let node_doc = &node_doc;
+                Box::pin(async move { txn.document_owners("Node", std::slice::from_ref(node_doc)).await.map_err(anyhow::Error::from) })
+            }).await?;
+            anyhow::ensure!(owners.len() == 1 && owners[0].owner.as_ref().map(|did| did.as_str()) == Some(bootstrap_user.did()),
+                "the bootstrap CLI User must be the native Node owner");
+            let grant_home = home_dir.clone();
+            let grant_owner = owner_home.clone();
+            let grant_request = pending.request_id.clone();
+            let granted = tokio::task::spawn_blocking(move || {
+                let home = grant_home.to_str().context("runtime home is not UTF-8")?;
+                let owner = grant_owner.to_str().context("bootstrap owner home is not UTF-8")?;
+                run_cli_json_with_env(&grant_home,
+                    &["p2p", "enrollment", "grant", &grant_request, "--home", home],
+                    &[("GENTS_DESKTOP_HOME", owner)],
+                )
+            }).await.context("joining enrollment grant")?
+                .context("granting the fresh desktop User access through the bootstrap User")?;
+            assert_eq!(granted["request_id"], pending.request_id);
+            assert_eq!(granted["node_did"], node_did);
+            assert_eq!(granted["candidate_did"], client_did);
+            assert_eq!(granted["node_administrator_granted"], true);
             let outcome = gents_server::server_host::decide_managed_enrollment(
                 &home_dir,
                 &graphql,
@@ -283,7 +345,7 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
             wait_for_client_node_readiness(&core, &node_did).await?;
 
             let session_id = Uuid::new_v4().to_string();
-            core.submit_request(
+            let submitted = core.submit_request(
                 &session_id,
                 &node_did,
                 &prompt,
@@ -291,16 +353,30 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
             )
             .await
             .context("submitting chat request from the enrolled desktop")?;
-
-            let (request_id, runtime_session, _) =
-                wait_for_runtime_agent_request(&graphql, core.node(), &node_did, &prompt).await?;
-            let runtime_reply = wait_for_complete_agent_response(
-                &graphql,
+            assert_eq!(submitted.node_did, node_did);
+            assert_eq!(submitted.session_id, session_id);
+            assert_eq!(submitted.agent_did.as_deref(), Some(default_agent_did.as_str()));
+            let request_id = submitted.request_id;
+            let access = core.operator_access(&node_did)?;
+            let runtime_reply = wait_for_complete_agent_response_with_access(
+                &access,
                 &request_id,
-                &runtime_session,
+                &session_id,
                 Duration::from_secs(240),
             )
             .await?;
+            let observed = access.execute(&format!(
+                r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{_docID node_did requester_did agent_did session_id content admission_kind admission_signer_did}} }}"#,
+                escape_graphql_string(&request_id),
+            )).await?;
+            let [request] = observed["data"]["AgentRequest"].as_array().context("desktop User cannot observe its request")?.as_slice() else {
+                bail!("desktop User must observe one physical request: {observed}");
+            };
+            anyhow::ensure!(request["node_did"] == node_did && request["requester_did"] == client_did
+                && request["agent_did"] == default_agent_did && request["session_id"] == session_id
+                && request["content"] == prompt && request["admission_kind"] == "client"
+                && request["admission_signer_did"] == client_did && request["_docID"].as_str().is_some(),
+                "desktop request lost its signed Node, User, Agent or session provenance: {request}");
             wait_for_client_complete_response(
                 &core,
                 &session_id,
@@ -792,7 +868,7 @@ async fn wait_for_client_node_readiness(core: &ClientCore, node_did: &str) -> Re
         }
         if Instant::now() >= deadline {
             bail!(
-                "timed out waiting for gossiped Agent/NodeReadiness; agents={} readiness={}",
+                "timed out waiting for authenticated Agent/NodeReadiness observation; agents={} readiness={}",
                 snapshot.agents.len(),
                 snapshot.node_readiness.len()
             );
@@ -807,7 +883,7 @@ async fn wait_for_client_node_readiness(core: &ClientCore, node_did: &str) -> Re
             Ok(Err(_)) => bail!("app projection channel closed"),
             Err(_) => {
                 bail!(
-                    "timed out waiting for gossiped Agent/NodeReadiness; agents={} readiness={}",
+                    "timed out waiting for authenticated Agent/NodeReadiness observation; agents={} readiness={}",
                     snapshot.agents.len(),
                     snapshot.node_readiness.len()
                 );
