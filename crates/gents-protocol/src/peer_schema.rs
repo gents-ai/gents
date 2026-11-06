@@ -3,7 +3,7 @@
 //! versions the receiver does not hold; a peer whose active versions differ can
 //! never merge the other side's writes and must be reported instead.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,17 @@ use serde_json::Value;
 /// Top-level `/status` field carrying the runtime's [`ReplicatedSchema`] for
 /// the client route. `null` means the runtime could not read its own node yet.
 pub const STATUS_REPLICATED_SCHEMA_FIELD: &str = "replicated_schema";
+
+/// Prevent app routes from bypassing protocol schema compatibility checks.
+pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<String>> {
+    let overlaps_protocol_catalog = requested.iter().any(|requested| {
+        crate::schemas::ALL_COLLECTION_NAMES
+            .iter()
+            .chain(crate::schemas::RUNTIME_COLLECTION_NAMES.iter())
+            .any(|protocol| requested == protocol)
+    });
+    (!requested.is_empty() && !overlaps_protocol_catalog).then_some(requested)
+}
 
 /// What a merge depends on for one collection: DefraDB's content-addressed
 /// active version ID, plus the branchable and policy settings that version

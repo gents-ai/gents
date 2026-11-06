@@ -5,13 +5,15 @@ set -euo pipefail
 # An lld build can lag behind a new SDK: Xcode 27's MacOSX27.0.sdk TBDs list
 # `arm64e.x1-macos` targets, and rust-lld 1.99 rejects them with
 # "could not load TAPI file ... malformed file", so nothing links. Before using
-# an lld, link a trivial program against the active SDK once and cache the
-# result per lld binary and SDK; when the probe fails, use Apple's linker.
+# an lld, link a small Objective-C program against the active SDK once and
+# cache the result per compiler, lld binary, and SDK. Objective-C class-message
+# stubs emitted by newer Apple clang versions also require linker support.
 
 lld_links_sdk() {
   local lld_dir="$1" sdk key cache probe status
   sdk="$(xcrun --show-sdk-path 2>/dev/null)" || return 1
-  key="$(printf '%s|%s|%s' "$(realpath "$lld_dir/ld64.lld")" "$(realpath "$sdk")" \
+  key="$(printf '%s|%s|%s|%s|%s|%s' objc-class-stubs-v1 "$(clang --version)" "$(realpath "$lld_dir/ld64.lld")" \
+    "$(stat -f %m "$lld_dir/ld64.lld")" "$(realpath "$sdk")" \
     "$(stat -f %m "$sdk/usr/lib/libSystem.tbd" 2>/dev/null)" | cksum | tr ' ' '-')"
   cache="${TMPDIR:-/tmp}/gents-macos-lld-probe/$key"
   if [ -f "$cache" ]; then
@@ -19,9 +21,9 @@ lld_links_sdk() {
     return
   fi
   probe="$(mktemp -d)"
-  printf 'int main(void) { return 0; }\n' >"$probe/probe.c"
+  printf '#import <Foundation/Foundation.h>\nint main(void) { return [NSBundle mainBundle] == nil; }\n' >"$probe/probe.m"
   status=fail
-  if PATH="$lld_dir:$PATH" clang -fuse-ld=lld "$probe/probe.c" -o "$probe/probe" >/dev/null 2>&1; then
+  if PATH="$lld_dir:$PATH" clang -O2 -fuse-ld=lld "$probe/probe.m" -framework Foundation -o "$probe/probe" >/dev/null 2>&1; then
     status=ok
   fi
   rm -rf "$probe"

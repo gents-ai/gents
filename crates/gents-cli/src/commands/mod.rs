@@ -11,6 +11,7 @@ pub(crate) mod codex_login;
 pub(crate) mod codex_shim;
 pub(crate) mod config;
 pub(crate) mod diagnose;
+pub(crate) mod docs_bundle;
 pub(crate) mod document;
 pub(crate) mod eval;
 pub(crate) mod export;
