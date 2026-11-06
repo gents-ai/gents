@@ -707,3 +707,19 @@ async fn generated_recovery_cases_preserve_scopes_without_self_waking() {
         assert_eq!(pending, expected_scopes, "modeled recovery case {name}");
     }
 }
+
+#[test]
+fn explicit_command_denial_clears_scope_and_rejects_pre_denial_snapshot() {
+    let (store, _) = ObservedStore::new(requests(&["before"]));
+    let read = store.capture_read();
+    let node = "did:test:reload";
+    store.report_permission_denied(node);
+    assert_eq!(
+        store.runtime_connection(node),
+        Some(RuntimeConnectionStatus::Denied)
+    );
+    assert!(store.snapshot().requests.is_empty());
+    assert!(!store.replace_reloaded_snapshot_at_read(&read, Some(node), requests(&["stale"])));
+    assert!(store.snapshot().requests.is_empty());
+    assert_eq!(store.take_permission_denials(), vec![node.to_owned()]);
+}

@@ -210,6 +210,7 @@ pub struct ObservedStore {
     change_tx: watch::Sender<StoreUpdateNotice>,
     resync_tx: watch::Sender<u64>,
     pending_resync: StdMutex<PendingResync>,
+    pending_denials: StdMutex<rapidhash::RapidHashSet<String>>,
 }
 
 impl ObservedStore {
@@ -234,6 +235,7 @@ impl ObservedStore {
             change_tx,
             resync_tx,
             pending_resync: StdMutex::new(PendingResync::default()),
+            pending_denials: StdMutex::new(rapidhash::RapidHashSet::default()),
         });
         (store, version_rx)
     }
@@ -311,6 +313,32 @@ impl ObservedStore {
 
     pub(crate) fn subscribe_resync_requests(&self) -> watch::Receiver<u64> {
         self.resync_tx.subscribe()
+    }
+
+    /// Feed an explicit authenticated read denial to the observation owner.
+    /// The scope is cleared before notifying the observer so reads that began
+    /// before the denial cannot republish their captured snapshot.
+    pub fn report_permission_denied(&self, node_did: &str) {
+        let _ = self.update_if_with_connection(
+            None,
+            StoreMutation::ReplaceNode(node_did.to_owned(), ClientStore::default()),
+            Some((node_did, RuntimeConnectionEvent::PermissionDenied.status())),
+        );
+        self.pending_denials
+            .lock()
+            .expect("pending denial lock poisoned")
+            .insert(node_did.to_owned());
+        self.resync_tx.send_modify(|generation| {
+            *generation = generation.saturating_add(1);
+        });
+    }
+
+    pub(crate) fn take_permission_denials(&self) -> Vec<String> {
+        self.pending_denials
+            .lock()
+            .expect("pending denial lock poisoned")
+            .drain()
+            .collect()
     }
 
     /// Coalesces stale async publishers into the observer's bounded
@@ -529,11 +557,23 @@ impl ObservedStore {
     }
 
     fn update_if(&self, captured: Option<&StoreReadFence>, mutation: StoreMutation) -> Option<u64> {
+        self.update_if_with_connection(captured, mutation, None)
+    }
+
+    fn update_if_with_connection(
+        &self,
+        captured: Option<&StoreReadFence>,
+        mutation: StoreMutation,
+        connection: Option<(&str, RuntimeConnectionStatus)>,
+    ) -> Option<u64> {
         let notice = {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
             let scope = mutation.scope(&state.snapshot);
             if captured.is_some_and(|captured| !state.fences.accepts(captured, &scope)) {
                 return None;
+            }
+            if let Some((node, status)) = connection {
+                state.runtime_connections.insert(node.to_owned(), status);
             }
             let store_version = state.revision.store_version.saturating_add(1);
             let provenance = mutation.provenance();

@@ -110,6 +110,13 @@ pub fn spawn_observer_with_selection(
                 }
                 changed = resync_requests.changed() => {
                     if changed.is_err() { break; }
+                    for node in store.take_permission_denials() {
+                        if let Some(source) = sources.entries.get_mut(&node) {
+                            source.stop();
+                        }
+                        store.observe_runtime_connection(&node, RuntimeConnectionEvent::PermissionDenied);
+                        pending.remove(&node);
+                    }
                     let (full, scopes) = store.take_resync_requests();
                     if full { pending.extend(sources.entries.keys().cloned()); }
                     pending.extend(scopes);
@@ -131,6 +138,7 @@ pub fn spawn_observer_with_selection(
                         .entries
                         .get(*node)
                         .is_some_and(|source| source.ready)
+                        && store.runtime_connection(node) != Some(RuntimeConnectionStatus::Denied)
                 })
                 .cloned()
                 .collect();

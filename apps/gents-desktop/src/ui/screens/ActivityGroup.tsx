@@ -51,11 +51,18 @@ function Step({
   /* just opened from elsewhere, such as the Background pane */
   shown?: boolean;
 }) {
-  if (isWorkerStep(tool)) return <WorkerStep tool={tool} workers={workers} />;
-  const summary = toolSummary(tool);
+  if (isWorkerStep(tool) && tool.reconstruction.state === "ready")
+    return <WorkerStep tool={tool} workers={workers} />;
+  const summary =
+    tool.reconstruction.state === "ready"
+      ? toolSummary(tool)
+      : { kind: "", primary: tool.toolName, secondary: null };
   const open = tool.statusKind !== "running";
   const p = tool.presentation;
-  const tally = p.kind === "fileEdit" ? diffTally(p.diff) : null;
+  const tally =
+    tool.reconstruction.state === "ready" && p.kind === "fileEdit"
+      ? diffTally(p.diff)
+      : null;
   const status = stepStatus(tool);
   const asked = filedQuestion(tool);
   const outcome =

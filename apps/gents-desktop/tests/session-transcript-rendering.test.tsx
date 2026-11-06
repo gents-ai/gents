@@ -14,6 +14,7 @@ vi.mock("../src/ui/screens/Markdown", () => ({
 }));
 
 import { TranscriptPanel } from "../src/ui/screens/Transcript";
+import { ToolBody } from "../src/ui/screens/tool-views";
 import { renderIn, testApp } from "./app-fixture";
 import { assistantMessage } from "./timeline-fixture";
 import { NO_PARENT } from "../src/ui/screens/parentWork";
@@ -71,6 +72,79 @@ function session(content: string): DesktopSessionSnapshot {
 }
 
 describe("SessionScreen transcript render boundary", () => {
+  it("explains unavailable tool output without showing unreconstructed payload", () => {
+    const tool = {
+      itemKey: "tool",
+      toolName: "command",
+      statusKind: "success",
+      reconstruction: { state: "denied" as const },
+      presentation: {
+        kind: "command" as const,
+        command: "test",
+        exitCode: 0,
+        timedOut: false,
+        failed: false,
+        durationMs: null,
+        cwd: null,
+        executionMode: null,
+        networkMode: null,
+        stdout: "unshared output",
+        stderr: null,
+        fallbackOutput: null,
+      },
+    };
+    renderIn(testApp(), <ToolBody tool={tool} />);
+    expect(screen.getByTestId("tool-output-unavailable")).toHaveTextContent(
+      "access denied",
+    );
+    expect(screen.queryByText("unshared output")).not.toBeInTheDocument();
+  });
+
+  it("explains unavailable assistant output without showing unreconstructed content", () => {
+    const base = session("unshared output");
+    const row = base.timelineItems[0]!;
+    if (row.kind !== "assistantMessage") throw new Error("expected assistant row");
+    const props = { ...UNRELATED, inFlight: false, scroller: null, content: null };
+    const view = renderIn(
+      testApp(),
+      <TranscriptPanel
+        {...props}
+        session={{
+          ...base,
+          timelineItems: [{ ...row, reconstruction: { state: "loading" } }],
+        }}
+      />,
+    );
+    expect(screen.getByTestId("assistant-output-unavailable")).toHaveTextContent(
+      "Loading message",
+    );
+    expect(screen.queryByText("unshared output")).not.toBeInTheDocument();
+    view.rerender(
+      <TranscriptPanel
+        {...props}
+        session={{
+          ...base,
+          timelineItems: [{ ...row, reconstruction: { state: "denied" } }],
+        }}
+      />,
+    );
+    expect(screen.getByTestId("assistant-output-unavailable")).toHaveTextContent(
+      "access denied",
+    );
+    view.rerender(
+      <TranscriptPanel
+        {...props}
+        session={{
+          ...base,
+          timelineItems: [{ ...row, reconstruction: { state: "invalid" } }],
+        }}
+      />,
+    );
+    expect(screen.getByTestId("assistant-output-unavailable")).toHaveTextContent(
+      "could not be reconstructed",
+    );
+  });
+
   afterEach(() => vi.unstubAllGlobals());
 
   it("renders failures and retries through the app's action, then shows interruption", async () => {

@@ -251,12 +251,33 @@ export function createSessionReads({
     const current = readSession(sessionStore);
     if (!current) return null;
     const nodeDid = current.nodeDid ?? store.getState().nodeDid;
-    const rows = await api.fetchSessionRows({
-      sessionId: current.sessionId,
-      nodeDid,
-      window,
-      limit,
-    });
+    let rows: SessionRowsView | null;
+    try {
+      rows = await api.fetchSessionRows({
+        sessionId: current.sessionId,
+        nodeDid,
+        window,
+        limit,
+      });
+    } catch (error) {
+      if (
+        error instanceof BridgeInvokeError &&
+        error.code === "permissionDenied" &&
+        capturedRun === runEpoch &&
+        store.getState().sessionId === current.sessionId &&
+        (store.getState().nodeDid ?? nodeDid) === nodeDid
+      ) {
+        setSession(null);
+        setSessionLoad({
+          phase: "failed",
+          sessionId: current.sessionId,
+          nodeDid,
+          found: null,
+          error: error.message,
+        });
+      }
+      throw error;
+    }
     if (
       capturedRun !== runEpoch ||
       store.getState().sessionId !== current.sessionId ||

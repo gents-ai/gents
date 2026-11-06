@@ -29,9 +29,15 @@ pub async fn session_snapshot(
         timeline_before_item_key.as_deref(),
         timeline_limit,
     );
-    let transcript_page = page_read
-        .await
-        .map_err(BridgeError::classify_transport_error)?;
+    let transcript_page = page_read.await.map_err(|error| {
+        let error = BridgeError::classify_transport_error(error);
+        if error.code == BridgeErrorCode::PermissionDenied {
+            if let Some(node) = node_did.as_deref() {
+                core.store().report_permission_denied(node);
+            }
+        }
+        error
+    })?;
     let page_request_doc_ids = transcript_page
         .store
         .transcript_messages
@@ -393,7 +399,13 @@ pub async fn session_rows(
             .await
         }
     };
-    let error = BridgeError::classify_transport_error;
+    let error = |error| {
+        let error = BridgeError::classify_transport_error(error);
+        if error.code == BridgeErrorCode::PermissionDenied {
+            core.store().report_permission_denied(&node_did);
+        }
+        error
+    };
     let store = core.store().snapshot();
     let provenance_access = &operator_access;
     let mut view = empty(None);
@@ -422,7 +434,7 @@ pub async fn session_rows(
                 &session_id,
             )
             .await
-            .map_err(BridgeError::classify_transport_error)?;
+            .map_err(error)?;
             view.covered_from = page.covered.from;
             view.covered_through = page.covered.through;
             view.has_older = match window {
@@ -455,7 +467,7 @@ pub async fn session_rows(
                 &session_id,
             )
             .await
-            .map_err(BridgeError::classify_transport_error)?;
+            .map_err(error)?;
             rows.extend(
                 crate::snapshot::render_transcript_rows_with_provenance(
                     provenance_access,
@@ -465,7 +477,7 @@ pub async fn session_rows(
                     &session_id,
                 )
                 .await
-                .map_err(BridgeError::classify_transport_error)?,
+                .map_err(error)?,
             );
             view.rows = rows;
             view.covered_from = older.covered.from;
@@ -492,7 +504,7 @@ pub async fn session_rows(
             &mut view.rows,
         )
         .await
-        .map_err(BridgeError::classify_transport_error)?;
+        .map_err(error)?;
     }
     Ok(view)
 }

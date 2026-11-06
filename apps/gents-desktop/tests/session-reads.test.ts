@@ -94,6 +94,37 @@ function readsFor(
 }
 
 describe("createSessionReads", () => {
+  it("clears the selected session on an explicit history permission denial", async () => {
+    const tip = session(["k1"], {
+      totalItems: 1,
+      pageItems: 1,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k1",
+    });
+    const denied = new BridgeInvokeError({
+      code: "permissionDenied",
+      message: "Access denied",
+      retryable: false,
+      endpoint: null,
+    });
+    const reads = readsFor({
+      fetchSessionSnapshot: vi.fn().mockResolvedValue(tip),
+      fetchSessionRows: vi.fn().mockRejectedValue(denied),
+    } as unknown as DesktopApiAdapter);
+    await reads.refreshSession("session-1");
+    await expect(reads.loadSessionRows({ kind: "before", sequence: 1 })).rejects.toBe(
+      denied,
+    );
+    expect(readSession(reads.sessionStore)).toBeNull();
+    expect(reads.sessionStore.getState().load).toMatchObject({
+      phase: "failed",
+      sessionId: "session-1",
+      error: "Access denied",
+    });
+  });
+
   it("keeps the transcript while a selected request is pending and recovers on arrival", async () => {
     const tip = session(["k1"], {
       totalItems: 1,

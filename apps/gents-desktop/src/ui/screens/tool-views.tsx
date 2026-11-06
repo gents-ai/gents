@@ -229,6 +229,23 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
   const p = tool.presentation;
   const live = tool.statusKind === "running" ? tool.partialOutputTail : null;
   const denial = tool.statusKind === "error" ? tool.denial : null;
+  if (tool.reconstruction.state !== "ready") {
+    if (tool.reconstruction.state === "loading" && live) {
+      return <Payload value={live} counted />;
+    }
+    return (
+      <p
+        role={tool.reconstruction.state === "loading" ? "status" : "alert"}
+        data-testid="tool-output-unavailable"
+      >
+        {tool.reconstruction.state === "loading"
+          ? "Loading output"
+          : tool.reconstruction.state === "denied"
+            ? "Tool output unavailable: access denied."
+            : "Tool output could not be reconstructed."}
+      </p>
+    );
+  }
   return (
     <div className="grid gap-3">
       {(tool.jobProgress || tool.jobState) && <JobProgressCell tool={tool} />}
