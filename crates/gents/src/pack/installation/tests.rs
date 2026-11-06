@@ -3252,7 +3252,9 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
 #[tokio::test]
 async fn installed_plugin_pin_stays_locked_through_document_commit() {
     let home = tempfile::tempdir().unwrap();
-    let (node, access) = dependency_fixture().await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime).to_owned();
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
     let (_source, _, old_archive) = crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
     crate::pack::plugin_lifecycle::install(
         home.path(),
@@ -3267,10 +3269,10 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
     let old = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
     let manifest = plugin_pack_manifest("installed_pin", "documents", &[]);
     let config: PackConfig = serde_json::from_value(json!({
-        "node": {"node_did": OWNER},
-        "agents": [{"agent_did":"pin-agent", "node_did":OWNER,"context_id":"pin-context","inference_profile_id":"glm:inference"}],
-        "contexts": [{"context_id":"pin-context", "node_did":OWNER,"tools_id":"pin-tools"}],
-        "tools": [{"tools_id":"pin-tools", "node_did":OWNER,"integrations":{"plugins":[{"plugin":"fixture/native_echo","digest":old.digest}]}}]
+        "node": {"node_did": owner},
+        "agents": [{"agent_did":binding.agent_did, "creation_nonce":binding.creation_nonce, "node_did":owner,"context_id":"pin-context","inference_profile_id":"profile"}],
+        "contexts": [{"context_id":"pin-context", "node_did":owner,"tools_id":"pin-tools"}],
+        "tools": [{"tools_id":"pin-tools", "node_did":owner,"integrations":{"plugins":[{"plugin":"fixture/native_echo","digest":old.digest}]}}]
     })).unwrap();
     let reached = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
@@ -3284,10 +3286,11 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         });
     let access_for_install = access.clone();
     let home_for_install = home.path().to_owned();
+    let install_owner = owner.clone();
     let installer = tokio::spawn(async move {
         super::documents::install_documents_with_plugins(
             &access_for_install,
-            OWNER,
+            &install_owner,
             &manifest,
             &format!("sha256:{}", "3".repeat(64)),
             &config,
@@ -3316,6 +3319,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
     let updated = crate::pack::archive::PackArchive::from_bytes(&packed).unwrap();
     let notify_access = access.clone();
     let notify_home = home.path().to_owned();
+    let notify_owner = owner.clone();
     let update = crate::pack::plugin_lifecycle::install(
         home.path(),
         &updated,
@@ -3325,7 +3329,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         move |identity| async move {
             super::record_plugin_store_change(
                 &notify_access,
-                OWNER,
+                &notify_owner,
                 &notify_home,
                 &identity.coordinate,
                 Some(&identity),
@@ -3346,6 +3350,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
     installer.await.unwrap().unwrap();
     let notify_access = access.clone();
     let notify_home = home.path().to_owned();
+    let notify_owner = owner.clone();
     let after_commit = crate::pack::plugin_lifecycle::install(
         home.path(),
         &updated,
@@ -3355,7 +3360,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         move |identity| async move {
             super::record_plugin_store_change(
                 &notify_access,
-                OWNER,
+                &notify_owner,
                 &notify_home,
                 &identity.coordinate,
                 Some(&identity),
@@ -3378,7 +3383,9 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
 #[tokio::test]
 async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
     let home = tempfile::tempdir().unwrap();
-    let (node, access) = dependency_fixture().await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime).to_owned();
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
     let (_source, _, old_archive) = crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
     let (old_home, _) = crate::pack::plugin_lifecycle::install(
         home.path(),
@@ -3392,12 +3399,12 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
     .unwrap();
     let old = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
     let external: PackConfig = serde_json::from_value(json!({
-        "node": {"node_did": OWNER},
-        "agents": [{"agent_did":"standalone-survivor", "node_did": OWNER, "context_id":"standalone-context", "inference_profile_id":"glm:inference"}],
-        "contexts": [{"context_id":"standalone-context", "node_did":OWNER,"tools_id":"standalone-tools"}],
-        "tools": [{"tools_id":"standalone-tools", "node_did":OWNER, "integrations":{"plugins":[{"plugin":"fixture/native_echo","digest":old.digest}]}}]
+        "node": {"node_did": owner},
+        "agents": [{"agent_did":binding.agent_did, "creation_nonce":binding.creation_nonce, "node_did": owner, "context_id":"standalone-context", "inference_profile_id":"profile"}],
+        "contexts": [{"context_id":"standalone-context", "node_did":owner,"tools_id":"standalone-tools"}],
+        "tools": [{"tools_id":"standalone-tools", "node_did":owner, "integrations":{"plugins":[{"plugin":"fixture/native_echo","digest":old.digest}]}}]
     })).unwrap();
-    install(&access, "1", &external, DriftPolicy::Refuse)
+    install_owned(&access, &owner, "1", &external, DriftPolicy::Refuse)
         .await
         .unwrap();
     let (updated_dir, _, _) = crate::pack::plugin_lifecycle::tests::fixture("2.0.0", false);
@@ -3413,6 +3420,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
     let updated = crate::pack::archive::PackArchive::from_bytes(&packed).unwrap();
     let notify_access = access.clone();
     let notify_home = home.path().to_owned();
+    let notify_owner = owner.clone();
     let error = crate::pack::plugin_lifecycle::install(
         home.path(),
         &updated,
@@ -3422,7 +3430,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
         move |identity| async move {
             super::record_plugin_store_change(
                 &notify_access,
-                OWNER,
+                &notify_owner,
                 &notify_home,
                 &identity.coordinate,
                 Some(&identity),
@@ -3432,10 +3440,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
     )
     .await
     .unwrap_err();
-    assert!(
-        error.to_string().contains("standalone-survivor"),
-        "{error:#}"
-    );
+    assert!(error.to_string().contains(&binding.agent_did), "{error:#}");
     assert_eq!(
         crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap(),
         old
