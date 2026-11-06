@@ -137,14 +137,13 @@ pub(crate) async fn project_transport_document(
         ));
     }
     let id = DocID::from_string(doc_id).map_err(failure)?;
-    if collection
+    let Some(document) = collection
         .get_by_doc_id(view, &system, &id)
         .await
         .map_err(failure)?
-        .is_none()
-    {
+    else {
         return Ok(());
-    }
+    };
     let acp_view = view.sibling(Namespace::Acpstore);
     let scoped = provider
         .bind_transaction(acp_view.clone())
@@ -243,6 +242,35 @@ pub(crate) async fn project_transport_document(
         false,
     )
     .await?;
+    if collection_name == PEER_REGISTRY_NAME
+        && document.get("node_did").and_then(|value| value.as_str()) == Some(runtime.as_str())
+    {
+        let creator = scoped
+            .get_doc_owner(AGENT_OWNERSHIP_POLICY_ID, resource, doc_id)
+            .await
+            .map_err(failure)?
+            .ok_or_else(|| failure("registry document has no native owner"))?;
+        let writer = if creator == *runtime {
+            Some(owner.clone())
+        } else if creator == owner {
+            Some(runtime.clone())
+        } else {
+            None
+        };
+        if let Some(writer) = writer {
+            change(
+                view,
+                provider,
+                runtime,
+                resource,
+                doc_id,
+                "writer",
+                Subject::entity(writer),
+                false,
+            )
+            .await?;
+        }
+    }
     change(
         view,
         provider,
