@@ -25,10 +25,9 @@ pub(crate) use documents::strip_secret_fields;
 #[cfg(test)]
 pub(crate) use documents::{
     create_callback_result, create_pending_invocation, flush_workspace_docs, update_invocation,
-    CallbackInvocationDoc,
-    CallbackResultDoc,
+    CallbackInvocationDoc, CallbackResultDoc,
 };
-pub(crate) use documents::{idempotency_key, load_invocation};
+pub(crate) use documents::{idempotency_key, load_invocation, load_invocation_with_access};
 pub(crate) use run::recover_local_invocations;
 
 pub(crate) const LIFECYCLE_PENDING: &str = "pending";

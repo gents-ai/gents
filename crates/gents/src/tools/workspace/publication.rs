@@ -16,7 +16,9 @@ pub(crate) async fn flush_workspace_docs(
         "callback workspace actor mismatch"
     );
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    access.transact_write("callback.publish_workspace", |txn| Box::pin(async move {
+    access.transact_write("callback.publish_workspace", |txn| {
+        let now = now.clone();
+        Box::pin(async move {
         let mut published = None;
         for workspace in docs.workspaces.values() {
             anyhow::ensure!(workspace.workspace_id == action.workspace_id
@@ -84,7 +86,7 @@ pub(crate) async fn flush_workspace_docs(
             }
         }
         Ok::<_, anyhow::Error>(())
-    })).await
+    })}).await
 }
 
 async fn workspace_document_id_in_txn(

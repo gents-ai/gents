@@ -128,6 +128,14 @@ mod tests {
         ))
     }
 
+    fn agent_visible(response: serde_json::Value) -> Result<bool> {
+        let response: query::QueryResponse = serde_json::from_value(response)?;
+        Ok(
+            !crate::store::graphql::required_rows::<serde_json::Value>(&response, "Agent")?
+                .is_empty(),
+        )
+    }
+
     #[tokio::test]
     async fn selected_callback_agents_follow_native_visibility() -> Result<()> {
         let directory = tempfile::tempdir()?;
@@ -222,8 +230,7 @@ mod tests {
                     crate::store::graphql::escape_graphql_string(&target_doc)
                 ))
                 .await?;
-            let visible =
-                !crate::store::graphql::rows::<serde_json::Value>(&response, "Agent")?.is_empty();
+            let visible = agent_visible(response)?;
             assert_eq!(visible, case["before"].as_bool().unwrap(), "{case}");
         }
         access
@@ -263,8 +270,7 @@ mod tests {
                     crate::store::graphql::escape_graphql_string(&target_doc)
                 ))
                 .await?;
-            let visible =
-                !crate::store::graphql::rows::<serde_json::Value>(&response, "Agent")?.is_empty();
+            let visible = agent_visible(response)?;
             assert_eq!(
                 visible,
                 case["after_revocation"].as_bool().unwrap(),
@@ -300,9 +306,7 @@ mod tests {
                         crate::store::graphql::escape_graphql_string(&target_doc)
                     ))
                     .await?;
-                let visible =
-                    !crate::store::graphql::rows::<serde_json::Value>(&response, "Agent")?
-                        .is_empty();
+                let visible = agent_visible(response)?;
                 assert_eq!(visible, case[expected_key].as_bool().unwrap(), "{case}");
             }
         }

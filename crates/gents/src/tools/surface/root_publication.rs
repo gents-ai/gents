@@ -2,7 +2,9 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use crate::store::config_client::{read_desired_state_record_in_txn, ConfigAccess, ConfigApplyTxn};
-use crate::store::graphql::{created_doc_id, escape_graphql_string, mutation_documents, rows};
+use crate::store::graphql::{
+    created_doc_id, escape_graphql_string, mutation_documents, required_rows,
+};
 use crate::Collection;
 
 #[derive(Debug, thiserror::Error)]
@@ -23,12 +25,17 @@ async fn selected_node(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Result<Strin
     Ok(doc)
 }
 
+fn value_rows(response: &Value, field: &str) -> Result<Vec<Value>> {
+    let response: query::QueryResponse = serde_json::from_value(response.clone())?;
+    Ok(required_rows(&response, field)?)
+}
+
 async fn root_row(txn: &ConfigApplyTxn<'_>, root_path: &str) -> Result<Option<Value>> {
     let response = txn.execute(&format!(
         "{{ WorkspaceRoot(filter: {{root_path: {{_eq: \"{}\"}}}}) {{ _docID node_did node_doc_id }} }}",
         escape_graphql_string(root_path)
     )).await?;
-    let mut rows: Vec<Value> = rows(&response, "WorkspaceRoot")?;
+    let mut rows: Vec<Value> = value_rows(&response, "WorkspaceRoot")?;
     anyhow::ensure!(
         rows.len() <= 1,
         "multiple visible WorkspaceRoot documents share a path"
@@ -348,7 +355,7 @@ mod tests {
         .await?;
         let query = format!("{{ WorkspaceRoot(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ _docID _version {{ cid height fieldName }} }} }}", escape_graphql_string(&root_doc));
         let signed = owner.execute(&query).await?;
-        let signed_rows: Vec<Value> = rows(&signed, "WorkspaceRoot")?;
+        let signed_rows: Vec<Value> = value_rows(&signed, "WorkspaceRoot")?;
         let [signed_root] = signed_rows.as_slice() else {
             anyhow::bail!("published root was not visible")
         };
@@ -409,7 +416,7 @@ mod tests {
                 );
                 let response = client(&endpoint, key)?.execute(&query).await?;
                 assert_eq!(
-                    !rows::<Value>(&response, "WorkspaceRoot")?.is_empty(),
+                    !value_rows(&response, "WorkspaceRoot")?.is_empty(),
                     allowed,
                     "{case}"
                 );
@@ -635,6 +642,6 @@ mod tests {
             "{{ WorkspaceRoot(filter: {{root_path: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
             escape_graphql_string(path)
         );
-        Ok(rows(&access.execute(&query).await?, "WorkspaceRoot")?)
+        Ok(value_rows(&access.execute(&query).await?, "WorkspaceRoot")?)
     }
 }

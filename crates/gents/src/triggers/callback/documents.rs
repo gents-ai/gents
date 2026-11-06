@@ -500,6 +500,26 @@ pub async fn load_invocation(
     Ok(first_row(&response, "CallbackInvocation")?)
 }
 
+pub(crate) async fn load_invocation_with_access(
+    access: &crate::ConfigAccess,
+    invocation_id: &str,
+    owner: &str,
+) -> Result<Option<CallbackInvocationDoc>> {
+    let query = format!(
+        r#"{{ CallbackInvocation(filter: {{ invocation_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}, limit: 2) {{ {INVOCATION_FIELDS} }} }}"#,
+        escape_graphql_string(invocation_id),
+        escape_graphql_string(owner),
+    );
+    let response: query::QueryResponse = serde_json::from_value(access.execute(&query).await?)?;
+    let mut found: Vec<CallbackInvocationDoc> =
+        crate::store::graphql::required_rows(&response, "CallbackInvocation")?;
+    anyhow::ensure!(
+        found.len() <= 1,
+        "ambiguous node-scoped callback/workspace document"
+    );
+    Ok(found.pop())
+}
+
 pub async fn load_invocation_by_key(
     node: &std::sync::Arc<EmbeddedNode>,
     key: &str,

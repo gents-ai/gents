@@ -157,11 +157,10 @@ pub(crate) struct SourceSchemaCache {
 }
 
 async fn enrich_native_outcome_provenance(
-    node: &Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     collection: &str,
     source: &mut serde_json::Value,
     owner: &str,
-    agent_did: &str,
 ) -> anyhow::Result<()> {
     let (work_unit_id, invocation_id) = match collection {
         "CallbackResult" => {
@@ -178,15 +177,16 @@ async fn enrich_native_outcome_provenance(
         "WorkspaceReceipt" => {
             let workspace_id = required_source_string(source, "workspace_id")?;
             let expected_work_unit = required_source_string(source, "work_unit_id")?;
-            let workspace = crate::tools::workspace::overlay::load_isolated_workspace_record(
-                node,
-                &workspace_id,
-                owner,
-            )
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("WorkspaceReceipt has no node-scoped IsolatedWorkspace")
-            })?;
+            let workspace =
+                crate::tools::workspace::overlay::load_isolated_workspace_record_with_access(
+                    access,
+                    &workspace_id,
+                    owner,
+                )
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("WorkspaceReceipt has no node-scoped IsolatedWorkspace")
+                })?;
             anyhow::ensure!(
                 workspace.workspace_id == workspace_id,
                 "workspace identity changed during lookup"
@@ -210,7 +210,7 @@ async fn enrich_native_outcome_provenance(
     };
 
     let invocation =
-        crate::triggers::callback::load_invocation(node, &invocation_id, owner, agent_did)
+        crate::triggers::callback::load_invocation_with_access(access, &invocation_id, owner)
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!("native source has no node-scoped CallbackInvocation")
@@ -1863,16 +1863,36 @@ impl EventSource {
                     "CallbackResult" | "WorkspaceReceipt"
                 )
             {
-                let Some(owner) = snapshot
-                    .agent(&trigger.task.agent_did)
-                    .map(|agent| agent.node_did())
-                else {
+                let Some(agent) = snapshot.agent(&trigger.task.agent_did) else {
                     build.correlation_pending = true;
                     build.deferred.push((
                         trigger.trigger_id.clone(),
                         "native outcome provenance".to_owned(),
                     ));
                     continue;
+                };
+                let owner = agent.node_did();
+                let access = identity::Did::new(&trigger.task.agent_did)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|actor| {
+                        crate::ConfigAccess::local_managed_agent(
+                            self.node.clone(),
+                            actor,
+                            agent.agent_identity.as_ref(),
+                        )
+                        .map_err(anyhow::Error::from)
+                    });
+                let access = match access {
+                    Ok(access) => access,
+                    Err(error) => {
+                        build.correlation_pending = true;
+                        build.deferred.push((
+                            trigger.trigger_id.clone(),
+                            "native outcome provenance".to_owned(),
+                        ));
+                        tracing::warn!(trigger_id = %trigger.trigger_id, %error, "event source selected Agent access is unavailable");
+                        continue;
+                    }
                 };
                 let Some(doc) = doc_vars.as_mut() else {
                     build.correlation_pending = true;
@@ -1883,11 +1903,10 @@ impl EventSource {
                     continue;
                 };
                 if let Err(error) = enrich_native_outcome_provenance(
-                    &self.node,
+                    &access,
                     &trigger.source_collection,
                     doc,
                     owner,
-                    &trigger.task.agent_did,
                 )
                 .await
                 {

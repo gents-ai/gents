@@ -1013,7 +1013,7 @@ pub(crate) async fn load_isolated_workspace_record(
         .transpose()
 }
 
-pub(super) async fn load_isolated_workspace_record_with_access(
+pub(crate) async fn load_isolated_workspace_record_with_access(
     access: &crate::ConfigAccess,
     workspace_id: &str,
     node_did: &str,
