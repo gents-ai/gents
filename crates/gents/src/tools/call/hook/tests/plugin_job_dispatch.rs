@@ -5,13 +5,13 @@ use crate::plugin::store;
 use crate::plugin::tests::executor::installed_plugin;
 use crate::store::identity::NodeIdentity;
 use crate::tools::background::job::driver::{settle_plugin_job, JobDriver, JobRuntime, Settlement};
-use crate::tools::background::job::input::tests::{insert, live_settings};
+use crate::tools::background::job::input::tests::live_settings;
 use crate::tools::background::job::keys::{job_session_id, job_spawn_key};
 use crate::tools::background::job::records::{
     read_pin, read_progress, read_step_state, write_pin_in_txn,
 };
 use crate::tools::background::job::JobBinding;
-use crate::tools::call::lifecycle::admission_fixture::{fixture_job_pin, write_fixture_job_pin};
+use crate::tools::call::lifecycle::admission_fixture::fixture_job_pin;
 use gents_protocol::job::{
     DynamicMode, JobPin, JobPolicy, JobState, PluginDataDeclaration, PluginJobDeclaration,
     PluginJobSettings,
@@ -74,7 +74,10 @@ impl Default for Options {
 }
 
 struct Step0 {
-    _dir: tempfile::TempDir,
+    db: crate::support::TestDb,
+    user: crate::KeyIdentity,
+    owner: crate::ConfigAccess,
+    caller: Arc<dyn NodeIdentity>,
     home: tempfile::TempDir,
     cwd: Option<tempfile::TempDir>,
     node: Arc<EmbeddedNode>,
@@ -193,39 +196,51 @@ fn install_plugin(
 /// A hook bound to the job tool `workflow`, whose installed plugin answers
 /// every step 0 with `output`.
 async fn step0(output: Value, options: Options) -> Step0 {
-    let dir = tempfile::tempdir().unwrap();
-    let identity =
-        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
-            .unwrap();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(dir.path())
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (db, user, owner, caller_binding) =
+        crate::test_support::signed_test_node("plugin-job-dispatch").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
+    let caller =
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &caller_binding).unwrap();
     node.add_collection("type Plain { body: String }")
         .await
         .unwrap();
-    let worker_binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
-    crate::test_support::install_test_agent_binding(
+    let worker_binding = crate::store::identity::provision_agent_identity_authorized(
+        &node,
+        identity.as_ref(),
+        &user.did().parse().unwrap(),
+    )
+    .await
+    .unwrap();
+    crate::test_support::install_test_agent_binding_with_access(
         &node,
         identity.did(),
         "worker",
         &worker_binding,
+        &owner,
     )
     .await;
     let worker =
-        crate::store::identity::resolve_agent_identity(&identity, &worker_binding).unwrap();
-    insert(
-        &node,
-        "AgentTarget",
-        json!({"target_id": "t-worker", "node_did": identity.did(), "target_node_did": identity.did(),
-               "agent_did": worker.did(), "name": "worker"}),
-    )
-    .await;
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &worker_binding).unwrap();
+    let target = json!({"target_id": "t-worker", "node_did": identity.did(),
+        "target_node_did": identity.did(), "agent_did": worker.did(), "name": "worker"});
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::AgentTarget,
+            add: target.clone(),
+            update: target,
+        },
+    ])
+    .unwrap();
+    owner
+        .transact_write("test.plugin_job_target", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .unwrap();
     let home = tempfile::tempdir().unwrap();
     install_plugin(
         home.path(),
@@ -242,39 +257,31 @@ async fn step0(output: Value, options: Options) -> Step0 {
         plugin: serde_json::from_value(json!({"plugin": "team/plugin"})).unwrap(),
         settings: options.settings,
     };
-    let mut hook =
-        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
-            .with_job_tools(RapidHashMap::from_iter([(TOOL.to_owned(), binding)]));
-    let session_id = hook.session_id().await.unwrap();
-    let request_id = format!("step0-{}", uuid::Uuid::new_v4());
-    let cause = match options.hop {
-        0 => None,
-        depth => Some(job_ancestry(&node, depth).await),
-    };
-    let lifecycle = request_at_hop(
-        &node,
-        &identity,
-        &request_id,
+    let (lifecycle, _) = job_chain(&db, &user, &owner, caller.as_ref(), options.hop).await;
+    let request_id = lifecycle.request().request_id.clone();
+    let session_id = lifecycle.request().session_id.clone();
+    let mut hook = DefraSessionHook::resume_with_actor_policy(
+        node.clone(),
         &session_id,
-        options.hop,
-        cause,
+        identity.did(),
+        lifecycle.request().requester_did.as_deref(),
+        caller.did().parse().unwrap(),
+        FailurePolicy::default(),
     )
-    .await;
-    let caller_signer = lifecycle.managed_agent_signer().unwrap();
-    hook.actor = Some(identity::Did::new(caller_signer.did()).unwrap());
-    hook = hook.with_managed_identity(&caller_signer).unwrap();
+    .await
+    .unwrap()
+    .with_managed_identity(caller.as_ref())
+    .unwrap()
+    .with_job_tools(RapidHashMap::from_iter([(TOOL.to_owned(), binding)]));
     let tools: crate::documents::Tools = serde_json::from_value(json!({
-        "tools_id": format!("{}:tools", caller_signer.did()),
+        "tools_id": format!("{}:tools", caller.did()),
         "node_did": identity.did(),
         "agents": {"enabled": true, "target_ids": if options.caller_targets { vec!["t-worker"] } else { Vec::new() }},
         "integrations": {"plugins": [{"plugin": "team/plugin", "job": hook.job_tools.get(TOOL).unwrap().settings}]},
     })).unwrap();
-    crate::store::config_client::write_tools_document(
-        &crate::ConfigAccess::local(node.clone()),
-        &tools,
-    )
-    .await
-    .unwrap();
+    crate::store::config_client::write_tools_document(&owner, &tools)
+        .await
+        .unwrap();
     if options.driver {
         let runtime = JobRuntime::new(
             node.clone(),
@@ -283,10 +290,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
             cwd.as_ref().map(|cwd| cwd.path().to_owned()),
         );
         let mut unavailable_agents = rapidhash::RapidHashMap::default();
-        for agent in [
-            Arc::new(caller_signer.clone()) as Arc<dyn NodeIdentity>,
-            worker.clone(),
-        ] {
+        for agent in [caller.clone(), worker.clone()] {
             unavailable_agents.insert(agent.did().to_owned(), crate::runtime::snapshot::UnavailableAgent::new(
                 gents_protocol::node_readiness::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid, "job fixture",
             ).with_watcher_identity(agent));
@@ -295,7 +299,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
             generation: 1,
             node: None,
             local_did: identity.did().to_owned(),
-            default_agent_did: caller_signer.did().to_owned(),
+            default_agent_did: caller.did().to_owned(),
             agents: Default::default(),
             tool_surfaces: Default::default(),
             backend_admission_configs: Default::default(),
@@ -317,7 +321,10 @@ async fn step0(output: Value, options: Options) -> Step0 {
     hook.on_completion_call(&user_text_message("run the workflow"), &[])
         .await;
     Step0 {
-        _dir: dir,
+        db,
+        user,
+        owner,
+        caller,
         home,
         cwd,
         node,
@@ -331,106 +338,136 @@ async fn step0(output: Value, options: Options) -> Step0 {
     }
 }
 
-async fn request_at_hop(
-    node: &Arc<EmbeddedNode>,
-    identity: &crate::store::identity::KeyIdentity,
-    request_id: &str,
-    session_id: &str,
-    hop: u32,
-    cause: Option<(String, String)>,
-) -> crate::RequestLifecycle {
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        request_id,
-        identity.did(),
-        identity.did(),
-        "general",
-        session_id,
+async fn job_chain(
+    db: &crate::support::TestDb,
+    user: &crate::KeyIdentity,
+    owner: &crate::ConfigAccess,
+    agent: &dyn NodeIdentity,
+    depth: u32,
+) -> (
+    crate::RequestLifecycle,
+    Option<(crate::RequestLifecycle, String)>,
+) {
+    use crate::request::lifecycle::ClaimOutcome;
+    use crate::tools::call::lifecycle::admission_fixture::{
+        materialize_session_message, pending_client_fixture_request,
+        publish_accepted_on_claimed_request,
+    };
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+    let request_id = format!("step0-{}", uuid::Uuid::new_v4());
+    let session_id = format!("session-{}", uuid::Uuid::new_v4());
+    let create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        &request_id,
+        db.node_identity.did(),
+        user.did(),
+        agent.did(),
+        &session_id,
         "run",
         "interactive",
         Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(identity.did()),
+        AgentRequestAdmissionRecord::client(user.did()),
     );
-    create.request_hop = hop;
-    if let Some((request_doc_id, call_doc_id)) = cause {
-        let response = crate::ConfigAccess::local(node.clone()).execute(&format!(
-            r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{request_id}} AgentToolCall(filter: {{_docID: {{_eq: "{}"}}}}) {{tool_call_id}}}}"#,
-            crate::store::graphql::escape_graphql_string(&request_doc_id),
-            crate::store::graphql::escape_graphql_string(&call_doc_id),
-        )).await.unwrap();
-        create.caused_by_parent_request_id = Some(
-            response["data"]["AgentRequest"][0]["request_id"]
-                .as_str()
-                .unwrap()
-                .into(),
-        );
-        create.caused_by_parent_request_doc_id = Some(request_doc_id);
-        create.caused_by_parent_tool_call_id = Some(
-            response["data"]["AgentToolCall"][0]["tool_call_id"]
-                .as_str()
-                .unwrap()
-                .into(),
-        );
-        create.caused_by_parent_tool_call_doc_id = Some(call_doc_id);
-    }
-    let lifecycle =
-        crate::tools::call::lifecycle::admission_fixture::claimed_signed_request_create(
-            node, identity, create,
+    let mut current = pending_client_fixture_request(
+        &db.node,
+        owner,
+        db.node_identity.clone(),
+        user,
+        agent,
+        create,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        current.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let mut parent = None;
+    for level in 0..depth {
+        let mut tool = publish_accepted_on_claimed_request(
+            db.node.clone(),
+            &mut current,
+            db.node_identity.did(),
+            0,
+            "agent_new",
+            &format!("ancestor-{level}"),
+            json!({}),
+            crate::tools::call::lifecycle::AwaitMode::Background,
+            false,
         )
-        .await;
-    lifecycle
+        .await
+        .unwrap();
+        if level == 0 {
+            write_pin_for_tool(&tool, &fixture_job_pin()).await;
+        }
+        let tool_doc = tool.doc_id().unwrap().to_owned();
+        let receipt = materialize_session_message(
+            &db.node,
+            &current,
+            &mut tool,
+            db.node_identity.did(),
+            "run",
+        )
+        .await
+        .unwrap();
+        let access = crate::ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            agent.did().parse().unwrap(),
+            agent,
+        )
+        .unwrap();
+        let doc = crate::store::graphql::escape_graphql_string(&receipt.request_doc_id);
+        let response = access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ {} }} }}"#,
+                crate::request::watcher::AGENT_REQUEST_FIELDS,
+            ))
+            .await
+            .unwrap();
+        let row: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+        let request = row.try_into().unwrap();
+        let (_authority_owner, authority) =
+            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+        let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+            db.node.clone(),
+            db.node_identity.clone(),
+            authority,
+        );
+        let (request, admission) = verifier
+            .verify_fresh_for_claim_with_identity(&request, agent)
+            .await
+            .unwrap();
+        let mut child = crate::RequestLifecycle::new_with_node_did(
+            db.node.clone(),
+            agent.did(),
+            db.node_identity.did(),
+            request,
+            60,
+        );
+        child.bind_managed_agent(agent).unwrap();
+        child.set_client_claim_admission(admission);
+        assert_eq!(
+            child.claim_with_identity().await.unwrap(),
+            ClaimOutcome::Claimed
+        );
+        parent = Some((current, tool_doc));
+        current = child;
+    }
+    (current, parent)
 }
 
-/// The (request, tool call) documents the calling request is caused by: a
-/// job `depth` sessions up, through `depth - 1` plain tool calls.
-async fn job_ancestry(node: &Arc<EmbeddedNode>, depth: u32) -> (String, String) {
-    let request = |id: &str, session: &str, parent: Option<(&str, &str)>| {
-        let mut value = json!({
-            "request_id": id,
-            "purpose": "normal",
-            "node_did": "owner",
-            "requester_did": null,
-            "session_id": session,
-            "agent_did": "configured",
-            "lifecycle_state": "processing",
-        });
-        if let Some((request_doc_id, call_doc_id)) = parent {
-            value["caused_by_parent_request_id"] = json!("parent");
-            value["caused_by_parent_request_doc_id"] = json!(request_doc_id);
-            value["caused_by_parent_tool_call_id"] = json!("call");
-            value["caused_by_parent_tool_call_doc_id"] = json!(call_doc_id);
-        }
-        value
-    };
-    let tool = |id: &str, session: &str, request_doc_id: &str| {
-        json!({
-            "request_id": session,
-            "request_doc_id": request_doc_id,
-            "node_did": "owner",
-            "requester_did": null,
-            "session_id": session,
-            "tool_call_id": id,
-            "tool_name": "agent_new",
-            "lifecycle_state": "running",
-            "await_mode": "background",
+async fn write_pin_for_tool(tool: &crate::tools::call::lifecycle::ToolCallLifecycle, pin: &JobPin) {
+    let access = tool.access().unwrap();
+    let doc = tool.doc_id().unwrap();
+    access
+        .transact_write("test.fixture_job_pin", |txn| {
+            Box::pin(async move { write_pin_in_txn(txn, doc, pin).await })
         })
-    };
-    let root = insert(node, "AgentRequest", request("root", "root", None)).await;
-    let job = insert(node, "AgentToolCall", tool("job", "root", &root)).await;
-    write_fixture_job_pin(node, &job).await.unwrap();
-    let (mut parent, mut cause) = (root, job);
-    for level in 1..depth {
-        let session = format!("level-{level}");
-        let mid = insert(
-            node,
-            "AgentRequest",
-            request(&session, &session, Some((&parent, &cause))),
-        )
-        .await;
-        cause = insert(node, "AgentToolCall", tool(&session, &session, &mid)).await;
-        parent = mid;
-    }
-    (parent, cause)
+        .await
+        .unwrap();
 }
 
 impl Step0 {
@@ -453,21 +490,23 @@ impl Step0 {
     }
 
     async fn row_of(&self, call_id: &str) -> Value {
-        let response = self
-            .node
-            .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ request_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "{TOOL}" }}, tool_call_id: {{ _eq: "{call_id}" }} }}) {{ _docID requester_did lifecycle_state tool_failure_class await_mode job_pin job_progress plugin_execution_receipt }} }}"#,
-                self.request_id
-            ))
-            .await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let rows = response.data.unwrap()["AgentToolCall"].clone();
+        let request = crate::store::graphql::escape_graphql_string(&self.request_id);
+        let call = crate::store::graphql::escape_graphql_string(call_id);
+        let response = self.access().execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ request_id: {{ _eq: "{request}" }}, tool_name: {{ _eq: "{TOOL}" }}, tool_call_id: {{ _eq: "{call}" }} }}) {{ _docID requester_did lifecycle_state tool_failure_class await_mode job_pin job_progress plugin_execution_receipt }} }}"#,
+        )).await.unwrap();
+        let rows = response["data"]["AgentToolCall"].clone();
         assert_eq!(rows.as_array().unwrap().len(), 1, "{rows}");
         rows[0].clone()
     }
 
     fn access(&self) -> crate::store::config_client::ConfigAccess {
-        crate::store::config_client::ConfigAccess::local(self.node.clone())
+        crate::ConfigAccess::local_managed_agent(
+            self.node.clone(),
+            self.caller.did().parse().unwrap(),
+            self.caller.as_ref(),
+        )
+        .unwrap()
     }
 
     async fn pin_of(&self, row: &Value) -> JobPin {
@@ -508,21 +547,18 @@ impl Step0 {
 
     /// The requests whose retry key names a spawn of the job rooted at `root`.
     async fn child_request(&self, root: &str, slot: &str) -> Value {
-        let response = self
-            .node
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{ _docID request_id session_id agent_did }} }}"#,
-                job_spawn_key(root, slot, 0)
-            ))
-            .await;
-        let rows = response.data.unwrap()["AgentRequest"].clone();
+        let key = crate::store::graphql::escape_graphql_string(&job_spawn_key(root, slot, 0));
+        let response = self.access().execute(&format!(
+            r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{key}" }} }}) {{ _docID request_id session_id agent_did }} }}"#,
+        )).await.unwrap();
+        let rows = response["data"]["AgentRequest"].clone();
         assert_eq!(rows.as_array().unwrap().len(), 1, "{rows}");
         rows[0].clone()
     }
 
     async fn bodies(&self) -> Vec<String> {
-        let response = self.node.execute("{ Plain { body } }").await;
-        response.data.unwrap()["Plain"]
+        let response = self.access().execute("{ Plain { body } }").await.unwrap();
+        response["data"]["Plain"]
             .as_array()
             .unwrap()
             .iter()
@@ -1624,10 +1660,13 @@ fn controlling(entries: &[(&str, &str)]) -> Value {
 
 impl Step0 {
     async fn interrupted(&self, doc_id: &str) -> bool {
-        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(&self.node, doc_id)
-            .await
-            .unwrap()
-            .is_some()
+        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+            &self.access(),
+            doc_id,
+        )
+        .await
+        .unwrap()
+        .is_some()
     }
 
     /// Adopts a running job with one live child; returns the job row and
@@ -1663,7 +1702,14 @@ impl Step0 {
             .as_str()
             .unwrap()
             .to_owned();
-        write_fixture_job_pin(&self.node, &doc).await.unwrap();
+        let pin = fixture_job_pin();
+        self.access()
+            .transact_write("test.other_plugin_pin", |txn| {
+                let (doc, pin) = (&doc, &pin);
+                Box::pin(async move { write_pin_in_txn(txn, doc, pin).await })
+            })
+            .await
+            .unwrap();
         doc
     }
 
@@ -1706,40 +1752,28 @@ async fn non_job_pause_ends_an_own_running_job_completed_paused() {
 async fn non_job_control_on_another_plugin_or_out_of_scope_row_is_refused() {
     let step = step0(json!({"result": "x"}), Options::default()).await;
     let other_plugin = step.other_plugin_job("call-1").await;
-    let (root_request, other_session) = job_ancestry(&step.node, 1).await;
-    // A job of this very plugin in a session the caller does not own: only
-    // the scope check refuses it.
-    let out_of_scope = insert(
-        &step.node,
-        "AgentToolCall",
-        json!({
-            "request_id": "root",
-            "request_doc_id": root_request,
-            "node_did": "owner",
-            "requester_did": null,
-            "session_id": "root",
-            "tool_call_id": "foreign",
-            "tool_name": "agent_new",
-            "lifecycle_state": "running",
-            "await_mode": "background",
-        }),
-    )
-    .await;
+    let (_, parent) = job_chain(&step.db, &step.user, &step.owner, step.caller.as_ref(), 1).await;
+    let (mut root, other_session) = parent.unwrap();
+    let out_of_scope =
+        crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+            step.node.clone(),
+            &mut root,
+            step.db.node_identity.did(),
+            1,
+            "agent_new",
+            "foreign",
+            json!({}),
+            crate::tools::call::lifecycle::AwaitMode::Background,
+            false,
+        )
+        .await
+        .unwrap();
     let pin = JobPin {
         plugin_ref: "team/plugin".to_owned(),
         ..fixture_job_pin()
     };
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &step.node,
-        None,
-        "test.pin",
-        |txn| {
-            let (doc, pin) = (&out_of_scope, &pin);
-            Box::pin(async move { write_pin_in_txn(txn, doc, pin).await })
-        },
-    )
-    .await
-    .unwrap();
+    write_pin_for_tool(&out_of_scope, &pin).await;
+    let out_of_scope = out_of_scope.doc_id().unwrap().to_owned();
     for (n, target) in [
         &other_plugin,
         &other_session,
