@@ -1298,6 +1298,32 @@ Denies the desktop_mailbox_start_request command without any pre-configured scop
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-managed-server-enroll`
+
+</td>
+<td>
+
+Enables the desktop_managed_server_enroll command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-managed-server-enroll`
+
+</td>
+<td>
+
+Denies the desktop_managed_server_enroll command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-managed-server-open-login-items`
 
 </td>
