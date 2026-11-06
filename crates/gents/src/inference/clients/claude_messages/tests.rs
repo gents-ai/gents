@@ -1487,11 +1487,12 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
         .build()
         .expect("runtime")
         .block_on(async {
-            let node = crate::inference::auth::credential::test_support::test_node().await;
+            let db = crate::support::test_db("claude-live-usage").await;
+            let node = db.node.clone();
             let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
                 std::sync::Arc::default();
             let account = crate::inference::usage_observation::UsageAccount::Backend {
-                node_did: "did:key:z6MkUsageWireClaudeLive".into(),
+                node_did: db.node_identity.did().to_owned(),
                 provider: "ClaudeCliSubscription".into(),
                 backend_id: "backend-usage-claude".into(),
                 connection: "connection-claude".into(),
