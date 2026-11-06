@@ -104,7 +104,7 @@ def policy : List ResourceDefinition :=
   , { name := "agents"
       relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
         ⟨"workspace_selected_by", ["configuration->reader", "agents->executor"], []⟩,
-        ⟨"session_writer", ["actor"], []⟩, ⟨"administrator", ["actor"],
+        ⟨"session_writer", ["actor"], []⟩, ⟨"administrator", ["actor", "nodes->owner", "nodes->administrator"],
           ["parent", "reader", "session_writer", "administrator", "executor", "config_writer"]⟩,
         ⟨"executor", ["actor"], []⟩, ⟨"config_writer", ["actor"], []⟩]
       permissions := [permission "read" ["reader", "workspace_selected_by", "session_writer", "administrator", "executor", "config_writer"] [("parent", "read")],
@@ -184,8 +184,8 @@ structure State where
   enrolled : List DID
   deriving Repr
 
-/-- Managed Agent creation stages the child document and its Node parent and
-executor relationships in one native transaction. A failed transaction exposes
+/-- Managed Agent creation stages the child, Node parent, executor and Node
+manager relationships in one native transaction. A failed transaction exposes
 none of them; NAC capabilities are granted only after commit. -/
 def commitAgentCreation (state : State) (childId creator childDid nodeId : String)
     (commit : Bool) : State :=
@@ -193,7 +193,9 @@ def commitAgentCreation (state : State) (childId creator childDid nodeId : Strin
     { state with
       objects := ⟨"agents", childId, creator⟩ :: state.objects
       relations := ⟨"agents", childId, "parent", .object "nodes" nodeId⟩ ::
-        ⟨"agents", childId, "executor", .actor childDid⟩ :: state.relations }
+        ⟨"agents", childId, "executor", .actor childDid⟩ ::
+        ⟨"agents", childId, "administrator", .entitySet "nodes" nodeId "owner"⟩ ::
+        ⟨"agents", childId, "administrator", .entitySet "nodes" nodeId "administrator"⟩ :: state.relations }
   else state
 
 theorem aborted_agent_creation_is_unchanged (state : State)
@@ -206,7 +208,9 @@ theorem committed_agent_creation_retains_creator_and_parent (state : State)
       ⟨"agents", childId, creator⟩ :: state.objects ∧
     (commitAgentCreation state childId creator childDid nodeId true).relations =
       ⟨"agents", childId, "parent", .object "nodes" nodeId⟩ ::
-        ⟨"agents", childId, "executor", .actor childDid⟩ :: state.relations := by
+        ⟨"agents", childId, "executor", .actor childDid⟩ ::
+        ⟨"agents", childId, "administrator", .entitySet "nodes" nodeId "owner"⟩ ::
+        ⟨"agents", childId, "administrator", .entitySet "nodes" nodeId "administrator"⟩ :: state.relations := by
   exact ⟨rfl, rfl⟩
 
 /-- Conditional atomic-publication contract for an implementation whose native
@@ -476,7 +480,8 @@ revocation; an ordinary update does not recreate it. -/
 def nodeManagerFixture : State :=
   { objects := [⟨"nodes", "node", "user"⟩, ⟨"nodes", "other-node", "other-user"⟩,
       ⟨"configuration", "config", "creator-agent"⟩,
-      ⟨"workspace_roots", "root", "creator-agent"⟩],
+      ⟨"workspace_roots", "root", "creator-agent"⟩,
+      ⟨"agents", "agent", "creator-agent"⟩],
     relations := [⟨"nodes", "node", "administrator", .actor "admin"⟩,
       ⟨"nodes", "other-node", "administrator", .actor "other-admin"⟩,
       ⟨"configuration", "config", "parent", .object "nodes" "node"⟩,
@@ -484,7 +489,10 @@ def nodeManagerFixture : State :=
       ⟨"configuration", "config", "selection_manager", .entitySet "nodes" "node" "administrator"⟩,
       ⟨"workspace_roots", "root", "parent", .object "nodes" "node"⟩,
       ⟨"workspace_roots", "root", "reader_manager", .entitySet "nodes" "node" "owner"⟩,
-      ⟨"workspace_roots", "root", "reader_manager", .entitySet "nodes" "node" "administrator"⟩],
+      ⟨"workspace_roots", "root", "reader_manager", .entitySet "nodes" "node" "administrator"⟩,
+      ⟨"agents", "agent", "parent", .object "nodes" "node"⟩,
+      ⟨"agents", "agent", "administrator", .entitySet "nodes" "node" "owner"⟩,
+      ⟨"agents", "agent", "administrator", .entitySet "nodes" "node" "administrator"⟩],
     enrolled := [] }
 
 theorem node_owner_and_admin_manage_selection :

@@ -567,6 +567,8 @@ pub(crate) struct LeanIdentityHouseholdCase {
     #[serde(default)]
     pub(crate) configuration_node_manager_link_revocation_case: serde_json::Value,
     #[serde(default)]
+    pub(crate) agent_node_manager_invoke_case: serde_json::Value,
+    #[serde(default)]
     pub(crate) mcp_service_use_cases: Vec<serde_json::Value>,
     #[serde(default)]
     pub(crate) configuration_schedule_cases: Vec<serde_json::Value>,

@@ -1012,6 +1012,13 @@ def nodeManagerLinkRevocationCaseJson : Json :=
       ⟨"configuration", "config", "selected_by", .entitySet "agents" "agent" "executor"⟩)),
     ("user", toJson (mayManage state "user"
       ⟨"configuration", "config", "selected_by", .entitySet "agents" "agent" "executor"⟩))]
+
+def agentInvokeManagerCaseJson : Json :=
+  let grant : Relation := ⟨"agents", "agent", "session_writer", .actor "reader"⟩
+  let granted := apply nodeManagerFixture (.grantAs "user" grant)
+  let revoked := apply granted (.revokeAs "user" grant)
+  Json.mkObj [("before", toJson (allowed 8 granted "reader" "agents" "agent" "invoke")),
+    ("after", toJson (allowed 8 revoked "reader" "agents" "agent" "invoke"))]
 def packInstallationCaseJson (name installer : String) (commit revoke retryFresh direct : Bool) : Json :=
   let initial : State :=
     { objects := [⟨"nodes", "home", userDid⟩],
@@ -1695,8 +1702,14 @@ def json : Json := Json.mkObj
        nodeManagerCaseJson "root-owner" "user" "workspace_roots" "root" "reader" false,
        nodeManagerCaseJson "root-admin" "admin" "workspace_roots" "root" "reader" false,
        nodeManagerCaseJson "root-other-admin" "other-admin" "workspace_roots" "root" "reader" false,
-       nodeManagerCaseJson "root-revoked-admin" "admin" "workspace_roots" "root" "reader" true]),
+       nodeManagerCaseJson "root-revoked-admin" "admin" "workspace_roots" "root" "reader" true,
+       nodeManagerCaseJson "agent-owner" "user" "agents" "agent" "session_writer" false,
+       nodeManagerCaseJson "agent-admin" "admin" "agents" "agent" "session_writer" false,
+       nodeManagerCaseJson "agent-creator" "creator-agent" "agents" "agent" "session_writer" false,
+       nodeManagerCaseJson "agent-other-admin" "other-admin" "agents" "agent" "session_writer" false,
+       nodeManagerCaseJson "agent-revoked-admin" "admin" "agents" "agent" "session_writer" true]),
    ("configuration_node_manager_link_revocation_case", nodeManagerLinkRevocationCaseJson),
+   ("agent_node_manager_invoke_case", agentInvokeManagerCaseJson),
    ("mcp_service_use_cases", toJson
       ([(true, true, true, true, true, true),
         (false, true, true, true, true, true),
