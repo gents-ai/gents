@@ -79,7 +79,7 @@ pub struct SubmissionOutcomeUnknown {
 #[derive(Debug, thiserror::Error)]
 pub enum SubmissionAttemptError {
     #[error(transparent)]
-    Unknown(SubmissionOutcomeUnknown),
+    Unknown(Box<SubmissionOutcomeUnknown>),
     #[error(transparent)]
     Rejected(ClientSubmissionError),
 }
@@ -87,7 +87,7 @@ pub enum SubmissionAttemptError {
 #[derive(Debug, thiserror::Error)]
 pub enum SubmissionError {
     #[error(transparent)]
-    Unknown(#[from] SubmissionOutcomeUnknown),
+    Unknown(#[from] Box<SubmissionOutcomeUnknown>),
     #[error(transparent)]
     Cleanup(#[from] SubmissionCleanupIncomplete),
     #[error(transparent)]
@@ -96,6 +96,12 @@ pub enum SubmissionError {
     Unconfirmed(#[from] DeliveryUnconfirmed),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+impl From<SubmissionOutcomeUnknown> for SubmissionError {
+    fn from(error: SubmissionOutcomeUnknown) -> Self {
+        Self::Unknown(Box::new(error))
+    }
 }
 
 /// A confirmed delivery outcome whose retained local journal could not be retired.
@@ -364,18 +370,18 @@ async fn reconcile_commit_failure(
     error: ClientSubmissionError,
 ) -> std::result::Result<SubmittedRequest, SubmissionAttemptError> {
     if gents::store::graphql::is_storage_full(&error) {
-        return Err(SubmissionAttemptError::Unknown(
+        return Err(SubmissionAttemptError::Unknown(Box::new(
             pending.unknown(Some(error.into())),
-        ));
+        )));
     }
     match gents::request::lifecycle::reconcile_client_request(access, &pending.create).await {
         Ok(true) => Ok(pending.result),
         Ok(false) if !error.is_unconfirmed() && !reports_existing_request(&error) => {
             Err(SubmissionAttemptError::Rejected(error))
         }
-        _ => Err(SubmissionAttemptError::Unknown(
+        _ => Err(SubmissionAttemptError::Unknown(Box::new(
             pending.unknown(Some(error.into())),
-        )),
+        ))),
     }
 }
 
@@ -472,9 +478,9 @@ pub async fn resolve_unresolved_submission(
     match gents::request::lifecycle::reconcile_client_request(access, &pending.create).await {
         Ok(true) => Ok(pending.result.clone()),
         Ok(false) => commit_signed_submission(access, pending.clone()).await,
-        Err(error) => Err(SubmissionAttemptError::Unknown(
+        Err(error) => Err(SubmissionAttemptError::Unknown(Box::new(
             pending.unknown(Some(error.into())),
-        )),
+        ))),
     }
 }
 
@@ -566,7 +572,9 @@ mod tests {
                 "notDelivered" => Err(SubmissionAttemptError::Rejected(
                     ClientSubmissionError::Rejected(anyhow::anyhow!("confirmed rejection")),
                 )),
-                "unresolved" => Err(SubmissionAttemptError::Unknown(pending.unknown(None))),
+                "unresolved" => Err(SubmissionAttemptError::Unknown(Box::new(
+                    pending.unknown(None),
+                ))),
                 _ => panic!("unknown modeled delivery"),
             };
             let cleanup = if case["cleanup_succeeded"].as_bool().unwrap() {
