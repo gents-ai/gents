@@ -953,27 +953,26 @@ mod tests {
 
     #[tokio::test]
     async fn delegated_recovery_does_not_grant_a_signed_request_without_its_creation_receipt() {
-        let home = tempfile::tempdir().unwrap();
-        let runtime: Arc<dyn NodeIdentity> =
-            Arc::new(KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap());
-        let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(runtime.did())
-                .with_node_acp_enabled()
-                .build()
-                .await
-                .unwrap(),
-        );
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        crate::test_support::bootstrap_test_node(&node, runtime.as_ref(), &user).await;
-        let parent =
-            crate::test_support::install_test_agent_as(&node, runtime.as_ref(), &user, "parent")
-                .await;
-        let target =
-            crate::test_support::install_test_agent_as(&node, runtime.as_ref(), &user, "target")
-                .await;
-        let user_access = ConfigAccess::local_as(node.clone(), user.did().parse().unwrap());
+        let db = crate::support::test_signed_db("delegated-recovery").await;
+        let (db, user, user_access, parent) =
+            crate::test_support::signed_test_node_from_db(db, "delegated-recovery").await;
+        let node = db.node.clone();
+        let runtime = db.node_identity.clone();
+        let target = crate::store::identity::provision_agent_identity_authorized(
+            &node,
+            runtime.as_ref(),
+            &identity::Did::new(user.did()).unwrap(),
+        )
+        .await
+        .unwrap();
+        crate::test_support::install_test_agent_binding_with_access(
+            &node,
+            runtime.did(),
+            "target",
+            &target,
+            &user_access,
+        )
+        .await;
         let escaped = crate::store::graphql::escape_graphql_string(&target.agent_did);
         let target_row = user_access
             .execute(&format!(
@@ -994,7 +993,9 @@ mod tests {
         let signer =
             crate::store::identity::resolve_agent_identity(runtime.as_ref(), &parent).unwrap();
         let actor: identity::Did = parent.agent_did.parse().unwrap();
-        let access = ConfigAccess::local_as(node.clone(), actor.clone());
+        let access =
+            ConfigAccess::local_managed_agent(node.clone(), actor.clone(), signer.as_ref())
+                .unwrap();
         let mut forged = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "forged-delegated-request",
@@ -1050,7 +1051,14 @@ mod tests {
             rows["data"]["AgentRequest"][0]["relationships_pending"],
             wrong_receipt["expected_request_pending"]
         );
-        let target_access = ConfigAccess::local_as(node.clone(), target.agent_did.parse().unwrap());
+        let target_signer =
+            crate::store::identity::resolve_agent_identity(runtime.as_ref(), &target).unwrap();
+        let target_access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            target.agent_did.parse().unwrap(),
+            target_signer.as_ref(),
+        )
+        .unwrap();
         let visible = target_access
             .execute("{ AgentRequest { request_id } }")
             .await
