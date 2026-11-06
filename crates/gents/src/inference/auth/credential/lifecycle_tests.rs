@@ -357,3 +357,52 @@ mod accounts;
 mod backends;
 mod identity;
 mod labels;
+
+#[tokio::test]
+async fn signed_account_delete_requires_user_document_delete_permission() {
+    use crate::store::config_client::{ConfigClientError, NodePermission};
+    use crate::store::identity::NodeIdentity;
+
+    let (db, user, access) =
+        crate::test_support::signed_test_node_without_agent("credential-delete-permission").await;
+    let node_did = db.node_identity.did();
+    store(
+        &access,
+        Product::Claude.sign_in(node_did, "delete", "refresh-1"),
+    )
+    .await;
+    let existing = rows(&access, node_did, CLAUDE_OAUTH_PROVIDER).await;
+    let [credential] = existing.as_slice() else {
+        panic!("one signed User-owned credential must exist");
+    };
+    let credential_id = credential.credential_id.clone();
+
+    let error = remove(&access, node_did, &credential_id).await.unwrap_err();
+    let typed =
+        gents_protocol::error_chain::find_map_source(error.as_ref(), |cause| match cause
+            .downcast_ref::<ConfigClientError>(
+        ) {
+            Some(ConfigClientError::ClientAgentSigning(
+                defra_http::client_signed_create::ClientSignedCreateError::Incomplete,
+            )) => Some(()),
+            _ => None,
+        });
+    assert!(
+        typed.is_some(),
+        "a denied no-wave delete must remain an error: {error:#}"
+    );
+    assert_eq!(
+        rows(&access, node_did, CLAUDE_OAUTH_PROVIDER).await.len(),
+        1
+    );
+
+    let admin = ConfigAccess::local_as(db.node.clone(), node_did.parse().unwrap());
+    admin
+        .grant_node_permission(&user.did().parse().unwrap(), NodePermission::DocumentDelete)
+        .await
+        .unwrap();
+    remove(&access, node_did, &credential_id).await.unwrap();
+    assert!(rows(&access, node_did, CLAUDE_OAUTH_PROVIDER)
+        .await
+        .is_empty());
+}
