@@ -971,6 +971,96 @@ async fn install_dependee(
     .unwrap();
 }
 
+#[tokio::test]
+async fn locally_installed_pack_agent_holds_the_projected_baseline() {
+    use crate::NodeIdentity as _;
+    let (db, user, user_access) =
+        crate::test_support::signed_test_node_without_agent("local-pack-baseline").await;
+    let runtime = db.node_identity.clone();
+    let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let local = ConfigAccess::local_as(db.node.clone(), identity::Did::new(user.did()).unwrap());
+    let backend = json!({"node_did":runtime.did(),"backend_id":"backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}});
+    let profile = json!({"node_did":runtime.did(),"profile_id":"profile","backend_id":"backend","model_name":"test-model"});
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(
+        [(crate::Collection::InferenceBackend, backend), (crate::Collection::InferenceProfile, profile)]
+            .into_iter()
+            .map(|(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect(),
+    )
+    .unwrap();
+    user_access
+        .transact_write("test.local_pack.profile", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .unwrap();
+    let requested = BTreeMap::from([("worker".to_owned(), "profile".to_owned())]);
+    let prepared = super::super::prepare_document_pack_archive_with_runtime(
+        &local,
+        runtime.did(),
+        &archive,
+        &requested,
+        &[],
+        None,
+        &|_| None,
+        runtime.as_ref(),
+    )
+    .await
+    .unwrap();
+    let agent = prepared
+        .agent_bindings
+        .values()
+        .next()
+        .expect("the pack provisions one Agent")
+        .agent_did
+        .clone();
+    let agent = identity::Did::new(&agent).unwrap();
+    let held = |node: Arc<defra_node::Node>, agent: identity::Did| async move {
+        let mut held = Vec::new();
+        for permission in crate::store::identity::GrantSet::AgentBaseline.permissions() {
+            if node.nac_manager().check_permission(&agent, *permission).await.unwrap() {
+                held.push(permission.as_str().to_owned());
+            }
+        }
+        held
+    };
+    assert!(held(db.node.clone(), agent.clone()).await.is_empty());
+    super::super::install_prepared_document_graph(
+        &user_access,
+        runtime.did(),
+        &archive,
+        &prepared,
+        DriftPolicy::Refuse,
+        None,
+        false,
+        true,
+    )
+    .await
+    .unwrap();
+    let modeled = crate::lean_vocab_test::lean_contract_snapshot()
+        .identity_agent_baseline_cases
+        .iter()
+        .find(|case| case.actor == "enrolled-user")
+        .expect("modeled enrolled-user lifecycle")
+        .steps
+        .iter()
+        .find(|step| step.action == "publish")
+        .expect("modeled publication")
+        .installed
+        .clone();
+    assert_eq!(held(db.node.clone(), agent).await, modeled);
+    db.node.shutdown().await.unwrap();
+}
+
 fn demo_identity(dependencies: Vec<String>) -> PackIdentity {
     PackIdentity {
         installation_doc_id: None,
@@ -1618,7 +1708,6 @@ fn prepared() -> PreparedDocumentPackInstall {
     PreparedDocumentPackInstall {
         installation_doc_id: None,
         agent_bindings: BTreeMap::new(),
-        provisioned: Vec::new(),
         node_binding: None,
         config: config(&[("self-config-tools", "Self-config tools")]),
         inference: crate::pack::PackInferenceBindingPreview {

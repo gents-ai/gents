@@ -305,7 +305,15 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
     let mut node_builder =
         gents::store::local::store_key::persistent_builder(&data_dir, &store_key)?;
     if let Some(node_identity_did) = initialized_identity.node_identity_did.as_ref() {
+        let ceiling = crate::resolve_helpers::host_tool_ceiling(
+            stored.tool_ceiling,
+            stored.tool_root.as_deref().map(Path::new),
+        )?;
         node_builder = node_builder
+            .with_document_projector(gents::store::local::document_projector(
+                initialized_identity.identity.clone(),
+                ceiling,
+            )?)
             .with_node_identity_did(node_identity_did.clone())
             .with_node_acp_enabled();
     }
@@ -476,7 +484,7 @@ async fn provision_fresh_home(
     runtime: &dyn NodeIdentity,
     client: &str,
 ) -> Result<gents_protocol::agent_identity::AgentIdentityBinding> {
-    use gents::store::config_client::NodePermission;
+    use gents::store::identity::GrantSet;
     anyhow::ensure!(
         node.node_identity_did() == Some(runtime.did()),
         "bootstrap runtime identity does not match the node"
@@ -484,24 +492,10 @@ async fn provision_fresh_home(
     let client = identity::Did::new(client)?;
     let access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     let binding = gents::store::identity::provision_agent_identity(runtime)?;
-    let agent = identity::Did::new(&binding.agent_did)?;
-    for permission in [
-        NodePermission::CollectionGet,
-        NodePermission::DocumentRead,
-        NodePermission::DocumentUpdate,
-        NodePermission::DocumentDelete,
-        NodePermission::DacRelationAdd,
-        NodePermission::DacRelationDelete,
-    ] {
-        access.grant_node_permission(&client, permission).await?;
-    }
-    for permission in [
-        NodePermission::DocumentRead,
-        NodePermission::DocumentUpdate,
-        NodePermission::DacRelationAdd,
-    ] {
-        access.grant_node_permission(&agent, permission).await?;
-    }
+    GrantSet::HouseholdOwner.grant(&access, &client).await?;
+    GrantSet::PolicyDelegate
+        .grant(&access, &identity::Did::new(&binding.agent_did)?)
+        .await?;
     Ok(binding)
 }
 
@@ -2279,6 +2273,7 @@ mod tests {
 
     #[tokio::test]
     async fn fresh_init_grants_native_operations_once_without_regranting_revocation() {
+        use gents::store::identity::GrantSet;
         let snapshot: Value =
             tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
                 .await
@@ -2397,14 +2392,55 @@ mod tests {
             worker.execute("{ AgentRequest { _docID } }").await.unwrap()["data"]["AgentRequest"]
                 .is_array()
         );
-        for did in [&client_did, &agent] {
-            runtime
-                .revoke_node_permission(
-                    did,
-                    gents::store::config_client::NodePermission::DocumentRead,
-                )
-                .await
-                .unwrap();
+        let recipients = snapshot["identity_grant_recipient_cases"].as_array().unwrap();
+        let modeled = |recipient: &str, kind: &str| -> Vec<GrantSet> {
+            recipients
+                .iter()
+                .find(|case| case["recipient"] == recipient)
+                .unwrap()[kind]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|name| {
+                    GrantSet::ALL
+                        .into_iter()
+                        .find(|set| Some(set.name()) == name.as_str())
+                        .unwrap()
+                })
+                .collect()
+        };
+        let holds = |did: identity::Did, sets: Vec<GrantSet>| {
+            let node = node.clone();
+            async move {
+                for set in sets {
+                    if set.native_admin() && !node.nac_manager().is_admin(&did).await.unwrap() {
+                        return false;
+                    }
+                    for permission in set.permissions() {
+                        if !node
+                            .nac_manager()
+                            .check_permission(&did, *permission)
+                            .await
+                            .unwrap()
+                        {
+                            return false;
+                        }
+                    }
+                }
+                true
+            }
+        };
+        let client_sets = modeled("init-user", "direct");
+        let agent_direct = modeled("default-agent", "direct");
+        let mut agent_sets = agent_direct.clone();
+        agent_sets.extend(modeled("default-agent", "projected"));
+        assert!(holds(client_did.clone(), client_sets.clone()).await);
+        assert!(holds(agent.clone(), agent_sets).await);
+        for set in &client_sets {
+            set.revoke(&runtime, &client_did).await.unwrap();
+        }
+        for set in &agent_direct {
+            set.revoke(&runtime, &agent).await.unwrap();
         }
         node.shutdown().await.unwrap();
         drop(owner);
@@ -2425,16 +2461,63 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        for did in [client_did, agent] {
-            let response = ConfigAccess::local_as(node.clone(), did)
-                .execute("{ Node { _docID } }")
-                .await
-                .unwrap();
+        assert!(
+            !node.nac_manager().is_admin(&client_did).await.unwrap(),
+            "revocation must survive reinit"
+        );
+        for permission in GrantSet::PolicyDelegate.permissions() {
+            if GrantSet::AgentBaseline.permissions().contains(permission) {
+                continue;
+            }
             assert!(
-                response["data"].get("Node").is_none(),
-                "revocation must survive reinit"
+                !node
+                    .nac_manager()
+                    .check_permission(&agent, *permission)
+                    .await
+                    .unwrap(),
+                "revocation of {} must survive reinit",
+                permission.as_str()
             );
         }
+        node.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn init_then_first_runtime_start_projects_engineer_tools() {
+        use gents::store::config_client::NodePermission;
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let initial = initialize_disposable_home(&home, false).await.unwrap();
+        let stored = read_init_config(&home).unwrap().unwrap();
+        let identity = crate::home_state::load_initialized_home_identity(&home, &stored).unwrap();
+        let agent = identity::Did::new(initial["default_agent_did"].as_str().unwrap()).unwrap();
+        let data = default_data_dir(&home);
+        let _claim = lock_init_store(&home, &data, false).unwrap();
+        let ceiling = crate::resolve_helpers::host_tool_ceiling(
+            stored.tool_ceiling,
+            stored.tool_root.as_deref().map(Path::new),
+        )
+        .unwrap();
+        let node = Arc::new(
+            crate::persistent_node_builder(&home, &data)
+                .await
+                .unwrap()
+                .with_document_projector(
+                    gents::store::local::document_projector(identity.clone(), ceiling).unwrap(),
+                )
+                .with_node_identity_did(identity.did())
+                .with_node_acp_enabled()
+                .build()
+                .await
+                .expect("the actorless startup reconcile finds every Engineer source edge"),
+        );
+        assert!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await
+                .unwrap(),
+            "the Engineer's self-config source is projected at init"
+        );
         node.shutdown().await.unwrap();
     }
 

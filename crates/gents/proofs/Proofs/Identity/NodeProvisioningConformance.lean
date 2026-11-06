@@ -5,60 +5,6 @@ import Lean
 namespace Identity.NodeProvisioningConformance
 open Lean Identity.NodeProvisioning
 
-inductive Action where
-  | grant (permission : String) (applied succeeded : Bool)
-  | revoke (permission : String)
-  | finish
-  | reopen
-
-def applyAction (s : State) : Action → State
-  | .grant permission applied succeeded => attempt s permission applied succeeded
-  | .revoke permission => revoke s permission
-  | .finish => finish s
-  | .reopen => reopen s
-
-def stateJson (s : State) : Json := Json.mkObj
-  [("target", toJson s.target), ("authorized", toJson s.authorized), ("fresh", toJson s.fresh),
-   ("attempted", toJson s.attempted), ("granted", toJson s.granted),
-   ("closed", toJson s.closed), ("revealed", toJson s.revealed)]
-
-def actionJson (a : Action) : Json :=
-  match a with
-  | .grant permission applied succeeded => Json.mkObj [("action", toJson "grant"),
-      ("permission", toJson permission), ("applied", toJson applied), ("succeeded", toJson succeeded)]
-  | .revoke permission => Json.mkObj [("action", toJson "revoke"), ("permission", toJson permission)]
-  | .finish => Json.mkObj [("action", toJson "finish")]
-  | .reopen => Json.mkObj [("action", toJson "reopen")]
-
-def trace (s : State) : List Action → List Json
-  | [] => []
-  | a :: rest =>
-    let next := applyAction s a
-    Json.mkObj [("action", actionJson a), ("after", stateJson next)] :: trace next rest
-
-def success : List Action :=
-  [.grant "read-document" true true, .grant "update-document" true true,
-   .grant "add-dac-relation" true true, .finish]
-
-def cases : List (String × State × List Action) :=
-  let fresh : State := { target := "agent", authorized := true, fresh := true }
-  [ ("fresh-success", fresh, success)
-  , ("unauthorized", { fresh with authorized := false }, success)
-  , ("existing-identity", { fresh with fresh := false }, success)
-  , ("partial-failure", fresh, [.grant "read-document" true true,
-      .grant "update-document" false false, .grant "update-document" true true, .finish])
-  , ("ambiguous-grant", fresh, [.grant "read-document" true false, .reopen,
-      .grant "read-document" true true, .finish])
-  , ("revoked-after-publication", fresh, success ++ [.revoke "read-document", .reopen,
-      .grant "read-document" true true])
-  , ("revoked-before-finish", fresh, [.grant "read-document" true true,
-      .grant "update-document" true true, .grant "add-dac-relation" true true,
-      .revoke "read-document", .finish]) ]
-
-def casesJson : String := (toJson (cases.map fun (name, initial, actions) =>
-  Json.mkObj [("name", toJson name), ("initial", stateJson initial),
-    ("steps", toJson (trace initial actions))])).compress
-
 def agentCreatorCases : List (String × AgentCreatorObservation) :=
   let valid : AgentCreatorObservation := ⟨true, true, true, true, true⟩
   [("authorized-agent", valid),

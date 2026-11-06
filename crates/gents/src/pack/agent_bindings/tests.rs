@@ -179,19 +179,10 @@ pub(in crate::pack) async fn fixture() -> (
     let runtime_access =
         ConfigAccess::local_as(node.clone(), identity::Did::new(root.did()).unwrap());
     let user_did = identity::Did::new(user.did()).unwrap();
-    for permission in [
-        acp::nac::NodePermission::CollectionGet,
-        acp::nac::NodePermission::DocumentRead,
-        acp::nac::NodePermission::DocumentUpdate,
-        acp::nac::NodePermission::DocumentDelete,
-        acp::nac::NodePermission::DacRelationAdd,
-        acp::nac::NodePermission::DacRelationDelete,
-    ] {
-        runtime_access
-            .grant_node_permission(&user_did, permission)
-            .await
-            .unwrap();
-    }
+    crate::store::identity::GrantSet::OperatorUser
+        .grant(&runtime_access, &user_did)
+        .await
+        .unwrap();
     let access = ConfigAccess::Graphql(
         crate::store::config_client::GraphqlEndpoint::as_principal(
             format!("http://{address}/api/v0/graphql"),

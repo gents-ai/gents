@@ -201,7 +201,7 @@ pub(crate) async fn grant_verified_client(
     request_id: &str,
     expected: Option<(&str, &str)>,
 ) -> Result<Option<serde_json::Value>> {
-    use gents::store::config_client::{ConfigAccess, NodePermission};
+    use gents::store::config_client::ConfigAccess;
     let request_id = request_id.trim();
     anyhow::ensure!(!request_id.is_empty(), "request_id must not be empty");
     let runtime = resolve_home_identity(Some(home))?;
@@ -302,17 +302,10 @@ pub(crate) async fn grant_verified_client(
         gents::store::config_client::GraphqlEndpoint::as_principal(endpoint.url(), runtime.did())
             .with_client_signing_capability(runtime.client_signing_capability()?)?,
     );
-    for permission in [
-        NodePermission::CollectionGet,
-        NodePermission::DocumentRead,
-        NodePermission::DocumentUpdate,
-        NodePermission::DocumentDelete,
-        NodePermission::DacRelationAdd,
-        NodePermission::DacRelationDelete,
-    ] {
-        runtime_access.grant_node_permission(&candidate, permission).await.with_context(|| format!(
-            "Node administrator was granted; node permission {} may have been granted, and earlier permissions were granted", permission.as_str()))?;
-    }
+    gents::store::identity::GrantSet::OperatorUser
+        .grant(&runtime_access, &candidate)
+        .await
+        .context("Node administrator was granted, but its operator node permissions were not")?;
     Ok(Some(
         serde_json::json!({"request_id": request_id, "candidate_did": candidate.as_str(), "node_did": runtime.did(), "node_administrator_granted": true}),
     ))

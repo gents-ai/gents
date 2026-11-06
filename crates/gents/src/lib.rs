@@ -219,8 +219,8 @@ pub(crate) mod test_support {
         crate::KeyIdentity,
         crate::store::config_client::ConfigAccess,
     ) {
-        use crate::store::config_client::{ConfigAccess, NodePermission};
-        use crate::store::identity::NodeIdentity;
+        use crate::store::config_client::ConfigAccess;
+        use crate::store::identity::{GrantSet, NodeIdentity};
 
         let fixture_name = name.to_owned();
         let user = tokio::task::spawn_blocking(move || {
@@ -233,17 +233,10 @@ pub(crate) mod test_support {
         let admin =
             ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
         let user_did = identity::Did::new(user.did()).unwrap();
-        for permission in [
-            NodePermission::DocumentRead,
-            NodePermission::DocumentUpdate,
-            NodePermission::DacRelationAdd,
-            NodePermission::CollectionGet,
-        ] {
-            admin
-                .grant_node_permission(&user_did, permission)
-                .await
-                .unwrap();
-        }
+        GrantSet::OperatorUser
+            .grant(&admin, &user_did)
+            .await
+            .unwrap();
         let access = db.client_access(&user);
         bootstrap_signed_test_node(&access, runtime.did()).await;
         (db, user, access)
@@ -366,13 +359,11 @@ pub(crate) mod test_support {
         install_test_agent_binding_with_access(owner, display_name, binding, &access).await;
     }
 
-    pub(crate) async fn install_test_agent_binding_with_access(
+    pub(crate) fn test_agent_documents(
         owner: &str,
         display_name: &str,
         binding: &gents_protocol::agent_identity::AgentIdentityBinding,
-        access: &crate::store::config_client::ConfigAccess,
-    ) {
-        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    ) -> Vec<(crate::Collection, serde_json::Value)> {
         use crate::Collection;
         use serde_json::json;
         let agent_did = &binding.agent_did;
@@ -380,13 +371,30 @@ pub(crate) mod test_support {
         let tools = format!("{agent_did}:tools");
         let profile = format!("{agent_did}:inference");
         let backend = format!("{agent_did}:backend");
-        let documents = [
+        vec![
             (Collection::Agent, json!({"node_did":owner,"agent_did":agent_did,"creation_nonce":binding.creation_nonce,"display_name":display_name,"context_id":context,"inference_profile_id":profile})),
             (Collection::AgentContext, json!({"node_did":owner,"context_id":context,"tools_id":tools})),
             (Collection::Tools, json!({"node_did":owner,"tools_id":tools})),
             (Collection::InferenceProfile, json!({"node_did":owner,"profile_id":profile,"backend_id":backend,"model_name":"test-model"})),
             (Collection::InferenceBackend, json!({"node_did":owner,"backend_id":backend,"name":"Test inference","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
-        ].into_iter().map(|(collection,value)| DesiredStateApplyDocument {collection,add:value.clone(),update:value}).collect();
+        ]
+    }
+
+    pub(crate) async fn install_test_agent_binding_with_access(
+        owner: &str,
+        display_name: &str,
+        binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+        access: &crate::store::config_client::ConfigAccess,
+    ) {
+        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        let documents = test_agent_documents(owner, display_name, binding)
+            .into_iter()
+            .map(|(collection, value)| DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect();
         let plan = DesiredStateApplyPlan::new(documents).unwrap();
         access
             .transact_write("test.install_agent", |txn| {
@@ -397,6 +405,7 @@ pub(crate) mod test_support {
             })
             .await
             .unwrap();
+        let backend = format!("{}:backend", binding.agent_did);
         crate::inference::backends::registry::set_backend_probe_status_as(
             access, owner, &backend, "healthy",
         )

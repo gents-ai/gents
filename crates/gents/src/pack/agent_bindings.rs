@@ -34,7 +34,6 @@ pub struct BoundPackConfig {
     pub installation_doc_id: Option<String>,
     pub config: PackConfig,
     pub agent_bindings: PackAgentBindings,
-    pub(crate) provisioned: Vec<AgentIdentityBinding>,
 }
 
 impl BoundPackConfig {
@@ -323,7 +322,15 @@ pub(super) async fn load_pack_install_config_with_dependencies(
                         root.did() == options.node_did,
                         "runtime identity does not match the selected Node"
                     );
-                    crate::store::identity::provision_agent_identity(root)?
+                    let caller = local
+                        .identity()
+                        .context("local pack agent creation requires an authenticated caller")?;
+                    crate::store::identity::provision_agent_identity_authorized(
+                        local.node(),
+                        root,
+                        caller,
+                    )
+                    .await?
                 }
                 ConfigAccess::Graphql(endpoint) => {
                     crate::store::identity::provision_agent_identity_remote(
@@ -367,7 +374,6 @@ pub(super) async fn load_pack_install_config_with_dependencies(
         installation_doc_id,
         config,
         agent_bindings: plan.recorded,
-        provisioned: provisioned.into_values().collect(),
     })
 }
 

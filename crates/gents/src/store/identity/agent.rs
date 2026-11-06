@@ -36,10 +36,9 @@ pub enum AgentProvisionError {
     Access(#[from] crate::store::config_client::ConfigClientError),
 }
 
-/// Allocate and provision a fresh agent only after native authorization of the
-/// caller. NAC grants are detached from the authorization snapshot: a
-/// concurrent revocation cannot fence a grant already in flight. A failed
-/// grant discards the fresh binding, including when its result is ambiguous.
+/// Allocate a fresh agent binding only after native authorization of the
+/// caller. It grants nothing: the Agent's baseline is projected from its
+/// document as the publishing actor, in the publishing transaction.
 pub async fn provision_agent_identity_authorized(
     node: &Arc<defra_node::Node>,
     runtime: &dyn NodeIdentity,
@@ -88,44 +87,12 @@ pub async fn provision_agent_identity_authorized(
         }
         _ => return Err(AgentProvisionError::AuthorizationUnavailable),
     }
-    grant_fresh_agent(node, runtime).await
-}
-
-async fn grant_fresh_agent(
-    node: &Arc<defra_node::Node>,
-    runtime: &dyn NodeIdentity,
-) -> std::result::Result<AgentIdentityBinding, AgentProvisionError> {
-    let binding = provision_agent_identity(runtime)?;
-    grant_agent_node_capabilities(node, runtime, &binding).await?;
-    Ok(binding)
-}
-
-pub(crate) async fn grant_agent_node_capabilities(
-    node: &Arc<defra_node::Node>,
-    runtime: &dyn NodeIdentity,
-    binding: &AgentIdentityBinding,
-) -> std::result::Result<(), AgentProvisionError> {
-    use crate::store::config_client::{ConfigAccess, NodePermission};
-    if node.node_identity_did() != Some(runtime.did()) {
-        return Err(AgentProvisionError::NodeMismatch);
-    }
-    resolve_agent_identity(runtime, binding)?;
-    let principal = identity::Did::new(runtime.did()).map_err(IdentityError::from)?;
-    let access = ConfigAccess::local_as(node.clone(), principal);
-    let agent = identity::Did::new(&binding.agent_did).map_err(IdentityError::from)?;
-    for permission in [
-        NodePermission::DocumentRead,
-        NodePermission::DocumentUpdate,
-        NodePermission::DacRelationAdd,
-    ] {
-        access.grant_node_permission(&agent, permission).await?;
-    }
-    Ok(())
+    provision_agent_identity(runtime).map_err(Into::into)
 }
 
 /// Allocate a binding for an explicitly held executing Agent signer. Native
-/// creation and relationship operations remain the authorization boundary.
-/// The new Agent receives its node capabilities only after publication.
+/// creation and relationship operations remain the authorization boundary;
+/// the new Agent's baseline is projected when its document publishes.
 pub async fn provision_agent_identity_for_agent(
     node: &Arc<defra_node::Node>,
     runtime: &dyn NodeIdentity,

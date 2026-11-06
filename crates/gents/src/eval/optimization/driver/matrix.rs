@@ -96,7 +96,6 @@ impl Harness {
             installation_doc_id: None,
             config,
             agent_bindings: agent_bindings.clone(),
-            provisioned: Vec::new(),
         };
         let inference_bindings =
             std::collections::BTreeMap::from([("primary".into(), "local".into())]);
