@@ -39,6 +39,7 @@ struct Options {
     /// The plugin declares the `run_script` host import and asks the host to
     /// run the call's `script` as its step.
     imports: bool,
+    caller_targets: bool,
 }
 
 /// The job block of `team/plugin` in the caller's Tools: it may start `worker`.
@@ -67,6 +68,7 @@ impl Default for Options {
             cwd: false,
             idle: false,
             imports: false,
+            caller_targets: true,
         }
     }
 }
@@ -264,7 +266,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
     let tools: crate::documents::Tools = serde_json::from_value(json!({
         "tools_id": format!("{}:tools", caller_signer.did()),
         "node_did": identity.did(),
-        "agents": {"enabled": true, "target_ids": ["t-worker"]},
+        "agents": {"enabled": true, "target_ids": if options.caller_targets { vec!["t-worker"] } else { Vec::new() }},
         "integrations": {"plugins": [{"plugin": "team/plugin", "job": hook.job_tools.get(TOOL).unwrap().settings}]},
     })).unwrap();
     crate::store::config_client::write_tools_document(
@@ -454,7 +456,7 @@ impl Step0 {
         let response = self
             .node
             .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ request_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "{TOOL}" }}, tool_call_id: {{ _eq: "{call_id}" }} }}) {{ _docID lifecycle_state tool_failure_class await_mode job_pin job_progress plugin_execution_receipt }} }}"#,
+                r#"{{ AgentToolCall(filter: {{ request_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "{TOOL}" }}, tool_call_id: {{ _eq: "{call_id}" }} }}) {{ _docID requester_did lifecycle_state tool_failure_class await_mode job_pin job_progress plugin_execution_receipt }} }}"#,
                 self.request_id
             ))
             .await;
@@ -478,11 +480,11 @@ impl Step0 {
     /// The invocation reply stored for the row, as the model reads it.
     async fn stored_reply(&self, row: &Value) -> Value {
         let message = crate::tools::call::lifecycle::query::load_tool_call_result(
-            &self.access(),
+            &self.hook.actor_access().unwrap(),
             row["_docID"].as_str().unwrap(),
             &self.hook.node_did,
             &self.session_id,
-            Some(&self.hook.node_did),
+            row["requester_did"].as_str(),
         )
         .await
         .unwrap();
@@ -1115,7 +1117,83 @@ async fn a_script_spawn_is_refused_under_the_check_policy() {
     .await;
     let call = json!({"script": PASS_PIN, "agent_budget": 2, "args": pin_args(PASS_PIN, 2, "h")});
     let answer = step.call_as("call-1", &call.to_string()).await;
-    assert_eq!(answer["code"], "plugin_job_policy_denied", "{answer}");
+    let case = crate::lean_vocab_test::lean_plugin_job_admission_cases()
+        .iter()
+        .find(|case| case.name == "dynamic_check_spawn_refused")
+        .unwrap();
+    assert!(!case.expected.admitted);
+    assert_eq!(
+        answer["code"].as_str(),
+        case.expected.code.as_deref(),
+        "{answer}"
+    );
+    assert!(
+        answer["message"]
+            .as_str()
+            .unwrap()
+            .contains("job.policy.dynamic is check"),
+        "{answer}"
+    );
+    assert!(
+        answer["next"]
+            .as_str()
+            .unwrap()
+            .contains("tools\",\"edit\",\"--help"),
+        "{answer}"
+    );
+    let row = step.row_of("call-1").await;
+    failed(&row, "policyDenied");
+    assert_eq!(step.stored_reply(&row).await, answer);
+    step.finish().await;
+}
+
+#[tokio::test]
+async fn an_unconfigured_job_target_names_the_caller_scope_and_next_help() {
+    let step = step0(
+        adopting(),
+        Options {
+            caller_targets: false,
+            ..Default::default()
+        },
+    )
+    .await;
+    let answer = step
+        .call_as("call-1", r#"{"args":{},"agent_budget":2}"#)
+        .await;
+    let case = crate::lean_vocab_test::lean_plugin_job_admission_cases()
+        .iter()
+        .find(|case| case.name == "caller_target_unconfigured_refused")
+        .unwrap();
+    assert!(!case.expected.admitted);
+    assert_eq!(
+        answer["code"].as_str(),
+        case.expected.code.as_deref(),
+        "{answer}"
+    );
+    assert!(
+        answer["message"]
+            .as_str()
+            .unwrap()
+            .contains("caller\u{27}s configured target scope"),
+        "{answer}"
+    );
+    assert!(
+        answer["next"]
+            .as_str()
+            .unwrap()
+            .contains("agents.target_ids"),
+        "{answer}"
+    );
+    assert!(
+        answer["next"]
+            .as_str()
+            .unwrap()
+            .contains("tools\",\"edit\",\"--help"),
+        "{answer}"
+    );
+    let row = step.row_of("call-1").await;
+    failed(&row, "policyDenied");
+    assert_eq!(step.stored_reply(&row).await, answer);
     step.finish().await;
 }
 

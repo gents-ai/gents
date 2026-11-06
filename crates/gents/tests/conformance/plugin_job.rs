@@ -460,8 +460,8 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
     let cases = lean_plugin_job_admission_cases();
     assert_eq!(
         cases.len(),
-        220,
-        "Lean supplies 28 admission regressions and 192 interrupted wire-to-recovery traces"
+        222,
+        "Lean supplies 30 admission regressions and 192 interrupted wire-to-recovery traces"
     );
     let mut names = BTreeSet::new();
     for case in cases {
@@ -520,6 +520,22 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
                         "{}: refusal code",
                         case.name
                     );
+                    use gents::tools::background::job::admit::PolicyDenialDetail;
+                    match case.name.as_str() {
+                        "dynamic_check_spawn_refused" => assert_eq!(
+                            refusal.detail,
+                            Some(PolicyDenialDetail::DynamicCheck),
+                            "{}",
+                            case.name
+                        ),
+                        "caller_target_unconfigured_refused" => assert_eq!(
+                            refusal.detail,
+                            Some(PolicyDenialDetail::TargetUnavailable),
+                            "{}",
+                            case.name
+                        ),
+                        _ => {}
+                    }
                     assert_eq!(
                         refusal.refusal
                             == gents::tools::background::job::admit::Refusal::DynamicCodeDisabled,

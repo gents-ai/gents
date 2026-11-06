@@ -18,8 +18,8 @@ use sha2::{Digest, Sha256};
 
 pub use super::admit::host_pin;
 use super::admit::{
-    admit_step, fresh_spawns, out_pin, out_resume, step_row, AdmitRefusal, HostFacts, Refusal,
-    StepContext, StepRow,
+    admit_step, fresh_spawns, out_pin, out_resume, step_row, AdmitRefusal, HostFacts,
+    PolicyDenialDetail, Refusal, StepContext, StepRow,
 };
 use super::control::{kill, resume_target_in_txn, validate_resume, KillCause};
 use super::driver::{
@@ -198,6 +198,7 @@ pub async fn run_step0(
     if let Err(refusal) = admit_step(&ctx, &row, &output) {
         let (class, message, next) = step0_refusal(
             refusal.refusal,
+            refusal.detail,
             binding,
             &installed,
             &runtime.home,
@@ -433,7 +434,7 @@ pub fn split_address(address: &str) -> Option<(String, String)> {
 /// What the adoption transaction decided.
 enum Adopted {
     /// With the address of the row that resumed the named resume target.
-    Refused(Refusal, Option<String>),
+    Refused(Refusal, Option<PolicyDenialDetail>, Option<String>),
     Settled {
         lifecycle: ToolCallLifecycle,
         terminal: PluginJobTerminal,
@@ -646,7 +647,9 @@ pub async fn adopt_step0(
                         )
                         .await?
                         {
-                            return Ok::<_, anyhow::Error>(Adopted::Refused(refusal, resumed_by));
+                            return Ok::<_, anyhow::Error>(Adopted::Refused(
+                                refusal, None, resumed_by,
+                            ));
                         }
                     }
                     let mut out = output.clone();
@@ -670,7 +673,13 @@ pub async fn adopt_step0(
                     let row = read_step_row_in_txn(txn, row_doc_id).await?;
                     let adoption = match adopt(&ctx, &view, &row, &out) {
                         Ok(adoption) => adoption,
-                        Err(refusal) => return Ok(Adopted::Refused(refusal.refusal, resumed_by)),
+                        Err(refusal) => {
+                            return Ok(Adopted::Refused(
+                                refusal.refusal,
+                                refusal.detail,
+                                resumed_by,
+                            ))
+                        }
                     };
                     let pin = adoption
                         .row
@@ -820,10 +829,11 @@ pub async fn adopt_step0(
             .await?
     };
     match adopted {
-        Adopted::Refused(refusal, resumed_by) => {
+        Adopted::Refused(refusal, detail, resumed_by) => {
             let resume = out_resume(output).map(|resume| resume.row_doc_id.as_str());
             let (class, message, next) = step0_refusal(
                 refusal,
+                detail,
                 binding,
                 installed,
                 &runtime.home,
@@ -899,6 +909,7 @@ async fn refuse(
 /// the row a step-0 resume named and the address of the row that resumed it.
 fn step0_refusal(
     refusal: Refusal,
+    detail: Option<PolicyDenialDetail>,
     binding: &JobBinding,
     installed: &InstalledPlugin,
     home: &Path,
@@ -907,6 +918,21 @@ fn step0_refusal(
 ) -> (FailureClass, String, String) {
     let tool = binding.tool_name.as_str();
     let coordinate = binding.plugin.plugin.as_str();
+    if refusal == Refusal::PolicyDenied {
+        match detail {
+            Some(PolicyDenialDetail::DynamicCheck) => return (
+                FailureClass::PolicyDenied,
+                "job.policy.dynamic is check: scripts cannot start or message child agents.".to_owned(),
+                "Next: use an installed job, or inspect job.policy.dynamic and dynamic_targets with config {\"argv\":[\"tools\",\"edit\",\"--help\"]}; change them only with the required Tools authority.".to_owned(),
+            ),
+            Some(PolicyDenialDetail::TargetUnavailable) => return (
+                FailureClass::PolicyDenied,
+                "The requested job target is unavailable in this caller's configured target scope.".to_owned(),
+                "Next: inspect this agent's Tools agents.target_ids and the job's agent_targets; select an available target or update an authorized Tools document. For the fields, call config with {\"argv\":[\"tools\",\"edit\",\"--help\"]}.".to_owned(),
+            ),
+            None => {}
+        }
+    }
     match refusal {
         Refusal::NotAvailable if engine_guard(home, installed).is_err() => (
             FailureClass::ServiceUnavailable,

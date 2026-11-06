@@ -159,8 +159,30 @@ impl Refusal {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdmitRefusal {
     pub refusal: Refusal,
+    pub detail: Option<PolicyDenialDetail>,
     closed_row: Box<StepRow>,
     kills: Vec<String>,
+}
+
+/// Public configuration reasons determined at the admission decision point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyDenialDetail {
+    DynamicCheck,
+    TargetUnavailable,
+}
+
+struct AdmissionFailure {
+    refusal: Refusal,
+    detail: Option<PolicyDenialDetail>,
+}
+
+impl From<Refusal> for AdmissionFailure {
+    fn from(refusal: Refusal) -> Self {
+        Self {
+            refusal,
+            detail: None,
+        }
+    }
 }
 
 impl AdmitRefusal {
@@ -259,14 +281,16 @@ pub fn admit_step(
     job: &StepRow,
     out: &JobStepOutput,
 ) -> Result<StepRow, AdmitRefusal> {
-    admit(ctx, job, out).map_err(|refusal| match refusal {
+    admit(ctx, job, out).map_err(|failure| match failure.refusal {
         Refusal::Terminal => AdmitRefusal {
-            refusal,
+            refusal: failure.refusal,
+            detail: failure.detail,
             closed_row: Box::new(job.clone()),
             kills: Vec::new(),
         },
         _ => AdmitRefusal {
-            refusal,
+            refusal: failure.refusal,
+            detail: failure.detail,
             closed_row: Box::new(StepRow {
                 state: JobState::Failed,
                 ..job.clone()
@@ -278,46 +302,54 @@ pub fn admit_step(
     })
 }
 
-fn admit(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> Result<StepRow, Refusal> {
+fn admit(
+    ctx: &StepContext,
+    job: &StepRow,
+    out: &JobStepOutput,
+) -> Result<StepRow, AdmissionFailure> {
     if job.state != JobState::Running {
-        return Err(Refusal::Terminal);
+        return Err(Refusal::Terminal.into());
     }
     if pin_mismatch(ctx, job, out) {
-        return Err(Refusal::PinMismatch);
+        return Err(Refusal::PinMismatch.into());
     }
     if !ctx.available || !ctx.engine_provenance_operator {
-        return Err(Refusal::NotAvailable);
+        return Err(Refusal::NotAvailable.into());
     }
     if engine_changed(ctx, job, out) {
-        return Err(Refusal::EngineChanged);
+        return Err(Refusal::EngineChanged.into());
     }
     if out_resume(out).is_some() && !resume_placed(job, out) {
-        return Err(Refusal::PolicyDenied);
+        return Err(Refusal::PolicyDenied.into());
     }
     if !resume_admitted(ctx, out) {
-        return Err(resume_refusal(ctx, out));
+        return Err(resume_refusal(ctx, out).into());
     }
     let Some(pin) = step_pin(ctx, job, out) else {
         if ctx.policy.dynamic == DynamicMode::Off
             && call_origin(job.call.script.as_deref()) == JobOrigin::Dynamic
         {
-            return Err(Refusal::DynamicCodeDisabled);
+            return Err(Refusal::DynamicCodeDisabled.into());
         }
-        return admit_non_job(ctx, job, out);
+        return admit_non_job(ctx, job, out).map_err(Into::into);
     };
     let row = step_row(ctx, job, out);
     if dynamic_mode_refusal(&ctx.policy, pin.origin, &row, out).is_some() {
-        return Err(Refusal::PolicyDenied);
+        return Err(AdmissionFailure {
+            refusal: Refusal::PolicyDenied,
+            detail: (ctx.policy.dynamic == DynamicMode::Check)
+                .then_some(PolicyDenialDetail::DynamicCheck),
+        });
     }
     if job.pin.is_none() {
         if ctx.live == empty_ceiling() {
-            return Err(Refusal::NotAvailable);
+            return Err(Refusal::NotAvailable.into());
         }
         if ctx.live_background as usize >= MAX_BACKGROUNDED_TOOLS_PER_PARENT {
-            return Err(Refusal::BackgroundBudgetExceeded);
+            return Err(Refusal::BackgroundBudgetExceeded.into());
         }
         if ctx.started_by_job {
-            return Err(Refusal::DepthExceeded);
+            return Err(Refusal::DepthExceeded.into());
         }
     }
     admit_job_output(
@@ -780,28 +812,35 @@ fn admit_effects(
     pin: &JobPin,
     job: &StepRow,
     effects: &JobEffects,
-) -> Result<StepRow, Refusal> {
+) -> Result<StepRow, AdmissionFailure> {
     let mut fresh = Vec::new();
     for spawn in fresh_of(job, &effects.spawn) {
-        let target = resolve_target(ctx, &spawn.target).ok_or(Refusal::PolicyDenied)?;
+        let target = resolve_target(ctx, &spawn.target).ok_or(AdmissionFailure {
+            refusal: Refusal::PolicyDenied,
+            detail: Some(PolicyDenialDetail::TargetUnavailable),
+        })?;
         if let Some(refusal) = spawn_refusal(ctx, pin, job, spawn, target) {
-            return Err(refusal);
+            return Err(AdmissionFailure {
+                refusal,
+                detail: (!effective_targets_permit(ctx, pin, target))
+                    .then_some(PolicyDenialDetail::TargetUnavailable),
+            });
         }
         fresh.push((spawn, target));
     }
     let eff = meet(&ctx.live, &pin.ceiling_at_pin);
     if !fresh.is_empty() && !panel_admitted(pin, &eff, job, fresh.len()) {
-        return Err(Refusal::PolicyDenied);
+        return Err(Refusal::PolicyDenied.into());
     }
     if !messages_admitted(ctx, pin, eff.max_messages_per_slot, job, &effects.message) {
-        return Err(Refusal::PolicyDenied);
+        return Err(Refusal::PolicyDenied.into());
     }
     if !interrupts_admitted(&add_spawns(job.clone(), &fresh), &effects.interrupt) {
-        return Err(Refusal::PolicyDenied);
+        return Err(Refusal::PolicyDenied.into());
     }
     let admitted = add_spawns(add_messages(job, &effects.message), &fresh);
     if !effects.message.is_empty() && live_count(&admitted) > eff.max_live as usize {
-        return Err(Refusal::PolicyDenied);
+        return Err(Refusal::PolicyDenied.into());
     }
     if is_stalled(
         live_count(job) as u32,
@@ -815,7 +854,7 @@ fn admit_effects(
             },
         ),
     ) {
-        return Err(Refusal::Stalled);
+        return Err(Refusal::Stalled.into());
     }
     Ok(StepRow {
         observed_terminal: terminal_count(&admitted) as u32,
@@ -847,12 +886,14 @@ fn admit_job_output(
     pin: &JobPin,
     job: &StepRow,
     out: &JobStepOutput,
-) -> Result<StepRow, Refusal> {
+) -> Result<StepRow, AdmissionFailure> {
     match out {
         JobStepOutput::Effects { effects } => admit_effects(ctx, pin, job, effects),
-        JobStepOutput::Result { control, .. } => end_row(job, JobState::Completed, control),
-        JobStepOutput::Fail { .. } => end_row(job, JobState::Failed, &[]),
-        JobStepOutput::Suspend { .. } => end_row(job, JobState::Completed, &[]),
+        JobStepOutput::Result { control, .. } => {
+            end_row(job, JobState::Completed, control).map_err(Into::into)
+        }
+        JobStepOutput::Fail { .. } => end_row(job, JobState::Failed, &[]).map_err(Into::into),
+        JobStepOutput::Suspend { .. } => end_row(job, JobState::Completed, &[]).map_err(Into::into),
     }
 }
 
