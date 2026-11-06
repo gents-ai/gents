@@ -943,14 +943,14 @@ impl ConfigApplyTxn<'_> {
                 .transpose()
                 .map_err(ConfigClientError::SerializeCollectionVersion),
             TxnBackend::Http {
-                endpoint, client, ..
+                endpoint, client, id, ..
             } => {
                 let url = format!(
                     "{}/collections?get_inactive=true",
                     graphql_api_base(endpoint.url())?
                 );
                 let versions: Value = endpoint
-                    .authorize(client.get(&url))?
+                    .authorize(client.get(&url).header("x-defradb-tx", id))?
                     .send()
                     .await?
                     .error_for_status()?
