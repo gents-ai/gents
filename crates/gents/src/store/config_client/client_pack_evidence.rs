@@ -585,13 +585,26 @@ mod tests {
         let node = Arc::new(
             defra_node::Node::builder()
                 .with_node_identity_did(runtime.did())
-                .with_node_acp_owner(user.did().to_owned())
+                .with_node_acp_owner(runtime.did().to_owned())
                 .build()
                 .await?,
         );
         crate::ensure_runtime_schemas(&node).await?;
         let user_access = ConfigAccess::local_as(node.clone(), user.did().parse()?);
         let node_access = ConfigAccess::local_as(node, runtime.did().parse()?);
+        let user_did = identity::Did::new(user.did())?;
+        for permission in [
+            acp::nac::NodePermission::CollectionGet,
+            acp::nac::NodePermission::DocumentRead,
+            acp::nac::NodePermission::DocumentUpdate,
+            acp::nac::NodePermission::DocumentDelete,
+            acp::nac::NodePermission::DacRelationAdd,
+            acp::nac::NodePermission::DacRelationDelete,
+        ] {
+            node_access
+                .grant_node_permission(&user_did, permission)
+                .await?;
+        }
         let scope = PackApprovalScope {
             node_did: runtime.did().into(),
             pack_digests: vec!["sha256:fixture".into()],
