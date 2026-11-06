@@ -650,7 +650,7 @@ pub(crate) struct LeanIdentityHouseholdCase {
     #[serde(default)]
     pub(crate) plugin_delete_cases: Vec<serde_json::Value>,
     #[serde(default)]
-    pub(crate) managed_tool_identity_cases: Vec<serde_json::Value>,
+    pub(crate) managed_tool_identity_cases: Vec<LeanManagedToolIdentityCase>,
     #[serde(default)]
     pub(crate) projection_binding_cases: Vec<serde_json::Value>,
     #[serde(default)]
@@ -675,6 +675,25 @@ pub(crate) struct LeanIdentityHouseholdCase {
     pub(crate) callback_checkpoint_claim_cases: Vec<serde_json::Value>,
     #[serde(default)]
     pub(crate) ordinary_receipt_visibility_cases: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanManagedToolIdentityCase {
+    pub(crate) claimed: Option<LeanClaimedDid>,
+    pub(crate) node_key: String,
+    pub(crate) creation_nonce: Option<String>,
+    pub(crate) allowed: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanClaimedDid {
+    Key(String),
+    Derived {
+        node_key: String,
+        creation_nonce: String,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
