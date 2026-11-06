@@ -955,6 +955,13 @@ async fn serve_foreground(
         if let Err(error) = gents::store::schema::migration::ensure_all_runtime_migrations(node.clone()).await {
             return Err(gents::store::local::storage_backend::classify_store_error(error, &data_dir).into());
         }
+        if !matches!(effective_tool_ceiling, ToolCeilingArg::MetaOnly) {
+            if let Some(root) = effective_tool_root.as_deref() {
+                gents::tools::surface::ensure_configured_root_published(&node, root)
+                    .await
+                    .context("checking the configured host tool root against published WorkspaceRoot documents")?;
+            }
+        }
         client_access_ready.store(true, std::sync::atomic::Ordering::Release);
         gents::store::local::store_key::upgrade::finish(&data_dir)?;
         let schema = gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
