@@ -194,6 +194,21 @@ impl SelfConfigFixture {
         .unwrap();
     }
 
+    async fn grant_user_relation_delete(&self) {
+        let admin = crate::ConfigAccess::local_as(
+            self.db.node.clone(),
+            identity::Did::new(self.db.node_identity.did()).unwrap(),
+        );
+        let user = identity::Did::new(self.user_access.actor_did().unwrap()).unwrap();
+        admin
+            .grant_node_permission(
+                &user,
+                crate::store::config_client::NodePermission::DacRelationDelete,
+            )
+            .await
+            .unwrap();
+    }
+
     pub(super) async fn grant_agent_schema(&self) {
         let admin = crate::ConfigAccess::local_as(
             self.db.node.clone(),
@@ -220,18 +235,7 @@ impl SelfConfigFixture {
     }
 
     pub(super) async fn grant_sibling_configuration(&self, sibling: &str) {
-        let admin = crate::ConfigAccess::local_as(
-            self.db.node.clone(),
-            identity::Did::new(self.db.node_identity.did()).unwrap(),
-        );
-        let user = identity::Did::new(self.user_access.actor_did().unwrap()).unwrap();
-        admin
-            .grant_node_permission(
-                &user,
-                crate::store::config_client::NodePermission::DacRelationDelete,
-            )
-            .await
-            .unwrap();
+        self.grant_user_relation_delete().await;
         self.user_access
             .transact_write("test.self_config.grant_sibling", |txn| {
                 let owner = self.db.node_identity.did();
@@ -6241,21 +6245,30 @@ async fn config_backend_accounts_is_readable_without_the_backend_grant() {
 
 #[tokio::test]
 async fn agent_management_clears_optional_fields_and_refuses_ignored_tool_modifiers() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-clear");
-    let owner = identity.did().to_owned();
-    crate::test_support::install_test_agent(&node, &owner, "seed").await;
+    let fixture = SelfConfigFixture::new("agent-clear").await;
+    let node = &fixture.db.node;
+    let owner = fixture.node_did();
+    let access = fixture.user_access();
+    let user = identity::Did::new(access.actor_did().unwrap()).unwrap();
+    let binding = crate::store::identity::provision_agent_identity_authorized(
+        node,
+        fixture.db.node_identity.as_ref(),
+        &user,
+    )
+    .await
+    .unwrap();
+    let profile = format!("{}:inference", fixture.agent_did());
     let created: Value = serde_json::from_str(
-        &agent_mutate(
-            &node,
-            &owner,
-            identity.as_ref(),
+        &configure_agent(
+            access,
+            owner,
             &ConfigureAgentParams {
                 action: "create".into(),
+                identity_binding: Some(binding),
                 display_name: StringUpdate::Set("Clearable".into()),
                 description: StringUpdate::Set("Original description".into()),
                 system_prompt: StringUpdate::Set("Original instructions".into()),
-                profile_id: StringUpdate::Set("seed:inference".into()),
+                profile_id: StringUpdate::Set(profile.clone()),
                 ..Default::default()
             },
             &Default::default(),
@@ -6273,10 +6286,10 @@ async fn agent_management_clears_optional_fields_and_refuses_ignored_tool_modifi
         system_prompt: StringUpdate::Clear,
         ..Default::default()
     };
-    agent_mutate(&node, &owner, identity.as_ref(), &edit, &Default::default())
+    configure_agent(access, owner, &edit, &Default::default())
         .await
         .unwrap();
-    let stored = crate::list_agents(&node, &owner)
+    let stored = crate::list_agents(node, owner)
         .await
         .unwrap()
         .into_iter()
@@ -6284,31 +6297,26 @@ async fn agent_management_clears_optional_fields_and_refuses_ignored_tool_modifi
         .unwrap();
     assert_eq!(stored.display_name, None);
     assert_eq!(stored.description, None);
-    let effective = SelfConfigCore::new(node.clone(), owner.clone(), id.clone())
-        .unwrap()
-        .read_effective_config(&BTreeSet::new(), false, false)
-        .await
-        .unwrap();
-    assert!(
-        effective["context"]["system_prompt"].is_null(),
-        "{effective}"
+    let context_id = crate::store::graphql::escape_graphql_string(
+        stored
+            .context_id
+            .as_deref()
+            .expect("created agent has a Context"),
     );
-    assert_eq!(stored.inference_profile_id, "seed:inference");
+    let context = access.execute(&format!(
+        r#"{{ AgentContext(filter: {{ context_id: {{ _eq: "{context_id}" }} }}) {{ system_prompt }} }}"#,
+    )).await.unwrap();
+    assert!(context["data"]["AgentContext"][0]["system_prompt"].is_null());
+    assert_eq!(stored.inference_profile_id, profile);
     let invalid = ConfigureAgentParams {
         root: StringUpdate::Set("/ignored".into()),
         ..edit
     };
-    let error = agent_mutate(
-        &node,
-        &owner,
-        identity.as_ref(),
-        &invalid,
-        &Default::default(),
-    )
-    .await
-    .unwrap_err();
+    let error = configure_agent(access, owner, &invalid, &Default::default())
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("tools update"), "{error:#}");
-    let after = crate::list_agents(&node, &owner)
+    let after = crate::list_agents(node, owner)
         .await
         .unwrap()
         .into_iter()
@@ -6407,42 +6415,40 @@ async fn agent_only_edits_preserve_an_optional_absent_context() {
 
 #[tokio::test]
 async fn public_agent_management_uses_provisioned_binding_and_client_access() {
-    let node = build_agent_node().await;
-    let root = crate::store::identity::RegisteredIdentity::from_registered_did(
-        node.node_identity_did().unwrap(),
-        None,
+    let fixture = SelfConfigFixture::new("public-agent-client").await;
+    let node = &fixture.db.node;
+    let owner = fixture.node_did();
+    let access = fixture.user_access();
+    let caller = identity::Did::new(access.actor_did().unwrap()).unwrap();
+    let binding = crate::store::identity::provision_agent_identity_authorized(
+        node,
+        fixture.db.node_identity.as_ref(),
+        &caller,
     )
+    .await
     .unwrap();
-    let owner = root.did().to_owned();
-    let seed = crate::test_support::install_test_agent(&node, &owner, "seed").await;
-    let client = node_identity("public-agent-client");
-    let access = crate::store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        ::identity::Did::new(client.did().to_owned()).unwrap(),
-    );
-    let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
     let mut args = ConfigureAgentParams {
         action: "preview".into(),
         operation: Some("create".into()),
         identity_binding: Some(binding.clone()),
         display_name: StringUpdate::Set("Public agent".into()),
         system_prompt: StringUpdate::Set("Complete the requested work.".into()),
-        profile_id: StringUpdate::Set(format!("{}:inference", seed.agent_did)),
+        profile_id: StringUpdate::Set(format!("{}:inference", fixture.agent_did())),
         ..Default::default()
     };
     let preview: Value = serde_json::from_str(
-        &configure_agent(&access, &owner, &args, &Default::default())
+        &configure_agent(access, owner, &args, &Default::default())
             .await
             .unwrap(),
     )
     .unwrap();
     assert_eq!(preview["admitted"], true);
     assert_eq!(preview["committed"], false);
-    assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 1);
+    assert_eq!(crate::list_agents(node, owner).await.unwrap().len(), 1);
     args.action = "create".into();
     args.operation = None;
     args.identity_binding = None;
-    let error = configure_agent(&access, &owner, &args, &Default::default())
+    let error = configure_agent(access, owner, &args, &Default::default())
         .await
         .unwrap_err();
     assert!(error
@@ -6450,7 +6456,7 @@ async fn public_agent_management_uses_provisioned_binding_and_client_access() {
         .contains("runtime-provisioned identity binding"));
     args.identity_binding = Some(binding.clone());
     let committed: Value = serde_json::from_str(
-        &configure_agent(&access, &owner, &args, &Default::default())
+        &configure_agent(access, owner, &args, &Default::default())
             .await
             .unwrap(),
     )
@@ -6458,35 +6464,40 @@ async fn public_agent_management_uses_provisioned_binding_and_client_access() {
     assert_eq!(committed["committed"], true);
     assert_eq!(committed["agent_did"], binding.agent_did);
     assert_eq!(committed["agent_did"], preview["agent_did"]);
-    let stored = crate::load_agent(&node, &binding.agent_did)
+    let stored = crate::load_agent(node, &binding.agent_did)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(stored.identity_binding(), binding);
-    let signer =
-        crate::store::identity::resolve_agent_identity(&root, &stored.identity_binding()).unwrap();
+    let signer = crate::store::identity::resolve_agent_identity(
+        fixture.db.node_identity.as_ref(),
+        &stored.identity_binding(),
+    )
+    .unwrap();
     assert_eq!(signer.did(), stored.agent_did);
 }
 
 #[tokio::test]
 async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() {
-    let node = build_agent_node().await;
-    let identity = node_identity("disabled-agent-edit");
-    let owner = identity.did().to_owned();
-    crate::test_support::install_test_agent(&node, &owner, "target").await;
-    let mut stored = crate::load_agent(&node, "target").await.unwrap().unwrap();
+    let fixture = SelfConfigFixture::new("disabled-agent-edit").await;
+    let node = &fixture.db.node;
+    let owner = fixture.node_did();
+    let target = fixture.install_sibling("target").await;
+    let access = fixture.user_access();
+    let mut stored = crate::load_agent(node, &target).await.unwrap().unwrap();
     stored.enabled = false;
-    crate::upsert_agent(&node, &stored).await.unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    crate::store::config_client::write_agent_document(access, &stored)
+        .await
+        .unwrap();
     let mut args = ConfigureAgentParams {
         action: "preview".into(),
         operation: Some("edit".into()),
-        agent_did: Some("target".into()),
+        agent_did: Some(target.clone()),
         display_name: StringUpdate::Set("Edited while disabled".into()),
         ..Default::default()
     };
     let preview: Value = serde_json::from_str(
-        &configure_agent(&access, &owner, &args, &Default::default())
+        &configure_agent(access, owner, &args, &Default::default())
             .await
             .unwrap(),
     )
@@ -6494,69 +6505,75 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
     assert_eq!(preview["committed"], false);
     assert_eq!(preview["agent"]["enabled"], false);
     assert_eq!(
-        crate::load_agent(&node, "target").await.unwrap(),
+        crate::load_agent(node, &target).await.unwrap(),
         Some(stored.clone())
     );
     args.action = "edit".into();
     args.operation = None;
-    args.clone_from = Some("target".into());
-    let error = configure_agent(&access, &owner, &args, &Default::default())
+    args.clone_from = Some(target.clone());
+    let error = configure_agent(access, owner, &args, &Default::default())
         .await
         .unwrap_err();
     assert!(error.to_string().contains("does not accept clone_from"));
     assert_eq!(
-        crate::load_agent(&node, "target").await.unwrap(),
+        crate::load_agent(node, &target).await.unwrap(),
         Some(stored.clone())
     );
     args.clone_from = None;
-    configure_agent(&access, &owner, &args, &Default::default())
+    configure_agent(access, owner, &args, &Default::default())
         .await
         .unwrap();
     stored.display_name = Some("Edited while disabled".into());
     assert_eq!(
-        crate::load_agent(&node, "target").await.unwrap(),
+        crate::load_agent(node, &target).await.unwrap(),
         Some(stored.clone())
     );
     args.profile_id = StringUpdate::Set("missing-profile".into());
-    assert!(configure_agent(&access, &owner, &args, &Default::default())
+    assert!(configure_agent(access, owner, &args, &Default::default())
         .await
         .is_err());
     assert_eq!(
-        crate::load_agent(&node, "target").await.unwrap(),
+        crate::load_agent(node, &target).await.unwrap(),
         Some(stored.clone())
     );
     args.profile_id = StringUpdate::Omitted;
     args.make_default = true;
-    assert!(configure_agent(&access, &owner, &args, &Default::default())
+    assert!(configure_agent(access, owner, &args, &Default::default())
         .await
         .is_err());
     assert_eq!(
-        crate::load_agent(&node, "target").await.unwrap(),
+        crate::load_agent(node, &target).await.unwrap(),
         Some(stored)
     );
 }
 
 #[tokio::test]
 async fn public_prompt_edits_require_an_existing_unshared_context_without_partial_writes() {
-    let node = build_agent_node().await;
-    let identity = node_identity("prompt-context-ownership");
-    let owner = identity.did().to_owned();
-    for id in ["missing", "shared", "sibling", "private"] {
-        crate::test_support::install_test_agent(&node, &owner, id).await;
-    }
-    let mut missing = crate::load_agent(&node, "missing").await.unwrap().unwrap();
+    let fixture = SelfConfigFixture::new("prompt-context-ownership").await;
+    fixture.grant_user_relation_delete().await;
+    let node = &fixture.db.node;
+    let owner = fixture.node_did();
+    let missing_id = fixture.install_sibling("missing").await;
+    let shared_id = fixture.install_sibling("shared").await;
+    let sibling_id = fixture.install_sibling("sibling").await;
+    let private_id = fixture.install_sibling("private").await;
+    let access = fixture.user_access();
+    let mut missing = crate::load_agent(node, &missing_id).await.unwrap().unwrap();
     missing.context_id = None;
-    crate::upsert_agent(&node, &missing).await.unwrap();
-    let shared = crate::load_agent(&node, "shared").await.unwrap().unwrap();
-    let mut sibling = crate::load_agent(&node, "sibling").await.unwrap().unwrap();
+    crate::store::config_client::write_agent_document(access, &missing)
+        .await
+        .unwrap();
+    let shared = crate::load_agent(node, &shared_id).await.unwrap().unwrap();
+    let mut sibling = crate::load_agent(node, &sibling_id).await.unwrap().unwrap();
     sibling.context_id = shared.context_id;
-    crate::upsert_agent(&node, &sibling).await.unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    crate::store::config_client::write_agent_document(access, &sibling)
+        .await
+        .unwrap();
     let query = "query { Agent(order: {agent_did: ASC}) { agent_did display_name context_id inference_profile_id enabled } AgentContext(order: {context_id: ASC}) { context_id display_name system_prompt tools_id } }";
     let before = access.execute(query).await.unwrap();
     for (target, expected) in [
-        ("missing", "agent has no context"),
-        ("shared", "unshared context"),
+        (missing_id.as_str(), "agent has no context"),
+        (shared_id.as_str(), "unshared context"),
     ] {
         for preview in [true, false] {
             let args = ConfigureAgentParams {
@@ -6567,21 +6584,21 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
                 system_prompt: StringUpdate::Set("Replacement instructions".into()),
                 ..Default::default()
             };
-            let error = configure_agent(&access, &owner, &args, &Default::default())
+            let error = configure_agent(access, owner, &args, &Default::default())
                 .await
                 .unwrap_err();
             assert!(error.to_string().contains(expected), "{error:#}");
             assert_eq!(access.execute(query).await.unwrap(), before);
         }
     }
-    let private = crate::load_agent(&node, "private").await.unwrap().unwrap();
+    let private = crate::load_agent(node, &private_id).await.unwrap().unwrap();
     let args = ConfigureAgentParams {
         action: "edit".into(),
-        agent_did: Some("private".into()),
+        agent_did: Some(private_id),
         system_prompt: StringUpdate::Set("Private replacement instructions".into()),
         ..Default::default()
     };
-    configure_agent(&access, &owner, &args, &Default::default())
+    configure_agent(access, owner, &args, &Default::default())
         .await
         .unwrap();
     let after = access.execute(query).await.unwrap();
