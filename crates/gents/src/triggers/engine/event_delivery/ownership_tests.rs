@@ -245,7 +245,7 @@ async fn modeled_group_clock_is_owned_by_selected_agent_and_linked_once() -> any
             &identity::Did::new(root.did())?,
         )
         .await?;
-    let created = owner.write("test.group.agent", &format!("mutation {{create_Agent(input:{{node_did:\"{}\",agent_did:\"{}\",creation_nonce:\"{}\"}}){{_docID}}}}", escape_graphql_string(root.did()), escape_graphql_string(agent.did()), escape_graphql_string(&agent_binding.creation_nonce))).await?;
+    let created = owner.write("test.group.agent", &format!("mutation {{create_Agent(input:{{node_did:\"{}\",agent_did:\"{}\",creation_nonce:\"{}\",inference_profile_id:\"{}\"}}){{_docID}}}}", escape_graphql_string(root.did()), escape_graphql_string(agent.did()), escape_graphql_string(&agent_binding.creation_nonce), escape_graphql_string(&format!("{}:inference", agent.did())))).await?;
     let agent_doc = crate::store::graphql::created_doc_id(&created, "Agent")?;
     owner
         .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
