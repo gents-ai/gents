@@ -168,7 +168,7 @@ mod tests {
                     .await?;
                 drop(tuples);
                 drop(view);
-                txn.discard().await?;
+                txn.discard()?;
                 Ok::<_, anyhow::Error>(present)
             }
         };
