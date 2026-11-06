@@ -394,6 +394,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     let _observer = tokio_util::task::AbortOnDropHandle::new(
         crate::request::interrupt::spawn_request_interrupt_observer(
             node.clone(),
+            agent_access.clone(),
             request_doc_id.clone(),
             interrupt_tx,
             shutdown_rx.clone(),

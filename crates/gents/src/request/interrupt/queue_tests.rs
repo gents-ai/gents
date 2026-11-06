@@ -841,6 +841,15 @@ async fn desktop_user_signed_interrupt_latches_and_drains_the_modeled_wake() {
     let parent = &fixture.parent;
     let wake =
         enqueue_generated_wake(&fixture.agent_access, &fixture.db.node, parent, case, entry).await;
+    let (interrupt_tx, mut interrupt_rx) = tokio::sync::watch::channel(None);
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let observer = spawn_request_interrupt_observer(
+        fixture.db.node.clone(),
+        fixture.agent_access.clone(),
+        parent.doc_id.clone(),
+        interrupt_tx,
+        shutdown_rx,
+    );
 
     interrupt_request_by_doc_id_with_access(
         &fixture.client,
@@ -852,6 +861,36 @@ async fn desktop_user_signed_interrupt_latches_and_drains_the_modeled_wake() {
     .unwrap();
     let first = latch(&fixture.agent_access, parent).await;
     assert_eq!(first.is_some(), case.expected.latched);
+    assert_eq!(
+        fetch_interrupt_requested_at_by_doc_id(&fixture.db.node, &parent.doc_id)
+            .await
+            .unwrap(),
+        None,
+        "the Node's default read cannot observe the User-owned request"
+    );
+    assert_eq!(
+        fetch_interrupt_requested_at_by_doc_id_with_access(&fixture.agent_access, &parent.doc_id)
+            .await
+            .unwrap(),
+        first,
+        "the final latch check must use the selected Agent"
+    );
+    let intent = tokio::time::timeout(
+        Duration::from_secs(5),
+        interrupt_rx.wait_for(|intent| intent.is_some()),
+    )
+    .await
+    .expect("the selected Agent must observe the interrupt")
+    .unwrap()
+    .clone()
+    .unwrap();
+    assert_eq!(
+        intent.at,
+        chrono::DateTime::parse_from_rfc3339(first.as_deref().unwrap())
+            .unwrap()
+            .with_timezone(&Utc)
+    );
+    observer.await.unwrap();
     let after = rows(&fixture.agent_access, &parent.session_id).await;
     let state = &after.iter().find(|row| row["_docID"] == wake).unwrap()["lifecycle_state"];
     assert_eq!(

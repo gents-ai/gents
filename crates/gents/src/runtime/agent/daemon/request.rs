@@ -725,14 +725,15 @@ where
                 return result;
             }
 
+            let interrupt_access = lifecycle.access()?;
             let token_was_cancelled = request_token.is_cancelled();
             let watched_interrupt = { interrupt_rx.borrow().clone() };
             let interrupt_at = if token_was_cancelled {
                 if let Some(intent) = watched_interrupt {
                     Some(intent.at.to_rfc3339())
                 } else {
-                    crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(
-                        &self.node,
+                    crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+                        &interrupt_access,
                         &request.doc_id,
                     )
                     .await?
@@ -741,11 +742,12 @@ where
                 request_token.cancel();
                 Some(intent.at.to_rfc3339())
             } else {
-                let persisted = crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(
-                    &self.node,
-                    &request.doc_id,
-                )
-                .await?;
+                let persisted =
+                    crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+                        &interrupt_access,
+                        &request.doc_id,
+                    )
+                    .await?;
                 if persisted.is_some() {
                     request_token.cancel();
                 }

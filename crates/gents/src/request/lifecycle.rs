@@ -591,7 +591,7 @@ impl RequestLifecycle {
         Ok(())
     }
 
-    fn access(&self) -> Result<crate::ConfigAccess> {
+    pub(crate) fn access(&self) -> Result<crate::ConfigAccess> {
         let actor = self.actor_did()?;
         match &self.agent_signer {
             Some(signer) => Ok(crate::ConfigAccess::local_with_agent_signer(

@@ -287,6 +287,7 @@ where
         let _observer = tokio_util::task::AbortOnDropHandle::new(
             crate::request::interrupt::spawn_request_interrupt_observer(
                 self.node.clone(),
+                lifecycle.access()?,
                 title_request.doc_id.clone(),
                 interrupt_tx,
                 shutdown.clone(),

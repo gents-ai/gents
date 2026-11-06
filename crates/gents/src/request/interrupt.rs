@@ -319,39 +319,49 @@ pub async fn fetch_interrupt_requested_at_by_doc_id(
     node: &EmbeddedNode,
     request_doc_id: &str,
 ) -> Result<Option<String>> {
+    let query = physical_interrupt_query(request_doc_id)?;
+    let response =
+        graphql_with_transaction_retry(node, &query, "fetch_interrupt_requested_at_by_doc_id")
+            .await
+            .with_context(|| format!("fetch_interrupt_requested_at_by_doc_id({request_doc_id})"))?;
+    decode_physical_interrupt(response.data.as_ref())
+}
+
+pub(crate) async fn fetch_interrupt_requested_at_by_doc_id_with_access(
+    access: &crate::ConfigAccess,
+    request_doc_id: &str,
+) -> Result<Option<String>> {
+    let query = physical_interrupt_query(request_doc_id)?;
+    let response = access
+        .execute(&query)
+        .await
+        .with_context(|| format!("fetch_interrupt_requested_at_by_doc_id({request_doc_id})"))?;
+    decode_physical_interrupt(response.get("data"))
+}
+
+fn physical_interrupt_query(request_doc_id: &str) -> Result<String> {
     anyhow::ensure!(
         !request_doc_id.trim().is_empty(),
         "interrupt fetch requires a physical request document id"
     );
     let escaped = escape_graphql_string(request_doc_id);
-    let query = format!(
-        r#"query {{
-            AgentRequest(
-                filter: {{ _docID: {{ _eq: "{escaped}" }} }},
-                limit: 2
-            ) {{
-                interrupt_requested_at
-            }}
-        }}"#
-    );
-    let resp =
-        graphql_with_transaction_retry(node, &query, "fetch_interrupt_requested_at_by_doc_id")
-            .await
-            .with_context(|| format!("fetch_interrupt_requested_at_by_doc_id({request_doc_id})"))?;
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
+    Ok(format!(
+        r#"query {{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ interrupt_requested_at }} }}"#
+    ))
+}
+
+fn decode_physical_interrupt(data: Option<&serde_json::Value>) -> Result<Option<String>> {
+    let rows = data
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(serde_json::Value::as_array)
         .ok_or_else(|| anyhow::anyhow!("interrupt request fetch omitted rows"))?;
     anyhow::ensure!(rows.len() <= 1, "interrupt request fetch is ambiguous");
-    let value = rows
+    Ok(rows
         .first()
         .and_then(|row| row.get("interrupt_requested_at"))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(String::from);
-    Ok(value)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned))
 }
 
 pub async fn fetch_interrupt_requested_at(
@@ -377,6 +387,7 @@ const OBSERVER_POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// aborted.
 pub fn spawn_request_interrupt_observer(
     node: Arc<EmbeddedNode>,
+    access: crate::ConfigAccess,
     request_doc_id: String,
     interrupt_tx: watch::Sender<Option<InterruptIntent>>,
     mut shutdown: watch::Receiver<bool>,
@@ -390,7 +401,7 @@ pub fn spawn_request_interrupt_observer(
         observe_request_interrupt(
             &request_doc_id,
             changes,
-            || read_interrupt_requested_at(&node, &request_doc_id),
+            || read_interrupt_requested_at(&access, &request_doc_id),
             &interrupt_tx,
             &mut shutdown,
         )
@@ -412,39 +423,17 @@ impl InterruptChangeFeed for events::DocumentChangeSubscription {
     }
 }
 
-async fn read_interrupt_requested_at(node: &EmbeddedNode, request_doc_id: &str) -> Option<String> {
-    let query = format!(
-        r#"query {{
-            AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                limit: 1
-            ) {{
-                interrupt_requested_at
-            }}
-        }}"#,
-        doc_id = escape_graphql_string(request_doc_id),
-    );
-    let resp = match graphql_with_transaction_retry(node, &query, "interrupt observer query").await
-    {
-        Ok(resp) => resp,
+async fn read_interrupt_requested_at(
+    access: &crate::ConfigAccess,
+    request_doc_id: &str,
+) -> Option<String> {
+    match fetch_interrupt_requested_at_by_doc_id_with_access(access, request_doc_id).await {
+        Ok(value) => value,
         Err(error) => {
-            tracing::warn!(
-                doc_id = %request_doc_id,
-                error = %error,
-                "interrupt observer query failed; will retry"
-            );
-            return None;
+            tracing::warn!(doc_id = %request_doc_id, error = %error, "interrupt observer query failed; will retry");
+            None
         }
-    };
-    resp.data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|row| row.get("interrupt_requested_at"))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
+    }
 }
 
 /// The fallback tick is polled before the change feed so a feed that is
