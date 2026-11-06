@@ -275,10 +275,19 @@ def replayProducerCasesJson : String := (toJson
       ("deliverable", toJson (Identity.RelationshipReplay.producerMayDeliver held manager committed))])).compress
 
 def enrollmentPolicyCasesJson : String :=
+  let empty : State := { objects := [], relations := [], enrolled := [] }
+  let thin := publishEnrollmentRequest empty "client" "admin" "request" none
+    true false true true
   let revoked := apply enrollmentRequestWithParent (.revokeAs "candidate"
     ⟨"enrollment_records", "request", "reader", .actor "admin"⟩)
   let cases : List (String × State × DID × String × String) :=
-    [("candidate-request-write", enrollmentRequestFixture, "candidate", "request", "update"),
+    [("thin-client-write", thin, "client", "request", "update"),
+     ("thin-admin-read", thin, "admin", "request", "read"),
+     ("thin-admin-write", thin, "admin", "request", "update"),
+     ("thin-user-read", thin, "user", "request", "read"),
+     ("thin-agent-read", thin, "agent", "request", "read"),
+     ("thin-outsider-read", thin, "outsider", "request", "read"),
+     ("candidate-request-write", enrollmentRequestFixture, "candidate", "request", "update"),
      ("admin-request-read", enrollmentRequestFixture, "admin", "request", "read"),
      ("admin-request-write", enrollmentRequestFixture, "admin", "request", "update"),
      ("user-request-before-parent", enrollmentRequestFixture, "user", "request", "read"),
