@@ -19,6 +19,13 @@ pub(super) const REQUEST_SIBLING_MAX_ATTEMPTS: u32 =
 /// callback errors are searched by [`access_error_in`].
 pub trait TransactionFailure {
     fn config_client_error(&self) -> Option<&ConfigClientError>;
+
+    /// [`ConfigClientError::is_permission_denied`] for the access error this
+    /// failure carries; a failure without one is not a denial.
+    fn permission_denied(&self) -> bool {
+        self.config_client_error()
+            .is_some_and(ConfigClientError::is_permission_denied)
+    }
 }
 
 impl TransactionFailure for ConfigClientError {

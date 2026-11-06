@@ -505,7 +505,7 @@ mod tests {
         let Err(error) = result else {
             panic!("explicit denial must be returned");
         };
-        assert!(is_permission_denied(&error));
+        assert!(error.permission_denied());
     }
 
     #[tokio::test]

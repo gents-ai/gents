@@ -6,6 +6,7 @@ use gents::documents::{
     InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation, SkillDocument, Task,
     ToolServiceRegistry, Tools, Trigger, TriggerObservation,
 };
+use gents::store::config_client::TransactionFailure;
 use gents_protocol::client_protocol::SessionRowObservation;
 use gents_protocol::graphql::escape_graphql_string;
 use gents_protocol::output::reconstruction::DependencyDenial;
@@ -30,11 +31,6 @@ use std::pin::Pin;
 
 use super::peer_directory::PeerRecord;
 use super::store::{ClientStore, ClientStoreRows};
-
-fn is_permission_denied(error: &anyhow::Error) -> bool {
-    gents::store::config_client::TransactionFailure::config_client_error(error)
-        .is_some_and(gents::store::config_client::ConfigClientError::is_permission_denied)
-}
 
 mod agent_scope;
 mod document_patches;
@@ -61,7 +57,7 @@ pub use session_transcript::{
     load_session_context_store, load_session_context_store_on, load_session_diagnostics_store,
     load_session_diagnostics_store_on, load_session_transcript_page,
     load_session_transcript_page_on, load_session_transcript_window,
-    load_session_transcript_window_on, session_transcript_requester_scope, TranscriptWindow,
+    load_session_transcript_window_on, TranscriptWindow,
 };
 pub(crate) use snapshot_loaders::*;
 

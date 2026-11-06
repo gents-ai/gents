@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use gents::session::canonical_rows::TranscriptMessageRow;
-use gents::store::config_client::ConfigAccess;
+use gents::store::config_client::{ConfigAccess, TransactionFailure};
 use gents::tools::background::job::view::{load_job_view, JobKey};
 use gents_desktop_core::client::{
     CanonicalTranscriptDependencies, ClientCore, ClientStore, SessionTranscriptQueryPage,
@@ -25,11 +25,6 @@ use super::super::types::{
 };
 use super::timeline::build_rendered_timeline;
 use super::{request_matches_node, source_matches_node};
-
-fn is_permission_denied(error: &anyhow::Error) -> bool {
-    gents::store::config_client::TransactionFailure::config_client_error(error)
-        .is_some_and(gents::store::config_client::ConfigClientError::is_permission_denied)
-}
 
 pub(super) fn question_reply_view(
     store: &ClientStore,
@@ -351,7 +346,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
                             .collect(),
                     )
                 }
-                Err(error) if is_permission_denied(&error) => return Err(error),
+                Err(error) if error.permission_denied() => return Err(error),
                 Err(error) => {
                     tracing::warn!(session_id, node_did, error = %error, "pending queue unavailable");
                     None
@@ -373,7 +368,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
                 .await
             {
                 Ok(context) => context,
-                Err(error) if is_permission_denied(&error) => return Err(error),
+                Err(error) if error.permission_denied() => return Err(error),
                 Err(error) => {
                     tracing::warn!(
                         target: "gents_desktop::chat",
@@ -487,7 +482,7 @@ pub(crate) async fn attach_context_history_rows(
     .await
     {
         Ok(entries) => Some(entries),
-        Err(error) if is_permission_denied(&error) => return Err(error),
+        Err(error) if error.permission_denied() => return Err(error),
         Err(error) => {
             tracing::warn!(
                 target: "gents_desktop::chat",
@@ -504,7 +499,7 @@ pub(crate) async fn attach_context_history_rows(
             .await
         {
             Ok(reductions) => Some(reductions),
-            Err(error) if is_permission_denied(&error) => return Err(error),
+            Err(error) if error.permission_denied() => return Err(error),
             Err(error) => {
                 tracing::warn!(
                     target: "gents_desktop::chat",
@@ -527,7 +522,7 @@ pub(crate) async fn attach_context_history_rows(
         .await
         {
             Ok(starts) => starts,
-            Err(error) if is_permission_denied(&error) => return Err(error),
+            Err(error) if error.permission_denied() => return Err(error),
             Err(error) => {
                 tracing::warn!(
                     target: "gents_desktop::chat",
@@ -578,7 +573,7 @@ pub(crate) async fn attach_context_history_rows(
             );
             true
         }
-        Err(error) if is_permission_denied(&error) => return Err(error),
+        Err(error) if error.permission_denied() => return Err(error),
         Err(error) => {
             tracing::warn!(
                 target: "gents_desktop::chat",
@@ -964,7 +959,7 @@ async fn fill_marker_summaries(
     .await
     {
         Ok(summaries) => summaries,
-        Err(error) if is_permission_denied(&error) => return Err(error),
+        Err(error) if error.permission_denied() => return Err(error),
         Err(error) => {
             tracing::warn!(
                 target: "gents_desktop::chat",

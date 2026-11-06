@@ -10,7 +10,7 @@ use p2p::iroh::parse_public_peer_addr;
 use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep, Instant};
 
-use super::super::observe::{spawn_observer_with_selection, ObservedStore};
+use super::super::observe::{spawn_observer, ObservedStore};
 use super::super::paths::DesktopPaths;
 use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::principal_identity::PrincipalIdentity;
@@ -142,8 +142,6 @@ impl ClientCore {
             subscribe_all_collections(node.as_ref()).await?;
             checkpoint("collection_subscriptions");
 
-            let observer_subscription = node.subscribe_document_changes();
-
             let observation_scope = super::observation_scope::ObservationScope::new();
 
             let initial_snapshot = Default::default();
@@ -192,16 +190,12 @@ impl ClientCore {
                 initial_database_sync,
                 initial_database_sync_error,
             );
-            let observer = spawn_observer_with_selection(
-                Arc::clone(&node),
+            let observer = spawn_observer(
                 Arc::clone(&store),
                 sync_state.clone(),
                 gents::store::config_client::ClientSigningCapability::from_ed25519_key(
                     node_identity.private_key_bytes(),
                 )?,
-                observer_subscription,
-                observation_scope.subscribe(),
-                options.operator_identity_interaction,
             );
             let (p2p_control, p2p_control_rx) = mpsc::channel(8);
             let p2p_supervisor = spawn_p2p_supervisor_task(

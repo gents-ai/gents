@@ -169,7 +169,7 @@ impl ClientCore {
             .iter()
             .find(|record| record.node_did == node_did)
             .and_then(|record| {
-                self.options.operator_identity_interaction.endpoint(
+                crate::local_runtime::operator_endpoint(
                     record,
                     &self.node_identity.client_signing_capability().ok()?,
                 )
@@ -185,9 +185,10 @@ impl ClientCore {
             .records()
             .into_iter()
             .find(|record| record.node_did == node_did)?;
-        let interaction = self.options.operator_identity_interaction;
         let capability = self.node_identity.client_signing_capability().ok()?;
-        tokio::task::spawn_blocking(move || interaction.endpoint(&record, &capability))
+        tokio::task::spawn_blocking(move || {
+            crate::local_runtime::operator_endpoint(&record, &capability)
+        })
             .await
             .ok()
             .flatten()

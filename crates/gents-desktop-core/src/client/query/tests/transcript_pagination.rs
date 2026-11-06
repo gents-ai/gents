@@ -366,24 +366,6 @@ async fn transcript_pages_bound_tool_groups_without_reintroducing_response_rows(
     assert!(!page.source_exhausted);
 }
 
-fn session_row(session_id: &str, node_did: &str, requester: Option<&str>) -> AgentSession {
-    AgentSession {
-        session_id: session_id.into(),
-        node_did: node_did.into(),
-        requester_did: requester.map(str::to_owned),
-        agent_did: "default".into(),
-        created_at: "2026-08-25T00:00:00Z".into(),
-        closed_at: None,
-        archived_at: None,
-        archive_revision: 0,
-        stopped_at: None,
-        title: None,
-        tags: Vec::new(),
-        provenance: None,
-        observation: None,
-    }
-}
-
 #[tokio::test]
 async fn operator_reads_a_local_child_session_under_its_own_scope() {
     let node = Arc::new(
@@ -428,49 +410,17 @@ async fn operator_reads_a_local_child_session_under_its_own_scope() {
         "the desktop scope cannot see a LocalChild transcript"
     );
 
-    let child = session_row("child", node_did, Some(node_did));
-    let scope =
-        session_transcript_requester_scope(Some(&child), Some(node_did), Some(desktop), true);
-    assert_eq!(scope.as_deref(), Some(node_did));
     let page = load_session_transcript_page(
         node.as_ref(),
         "child",
         Some(node_did),
-        scope.as_deref(),
+        Some(node_did),
         None,
         None,
     )
     .await
     .expect("child page");
     assert_eq!(page.store.transcript_messages.len(), 2);
-
-    assert_eq!(
-        session_transcript_requester_scope(Some(&child), Some(node_did), Some(desktop), false)
-            .as_deref(),
-        Some(node_did)
-    );
-    let other = session_row("other", node_did, Some("did:test:other"));
-    assert_eq!(
-        session_transcript_requester_scope(Some(&other), Some(node_did), Some(desktop), true)
-            .as_deref(),
-        Some("did:test:other")
-    );
-    let foreign = session_row("child", "did:test:foreign", Some(node_did));
-    assert_eq!(
-        session_transcript_requester_scope(Some(&foreign), Some(node_did), Some(desktop), true)
-            .as_deref(),
-        Some(node_did)
-    );
-    let own = session_row("own", node_did, Some(desktop));
-    assert_eq!(
-        session_transcript_requester_scope(Some(&own), Some(node_did), Some(desktop), true)
-            .as_deref(),
-        Some(desktop)
-    );
-    assert_eq!(
-        session_transcript_requester_scope(None, Some(node_did), Some(desktop), true).as_deref(),
-        Some(desktop)
-    );
 }
 
 #[tokio::test]

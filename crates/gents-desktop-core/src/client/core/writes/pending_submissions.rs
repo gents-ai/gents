@@ -91,10 +91,7 @@ impl ClientCore {
                             self.node_identity.private_key_bytes(),
                         )
                         .map_err(anyhow::Error::from)?;
-                    self.options
-                        .operator_identity_interaction
-                        .endpoint(&peer, &capability)
-                        .map(gents::store::config_client::ConfigAccess::Graphql)
+                    crate::local_runtime::operator_endpoint(&peer, &capability).map(gents::store::config_client::ConfigAccess::Graphql)
                 }
                 _ => None,
             }

@@ -115,7 +115,7 @@ async fn read_legacy_question_sources<'a>(
                 }
                 Err(error) => tracing::debug!(%error, "question reply sources unavailable"),
             },
-            Ok(Err(error)) if is_permission_denied(&error) => return Err(error),
+            Ok(Err(error)) if error.permission_denied() => return Err(error),
             Ok(Err(error)) => tracing::debug!(%error, "question reply sources unavailable"),
             Err(_) => tracing::debug!("question reply sources timed out"),
         }
@@ -155,7 +155,7 @@ mod question_source_tests {
             )
             .await;
             if denied {
-                assert!(is_permission_denied(&result.unwrap_err()));
+                assert!(result.unwrap_err().permission_denied());
             } else {
                 assert!(result.unwrap().0.is_empty());
             }
@@ -579,18 +579,6 @@ async fn resolve_transcript_cursor_sequence(
     rows.first()
         .and_then(|row| row.sequence)
         .ok_or_else(|| anyhow!("session transcript cursor is no longer present: {cursor}"))
-}
-
-pub fn session_transcript_requester_scope(
-    session: Option<&AgentSession>,
-    _node_did: Option<&str>,
-    requester_scope: Option<&str>,
-    _operator: bool,
-) -> Option<String> {
-    match session {
-        Some(session) => session.requester_did.clone(),
-        None => requester_scope.map(str::to_owned),
-    }
 }
 
 /// The stretch of a session's message order a transcript read covers: the

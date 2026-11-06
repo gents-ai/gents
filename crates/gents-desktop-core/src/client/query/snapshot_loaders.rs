@@ -681,26 +681,39 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
     snapshot_rows_with_requests(&data, None, requests)
 }
 
+/// Every reachable runtime's snapshot merged by node. A runtime that refuses
+/// the read is listed in `denied` and contributes no rows; it does not
+/// discard another runtime's snapshot.
+#[derive(Default)]
+pub struct PeerSnapshots {
+    pub store: ClientStore,
+    pub denied: Vec<String>,
+}
+
 pub async fn load_full_snapshot_with_peer_records(
-    _node: &EmbeddedNode,
     peers: &[PeerRecord],
     capability: &gents::store::config_client::ClientSigningCapability,
-    identity_interaction: crate::local_runtime::OperatorIdentityInteraction,
-) -> Result<ClientStore> {
-    let mut store = ClientStore::default();
+) -> PeerSnapshots {
+    let mut snapshots = PeerSnapshots::default();
     for peer in peers {
-        let Some(graphql) = identity_interaction.endpoint(peer, capability) else {
+        let Some(graphql) = crate::local_runtime::operator_endpoint(peer, capability) else {
             continue;
         };
         let access = gents::store::config_client::ConfigAccess::Graphql(graphql);
         match load_node_snapshot_on(&access, &peer.node_did).await {
-            Ok(remote) => store = store.replace_node_scope(&peer.node_did, remote),
-            Err(error) if is_permission_denied(&error) => return Err(error),
-            Err(error) => tracing::warn!(node_did = %peer.node_did, error = %error,
-                "runtime snapshot unavailable"),
+            Ok(remote) => {
+                snapshots.store = snapshots.store.replace_node_scope(&peer.node_did, remote)
+            }
+            Err(error) => {
+                tracing::warn!(node_did = %peer.node_did, error = %error,
+                    "runtime snapshot unavailable");
+                if error.permission_denied() {
+                    snapshots.denied.push(peer.node_did.clone());
+                }
+            }
         }
     }
-    Ok(store)
+    snapshots
 }
 
 pub async fn load_node_snapshot_on(
@@ -861,16 +874,14 @@ fn operator_config_store_from_data_with_requests(
 }
 
 pub async fn load_node_scoped_snapshot_with_peer_records(
-    _node: &EmbeddedNode,
     node_did: &str,
     peers: &[PeerRecord],
     capability: &gents::store::config_client::ClientSigningCapability,
-    identity_interaction: crate::local_runtime::OperatorIdentityInteraction,
 ) -> Result<ClientStore> {
     let endpoint = peers
         .iter()
         .find(|peer| peer.node_did == node_did)
-        .and_then(|peer| identity_interaction.endpoint(peer, capability))
+        .and_then(|peer| crate::local_runtime::operator_endpoint(peer, capability))
         .with_context(|| format!("runtime {node_did} has no authenticated database endpoint"))?;
     load_node_snapshot_on(
         &gents::store::config_client::ConfigAccess::Graphql(endpoint),
@@ -906,7 +917,7 @@ mod remote_failure_tests {
     use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
-    async fn full_snapshot_surfaces_explicit_runtime_denial() {
+    async fn full_snapshot_isolates_one_runtime_denial() {
         let directory = tempfile::tempdir().unwrap();
         let key_path = directory.path().join("client.key");
         let client = tokio::task::spawn_blocking(move || {
@@ -914,26 +925,56 @@ mod remote_failure_tests {
         })
         .await
         .unwrap();
-        let server = MockServer::start().await;
+        let healthy_did = "did:test:healthy";
+        let source = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        crate::client::schema::ensure_runtime_schemas(&source)
+            .await
+            .unwrap();
+        gents::store::config_client::ConfigAccess::local(source.clone())
+            .write(
+                "test.snapshot.healthy",
+                &format!("mutation {{ create_Node(input: {{node_did: \"{healthy_did}\", display_name: \"healthy\", enabled: true, created_at: \"now\", created_by: \"test\"}}) {{ _docID }} }}"),
+            )
+            .await
+            .unwrap();
+        let healthy_data = execute_local_graphql_query(
+            &source,
+            &snapshot_query(Some(healthy_did)).unwrap(),
+            "test snapshot",
+        )
+        .await
+        .unwrap();
+        let healthy = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "data": healthy_data })),
+            )
+            .mount(&healthy)
+            .await;
+        let denied = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "errors": [{"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}}]
             })))
             .expect(1)
-            .mount(&server)
+            .mount(&denied)
             .await;
-        let mut peer = PeerRecord::new("runtime", "", "did:test:runtime");
-        peer.graphql = Some(format!("{}/api/v0/graphql", server.uri()));
-        let node = crate::test_support::node_builder().build().await.unwrap();
-        let error = load_full_snapshot_with_peer_records(
-            &node,
-            &[peer],
+        let mut denied_peer = PeerRecord::new("denied", "", "did:test:denied");
+        denied_peer.graphql = Some(format!("{}/api/v0/graphql", denied.uri()));
+        let mut healthy_peer = PeerRecord::new("healthy", "", healthy_did);
+        healthy_peer.graphql = Some(format!("{}/api/v0/graphql", healthy.uri()));
+        let snapshots = load_full_snapshot_with_peer_records(
+            &[denied_peer, healthy_peer],
             &client.client_signing_capability().unwrap(),
-            Default::default(),
         )
-        .await
-        .unwrap_err();
-        assert!(is_permission_denied(&error));
-        node.shutdown().await.unwrap();
+        .await;
+        assert_eq!(snapshots.denied, vec!["did:test:denied".to_owned()]);
+        assert!(snapshots
+            .store
+            .nodes
+            .iter()
+            .any(|node| node.node_did == healthy_did));
+        source.shutdown().await.unwrap();
     }
 }

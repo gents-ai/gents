@@ -46,14 +46,6 @@ pub enum OperatorIdentityInteraction {
 }
 
 impl OperatorIdentityInteraction {
-    pub(crate) fn endpoint(
-        self,
-        record: &crate::client::PeerRecord,
-        capability: &gents::store::config_client::ClientSigningCapability,
-    ) -> Option<gents::store::config_client::GraphqlEndpoint> {
-        operator_endpoint(record, capability)
-    }
-
     pub(crate) fn runtime_endpoint(
         self,
         record: &crate::client::PeerRecord,

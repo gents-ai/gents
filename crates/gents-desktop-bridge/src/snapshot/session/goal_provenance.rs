@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use gents::session::canonical_rows::TranscriptMessageRow;
-use gents::store::config_client::ConfigRead;
+use gents::store::config_client::{ConfigRead, TransactionFailure};
 use gents_desktop_core::client::CanonicalTranscriptDependencies;
 use gents_protocol::output::{
     origin::{resolve_origin, ObservedMessage},
@@ -115,7 +115,7 @@ async fn observe<'source, 'request>(
     .await
     {
         Ok(confirmed) => confirmed,
-        Err(error) if super::is_permission_denied(&error) => return Err(error),
+        Err(error) if error.permission_denied() => return Err(error),
         Err(error) => {
             tracing::warn!(error = %error, "opening Goal provenance unavailable");
             return Ok(None);

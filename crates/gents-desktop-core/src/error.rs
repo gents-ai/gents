@@ -141,9 +141,7 @@ impl BridgeError {
         if let Some(classified) = error.chain().find_map(|cause| cause.downcast_ref::<Self>()) {
             return classified.clone();
         }
-        if gents::store::config_client::TransactionFailure::config_client_error(&error)
-            .is_some_and(gents::store::config_client::ConfigClientError::is_permission_denied)
-        {
+        if gents::store::config_client::TransactionFailure::permission_denied(&error) {
             return Self::new(
                 BridgeErrorCode::PermissionDenied,
                 "Access was denied. Check this client's permissions with the runtime owner.",
