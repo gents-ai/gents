@@ -447,6 +447,12 @@ impl ConfigClientError {
                 error.as_ref(),
                 query::error::QueryError::PermissionDenied(_)
             ),
+            Self::Node(error) => matches!(
+                error.as_ref(),
+                defra_node::Error::Transaction(query::TransactionError::Storage(
+                    storage::corekv::Error::ProjectionPermissionDenied
+                ))
+            ),
             Self::EmbeddedGraphqlErrors { errors } => errors.iter().any(|error| {
                 error.code() == Some(gents_protocol::database_error::PERMISSION_DENIED_CODE)
             }),
@@ -622,4 +628,29 @@ impl From<defra_node::Error> for ConfigClientError {
 #[error("DefraDB transaction conflict")]
 pub struct TransactionConflict {
     pub(super) origin: ConflictSource,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConfigClientError;
+
+    #[test]
+    fn native_source_projection_denial_is_not_a_retryable_conflict() {
+        let denied = ConfigClientError::Node(Box::new(defra_node::Error::Transaction(
+            query::TransactionError::Storage(storage::corekv::Error::ProjectionPermissionDenied),
+        )));
+        assert!(denied.is_permission_denied());
+        assert!(!denied.is_retryable_database_conflict());
+        let wrapped = ConfigClientError::StorageFailure(Box::new(denied));
+        assert!(wrapped.is_permission_denied());
+        assert!(!wrapped.is_retryable_database_conflict());
+
+        let other = ConfigClientError::Node(Box::new(defra_node::Error::Transaction(
+            query::TransactionError::Storage(storage::corekv::Error::Other(
+                "unrelated storage failure".into(),
+            )),
+        )));
+        assert!(!other.is_permission_denied());
+        assert!(!other.is_retryable_database_conflict());
+    }
 }
