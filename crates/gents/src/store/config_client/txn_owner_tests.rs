@@ -2251,6 +2251,7 @@ async fn readonly_transaction_preserves_snapshot_and_rejects_native_mutation() {
 #[derive(Clone, Copy)]
 enum FirstCommit {
     Conflict,
+    CanonicalUnconfirmed,
     ConfirmedConflict,
     ServerError,
     Succeed,
@@ -2321,6 +2322,12 @@ async fn commit_transaction(
                 );
             }
             FirstCommit::ConfirmedConflict => {
+                return (
+                    StatusCode::CONFLICT,
+                    r#"{"error":"transaction conflict. Please retry","outcome":"transaction_conflict_aborted"}"#,
+                );
+            }
+            FirstCommit::CanonicalUnconfirmed => {
                 return (
                     StatusCode::CONFLICT,
                     r#"{"error":"transaction conflict. Please retry"}"#,
@@ -2454,22 +2461,71 @@ async fn confirmed_signed_conflict_rebuilds_on_a_fresh_transaction() {
 }
 
 #[tokio::test]
-async fn ambiguous_signed_conflict_does_not_rebuild() {
-    let (endpoint, state, server) = fake_transaction_server(FirstCommit::Conflict).await;
+async fn signed_statement_conflict_rebuilds_only_after_successful_discard() {
+    let (endpoint, state, server) = fake_transaction_server(FirstCommit::Succeed).await;
     let access = held_fake_access(endpoint).await;
-    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts = Arc::new(Mutex::new(Vec::new()));
     let captured = attempts.clone();
-    let result = access
-        .transact_signed_conflict_rebuild("test.signed_ambiguous_conflict", move |txn| {
-            captured.fetch_add(1, Ordering::SeqCst);
+    access
+        .transact_signed_conflict_rebuild("test.signed_statement_conflict", move |txn| {
+            let id = transaction_id(txn);
+            lock(&captured).push(id.clone());
+            txn.client_signed_write_dispatched.store(true, Ordering::Release);
+            Box::pin(async move {
+                if id == "0" {
+                    Err(super::retry::transaction_conflict(
+                        crate::store::config_client::write_telemetry::ConflictSource::StructuredCode,
+                    ))
+                } else {
+                    Ok(())
+                }
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(&*lock(&attempts), &["0", "1"]);
+    assert_eq!(&*lock(&state.discarded_ids), &["0"]);
+    assert_eq!(&*lock(&state.committed_ids), &["1"]);
+    server.abort();
+}
+
+#[tokio::test]
+async fn ambiguous_signed_conflict_does_not_rebuild() {
+    for first_commit in [FirstCommit::Conflict, FirstCommit::CanonicalUnconfirmed] {
+        let (endpoint, state, server) = fake_transaction_server(first_commit).await;
+        let access = held_fake_access(endpoint).await;
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let captured = attempts.clone();
+        let result = access
+            .transact_signed_conflict_rebuild("test.signed_ambiguous_conflict", move |txn| {
+                captured.fetch_add(1, Ordering::SeqCst);
+                txn.client_signed_write_dispatched
+                    .store(true, Ordering::Release);
+                Box::pin(async { Ok::<_, TestError>(()) })
+            })
+            .await;
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(state.next_id.load(Ordering::SeqCst), 1);
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn canonical_conflict_without_receipt_has_unconfirmed_finality() {
+    let (endpoint, _state, server) =
+        fake_transaction_server(FirstCommit::CanonicalUnconfirmed).await;
+    let access = held_fake_access(endpoint).await;
+    let error = access
+        .transact_write_with_finality("test.signed_unconfirmed_conflict_finality", |txn| {
             txn.client_signed_write_dispatched
                 .store(true, Ordering::Release);
             Box::pin(async { Ok::<_, TestError>(()) })
         })
-        .await;
-    assert!(result.is_err());
-    assert_eq!(attempts.load(Ordering::SeqCst), 1);
-    assert_eq!(state.next_id.load(Ordering::SeqCst), 1);
+        .await
+        .unwrap_err();
+    assert!(error.unconfirmed);
+    assert!(super::is_classified_transaction_conflict(&error.error));
     server.abort();
 }
 

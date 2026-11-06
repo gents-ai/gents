@@ -237,14 +237,15 @@ pub(super) async fn txn_commit(
     ))
 }
 
-/// The pinned DefraDB commit endpoint emits this exact JSON error only when
-/// its transaction owner reports a conflict before the Regolith commit record.
+/// DefraDB emits this outcome at the commit endpoint only for the registry's
+/// typed conflict, which Regolith decides before writing a commit record.
+/// Older servers' text-classified 409 responses do not establish finality.
 fn is_confirmed_commit_conflict(bytes: &[u8]) -> bool {
     serde_json::from_slice::<Value>(bytes).is_ok_and(|value| {
         value.as_object().is_some_and(|body| {
-            body.len() == 1
-                && body.get("error").and_then(Value::as_str)
-                    == Some(query::executor::TXN_CONFLICT_MESSAGE)
+            body.get("error").and_then(Value::as_str) == Some(query::executor::TXN_CONFLICT_MESSAGE)
+                && body.get("outcome").and_then(Value::as_str)
+                    == Some("transaction_conflict_aborted")
         })
     })
 }
@@ -333,6 +334,9 @@ mod tests {
     #[test]
     fn confirmed_commit_conflict_requires_the_pinned_error_body() {
         assert!(is_confirmed_commit_conflict(
+            br#"{"error":"transaction conflict. Please retry","outcome":"transaction_conflict_aborted"}"#
+        ));
+        assert!(!is_confirmed_commit_conflict(
             br#"{"error":"transaction conflict. Please retry"}"#
         ));
         assert!(!is_confirmed_commit_conflict(
@@ -342,7 +346,7 @@ mod tests {
             b"transaction conflict. Please retry"
         ));
         assert!(!is_confirmed_commit_conflict(
-            br#"{"error":"transaction conflict. Please retry","other":true}"#
+            br#"{"error":"transaction conflict. Please retry","outcome":"unknown"}"#
         ));
         assert!(!is_confirmed_commit_conflict(
             br#"{"error":"transaction conflict. please retry"}"#
