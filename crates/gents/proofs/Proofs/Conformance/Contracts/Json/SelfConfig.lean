@@ -165,8 +165,8 @@ def selfConfigScopeEditCasesJson : String := Id.run do
     [("none", []), ("agent-only", ["agent"]), ("tools-only", ["tools"]),
      ("catalog-only", ["node"]), ("catalog-and-agent", ["node", "agent"]),
      ("catalog-and-tools", ["node", "tools"]), ("agent-and-tools", ["agent", "tools"]),
-     ("engineer", ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation"])]
-  let documents := ["agent", "tools", "profile", "backend", "automation"]
+     ("engineer", SelfConfig.effectiveCategories SelfConfig.engineerGroup)]
+  let documents := ["agent", "tools", "profile", "backend", "automation", "policy"]
   let scopes : List (String × SelfConfig.Scope) := [("own", .own), ("foreign", .foreign)]
   let mut rows : List String := []
   for (setName, categories) in categorySets do
@@ -205,7 +205,9 @@ def selfConfigScopeOfCasesJson : String := Id.run do
       ++ ",\"scope\":" ++ jsonString (if SelfConfig.scopeOf invoking target shared == .own then "own" else "foreign") ++ "}")
 
 def selfConfigScopeCasesJson : String :=
-  "{\"edit\":" ++ selfConfigScopeEditCasesJson
+  "{\"categories\":" ++ jsonStringArray SelfConfig.selfConfigCategories
+    ++ ",\"default_categories\":" ++ jsonStringArray SelfConfig.defaultCategories
+    ++ ",\"edit\":" ++ selfConfigScopeEditCasesJson
     ++ ",\"groups\":" ++ selfConfigScopeGroupCasesJson
     ++ ",\"scope_of\":" ++ selfConfigScopeOfCasesJson ++ "}"
 

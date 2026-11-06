@@ -254,6 +254,32 @@ mod scope_tests {
     }
 
     #[test]
+    fn category_vocabulary_is_the_modeled_vocabulary() {
+        let LeanSelfConfigScopeCases {
+            categories,
+            default_categories,
+            ..
+        } = &crate::lean_vocab_test::lean_contract_snapshot().self_config_scope_cases;
+        let sorted = |names: &[&str]| {
+            let mut names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
+            names.sort();
+            names
+        };
+        let mut modeled = categories.clone();
+        modeled.sort();
+        assert_eq!(
+            sorted(&crate::store::config_client::patch::SELF_CONFIG_CATEGORIES),
+            modeled
+        );
+        let mut modeled = default_categories.clone();
+        modeled.sort();
+        assert_eq!(
+            sorted(&crate::store::config_client::patch::DEFAULT_SELF_CONFIG_CATEGORIES),
+            modeled
+        );
+    }
+
+    #[test]
     fn engineer_preset_is_the_modeled_engineer_group() {
         let LeanSelfConfigScopeCases { groups, .. } =
             &crate::lean_vocab_test::lean_contract_snapshot().self_config_scope_cases;

@@ -62,9 +62,21 @@ def createdGroup : SelfConfigGroup := ⟨false, none⟩
 
 def cloneGroup (_source : SelfConfigGroup) : SelfConfigGroup := createdGroup
 
-/-- The bundled Engineer preset (`engineer-self-config.json`). -/
+/-- The bundled Engineer preset (`engineer-self-config.json`), and the only
+group that holds every category out of the box.
+
+Decision: the Engineer holds every self-config category, the agent catalog
+(`node`) and the held-bounded `policy` category, so it can configure itself,
+configure other Agents and shared documents, and manage relationships through
+its `Identity.GrantSets.GrantSet.policyDelegate` set. It is the full
+`selfConfigCategories` list by definition, so adding a category gives it to the
+Engineer and to nobody else. Agents the Engineer or the User creates or clones
+start from `createdGroup`; a later explicit grant gives self-config (own only)
+or the catalog. Capability comes from these grants alone: no Agent name or
+tag widens them, and none of them is native admin, which only the client key
+holds (`Identity.GrantSets.only_init_user_is_admin`). -/
 def engineerGroup : SelfConfigGroup :=
-  ⟨true, some ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation"]⟩
+  ⟨true, some selfConfigCategories⟩
 
 /-- Creating or cloning an Agent adds an Agent to the node, which is catalog
 management. -/
@@ -145,6 +157,21 @@ theorem engineer_edits_own_tools_and_catalog :
     mayEdit (effectiveCategories engineerGroup) "tools" .foreign = true ∧
     mayEdit (effectiveCategories engineerGroup) agentCategory .foreign = true ∧
     mayCreateAgent (effectiveCategories engineerGroup) = true := by
+  decide
+
+theorem engineer_holds_every_category :
+    effectiveCategories engineerGroup = selfConfigCategories := rfl
+
+theorem engineer_holds_catalog_and_policy :
+    catalogCategory ∈ effectiveCategories engineerGroup ∧
+    policyResourceExposed (effectiveCategories engineerGroup) = true := by
+  decide
+
+/-- Holding the agent catalog never stands in for the own category: the
+Engineer edits its own documents through each document's category. -/
+theorem engineer_edits_own_documents_of_every_category :
+    selfConfigCategories.all (fun c => mayEdit (effectiveCategories engineerGroup) c .own) =
+      true := by
   decide
 
 theorem own_only_grant_cannot_reach_others :

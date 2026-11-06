@@ -15,9 +15,21 @@ abbrev Target.collectionName (t : Target) := ConfigDocuments.Collection.collecti
 abbrev Target.uniqueField (t : Target) := ConfigDocuments.Collection.uniqueField t
 abbrev Target.category (t : Target) := ConfigDocuments.Collection.category t
 
+/-- Every self-config category. `node` is the agent catalog: the grant that
+reaches another Agent's configuration and shared documents
+(`SelfConfig.requiredCategories`). `policy` exposes the policy resource and is
+held-bounded (`SelfConfig.Grants.policy`). The Engineer holds exactly this list
+(`SelfConfig.engineerGroup`); the Rust `SELF_CONFIG_CATEGORIES` and the
+Engineer preset are checked against it. -/
 def selfConfigCategories : List String :=
   ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation", "policy"]
+/-- The categories an enabled group selects when its list is absent: own
+configuration only, never the catalog or `policy`, so enabling self-config
+without naming categories cannot reach another Agent or delegate grants. -/
 def defaultCategories : List String := ["agent", "tools", "profile"]
+
+theorem default_categories_exclude_catalog_and_policy :
+    "node" ∉ defaultCategories ∧ "policy" ∉ defaultCategories := by decide
 
 /-- The `policy` resource (`get`, `check`, `explain`, `grant`, `revoke`) is
 exposed exactly when its category is selected. Admission of each grant is
