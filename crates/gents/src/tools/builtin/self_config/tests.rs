@@ -2214,20 +2214,9 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
 
 #[tokio::test]
 async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
-    let node = build_agent_node().await;
-    let identity = node_identity("datastore-config");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    let mut grants = config(&["tools"]);
-    grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("datastore-config").await;
+    fixture.grant_selected_configuration().await;
+    let tools = fixture.tools(&["tools"]);
     let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect();
     let expected_help = call_config_tool(&tools, command(&["help", "datastore"]))
         .await
@@ -2387,9 +2376,9 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     assert!(actual.contains("Jobs"));
     assert!(actual.contains("user:keep"));
     assert!(!actual.contains("Duplicate"));
-    node.add_collection("type ConfiguredWork { message: String }")
-        .await
-        .unwrap();
+    fixture
+        .add_collection("type ConfiguredWork { message: String }")
+        .await;
     let entries = r#"entries=[{"tool_name":"submit_work","collection":"ConfiguredWork","fields":[{"name":"message","required":true}]}]"#;
     call_config_tool(
         &tools,
@@ -2418,7 +2407,7 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     )
     .await
     .is_err());
-    let core = SelfConfigCore::new(node.clone(), owner, "beh-test".into()).unwrap();
+    let core = fixture.core();
     core.apply(tools_request(
         &core,
         vec![(
@@ -2586,21 +2575,11 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
 
 #[tokio::test]
 async fn config_errors_name_the_next_call() {
-    let node = build_agent_node().await;
-    let identity = node_identity("next-call");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    crate::test_support::install_test_agent(&node, &owner, &format!("{owner}:builder")).await;
-    let mut grants = config(&["node", "tools"]);
-    grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("next-call").await;
+    fixture.grant_selected_configuration().await;
+    let builder = fixture.install_sibling("Builder").await;
+    fixture.grant_node_reader().await;
+    let tools = fixture.tools(&["node", "tools"]);
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -2613,7 +2592,7 @@ async fn config_errors_name_the_next_call() {
         serde_json::from_str::<Value>(&error.to_string()).unwrap()
     };
 
-    let skill = failure(json!({"argv":["agent","context","preview"],"options":{"agent":"builder"},"set":{"skill_ids":["eval-coding-check"]}})).await;
+    let skill = failure(json!({"argv":["agent","context","preview"],"options":{"agent":builder},"set":{"skill_ids":["eval-coding-check"]}})).await;
     let message = skill["error"].as_str().unwrap();
     assert!(
         message.starts_with("Skill \"eval-coding-check\" does not exist yet"),
@@ -2632,7 +2611,7 @@ async fn config_errors_name_the_next_call() {
         .unwrap();
     assert_eq!(skill["config_execution"]["mutation_entered"], false);
 
-    let tools_ref = failure(json!({"argv":["agent","context","preview"],"options":{"agent":"builder"},"set":{"tools_id":"proposed-tools"}})).await;
+    let tools_ref = failure(json!({"argv":["agent","context","preview"],"options":{"agent":builder},"set":{"tools_id":"proposed-tools"}})).await;
     let message = tools_ref["error"].as_str().unwrap();
     assert!(
         message.contains("create it with its own resource command first"),
@@ -2648,7 +2627,7 @@ async fn config_errors_name_the_next_call() {
         .unwrap();
 
     let aliased = tool
-        .call(json!({"argv":["agent","context","preview","edit"],"options":{"agent":"builder"},"set":{"skill_ids":[]}}).to_string())
+        .call(json!({"argv":["agent","context","preview","edit"],"options":{"agent":builder},"set":{"skill_ids":[]}}).to_string())
         .await
         .unwrap();
     assert!(aliased.contains("\"committed\": false"), "{aliased}");
@@ -2665,9 +2644,9 @@ async fn config_errors_name_the_next_call() {
     let named = failure(json!({"argv":["agent","get","Builder"]})).await;
     assert_eq!(
         named["error"],
-        "unknown agent_did \"Builder\"; did you mean \"builder\"?"
+        format!("unknown agent_did \"Builder\"; did you mean {builder:?}?")
     );
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "beh-test".into()).unwrap();
+    let core = fixture.core();
     core.apply(agent_request(
         &core,
         vec![("display_name".into(), Some(json!("Night Shift")))],
@@ -2677,17 +2656,25 @@ async fn config_errors_name_the_next_call() {
     let display = failure(json!({"argv":["agent","get","night shift"]})).await;
     assert_eq!(
         display["error"],
-        "unknown agent_did \"night shift\"; did you mean \"beh-test\"?"
+        format!(
+            "unknown agent_did \"night shift\"; did you mean {:?}?",
+            fixture.agent_did()
+        )
     );
     let unknown = failure(json!({"argv":["agent","get","nobody"]})).await;
     assert!(
         unknown["error"]
             .as_str()
             .unwrap()
-            .contains(r#"copy an exact ID from ["agent","list"]"#),
+            .contains(r#"copy an exact DID from ["agent","list"]"#),
         "{unknown}"
     );
-    node.shutdown().await.expect("shut down test node");
+    fixture
+        .db
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
 }
 
 #[tokio::test]
