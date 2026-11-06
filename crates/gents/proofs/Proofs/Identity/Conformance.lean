@@ -1625,6 +1625,10 @@ def json : Json := Json.mkObj
    ("tool_grantor_cases", toJson ([toolGrantorCaseJson userDid true,
       toolGrantorCaseJson agentDid true, toolGrantorCaseJson userDid false])),
    ("tool_operation_cases", toJson toolOperationCases),
+   ("managed_tool_identity_cases", toJson ([("matched", "agent", "agent"),
+      ("foreign", "user", "agent"), ("empty", "", "agent")].map fun (name, claimed, derived) =>
+      Json.mkObj [("name", toJson name),
+        ("allowed", toJson (Configuration.managedToolSourceMatches claimed derived))])),
    ("policy_yaml", toJson policyYaml),
    ("objects", toJson (initial.objects.map objectJson)),
    ("relations", toJson (initial.relations.map relationJson)), ("enrolled", toJson ([] : List String)),

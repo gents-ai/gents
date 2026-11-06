@@ -389,6 +389,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn user_signed_configuration_cannot_grant_schema_to_foreign_identity() -> anyhow::Result<()> {
+        use crate::store::config_client::{ConfigAccess, GraphqlEndpoint};
+        use serde_json::json;
+
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("runtime");
+        let runtime = crate::KeyIdentity::load_or_create(&path, None)?;
+        let user = crate::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
+        let binding = crate::store::identity::provision_agent_identity(&runtime)?;
+        let key = crate::store::identity::load_file_identity(&path)?.private_key_bytes();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let projector = Arc::new(super::super::runtime_document_projection::RuntimeDocumentProjector::new(
+            runtime.did(), crate::tools::surface::ToolCeiling::meta_only(),
+        )?);
+        let node = Arc::new(defra_node::Node::builder()
+            .with_node_identity_did(runtime.did())
+            .with_signing_key(defra_node::SigningKey::Ed25519(key))
+            .with_node_acp_enabled()
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .with_document_projector(projector).build().await?);
+        crate::ensure_runtime_schemas(&node).await?;
+        let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+        let user_did = identity::Did::new(user.did())?;
+        for permission in [NodePermission::CollectionGet, NodePermission::DocumentRead, NodePermission::DocumentUpdate] {
+            owner.grant_node_permission(&user_did, permission).await?;
+        }
+        let access = ConfigAccess::Graphql(GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"), user.did(),
+        ).with_client_signing_capability(user.client_signing_capability()?)?.with_client_signed_agent_creates());
+        for (collection, mutation, input) in [
+            (crate::Collection::Tools, "mutation($input: ToolsMutationInputArg!) { create_Tools(input: $input) { _docID _version { cid } } }", json!({"node_did":runtime.did(),"tools_id":"tools","built_ins":{"enable_schema_tool":true}})),
+            (crate::Collection::AgentContext, "mutation($input: AgentContextMutationInputArg!) { create_AgentContext(input: $input) { _docID _version { cid } } }", json!({"node_did":runtime.did(),"context_id":"context","tools_id":"tools"})),
+            (crate::Collection::Agent, "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID _version { cid } } }", json!({"node_did":runtime.did(),"agent_did":user.did(),"creation_nonce":binding.creation_nonce,"context_id":"context","enabled":true})),
+        ] {
+            access.transact_write("test.user_signed_tool_configuration", |txn| {
+                let input = &input;
+                Box::pin(async move { txn.execute_desired_state_mutation(mutation, &json!({"input":input}), collection, true).await })
+            }).await?;
+        }
+        let cases = crate::lean_vocab_test::lean_identity_household_cases().iter()
+            .find(|case| case.name == "configuration-explicit-grants").unwrap();
+        let allowed = cases.managed_tool_identity_cases.iter()
+            .find(|case| case["name"] == "foreign").unwrap()["allowed"].as_bool().unwrap();
+        assert_eq!(node.nac_manager().check_permission(&user_did, NodePermission::CollectionPatch).await?, allowed);
+        node.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn selected_schema_tool_grants_and_revokes_only_its_native_source() -> anyhow::Result<()>
     {
         let (_directory, runtime, node) = projection_node().await?;
