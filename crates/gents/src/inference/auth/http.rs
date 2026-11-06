@@ -341,13 +341,19 @@ mod tests {
             CLAUDE_OAUTH_PROVIDER,
         };
         use crate::inference::auth::credential::{
-            remove_account_in_txn, store_sign_in, test_support::test_node, AccountPick,
-            OAuthRefreshKind, SignInResult,
+            remove_account_in_txn, store_sign_in, AccountPick, OAuthRefreshKind, SignInResult,
         };
-        use crate::store::config_client::ConfigAccess;
-        let node = test_node().await;
-        let access = ConfigAccess::local(node.clone());
-        let did = "did:key:z6MkTestRebuiltClient";
+        use crate::store::config_client::{ConfigAccess, NodePermission};
+        use crate::store::identity::NodeIdentity;
+        let (db, user, access) =
+            crate::test_support::signed_test_node_without_agent("rebuilt-oauth-client").await;
+        let node = db.node.clone();
+        let did = db.node_identity.did();
+        let runtime = ConfigAccess::local_as(node.clone(), did.parse().unwrap());
+        runtime
+            .grant_node_permission(&user.did().parse().unwrap(), NodePermission::DocumentDelete)
+            .await
+            .unwrap();
         let sign_in = |who: &str, expires_in| {
             credential_from_login_tokens(
                 did,
@@ -380,8 +386,7 @@ mod tests {
         let (bearer, _) = bootstrap().await.unwrap();
         assert_eq!(bearer.current_bearer().await.unwrap(), "access-a");
 
-        ConfigAccess::write_local(
-            &node,
+        runtime.write(
             "test.same_document",
             &format!(
                 r#"mutation {{ update_OAuthCredential(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ access_token: "access-a-stored" }}) {{ _docID }} }}"#,
