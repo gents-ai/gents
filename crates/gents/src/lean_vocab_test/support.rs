@@ -471,6 +471,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) lsp_action_cases: Vec<LeanLspActionCase>,
     pub(crate) self_config_field_tables: Vec<LeanSelfConfigFieldTable>,
     pub(crate) self_config_resource_read_exposure_cases: Vec<serde_json::Value>,
+    pub(crate) policy_resource_exposure_cases: Vec<serde_json::Value>,
     pub(crate) self_config_cases: Vec<LeanSelfConfigCase>,
     pub(crate) agent_decision_cases: Vec<LeanAgentDecisionCase>,
     pub(crate) agent_materialization_cases: Vec<LeanAgentMaterializationCase>,

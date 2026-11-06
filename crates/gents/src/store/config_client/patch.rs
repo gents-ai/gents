@@ -21,7 +21,7 @@ pub enum SelfConfigTarget {
     DatastoreToolSurface,
     Skill,
 }
-pub const SELF_CONFIG_CATEGORIES: [&str; 7] = [
+pub const SELF_CONFIG_CATEGORIES: [&str; 8] = [
     "agent",
     "tools",
     "profile",
@@ -29,6 +29,7 @@ pub const SELF_CONFIG_CATEGORIES: [&str; 7] = [
     "mcp_service",
     "automation",
     "node",
+    "policy",
 ];
 pub const DEFAULT_SELF_CONFIG_CATEGORIES: [&str; 3] = ["agent", "tools", "profile"];
 pub const ALL_SELF_CONFIG_TARGETS: [SelfConfigTarget; 17] = [

@@ -41,6 +41,7 @@ pub(super) fn log_config_call(
     let verb = argv.get(1).map(String::as_str).unwrap_or("");
     let reads = [
         "get", "list", "discover", "context", "help", "--help", "-h", "scan", "verify",
+        "check", "explain",
     ];
     if help
         || previewing

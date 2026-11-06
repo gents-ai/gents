@@ -31,6 +31,9 @@ pub(super) fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<
     if pack {
         resources.push("pack");
     }
+    if categories.contains("policy") {
+        resources.push("policy");
+    }
     if pack || categories.contains("tools") {
         resources.push("plugin");
     }

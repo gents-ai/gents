@@ -1843,7 +1843,7 @@ async fn composition_help_and_field_placement_match_the_accepted_calls() {
     );
     assert!(root_help.contains("gents config workspace-root grant-reader --graphql GRAPHQL_URL --path PUBLISHED_ROOT --agent-did AGENT_DID"), "{root_help}");
     assert!(
-        root_help.contains("config tool cannot grant"),
+        root_help.contains("policy grant --collection WorkspaceRoot"),
         "{root_help}"
     );
     let error = structured_failure(&tools, json!({"argv":["execution","create"],"target_id":"limits","options":{"display_name":"Limits"}})).await;
