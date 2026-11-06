@@ -483,7 +483,7 @@ mod tests {
     }
     use super::*;
     use crate::ensure_runtime_schemas;
-    use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+    use crate::request::lifecycle::RequestLifecycle;
     use crate::request::streaming::DefraStreamWriter;
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     use std::time::Duration;
@@ -522,9 +522,11 @@ mod tests {
         (fixture, owner, child)
     }
 
+    /// Reads the row as its owning Agent: ACP hides agent-owned rows from the node identity.
     async fn reload(child: &ToolCallLifecycle, node: &Arc<EmbeddedNode>) -> ToolCallLifecycle {
-        ToolCallLifecycle::load_by_doc_id(
+        ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            child.actor().clone(),
             child.doc_id().unwrap(),
             child.node_did(),
             child.session_id(),
@@ -699,47 +701,24 @@ mod tests {
         }
     }
 
-    async fn claimed_request(
-        node: &Arc<EmbeddedNode>,
-        request_id: &str,
-        session_id: &str,
-        node_did: &str,
-    ) -> RequestLifecycle {
-        let now = crate::store::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let request_id = crate::store::graphql::escape_graphql_string(request_id);
-        let session_id = crate::store::graphql::escape_graphql_string(session_id);
-        let node_did = crate::store::graphql::escape_graphql_string(node_did);
-        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_did: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "cancel fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#)).await;
-        assert!(!created.has_errors(), "{:#?}", created.errors);
-        let row = node.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        )).await;
-        let row: gents_protocol::row::AgentRequestRow =
-            crate::store::graphql::first_row(&row, "AgentRequest")
-                .unwrap()
-                .unwrap();
-        let mut lifecycle = RequestLifecycle::new_with_node_did(
-            node.clone(),
-            "general",
-            &node_did,
-            row.try_into().unwrap(),
-            60,
-        );
-        assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-        lifecycle
-    }
-
     #[cfg(unix)]
     #[tokio::test]
     async fn cancel_background_tool_call_terminalizes_row_and_token() {
+        use crate::store::identity::KeyIdentity;
+        use crate::tools::call::lifecycle::admission_fixture::claimed_signed_request;
+
         let data_path = std::env::temp_dir().join(format!(
             "agent-tool-control-cancel-{}",
             uuid::Uuid::new_v4()
         ));
+        std::fs::create_dir_all(&data_path).unwrap();
+        let node_identity = Arc::new(
+            KeyIdentity::load_or_create(data_path.join("agent.key"), None).unwrap(),
+        );
         let node = Arc::new(
-            crate::test_support::node_builder()
+            defra_node::Node::builder()
                 .data_path(&data_path)
+                .with_node_identity_did(node_identity.did())
                 .build()
                 .await
                 .unwrap(),
@@ -748,8 +727,18 @@ mod tests {
 
         let owner = node.node_identity_did().unwrap().to_owned();
         let node_did = owner.as_str();
-        let mut request = claimed_request(&node, "request-cancel", "session-1", node_did).await;
-        let writer = DefraStreamWriter::new(node.clone(), node_did, Duration::from_millis(1));
+        let mut request = claimed_signed_request(
+            &node,
+            "request-cancel",
+            "session-1",
+            node_identity.as_ref(),
+            None,
+        )
+        .await;
+        let agent = identity::Did::new(request.request().agent_did.as_str()).unwrap();
+        let writer =
+            DefraStreamWriter::new_for_lifecycle(node.clone(), &request, Duration::from_millis(1))
+                .unwrap();
         request.begin_owned_execution(&writer).await.unwrap();
         writer
             .start_provider_attempt(
@@ -797,7 +786,7 @@ mod tests {
             let mut lifecycle = ToolCallLifecycle::from_accepted(
                 node.clone(),
                 node_did.to_string(),
-                None,
+                request.request().requester_did.clone(),
                 accepted,
                 deadline,
                 AwaitMode::Background,
@@ -819,7 +808,12 @@ mod tests {
         }
         let token = tokens["cancel-native-tool"].clone();
         let reservation = reservations.remove("cancel-native-tool").unwrap();
-        let physical = ToolCallLifecycle::load(node.clone(), "session-1", "cancel-native-tool")
+        let physical = ToolCallLifecycle::load_as(
+            node.clone(),
+            agent.clone(),
+            "session-1",
+            "cancel-native-tool",
+        )
             .await
             .unwrap()
             .unwrap()
@@ -893,7 +887,12 @@ mod tests {
         assert!(token.is_cancelled());
         worker.await.unwrap();
 
-        let row = ToolCallLifecycle::load(node.clone(), "session-1", "cancel-native-tool")
+        let row = ToolCallLifecycle::load_as(
+            node.clone(),
+            agent.clone(),
+            "session-1",
+            "cancel-native-tool",
+        )
             .await
             .unwrap()
             .expect("tool row");
@@ -908,7 +907,12 @@ mod tests {
             !tokens["sibling-native-tool"].is_cancelled(),
             "killing one background task must not signal its sibling"
         );
-        let sibling = ToolCallLifecycle::load(node.clone(), "session-1", "sibling-native-tool")
+        let sibling = ToolCallLifecycle::load_as(
+            node.clone(),
+            agent.clone(),
+            "session-1",
+            "sibling-native-tool",
+        )
             .await
             .unwrap()
             .expect("sibling row");
@@ -960,8 +964,9 @@ mod tests {
             )
             .await
             .unwrap();
-            let row = ToolCallLifecycle::load(
+            let row = ToolCallLifecycle::load_as(
                 admission.node.clone(),
+                admission.tool.actor().clone(),
                 admission.tool.session_id(),
                 admission.tool.tool_call_id(),
             )
@@ -1088,12 +1093,17 @@ mod tests {
                 .unwrap(),
             "owned cancel must win the durable running-state compare"
         );
-        let row_response = node . execute (r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "custom-native-tool" } }, limit: 1) { _docID status lifecycle_state cancel_cause request_id request_doc_id session_id node_did } }"# ,) . await ;
-        assert!(!row_response.has_errors(), "{:#?}", row_response.errors);
-        let row =
-            crate::store::graphql::first_row::<serde_json::Value>(&row_response, "AgentToolCall")
-                .unwrap()
-                .expect("cancelled background tool row");
+        // Rows are agent-owned: read them through the owning Agent's access, since ACP hides them from the node.
+        let agent_access = lifecycle.access().unwrap();
+        let row_response = agent_access
+            .execute(r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "custom-native-tool" } }, limit: 1) { _docID status lifecycle_state cancel_cause request_id request_doc_id session_id node_did } }"#)
+            .await
+            .unwrap();
+        let row = row_response["data"]["AgentToolCall"]
+            .as_array()
+            .and_then(|rows| rows.first())
+            .cloned()
+            .expect("cancelled background tool row");
         assert_eq!(row["lifecycle_state"].as_str(), Some("cancelled"));
         assert_eq!(
             row["cancel_cause"].as_str(),
@@ -1122,17 +1132,12 @@ mod tests {
         );
         let message_key = format!("background-completion-notification:{tool_doc_id}:tool");
         let message_key = crate::store::graphql::escape_graphql_string(&message_key);
-        let notification_response = node . execute (& format ! (r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{message_key}" }} }}, limit: 2) {{ message_key session_id node_did requester_did role }} }}"#)) . await ;
-        assert!(
-            !notification_response.has_errors(),
-            "{:#?}",
-            notification_response.errors
-        );
-        let notifications = crate::store::graphql::rows::<serde_json::Value>(
-            &notification_response,
-            "AgentMessage",
-        )
-        .unwrap();
+        let notification_query = format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{message_key}" }} }}, limit: 2) {{ message_key session_id node_did requester_did role }} }}"#);
+        let notification_response = agent_access.execute(&notification_query).await.unwrap();
+        let notifications = notification_response["data"]["AgentMessage"]
+            .as_array()
+            .cloned()
+            .expect("AgentMessage rows");
         assert_eq!(
             notifications.len(),
             1,
@@ -1148,9 +1153,8 @@ mod tests {
         assert_eq!(notification["role"].as_str(), Some("user"));
         let escaped_session = crate::store::graphql::escape_graphql_string("session-custom");
         let escaped_agent = crate::store::graphql::escape_graphql_string(&node_did);
-        let wake_response = node
-            .execute(&format!(
-                r#"{{
+        let wake_query = format!(
+            r#"{{
                 AgentRequest(
                     filter: {{
                         session_id: {{ _eq: "{escaped_session}" }},
@@ -1160,12 +1164,12 @@ mod tests {
                     limit: 2
                 ) {{ {SIGNED_REQUEST_FIELDS} }}
             }}"#
-            ))
-            .await;
-        assert!(!wake_response.has_errors(), "{:#?}", wake_response.errors);
-        let wakes =
-            crate::store::graphql::rows::<serde_json::Value>(&wake_response, "AgentRequest")
-                .unwrap();
+        );
+        let wake_response = agent_access.execute(&wake_query).await.unwrap();
+        let wakes = wake_response["data"]["AgentRequest"]
+            .as_array()
+            .cloned()
+            .expect("AgentRequest rows");
         assert_eq!(
             wakes.len(),
             1,
