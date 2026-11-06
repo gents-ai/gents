@@ -685,39 +685,32 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
         .find(|case| case["actor"] == "agent" && case["requester"] == "user")
         .unwrap();
     for replacement in [false, true] {
-        let directory = tempfile::tempdir().unwrap();
-        let runtime = KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
-        let user = KeyIdentity::load_or_create(directory.path().join("user.key"), None).unwrap();
-        let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
-        let agent = crate::store::identity::resolve_agent_identity(&runtime, &binding).unwrap();
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(runtime.did())
-                .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
-                .build()
-                .await
-                .unwrap(),
-        );
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        crate::test_support::install_test_agent_binding(
-            &node,
-            runtime.did(),
-            "goal control",
-            &binding,
-        )
-        .await;
-        let agent_access = ConfigAccess::local_managed_agent(
-            node.clone(),
-            ::identity::Did::new(agent.did()).unwrap(),
-            agent.as_ref(),
-        )
-        .unwrap();
-        let owner =
+        let (db, user, client, binding) =
+            crate::test_support::signed_test_node("goal-actor-fence").await;
+        let node = db.node.clone();
+        let runtime = db.node_identity.clone();
+        let agent =
+            crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+        let admin =
             ConfigAccess::local_as(node.clone(), ::identity::Did::new(runtime.did()).unwrap());
-        let agent_doc = super::agent_document_for_test(&owner, runtime.did(), agent.did()).await;
-        owner
+        let actor = ::identity::Did::new(agent.did()).unwrap();
+        for permission in [
+            crate::store::config_client::NodePermission::CollectionGet,
+            crate::store::config_client::NodePermission::DocumentRead,
+            crate::store::config_client::NodePermission::DocumentUpdate,
+            crate::store::config_client::NodePermission::DocumentDelete,
+            crate::store::config_client::NodePermission::DacRelationAdd,
+            crate::store::config_client::NodePermission::DacRelationDelete,
+        ] {
+            admin
+                .grant_node_permission(&actor, permission)
+                .await
+                .unwrap();
+        }
+        let agent_access =
+            ConfigAccess::local_managed_agent(node.clone(), actor, agent.as_ref()).unwrap();
+        let agent_doc = super::agent_document_for_test(&client, runtime.did(), agent.did()).await;
+        client
             .add_actor_relationship(
                 "Agent",
                 &agent_doc,
@@ -726,15 +719,6 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
             )
             .await
             .unwrap();
-        let client = ConfigAccess::Graphql(
-            crate::store::config_client::GraphqlEndpoint::as_principal(
-                format!("http://{address}/api/v0/graphql"),
-                user.did(),
-            )
-            .with_client_signing_capability(user.client_signing_capability().unwrap())
-            .unwrap()
-            .with_client_signed_agent_creates(),
-        );
         let mut spec = RequestSpec::new(
             RequestPurpose::Normal,
             RequestIdentity {
@@ -798,7 +782,7 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
                     }),
                     client_graphs: None,
                 };
-                Box::pin(async move { stage_goal_control(txn, runtime, requested).await })
+                Box::pin(async move { stage_goal_control(txn, runtime.as_ref(), requested).await })
             })
             .await;
         assert_eq!(result.is_ok(), modeled["allowed"].as_bool().unwrap());
@@ -822,7 +806,9 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
             .client_goal_graph_handoff_cases;
         assert_eq!(cases.len(), 7);
         let foreign =
-            KeyIdentity::load_or_create(directory.path().join("foreign.key"), None).unwrap();
+            tokio::task::spawn_blocking(|| crate::support::fixtures::test_identity("goal-foreign"))
+                .await
+                .unwrap();
         for case in cases.iter().filter(|case| case["replacing"] == replacement) {
             let requester: &dyn NodeIdentity = if case["authorized"] == false {
                 &foreign
