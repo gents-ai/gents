@@ -12,6 +12,8 @@ export const deployment: DeploymentView = {
   graphql: null,
   dialSucceeded: true,
   chatSafe: true,
+  leaseExpiresAt: null,
+  operatorAccess: true,
   routes: [],
   pairing: [],
   lastError: null,

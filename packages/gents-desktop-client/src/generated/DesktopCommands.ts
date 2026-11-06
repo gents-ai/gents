@@ -181,6 +181,7 @@ export type DesktopCommands = {
   desktop_config_components_patch: { args: { request: ConfigComponentsPatchRequest }; result: DesktopClientSnapshot };
   desktop_context_delete: { args: { request: ContextDeleteRequest }; result: DesktopClientSnapshot };
   desktop_default_agent_set: { args: { request: DefaultAgentSetRequest }; result: DesktopClientSnapshot };
+  desktop_ended_access_dismiss: { args: { nodeDid: string }; result: DesktopClientSnapshot };
   desktop_event_source_delete: { args: { request: EventSourceDeleteRequest }; result: DesktopClientSnapshot };
   desktop_event_source_save: { args: { request: EventSourceSaveRequest }; result: DesktopClientSnapshot };
   desktop_goal_control: { args: { request: GoalControlRequest }; result: GoalControlResult };

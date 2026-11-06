@@ -1674,6 +1674,10 @@ async fn locally_removed_enrollment_stays_absent_across_reconcile() {
         "revocation removes the outcome and prunes the retirement with it"
     );
     assert!(core.peer_records().await.is_empty());
+    assert!(
+        core.ended_access().await.is_empty(),
+        "a node removed on this desktop first isn't one whose access ended"
+    );
 
     Arc::new(core).shutdown().await.unwrap();
 }
@@ -2169,6 +2173,10 @@ async fn a_saved_peer_removed_for_an_absent_receipt_reinstalls_when_it_returns()
             .is_empty(),
         "an automatic teardown must not retire a generation the operator kept"
     );
+    assert!(
+        core.ended_access().await.is_empty(),
+        "authority still current without its receipt hasn't ended this desktop's access"
+    );
 
     commit_route_receipt(&core, &authority).await;
     let authority_map = reconcile().await;
@@ -2183,6 +2191,25 @@ async fn a_saved_peer_removed_for_an_absent_receipt_reinstalls_when_it_returns()
             .map(|record| record.enrollment_request_digest.as_deref())
             .collect::<Vec<_>>(),
         vec![Some(authority.request.request_digest.as_str())]
+    );
+
+    commit_revision(&core, &authority.revoked).await;
+    reconcile().await;
+    assert!(
+        core.peer_records().await.is_empty(),
+        "a revoked node is torn down"
+    );
+    let ended = core.ended_access().await;
+    assert_eq!(
+        ended
+            .iter()
+            .map(|ended| (ended.node_did.as_str(), ended.reason))
+            .collect::<Vec<_>>(),
+        vec![(
+            authority.request.owner_agent.as_str(),
+            crate::client::EndedAccessReason::Revoked
+        )],
+        "the desktop keeps why its access ended"
     );
 
     Arc::new(core).shutdown().await.unwrap();

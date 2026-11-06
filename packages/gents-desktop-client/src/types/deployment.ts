@@ -8,6 +8,7 @@ export type { AgentUnavailableReasonView } from "../generated/AgentUnavailableRe
 export type { AgentView } from "../generated/AgentView.js";
 export type { SessionSummary } from "../generated/SessionSummary.js";
 export type { DeploymentView } from "../generated/DeploymentView.js";
+export type { EndedAccessView } from "../generated/EndedAccessView.js";
 export type { DesktopClientSnapshot } from "../generated/DesktopClientSnapshot.js";
 export type { DesktopRuntimeSnapshot as RuntimeSnapshot } from "../generated/DesktopRuntimeSnapshot.js";
 export type { TriggerView } from "../generated/TriggerView.js";

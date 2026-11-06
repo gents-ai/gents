@@ -26,4 +26,14 @@ import type { ToolServiceRegistry } from "./ToolServiceRegistry.js";
 import type { Tools } from "./Tools.js";
 import type { TriggerView } from "./TriggerView.js";
 
-export type DeploymentView = { peerId: string, label: string, nodeDid: string, addr: string, source: string | null, graphql: string | null, dialSucceeded: boolean, chatSafe: boolean, routes: Array<ClientRouteStatusView>, pairing: Array<PairingCollectionStatusView>, lastError: string | null, node: NodeView, nodeConfig: Node | null, agentConfigs: Array<Agent>, runtime: RuntimeView | null, nodeReadiness: NodeReadinessView, agents: Array<AgentView>, agentEnvironments: Array<AgentEnvironmentView>, inferenceBackends: Array<InferenceBackendView>, inferenceProfiles: Array<InferenceProfile>, inferenceSampling: Array<InferenceSampling>, inferenceExecution: Array<InferenceExecution>, contexts: Array<AgentContext>, compactions: Array<CompactionConfig>, tools: Array<Tools>, toolServiceRegistries: Array<ToolServiceRegistry>, agentTargets: Array<AgentTargetDocument>, datastoreToolSurfaces: Array<DatastoreToolSurfaceDocument>, skills: Array<SkillView>, tasks: Array<TaskView>, schedules: Array<Schedule>, eventSources: Array<EventSource>, triggers: Array<TriggerView>, sessions: Array<SessionSummary>, mailboxItems: Array<MailboxItemView>, };
+export type DeploymentView = { peerId: string, label: string, nodeDid: string, addr: string, source: string | null, graphql: string | null, dialSucceeded: boolean, chatSafe: boolean,
+/**
+ * When this desktop's authorization on a joined node runs out; none for
+ * a node this desktop reaches without enrollment.
+ */
+leaseExpiresAt: string | null,
+/**
+ * Whether this desktop can change the node's configuration directly,
+ * which only its own runtime or a local node allows.
+ */
+operatorAccess: boolean, routes: Array<ClientRouteStatusView>, pairing: Array<PairingCollectionStatusView>, lastError: string | null, node: NodeView, nodeConfig: Node | null, agentConfigs: Array<Agent>, runtime: RuntimeView | null, nodeReadiness: NodeReadinessView, agents: Array<AgentView>, agentEnvironments: Array<AgentEnvironmentView>, inferenceBackends: Array<InferenceBackendView>, inferenceProfiles: Array<InferenceProfile>, inferenceSampling: Array<InferenceSampling>, inferenceExecution: Array<InferenceExecution>, contexts: Array<AgentContext>, compactions: Array<CompactionConfig>, tools: Array<Tools>, toolServiceRegistries: Array<ToolServiceRegistry>, agentTargets: Array<AgentTargetDocument>, datastoreToolSurfaces: Array<DatastoreToolSurfaceDocument>, skills: Array<SkillView>, tasks: Array<TaskView>, schedules: Array<Schedule>, eventSources: Array<EventSource>, triggers: Array<TriggerView>, sessions: Array<SessionSummary>, mailboxItems: Array<MailboxItemView>, };

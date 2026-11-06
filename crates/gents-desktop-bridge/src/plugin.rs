@@ -159,6 +159,7 @@ where
             tauri_commands::db_explorer::desktop_open_db_explorer,
             tauri_commands::peers::desktop_peer_remove,
             tauri_commands::peers::desktop_peer_rename,
+            tauri_commands::peers::desktop_ended_access_dismiss,
             tauri_commands::peers::desktop_peer_status_fetch,
             tauri_commands::peers::desktop_peer_enroll_status,
             tauri_commands::peers::desktop_p2p_repair,

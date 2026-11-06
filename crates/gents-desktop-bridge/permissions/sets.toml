@@ -148,11 +148,12 @@ permissions = ["allow-desktop-allowed-dirs-add", "allow-desktop-allowed-dirs-rem
 
 [[set]]
 identifier = "fleet-admin"
-description = "Authenticated peer enrollment, removal/rename, and P2P repair"
+description = "Authenticated peer enrollment, removal/rename, ended access, and P2P repair"
 permissions = [
   "allow-desktop-peer-enroll-status",
   "allow-desktop-peer-remove",
   "allow-desktop-peer-rename",
+  "allow-desktop-ended-access-dismiss",
   "allow-desktop-p2p-repair",
 ]
 

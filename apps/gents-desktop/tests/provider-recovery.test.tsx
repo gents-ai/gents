@@ -21,8 +21,24 @@ const api = vi.hoisted(() => ({
 vi.mock("@/app/AppContext", () => ({
   useApp: () => ({ api, actions: { signInToProvider: vi.fn() } }),
 }));
-/* no node in the fleet: the card names nothing it can't find */
-vi.mock("@/hooks/useFleet", () => ({ useFleet: () => null }));
+/* no node in the fleet unless a test lists one's operator access: the card
+   names nothing it can't find */
+const fleet = vi.hoisted(() => ({ operatorAccess: null as boolean | null }));
+vi.mock("@/hooks/useFleet", () => ({
+  useFleet: (select: (state: unknown) => unknown) =>
+    fleet.operatorAccess === null
+      ? null
+      : select({
+          nodeKeys: ["node-1"],
+          nodes: {
+            "node-1": {
+              operatorAccess: fleet.operatorAccess,
+              inferenceProfiles: [],
+              inferenceBackends: [],
+            },
+          },
+        }),
+}));
 
 function plan(overrides: Partial<ProviderRecoveryPlan> = {}): ProviderRecoveryPlan {
   return {
@@ -56,9 +72,20 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ outcome: "applied", message: "Saved", requestId: null });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  fleet.operatorAccess = null;
+});
 
 describe("provider account recovery", () => {
+  it("isn't read on a node this app joined, whose accounts only its own runtime reads", async () => {
+    fleet.operatorAccess = false;
+    const { container } = mount();
+    await act(async () => {});
+    expect(api.fetchProviderRecovery).not.toHaveBeenCalled();
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it.each([
     ["usage_limit", "has reached its usage limit"],
     ["account_disabled", "is disabled"],

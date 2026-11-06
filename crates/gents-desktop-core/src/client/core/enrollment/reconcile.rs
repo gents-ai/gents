@@ -160,8 +160,16 @@ pub(in crate::client::core) async fn reconcile_status_enrollment_approvals(
     for existing in sync_state.records().into_iter().filter(|record| {
         record.source.as_deref() == Some("enrollment") && !outcomes.contains_key(&record.peer_id)
     }) {
+        // Authority that still reads as current, only without its route
+        // receipt, is a teardown the receipt undoes; authority that is gone
+        // ended this desktop's access.
+        let cause = if authority_server_peers.contains(&existing.peer_id) {
+            RemovalCause::Reconciliation
+        } else {
+            RemovalCause::AuthorityEnded
+        };
         let removal = route_manager
-            .remove_peer(sync_state, &existing.peer_id, RemovalCause::Reconciliation)
+            .remove_peer(sync_state, &existing.peer_id, cause)
             .await?;
         if let Some(error) = removal.cleanup_error {
             tracing::warn!(peer_id = %existing.peer_id, error = %error, "revoked enrollment route cleanup will retry");

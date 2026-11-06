@@ -9,6 +9,7 @@ import { clientStatus, createClientStore } from "./clientStore";
 import { createFleetStore } from "./fleetStore";
 import { createSelectionStore } from "./selectionStore";
 import { reconcileSelection } from "./selectionReconcile";
+import { noticeEndedAccess } from "./endedAccessNotices";
 import { createSessionReads } from "./sessionReads";
 import { createSessionStore, holdsRequest } from "./sessionStore";
 import { createProviderStore, type ProviderStore } from "./providerStore";
@@ -102,6 +103,7 @@ export function createDesktopApp({
   observeMailboxAnswerRetirement({ api, stores });
   const drafts = createDraftStore();
   reconcileSelection(stores, actions.selectNode, drafts);
+  noticeEndedAccess(stores.fleet);
   keepSeen(stores);
   watchNotifications(stores);
   return { api, stores, view, drafts, project, trackedRequestId, lifecycle, actions };

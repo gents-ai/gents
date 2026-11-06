@@ -10,6 +10,7 @@ import {
 import { toast } from "sonner";
 import {
   enrollmentActivationMessage,
+  type EndedAccessView,
   type EnrollmentRequestView,
 } from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
@@ -67,12 +68,15 @@ import { errorText } from "../../lib/errorText";
 import { useHidden } from "@/lib/hidden";
 import { usePackGroups } from "./agent/ListDetail";
 import { preferences, useOpenOn } from "@/preferences";
+import { endedAccessDetail, endedAccessTitle, leaseLeft } from "../../hooks/nodeAccess";
+import { shortTime } from "./TranscriptMarker";
 
 export function AgentsScreen() {
   const {
     actions: { removePeer, renamePeer },
   } = useApp();
   const nodes = useFleet(useShallow(fleetNodes));
+  const ended = useFleet((fleet) => fleet.endedAccess);
   const [adding, setAdding] = useState(false);
   const [addingLocal, setAddingLocal] = useState(false);
   const [renaming, setRenaming] = useState<{
@@ -205,31 +209,34 @@ export function AgentsScreen() {
                 )}
               </h2>
             )}
-            {g.nodes.length === 0 && !(g.key === "remote" && waiting.length > 0) && (
-              <div className="mt-3 rounded-2xl border border-dashed border-border px-5 py-4 text-sm text-muted-foreground">
-                <p>
-                  {g.key === "local"
-                    ? "No node runs on this machine; work happens on the remote nodes."
-                    : "No remote nodes paired."}
-                </p>
-                {g.key === "local" &&
-                  bootstrap?.initConfigStatus === "absent" &&
-                  supportsLocalManagedServer() && (
-                    <Button
-                      className="mt-3"
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => setAddingLocal(true)}
-                    >
-                      Set up local node
-                    </Button>
-                  )}
-              </div>
-            )}
+            {g.nodes.length === 0 &&
+              !(g.key === "remote" && (waiting.length > 0 || ended.length > 0)) && (
+                <div className="mt-3 rounded-2xl border border-dashed border-border px-5 py-4 text-sm text-muted-foreground">
+                  <p>
+                    {g.key === "local"
+                      ? "No node runs on this machine; work happens on the remote nodes."
+                      : "No remote nodes paired."}
+                  </p>
+                  {g.key === "local" &&
+                    bootstrap?.initConfigStatus === "absent" &&
+                    supportsLocalManagedServer() && (
+                      <Button
+                        className="mt-3"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setAddingLocal(true)}
+                      >
+                        Set up local node
+                      </Button>
+                    )}
+                </div>
+              )}
             {(g.key !== "hidden" || hiddenOpen) && (
               <ul className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-3">
                 {g.key === "remote" &&
                   waiting.map((r) => <PendingNodeRow key={r.requestId} request={r} />)}
+                {g.key === "remote" &&
+                  ended.map((e) => <EndedNodeRow key={e.nodeDid} ended={e} />)}
                 {g.nodes.map((d) => (
                   <AgentRow
                     key={d.nodeDid}
@@ -494,6 +501,7 @@ const AgentRow = memo(function AgentRow({
   );
   const name = d.node.displayName ?? d.label;
   const online = d.dialSucceeded;
+  const lease = isLocalNode(d, homeDid) ? null : leaseLeft(d.leaseExpiresAt);
   /* the node the app is working with, ringed as the rail's avatar is */
   const active = useSelectedNode()?.nodeDid === d.nodeDid;
   const config = href({
@@ -552,6 +560,22 @@ const AgentRow = memo(function AgentRow({
           {!isWorkingNode(d, homeDid) && d.label !== name && (
             <span className="min-w-0 truncate text-xs text-muted-foreground">
               {d.label}
+            </span>
+          )}
+          {lease && (
+            <span
+              data-testid="node-lease"
+              title={
+                d.leaseExpiresAt
+                  ? new Date(d.leaseExpiresAt).toLocaleString()
+                  : undefined
+              }
+              className={cn(
+                "min-w-0 truncate text-xs",
+                lease.soon ? "text-warning" : "text-muted-foreground",
+              )}
+            >
+              {lease.text}
             </span>
           )}
           {d.lastError && (
@@ -713,6 +737,53 @@ function PendingNodeRow({ request: r }: { request: EnrollmentRequestView }) {
           )}
         </p>
       </div>
+    </li>
+  );
+}
+
+/** A joined node this app can no longer use, kept where its row was so the
+    person learns why it went, until they dismiss it or join again. */
+function EndedNodeRow({ ended }: { ended: EndedAccessView }) {
+  const {
+    actions: { dismissEndedAccess },
+  } = useApp();
+  const [busy, setBusy] = useState(false);
+  const when = shortTime(ended.endedAt);
+  return (
+    <li
+      data-testid="ended-node"
+      className="flex items-center gap-4 rounded-2xl border border-dashed border-border px-5 py-4"
+    >
+      <NodeAvatar name={ended.label} className="size-8 opacity-50 grayscale" />
+      <div className="min-w-0 flex-1">
+        <p className="flex min-w-0 items-baseline gap-3">
+          <span className="truncate font-heading text-base font-medium text-muted-foreground">
+            {ended.label}
+          </span>
+          <span className="min-w-0 truncate text-sm text-muted-foreground">
+            {ended.reason === "expired" ? "Access ran out" : "Access revoked"}
+            {when && <> · {when}</>}
+          </span>
+        </p>
+        <p className="text-sm text-muted-foreground">{endedAccessDetail(ended)}</p>
+      </div>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={busy}
+        aria-label={`Dismiss: ${endedAccessTitle(ended)}`}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await dismissEndedAccess(ended.nodeDid);
+          } catch (error) {
+            toastFailure("Dismiss", error);
+            setBusy(false);
+          }
+        }}
+      >
+        Dismiss
+      </Button>
     </li>
   );
 }

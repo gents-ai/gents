@@ -607,6 +607,18 @@
           "markdownDescription": "Denies the desktop_default_agent_set command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_ended_access_dismiss command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-ended-access-dismiss",
+          "markdownDescription": "Enables the desktop_ended_access_dismiss command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_ended_access_dismiss command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-ended-access-dismiss",
+          "markdownDescription": "Denies the desktop_ended_access_dismiss command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_event_source_delete command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-event-source-delete",
@@ -2143,10 +2155,10 @@
           "markdownDescription": "Allow, change and remove plugin folders, and answer a plugin question\n#### This permission set includes:\n\n- `allow-desktop-allowed-dirs-add`\n- `allow-desktop-allowed-dirs-remove`\n- `allow-desktop-plugin-approval-decide`\n- `allow-desktop-plugin-approval-subscribe`\n- `allow-desktop-plugin-approval-unsubscribe`"
         },
         {
-          "description": "Authenticated peer enrollment, removal/rename, and P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-p2p-repair`",
+          "description": "Authenticated peer enrollment, removal/rename, ended access, and P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-ended-access-dismiss`\n- `allow-desktop-p2p-repair`",
           "type": "string",
           "const": "fleet-admin",
-          "markdownDescription": "Authenticated peer enrollment, removal/rename, and P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-p2p-repair`"
+          "markdownDescription": "Authenticated peer enrollment, removal/rename, ended access, and P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-ended-access-dismiss`\n- `allow-desktop-p2p-repair`"
         },
         {
           "description": "Operations snapshot, health, session provenance, MCP probe\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-session-provenance`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`",

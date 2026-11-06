@@ -17,7 +17,7 @@ use super::{
     p2p_health_materially_changed, ClientPeerStatus, ClientSyncStateSnapshot,
     EnrollmentActivationError, P2PHealth,
 };
-use crate::client::peer_directory::RemovalCause;
+use crate::client::peer_directory::{EndedAccess, RemovalCause};
 use crate::client::{PeerDirectory, PeerRecord};
 
 type LastErrorPatch = (Option<String>, Option<String>);
@@ -363,6 +363,18 @@ impl ClientSyncStateOwner {
         let records = directory.records().to_vec();
         self.publish_persisted_directory(records);
         Ok(removed)
+    }
+
+    pub(super) async fn ended_access(&self) -> Vec<EndedAccess> {
+        self.directory.read().await.ended_access().to_vec()
+    }
+
+    pub(super) async fn dismiss_ended_access(&self, node_did: &str) -> anyhow::Result<bool> {
+        self.directory
+            .write()
+            .await
+            .dismiss_ended_access(node_did)
+            .await
     }
 
     pub(super) async fn complete_removal_if_matches(

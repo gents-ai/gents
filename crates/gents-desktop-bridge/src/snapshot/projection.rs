@@ -306,6 +306,8 @@ mod tests {
                     graphql: Some("http://127.0.0.1/graphql".into()),
                     dial_succeeded: true,
                     chat_safe: true,
+                    lease_expires_at: None,
+                    operator_access: true,
                     pairing: vec![PairingCollectionStatusView {
                         collection_id: "AgentSession".into(),
                         pairing_retry_count: 2,
@@ -453,6 +455,7 @@ mod tests {
                         created_at: "2026-08-25T12:00:00Z".into(),
                     }],
                 }],
+                ended_access: Vec::new(),
             }),
         }
     }
