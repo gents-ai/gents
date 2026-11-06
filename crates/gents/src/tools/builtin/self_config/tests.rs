@@ -4116,41 +4116,14 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
 
 #[tokio::test]
 async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tools() {
-    let identity = node_identity("descendant-root-self-config");
-    let owner = identity.did().to_string();
-    let storage = tempfile::tempdir().expect("node storage");
-    let node = Arc::new(
-        crate::test_support::node_builder()
-            .data_path(storage.path().join("data"))
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .expect("identity-bound node"),
-    );
-    crate::ensure_runtime_schemas(&node)
-        .await
-        .expect("runtime schemas");
-    let seed_binding = crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    let seed_agent = seed_binding.agent_did.clone();
-    let selected_agent =
-        crate::store::identity::resolve_agent_identity(identity.as_ref(), &seed_binding).unwrap();
-    let operator =
-        crate::ConfigAccess::local_as(node.clone(), ::identity::Did::new(&owner).unwrap());
-    operator
-        .transact_write("test.self_config.root_grants", |txn| {
-            let (owner, agent_did) = (&owner, &seed_agent);
-            Box::pin(async move {
-                crate::store::config_client::grant_selected_self_configuration(
-                    txn, owner, agent_did,
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
-    crate::upsert_node(&node, &owner, None, Some(&seed_agent), true, None)
-        .await
-        .expect("bind default agent");
+    let fixture = SelfConfigFixture::new("descendant-root-self-config").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let owner = fixture.node_did().to_owned();
+    let seed_agent = fixture.agent_did().to_owned();
+    let operator = fixture.user_access();
 
     let operator_root = tempfile::tempdir().expect("operator root");
     let selected_root = operator_root.path().join("projects").join("mandrake");
@@ -4173,9 +4146,9 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         .expect("original transcript fixture");
 
     let selected_text = selected_root.to_string_lossy().into_owned();
-    let fixture_actor = ::identity::Did::new(owner.clone()).expect("fixture creator DID");
+    let fixture_actor = ::identity::Did::new(seed_agent.clone()).expect("fixture Agent DID");
     crate::tools::surface::set_workspace_root_with_readers(
-        &operator,
+        operator,
         &owner,
         &selected_text,
         None,
@@ -4192,16 +4165,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         bash_mode: crate::tools::surface::BashMode::Off,
         root: Some(operator_root.path().to_path_buf()),
     };
-    let agent_tools = build_self_config_tools_with_runtime(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(selected_agent),
-        Some(identity.clone()),
-        &tool_config,
-        test_plugins(),
-        None,
-    );
+    let agent_tools = fixture.tools_with_config(&tool_config);
     let profile_id = format!("{seed_agent}:inference");
     let command = |preview: bool| {
         let mut argv = vec!["agent".to_string()];
@@ -4220,7 +4184,6 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
             "readonly".to_string(),
             "--profile".to_string(),
             profile_id.clone(),
-            "--default".to_string(),
         ]);
         argv
     };
@@ -4245,6 +4208,20 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         .iter()
         .find(|agent| agent.agent_did != seed_agent)
         .expect("agent reconciler materialized one agent");
+    fixture
+        .update_signed_configuration(
+            crate::Collection::Node,
+            &owner,
+            json!({"default_agent_did": created.agent_did}),
+        )
+        .await;
+    crate::tools::surface::grant_workspace_root_reader(
+        operator,
+        &selected_text,
+        &created.agent_did,
+    )
+    .await
+    .expect("User grants the created Agent access to the selected root");
     let runtime_view =
         crate::runtime::agent::document_view::load_document_runtime_view(&node, &owner)
             .await
@@ -4318,7 +4295,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         let request_doc_id = crate::write_manual_agent_request(
             &node,
             fixture_actor.clone(),
-            identity.as_ref(),
+            fixture.agent.as_ref(),
             crate::request::lifecycle::ManualRequestTarget {
                 node_did: &owner,
                 agent_did: &created.agent_did,
@@ -4354,13 +4331,12 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         .await
         .expect("run the persisted request through the production owned loop");
         let escaped_request_doc = crate::store::graphql::escape_graphql_string(&request_doc_id);
-        let observed = node
+        let observed = operator
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{escaped_request_doc}"}}}}) {{lifecycle_state failure_reason terminal_output}} }}"#
             ))
             .await;
-        assert!(!observed.has_errors(), "{label}: {:?}", observed.errors);
-        let data = observed.data.as_ref().expect("owned-loop observations");
+        let data = &observed.expect("owned-loop observations")["data"];
         assert!(
             turns.load(std::sync::atomic::Ordering::SeqCst) >= 2,
             "{label}: provider did not receive the tool-result turn; request: {}",
