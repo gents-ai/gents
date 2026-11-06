@@ -2351,29 +2351,7 @@ async fn an_install_naming_an_unresolved_plugin_is_refused_before_writing() {
 async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_plugin_free_pack() {
     use crate::store::identity::NodeIdentity;
 
-    let root = tempfile::tempdir().unwrap();
-    let key = root.path().join("remote-install.key");
-    let identity =
-        tokio::task::spawn_blocking(move || crate::KeyIdentity::load_or_create(key, None))
-            .await
-            .unwrap()
-            .unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(identity.did())
-            .with_node_acp_enabled()
-            .with_http(defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap())
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::documents::ensure_node(&node, identity.did())
-        .await
-        .unwrap();
-    let access = ConfigAccess::graphql_as(endpoint, identity.did());
+    let (_directory, identity, node, access) = super::super::agent_bindings::tests::fixture().await;
     let (_guard, directory) =
         crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
     let manifest_path = directory.join("manifest.json");
@@ -2381,6 +2359,11 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
         serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
     manifest.as_object_mut().unwrap().remove("schemas");
     manifest.as_object_mut().unwrap().remove("inference_slots");
+    manifest["assets"].as_array_mut().unwrap().retain(|asset| {
+        !asset
+            .as_str()
+            .is_some_and(|path| path.starts_with("schemas/"))
+    });
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let (bytes, _) = crate::pack::archive::pack_dir(&directory).unwrap();
     let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
