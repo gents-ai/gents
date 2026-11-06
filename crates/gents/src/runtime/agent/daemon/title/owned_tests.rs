@@ -614,7 +614,7 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
         std::sync::Arc::default(),
         fixture.node.clone(),
         fixture.parent.node_did.clone(),
-        Some(fixture.identity.clone()),
+        Some(fixture.agent_config.agent_identity.clone()),
         &crate::tools::surface::SelfConfigToolConfig {
             enabled: true,
             agent_did: fixture.parent.agent_did.clone(),
