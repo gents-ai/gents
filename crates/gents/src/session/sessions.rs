@@ -8,75 +8,12 @@ pub(crate) async fn stage_plugin_job_session_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<String> {
-    use gents_protocol::request_input::SessionCreationIntent;
-    use gents_protocol::row::AgentRequestRow;
-
-    let source = create
-        .input
-        .started_by
-        .as_ref()
-        .context("job child lacks source")?;
-    let signer = txn
-        .managed_agent_signer()
-        .context("job child requires a managed Agent")?;
-    anyhow::ensure!(
-        create.input.session_creation == Some(SessionCreationIntent::PluginJob)
-            && create.node_did == source.node_did
-            && txn.actor_did() == Some(create.requester_did.as_str())
-            && signer.did() == create.requester_did
-            && create.admission.signer_did == create.requester_did,
-        "job child differs from its authenticated local author"
-    );
-    let candidate = AgentRequestRow {
-        request_id: create.request_id.clone(),
-        requester_did: Some(create.requester_did.clone()),
-        admission_signer_did: Some(create.admission.signer_did.clone()),
-        session_id: Some(create.session_id.clone()),
-        retry_key: create.retry_key.clone(),
-        caused_by_parent_request_doc_id: create.caused_by_parent_request_doc_id.clone(),
-        caused_by_parent_request_id: create.caused_by_parent_request_id.clone(),
-        caused_by_parent_tool_call_doc_id: create.caused_by_parent_tool_call_doc_id.clone(),
-        caused_by_parent_tool_call_id: create.caused_by_parent_tool_call_id.clone(),
-        ..Default::default()
-    };
-    let verified = crate::session::origin::verified_agent_source(txn, &candidate)
-        .await?
-        .context("job child source is unavailable or invalid")?;
-    anyhow::ensure!(
-        verified.node_did == source.node_did
-            && verified.session_id == source.session_id
-            && verified.requester_did == source.requester_did,
-        "job child source differs from its authenticated parent"
-    );
-    anyhow::ensure!(
-        crate::session::origin::plugin_job_creation_binding(txn, &candidate)
-            .await?
-            .is_some(),
-        "job child does not match its pinned spawn"
-    );
-    anyhow::ensure!(
-        load_agent_session_owner_in_txn(txn, &create.node_did, &create.session_id)
-            .await?
-            .is_none(),
-        "job child session identity already exists"
-    );
-    let provenance = gents_protocol::session::SessionProvenance {
-        parent_request_doc_id: create.caused_by_parent_request_doc_id.clone(),
-        started_by: Some(source.clone()),
-        ..Default::default()
-    };
-    let response = txn.execute_client_signed_create(
-        "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
-        &serde_json::json!({"input": {
-            "session_id": create.session_id, "node_did": create.node_did,
-            "requester_did": create.requester_did, "agent_did": create.agent_did,
-            "created_at": create.created_at, "title": create.input.initial_title,
-            "relationships_pending": false, "started_by_node_did": source.node_did,
-            "started_by_session_id": source.session_id, "provenance": provenance
-        }}),
-        gents_protocol::schemas::AGENT_SESSION,
-    ).await?;
-    let session_doc = crate::store::graphql::created_doc_id(&response, "AgentSession")?;
+    let session_doc = stage_caused_session_in_txn(
+        txn,
+        create,
+        gents_protocol::request_input::SessionCreationIntent::PluginJob,
+    )
+    .await?;
     let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
         txn,
         crate::Collection::Agent,
@@ -85,7 +22,7 @@ pub(crate) async fn stage_plugin_job_session_in_txn(
     )
     .await?
     .context("job child Agent is unavailable")?;
-    stage_session_relationships_in_txn(
+    stage_created_session_relationships_in_txn(
         txn,
         &session_doc,
         &agent,
@@ -115,6 +52,13 @@ pub(crate) async fn finalize_plugin_job_session_in_txn(
         .caused_by_parent_request_doc_id
         .as_deref()
         .context("job child lacks parent")?;
+    let row = verify_caused_opening_in_txn(txn, create, session_doc, opening_doc, false).await?;
+    anyhow::ensure!(
+        crate::session::origin::plugin_job_creation_binding(txn, &row)
+            .await?
+            .is_some(),
+        "job child opening differs from its pinned spawn"
+    );
     let mut provenance = SessionProvenance {
         parent_request_doc_id: Some(parent.to_owned()),
         started_by: Some(source.clone()),
@@ -183,6 +127,19 @@ pub(crate) async fn stage_agent_new_session_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<String> {
+    stage_caused_session_in_txn(
+        txn,
+        create,
+        gents_protocol::request_input::SessionCreationIntent::AgentNew,
+    )
+    .await
+}
+
+async fn stage_caused_session_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+    expected: gents_protocol::request_input::SessionCreationIntent,
+) -> Result<String> {
     use gents_protocol::request_input::SessionCreationIntent;
     use gents_protocol::row::AgentRequestRow;
     use gents_protocol::session::SessionProvenance;
@@ -205,7 +162,10 @@ pub(crate) async fn stage_agent_new_session_in_txn(
     anyhow::ensure!(
         txn.actor_did() == Some(create.requester_did.as_str())
             && create.admission.signer_did == create.requester_did
-            && create.input.session_creation == Some(SessionCreationIntent::AgentNew)
+            && create.input.session_creation == Some(expected)
+            && txn
+                .managed_agent_signer()
+                .is_some_and(|signer| signer.did() == create.requester_did)
             && source.node_did == create.node_did
             && !create.node_did.trim().is_empty()
             && !create.agent_did.trim().is_empty()
@@ -218,6 +178,8 @@ pub(crate) async fn stage_agent_new_session_in_txn(
         request_id: create.request_id.clone(),
         requester_did: Some(create.requester_did.clone()),
         admission_signer_did: Some(create.admission.signer_did.clone()),
+        session_id: Some(create.session_id.clone()),
+        retry_key: create.retry_key.clone(),
         caused_by_parent_request_doc_id: create.caused_by_parent_request_doc_id.clone(),
         caused_by_parent_request_id: create.caused_by_parent_request_id.clone(),
         caused_by_parent_tool_call_doc_id: create.caused_by_parent_tool_call_doc_id.clone(),
@@ -233,17 +195,29 @@ pub(crate) async fn stage_agent_new_session_in_txn(
             && verified.requester_did == source.requester_did,
         "agent_new source differs from its authenticated parent"
     );
-    let escaped_tool = escape_graphql_string(tool_doc);
-    let tool = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped_tool}" }} }}, limit: 2) {{ _docID tool_name }} }}"#)).await?;
-    let tool_rows = tool["data"]["AgentToolCall"]
-        .as_array()
-        .context("agent_new tool lookup omitted rows")?;
-    anyhow::ensure!(
-        tool_rows.len() == 1
-            && tool_rows[0]["_docID"] == tool_doc
-            && tool_rows[0]["tool_name"] == crate::tools::native::AGENT_NEW_TOOL_NAME,
-        "agent_new source is not its accepted tool call"
-    );
+    match expected {
+        SessionCreationIntent::AgentNew => {
+            let escaped_tool = escape_graphql_string(tool_doc);
+            let tool = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped_tool}" }} }}, limit: 2) {{ _docID tool_name }} }}"#)).await?;
+            let tool_rows = tool["data"]["AgentToolCall"]
+                .as_array()
+                .context("agent_new tool lookup omitted rows")?;
+            anyhow::ensure!(
+                tool_rows.len() == 1
+                    && tool_rows[0]["_docID"] == tool_doc
+                    && tool_rows[0]["tool_name"] == crate::tools::native::AGENT_NEW_TOOL_NAME,
+                "agent_new source is not its accepted tool call"
+            );
+        }
+        SessionCreationIntent::PluginJob => {
+            anyhow::ensure!(
+                crate::session::origin::plugin_job_creation_binding(txn, &candidate)
+                    .await?
+                    .is_some(),
+                "job child does not match its pinned spawn"
+            );
+        }
+    }
     let existing =
         load_agent_session_owner_in_txn(txn, &create.node_did, &create.session_id).await?;
     anyhow::ensure!(
@@ -268,31 +242,24 @@ pub(crate) async fn stage_agent_new_session_in_txn(
     crate::store::graphql::created_doc_id(&response, "AgentSession").map_err(Into::into)
 }
 
-/// Complete the provisional session before its transaction can commit.
-pub(crate) async fn finalize_agent_new_session_in_txn(
+async fn verify_caused_opening_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     create: &gents_protocol::request_admission::AgentRequestCreate,
     session_doc_id: &str,
     opening_doc_id: &str,
-) -> Result<()> {
+    relationships_pending: bool,
+) -> Result<gents_protocol::row::AgentRequestRow> {
     use gents_protocol::request_admission::AgentRequestAdmissionKind;
-    use gents_protocol::session::{
-        SessionCreationCause, SessionCreationStarter, SessionProvenance,
-    };
-
+    use gents_protocol::session::SessionProvenance;
     let source = create
         .input
         .started_by
         .as_ref()
-        .context("agent_new lacks its source session")?;
+        .context("child lacks its source session")?;
     let parent = create
         .caused_by_parent_request_doc_id
         .as_deref()
-        .context("agent_new lacks its parent request")?;
-    let tool = create
-        .caused_by_parent_tool_call_doc_id
-        .as_deref()
-        .context("agent_new lacks its parent tool")?;
+        .context("child lacks its parent request")?;
     anyhow::ensure!(
         txn.actor_did() == Some(create.requester_did.as_str())
             && create.admission.kind == AgentRequestAdmissionKind::Client
@@ -330,7 +297,7 @@ pub(crate) async fn finalize_agent_new_session_in_txn(
     anyhow::ensure!(
         session_rows.len() == 1
             && session_rows[0]["_docID"] == session_doc_id
-            && session_rows[0]["relationships_pending"] == true
+            && session_rows[0]["relationships_pending"] == relationships_pending
             && session_rows[0]["started_by_node_did"] == source.node_did
             && session_rows[0]["started_by_session_id"] == source.session_id,
         "agent_new provisional immutable starter changed"
@@ -356,6 +323,35 @@ pub(crate) async fn finalize_agent_new_session_in_txn(
             && crate::request::admission::signed_request_matches_create(&row, create)?,
         "agent_new staged opening differs from its signed intent"
     );
+    Ok(row)
+}
+
+/// Complete the provisional session before its transaction can commit.
+pub(crate) async fn finalize_agent_new_session_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+    session_doc_id: &str,
+    opening_doc_id: &str,
+) -> Result<()> {
+    use gents_protocol::session::{
+        SessionCreationCause, SessionCreationStarter, SessionProvenance,
+    };
+
+    let source = create
+        .input
+        .started_by
+        .as_ref()
+        .context("agent_new lacks its source session")?;
+    let parent = create
+        .caused_by_parent_request_doc_id
+        .as_deref()
+        .context("agent_new lacks its parent request")?;
+    let tool = create
+        .caused_by_parent_tool_call_doc_id
+        .as_deref()
+        .context("agent_new lacks its parent tool")?;
+    let row =
+        verify_caused_opening_in_txn(txn, create, session_doc_id, opening_doc_id, true).await?;
     anyhow::ensure!(
         crate::session::origin::agent_new_binding_in_txn(txn, &row, opening_doc_id)
             .await?
