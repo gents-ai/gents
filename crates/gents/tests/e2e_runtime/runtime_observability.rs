@@ -2,22 +2,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::{
-    DocumentRuntimeOptions, Gents, KeyIdentity, NodeIdentity, ProcessLifecycleObserver,
-    ProcessLifecycleState, RuntimeSnapshotObserver, ToolCeiling,
+    ConfigAccess, DocumentRuntimeOptions, Gents, ProcessLifecycleObserver, ProcessLifecycleState,
+    RuntimeSnapshotObserver, ToolCeiling,
 };
 use tokio::sync::watch;
 
-use crate::support::fixtures::bind_default_agent_backend;
+use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::interrupt::TEST_RUNTIME_READY_TIMEOUT;
-use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
-use crate::support::test_db;
+use crate::support::snapshots::{fetch_runtime_snapshot_as, RuntimeSnapshot};
+use crate::support::{managed_agent_fixture, test_db};
 
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
-
-fn test_identity(name: &str) -> KeyIdentity {
-    let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
-    KeyIdentity::load_or_create(path, None).unwrap()
-}
 
 struct RuntimeEventObserver {
     process_state_tx: watch::Sender<ProcessLifecycleState>,
@@ -82,7 +77,7 @@ async fn wait_for_observed<T>(
 }
 
 async fn wait_for_runtime_snapshot<F>(
-    node: &gents::defra_node::Node,
+    access: &ConfigAccess,
     node_did: &str,
     predicate: F,
 ) -> RuntimeSnapshot
@@ -91,7 +86,7 @@ where
 {
     let deadline = tokio::time::Instant::now() + TEST_RUNTIME_READY_TIMEOUT;
     loop {
-        let last_snapshot = fetch_runtime_snapshot(node, node_did).await;
+        let last_snapshot = fetch_runtime_snapshot_as(access, node_did).await;
         if let Some(snapshot) = last_snapshot.as_ref() {
             if predicate(snapshot) {
                 return snapshot.clone();
@@ -109,12 +104,14 @@ where
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
     let db = test_db("runtime-observability").await;
-    let identity = Arc::new(test_identity("runtime-observability"));
-    bind_default_agent_backend(
-        &db.node,
-        identity.did(),
+    let fixture = managed_agent_fixture(&db).await;
+    let identity = db.node_identity.clone();
+    bind_managed_agent_backend(
+        &db,
+        &fixture,
         "backend-runtime-observability",
         UNUSED_BACKEND_ENDPOINT,
+        "default",
     )
     .await;
     let (process_state_tx, mut process_state_rx) =
@@ -150,7 +147,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
         |state| *state == ProcessLifecycleState::Ready,
     )
     .await;
-    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
+    let startup = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
         snapshot.process_state == "ready"
             && snapshot.reconcile_phase == "idle"
             && snapshot.active_generation == 1
@@ -175,11 +172,9 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
     )
     .await;
 
-    gents::store::config_client::ConfigAccess::transact_local_write(
-        &db.node,
-        None,
-        "test.update_context",
-        |txn| {
+    fixture
+        .access
+        .transact_write("test.update_context", |txn| {
             let node_did = &node_did;
             let agent_did = &default_agent_did;
             Box::pin(async move {
@@ -218,10 +213,9 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
                 )?;
                 gents::store::config_client::apply_desired_state_plan(txn, &plan).await
             })
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .await
+        .unwrap();
 
     let expected_fingerprint = agent
         .document_runtime_configuration_fingerprint()
@@ -243,7 +237,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
         *generation >= 2
     })
     .await;
-    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
+    let reconciled = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
         snapshot.process_state == "ready"
             && snapshot.reconcile_phase == "idle"
             && snapshot.active_generation == 2
@@ -257,7 +251,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
     let _ = shutdown_tx.send(true);
     handle.await.unwrap().unwrap();
 
-    let shutdown = fetch_runtime_snapshot(db.node.as_ref(), &node_did)
+    let shutdown = fetch_runtime_snapshot_as(&fixture.access, &node_did)
         .await
         .expect("shutdown runtime snapshot");
     assert_eq!(shutdown.process_state, "shutdown");
