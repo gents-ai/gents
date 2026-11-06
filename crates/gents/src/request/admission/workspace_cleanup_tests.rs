@@ -28,7 +28,7 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     pub(crate) async fn new() -> Self {
-        let db = crate::support::test_signed_db("workspace-rejection").await;
+        let db = crate::support::test_db("workspace-rejection").await;
         let (home, user, user_access, binding) =
             crate::test_support::signed_test_node_from_db(db, "workspace-rejection-user").await;
         let node = home.node.clone();

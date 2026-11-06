@@ -1413,7 +1413,7 @@ async fn controller_block_rejects_same_status_from_an_older_continuation() {
 
 #[tokio::test]
 async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
-    let db = crate::support::test_signed_db("goal-model-create").await;
+    let db = crate::support::test_db("goal-model-create").await;
     let (user, agent) = goal_creation_actors(&db).await;
     let client = db.client_access(&user);
     let created = gents::goal::create_goal_for_session_from_access(
@@ -1499,7 +1499,7 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
 
 #[tokio::test]
 async fn clearing_a_goal_also_clears_its_creation_claim() {
-    let db = crate::support::test_signed_db("goal-model-create-clear").await;
+    let db = crate::support::test_db("goal-model-create-clear").await;
     let (_user, agent) = goal_creation_actors(&db).await;
     let access = ConfigAccess::local_managed_agent(
         db.node.clone(),
@@ -1543,7 +1543,7 @@ async fn clearing_a_goal_also_clears_its_creation_claim() {
 
 #[tokio::test]
 async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_spend() {
-    let db = crate::support::test_signed_db("goal-baseline-prior-usage").await;
+    let db = crate::support::test_db("goal-baseline-prior-usage").await;
     let (user, agent) = goal_creation_actors(&db).await;
     let client = db.client_access(&user);
     let request_doc = goal_fixture_request(&db, &user, &agent, "parent-baseline").await;
@@ -1611,7 +1611,7 @@ async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_
 
 #[tokio::test]
 async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
-    let db = crate::support::test_signed_db("goal-baseline-idempotent").await;
+    let db = crate::support::test_db("goal-baseline-idempotent").await;
     let (user, agent) = goal_creation_actors(&db).await;
     let client = db.client_access(&user);
     let request_doc = goal_fixture_request(&db, &user, &agent, "parent-idempotent").await;
@@ -1701,7 +1701,7 @@ async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
 
 #[tokio::test]
 async fn fresh_goal_with_zero_prior_usage_starts_charging_from_zero() {
-    let db = crate::support::test_signed_db("goal-baseline-zero").await;
+    let db = crate::support::test_db("goal-baseline-zero").await;
     let (user, agent) = goal_creation_actors(&db).await;
     let client = db.client_access(&user);
     let request_doc = goal_fixture_request(&db, &user, &agent, "parent-zero").await;
@@ -2113,7 +2113,7 @@ async fn goal_backed_submission_discards_goal_when_request_staging_fails() {
 
 #[tokio::test]
 async fn concurrent_model_goal_create_converges_to_one_physical_goal() {
-    let db = crate::support::test_signed_db("goal-model-create-concurrent").await;
+    let db = crate::support::test_db("goal-model-create-concurrent").await;
     let (user, _agent) = goal_creation_actors(&db).await;
     let client = db.client_access(&user);
     let left_client = client.clone();

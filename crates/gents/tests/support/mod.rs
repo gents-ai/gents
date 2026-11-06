@@ -268,13 +268,6 @@ pub async fn test_db(name: &str) -> TestDb {
     test_db_from_home(home)
 }
 
-pub async fn test_signed_db(name: &str) -> TestDb {
-    let home = EmbeddedHome::create_temp_with_node_acp(name)
-        .await
-        .expect("signed embedded home");
-    test_db_from_home(home)
-}
-
 pub async fn test_db_in(tempdir: tempfile::TempDir) -> TestDb {
     let home = EmbeddedHome::in_tempdir(tempdir, None)
         .await

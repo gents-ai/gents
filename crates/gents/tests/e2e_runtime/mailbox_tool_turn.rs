@@ -6,11 +6,11 @@ use gents::NodeIdentity;
 
 use crate::support::accepted_turn::boot_prepared_accepted_turn;
 use crate::support::streaming_backend::{StreamChunk, StreamPlan, StreamResponse};
-use crate::support::test_signed_db;
+use crate::support::test_db;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
-    let db = test_signed_db("mailbox-tool-turn").await;
+    let db = test_db("mailbox-tool-turn").await;
     let did = db.node_identity.did().to_string();
     let request_id = "mailbox-tool-turn-request";
     let prompt = "mailbox-tool-turn-prompt";
@@ -151,7 +151,7 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
     use gents_protocol::mailbox_question::{
         MailboxQuestion, MailboxQuestionAnswer, MailboxQuestionOption, MAILBOX_QUESTION_VERSION,
     };
-    let db = test_signed_db("mailbox-question-turn").await;
+    let db = test_db("mailbox-question-turn").await;
     let session_id = "mailbox-question-session";
     let question = MailboxQuestion {
         version: MAILBOX_QUESTION_VERSION,
@@ -289,7 +289,7 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
     use gents_protocol::mailbox_question::{
         MailboxQuestion, MailboxQuestionAnswer, MailboxQuestionOption,
     };
-    let db = test_signed_db("mailbox-question-busy").await;
+    let db = test_db("mailbox-question-busy").await;
     let session_id = "mailbox-question-busy-session";
     let asking = "mailbox-question-busy-request";
     let prompt = "mailbox-question-busy-prompt";

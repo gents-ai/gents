@@ -48,7 +48,7 @@ async fn test_node() -> (
     Arc<dyn crate::store::identity::NodeIdentity>,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
-    let db = crate::support::test_signed_db("execution-lease-fixture").await;
+    let db = crate::support::test_db("execution-lease-fixture").await;
     let (db, _user, _access, agent) =
         crate::test_support::signed_test_node_from_db(db, "execution-lease-owner").await;
     let node = db.node.clone();

@@ -42,9 +42,7 @@ pub(super) async fn install(
     let node_did = home.did().to_string();
     let evaluator = home.evaluator(&spec.evaluator_did)?;
     let schema_access = ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(&node_did)?);
-    if home.node_acp_enabled() {
-        grant_trial_operations(home, &spec.evaluator_did).await?;
-    }
+    grant_trial_operations(home, &spec.evaluator_did).await?;
     let planning_access = ConfigAccess::local_as(
         home.node.clone(),
         ::identity::Did::new(spec.evaluator_did.clone())?,
@@ -83,10 +81,8 @@ pub(super) async fn install(
         .with_context(|| format!("pack has no installed agent slot {:?}", spec.agent_slot))?
         .agent_did
         .clone();
-    if home.node_acp_enabled() {
-        for binding in identity.agent_bindings.values() {
-            grant_trial_operations(home, &binding.agent_did).await?;
-        }
+    for binding in identity.agent_bindings.values() {
+        grant_trial_operations(home, &binding.agent_did).await?;
     }
     let config = bind_inference_slots(&manifest, &config, &spec.inference)
         .context("binding the pack's inference slots to the frozen profile")?;
@@ -202,16 +198,14 @@ pub(super) async fn install(
                 .clone();
         }
     }
-    if home.node_acp_enabled() {
-        let mut owners = std::collections::BTreeSet::new();
-        for fixture in &fixtures.documents {
-            if fixture.session_agent_owned {
-                let agent = fixture.document["agent_did"]
-                    .as_str()
-                    .context("agent-owned fixture session has no agent")?;
-                if owners.insert(agent) {
-                    grant_trial_operations(home, agent).await?;
-                }
+    let mut owners = std::collections::BTreeSet::new();
+    for fixture in &fixtures.documents {
+        if fixture.session_agent_owned {
+            let agent = fixture.document["agent_did"]
+                .as_str()
+                .context("agent-owned fixture session has no agent")?;
+            if owners.insert(agent) {
+                grant_trial_operations(home, agent).await?;
             }
         }
     }

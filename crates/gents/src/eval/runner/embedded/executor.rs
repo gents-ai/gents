@@ -80,7 +80,7 @@ impl EmbeddedExecutor {
     async fn provision_home(&self, spec: &TrialSpec) -> Result<TrialLocator> {
         let dir = spec.trial_dir.join("home");
         let mut home = opened(&self.runtime, move || async move {
-            EmbeddedHome::create_trial_retained(&dir).await
+            EmbeddedHome::create_retained(&dir).await
         })
         .await?;
         if let Some((evaluator, capability)) = &self.evaluator {
@@ -331,7 +331,7 @@ impl TrialExecutor for EmbeddedExecutor {
         let dir = trial_dir.join("home");
         let workspace = workspace_dir(&trial_dir);
         let mut home = match opened(&self.runtime, move || async move {
-            EmbeddedHome::open_trial_retained(&dir).await
+            EmbeddedHome::open_retained(&dir).await
         })
         .await
         {

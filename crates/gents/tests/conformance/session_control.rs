@@ -149,7 +149,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     let interrupt_case = model_case("interrupt_idle");
     let stop_case = model_case("stop_drains");
     let resume_case = model_case("resume_terminal_goal");
-    let db = support::test_signed_db("session-control-generated").await;
+    let db = support::test_db("session-control-generated").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let node_did = db.node_identity.did();
 
@@ -330,7 +330,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
 #[tokio::test]
 async fn generated_resume_after_settlement_stages_the_paused_goal_continuation() {
     let resume_case = model_case("resume_after_settlement");
-    let db = support::test_signed_db("session-control-resume").await;
+    let db = support::test_db("session-control-resume").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let node_did = db.node_identity.did();
     let session_id = uuid::Uuid::new_v4().to_string();

@@ -41,7 +41,6 @@ pub struct EmbeddedHome {
     store_lock: crate::store::local::home::StoreLock,
     backend_admission: crate::store::local::backend_protection::BackendAdmission,
     p2p: Option<P2PConfigForPath>,
-    node_acp_enabled: bool,
     #[allow(dead_code)]
     tempdir: Option<TempDir>,
 }
@@ -74,21 +73,6 @@ impl EmbeddedHome {
         Self::in_tempdir(tempdir, None).await
     }
 
-    /// Create a temporary home with native Node access control enabled.
-    pub async fn create_temp_with_node_acp(prefix: &str) -> Result<Self> {
-        let tempdir = tempfile::Builder::new()
-            .prefix(&format!("gents-{prefix}-"))
-            .tempdir()?;
-        let mut home = Self::open_at_mode(tempdir.path().to_path_buf(), None, true).await?;
-        home.tempdir = Some(tempdir);
-        Ok(home)
-    }
-
-    #[cfg(test)]
-    pub(super) async fn create_trial_temp(prefix: &str) -> Result<Self> {
-        Self::create_temp_with_node_acp(prefix).await
-    }
-
     pub async fn in_tempdir(tempdir: TempDir, p2p: Option<P2PConfigForPath>) -> Result<Self> {
         let mut home = Self::open_at(tempdir.path().to_path_buf(), p2p).await?;
         home.tempdir = Some(tempdir);
@@ -97,12 +81,6 @@ impl EmbeddedHome {
 
     pub async fn create_retained(dir: &Path) -> Result<Self> {
         Self::create_retained_with_p2p(dir, None).await
-    }
-
-    pub(super) async fn create_trial_retained(dir: &Path) -> Result<Self> {
-        ensure!(!dir.exists(), "trial home {} already exists", dir.display());
-        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        Self::open_at_mode(dir.to_path_buf(), None, true).await
     }
 
     pub async fn create_retained_with_p2p(
@@ -124,14 +102,6 @@ impl EmbeddedHome {
     }
 
     async fn open_at(path: PathBuf, p2p: Option<P2PConfigForPath>) -> Result<Self> {
-        Self::open_at_mode(path, p2p, false).await
-    }
-
-    async fn open_at_mode(
-        path: PathBuf,
-        p2p: Option<P2PConfigForPath>,
-        node_acp_enabled: bool,
-    ) -> Result<Self> {
         ensure!(
             !tokio::fs::try_exists(path.join("MANIFEST")).await?,
             "legacy trial store has no backend protection provenance"
@@ -149,16 +119,7 @@ impl EmbeddedHome {
             .await?
             .context("node identity")?,
         );
-        Self::open_with_identity(path, p2p, identity, true, node_acp_enabled).await
-    }
-
-    pub(super) async fn open_trial_retained(dir: &Path) -> Result<Self> {
-        ensure!(
-            dir.join("node.key").exists(),
-            "no trial home at {}",
-            dir.display()
-        );
-        Self::open_at_mode(dir.to_path_buf(), None, true).await
+        Self::open_with_identity(path, p2p, identity, true).await
     }
 
     pub(super) async fn open_for_inspection(dir: &Path, expected_did: &str) -> Result<Self> {
@@ -177,7 +138,7 @@ impl EmbeddedHome {
             "retained trial identity {} does not match recorded DID {expected_did}",
             identity.did()
         );
-        Self::open_with_identity(dir.to_path_buf(), None, identity, false, true).await
+        Self::open_with_identity(dir.to_path_buf(), None, identity, false).await
     }
 
     async fn open_with_identity(
@@ -185,7 +146,6 @@ impl EmbeddedHome {
         p2p: Option<P2PConfigForPath>,
         identity: Arc<dyn NodeIdentity>,
         initialize_schemas: bool,
-        _node_acp_enabled: bool,
     ) -> Result<Self> {
         let did = identity.did().to_string();
         ensure!(
@@ -259,7 +219,6 @@ impl EmbeddedHome {
             store_lock,
             backend_admission,
             p2p,
-            node_acp_enabled: true,
             tempdir: None,
         })
     }
@@ -313,10 +272,6 @@ impl EmbeddedHome {
 
     pub fn path(&self) -> &Path {
         &self.path
-    }
-
-    pub(super) fn node_acp_enabled(&self) -> bool {
-        self.node_acp_enabled
     }
 
     /// The admission is bound to this home's protected native node.
@@ -675,9 +630,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_access_requires_the_held_evaluator_even_after_reopen() {
-        let mut home = EmbeddedHome::create_trial_temp("eval-held-client")
-            .await
-            .unwrap();
+        let mut home = EmbeddedHome::create_temp("eval-held-client").await.unwrap();
         let evaluator =
             Arc::new(KeyIdentity::load_or_create(home.path().join("evaluator.key"), None).unwrap());
         let evaluator_did = evaluator.did().to_owned();

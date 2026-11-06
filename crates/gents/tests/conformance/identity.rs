@@ -449,7 +449,7 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
         })
         .expect("modeled sibling");
 
-    let db = crate::support::test_signed_db("modeled-configuration-native").await;
+    let db = crate::support::test_db("modeled-configuration-native").await;
     let fixture = crate::support::managed_agent_fixture(&db).await;
     let node = db.node.clone();
     let node_did = db.node_identity.did();
@@ -762,7 +762,7 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
     };
     let model_agent = executor("general");
     let model_sibling = executor("sibling");
-    let db = crate::support::test_signed_db("modeled-self-config-native").await;
+    let db = crate::support::test_db("modeled-self-config-native").await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let fixture = crate::support::managed_agent_fixture(&db).await;

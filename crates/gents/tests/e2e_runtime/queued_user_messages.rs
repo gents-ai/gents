@@ -8,7 +8,7 @@ use crate::support::signed_mailbox::{
     prepare_signed_mailbox_turn, request_state_on, wait_for_request_terminal_on, SignedMailboxTurn,
 };
 use crate::support::streaming_backend::{StreamChunk, StreamResponse};
-use crate::support::test_signed_db;
+use crate::support::test_db;
 
 async fn queue_user_message(
     turn: &SignedMailboxTurn,
@@ -33,7 +33,7 @@ async fn queue_user_message(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn messages_queued_behind_a_busy_turn_are_answered_by_one_inference() {
-    let db = test_signed_db("queued-user-messages").await;
+    let db = test_db("queued-user-messages").await;
     let session_id = "queued-user-messages-session";
     let asking = "queued-user-messages-active";
     let prompt = "queued-user-messages-prompt";

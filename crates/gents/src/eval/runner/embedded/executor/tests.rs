@@ -32,7 +32,7 @@ pub(super) async fn configured_trial(
         inference: frozen_binding(json!("frozen-profile")),
         ..TrialSpec::empty_for_tests(name)
     };
-    let mut home = EmbeddedHome::create_trial_temp(name).await.unwrap();
+    let mut home = EmbeddedHome::create_temp(name).await.unwrap();
     bind_test_evaluator(&mut spec, &mut home);
     let agent = install(&spec, &home, &workspace).await.unwrap();
     (home, spec, agent)
@@ -94,9 +94,7 @@ async fn a_declared_slot_the_binding_cannot_fill_is_infrastructure() {
         ..TrialSpec::empty_for_tests("t1")
     };
 
-    let mut home = EmbeddedHome::create_trial_temp("unbindable-slot")
-        .await
-        .unwrap();
+    let mut home = EmbeddedHome::create_temp("unbindable-slot").await.unwrap();
     let evaluator = bind_test_evaluator(&mut spec, &mut home);
     let executor = EmbeddedExecutor::new(
         DocumentRuntimeOptions::default(),
@@ -301,7 +299,7 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
         inference: frozen_binding(json!("frozen-profile")),
         ..TrialSpec::empty_for_tests("recollect")
     };
-    let mut home = EmbeddedHome::create_trial_retained(&trial_dir.join("home"))
+    let mut home = EmbeddedHome::create_retained(&trial_dir.join("home"))
         .await
         .unwrap();
     let evaluator = bind_test_evaluator(&mut spec, &mut home);
@@ -461,7 +459,7 @@ async fn recollect_refuses_a_home_hint_outside_the_runs_directory() {
     let dir = tempfile::tempdir().unwrap();
     let runs_dir = dir.path().join("runs");
     let outside = dir.path().join("outside");
-    let mut home = EmbeddedHome::create_trial_retained(&outside.join("home"))
+    let mut home = EmbeddedHome::create_retained(&outside.join("home"))
         .await
         .unwrap();
     let mut spec = TrialSpec::empty_for_tests("recollect-paths");

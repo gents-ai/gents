@@ -11,7 +11,7 @@ use crate::store::identity::KeyIdentity;
 pub(super) async fn test_node(
     name: &str,
 ) -> (crate::support::TestDb, KeyIdentity, crate::ConfigAccess) {
-    let db = crate::support::test_signed_db(name).await;
+    let db = crate::support::test_db(name).await;
     crate::test_support::signed_test_node_without_agent_from_db(db, name).await
 }
 
