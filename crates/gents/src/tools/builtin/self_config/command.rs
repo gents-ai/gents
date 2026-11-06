@@ -17,6 +17,7 @@ mod inventory;
 mod observe;
 mod pack;
 mod patch;
+mod policy;
 mod reads;
 mod skill;
 mod validate;
@@ -59,6 +60,10 @@ const HELP_INDEX: &[(&str, &str)] = &[
         "connect sources, tasks and triggers; wiring recipes",
     ),
     ("pack", "pack installation"),
+    (
+        "policy",
+        "node permissions and document relationships, delegated as this agent",
+    ),
     (
         "plugin",
         "installed plugin inspection and explicit Tools selection",
@@ -453,6 +458,7 @@ impl ConfigCommandTool {
             "automation" => self.automation(&argv[1..]).await,
             "cleanup" => self.cleanup(&argv[1..]).await,
             "pack" => self.pack(&argv[1..]).await,
+            "policy" => self.policy(&argv[1..]).await,
             "plugin" => self.plugin(&argv[1..]),
             "skill" => self.skill(&argv[1..]).await,
             "discovery" => self.discovery(&argv[1..]).await,

@@ -2,6 +2,7 @@ import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.SelfConfig.Cases
 import Proofs.SelfConfig.Auth
 import Proofs.SelfConfig.Scope
+import Proofs.Identity.GrantSets
 
 namespace Conformance.Contracts
 
@@ -43,6 +44,14 @@ def selfConfigResourceReadExposureCasesJson : String :=
     ",\"exposed\":" ++ scBool (if resource == "effective" then effectiveReadExposed enabled
       else resourceReadExposed enabled target) ++ "}")
 
+def policyResourceExposureCasesJson : String :=
+  let cases : List (List String) :=
+    [[], ["policy"], ["agent", "tools", "profile"], ["node", "policy"],
+     ["backend", "mcp_service", "automation", "policy"]]
+  jsonArray (cases.map fun categories =>
+    "{\"categories\":" ++ jsonStringArray categories ++
+    ",\"exposed\":" ++ scBool (policyResourceExposed categories) ++ "}")
+
 def fieldValuePairJson (entry : FieldKey × FieldValue) : String :=
   "{"
     ++ "\"field\":" ++ jsonString entry.1 ++ ","
@@ -70,7 +79,42 @@ def selfConfigBackendJson (entry : String × String × String) : String :=
   ++ "}"
 
 def selfConfigGrantsJson (g : Grants) : String :=
-  "{\"pack_install\":" ++ scBool g.packInstall ++ "}"
+  "{\"pack_install\":" ++ scBool g.packInstall ++ ",\"policy\":" ++ scBool g.policy ++ "}"
+
+/-- Every combination of the policy grant bit on the candidate, the stored Tools and
+the invoker, with pack installation off. Rust `OperatorGrants::bounded_by` must
+match `Grants.boundedBy` on each row. -/
+def policyGrantBoundCasesJson : String :=
+  let bools := [false, true]
+  jsonArray <| bools.flatMap fun candidate => bools.flatMap fun stored =>
+    bools.map fun held =>
+      let c : Grants := { Grants.bot with policy := candidate }
+      let s : Grants := { Grants.bot with policy := stored }
+      let h : Grants := { Grants.bot with policy := held }
+      "{\"candidate_policy\":" ++ scBool candidate
+        ++ ",\"stored_policy\":" ++ scBool stored
+        ++ ",\"held_policy\":" ++ scBool held
+        ++ ",\"accepted\":" ++ scBool (c.boundedBy s h) ++ "}"
+
+/-- The node permissions a no-lockout Agent keeps against its own revoke, and for
+each permission and change, whether the lockout guard keeps it. Rust
+`policy::keeps_lockout` must agree on every row. -/
+def policyLockoutCasesJson : String :=
+  let permissions := (Identity.GrantSets.lockoutProtected ++ ["patch-collection"]).eraseDups
+  let rows := permissions.flatMap fun p =>
+    [false, true].flatMap fun delete =>
+      [false, true].flatMap fun noLockout =>
+        [false, true].map fun isSelf =>
+          let change : Identity.GrantSets.Change :=
+            ⟨.permission p, delete, true, false⟩
+          "{\"permission\":" ++ jsonString p
+            ++ ",\"delete\":" ++ scBool delete
+            ++ ",\"no_lockout\":" ++ scBool noLockout
+            ++ ",\"is_self\":" ++ scBool isSelf
+            ++ ",\"kept\":"
+            ++ scBool (Identity.GrantSets.selfChangeKeepsLockout noLockout isSelf change) ++ "}"
+  "{\"protected\":" ++ jsonStringArray Identity.GrantSets.lockoutProtected
+    ++ ",\"rows\":" ++ jsonArray rows ++ "}"
 
 def selfConfigSelectionJson : Option (List (FieldKey × FieldValue)) → String
   | none => "null"

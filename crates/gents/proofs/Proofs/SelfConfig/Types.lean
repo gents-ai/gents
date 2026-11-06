@@ -16,8 +16,20 @@ abbrev Target.uniqueField (t : Target) := ConfigDocuments.Collection.uniqueField
 abbrev Target.category (t : Target) := ConfigDocuments.Collection.category t
 
 def selfConfigCategories : List String :=
-  ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation"]
+  ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation", "policy"]
 def defaultCategories : List String := ["agent", "tools", "profile"]
+
+/-- The `policy` resource (`get`, `check`, `explain`, `grant`, `revoke`) is
+exposed exactly when its category is selected. Admission of each grant is
+decided by `Identity.GrantSets.policyToolAdmits`, never by the category alone. -/
+def policyResourceExposed (categories : List String) : Bool :=
+  categories.contains "policy"
+
+theorem policy_resource_needs_category :
+    policyResourceExposed ["agent", "tools", "node"] = false := by decide
+
+theorem policy_resource_exposed_with_category :
+    policyResourceExposed ["policy"] = true := by decide
 
 /-- A resource category exposes its read commands. Document access remains
 subject to native authorization for the invoking actor. -/

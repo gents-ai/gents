@@ -7431,7 +7431,10 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         assert!(format!("{:#}", result.unwrap_err()).contains("cannot be self-granted"));
     }
     fixture.grant_pack_install().await;
-    let holder = core.with_held_grants(ops::OperatorGrants { pack_install: true });
+    let holder = core.with_held_grants(ops::OperatorGrants {
+        pack_install: true,
+        policy: false,
+    });
     holder
         .apply(protect_working_agent(
             agent_request(&holder, vec![("context_id".into(), Some(json!(context)))]),

@@ -193,6 +193,26 @@ impl SelfConfigCore {
         )?)
     }
 
+    /// The access the policy resource uses. Native grants and revokes act only as
+    /// this Agent's own managed signer: without one the command fails, and it
+    /// never falls back to the Agent identity alone or to the Node.
+    pub(crate) fn managed_access(&self) -> Result<ConfigAccess> {
+        let signer = self
+            .agent_signer
+            .clone()
+            .ok_or(crate::store::config_client::ConfigClientError::ManagedAgentSignerRequired)?;
+        let actor = self.identity()?;
+        anyhow::ensure!(
+            actor.as_str() != self.node_did,
+            "policy acts as an agent; this agent's DID is the node's DID"
+        );
+        Ok(ConfigAccess::local_with_agent_signer(
+            self.node.clone(),
+            actor,
+            signer,
+        )?)
+    }
+
     pub(crate) fn with_runtime_identity(
         mut self,
         identity: Option<Arc<dyn crate::NodeIdentity>>,

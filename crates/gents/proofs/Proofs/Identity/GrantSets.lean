@@ -320,4 +320,141 @@ theorem baseline_survives_tool_removal (o : AgentObservation) (tools direct : Li
   rw [live, base]
   simp
 
+/-! ### The policy resource
+
+The config tool's `policy` resource (`get`, `check`, `explain`, `grant`,
+`revoke`) runs only with the `policy` category selected and only as the calling
+Agent's own signer. It adds no tool-derived native source: a policy grant is
+admitted by the Agent's direct grants through the native held-bounded rule, so
+the Engineer's authority is its `policyDelegate` set and nothing else. -/
+
+/-- Selected by the Engineer preset; other Agents receive it only by explicit
+configuration. -/
+def policyCategory : String := "policy"
+
+/-- One policy grant or revoke issued through the config tool. The category gate
+is necessary, and native admission is exactly `admits`, so the tool can refuse
+nothing the native rule would allow and allow nothing it would refuse. -/
+def policyToolAdmits (categories : List String) (actor : Holder) (c : Change) : Bool :=
+  categories.contains policyCategory && admits actor c
+
+theorem policy_tool_requires_category (categories : List String) (actor : Holder) (c : Change)
+    (absent : categories.contains policyCategory = false) :
+    policyToolAdmits categories actor c = false := by
+  simp only [policyToolAdmits, absent, Bool.false_and]
+
+theorem policy_tool_never_changes_admin (categories : List String) (actor : Holder)
+    (d : Bool) (notAdmin : actor.admin = false) :
+    policyToolAdmits categories actor ⟨.admin, d, true, false⟩ = false := by
+  simp [policyToolAdmits, admits, notAdmin]
+
+/-- A non-admin policy actor cannot change an admission-class permission, whether
+it grants or revokes it. Native `ADMIN_CLASS` is the external premise. -/
+theorem policy_tool_refuses_admin_class (categories : List String) (actor : Holder)
+    (p : String) (d : Bool) (notAdmin : actor.admin = false) (cls : adminClass.contains p = true) :
+    policyToolAdmits categories actor ⟨.permission p, d, true, false⟩ = false := by
+  have refused : admits actor ⟨.permission p, d, true, false⟩ = false := by
+    simp only [admits, notAdmin, cls, Bool.false_or, Bool.not_true, Bool.false_and]
+  simp [policyToolAdmits, refused]
+
+/-- A non-admin policy actor cannot grant or revoke a permission it does not hold. -/
+theorem policy_tool_refuses_unheld (categories : List String) (actor : Holder)
+    (p : String) (d : Bool) (notAdmin : actor.admin = false) (unheld : actor.held.contains p = false) :
+    policyToolAdmits categories actor ⟨.permission p, d, true, false⟩ = false := by
+  have refused : admits actor ⟨.permission p, d, true, false⟩ = false := by
+    simp only [admits, Holder.holds, notAdmin, unheld, Bool.false_or, Bool.and_false,
+      Bool.false_and]
+  simp [policyToolAdmits, refused]
+
+/-- No escalation through the policy tool: whatever the subject gains is held by
+the subject already or by the acting Agent. -/
+theorem policy_tool_no_escalation (categories : List String) (r target : Holder) (c : Change)
+    (q : String) (notAdmin : r.admin = false) (ok : policyToolAdmits categories r c = true)
+    (after : (grant target c).held.contains q = true) :
+    (target.held.contains q = true ∨ r.held.contains q = true) ∧
+      (grant target c).admin = target.admin := by
+  simp only [policyToolAdmits, Bool.and_eq_true] at ok
+  exact delegated_no_escalation r target c q notAdmin ok.2 after
+
+theorem engineer_policy_grants_only_held (p : String) (d : Bool)
+    (ok : policyToolAdmits [policyCategory] (holderOf (receives .defaultAgent))
+      ⟨.permission p, d, true, false⟩ = true) :
+    (holderOf (receives .defaultAgent)).held.contains p = true := by
+  simp only [policyToolAdmits, Bool.and_eq_true] at ok
+  have notAdmin : (holderOf (receives .defaultAgent)).admin = false := by decide
+  exact (delegate_grants_only_held _ _ p notAdmin rfl ok.2).1
+
+theorem engineer_policy_refuses_admin_class :
+    (adminClass.all fun p => [false, true].all fun d =>
+      !policyToolAdmits [policyCategory] (holderOf (receives .defaultAgent))
+        ⟨.permission p, d, true, false⟩) = true := by decide
+
+theorem engineer_without_policy_category_refused (p : String) (d : Bool) :
+    policyToolAdmits ["agent", "tools", "profile"] (holderOf (receives .defaultAgent))
+      ⟨.permission p, d, true, false⟩ = false := by
+  exact policy_tool_requires_category _ _ _ (by decide)
+
+theorem engineer_policy_admits_held_operations :
+    policyToolAdmits [policyCategory] (holderOf (receives .defaultAgent))
+      ⟨.permission "read-document", false, true, false⟩ = true := by decide
+
+theorem engineer_policy_refuses_unheld :
+    policyToolAdmits [policyCategory] (holderOf (receives .defaultAgent))
+      ⟨.permission "patch-collection", false, true, false⟩ = false := by decide
+
+/-! ### Self-lockout under `self_config_no_lockout`
+
+An Agent that set `self_config_no_lockout` may not, through the policy tool,
+revoke from itself a permission that keeps it able to configure itself: its
+baseline and its policy delegation. Other Agents' grants and all grants are
+otherwise governed by `policyToolAdmits`. Document relationships on the Agent's
+own documents are not modeled here; they stay governed by native document
+authorization. -/
+
+/-- Permissions the acting Agent keeps while no-lockout is set. -/
+def lockoutProtected : List String :=
+  GrantSet.agentBaseline.permissions ++ GrantSet.policyDelegate.permissions
+
+/-- Whether a policy change keeps the acting Agent's configuration reachable. A
+grant never removes access, so only a self revoke of a protected permission is
+refused, and only while no-lockout is set. -/
+def selfChangeKeepsLockout (noLockout isSelf : Bool) (c : Change) : Bool :=
+  !(noLockout && isSelf) ||
+    match c.relation with
+    | .admin => true
+    | .permission p => !(c.delete && lockoutProtected.contains p)
+
+/-- The policy tool admits a change when the category gate, native admission and
+the self-lockout guard all admit it. -/
+def policyToolAdmitsSelf (categories : List String) (actor : Holder) (noLockout isSelf : Bool)
+    (c : Change) : Bool :=
+  policyToolAdmits categories actor c && selfChangeKeepsLockout noLockout isSelf c
+
+theorem no_lockout_refuses_self_revoke_of_protected (categories : List String) (actor : Holder)
+    (p : String) (guarded : lockoutProtected.contains p = true) :
+    policyToolAdmitsSelf categories actor true true ⟨.permission p, true, true, false⟩ = false := by
+  have lockout : selfChangeKeepsLockout true true ⟨.permission p, true, true, false⟩ = false := by
+    simp only [selfChangeKeepsLockout, guarded, Bool.and_self, Bool.and_true,
+      Bool.not_true, Bool.false_or]
+  simp [policyToolAdmitsSelf, lockout]
+
+theorem no_lockout_keeps_self_grant (categories : List String) (actor : Holder) (p : String)
+    (ok : policyToolAdmits categories actor ⟨.permission p, false, true, false⟩ = true) :
+    policyToolAdmitsSelf categories actor true true ⟨.permission p, false, true, false⟩ = true := by
+  have lockout : selfChangeKeepsLockout true true ⟨.permission p, false, true, false⟩ = true := by
+    simp [selfChangeKeepsLockout]
+  simp [policyToolAdmitsSelf, lockout, ok]
+
+theorem engineer_cannot_revoke_own_baseline :
+    policyToolAdmitsSelf [policyCategory] (holderOf (receives .defaultAgent)) true true
+      ⟨.permission "read-document", true, true, false⟩ = false := by decide
+
+theorem engineer_can_revoke_own_grant_without_no_lockout :
+    policyToolAdmitsSelf [policyCategory] (holderOf (receives .defaultAgent)) false true
+      ⟨.permission "read-document", true, true, false⟩ = true := by decide
+
+theorem engineer_can_revoke_baseline_from_others_under_no_lockout :
+    policyToolAdmitsSelf [policyCategory] (holderOf (receives .defaultAgent)) true false
+      ⟨.permission "read-document", true, true, false⟩ = true := by decide
+
 end Identity.GrantSets

@@ -88,21 +88,29 @@ def keepsControl (decode : Doc → Option Control) (stored candidate : Doc) : Bo
   | _, _ => false
 
 /-- Operator-managed grants projected from a Tools document by the canonical
-typed decoder; absent flags are false. -/
+typed decoder; absent flags are false. A grant is an operator grant when the
+Tools document carries it, and a write may carry it forward only when the
+stored Tools or the invoker already holds it (`Grants.boundedBy`). -/
 structure Grants where
   /-- `self_config.enable_pack_install`. -/
   packInstall : Bool
+  /-- The `policy` self-config category: the policy resource and its
+  grant and revoke commands. Held-bounded like pack installation, so an Agent
+  cannot select it for itself or a sibling without holding it. -/
+  policy : Bool
   deriving DecidableEq, Repr
 
-def Grants.bot : Grants := { packInstall := false }
+def Grants.bot : Grants := { packInstall := false, policy := false }
 
-def Grants.le (a b : Grants) : Bool := (!a.packInstall || b.packInstall)
+def Grants.le (a b : Grants) : Bool :=
+  (!a.packInstall || b.packInstall) && (!a.policy || b.policy)
 
 /-- Whether each grant the candidate `c` carries stays within its own bound
 against the stored Tools `s` and the invoker's `held` grants; each grant is
 judged on its own, never as a whole vector. -/
 def Grants.boundedBy (c s held : Grants) : Bool :=
-  (!c.packInstall || s.packInstall || held.packInstall)
+  (!c.packInstall || s.packInstall || held.packInstall) &&
+    (!c.policy || s.policy || held.policy)
 
 /-- A self-config write is accepted when every operator-managed grant of the
 candidate stays within its own bound against the Tools document it replaces;
