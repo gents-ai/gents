@@ -314,9 +314,9 @@ pub(crate) async fn bootstrap_oauth_client_typed(
         )?;
     let credential_id = credential.credential_id.clone();
     let provider = provider.to_string();
-    let bearer = shared_bearer(&credential_id, || {
+    let bearer = shared_bearer(&node, &credential_id, || {
         DbCredentialBearer::with_cache(
-            node,
+            node.clone(),
             node_did,
             provider,
             credential_id.clone(),

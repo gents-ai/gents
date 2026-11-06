@@ -26,7 +26,7 @@ pub(crate) fn bound_bearer(
         .lock()
         .expect("bearer registry mutex poisoned")
         .get(credential_id)
-        .cloned()
+        .and_then(std::sync::Weak::upgrade)
 }
 
 pub(crate) async fn seed_credential(

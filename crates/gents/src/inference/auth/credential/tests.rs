@@ -1,12 +1,8 @@
 use serde_json::json;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use super::bearer::get_or_insert_arc;
 use super::document::oauth_credential_from_value;
 use super::*;
-
-use std::sync::atomic::AtomicUsize;
 
 fn sample_credential() -> OAuthCredential {
     OAuthCredential {
@@ -79,34 +75,48 @@ fn account_label_is_display_only_and_prefers_email() {
     assert_eq!(account_display_label(&credential), None);
 }
 
-#[test]
-fn shared_registry_returns_one_arc_per_key_and_constructs_once() {
-    use rapidhash::{HashMapExt, RapidHashMap};
-    use std::sync::Mutex as StdMutex;
+#[tokio::test]
+async fn a_shared_bearer_neither_retains_its_node_nor_crosses_nodes() {
+    use super::test_support::test_node;
+    let provider = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
+    let did = "did:test:shared-bearer";
+    let bearer_on = |node: Arc<defra_node::Node>| {
+        DbCredentialBearer::new(
+            node,
+            did,
+            provider,
+            oauth_credential_id(did, provider),
+            true,
+            OAuthRefreshKind::Xai,
+            XAI_OAUTH_PRODUCT,
+        )
+    };
 
-    let registry: StdMutex<RapidHashMap<String, Arc<u32>>> = StdMutex::new(RapidHashMap::new());
-    let calls = AtomicUsize::new(0);
+    let node = test_node().await;
+    let weak = Arc::downgrade(&node);
+    let first = shared_bearer(&node, "cred-shared-bearer", || bearer_on(node.clone()));
+    let again = shared_bearer(&node, "cred-shared-bearer", || -> DbCredentialBearer {
+        panic!("a live bearer for this node is reused")
+    });
+    assert!(Arc::ptr_eq(&first, &again), "one live bearer per node");
 
-    let a = get_or_insert_arc(&registry, "k1", || {
-        calls.fetch_add(1, Ordering::SeqCst);
-        7u32
-    });
-    let b = get_or_insert_arc(&registry, "k1", || {
-        calls.fetch_add(1, Ordering::SeqCst);
-        99u32
-    });
-    let c = get_or_insert_arc(&registry, "k2", || {
-        calls.fetch_add(1, Ordering::SeqCst);
-        7u32
-    });
+    let other = test_node().await;
+    let rebound = shared_bearer(&other, "cred-shared-bearer", || bearer_on(other.clone()));
+    assert!(
+        !Arc::ptr_eq(&first, &rebound),
+        "a credential id on another node must not reuse the first node's bearer"
+    );
 
-    assert!(Arc::ptr_eq(&a, &b), "same key must share one Arc");
-    assert!(!Arc::ptr_eq(&a, &c), "different keys must be distinct Arcs");
-    assert_eq!(*a, 7, "first construction wins for a key");
+    drop((first, again, rebound));
     assert_eq!(
-        calls.load(Ordering::SeqCst),
-        2,
-        "construct exactly once per distinct key"
+        Arc::strong_count(&node),
+        1,
+        "the registry must not retain a released bearer's node"
+    );
+    drop(node);
+    assert!(
+        weak.upgrade().is_none(),
+        "the node is released once its holders drop"
     );
 }
 
