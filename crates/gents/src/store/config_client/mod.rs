@@ -18,6 +18,7 @@ mod agent_behavior;
 #[cfg(test)]
 mod agent_signer_conformance;
 mod application_failure;
+mod authored_document;
 mod client_agent_publication;
 mod client_pack_evidence;
 mod client_signed_agent;
@@ -93,6 +94,9 @@ pub(crate) fn classified_conflict_for_test() -> ConfigClientError {
 pub mod patch;
 
 pub use agent_behavior::write_agent_document;
+pub use authored_document::{
+    create_authored_document, AuthoredDocumentCreateError, DocumentSchemaSource,
+};
 pub use client_agent_publication::{
     AgentPublicationObserver, ClientAgentJournal, PublicationStage, PublicationStatus,
 };
