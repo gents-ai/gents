@@ -1817,12 +1817,15 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
         &creation.signature
     )
     .unwrap());
-    assert!(!crate::store::identity::verify_did_signature(
-        target.did(),
-        &creation.signing_payload(),
-        &creation.signature
-    )
-    .unwrap());
+    assert!(matches!(
+        crate::store::identity::verify_did_signature(
+            target.did(),
+            &creation.signing_payload(),
+            &creation.signature
+        ),
+        Err(crate::store::identity::IdentityError::VerifyPayload { did, .. })
+            if did == target.did()
+    ));
     for (collection, row) in [
         ("AgentSession", &sessions[0]),
         ("AgentRequest", &requests[0]),
