@@ -1288,8 +1288,8 @@ async fn an_agent_new_row_links_the_request_it_caused() {
     .await
     .unwrap();
     let node = message.admission.node.clone();
-    let caller_request_id = crate::request::binding::load_agent_request_by_doc_id(
-        &node,
+    let caller_request_id = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.client,
         message.admission.tool.request_doc_id().unwrap(),
     )
     .await
@@ -1298,7 +1298,7 @@ async fn an_agent_new_row_links_the_request_it_caused() {
     .request_id;
     let tool_call_id = message.admission.tool.tool_call_id().to_owned();
     let rows = crate::observe::run_timeline_fetch::load_run_timeline_rows(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &message.admission.client,
         &caller_request_id,
     )
     .await

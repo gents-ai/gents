@@ -178,7 +178,13 @@ async fn transcript_uses_the_callers_authenticated_access_and_preserves_denials(
     .unwrap()
     .unwrap();
     let did = crate::store::identity::NodeIdentity::did(&identity).to_owned();
-    let access = crate::ConfigAccess::graphql_as(endpoint, &did);
+    let access = crate::ConfigAccess::Graphql(
+        crate::store::config_client::GraphqlEndpoint::as_principal(endpoint, &did)
+            .with_client_signing_capability(
+                crate::store::identity::NodeIdentity::client_signing_capability(&identity).unwrap(),
+            )
+            .unwrap(),
+    );
     let read =
         || load_trace_transcript(&access, "session", "did:test:node", None, None, None, None);
     assert!(read().await.unwrap().is_empty());
