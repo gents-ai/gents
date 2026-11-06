@@ -218,6 +218,14 @@ async fn live_glm_plugin_denial_rolls_back_data_and_terminalizes_tool() -> Resul
     server.capturing(async {
         wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
         run_cli_json_with_env(&home, &["pack", "install", pack.to_str().context("pack path UTF-8")?, "--home", home_arg, "--graphql", &graphql], &owner_env)?;
+        let installed = gents::plugin::store::read_record(&home, "fixture", "job_fixture")?;
+        let grant = installed.data_grant().context("installed plugin data grant missing")?;
+        let writes: Vec<gents_protocol::job::DataWrite> = serde_json::from_value(args["args"]["plan"][0]["output"]["writes"].clone())?;
+        let stamps = gents::plugin::data::StampContext::ToolOutput {
+            caller_did: agent_did.clone(), session_id: "admission-preflight".into(),
+            request_doc_id: "admission-preflight".into(), tool_call_doc_id: "admission-preflight".into(),
+        };
+        gents::plugin::data::admit_write(&grant, &stamps, writes).context("fixture writes must pass the installed plugin grant before native ACP")?;
         let core = ClientCore::start_with_paths_and_options(DesktopPaths::from_root(&client), ClientCoreOptions::local_only()).await?;
         let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
         let pending = core.request_status_enrollment_with_label(&status, Some("plugin denial")).await?;
