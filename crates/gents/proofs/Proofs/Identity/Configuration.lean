@@ -1551,6 +1551,6 @@ theorem managed_approval_requires_user_and_node_grants (requestMatches nodeGrant
 
 theorem managed_approval_requires_matching_request (ownerGrant nodeGrant : Bool) :
     managedClientMayApprove false ownerGrant nodeGrant = false := by
-  decide
+  simp [managedClientMayApprove]
 
 end Identity.Configuration
