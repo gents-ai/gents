@@ -48,7 +48,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
         spawn_server_with_ready_json(&runtime_home, port, &["--home", home], &owner_env)?;
     wait_for_port(port, &mut server)?;
 
-    let (bindings, requests) = server
+    let (bindings, requests, client_did) = server
         .capturing(async {
             wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
             let core = ClientCore::start_with_paths_and_options(
@@ -194,6 +194,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
             Ok((
                 [first, second],
                 requests.into_iter().map(|(request_id, session, _)| (request_id, session)).collect::<Vec<_>>(),
+                user_did,
             ))
         })
         .await?;
@@ -213,6 +214,62 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
             .with_node_acp_enabled()
             .build()
             .await?,
+    );
+    let user_access = ConfigAccess::local_as(node.clone(), client_did.parse()?);
+    let agent_doc = user_access
+        .transact_readonly("test.live_agent_creation_owner", |txn| {
+            let agent = &bindings[1].agent_did;
+            let client_did = &client_did;
+            Box::pin(async move {
+                let rows = txn
+                    .execute(&format!(
+                        "{{ Agent(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{_docID}} }}",
+                        escape_graphql_string(agent),
+                    ))
+                    .await?;
+                let [row] = rows["data"]["Agent"]
+                    .as_array()
+                    .context("created Agent query unavailable")?
+                    .as_slice()
+                else {
+                    anyhow::bail!("created Agent must be uniquely visible to its User")
+                };
+                let doc = row["_docID"]
+                    .as_str()
+                    .context("created Agent missing physical ID")?
+                    .to_owned();
+                let owners = txn
+                    .document_owners("Agent", std::slice::from_ref(&doc))
+                    .await?;
+                anyhow::ensure!(
+                    matches!(owners.as_slice(), [owner] if owner.visible
+                && owner.owner.as_ref().is_some_and(|did| did.as_str() == client_did.as_str())),
+                    "created Agent must be owned by the paired User"
+                );
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await?;
+    let commits = gents::store::graphql::composite_commits(
+        &node,
+        &agent_doc,
+        "test.live_agent_creation_signature",
+    )
+    .await?;
+    let creation = commits
+        .iter()
+        .min_by_key(|commit| commit.height)
+        .context("Agent creation commit missing")?;
+    let (block, signature) = node
+        .authorized_signed_block_bytes(&creation.cid, Some(&client_did))
+        .await?;
+    let block = defra_core::block::Block::from_dag_cbor(&block)?;
+    let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
+    let signer = db::block::verify::verified_signature_signer_did(&block, &signature)
+        .map_err(anyhow::Error::msg)?;
+    assert_eq!(
+        signer, client_did,
+        "paired User must sign the Agent creation block"
     );
     let contract: Value = gents_lean_contract::load_contract_snapshot()?;
     let household = contract["identity_household_cases"]

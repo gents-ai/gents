@@ -73,7 +73,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
     let (mut server, _) =
         spawn_server_with_ready_json(&runtime_home, port, &["--home", home], &owner_env)?;
     wait_for_port(port, &mut server)?;
-    let (bindings, owned, root_doc) = server.capturing(async {
+    let (bindings, owned, root_doc, target_agent_doc, user_did) = server.capturing(async {
         wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
         let core = ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
@@ -124,6 +124,14 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             agent.display_name = Some(label.into());
             core.save_agent(&agent).await?;
         }
+        let target_agent_doc = access.transact_readonly("test.live_delegation_target", |txn| {
+            let (node_did, target) = (&node_did, &b.agent_did);
+            Box::pin(async move {
+                let (doc, _) = read_desired_state_record_in_txn(txn, Collection::Agent, node_did, target)
+                    .await?.context("created target Agent unavailable to User")?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        }).await?;
         let roots = access.execute("{ WorkspaceRoot {_docID} }").await?;
         let root_rows = roots["data"]["WorkspaceRoot"].as_array().context("User cannot observe WorkspaceRoot")?;
         let [root] = root_rows.as_slice() else { anyhow::bail!("expected one configured WorkspaceRoot: {roots}") };
@@ -272,7 +280,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         assert_eq!(denial["message"], "selected agent is unavailable");
         assert_eq!(denial["retryable"], false);
         Arc::new(core).shutdown().await?;
-        Ok(([a, b], (child_doc, session_doc, tool_doc, inference_docs), root_doc))
+        Ok(([a, b], (child_doc, session_doc, tool_doc, inference_docs), root_doc, target_agent_doc, user))
     }).await?;
     drop(server);
     let runtime_identity = identity_from_init(&init)?;
@@ -291,6 +299,55 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             .await?,
     );
     let contract: Value = gents_lean_contract::load_contract_snapshot()?;
+    let modeled_revoked_invoke = contract["identity_household_cases"]
+        .as_array()
+        .context("modeled household cases")?
+        .iter()
+        .find_map(|case| case.get("agent_node_manager_invoke_case"))
+        .and_then(|case| case["after"].as_bool())
+        .context("modeled invoke after session_writer revocation")?;
+    let user_access = ConfigAccess::local_as(node.clone(), user_did.parse()?);
+    let caller_did: identity::Did = bindings[0].agent_did.parse()?;
+    assert!(
+        node.nac_manager()
+            .check_permission(
+                &caller_did,
+                gents::store::config_client::NodePermission::DocumentUpdate,
+            )
+            .await?,
+        "the caller must pass the Node permission gate before checking Agent invoke"
+    );
+    let invoke = user_access
+        .transact_readonly("test.live_revoked_agent_invoke", |txn| {
+            let target = &target_agent_doc;
+            let agent = &bindings[0].agent_did;
+            Box::pin(async move {
+                txn.observe_document_access(
+                    &agent.parse()?,
+                    "Agent",
+                    std::slice::from_ref(target),
+                    gents::defra_node::DocumentAccessMode::Named {
+                        permission: "invoke".into(),
+                        node_permission:
+                            gents::store::config_client::NodePermission::DocumentUpdate,
+                    },
+                )
+                .await
+                .map_err(anyhow::Error::from)
+            })
+        })
+        .await?;
+    assert!(
+        matches!(
+            invoke.as_slice(),
+            [gents::defra_node::DocumentAccessDecision::Denied]
+        ),
+        "the actual caller must lack native invoke after revocation: {invoke:?}"
+    );
+    assert!(
+        !modeled_revoked_invoke,
+        "model must deny invoke after session_writer revocation"
+    );
     let root_expected = contract["workspace_root_access_cases"]
         .as_array()
         .context("modeled WorkspaceRoot cases")?
