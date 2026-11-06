@@ -30,7 +30,7 @@ fn goal_backed_request_recovery_query(
     Ok(format!(
         r#"{{
             AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}, limit: 2) {{
-                _docID {GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS}
+                {SIGNED_REQUEST_FIELDS}
             }}
             {}
         }}"#,
@@ -53,6 +53,8 @@ fn decode_agent_request_by_retry_key(
         persisted == *expected,
         "AgentRequest retry key conflicts with a different immutable request"
     );
+    let receipt: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone())?;
+    crate::request::admission::verify_request_receipt_signature(&receipt)?;
     row.get("_docID")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
@@ -190,14 +192,21 @@ pub(super) async fn load_goal_backed_request_by_retry_key_from_access(
                     request,
                 )?;
                 let response = txn.execute(&query).await?;
-                decode_goal_backed_request_recovery(
+                let recovered = decode_goal_backed_request_recovery(
                     &response,
                     node_did,
                     session_id,
                     objective,
                     token_budget,
                     request,
-                )
+                )?;
+                if let Some(found) = &recovered {
+                    let owners = txn.document_owners("AgentRequest", std::slice::from_ref(&found.doc_id)).await?;
+                    anyhow::ensure!(matches!(owners.as_slice(), [owner] if owner.doc_id == found.doc_id
+                        && owner.visible && owner.owner.as_ref().is_some_and(|owner| owner.as_str() == request.admission.signer_did)),
+                        "recovered Goal request differs from its native author");
+                }
+                Ok(recovered)
             })
         })
         .await

@@ -467,13 +467,18 @@ async fn stage_agent_new_in_txn(
     ensure_planned_hop_current(txn, &create).await?;
     let enqueued = match &plan.write {
         PlannedWrite::Request { .. } => {
-            let mutation = create
-                .graphql_client_publication_mutation()
-                .map_err(anyhow::Error::msg)?;
-            let response = txn.execute(&mutation).await?;
+            let doc_id = crate::request::lifecycle::stage_pending_child_request_in_txn(
+                txn,
+                &create,
+                &session_doc,
+                create
+                    .agent_doc_id
+                    .as_deref()
+                    .context("new child lacks Agent binding")?,
+            )
+            .await?;
             crate::request::lifecycle::EnqueuedAgentRequest {
-                doc_id: crate::store::graphql::created_doc_id(&response, "AgentRequest")
-                    .map_err(anyhow::Error::from)?,
+                doc_id,
                 request_id: create.request_id.clone(),
                 session_id: create.session_id.clone(),
             }
@@ -492,14 +497,6 @@ async fn stage_agent_new_in_txn(
                 &create,
             )
             .await?;
-            let doc = escape_graphql_string(&enqueued.doc_id);
-            let response = txn.execute(&format!(r#"mutation {{ update_AgentRequest(docID: "{doc}", input: {{ relationships_pending: true }}) {{ _docID }} }}"#)).await?;
-            anyhow::ensure!(
-                response["data"]["update_AgentRequest"]
-                    .as_array()
-                    .is_some_and(|rows| rows.len() == 1),
-                "new child relationship marker was not staged"
-            );
             enqueued
         }
     };

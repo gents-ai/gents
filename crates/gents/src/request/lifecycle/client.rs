@@ -126,6 +126,17 @@ pub(crate) async fn stage_runtime_request_in_txn(
         )?,
         "runtime request requires its valid signed receipt"
     );
+    let escaped = crate::store::graphql::escape_graphql_string(session);
+    let observed = txn.execute(&format!(
+        r#"{{ AgentSession(filter: {{_docID: {{_eq: "{escaped}"}}}}, limit: 2) {{_docID relationships_pending}} }}"#,
+    )).await?;
+    let sessions = observed["data"]["AgentSession"]
+        .as_array()
+        .context("runtime request session check omitted rows")?;
+    anyhow::ensure!(
+        matches!(sessions.as_slice(), [row] if row["_docID"] == session && row["relationships_pending"] == false),
+        "runtime request session relationships are incomplete"
+    );
     let fields = create.graphql_input_fields().map_err(anyhow::Error::msg)?;
     let response = txn.execute(&format!(
         "mutation {{ create_AgentRequest(input: {{ {fields}, relationships_pending: false }}) {{ _docID }} }}"
@@ -183,7 +194,56 @@ pub(crate) async fn stage_client_request_in_txn(
     Ok(request)
 }
 
-async fn ensure_request_session_in_txn(
+/// Stage an Agent-authored child while its new session still awaits the
+/// existing creator-owned relationship publication protocol.
+pub(crate) async fn stage_pending_child_request_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    create: &AgentRequestCreate,
+    session: &str,
+    agent: &str,
+) -> anyhow::Result<String> {
+    anyhow::ensure!(
+        create.admission.kind == AgentRequestAdmissionKind::Client
+            && txn
+                .actor_did()
+                .is_some_and(|actor| publication_admission_allowed(create, actor))
+            && txn
+                .managed_agent_signer()
+                .is_some_and(|signer| signer.did() == create.admission.signer_did)
+            && create.session_doc_id.as_deref() == Some(session)
+            && create.agent_doc_id.as_deref() == Some(agent),
+        "pending child differs from its signing Agent or physical targets"
+    );
+    anyhow::ensure!(
+        crate::store::identity::verify_did_signature(
+            &create.admission.signer_did,
+            &create.signing_payload(),
+            &create.admission.signature,
+        )?,
+        "pending child requires its valid signed receipt"
+    );
+    let escaped = crate::store::graphql::escape_graphql_string(session);
+    let observed = txn.execute(&format!(
+        r#"{{ AgentSession(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ _docID relationships_pending }} }}"#,
+    )).await?;
+    let sessions = observed["data"]["AgentSession"]
+        .as_array()
+        .context("pending child session check omitted rows")?;
+    anyhow::ensure!(
+        matches!(sessions.as_slice(), [row] if row["_docID"] == session && row["relationships_pending"] == true),
+        "pending child session is unavailable or already published"
+    );
+    let response = txn
+        .execute(
+            &create
+                .graphql_client_publication_mutation()
+                .map_err(anyhow::Error::msg)?,
+        )
+        .await?;
+    crate::store::graphql::created_doc_id(&response, "AgentRequest")
+}
+
+pub(crate) async fn ensure_request_session_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     create: &AgentRequestCreate,
     actor: &str,
@@ -1404,6 +1464,31 @@ mod tests {
                 .is_empty(),
             modeled("created")["grants"]
         );
+        let other_home = tempfile::tempdir().unwrap();
+        let other = KeyIdentity::load_or_create(other_home.path().join("other.key"), None).unwrap();
+        let admin = ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(db.node_identity.did()).unwrap(),
+        );
+        for permission in [
+            crate::store::config_client::NodePermission::DocumentRead,
+            crate::store::config_client::NodePermission::CollectionGet,
+        ] {
+            admin
+                .grant_node_permission(&identity::Did::new(other.did()).unwrap(), permission)
+                .await
+                .unwrap();
+        }
+        let other_access =
+            ConfigAccess::local_as(node.clone(), identity::Did::new(other.did()).unwrap());
+        let hidden = other_access
+            .execute("{ AgentRequest {_docID} }")
+            .await
+            .unwrap();
+        assert!(hidden["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .is_empty());
         let retry = crate::goal::submit_goal_backed_request_with_identity(
             &node,
             identity::Did::new(agent.did()).unwrap(),
@@ -1417,6 +1502,94 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(retry.doc_id, submitted.doc_id);
+        for (field, name) in [("session", "wrong-session"), ("agent", "wrong-agent")] {
+            let mut wrong = request.clone();
+            if field == "session" {
+                wrong.session_doc_id = Some("foreign-session".into());
+            } else {
+                wrong.agent_doc_id = Some("foreign-agent".into());
+            }
+            crate::sign_agent_request_create(agent.as_ref(), &mut wrong)
+                .await
+                .unwrap();
+            assert!(
+                crate::goal::submit_goal_backed_request_with_identity(
+                    &node,
+                    identity::Did::new(agent.did()).unwrap(),
+                    db.node_identity.did(),
+                    "task-session",
+                    "finish work",
+                    None,
+                    &wrong,
+                    Some(agent.as_ref()),
+                )
+                .await
+                .is_err(),
+                "{name}"
+            );
+            assert_eq!(modeled(name)["request"], false);
+        }
+        assert!(crate::goal::submit_goal_backed_request_with_identity(
+            &node,
+            identity::Did::new(db.node_identity.did()).unwrap(),
+            db.node_identity.did(),
+            "task-session",
+            "finish work",
+            None,
+            &request,
+            Some(db.node_identity.as_ref()),
+        )
+        .await
+        .is_err());
+        assert_eq!(modeled("foreign-actor")["request"], false);
+        admin
+            .grant_node_permission(
+                &identity::Did::new(agent.did()).unwrap(),
+                crate::store::config_client::NodePermission::DacRelationDelete,
+            )
+            .await
+            .unwrap();
+        access
+            .delete_resource_relationship(
+                "AgentRequest",
+                &submitted.doc_id,
+                "parent",
+                "agents",
+                row.agent_doc_id.as_deref().unwrap(),
+            )
+            .await
+            .unwrap();
+        access
+            .delete_resource_relationship(
+                "AgentRequest",
+                &submitted.doc_id,
+                "session",
+                "sessions",
+                row.session_doc_id.as_deref().unwrap(),
+            )
+            .await
+            .unwrap();
+        let retry = crate::goal::submit_goal_backed_request_with_identity(
+            &node,
+            identity::Did::new(agent.did()).unwrap(),
+            db.node_identity.did(),
+            "task-session",
+            "finish work",
+            None,
+            &request,
+            Some(agent.as_ref()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(retry.doc_id, submitted.doc_id);
+        let observed = client.execute("{ AgentRequest {_docID} }").await.unwrap();
+        assert_eq!(
+            !observed["data"]["AgentRequest"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            modeled("duplicate-after-revocation")["grants"]
+        );
         let mut rejected = request.clone();
         rejected.request_id = "rejected-opening".into();
         rejected.session_id = "rejected-session".into();

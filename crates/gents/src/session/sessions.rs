@@ -481,6 +481,56 @@ pub(crate) async fn ensure_reserved_session_in_txn(
     .await
 }
 
+/// Complete provenance for a session reserved earlier in this same transaction.
+pub(crate) async fn finalize_reserved_runtime_session_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    session_doc: &str,
+    request: &crate::request::watcher::AgentRequest,
+    provenance: Option<gents_protocol::session::SessionProvenance>,
+) -> Result<()> {
+    let Some(mut origin) = provenance else {
+        return Ok(());
+    };
+    let session = load_agent_session_row_in_txn(
+        txn,
+        &request.node_did,
+        &request.session_id,
+        request.requester_did.as_deref(),
+    )
+    .await?
+    .context("reserved runtime session is unavailable")?;
+    anyhow::ensure!(
+        session.doc_id == session_doc
+            && session.session.agent_did == request.agent_did
+            && session.session.provenance.is_none(),
+        "reserved runtime session binding changed"
+    );
+    origin.started_by = crate::session::origin::verified_starter_in_txn(
+        txn,
+        &origin,
+        &request.node_did,
+        &request.session_id,
+        request.requester_did.as_deref(),
+        &request.agent_did,
+    )
+    .await?;
+    anyhow::ensure!(
+        origin.started_by.is_none(),
+        "reserved runtime session cannot change immutable starter indices"
+    );
+    origin.creation_receipt = crate::session::origin::issue_creation_receipt_in_txn(
+        txn,
+        &request.node_did,
+        &request.session_id,
+        session_doc,
+        request.requester_did.as_deref(),
+        &request.agent_did,
+        origin.opening_request_doc_id.as_deref(),
+    )
+    .await?;
+    patch_session_in_txn(txn, session_doc, serde_json::json!({"provenance": origin})).await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn ensure_session_with_pending_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,

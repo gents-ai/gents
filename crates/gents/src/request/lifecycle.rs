@@ -3,8 +3,8 @@ mod client;
 pub(crate) use client::stage_request_relationships_in_txn;
 pub(crate) use client::{
     bind_client_targets_in_txn, complete_client_request_relationships,
-    recover_delegated_client_request_relationships_with_access, stage_client_request_in_txn,
-    stage_runtime_request_in_txn,
+    ensure_request_session_in_txn, recover_delegated_client_request_relationships_with_access,
+    stage_client_request_in_txn, stage_pending_child_request_in_txn, stage_runtime_request_in_txn,
 };
 pub use client::{
     build_signed_client_request, build_signed_client_request_in_txn, client_request_input,
