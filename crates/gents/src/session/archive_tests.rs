@@ -48,6 +48,13 @@ async fn key(home: &std::path::Path, name: &str) -> crate::store::identity::KeyI
     .unwrap()
 }
 
+/// Archive writes by a non-node actor need its managed Agent signer, so the
+/// authority fixture's writers are Agents provisioned from the runtime root.
+fn managed_agent(runtime: &crate::store::identity::KeyIdentity) -> Arc<dyn NodeIdentity> {
+    let binding = crate::store::identity::provision_agent_identity(runtime).unwrap();
+    crate::store::identity::resolve_agent_identity(runtime, &binding).unwrap()
+}
+
 async fn read_as(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> Result<AgentSession> {
     ConfigAccess::transact_local_readonly(
         node,
@@ -239,10 +246,16 @@ async fn archive_restore_survive_reopen_and_reject_stale_windows_without_stoppin
 async fn archive_authority_is_native_acp_and_never_requester_scope() {
     let home = tempfile::tempdir().unwrap();
     let owner = key(home.path(), "owner").await;
-    let writer = key(home.path(), "writer").await;
-    let reader = key(home.path(), "reader").await;
-    let denied = key(home.path(), "denied").await;
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let writer = managed_agent(&owner);
+    let reader = managed_agent(&owner);
+    let denied = managed_agent(&owner);
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(owner.did())
+            .build()
+            .await
+            .unwrap(),
+    );
     let policy = node
         .add_dac_policy_as(
             &defra_core::RequestContext::default().with_identity(Some(owner.did().to_owned())),
@@ -322,7 +335,14 @@ resources:
 async fn concurrent_archive_calls_commit_one_revision() {
     let home = tempfile::tempdir().unwrap();
     let actor = key(home.path(), "owner").await;
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    // The archive writer is the runtime owner, so the node identity is the actor.
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(actor.did())
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::test_support::acp_policies::install_identity_acp_policies(&node).await.unwrap();
     node.add_collection(gents_protocol::schemas::AGENT_SESSION)
         .await
@@ -396,6 +416,14 @@ async fn authenticated_http_archive_uses_the_same_durable_transaction_owner() ->
                 .await?;
         }
     }
+    // Block signature verification reads the signed block as the node identity,
+    // so the runtime must hold document read to verify the session's update.
+    node.add_nac_actor_relationship_as(
+        &context,
+        acp::nac::NodePermission::DocumentRead.as_str(),
+        runtime.did(),
+    )
+    .await?;
     let client = |identity: &crate::KeyIdentity| -> Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
             crate::store::config_client::GraphqlEndpoint::as_principal(&endpoint, identity.did())

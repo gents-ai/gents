@@ -2037,10 +2037,28 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
         crate::inference::rendered_request::encoding::block_content_key(&poisoned),
         chunks[index].content_key
     );
+    // Capture blocks are deduplicated within their session scope, so the
+    // poisoned block must occupy the same scope the sink resolves for the turn.
+    let session_doc_id = {
+        let response = fixture
+            .access
+            .execute(&format!(
+                r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                crate::store::graphql::escape_graphql_string(&fixture.node_did),
+                crate::store::graphql::escape_graphql_string(SESSION_ID),
+            ))
+            .await
+            .unwrap();
+        let rows = response["data"]["AgentSession"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "the replay session scopes its capture blocks");
+        rows[0]["_docID"].as_str().unwrap().to_owned()
+    };
     let created = fixture_write(
         &fixture.access,
         "mutation($input: RenderedRequestBlockMutationInputArg!) { create_RenderedRequestBlock(input: $input) { _docID } }",
         &serde_json::json!({"input": {
+            "session_doc_id": session_doc_id,
+            "agent_did": fixture.agent.did(),
             "content_key": chunks[index].content_key,
             "payload": String::from_utf8(poisoned.clone()).unwrap(),
             "byte_len": chunks[index].bytes.len(),

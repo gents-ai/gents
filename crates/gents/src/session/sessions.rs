@@ -1226,10 +1226,17 @@ mod relationship_publication_tests {
         let directory = tempfile::tempdir().unwrap();
         let node_identity =
             crate::KeyIdentity::load_or_create(directory.path().join("node"), None).unwrap();
+        // Sessions are published by Agents, so the creator and collaborator are
+        // Agent identities with managed signers derived from the runtime root.
+        let creator_binding =
+            crate::store::identity::provision_agent_identity(&node_identity).unwrap();
         let creator =
-            crate::KeyIdentity::load_or_create(directory.path().join("creator"), None).unwrap();
+            crate::store::identity::resolve_agent_identity(&node_identity, &creator_binding)
+                .unwrap();
+        let collaborator_binding =
+            crate::store::identity::provision_agent_identity(&node_identity).unwrap();
         let collaborator =
-            crate::KeyIdentity::load_or_create(directory.path().join("collaborator"), None)
+            crate::store::identity::resolve_agent_identity(&node_identity, &collaborator_binding)
                 .unwrap();
         let node = Arc::new(
             defra_node::Node::builder()
@@ -1262,14 +1269,23 @@ mod relationship_publication_tests {
             .grant_node_permission(&collaborator_did, NodePermission::DocumentRead)
             .await
             .unwrap();
-        let owner = ConfigAccess::local_as(node.clone(), creator_did);
-        let other = ConfigAccess::local_as(node.clone(), collaborator_did.clone());
-        let agent = owner.write("test.session_relationship_agent", &format!(
+        let owner =
+            ConfigAccess::local_managed_agent(node.clone(), creator_did.clone(), creator.as_ref())
+                .unwrap();
+        let other = ConfigAccess::local_managed_agent(
+            node.clone(),
+            collaborator_did.clone(),
+            collaborator.as_ref(),
+        )
+        .unwrap();
+        // The runtime owner registers Agent configuration; the creator Agent only
+        // publishes its own sessions.
+        let agent = admin.write("test.session_relationship_agent", &format!(
             r#"mutation {{ create_Agent(input: {{ node_did: "{}", agent_did: "{}", creation_nonce: "{}", inference_profile_id: "profile", enabled: true }}) {{ _docID }} }}"#,
-            node_identity.did(), creator.did(), "a".repeat(64),
+            node_identity.did(), creator.did(), creator_binding.creation_nonce,
         )).await.unwrap();
         let agent_doc = crate::store::graphql::created_doc_id(&agent, "Agent").unwrap();
-        owner
+        admin
             .add_actor_relationship("Agent", &agent_doc, "reader", &collaborator_did)
             .await
             .unwrap();
