@@ -6,13 +6,14 @@ use db::block::builder::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use super::client_signed_agent::{signing_schema, trusted_delete_schema};
 use super::{ConfigAccess, ConfigApplyTxn, ConfigClientError};
 use crate::store::identity::NodeIdentity;
 
 /// An exact mutation independently selected by the pack installation plan.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PackMutation {
     Create {
@@ -32,13 +33,68 @@ pub enum PackMutation {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "evidence", rename_all = "snake_case")]
-pub enum PackEvidence {
+enum PackGraphEvidence {
     Create(ClientCreateEvidence),
     Update(ClientMutationEvidence),
     Delete(ClientMutationEvidence),
 }
 
-pub enum VerifiedPackEvidence {
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackEvidence {
+    scope: PackApprovalScope,
+    actor_did: String,
+    mutation: PackMutation,
+    graph: PackGraphEvidence,
+    signature: Vec<u8>,
+}
+
+/// Identifies the runtime-hosted stage that a client has reviewed.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackApprovalScope {
+    pub node_did: String,
+    pub pack_digests: Vec<String>,
+    pub nonce: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PackRelationshipTarget {
+    Actor {
+        did: String,
+    },
+    Resource {
+        resource: String,
+        doc_id: String,
+    },
+    EntitySet {
+        resource: String,
+        doc_id: String,
+        relation: String,
+    },
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackRelationship {
+    pub collection: String,
+    pub doc_id: String,
+    pub relation: String,
+    pub target: PackRelationshipTarget,
+    pub delete: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackRelationshipEvidence {
+    scope: PackApprovalScope,
+    actor_did: String,
+    relationship: PackRelationship,
+    signature: Vec<u8>,
+}
+
+pub(super) enum VerifiedPackEvidence {
     Create(Arc<VerifiedClientCreate>),
     Mutation(Arc<VerifiedClientMutation>),
 }
@@ -61,12 +117,99 @@ pub enum PackEvidenceError {
     Verify(#[from] db::block::builder::VerifiedMutationError),
     #[error("joining client evidence work")]
     Join(#[from] tokio::task::JoinError),
+    #[error("encoding the approved pack relationship")]
+    Encoding(#[from] serde_json::Error),
+    #[error("signing or verifying the approved pack relationship")]
+    Identity(#[source] Box<crate::store::identity::IdentityError>),
 }
 
 impl From<ConfigClientError> for PackEvidenceError {
     fn from(error: ConfigClientError) -> Self {
         Self::Config(Box::new(error))
     }
+}
+
+impl super::TransactionFailure for PackEvidenceError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::store::identity::IdentityError> for PackEvidenceError {
+    fn from(error: crate::store::identity::IdentityError) -> Self {
+        Self::Identity(Box::new(error))
+    }
+}
+
+fn relationship_payload(
+    scope: &PackApprovalScope,
+    actor_did: &str,
+    relationship: &PackRelationship,
+) -> Result<Vec<u8>, PackEvidenceError> {
+    validate_scope(scope)?;
+    Ok(serde_json::to_vec(&(
+        "gents.pack.relationship.v1",
+        scope,
+        actor_did,
+        relationship,
+    ))?)
+}
+
+fn validate_scope(scope: &PackApprovalScope) -> Result<(), PackEvidenceError> {
+    if scope.node_did.is_empty()
+        || scope.pack_digests.is_empty()
+        || scope.pack_digests.iter().any(String::is_empty)
+        || scope.nonce.is_empty()
+    {
+        return Err(PackEvidenceError::Mismatch);
+    }
+    Ok(())
+}
+
+/// Binds the exact signed graph using SHA-256 collision resistance.
+fn graph_payload(
+    scope: &PackApprovalScope,
+    actor_did: &str,
+    mutation: &PackMutation,
+    graph: &PackGraphEvidence,
+) -> Result<Vec<u8>, PackEvidenceError> {
+    validate_scope(scope)?;
+    let bytes = serde_json::to_vec(&("gents.pack.graph.v1", scope, actor_did, mutation, graph))?;
+    Ok(Sha256::digest(bytes).to_vec())
+}
+
+/// Approve one plan-selected relationship with the client's key.
+pub async fn prepare_pack_relationship(
+    actor: &dyn NodeIdentity,
+    scope: &PackApprovalScope,
+    relationship: &PackRelationship,
+) -> Result<PackRelationshipEvidence, PackEvidenceError> {
+    let payload = relationship_payload(scope, actor.did(), relationship)?;
+    let signature = actor.sign(&payload).await?;
+    Ok(PackRelationshipEvidence {
+        scope: scope.clone(),
+        actor_did: actor.did().to_owned(),
+        relationship: relationship.clone(),
+        signature,
+    })
+}
+
+pub(super) fn verify_pack_relationship(
+    actor: &str,
+    scope: &PackApprovalScope,
+    evidence: PackRelationshipEvidence,
+) -> Result<PackRelationship, PackEvidenceError> {
+    if evidence.actor_did != actor || evidence.scope != *scope {
+        return Err(PackEvidenceError::Mismatch);
+    }
+    let payload = relationship_payload(scope, actor, &evidence.relationship)?;
+    if !crate::store::identity::verify_did_signature(actor, &payload, &evidence.signature)? {
+        return Err(PackEvidenceError::Mismatch);
+    }
+    Ok(evidence.relationship)
 }
 
 async fn snapshot(
@@ -104,6 +247,7 @@ fn trusted_schema(mutation: &PackMutation) -> Result<schema::CollectionVersion, 
 pub async fn prepare_pack_evidence(
     access: &ConfigAccess,
     actor: &dyn NodeIdentity,
+    scope: &PackApprovalScope,
     mutation: &PackMutation,
 ) -> Result<PackEvidence, PackEvidenceError> {
     let capability = actor.client_signing_capability()?;
@@ -121,49 +265,92 @@ pub async fn prepare_pack_evidence(
                 .await?,
         ),
     };
-    let mutation = mutation.clone();
+    let requested = mutation.clone();
     let signing = (*capability.config).clone();
-    tokio::task::spawn_blocking(move || {
-        let crdts = storage::Crdts::default();
-        match mutation {
-            PackMutation::Create { input, .. } => Ok(PackEvidence::Create(
-                ClientCreateSignatures::from_input(&crdts, &schema, &input, &signing)?.evidence(),
-            )),
-            PackMutation::Update { doc_id, input, .. } => Ok(PackEvidence::Update(
-                ClientUpdateSignatures::from_input(
-                    &crdts,
-                    &schema,
-                    &doc_id,
-                    &input,
-                    observed.as_ref().ok_or(PackEvidenceError::Mismatch)?,
-                    &signing,
-                )?
-                .evidence(),
-            )),
-            PackMutation::Delete { doc_id, .. } => Ok(PackEvidence::Delete(
-                ClientDeleteSignatures::from_snapshot(
-                    &schema,
-                    &doc_id,
-                    observed.as_ref().ok_or(PackEvidenceError::Mismatch)?,
-                    &signing,
-                )?
-                .evidence(),
-            )),
-        }
+    let graph =
+        tokio::task::spawn_blocking(move || -> Result<PackGraphEvidence, PackEvidenceError> {
+            let crdts = storage::Crdts::default();
+            match requested {
+                PackMutation::Create { input, .. } => Ok(PackGraphEvidence::Create(
+                    ClientCreateSignatures::from_input(&crdts, &schema, &input, &signing)?
+                        .evidence(),
+                )),
+                PackMutation::Update { doc_id, input, .. } => Ok(PackGraphEvidence::Update(
+                    ClientUpdateSignatures::from_input(
+                        &crdts,
+                        &schema,
+                        &doc_id,
+                        &input,
+                        observed.as_ref().ok_or(PackEvidenceError::Mismatch)?,
+                        &signing,
+                    )?
+                    .evidence(),
+                )),
+                PackMutation::Delete { doc_id, .. } => Ok(PackGraphEvidence::Delete(
+                    ClientDeleteSignatures::from_snapshot(
+                        &schema,
+                        &doc_id,
+                        observed.as_ref().ok_or(PackEvidenceError::Mismatch)?,
+                        &signing,
+                    )?
+                    .evidence(),
+                )),
+            }
+        })
+        .await??;
+    let payload_scope = scope.clone();
+    let payload_actor = actor.did().to_owned();
+    let payload_mutation = mutation.clone();
+    let (graph, payload) = tokio::task::spawn_blocking(move || {
+        let payload = graph_payload(&payload_scope, &payload_actor, &payload_mutation, &graph)?;
+        Ok::<_, PackEvidenceError>((graph, payload))
     })
-    .await?
+    .await??;
+    let signature = actor.sign(&payload).await?;
+    Ok(PackEvidence {
+        scope: scope.clone(),
+        actor_did: actor.did().to_owned(),
+        mutation: mutation.clone(),
+        graph,
+        signature,
+    })
 }
 
 /// Verify the plan's exact mutation against the transaction's native snapshot.
-pub async fn verify_pack_evidence(
+pub(super) async fn verify_pack_evidence(
     txn: &ConfigApplyTxn<'_>,
     actor: &str,
+    scope: &PackApprovalScope,
     mutation: &PackMutation,
     evidence: PackEvidence,
 ) -> Result<VerifiedPackEvidence, PackEvidenceError> {
-    if txn.actor_did() != Some(actor) {
+    if txn.actor_did() != Some(actor)
+        || evidence.actor_did != actor
+        || evidence.scope != *scope
+        || evidence.mutation != *mutation
+    {
         return Err(PackEvidenceError::Mismatch);
     }
+    let checked_scope = scope.clone();
+    let checked_actor = actor.to_owned();
+    let checked_mutation = mutation.clone();
+    let evidence = tokio::task::spawn_blocking(move || {
+        let payload = graph_payload(
+            &checked_scope,
+            &checked_actor,
+            &checked_mutation,
+            &evidence.graph,
+        )?;
+        if !crate::store::identity::verify_did_signature(
+            &checked_actor,
+            &payload,
+            &evidence.signature,
+        )? {
+            return Err(PackEvidenceError::Mismatch);
+        }
+        Ok::<_, PackEvidenceError>(evidence)
+    })
+    .await??;
     let schema = trusted_schema(mutation)?;
     let observed = match mutation {
         PackMutation::Create { .. } => None,
@@ -175,15 +362,15 @@ pub async fn verify_pack_evidence(
     let actor = actor.to_owned();
     tokio::task::spawn_blocking(move || {
         let crdts = storage::Crdts::default();
-        match (mutation, evidence) {
-            (PackMutation::Create { input, .. }, PackEvidence::Create(evidence)) => {
+        match (mutation, evidence.graph) {
+            (PackMutation::Create { input, .. }, PackGraphEvidence::Create(evidence)) => {
                 let graph = VerifiedClientCreate::verify(&crdts, &schema, &input, evidence)?;
                 if graph.signer_did() != actor {
                     return Err(PackEvidenceError::Mismatch);
                 }
                 Ok(VerifiedPackEvidence::Create(Arc::new(graph)))
             }
-            (PackMutation::Update { doc_id, input, .. }, PackEvidence::Update(evidence)) => {
+            (PackMutation::Update { doc_id, input, .. }, PackGraphEvidence::Update(evidence)) => {
                 let graph = VerifiedClientMutation::verify_update(
                     &crdts,
                     &schema,
@@ -197,7 +384,7 @@ pub async fn verify_pack_evidence(
                 }
                 Ok(VerifiedPackEvidence::Mutation(Arc::new(graph)))
             }
-            (PackMutation::Delete { doc_id, .. }, PackEvidence::Delete(evidence)) => {
+            (PackMutation::Delete { doc_id, .. }, PackGraphEvidence::Delete(evidence)) => {
                 let graph = VerifiedClientMutation::verify_delete(
                     &schema,
                     &doc_id,
@@ -216,7 +403,7 @@ pub async fn verify_pack_evidence(
 }
 
 /// Apply only the graph verified for this exact plan operation and actor.
-pub async fn apply_pack_evidence(
+pub(super) async fn apply_pack_evidence(
     txn: &ConfigApplyTxn<'_>,
     mutation: &PackMutation,
     graph: VerifiedPackEvidence,
@@ -271,6 +458,12 @@ mod tests {
         let actor = KeyIdentity::load_or_create(directory.path().join("user.key"), None)?;
         let runtime = KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
         let other = KeyIdentity::load_or_create(directory.path().join("other.key"), None)?;
+        let mut public_only = defra_core::signing::get_identity(actor.did()).unwrap();
+        public_only.private_key_bytes.clear();
+        defra_core::signing::store_identity(actor.did(), public_only);
+        assert!(!defra_core::signing::get_identity(actor.did())
+            .unwrap()
+            .has_local_private_key());
         let node = Arc::new(
             defra_node::Node::builder()
                 .with_node_identity_did(runtime.did())
@@ -280,13 +473,36 @@ mod tests {
         );
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local_as(node.clone(), actor.did().parse()?);
+        let scope = PackApprovalScope {
+            node_did: runtime.did().to_owned(),
+            pack_digests: vec!["sha256:fixture".into()],
+            nonce: "test-session".into(),
+        };
+        let node_create = PackMutation::Create {
+            collection: "Node".into(),
+            input: json!({"node_did": runtime.did(), "enabled": true}),
+        };
+        let node_evidence = prepare_pack_evidence(&access, &actor, &scope, &node_create).await?;
+        let node_doc = access
+            .transact_verified_pack("test.pack_evidence.node", |txn| {
+                let node_create = &node_create;
+                let evidence = node_evidence.clone();
+                let scope = &scope;
+                Box::pin(async move {
+                    let response = txn.apply(scope, node_create, evidence).await?;
+                    Ok::<_, anyhow::Error>(crate::store::graphql::created_doc_id(
+                        &response, "Node",
+                    )?)
+                })
+            })
+            .await?;
         let create = PackMutation::Create {
             collection: "PackInstallation".into(),
-            input: json!({"node_did": actor.did(), "coordinate": "acme/fixture", "version": "1", "digest": "one"}),
+            input: json!({"node_did": runtime.did(), "coordinate": "acme/fixture", "version": "1", "digest": "one"}),
         };
-        let evidence = prepare_pack_evidence(&access, &actor, &create).await?;
+        let evidence = prepare_pack_evidence(&access, &actor, &scope, &create).await?;
         let other_access = ConfigAccess::local_as(node.clone(), other.did().parse()?);
-        let other_evidence = prepare_pack_evidence(&other_access, &other, &create).await?;
+        let other_evidence = prepare_pack_evidence(&other_access, &other, &scope, &create).await?;
         let cases = tokio::task::spawn_blocking(|| {
             crate::lean_vocab_test::lean_contract_snapshot()
                 .hosted_pack_evidence_cases
@@ -295,7 +511,7 @@ mod tests {
         .await?;
         let tampered = PackMutation::Create {
             collection: "PackInstallation".into(),
-            input: json!({"node_did": actor.did(), "coordinate": "acme/fixture", "version": "1", "digest": "other"}),
+            input: json!({"node_did": runtime.did(), "coordinate": "acme/fixture", "version": "1", "digest": "other"}),
         };
         let created = access
             .transact_verified_pack("test.pack_evidence.create", |txn| {
@@ -304,11 +520,16 @@ mod tests {
                 let create = &create;
                 let tampered = &tampered;
                 let cases = &cases;
+                let actor = &actor;
+                let other = &other;
+                let node_doc = &node_doc;
+                let scope = &scope;
                 Box::pin(async move {
                     let mut response = None;
                     for case in cases {
                         let actor_matches = case["actor_matches"].as_bool().unwrap();
                         let graph_verified = case["graph_verified"].as_bool().unwrap();
+                        let plan_approved = case["plan_approved"].as_bool().unwrap();
                         let expected = case["allowed"].as_bool().unwrap();
                         let candidate = if graph_verified { create } else { tampered };
                         let signed = if actor_matches {
@@ -316,17 +537,85 @@ mod tests {
                         } else {
                             other_evidence.clone()
                         };
-                        let actual = txn.apply(candidate, signed).await;
+                        let mut wrong_scope = (*scope).clone();
+                        wrong_scope.nonce.push_str("-other");
+                        let actual = txn
+                            .apply(
+                                if plan_approved { scope } else { &wrong_scope },
+                                candidate,
+                                signed,
+                            )
+                            .await;
                         assert_eq!(actual.is_ok(), expected, "{case}");
                         if let Ok(value) = actual {
                             response = Some(value);
                         }
                     }
                     let response = response.expect("modeled successful create");
-                    Ok::<_, anyhow::Error>(crate::store::graphql::created_doc_id(
-                        &response,
-                        "PackInstallation",
-                    )?)
+                    let created =
+                        crate::store::graphql::created_doc_id(&response, "PackInstallation")?;
+                    let parent = PackRelationship {
+                        collection: "PackInstallation".into(),
+                        doc_id: created.clone(),
+                        relation: "parent".into(),
+                        target: PackRelationshipTarget::Resource {
+                            resource: "nodes".into(),
+                            doc_id: node_doc.to_owned(),
+                        },
+                        delete: false,
+                    };
+                    let signed = prepare_pack_relationship(actor, scope, &parent).await?;
+                    let mut altered = signed.clone();
+                    altered.relationship.relation = "reader".into();
+                    let expected = cases
+                        .iter()
+                        .find(|case| {
+                            case["actor_matches"] == true
+                                && case["graph_verified"] == false
+                                && case["plan_approved"] == true
+                        })
+                        .unwrap()["allowed"]
+                        .as_bool()
+                        .unwrap();
+                    assert_eq!(
+                        txn.apply_relationship(scope, altered).await.is_ok(),
+                        expected
+                    );
+                    let other_signed = prepare_pack_relationship(other, scope, &parent).await?;
+                    let expected = cases
+                        .iter()
+                        .find(|case| {
+                            case["actor_matches"] == false
+                                && case["graph_verified"] == true
+                                && case["plan_approved"] == true
+                        })
+                        .unwrap()["allowed"]
+                        .as_bool()
+                        .unwrap();
+                    assert_eq!(
+                        txn.apply_relationship(scope, other_signed).await.is_ok(),
+                        expected
+                    );
+                    let mut wrong_scope = (*scope).clone();
+                    wrong_scope.nonce.push_str("-other");
+                    let expected = cases
+                        .iter()
+                        .find(|case| {
+                            case["actor_matches"] == true
+                                && case["graph_verified"] == true
+                                && case["plan_approved"] == false
+                        })
+                        .unwrap()["allowed"]
+                        .as_bool()
+                        .unwrap();
+                    assert_eq!(
+                        txn.apply_relationship(&wrong_scope, signed.clone())
+                            .await
+                            .is_ok(),
+                        expected
+                    );
+                    txn.apply_relationship(scope, signed).await?;
+                    Ok::<_, anyhow::Error>(created)
                 })
             })
             .await?;
@@ -335,13 +624,14 @@ mod tests {
             doc_id: created,
             input: json!({"version": "2"}),
         };
-        let evidence = prepare_pack_evidence(&access, &actor, &update).await?;
+        let evidence = prepare_pack_evidence(&access, &actor, &scope, &update).await?;
         access
             .transact_verified_pack("test.pack_evidence.update", |txn| {
                 let evidence = evidence.clone();
                 let update = &update;
+                let scope = &scope;
                 Box::pin(async move {
-                    txn.apply(update, evidence).await?;
+                    txn.apply(scope, update, evidence).await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })
@@ -350,6 +640,58 @@ mod tests {
             .execute("{ PackInstallation { coordinate version } }")
             .await?;
         assert_eq!(observed["data"]["PackInstallation"][0]["version"], "2");
+        let stale = PackMutation::Update {
+            collection: "PackInstallation".into(),
+            doc_id: match &update {
+                PackMutation::Update { doc_id, .. } => doc_id.clone(),
+                _ => unreachable!(),
+            },
+            input: json!({"version": "stale"}),
+        };
+        let stale_evidence = prepare_pack_evidence(&access, &actor, &scope, &stale).await?;
+        let replacement = PackMutation::Update {
+            collection: "PackInstallation".into(),
+            doc_id: match &update {
+                PackMutation::Update { doc_id, .. } => doc_id.clone(),
+                _ => unreachable!(),
+            },
+            input: json!({"version": "winner"}),
+        };
+        let replacement_evidence =
+            prepare_pack_evidence(&access, &actor, &scope, &replacement).await?;
+        access
+            .transact_verified_pack("test.pack_evidence.winner", |txn| {
+                let replacement_evidence = replacement_evidence.clone();
+                let replacement = &replacement;
+                let scope = &scope;
+                Box::pin(async move {
+                    txn.apply(scope, replacement, replacement_evidence).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await?;
+        let stale_result = access
+            .transact_verified_pack("test.pack_evidence.stale", |txn| {
+                let evidence = stale_evidence.clone();
+                let stale = &stale;
+                let scope = &scope;
+                Box::pin(async move {
+                    txn.apply(scope, stale, evidence).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await;
+        let stale_expected = cases
+            .iter()
+            .find(|case| case["actor_matches"] == true && case["graph_verified"] == false)
+            .expect("modeled stale graph")["allowed"]
+            .as_bool()
+            .unwrap();
+        assert_eq!(stale_result.is_ok(), stale_expected);
+        let observed = access
+            .execute("{ PackInstallation { coordinate version } }")
+            .await?;
+        assert_eq!(observed["data"]["PackInstallation"][0]["version"], "winner");
         node.shutdown().await?;
         Ok(())
     }

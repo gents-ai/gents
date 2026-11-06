@@ -630,8 +630,9 @@ theorem hosted_effect_requires_approved_plan (actor graph native : Bool) :
     hostedPackEffectAllowed actor graph false native = false := by
   simp [hostedPackEffectAllowed]
 
-def hostedPackEffectCases : List (Bool × Bool) :=
-  [(false, false), (false, true), (true, false), (true, true)]
+def hostedPackEffectCases : List (Bool × Bool × Bool) :=
+  [(false, false, true), (false, true, true), (true, false, true),
+    (true, true, false), (true, true, true)]
 
 /-- Once a commit request may have succeeded, later failed attempts cannot
 prove that the earlier attempt did not commit. A successful receipt resolves

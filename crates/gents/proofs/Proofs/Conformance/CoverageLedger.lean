@@ -800,7 +800,7 @@ def caseCoverage : List CoverageEntry :=
       "hosted_pack_evidence_cases"
       "HostedPackEvidenceCases"
       "store::config_client::client_pack_evidence::tests::verified_pack_evidence_binds_mutation_actor_and_snapshot"
-      "Binds client signer and exact create graph to an embedded transaction. Plan approval, native denial, update and delete coverage remain to be exercised.")
+      "Binds client signer, exact create and update graphs, and relationship scope to an embedded transaction. Full plan validation, deletion and native denial remain to be exercised.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "agent_steer_disposition_cases"

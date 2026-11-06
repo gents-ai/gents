@@ -4,11 +4,12 @@ import Proofs.Conformance.Contracts.Json.Helpers
 namespace Conformance.Contracts.PackInstallation
 
 def evidenceCasesJson : String := jsonArray (Configuration.hostedPackEffectCases.map fun
-    (actor, graph) =>
+    (actor, graph, plan) =>
   "{\"actor_matches\":" ++ toString actor ++
     ",\"graph_verified\":" ++ toString graph ++
+    ",\"plan_approved\":" ++ toString plan ++
     ",\"allowed\":" ++ toString
-      (Configuration.hostedPackEffectAllowed actor graph true true) ++ "}")
+      (Configuration.hostedPackEffectAllowed actor graph plan true) ++ "}")
 
 def finalityCasesJson : String := jsonArray (Configuration.packFinalityCases.map fun attempts =>
   let name := fun event : Configuration.PackAttemptEvidence => match event with
