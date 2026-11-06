@@ -277,63 +277,6 @@ async fn complete_child_managed_inner(
     assert_eq!(terminal, crate::request::lifecycle::TerminalizeResult::Won);
 }
 
-pub(crate) async fn ensure_fixture_session(
-    node: &Arc<EmbeddedNode>,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    created_at: &str,
-) -> String {
-    let session = crate::store::graphql::escape_graphql_string(session_id);
-    let response = node
-        .execute(&format!(
-            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{session}" }} }}, limit: 2) {{ _docID node_did requester_did agent_did }} }}"#
-        ))
-        .await;
-    assert!(!response.has_errors(), "{:#?}", response.errors);
-    let rows = response.data.unwrap()["AgentSession"]
-        .as_array()
-        .unwrap()
-        .clone();
-    assert!(rows.len() <= 1, "fixture session identity must be unique");
-    if let Some(row) = rows.first() {
-        assert_eq!(row["node_did"].as_str(), Some(node_did));
-        assert_eq!(
-            row["requester_did"].as_str(),
-            if requester_did == Some(node_did) {
-                row["agent_did"].as_str()
-            } else {
-                requester_did
-            }
-        );
-        return row["agent_did"].as_str().unwrap().to_owned();
-    }
-    let root = crate::store::identity::RegisteredIdentity::from_registered_did(
-        node.node_identity_did().expect("fixture node has a signer"),
-        None,
-    )
-    .unwrap();
-    let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
-    let agent_did = crate::store::graphql::escape_graphql_string(&binding.agent_did);
-    let agent = crate::store::graphql::escape_graphql_string(node_did);
-    let requester_did = if requester_did == Some(node_did) {
-        Some(binding.agent_did.as_str())
-    } else {
-        requester_did
-    };
-    let requester = requester_did.map_or_else(
-        || "null".to_owned(),
-        |did| format!("\"{}\"", crate::store::graphql::escape_graphql_string(did)),
-    );
-    let created = crate::store::graphql::escape_graphql_string(created_at);
-    let access = crate::store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(binding.agent_did.as_str()).unwrap(),
-    );
-    access.write("fixture.create_session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{agent}", requester_did: {requester}, agent_did: "{agent_did}", created_at: "{created}" }}) {{ _docID }} }}"#)).await.expect("create agent-owned fixture session");
-    binding.agent_did
-}
-
 async fn ensure_managed_fixture_session(
     node: &Arc<EmbeddedNode>,
     session_id: &str,
@@ -391,46 +334,6 @@ async fn ensure_managed_fixture_session(
     let created = crate::store::graphql::escape_graphql_string(created_at);
     access.write("fixture.create_managed_session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{node_did}", requester_did: {requester}, agent_did: "{agent_did}", created_at: "{created}" }}) {{ _docID }} }}"#)).await.expect("create managed fixture session");
     agent
-}
-
-pub async fn claimed_request(
-    node: &Arc<EmbeddedNode>,
-    request_id: &str,
-    session_id: &str,
-    node_did: &str,
-) -> RequestLifecycle {
-    let now = chrono::Utc::now().to_rfc3339();
-    let agent_did = ensure_fixture_session(node, session_id, node_did, None, &now).await;
-    let agent_did = crate::store::graphql::escape_graphql_string(&agent_did);
-    let now = crate::store::graphql::escape_graphql_string(&now);
-    let request_id = crate::store::graphql::escape_graphql_string(request_id);
-    let session_id = crate::store::graphql::escape_graphql_string(session_id);
-    let node_did = crate::store::graphql::escape_graphql_string(node_did);
-    let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_did: "{agent_did}", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "spawn", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#)).await;
-    assert!(!created.has_errors(), "{:#?}", created.errors);
-    let row = node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        ))
-        .await;
-    let row: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&row, "AgentRequest")
-            .unwrap()
-            .unwrap();
-    let selected_agent = row
-        .agent_did
-        .clone()
-        .expect("fixture request selects an agent");
-    let mut lifecycle = RequestLifecycle::new_with_node_did(
-        node.clone(),
-        &selected_agent,
-        &node_did,
-        row.try_into().unwrap(),
-        60,
-    );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    lifecycle
 }
 
 pub(crate) async fn claimed_signed_request(
