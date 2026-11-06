@@ -365,6 +365,24 @@ def invokeChanges : List Action :=
   , .revoke (actorRelation "agents" "general" "session_writer" readerDid)
   , .check readerDid "agents" "general" "invoke" ]
 
+/-- Invoking a User-owned target does not expose its unrelated User-owned
+sessions. The caller still reads the child session it created, and the target
+reads its own working session. -/
+def invokeOnlySessionActions : List Action :=
+  [ .grant (actorRelation "agents" "sibling" "session_writer" agentDid)
+  , .check agentDid "agents" "sibling" "read"
+  , .check agentDid "agents" "sibling" "invoke"
+  , .check agentDid "sessions" "sibling-session" "read"
+  , .check agentDid "sessions" "nested-session" "read"
+  , .check siblingDid "sessions" "sibling-session" "read"
+  , .check userDid "sessions" "sibling-session" "read"
+  , .check agentDid "sessions" "sibling-session" "update"
+  , .grant (actorRelation "sessions" "sibling-session" "reader" agentDid)
+  , .check agentDid "sessions" "sibling-session" "read"
+  , .revoke (actorRelation "sessions" "sibling-session" "reader" agentDid)
+  , .check agentDid "sessions" "sibling-session" "read"
+  , .revoke (actorRelation "agents" "sibling" "session_writer" agentDid) ]
+
 def requestSessionChanges : List Action :=
   [ .check strangerDid "delivered_requests" "remote-request" "read"
   , .grant (actorRelation "sessions" "wife-session" "reader" strangerDid)
@@ -423,6 +441,10 @@ theorem runtime_reader_is_explicit_and_revocable :
 
 theorem invoke_is_distinct_and_revocable :
     observed initial invokeChanges = [false, true, true, true, false] := by native_decide
+
+theorem invoke_only_preserves_session_isolation :
+    observed initial invokeOnlySessionActions =
+      [true, true, false, true, true, true, true, true, false] := by native_decide
 
 theorem request_session_reader_is_revocable :
     observed initial requestSessionChanges = [false, true, false] := by native_decide
@@ -563,7 +585,7 @@ def json : Json := Json.mkObj
    ("self_config_actions", toJson (traceJson initial selfConfigChanges)),
    ("self_config_lookup_cases", toJson (selfConfigLookupCases.map fun (name, attempt) =>
      selfConfigLookupCaseJson name attempt)),
-   ("actions", toJson (traceJson initial (nodeAdministratorChanges ++ runtimeReaderChanges ++ invokeChanges ++ requestSessionChanges ++ receiptAuthorChanges ++ matrix ++ managementChanges ++ selfConfigChanges ++ changes)))]
+   ("actions", toJson (traceJson initial (nodeAdministratorChanges ++ runtimeReaderChanges ++ invokeChanges ++ invokeOnlySessionActions ++ requestSessionChanges ++ receiptAuthorChanges ++ matrix ++ managementChanges ++ selfConfigChanges ++ changes)))]
 end HouseholdFixture
 
 namespace OperationsFixture

@@ -111,7 +111,7 @@ def policy : List ResourceDefinition :=
         permission "update" ["administrator", "config_writer"] [("parent", "update")],
         permission "delete" ["administrator"] [("parent", "delete")],
         permission "invoke" ["session_writer", "executor", "administrator"] [("parent", "delete")],
-        permission "session_read" ["reader", "session_writer", "administrator"] [("parent", "delete")],
+        permission "session_read" ["reader", "administrator"] [("parent", "delete")],
         permission "session_admin" ["administrator"] [("parent", "delete")]] }
   , { name := "sessions"
       relations := [⟨"parent", ["agents"], []⟩, ⟨"reader", ["actor"], []⟩,
