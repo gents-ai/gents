@@ -66,9 +66,10 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
         let access = f.user_access();
         if !case.commit {
             assert_eq!(case.name, "staging_failure_rolls_back");
-            let txn = ConfigApplyTxn::begin_local(
+            let txn = ConfigApplyTxn::begin_local_with_signer(
                 &f.node,
-                Some(::identity::Did::new(f.agent.did()).unwrap()),
+                ::identity::Did::new(f.agent.did()).unwrap(),
+                f.agent.managed_agent_signer().unwrap(),
             )
             .await
             .unwrap();
@@ -314,9 +315,10 @@ async fn overlapping_resume_and_native_goal_write_conflict_atomically() {
         );
         let before = native(&f.node, &remote, &query, f.agent.did()).await;
         assert_eq!(before["Goal"][0]["status"], "paused");
-        let local = ConfigApplyTxn::begin_local(
+        let local = ConfigApplyTxn::begin_local_with_signer(
             &f.node,
-            Some(::identity::Did::new(f.agent.did()).unwrap()),
+            ::identity::Did::new(f.agent.did()).unwrap(),
+            f.agent.managed_agent_signer().unwrap(),
         )
         .await
         .unwrap();
