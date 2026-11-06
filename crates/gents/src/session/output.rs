@@ -2,9 +2,10 @@
 //!
 //! Headers carry no body bytes.  This module is the one session reader that
 //! obtains strict header/segment documents and hands the facts to the protocol
-//! reconstruction owner.  In particular, a fork header may resolve segments
-//! from its origin session, so segment reads are scoped by node/requester,
-//! not by the child session label.
+//! reconstruction owner.  A fork header whose origin is visible resolves its
+//! origin's physical closures, keeping exact provenance and replay evidence;
+//! otherwise it resolves the closures copied into its own session, so a reader
+//! granted only the fork needs nothing from the source session.
 
 fn replay_violation(message: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(gents_loop::loop_stream::ReplayEvidenceViolation(

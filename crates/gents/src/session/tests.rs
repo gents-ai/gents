@@ -945,6 +945,136 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
 }
 
 #[tokio::test]
+async fn a_reader_granted_only_the_fork_reads_its_whole_retained_transcript() {
+    use crate::store::identity::NodeIdentity;
+    const SOURCE: &str = "shared-fork-source";
+    let case = crate::lean_vocab_test::lean_contract_snapshot()
+        .session_document_cases
+        .fork
+        .iter()
+        .find(|case| case["name"] == "exact_copy")
+        .unwrap();
+    let reads = |grant: &str| {
+        case["readers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|reader| reader["grant"] == grant)
+            .unwrap()["reads_transcript"]
+            .as_bool()
+            .unwrap()
+    };
+    let (db, user, client, binding) =
+        crate::test_support::signed_test_node("shared-fork-reader").await;
+    let node_did = db.node_identity.did();
+    let messages = (1..=3)
+        .map(|turn| format!("shared-{turn}"))
+        .collect::<Vec<_>>();
+    publish_signed_history(&db, &user, &client, &binding, SOURCE, &messages).await;
+    let receipt = fork_on(
+        &client,
+        ForkParams {
+            source_session_id: SOURCE,
+            boundary: ForkBoundary::UserTurn(2),
+            caller_node_did: node_did,
+            caller_requester_did: Some(user.did()),
+            target_agent_did: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(receipt.copied_messages, 2);
+    let owned = history_on(
+        &client,
+        &receipt.session_id,
+        node_did,
+        Some(user.did()),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(owned.len(), 2);
+
+    let sharee =
+        tokio::task::spawn_blocking(|| crate::support::fixtures::test_identity("fork-sharee"))
+            .await
+            .unwrap();
+    let sharee_did = identity::Did::new(sharee.did()).unwrap();
+    let sharee_access = crate::ConfigAccess::local_as(db.node.clone(), sharee_did.clone());
+    let session_doc = |session: &str| {
+        let session = escape_graphql_string(session);
+        let client = &client;
+        async move {
+            let response = client
+                .execute(&format!(
+                    r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{session}" }} }}, limit: 2) {{ _docID }} }}"#
+                ))
+                .await
+                .unwrap();
+            let [row] = response["data"]["AgentSession"]
+                .as_array()
+                .unwrap()
+                .as_slice()
+            else {
+                panic!("session must be unique")
+            };
+            row["_docID"].as_str().unwrap().to_owned()
+        }
+    };
+    let child_doc = session_doc(&receipt.session_id).await;
+    let source_doc = session_doc(SOURCE).await;
+    let requester = user.did();
+    let expected = &owned;
+    let sharee = &sharee_access;
+    let sharee_reads = |session: String| async move {
+        history_on(sharee, &session, node_did, Some(requester), None)
+            .await
+            .is_ok_and(|history| history == *expected)
+    };
+
+    assert_eq!(
+        sharee_reads(receipt.session_id.clone()).await,
+        reads("unrelated_session")
+    );
+    client
+        .add_actor_relationship("AgentSession", &source_doc, "reader", &sharee_did)
+        .await
+        .unwrap();
+    assert_eq!(
+        sharee_reads(receipt.session_id.clone()).await,
+        reads("source_session")
+    );
+    client
+        .delete_actor_relationship("AgentSession", &source_doc, "reader", &sharee_did)
+        .await
+        .unwrap();
+    client
+        .add_actor_relationship("AgentSession", &child_doc, "reader", &sharee_did)
+        .await
+        .unwrap();
+    assert!(reads("child_session"));
+    assert!(
+        sharee_reads(receipt.session_id.clone()).await,
+        "a direct reader of only the fork reads its retained transcript"
+    );
+    assert!(
+        !history_on(&sharee_access, SOURCE, node_did, Some(user.did()), None)
+            .await
+            .is_ok_and(|history| !history.is_empty()),
+        "the fork grant reveals nothing of the source session"
+    );
+    client
+        .delete_actor_relationship("AgentSession", &child_doc, "reader", &sharee_did)
+        .await
+        .unwrap();
+    assert_eq!(
+        sharee_reads(receipt.session_id.clone()).await,
+        reads("unrelated_session")
+    );
+    db.node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
 async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_current_agent() {
     use crate::NodeIdentity as _;
     const SOURCE: &str = "retained-source";
