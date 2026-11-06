@@ -220,19 +220,21 @@ theorem runStep_identity_immutable (validate guard : Doc → Bool) (t : Target)
       simp [runStep, hstep, hm, himm]
 
 theorem Grants.le_refl (g : Grants) : g.le g = true := by
-  cases h : g.packInstall <;> simp [Grants.le, h]
+  cases h : g.packInstall <;> cases h2 : g.policy <;> simp [Grants.le, h, h2]
 
 theorem Grants.boundedBy_self (g held : Grants) : g.boundedBy g held = true := by
-  cases h : g.packInstall <;> simp [Grants.boundedBy, h]
+  cases h : g.packInstall <;> cases h2 : g.policy <;> simp [Grants.boundedBy, h, h2]
 
 theorem Grants.boundedBy_of_le_stored {c s : Grants} (held : Grants)
     (h : c.le s = true) : c.boundedBy s held = true := by
   cases hc : c.packInstall <;> cases hs : s.packInstall <;>
+    cases hcp : c.policy <;> cases hsp : s.policy <;>
     simp_all [Grants.le, Grants.boundedBy]
 
 theorem Grants.boundedBy_of_le_held {c held : Grants} (s : Grants)
     (h : c.le held = true) : c.boundedBy s held = true := by
   cases hc : c.packInstall <;> cases hh : held.packInstall <;>
+    cases hcp : c.policy <;> cases hhp : held.policy <;>
     simp_all [Grants.le, Grants.boundedBy]
 
 theorem grant_widening_requires_held (decode : Doc → Option Grants) (held : Grants)
@@ -242,7 +244,18 @@ theorem grant_widening_requires_held (decode : Doc → Option Grants) (held : Gr
     (h : keepsGrants decode held stored candidate = true) :
     held.packInstall = true := by
   simp [keepsGrants, Grants.boundedBy, hs, hc, hcp, hsp] at h
-  exact h
+  exact h.1
+
+/-- The policy category is held-bounded exactly like pack installation: a Tools
+write that newly selects it needs the stored Tools or the invoker to hold it. -/
+theorem policy_widening_requires_held (decode : Doc → Option Grants) (held : Grants)
+    (stored candidate : Doc) (s c : Grants)
+    (hs : decode stored = some s) (hc : decode candidate = some c)
+    (hcp : c.policy = true) (hsp : s.policy = false)
+    (h : keepsGrants decode held stored candidate = true) :
+    held.policy = true := by
+  simp [keepsGrants, Grants.boundedBy, hs, hc, hcp, hsp] at h
+  exact h.2
 
 theorem unrelated_edit_preserves_grants (decode : Doc → Option Grants) (held : Grants)
     (stored candidate : Doc) (g : Grants)
@@ -298,7 +311,7 @@ theorem reselection_from_nothing_requires_held (decode : Doc → Option Grants)
     (h : reselectionKeepsGrants decode held none (some tools) = true) :
     held.packInstall = true := by
   simp [reselectionKeepsGrants, hd, Grants.boundedBy, Grants.bot, hcp] at h
-  exact h
+  exact h.1
 
 
 end SelfConfig

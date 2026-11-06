@@ -402,4 +402,59 @@ theorem engineer_policy_refuses_unheld :
     policyToolAdmits [policyCategory] (holderOf (receives .defaultAgent))
       ⟨.permission "patch-collection", false, true, false⟩ = false := by decide
 
+/-! ### Self-lockout under `self_config_no_lockout`
+
+An Agent that set `self_config_no_lockout` may not, through the policy tool,
+revoke from itself a permission that keeps it able to configure itself: its
+baseline and its policy delegation. Other Agents' grants and all grants are
+otherwise governed by `policyToolAdmits`. Document relationships on the Agent's
+own documents are not modeled here; they stay governed by native document
+authorization. -/
+
+/-- Permissions the acting Agent keeps while no-lockout is set. -/
+def lockoutProtected : List String :=
+  GrantSet.agentBaseline.permissions ++ GrantSet.policyDelegate.permissions
+
+/-- Whether a policy change keeps the acting Agent's configuration reachable. A
+grant never removes access, so only a self revoke of a protected permission is
+refused, and only while no-lockout is set. -/
+def selfChangeKeepsLockout (noLockout isSelf : Bool) (c : Change) : Bool :=
+  !(noLockout && isSelf) ||
+    match c.relation with
+    | .admin => true
+    | .permission p => !(c.delete && lockoutProtected.contains p)
+
+/-- The policy tool admits a change when the category gate, native admission and
+the self-lockout guard all admit it. -/
+def policyToolAdmitsSelf (categories : List String) (actor : Holder) (noLockout isSelf : Bool)
+    (c : Change) : Bool :=
+  policyToolAdmits categories actor c && selfChangeKeepsLockout noLockout isSelf c
+
+theorem no_lockout_refuses_self_revoke_of_protected (categories : List String) (actor : Holder)
+    (p : String) (guarded : lockoutProtected.contains p = true) :
+    policyToolAdmitsSelf categories actor true true ⟨.permission p, true, true, false⟩ = false := by
+  have lockout : selfChangeKeepsLockout true true ⟨.permission p, true, true, false⟩ = false := by
+    simp only [selfChangeKeepsLockout, guarded, Bool.and_self, Bool.and_true,
+      Bool.not_true, Bool.false_or]
+  simp [policyToolAdmitsSelf, lockout]
+
+theorem no_lockout_keeps_self_grant (categories : List String) (actor : Holder) (p : String)
+    (ok : policyToolAdmits categories actor ⟨.permission p, false, true, false⟩ = true) :
+    policyToolAdmitsSelf categories actor true true ⟨.permission p, false, true, false⟩ = true := by
+  have lockout : selfChangeKeepsLockout true true ⟨.permission p, false, true, false⟩ = true := by
+    simp [selfChangeKeepsLockout]
+  simp [policyToolAdmitsSelf, lockout, ok]
+
+theorem engineer_cannot_revoke_own_baseline :
+    policyToolAdmitsSelf [policyCategory] (holderOf (receives .defaultAgent)) true true
+      ⟨.permission "read-document", true, true, false⟩ = false := by decide
+
+theorem engineer_can_revoke_own_grant_without_no_lockout :
+    policyToolAdmitsSelf [policyCategory] (holderOf (receives .defaultAgent)) false true
+      ⟨.permission "read-document", true, true, false⟩ = true := by decide
+
+theorem engineer_can_revoke_baseline_from_others_under_no_lockout :
+    policyToolAdmitsSelf [policyCategory] (holderOf (receives .defaultAgent)) true false
+      ⟨.permission "read-document", true, true, false⟩ = true := by decide
+
 end Identity.GrantSets
