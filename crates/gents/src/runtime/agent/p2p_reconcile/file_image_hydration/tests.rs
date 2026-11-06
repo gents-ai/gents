@@ -127,7 +127,7 @@ fn generated_routes_follow_executable_scope_filters() {
         owner: String,
         demand_collection: String,
         image_collection: String,
-        expected: Predicate,
+        expected: Option<Predicate>,
         images_granted: bool,
         image_filter_installed: bool,
     }
@@ -145,25 +145,35 @@ fn generated_routes_follow_executable_scope_filters() {
         let direction = PairingDirection::parse(&case.direction).unwrap();
         let template = resolve_template(CLIENT_TEMPLATE).unwrap();
         let actual = resolve_template_filters(template, direction, &case.requester, &case.owner);
-        assert_eq!(case.expected.collection, case.demand_collection);
-        let mut clauses: Vec<Value> = case
-            .expected
-            .clauses
-            .into_iter()
-            .map(|clause| json!({(clause.field): {(clause.operator): clause.value}}))
-            .collect();
-        let expected = if clauses.len() == 1 {
-            clauses.remove(0)
-        } else {
-            json!({"_and": clauses})
-        };
-        let predicate = actual.get(&case.demand_collection).unwrap();
-        assert_eq!(
-            sorted_conjunction(Value::Object(filter_conditions(predicate).unwrap())),
-            sorted_conjunction(expected),
-            "{}",
-            case.direction
-        );
+        match case.expected {
+            // The model emits null when a route has no demand filter for the collection.
+            None => assert!(
+                !actual.contains_key(&case.demand_collection),
+                "{}: unexpected demand filter for {}",
+                case.direction,
+                case.demand_collection
+            ),
+            Some(expected_predicate) => {
+                assert_eq!(expected_predicate.collection, case.demand_collection);
+                let mut clauses: Vec<Value> = expected_predicate
+                    .clauses
+                    .into_iter()
+                    .map(|clause| json!({(clause.field): {(clause.operator): clause.value}}))
+                    .collect();
+                let expected = if clauses.len() == 1 {
+                    clauses.remove(0)
+                } else {
+                    json!({"_and": clauses})
+                };
+                let predicate = actual.get(&case.demand_collection).unwrap();
+                assert_eq!(
+                    sorted_conjunction(Value::Object(filter_conditions(predicate).unwrap())),
+                    sorted_conjunction(expected),
+                    "{}",
+                    case.direction
+                );
+            }
+        }
         assert_eq!(
             client_route_collections(direction).contains(&case.image_collection.as_str()),
             case.images_granted
