@@ -4508,9 +4508,24 @@ pub(crate) fn assert_lean_to_defradb_vocabulary_matches(spec: LeanVocabulary<'_>
     );
 }
 
+/// Mirrors the conformance build target and generator of `gents_lean_contract`.
+/// The proofs directory is anchored at compile time: the runtime
+/// `CARGO_MANIFEST_DIR` lookup in `gents_lean_contract::proofs_dir` is absent
+/// when this test binary runs outside cargo.
+const LEAN_CONTRACT_TARGET: &str = "Proofs.Conformance.Contracts:olean";
+const LEAN_CONTRACT_FILE: &str = "Proofs/Conformance/Contracts.lean";
+
 fn load_lean_contract_snapshot() -> LeanContractSnapshot {
-    let json = gents_lean_contract::load_contract_json()
-        .unwrap_or_else(|error| panic!("failed to load Lean conformance contract JSON: {error:#}"));
+    let proofs_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("proofs");
+    let stdout = gents_lean_contract::run_prepared_generator(
+        &proofs_dir,
+        LEAN_CONTRACT_TARGET,
+        LEAN_CONTRACT_FILE,
+    )
+    .unwrap_or_else(|error| panic!("failed to load Lean conformance contract JSON: {error:#}"));
+    let json = gents_lean_contract::extract_contract_json(&stdout)
+        .unwrap_or_else(|error| panic!("failed to load Lean conformance contract JSON: {error:#}"))
+        .to_owned();
 
     serde_json::from_str(&json).unwrap_or_else(|error| {
         let excerpt = json_excerpt_at(&json, error.line(), error.column(), 512);
