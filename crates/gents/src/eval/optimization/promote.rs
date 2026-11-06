@@ -12,6 +12,7 @@ use crate::eval::optimization::target::{
 };
 use crate::store::config_client::{
     apply_desired_state_plan, stale_expectation, ConfigAccess, DesiredStateApplyPlan,
+    TransactionFailure,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -157,6 +158,8 @@ tokio::task_local! {
     static BETWEEN_CHECK_AND_WRITE: std::sync::Arc<(tokio::sync::Notify, tokio::sync::Notify)>;
 }
 
+/// A conflicted signed promotion is not replayed. A fresh authorized read may
+/// establish that its frozen closure moved and justify a stale refusal.
 pub async fn promote(
     access: &ConfigAccess,
     owner: &str,
@@ -247,7 +250,29 @@ pub async fn promote(
             Ok(promotion)
         }
         Err(error) => {
-            let Some(drifted) = drift_of(&error) else {
+            let drifted = if let Some(drifted) = drift_of(&error) {
+                drifted
+            } else if error
+                .config_client_error()
+                .is_some_and(|source| source.transaction_conflict().is_some())
+            {
+                let observed = access
+                    .transact_readonly("optimization.promote_conflict_closure", |txn| {
+                        Box::pin(async move { capture_closure(txn, owner).await })
+                    })
+                    .await;
+                let Ok(live) = observed else {
+                    return Err(error);
+                };
+                let Ok(digests) = closure_digests(&live) else {
+                    return Err(error);
+                };
+                let drifted = between(&job.origin.closure, &digests);
+                if drifted.is_empty() {
+                    return Err(error);
+                }
+                drifted
+            } else {
                 return Err(error);
             };
             let entry = JournalEntry::PromotionRefused {
@@ -514,7 +539,11 @@ mod tests {
         else {
             panic!("the last entry is not Promoted: {:?}", job.journal.last());
         };
-        assert_eq!(by.as_str(), harness.evaluator_did(), "the caller's DID is recorded");
+        assert_eq!(
+            by.as_str(),
+            harness.evaluator_did(),
+            "the caller's DID is recorded"
+        );
         assert_eq!(journaled, &promotion.target_digest);
         assert_eq!(journaled, &target_digest(&after, target).unwrap());
         assert_eq!(
