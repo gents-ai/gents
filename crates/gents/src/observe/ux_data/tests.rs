@@ -431,7 +431,7 @@ async fn watch_refuses_foreign_nodes_undeclared_and_mutating_tools() {
         args: json!({}),
     };
     let mut other = request.clone();
-    other.node_did = OTHER_NODE.into();
+    other.node_did = fixture.other_node_did.clone();
     assert!(
         watch_local(fixture.home.path(), fixture.node.clone(), other)
             .await
