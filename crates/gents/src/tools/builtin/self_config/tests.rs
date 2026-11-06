@@ -140,6 +140,16 @@ impl SelfConfigFixture {
         &self.agent_did
     }
 
+    pub(super) async fn add_collection(&self, sdl: &str) {
+        crate::ConfigAccess::local_as(
+            self.db.node.clone(),
+            identity::Did::new(self.db.node_identity.did()).unwrap(),
+        )
+        .add_collection(sdl)
+        .await
+        .unwrap();
+    }
+
     pub(super) fn tools(&self, categories: &[&str]) -> Vec<Box<dyn ToolDyn>> {
         let mut grants = config(categories);
         grants.agent_did = self.agent_did.clone();
@@ -1308,20 +1318,9 @@ pub(super) fn node_identity(label: &str) -> std::sync::Arc<dyn crate::NodeIdenti
 
 #[tokio::test]
 async fn automation_rejects_invalid_template_before_publication_and_can_recover() {
-    let node = build_agent_node().await;
-    let identity = node_identity("template-config");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    let mut grants = config(&["automation"]);
-    grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner,
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("template-config").await;
+    fixture.grant_selected_configuration().await;
+    let tools = fixture.tools(&["automation"]);
     for verb in ["preview", "edit"] {
         let error = call_config_tool(
             &tools,
@@ -1337,9 +1336,12 @@ async fn automation_rejects_invalid_template_before_publication_and_can_recover(
         .await
         .unwrap_err();
         assert!(format!("{error:#}").contains("MiniJinja"), "{error:#}");
-        let rows = node.execute("{ Task { task_id } }").await;
-        assert!(!rows.has_errors());
-        assert!(rows.data.unwrap()["Task"].as_array().unwrap().is_empty());
+        let rows = fixture
+            .user_access
+            .execute("{ Task { task_id } }")
+            .await
+            .unwrap();
+        assert!(rows["data"]["Task"].as_array().unwrap().is_empty());
     }
     call_config_tool(
         &tools,
@@ -1354,9 +1356,12 @@ async fn automation_rejects_invalid_template_before_publication_and_can_recover(
     )
     .await
     .unwrap();
-    let rows = node.execute("{ Task { task_id prompt_template } }").await;
-    assert!(!rows.has_errors());
-    let data = rows.data.unwrap();
+    let rows = fixture
+        .user_access
+        .execute("{ Task { task_id prompt_template } }")
+        .await
+        .unwrap();
+    let data = &rows["data"];
     assert_eq!(data["Task"].as_array().unwrap().len(), 1);
     assert_eq!(
         data["Task"][0]["prompt_template"],
@@ -1366,23 +1371,12 @@ async fn automation_rejects_invalid_template_before_publication_and_can_recover(
 
 #[tokio::test]
 async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recover() {
-    let node = build_agent_node().await;
-    let identity = node_identity("event-source-config");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    node.add_collection("type SelfConfigProbe { batch: String flag: Boolean total: Int }")
-        .await
-        .unwrap();
-    let mut grants = config(&["automation"]);
-    grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner,
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("event-source-config").await;
+    fixture.grant_selected_configuration().await;
+    fixture
+        .add_collection("type SelfConfigProbe { batch: String flag: Boolean total: Int }")
+        .await;
+    let tools = fixture.tools(&["automation"]);
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -1417,25 +1411,23 @@ async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recove
             "{diagnostic}"
         );
         assert!(diagnostic.contains("Boolean"), "{diagnostic}");
-        let rows = node.execute("{ EventSource { event_source_id } }").await;
-        assert!(!rows.has_errors());
+        let rows = fixture
+            .user_access
+            .execute("{ EventSource { event_source_id } }")
+            .await
+            .unwrap();
         assert!(
-            rows.data.unwrap()["EventSource"]
-                .as_array()
-                .unwrap()
-                .is_empty(),
+            rows["data"]["EventSource"].as_array().unwrap().is_empty(),
             "a refused event source publishes no row"
         );
     }
     tool.call(set("total")).await.unwrap();
-    let rows = node
+    let rows = fixture
+        .user_access
         .execute("{ EventSource { event_source_id group } }")
-        .await;
-    assert!(!rows.has_errors());
-    let rows = rows.data.unwrap()["EventSource"]
-        .as_array()
-        .unwrap()
-        .clone();
+        .await
+        .unwrap();
+    let rows = rows["data"]["EventSource"].as_array().unwrap().clone();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["group"]["expected_count"]["source_field"], "total");
 }

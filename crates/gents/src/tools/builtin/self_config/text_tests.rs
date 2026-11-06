@@ -311,10 +311,10 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
 
 #[tokio::test]
 async fn automation_validation_refuses_what_every_fire_would_reject() {
-    let (node, _owner, tools) = setup("automation-gaps", &["automation"]).await;
-    node.add_collection("type GapInput { message: String reply_session_id: String }")
-        .await
-        .unwrap();
+    let (fixture, tools) = authenticated_setup("automation-gaps", &["automation"]).await;
+    fixture
+        .add_collection("type GapInput { message: String reply_session_id: String }")
+        .await;
     let edit = |kind: &str, id: &str, set: Value| json!({"argv":["automation","edit",kind],"target_id":id,"set":set});
 
     let error = refused(
