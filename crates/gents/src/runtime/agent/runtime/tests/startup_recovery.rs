@@ -146,6 +146,28 @@ async fn wait_for_request_state(
     }
 }
 
+async fn wait_for_held_request_state(access: &crate::ConfigAccess, doc_id: &str, expected: &str) {
+    let doc_id = escape_graphql_string(doc_id);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let response = access.execute(&format!(
+            r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{doc_id}"}}}}, limit: 1) {{lifecycle_state}} }}"#
+        )).await.unwrap();
+        let rows = response["data"]["AgentRequest"].as_array().unwrap();
+        let [row] = rows.as_slice() else {
+            panic!("held Agent cannot read its request")
+        };
+        if row["lifecycle_state"] == expected {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "request {doc_id} did not reach {expected}: {row:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 async fn fetch_backend_probe_row(
     node: &defra_node::Node,
     backend_id: &str,
@@ -279,37 +301,37 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
 
 #[tokio::test]
 async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("startup-invalid-config"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture(
+        "startup-invalid-config",
         "backend-invalid-config",
         "http://127.0.0.1:9/v1",
     )
     .await;
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, identity.did())
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let default_agent_did = fixture.agent.did().to_owned();
+    let context_id = escape_graphql_string(&format!("{default_agent_did}:context"));
+    let observed = fixture
+        .user_access
+        .execute(&format!(
+            r#"{{ AgentContext(filter: {{context_id: {{_eq: "{context_id}"}}}}) {{_docID}} }}"#
+        ))
         .await
-        .agent_did;
-    let context_id = format!("{default_agent_did}:context");
-    let escaped_context_id = escape_graphql_string(&context_id);
-    let escaped_tools_id = escape_graphql_string("missing-tools");
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentContext(
-                filter: {{ context_id: {{ _eq: "{escaped_context_id}" }} }},
-                input: {{ tools_id: "{escaped_tools_id}" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+        .unwrap();
+    let rows = observed["data"]["AgentContext"].as_array().unwrap();
+    let [row] = rows.as_slice() else {
+        panic!("fixture context must be unique")
+    };
+    let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
+    fixture.user_access.write("test.invalid_context", &format!(
+        r#"mutation {{ update_AgentContext(docID: "{doc}", input: {{tools_id: "missing-tools"}}) {{_docID}} }}"#
+    )).await.unwrap();
 
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -367,30 +389,38 @@ async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config()
 
 #[tokio::test]
 async fn router_generation_persistence_failure_terminates_run_agent_before_dispatch() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("router-generation-persistence-run-agent"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "router-generation-persistence-run-agent",
         "backend-router-generation-persistence",
         mock_endpoint.endpoint(),
+        1,
+        "healthy",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
     )
     .await
     .unwrap();
-    let request_doc_id = create_agent_request(
-        node.as_ref(),
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        fixture.agent.did().parse().unwrap(),
+        fixture.agent.as_ref(),
+    )
+    .unwrap();
+    let request_doc_id = create_held_agent_request(
+        &node,
         identity.did(),
+        fixture.agent.as_ref(),
         "req-router-generation-persistence",
         "session-router-generation-persistence",
         "must remain pending",
@@ -418,7 +448,7 @@ async fn router_generation_persistence_failure_terminates_run_agent_before_dispa
         format!("{error:#}").contains("durably acknowledge router generation"),
         "runtime returned the wrong failure: {error:#}"
     );
-    wait_for_request_state(node.as_ref(), &request_doc_id, "pending").await;
+    wait_for_held_request_state(&agent_access, &request_doc_id, "pending").await;
 }
 
 #[tokio::test]
@@ -715,22 +745,21 @@ async fn ready_persistence_exhaustion_is_fatal_and_never_opens_runtime_readiness
 
 #[tokio::test]
 async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_runtime() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("startup-all-unavailable"));
-    bind_default_agent_backend_with_capacity_and_probe_status(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture_with_status(
+        "startup-all-unavailable",
         "backend-unavailable",
         "http://127.0.0.1:9/v1",
         1,
         "unknown",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -759,15 +788,22 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
         Some(AgentReadinessUnavailableReason::BackendTemporarilyUnavailable)
     );
 
-    let request_doc_id = create_agent_request(
-        node.as_ref(),
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        fixture.agent.did().parse().unwrap(),
+        fixture.agent.as_ref(),
+    )
+    .unwrap();
+    let request_doc_id = create_held_agent_request(
+        &node,
         identity.did(),
+        fixture.agent.as_ref(),
         "req-unavailable-runtime",
         "session-unavailable-runtime",
         "hello",
     )
     .await;
-    wait_for_request_state(node.as_ref(), &request_doc_id, "failed").await;
+    wait_for_held_request_state(&agent_access, &request_doc_id, "failed").await;
 
     let request_query = format!(
         r#"{{
@@ -777,22 +813,10 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
         }}"#,
         escape_graphql_string(&request_doc_id),
     );
-    let request_response = node.execute(&request_query).await;
-    assert!(
-        !request_response.has_errors(),
-        "AgentRequest failure query failed: {:?}",
-        request_response.errors
-    );
-    let failure_reason = request_response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("failure_reason"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+    let request_response = agent_access.execute(&request_query).await.unwrap();
+    let failure_reason = request_response["data"]["AgentRequest"][0]["failure_reason"]
+        .as_str()
+        .unwrap_or_default();
     assert_eq!(
         failure_reason, "inference backend is temporarily unavailable",
         "runtime rejection must expose only the typed public readiness reason"

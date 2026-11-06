@@ -279,12 +279,73 @@ pub(super) async fn held_runtime_fixture_with_status(
     .unwrap();
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
+    grant_held_agent_operations(&db.node, db.node_identity.as_ref(), agent.as_ref()).await;
     HeldRuntimeFixture {
         db,
         user,
         user_access,
         agent,
     }
+}
+
+pub(super) async fn grant_held_agent_operations(
+    node: &Arc<defra_node::Node>,
+    runtime: &dyn NodeIdentity,
+    agent: &dyn NodeIdentity,
+) {
+    use crate::store::config_client::NodePermission;
+    let admin = crate::ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
+    let agent_did = identity::Did::new(agent.did()).unwrap();
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DocumentDelete,
+        NodePermission::DacRelationAdd,
+        NodePermission::DacRelationDelete,
+    ] {
+        admin
+            .grant_node_permission(&agent_did, permission)
+            .await
+            .unwrap();
+    }
+}
+
+pub(super) async fn create_held_agent_request(
+    node: &Arc<defra_node::Node>,
+    node_did: &str,
+    agent: &dyn NodeIdentity,
+    request_id: &str,
+    session_id: &str,
+    content: &str,
+) -> String {
+    let did = agent.did();
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        request_id,
+        node_did,
+        did,
+        did,
+        session_id,
+        content,
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did),
+    );
+    crate::sign_agent_request_create(agent, &mut create)
+        .await
+        .unwrap();
+    let access =
+        crate::ConfigAccess::local_managed_agent(node.clone(), did.parse().unwrap(), agent)
+            .unwrap();
+    let response = access
+        .write(
+            "test.runtime.create_request",
+            &create.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
+    crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
 pub(super) fn request(agent_did: Option<&str>, session_id: &str) -> AgentRequest {
