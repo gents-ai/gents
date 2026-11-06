@@ -1104,6 +1104,65 @@ mod with_model {
         format!("Reply with exactly this token: {}", uuid::Uuid::new_v4())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "needs a local model, real launchd and real Codex; run through `make live-onboarding`"]
+    async fn continue_reopens_a_session_in_real_codex_with_its_agent() -> Result<()> {
+        let (endpoint, model) = live_model().await?;
+        let Some(codex) = real_interface("codex") else {
+            return Ok(());
+        };
+        let codex = codex.to_string_lossy();
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", &endpoint, &model)?;
+        live.bring_up(&home.home).await?;
+        crate::support::graphql::register_served_home(&home.home, HTTP_PORT)?;
+        let b = live.clone_agent(&home, "other").await?;
+        let graphql = graphql_url(HTTP_PORT);
+        // The session starts in Codex, so Codex keeps its own record of it, as it does for
+        // a person; it refuses permission overrides when resuming such a session.
+        let first = unique_prompt();
+        let mut opening = live.bare_gents(&codex, &home.home);
+        opening.args(["--agent", &b, &first]);
+        let mut first_window = Terminal::spawn(&opening, &live.log("window-first"))?;
+        let session: Result<String> = async {
+            let (request, session, _) = wait_for_request(&graphql, &home.node_did, &first).await?;
+            wait_for_request_lifecycle_state(&graphql, &request, &["completed"], TURN).await?;
+            first_window.settle().await;
+            first_window.send("\x03")?;
+            first_window.wait_exit(PROMPT).await?;
+            Ok(session)
+        }
+        .await;
+        let session =
+            session.with_context(|| format!("the first window:\n{}", first_window.transcript()))?;
+
+        let second = unique_prompt();
+        let mut command = live.bare_gents(&codex, &home.home);
+        command.args(["--continue", &session, &second]);
+        let mut window = Terminal::spawn(&command, &live.log("window-continue"))?;
+        let turn: Result<()> = async {
+            let (request, again, agent) =
+                wait_for_request(&graphql, &home.node_did, &second).await?;
+            ensure!(
+                again == session,
+                "the prompt went to {again}, not {session}"
+            );
+            ensure!(agent == b, "the prompt went to agent {agent}, not {b}");
+            wait_for_request_lifecycle_state(&graphql, &request, &["completed"], TURN).await?;
+            // Until the shim's next poll tells Codex the turn ended, Ctrl-C interrupts it.
+            window.settle().await;
+            window.send("\x03")?;
+            window
+                .expect(
+                    &format!("Pick this up again with: gents --continue {session}"),
+                    PROMPT,
+                )
+                .await
+        }
+        .await;
+        turn.with_context(|| format!("the window:\n{}", window.transcript()))
+    }
+
     /// `doctor` is a Codex subcommand, so it reaches the agent only past the separator.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "needs a local model, real launchd and real Codex; run through `make live-onboarding`"]

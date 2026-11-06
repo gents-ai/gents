@@ -44,6 +44,12 @@ source consistency checks, not a separate runtime compatibility version.
   than sent. Codex and Grok get the prompt after `--`, so one that names their
   own subcommand, such as `update`, is sent instead of run; this also covers
   `gents codex PROMPT`.
+- `gents --continue SESSION_ID` picks a session back up with the agent it had:
+  in Codex through `codex resume`, or for one more turn with `-p MESSAGE`, which
+  waits for a turn still running in that session. Grok cannot open a session at
+  launch, so a home set to Grok refuses it and names `-p` or Codex instead.
+  When Codex or Grok closes, `gents` prints the `--continue` command for the
+  session that window last gave a turn to.
 - `gents --yolo` opens the yolo agent, and `gents --yolo -p MESSAGE` messages it:
   a general-purpose agent with a copy of the default agent's tools, The
   Engineer's on a home `gents` set up. The first use makes it, later uses reuse

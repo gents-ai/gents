@@ -18,24 +18,26 @@ pub(crate) use streaming::{load_existing_tool_call_keys, stream_turn_progress};
 const PRINT_TIMEOUT_SECS: u64 = 86_400;
 const PRINT_POLL_SECS: u64 = 1;
 
-/// Sends `message` as the first turn of a new session and prints the reply. Only the reply
-/// reaches stdout, so `gents -p` can feed a pipe, and an approval the turn asks for is
-/// denied because nobody is there to answer it.
+/// Sends `message` as a turn of `session`, or of a new session, and prints the reply. A turn
+/// still running in that session finishes first. Only the reply reaches stdout, so `gents -p`
+/// can feed a pipe, and an approval the turn asks for is denied because nobody is there to
+/// answer it.
 pub(crate) async fn print_reply(
     home: &Path,
     graphql: &GraphqlEndpoint,
     node_did: &str,
     agent_id: Option<&str>,
+    session: Option<&str>,
     message: &str,
 ) -> Result<()> {
     ensure_local_request_signer(Some(home), node_did)?;
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_id = session.map_or_else(|| uuid::Uuid::new_v4().to_string(), str::to_owned);
     let input = gents::request::lifecycle::prepare_user_message_input(
         &gents::ConfigAccess::Graphql(graphql.clone()),
         node_did,
         &session_id,
         Default::default(),
-        gents_protocol::request_input::QueueDelivery::Steer,
+        gents_protocol::request_input::QueueDelivery::Queue,
     )
     .await?;
     let submitted = create_agent_request(

@@ -265,4 +265,7 @@ pub(crate) struct CodexArgs {
         help = "Optional prompt to start the session with"
     )]
     pub(crate) prompt: Option<String>,
+    /// Set by `gents --continue`, never by a flag.
+    #[arg(skip)]
+    pub(crate) resume: Option<String>,
 }

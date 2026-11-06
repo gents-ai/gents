@@ -120,6 +120,25 @@ fn a_bare_prompt_opens_the_interface_with_it_and_commands_still_win() {
 }
 
 #[test]
+fn continue_picks_up_a_session_with_its_own_agent() {
+    let cli = Cli::try_parse_from(["gents", "--continue", "s1"]).expect("--continue parses");
+    assert_eq!(cli.continue_session.as_deref(), Some("s1"));
+    let cli = Cli::try_parse_from(["gents", "--continue", "s1", "-p", "next"])
+        .expect("--continue with -p parses");
+    assert_eq!(cli.print.as_deref(), Some("next"));
+    let cli = Cli::try_parse_from(["gents", "--continue", "s1", "next step"])
+        .expect("--continue with a prompt parses");
+    assert_eq!(cli.prompt.as_deref(), Some("next step"));
+    for other in [&["--agent", "a"][..], &["--yolo"][..]] {
+        let argv = [&["gents", "--continue", "s1"][..], other].concat();
+        let conflict = Cli::try_parse_from(argv)
+            .err()
+            .expect("the session names its own agent");
+        assert_eq!(conflict.kind(), ErrorKind::ArgumentConflict, "{other:?}");
+    }
+}
+
+#[test]
 fn installed_services_and_updaters_keep_their_root_names() {
     let cli = Cli::try_parse_from(["gents", "server", "--home", "/h"]).expect("server parses");
     assert!(matches!(cli.command, Some(Command::Server(_))));

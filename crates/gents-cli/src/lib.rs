@@ -117,6 +117,7 @@ const ROOT_HELP_TEMPLATE: &str = "\
 Run `gents` with no command to set up a home and open a conversation.
 Run `gents PROMPT` to open it with PROMPT as the first message.
 Run `gents -p MESSAGE` to send one message and print the reply.
+Run `gents --continue SESSION_ID` to pick a session back up with its agent.
 Run `gents <command> --help` for details.
 
 \x1b[1;4mOptions:\x1b[0m
@@ -427,6 +428,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
                 agent: cli.agent,
                 print: cli.print,
                 prompt: cli.prompt,
+                continue_session: cli.continue_session,
                 yolo: cli.yolo,
             })
             .await

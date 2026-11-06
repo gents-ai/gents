@@ -131,6 +131,12 @@ fn parse_prompt(value: &str) -> Result<String, String> {
     }
 }
 
+fn parse_session_id(value: &str) -> Result<String, String> {
+    crate::require_non_empty("session", value)
+        .map(str::to_string)
+        .map_err(|error| error.to_string())
+}
+
 fn parse_agent_id(value: &str) -> Result<String, String> {
     crate::require_non_empty("agent", value)
         .map(str::to_string)
@@ -159,6 +165,14 @@ pub(crate) struct Cli {
     /// Use the yolo agent: a general-purpose agent with The Engineer's tools, made on first use.
     #[arg(long, conflicts_with = "agent")]
     pub(crate) yolo: bool,
+    /// Pick SESSION_ID back up with the agent it had. See `gents sessions list`.
+    #[arg(
+        long = "continue",
+        value_name = "SESSION_ID",
+        value_parser = parse_session_id,
+        conflicts_with_all = ["agent", "yolo"]
+    )]
+    pub(crate) continue_session: Option<String>,
     /// Open the interface with PROMPT as its first message. A PROMPT that names a command runs it.
     #[arg(value_name = "PROMPT", value_parser = parse_prompt, conflicts_with = "print")]
     pub(crate) prompt: Option<String>,

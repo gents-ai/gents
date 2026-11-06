@@ -172,3 +172,59 @@ async fn yolo_makes_one_agent_with_the_default_agents_tools_and_reuses_it() -> R
     assert_eq!(sessions.len(), 2, "both runs went to the same yolo agent");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn continue_adds_a_turn_to_the_session_with_the_agent_it_had() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let reply = format!("continue-ok-{}", Uuid::new_v4().simple());
+    let model_name = format!("mock-continue-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &reply)?;
+    let (_serve, graphql, node_did) =
+        served_home(&home_dir, &model_name, mock_endpoint.endpoint()).await?;
+    let turn = |content: &str| {
+        let graphql = graphql.clone();
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{node_did}"}}, content: {{_eq: "{content}"}}}}) {{ session_id agent_id }} }}"#
+        );
+        async move {
+            let rows = graphql_query(&graphql, &query).await?;
+            rows["data"]["AgentRequest"]
+                .as_array()
+                .and_then(|rows| rows.first().cloned())
+                .context("the turn has a request")
+        }
+    };
+
+    gents_without_a_terminal(&home_dir, &["--yolo", "-p", "First turn."])?;
+    let first = turn("First turn.").await?;
+    let session = first["session_id"]
+        .as_str()
+        .context("a session")?
+        .to_owned();
+    let stdout =
+        gents_without_a_terminal(&home_dir, &["--continue", &session, "-p", "Second turn."])?;
+    assert_eq!(stdout.trim(), reply);
+    let second = turn("Second turn.").await?;
+    assert_eq!(second["session_id"], session.as_str(), "the same session");
+    assert_eq!(
+        second["agent_id"],
+        format!("{node_did}:yolo").as_str(),
+        "the agent the session had, with no --agent"
+    );
+
+    let unknown = Command::new(cli_bin())
+        .env("HOME", &home_dir)
+        .env("RUST_LOG", "error")
+        .args(["--continue", "no-such-session", "-p", "hello"])
+        .stdin(Stdio::null())
+        .output()?;
+    let stderr = String::from_utf8_lossy(&unknown.stderr);
+    assert!(!unknown.status.success(), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("no session no-such-session") && stderr.contains("gents sessions list"),
+        "stderr:\n{stderr}"
+    );
+    Ok(())
+}
