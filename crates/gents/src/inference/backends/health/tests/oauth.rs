@@ -409,11 +409,12 @@ async fn oauth_kinds_stale_credential_without_refresh_token_still_demotes_after_
         reqwest::Client::new(),
         BackendHealthMap::new(),
     );
-    let grok = oauth_backend(
+    let mut grok = oauth_backend(
         crate::inference::backends::provider::BackendProviderKind::XaiGrokOAuth,
         "grok",
         "https://cli-chat-proxy.grok.com/v1",
     );
+    grok.node_did = did.to_owned();
     for cycle in 1..=3u32 {
         let outcome = probe_backends_cycle(
             &node,
@@ -633,11 +634,12 @@ async fn oauth_kinds_missing_credential_fails_with_login_hint() {
         reqwest::Client::new(),
         BackendHealthMap::new(),
     );
-    let codex = oauth_backend(
+    let mut codex = oauth_backend(
         crate::inference::backends::provider::BackendProviderKind::ChatGptCodex,
         "codex",
         "https://chatgpt.com/backend-api/codex",
     );
+    codex.node_did = did.to_owned();
     probe_backends_cycle(
         &node,
         &client,
