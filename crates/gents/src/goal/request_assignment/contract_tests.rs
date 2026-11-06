@@ -6,6 +6,33 @@ use gents_protocol::request_admission::{
 use gents_protocol::request_input::GoalAssignmentInput;
 use serde_json::{json, Value};
 
+#[tokio::test]
+async fn physical_goal_caller_reuses_the_signed_session_observation() {
+    let temp = tempfile::tempdir().unwrap();
+    let identity = KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap();
+    let row = entry(
+        &json!({"owner":1,"session":1,"doc":1,"reference":null,"signature_valid":true}),
+        std::slice::from_ref(&identity),
+    )
+    .await;
+    let assignments =
+        request_assignments(identity.did(), "session-1", vec![row.clone()], vec![]).unwrap();
+    let (observed, assignment) = assignments
+        .observe_physical_request("physical-1", "request-1")
+        .unwrap();
+    assert_eq!(observed.doc_id, row.doc_id);
+    assert!(matches!(assignment, RequestAssignmentObservation::None));
+    assert!(assignments
+        .observe_physical_request("physical-1", "other")
+        .is_err());
+    assert!(assignments
+        .observe_physical_request("missing", "request-1")
+        .is_err());
+    assert!(
+        request_assignments(identity.did(), "session-1", vec![row.clone(), row], vec![]).is_err()
+    );
+}
+
 pub(super) fn goal(value: &Value, identities: &[KeyIdentity]) -> GoalDocument {
     serde_json::from_value(json!({
         "_docID":format!("goal-doc-{}-{}",value["goal"],value["root"]),
