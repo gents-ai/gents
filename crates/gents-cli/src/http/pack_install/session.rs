@@ -532,7 +532,7 @@ async fn run_inner(
             coordinate: coordinate.clone(),
             version: received.root.manifest().version.clone(),
             digest: received.root.digest().to_owned(),
-            kind: gents::pack::PackKind::Documents,
+            kind: received.root.manifest().metadata.kind.clone(),
             assets: materialized.0,
             dependency_assets: materialized.1,
             plugins: installed_plugins

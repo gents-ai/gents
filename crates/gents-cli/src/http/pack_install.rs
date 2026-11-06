@@ -258,6 +258,12 @@ pub(crate) async fn install_handler(
         Ok(Err(error)) => return refused(StatusCode::BAD_REQUEST, error),
         Err(error) => return refused(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
+    if received.root.manifest().metadata.kind != PackKind::Documents {
+        return refused(
+            StatusCode::BAD_REQUEST,
+            "plugin packs require the reviewed install session",
+        );
+    }
     // Detached so a dropped client cannot cancel an install mid-commit.
     let result =
         tokio::spawn(
@@ -347,8 +353,11 @@ fn decode_install_request(mut request: InstallRequest, node_did: &str) -> Result
         .map(open)
         .collect::<Result<Vec<_>>>()?;
     anyhow::ensure!(
-        root.manifest().metadata.kind == PackKind::Documents,
-        "remote pack install accepts a documents pack root"
+        matches!(
+            root.manifest().metadata.kind,
+            PackKind::Documents | PackKind::Plugins | PackKind::Assets
+        ),
+        "unsupported remote pack root"
     );
     ensure_exact_closure(&root, &dependencies)?;
     Ok(Received {

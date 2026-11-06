@@ -790,6 +790,62 @@ fn classify_plugin_store_failure(
     }
 }
 
+/// Apply the reviewed plugin identity without replacing any existing pack documents.
+async fn write_installed_plugin_identity(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    pack: &PackIdentity,
+    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+) -> Result<()> {
+    let prior = read_record(txn, owner, &pack.coordinate).await?;
+    anyhow::ensure!(
+        prior.doc_id == pack.installation_doc_id,
+        "pack installation changed after preparation"
+    );
+    let documents = prior.documents.values().cloned().collect();
+    if prior.doc_id.is_none() || prior.plugin_store {
+        write_record_in_txn(
+            txn,
+            owner,
+            pack,
+            &prior,
+            documents,
+            false,
+            true,
+            node_binding,
+        )
+        .await?;
+    } else {
+        let mut plugins = prior.plugins.clone();
+        for plugin in &pack.plugins {
+            plugins.retain(|kept| kept.name != plugin.name);
+            plugins.push(plugin.clone());
+        }
+        let identity = PackIdentity {
+            installation_doc_id: prior.doc_id.clone(),
+            agent_bindings: prior.agent_bindings.clone(),
+            coordinate: pack.coordinate.clone(),
+            version: prior.version.clone().unwrap_or_default(),
+            digest: prior.digest.clone().unwrap_or_default(),
+            plugins,
+            dependencies: Vec::new(),
+            explicit: prior.explicit,
+        };
+        write_record_in_txn(
+            txn,
+            owner,
+            &identity,
+            &prior,
+            documents,
+            false,
+            prior.plugin_store,
+            node_binding,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 async fn write_plugin_record(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,

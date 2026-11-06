@@ -269,11 +269,17 @@ pub(super) async fn load_pack_install_config_with_dependencies(
         hosted,
     } = bindings;
     super::validate_pack_manifest(manifest)?;
-    let path = manifest
-        .config
-        .as_deref()
-        .context("pack has no configuration")?;
-    let mut value: Value = serde_json::from_slice(&read_asset(path)?)?;
+    let mut value: Value = match manifest.config.as_deref() {
+        Some(path) => serde_json::from_slice(&read_asset(path)?)?,
+        None if matches!(
+            manifest.metadata.kind,
+            super::PackKind::Plugins | super::PackKind::Assets
+        ) =>
+        {
+            serde_json::json!({"node": {}})
+        }
+        None => anyhow::bail!("pack has no configuration"),
+    };
     let slots = authored_slots(&value)?;
     let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
     let (installation_doc_id, recorded) =
@@ -409,11 +415,17 @@ pub fn load_pack_authoring_config(
     environment: &dyn Fn(&str) -> Option<String>,
 ) -> Result<AuthoredPackConfig> {
     super::validate_pack_manifest(manifest)?;
-    let path = manifest
-        .config
-        .as_deref()
-        .context("pack has no configuration")?;
-    let mut value: Value = serde_json::from_slice(&read_asset(path)?)?;
+    let mut value: Value = match manifest.config.as_deref() {
+        Some(path) => serde_json::from_slice(&read_asset(path)?)?,
+        None if matches!(
+            manifest.metadata.kind,
+            super::PackKind::Plugins | super::PackKind::Assets
+        ) =>
+        {
+            serde_json::json!({"node": {}})
+        }
+        None => anyhow::bail!("pack has no configuration"),
+    };
     let original = value.clone();
     super::loader::interpolate_values(&mut value, &|name| {
         if name == "GENTS_PACK_NODE_DID" {

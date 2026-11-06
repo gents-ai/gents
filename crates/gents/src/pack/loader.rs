@@ -27,10 +27,17 @@ pub(super) fn load_pack_config_value(
     read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
     environment: &dyn Fn(&str) -> Option<String>,
 ) -> Result<PackConfig> {
-    let path = manifest
-        .config
-        .as_deref()
-        .context("pack has no configuration")?;
+    let path = match manifest.config.as_deref() {
+        Some(path) => path,
+        None if matches!(
+            manifest.metadata.kind,
+            super::PackKind::Plugins | super::PackKind::Assets
+        ) =>
+        {
+            ""
+        }
+        None => anyhow::bail!("pack has no configuration"),
+    };
     let mut config = decode_pack_config(value, Some(options), environment, &|_, _, reference| {
         let mut prompt = reference.to_owned();
         hydrate_sidecar(&mut prompt, path, manifest, read_asset)?;

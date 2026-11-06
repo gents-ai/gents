@@ -25,6 +25,52 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         "{namespace}/{name} carries no plugins; install the whole pack with gents pack install"
     );
     let notification_scope = crate::commands::pack::plugin_notification_scope(&home).await?;
+    if let Some((gents::ConfigAccess::Graphql(endpoint), owner)) = &notification_scope {
+        use futures_util::StreamExt;
+        let source = crate::commands::pack::PackSource::received(pack.archive);
+        let dependencies =
+            futures_util::stream::iter(source.manifest().metadata.dependencies.iter())
+                .map(|coordinate| {
+                    crate::commands::pack::resolve_pack_source(
+                        coordinate,
+                        args.registry.as_deref(),
+                        &home,
+                    )
+                })
+                .buffered(4)
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?;
+        let pack_args = crate::cli::PackInstallArgs {
+            package: args.name.clone(),
+            inference_slots: Vec::new(),
+            preview: false,
+            scope: crate::cli::ScopeArgs {
+                home: Some(home.clone()),
+                graphql: None,
+                node_did: None,
+            },
+            output: crate::cli::output_format::OutputFormat::Json,
+            force_rebind_concrete_did: false,
+            registry: args.registry.clone(),
+            drift: Default::default(),
+            grant_authority: args.grant_authority,
+            wire: Vec::new(),
+            expect_digest: None,
+            explicit: true,
+        };
+        let result = crate::http::pack_install_client::install_remote(
+            endpoint,
+            owner,
+            &source,
+            &dependencies,
+            &pack_args,
+            true,
+        )
+        .await?;
+        return crate::print_json(&result);
+    }
     let notify_scope = notification_scope.clone();
     let notify_home = home.clone();
     let result = gents::pack::plugin_lifecycle::install_plugin(

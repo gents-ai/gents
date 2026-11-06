@@ -1230,6 +1230,7 @@ pub struct HostedDocumentGraph {
     identities: Vec<PackIdentity>,
     documents: Vec<Vec<crate::store::config_client::DesiredStateApplyDocument>>,
     node_binding: Option<crate::store::config_client::ConfigurationNodeBinding>,
+    plugin_root: bool,
 }
 
 pub fn hosted_document_graph(
@@ -1271,6 +1272,12 @@ pub(super) fn hosted_document_graph_from_stages(
         identities,
         documents,
         node_binding: prepared.node_binding.clone(),
+        plugin_root: stages.last().is_some_and(|stage| {
+            matches!(
+                stage.manifest.metadata.kind,
+                super::super::PackKind::Plugins | super::super::PackKind::Assets
+            )
+        }),
     })
 }
 
@@ -1280,15 +1287,47 @@ pub async fn apply_hosted_document_graph(
     graph: &HostedDocumentGraph,
     policy: DriftPolicy,
 ) -> Result<Vec<InstallReport>> {
-    apply_document_graph_in_txn(
+    if !graph.plugin_root {
+        return apply_document_graph_in_txn(
+            txn,
+            owner,
+            &graph.identities,
+            graph.documents.clone(),
+            policy,
+            graph.node_binding.as_ref(),
+        )
+        .await;
+    }
+    let (root, dependencies) = graph
+        .identities
+        .split_last()
+        .context("hosted plugin root missing")?;
+    let (root_documents, dependency_documents) = graph
+        .documents
+        .split_last()
+        .context("hosted plugin graph missing")?;
+    anyhow::ensure!(
+        root_documents.is_empty(),
+        "plugin root cannot replace pack documents"
+    );
+    let mut reports = apply_document_graph_in_txn(
         txn,
         owner,
-        &graph.identities,
-        graph.documents.clone(),
+        dependencies,
+        dependency_documents.to_vec(),
         policy,
         graph.node_binding.as_ref(),
     )
-    .await
+    .await?;
+    super::validate_plugin_replacements_in_txn(txn, owner, std::slice::from_ref(root)).await?;
+    super::write_installed_plugin_identity(txn, owner, root, graph.node_binding.as_ref()).await?;
+    super::dependencies::claim_in_txn(txn, owner, &root.coordinate, &root.dependencies, policy)
+        .await?;
+    reports.push(super::InstallReport {
+        plugins: root.plugins.clone(),
+        ..Default::default()
+    });
+    Ok(reports)
 }
 
 pub(super) async fn stage_document_plugins(
@@ -1396,6 +1435,10 @@ pub(super) async fn install_document_graph(
             .as_ref()
             .map(|stage| stage.installed.clone())
             .unwrap_or_default();
+        let previous_plugins = plugin_stage
+            .as_ref()
+            .map(|stage| stage.previous_plugins())
+            .unwrap_or_default();
         let reference_packs = stages
             .iter()
             .rev()
@@ -1437,8 +1480,12 @@ pub(super) async fn install_document_graph(
                 let reference_packs = reference_packs.clone();
                 let home = home.clone();
                 let plugins = plugins.clone();
+                let staged_plugins = plugins.clone();
+                let previous_plugins = previous_plugins.clone();
                 let node_binding = node_binding.clone();
                 Box::pin(async move {
+                    txn.stage_plugin_delete_roots(&previous_plugins, &staged_plugins)
+                        .await?;
                     tokio::task::spawn_blocking(move || {
                         let packs = reference_packs
                             .iter()

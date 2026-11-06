@@ -3932,3 +3932,58 @@ async fn client_signs_pack_installation_record_and_dependency_updates() -> Resul
     node.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
+    let access = access().await;
+    let (_directory, _path, archive) =
+        crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
+    let home = tempfile::tempdir()?;
+    let mut existing = identity("1");
+    existing.coordinate = "fixture/native_echo_pack".into();
+    existing.plugins.clear();
+    super::super::install_pack_documents(
+        &access,
+        OWNER,
+        &existing,
+        &config(&[("retained", "Retained")]),
+        DriftPolicy::Refuse,
+    )
+    .await?;
+    let prepared = prepare_document_pack_archive(
+        &access,
+        OWNER,
+        &archive,
+        &crate::pack::PackInferenceBindings::new(),
+        &[],
+        InstalledVia::Operator,
+        Some(home.path()),
+        &|_| None,
+    )
+    .await?;
+    let graph = hosted_document_graph(&archive, &prepared, true)?;
+    let result = access
+        .transact_write("test.hosted_plugin.graph", |txn| {
+            let graph = &graph;
+            Box::pin(async move {
+                apply_hosted_document_graph(txn, OWNER, graph, DriftPolicy::Refuse).await
+            })
+        })
+        .await;
+    let model = crate::lean_vocab_test::lean_contract_snapshot()
+        .hosted_plugin_cases
+        .iter()
+        .find(|case| case["reviewed"] == true && case["plan"] == true && case["native"] == true)
+        .unwrap();
+    assert_eq!(result.is_ok(), model["allowed"].as_bool().unwrap());
+    result?;
+    let record = access
+        .transact_readonly("test.hosted_plugin.read", |txn| {
+            Box::pin(async move { read_record(txn, OWNER, "fixture/native_echo_pack").await })
+        })
+        .await?;
+    assert!(!record.plugin_store);
+    assert!(record.documents.contains_key("Tools/retained"));
+    assert_eq!(record.plugins.len(), 1);
+    Ok(())
+}

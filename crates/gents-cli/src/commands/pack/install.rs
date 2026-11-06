@@ -475,6 +475,28 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 .clone()
                 .context("asset and plugins packs require --home")?;
             let notification_scope = plugin_notification_scope(&home).await?;
+            if let Some((gents::ConfigAccess::Graphql(endpoint), owner)) = &notification_scope {
+                let dependencies =
+                    futures_util::stream::iter(pack.manifest().metadata.dependencies.iter())
+                        .map(|coordinate| {
+                            resolve_pack_source(coordinate, args.registry.as_deref(), &home)
+                        })
+                        .buffered(4)
+                        .collect::<Vec<_>>()
+                        .await
+                        .into_iter()
+                        .collect::<Result<Vec<_>>>()?;
+                let result = crate::http::pack_install_client::install_remote(
+                    endpoint,
+                    owner,
+                    &pack,
+                    &dependencies,
+                    &args,
+                    true,
+                )
+                .await?;
+                return crate::print_json(&result);
+            }
             let notify_scope = notification_scope.clone();
             let notify_home = home.clone();
             let result = gents::pack::plugin_lifecycle::install(
