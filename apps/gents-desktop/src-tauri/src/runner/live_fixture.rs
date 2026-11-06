@@ -592,7 +592,7 @@ mod tests {
             skill_save_request(&node_did, skill_id, skill_body),
         )
         .await?;
-        wait_for_remote_skill(fixture.remote_core().as_ref(), skill_id)
+        wait_for_remote_skill(fixture.desktop_core().as_ref(), skill_id)
             .await
             .context("skill did not appear on the runtime after create")?;
 
@@ -604,7 +604,7 @@ mod tests {
             },
         )
         .await?;
-        wait_for_remote_skill_absent(fixture.remote_core().as_ref(), skill_id)
+        wait_for_remote_skill_absent(fixture.desktop_core().as_ref(), skill_id)
             .await
             .context("skill remained queryable on the node after delete")?;
         Ok(())
@@ -616,7 +616,7 @@ mod tests {
     ) -> Result<()> {
         let node_did = fixture.node_did().to_string();
         let agent_did = fixture
-            .remote_core()
+            .desktop_core()
             .store()
             .snapshot()
             .default_agent_did_for_node(&node_did)
@@ -631,16 +631,16 @@ mod tests {
             skill_save_request(&node_did, skill_id, skill_body),
         )
         .await?;
-        wait_for_remote_skill(fixture.remote_core().as_ref(), skill_id).await?;
+        wait_for_remote_skill(fixture.desktop_core().as_ref(), skill_id).await?;
         let generation_before_bind =
-            wait_for_remote_runtime_generation(fixture.remote_core().as_ref(), &node_did)
+            wait_for_remote_runtime_generation(fixture.desktop_core().as_ref(), &node_did)
                 .await
                 .context("runtime status missing before skill binding")?;
         bind_skill_to_agent_context(fixture, &node_did, &agent_did, skill_id).await?;
-        wait_for_remote_context_skill_ids(fixture.remote_core().as_ref(), &agent_did, &[skill_id])
+        wait_for_remote_context_skill_ids(fixture.desktop_core().as_ref(), &agent_did, &[skill_id])
             .await?;
         wait_for_remote_runtime_generation_after(
-            fixture.remote_core().as_ref(),
+            fixture.desktop_core().as_ref(),
             &node_did,
             generation_before_bind,
         )
@@ -794,7 +794,7 @@ mod tests {
         drop(release);
 
         let request =
-            wait_for_remote_request(fixture.remote_core().as_ref(), &submitted.request_id).await?;
+            wait_for_remote_request(fixture.desktop_core().as_ref(), &submitted.request_id).await?;
         assert_eq!(
             request.requester_did.as_deref(),
             Some(requester_scope.as_str())

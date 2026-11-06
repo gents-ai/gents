@@ -318,6 +318,7 @@ impl EmbeddedHome {
         self.node_acp_enabled
     }
 
+    /// The admission is bound to this home's protected native node.
     pub fn backend_admission(&self) -> crate::store::local::backend_protection::BackendAdmission {
         self.backend_admission.clone()
     }

@@ -163,6 +163,14 @@ async fn seed_live_agent_documents(
     .await?;
     let agent_did = binding.agent_did;
     let target_agent_did = target_binding.agent_did;
+    anyhow::ensure!(
+        agent_did != node_did
+            && agent_did != config_actor_did
+            && target_agent_did != node_did
+            && target_agent_did != config_actor_did
+            && target_agent_did != agent_did,
+        "fixture User, Node, and Agents must have distinct identities"
+    );
     let backend_id = format!("{agent_name}-backend");
     let target_backend_id = if target_backend.is_some() {
         format!("{agent_name}-target-backend")
