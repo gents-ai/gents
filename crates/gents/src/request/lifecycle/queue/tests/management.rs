@@ -3,6 +3,16 @@ use crate::lean_vocab_test::LeanQueueManagementOperation;
 use crate::store::config_client::ConfigAccess;
 use rapidhash::{HashMapExt, RapidHashMap};
 
+/// Seeds an Agent-owned row through the Agent's own signed access.
+async fn agent_write(db: &TestDb, operation: &'static str, mutation: &str) -> serde_json::Value {
+    db.agent_access
+        .transact_write(operation, |txn| {
+            Box::pin(async move { Ok::<_, anyhow::Error>(txn.execute(mutation).await?) })
+        })
+        .await
+        .unwrap()
+}
+
 async fn queue_image(
     db: &TestDb,
     session_id: &str,
@@ -87,13 +97,12 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             crate::sign_agent_request_create(db.agent_identity.as_ref(), &mut create)
                 .await
                 .unwrap();
-            let response = ConfigAccess::write_local_response(
-                &db.node,
+            let response = agent_write(
+                &db,
                 "test.management.active",
                 &create.graphql_mutation().unwrap(),
             )
-            .await
-            .unwrap();
+            .await;
             bound.insert(
                 active,
                 extract_single_doc_id(&response, "create_AgentRequest").unwrap(),
@@ -122,10 +131,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                         1,
                     );
                 }
-                let response =
-                    ConfigAccess::write_local_response(&db.node, "test.management.seed", &mutation)
-                        .await
-                        .unwrap();
+                let response = agent_write(&db, "test.management.seed", &mutation).await;
                 extract_single_doc_id(&response, "create_AgentRequest").unwrap()
             };
             bound.insert(entry.request_id, id);
@@ -334,7 +340,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                 bound.insert(replacement.request_id, id.clone());
             }
             for (replacement, id) in replacements.iter().zip(&receipt.request_doc_ids) {
-                let row = crate::request::binding::load_agent_request_by_doc_id(&db.node, id)
+                let row = crate::request::binding::load_agent_request_by_doc_id_with_access(&db.agent_access, id)
                     .await
                     .unwrap()
                     .unwrap();
