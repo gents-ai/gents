@@ -154,8 +154,14 @@ export function AppShell({
   return (
     <MorphProvider value={shell}>
       <PaneBarSlotContext.Provider value={paneBar}>
+        {/* A fixed frame is a stacking context of its own, which would hold
+            everything the shell raises (the sidebar's hover panel, its peek)
+            under plugin pages' frames, staged at the body. A wide window's
+            body never scrolls, so there the shell is absolute, with the same
+            box and no stacking context; a narrow one keeps the fixed frame,
+            which follows the visual viewport while the keyboard is open. */}
         <div
-          className="viewport-frame grid min-h-0 overflow-hidden bg-background text-foreground"
+          className="viewport-frame grid min-h-0 overflow-hidden bg-background text-foreground md:absolute"
           ref={shellRef}
           data-testid="app-shell"
           data-resize-container=""
