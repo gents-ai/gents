@@ -321,6 +321,34 @@ theorem replica_parent_repair_does_not_restore_revocation :
       "local-node" "user" true true true) "user" "enrollment_records" "remote" "read" = false := by
   native_decide
 
+/-- A thin client may administer its own native store with its held peer DID
+without having a Node configuration document. On receipt of a verified foreign
+transport record, native NAC grants that exact client a local reader relation;
+the foreign creator remains the owner and the parent remains pending. This is
+local store authority, not peer enrollment or access to application records. -/
+def clientTransportFixture : State :=
+  { objects := [⟨"enrollment_records", "decision", "server"⟩,
+      ⟨"children", "application", "server"⟩], relations := [], enrolled := [] }
+
+def clientTransportPublished : State :=
+  replicaGrant clientTransportFixture "enrollment_records" "decision" "client"
+    "client-node" "user" true true true false false
+
+theorem client_receives_only_its_local_transport_reader :
+    (allowed 5 clientTransportPublished "server" "enrollment_records" "decision" "update",
+     allowed 5 clientTransportPublished "client" "enrollment_records" "decision" "read",
+     allowed 5 clientTransportPublished "client" "enrollment_records" "decision" "update",
+     allowed 5 clientTransportPublished "user" "enrollment_records" "decision" "read",
+     allowed 5 clientTransportPublished "agent" "enrollment_records" "decision" "read",
+     allowed 5 clientTransportPublished "outsider" "enrollment_records" "decision" "read",
+     allowed 5 clientTransportPublished "client" "children" "application" "read") =
+      (true, true, false, false, false, false, false) := by native_decide
+
+theorem client_without_native_authority_cannot_publish :
+    replicaGrant clientTransportFixture "enrollment_records" "decision" "client"
+      "client-node" "user" false true true false false = clientTransportFixture := by
+  simp [replicaGrant]
+
 theorem native_replica_requires_authority_and_registration :
     (replicaGrant privateReplicaFixture "enrollment_records" "remote" "runtime"
       "local-node" "user" false true true true false,

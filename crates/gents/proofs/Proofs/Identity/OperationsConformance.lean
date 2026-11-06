@@ -347,4 +347,12 @@ def localRegistryWriterCasesJson : String :=
     ("creator", toJson creator), ("names_runtime", toJson namesRuntime),
     ("writer", toJson (localRegistryWriter creator "runtime" "user" namesRuntime))])).compress
 
+def clientTransportCasesJson : String :=
+  let cases := [("foreign-owner-update", "server", "update"),
+    ("client-read", "client", "read"), ("client-update", "client", "update"),
+    ("user-read", "user", "read"), ("agent-read", "agent", "read"),
+    ("outsider-read", "outsider", "read")]
+  (toJson (cases.map fun (name, actor, permission) => Json.mkObj [("name", toJson name),
+    ("allowed", toJson (allowed 5 clientTransportPublished actor "enrollment_records" "decision" permission))])).compress
+
 end Identity.OperationsConformance

@@ -692,6 +692,8 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.OperationsConformance.localRegistryWriterCasesJson ++ ","
     ++ "\"identity_discovery_policy_cases\":"
       ++ Identity.OperationsConformance.discoveryPolicyCasesJson ++ ","
+    ++ "\"identity_client_transport_cases\":"
+      ++ Identity.OperationsConformance.clientTransportCasesJson ++ ","
     ++ "\"identity_replica_grant_cases\":"
       ++ Identity.OperationsConformance.replicaGrantCasesJson ++ ","
     ++ "\"identity_network_protocol_cases\":"
