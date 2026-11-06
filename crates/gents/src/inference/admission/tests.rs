@@ -27,15 +27,21 @@ pub(super) async fn test_node() -> (
     crate::support::TestDb,
     crate::store::identity::ManagedAgentSigner,
 ) {
-    use crate::store::config_client::NodePermission;
-    use crate::store::identity::NodeIdentity;
-
     lean_inference_slot_accounting_cases();
     let (db, _user, _access, binding) =
         crate::test_support::signed_test_node("inference-admission").await;
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
     let signer = agent.managed_agent_signer().unwrap();
+    grant_test_agent(&db, &signer).await;
+    (db, signer)
+}
+
+pub(super) async fn grant_test_agent(
+    db: &crate::support::TestDb,
+    signer: &crate::store::identity::ManagedAgentSigner,
+) {
+    use crate::store::config_client::NodePermission;
     let admin = crate::ConfigAccess::local_as(
         db.node.clone(),
         identity::Did::new(db.node_identity.did()).unwrap(),
@@ -54,7 +60,6 @@ pub(super) async fn test_node() -> (
             .await
             .unwrap();
     }
-    (db, signer)
 }
 
 #[derive(Clone)]

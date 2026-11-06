@@ -562,53 +562,59 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
 /// late_usage_preserves_terminal_projection / late_usage_is_recorded.
 #[tokio::test]
 async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
+    use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
     use crate::store::identity::NodeIdentity;
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
-    };
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
 
-    let keys = tempfile::tempdir().unwrap();
-    let identity =
-        crate::store::identity::KeyIdentity::load_or_create(keys.path().join("node.key"), None)
-            .unwrap();
-    let node = std::sync::Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
-    crate::test_support::install_test_agent_binding(&node, identity.did(), "test", &binding).await;
-    let agent = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
+    let (db, user, access, binding) =
+        crate::test_support::signed_test_node("inference-recovery-parent").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
+    let agent =
+        crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
     let signer = agent.managed_agent_signer().unwrap();
-    let mut create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        "recovery-cas-request",
-        identity.did(),
-        identity.did(),
-        agent.did(),
-        "recovery-cas-session",
-        "Resume the request",
-        "interactive",
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::local_self(identity.did()),
-    );
-    crate::sign_agent_request_create(&identity, &mut create)
+    super::super::tests::grant_test_agent(&db, &signer).await;
+    let request_id = "recovery-cas-request";
+    let create = crate::request::lifecycle::build_signed_client_request(
+        &access,
+        RequestSpec::new(
+            RequestPurpose::Normal,
+            RequestIdentity {
+                request_id: request_id.into(),
+                node_did: identity.did().to_owned(),
+                requester_did: Some(user.did().to_owned()),
+                agent_did: agent.did().to_owned(),
+                session_id: "recovery-cas-session".into(),
+                content: "Resume the request".into(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339(),
+            },
+            AgentRequestAdmissionRecord::client(user.did()),
+        ),
+        RequestSigner::Identity(&user),
+    )
+    .await
+    .unwrap();
+    crate::request::lifecycle::submit_client_request(&access, &create)
         .await
         .unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let response = access
-        .write("test.recovery_parent", &create.graphql_mutation().unwrap())
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+            escape_graphql_string(request_id),
+        ))
         .await
         .unwrap();
-    let parent_doc_id = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
-    let parent = crate::request::admission::load_request_for_admission_test(&node, &parent_doc_id)
-        .await
+    let parent_doc_id = response["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
         .unwrap();
+    let parent = crate::request::admission::load_request_for_admission_test_as(
+        &node,
+        parent_doc_id,
+        agent.did(),
+    )
+    .await
+    .unwrap();
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
         node.clone(),
         agent.did(),
@@ -666,7 +672,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     assert_eq!(stored["prompt_tokens"], 17);
     assert_eq!(stored["completion_tokens"], 9);
     let budget = crate::turn::completion_factory::aggregate_token_budget_for_request(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &agent_access(&node, &signer),
         &request,
     )
     .await
@@ -690,7 +696,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     .unwrap();
     assert_eq!(stored_call(&node, &signer).await, stored);
     let budget = crate::turn::completion_factory::aggregate_token_budget_for_request(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &agent_access(&node, &signer),
         &request,
     )
     .await
