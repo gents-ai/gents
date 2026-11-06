@@ -48,9 +48,8 @@ use lean_vocab_test::{
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
-    fetch_request_lineage_snapshot, fetch_request_lineage_snapshot_by_tuple,
-    fetch_request_snapshot, fetch_request_snapshot_raw, fetch_session_snapshot,
-    RequestLineageSnapshot, RequestSnapshot,
+    fetch_request_lineage_snapshot, fetch_request_snapshot, fetch_request_snapshot_raw,
+    fetch_session_snapshot, RequestLineageSnapshot, RequestSnapshot,
 };
 use support::{
     build_request, create_request, create_request_with_signed_fields,

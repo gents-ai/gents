@@ -1371,8 +1371,15 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
 
 #[tokio::test]
 async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
-    let db = test_db("scheduled-materialize").await;
-    let agent = crate::support::managed_agent(&db).await;
+    let db = support::test_signed_db("scheduled-materialize").await;
+    let fixture = support::managed_agent_fixture(&db).await;
+    let agent = &fixture.agent;
+    let access = gents::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         agent.did(),
@@ -1388,7 +1395,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
     .unwrap();
 
     assert_eq!(
-        fetch_request_snapshot(&db.node, &lifecycle.request().doc_id).await,
+        fetch_request_snapshot_with_access(&access, &lifecycle.request().doc_id).await,
         RequestSnapshot {
             lifecycle_state: RequestLifecycleState::Claimed,
             agent_did: agent.did().into(),
@@ -1405,8 +1412,8 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
         }
     );
 
-    assert_session_observes_request_in_scope(
-        &db.node,
+    assert_session_observes_request_with_access(
+        &access,
         &lifecycle.request().session_id,
         &(lifecycle.request().request_id.clone()),
         RequestLifecycleState::Claimed,
@@ -1419,8 +1426,15 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
 
 #[tokio::test]
 async fn scheduled_materialization_persists_trigger_lineage() {
-    let db = test_db("scheduled-materialize-lineage").await;
-    let agent = crate::support::managed_agent(&db).await;
+    let db = support::test_signed_db("scheduled-materialize-lineage").await;
+    let fixture = support::managed_agent_fixture(&db).await;
+    let agent = &fixture.agent;
+    let access = gents::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
     let lineage = TriggerLineage {
         trigger_id: Some("sched-1".into()),
         trigger_kind: Some("schedule".into()),
@@ -1444,7 +1458,14 @@ async fn scheduled_materialization_persists_trigger_lineage() {
     .unwrap();
 
     assert_eq!(
-        fetch_request_lineage_snapshot(&db.node, &lifecycle.request().doc_id).await,
+        fetch_request_lineage_with_access(
+            &access,
+            &format!(
+                "_docID: {{_eq: \"{}\"}}",
+                escape_graphql_string(&lifecycle.request().doc_id)
+            )
+        )
+        .await,
         RequestLineageSnapshot {
             caused_by_trigger_id: Some("sched-1".into()),
             caused_by_trigger_kind: Some("schedule".into()),
@@ -1452,22 +1473,23 @@ async fn scheduled_materialization_persists_trigger_lineage() {
     );
 
     assert_eq!(
-        fetch_request_lineage_snapshot_by_tuple(&db.node, "sched-1", "schedule").await,
+        Some(fetch_request_lineage_with_access(&access,
+            "caused_by_trigger_id: {_eq: \"sched-1\"}, caused_by_trigger_kind: {_eq: \"schedule\"}"
+        ).await),
         Some(RequestLineageSnapshot {
             caused_by_trigger_id: Some("sched-1".into()),
             caused_by_trigger_kind: Some("schedule".into()),
         })
     );
 
-    let response = db
-        .node
+    let response = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ admission_kind admission_signer_did admission_signature }} }}"#,
             escape_graphql_string(&lifecycle.request().doc_id),
         ))
         .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let row = &response.data.as_ref().unwrap()["AgentRequest"][0];
+    let response = response.unwrap();
+    let row = &response["data"]["AgentRequest"][0];
     assert_eq!(row["admission_kind"], "local-self");
     assert_eq!(row["admission_signer_did"], agent.did());
     assert!(row["admission_signature"]
@@ -2192,6 +2214,104 @@ async fn terminal_repair_sweep_ignores_foreign_did_claims() {
     assert_eq!(
         fetch_request_snapshot(&db.node, &foreign_doc).await,
         foreign_before
+    );
+}
+
+async fn fetch_request_snapshot_with_access(
+    access: &gents::ConfigAccess,
+    doc_id: &str,
+) -> RequestSnapshot {
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, limit: 1) {{
+            request_id lifecycle_state agent_did backend_id execution_origin
+            retry_parent_request retry_root_request superseded_by_request retry_count max_retries
+            claimed_at deadline failure_reason
+        }} }}"#,
+            escape_graphql_string(doc_id),
+        ))
+        .await
+        .unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    row.into()
+}
+
+async fn fetch_request_lineage_with_access(
+    access: &gents::ConfigAccess,
+    filter: &str,
+) -> RequestLineageSnapshot {
+    let response = access.execute(&format!(
+        "{{ AgentRequest(filter: {{{filter}}}, limit: 1) {{ caused_by_trigger_id caused_by_trigger_kind }} }}"
+    )).await.unwrap();
+    serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap()
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the observation checks both model states and authenticated scope"
+)]
+async fn assert_session_observes_request_with_access(
+    access: &gents::ConfigAccess,
+    session_id: &str,
+    request_id: &str,
+    expected_observation: RequestLifecycleState,
+    expected_authoritative: RequestLifecycleState,
+    node_did: &str,
+    agent_did: &str,
+) {
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{session_id: {{_eq: "{}"}}}}, limit: 2) {{ {} }} }}"#,
+            escape_graphql_string(session_id),
+            gents::session::AGENT_SESSION_FIELDS,
+        ))
+        .await
+        .unwrap();
+    let rows = response["data"]["AgentSession"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "exact session must be unambiguous");
+    let session = gents::session::decode_session_row(&rows[0])
+        .unwrap()
+        .session;
+    assert_eq!(session.session_id, session_id);
+    assert_eq!(session.node_did, node_did);
+    assert_eq!(session.agent_did, agent_did);
+    assert!(
+        session.closed_at.is_none(),
+        "request terminality does not close the session"
+    );
+    let latest = session
+        .observation
+        .expect("index observation")
+        .latest_request
+        .expect("latest request");
+    assert_eq!(latest.request_id, request_id);
+    assert_eq!(latest.lifecycle_state, expected_observation);
+    let response = access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{ _docID node_did requester_did agent_did lifecycle_state }} }}"#,
+        escape_graphql_string(request_id), escape_graphql_string(session_id),
+    )).await.unwrap();
+    let rows = response["data"]["AgentRequest"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "exact request must be unambiguous");
+    assert_eq!(
+        rows[0]["_docID"].as_str(),
+        Some(latest.request_doc_id.as_str())
+    );
+    assert_eq!(
+        rows[0]["lifecycle_state"].as_str(),
+        Some(expected_authoritative.as_str())
+    );
+    assert_eq!(
+        rows[0]["node_did"].as_str(),
+        Some(session.node_did.as_str())
+    );
+    assert_eq!(
+        rows[0]["requester_did"].as_str(),
+        session.requester_did.as_deref()
+    );
+    assert_eq!(
+        rows[0]["agent_did"].as_str(),
+        Some(session.agent_did.as_str())
     );
 }
 
