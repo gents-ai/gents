@@ -227,8 +227,6 @@
             "links": [
               {
                 "capture": "agents",
-                "key": "agent_did",
-                "id": "nightly-reviewer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -237,12 +235,14 @@
                     "field": "reasoning_effort",
                     "equals": "medium"
                   }
-                ]
+                ],
+                "source_match": {
+                  "field": "display_name",
+                  "matches": "(?i)^nightly[ -]reviewer$"
+                }
               },
               {
                 "capture": "agents",
-                "key": "agent_did",
-                "id": "nightly-reviewer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -266,12 +266,14 @@
                     "target_capture": "executions",
                     "target_key": "execution_id"
                   }
-                ]
+                ],
+                "source_match": {
+                  "field": "display_name",
+                  "matches": "(?i)^nightly[ -]reviewer$"
+                }
               },
               {
                 "capture": "agents",
-                "key": "agent_did",
-                "id": "nightly-reviewer",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -282,7 +284,11 @@
                     "target_capture": "backends",
                     "target_key": "backend_id"
                   }
-                ]
+                ],
+                "source_match": {
+                  "field": "display_name",
+                  "matches": "(?i)^nightly[ -]reviewer$"
+                }
               }
             ],
             "present": [
@@ -330,6 +336,20 @@
       "capture": [
         {
           "kind": "documents",
+          "name": "role_agents",
+          "collection": "Agent",
+          "filter": {
+            "node_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "agent_did",
+            "display_name"
+          ]
+        },
+        {
+          "kind": "documents",
           "name": "completed_review",
           "collection": "AgentRequest",
           "filter": {
@@ -337,7 +357,16 @@
               "_eq": "$trial"
             },
             "agent_did": {
-              "_like": "%:nightly-reviewer"
+              "_eq": {
+                "$capture": {
+                  "capture": "role_agents",
+                  "source_match": {
+                    "field": "display_name",
+                    "matches": "(?i)^nightly[ -]reviewer$"
+                  },
+                  "field": "agent_did"
+                }
+              }
             },
             "content": {
               "_like": "%nightly-digest%"

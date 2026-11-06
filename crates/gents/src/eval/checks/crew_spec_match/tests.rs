@@ -504,6 +504,56 @@ fn source_match_follows_one_role_and_rejects_ambiguity_and_decoys() {
 }
 
 #[test]
+fn nightly_reviewer_fixture_checks_the_unique_managed_agent_profile() {
+    let case: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/configurator_evals/ladder/l1_inference/cases/held_nightly_automation_reviewer.json"
+    )))
+    .unwrap();
+    let configure = case["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|stage| stage["stage_id"] == "configure")
+        .unwrap();
+    let params = &configure["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["check"] == "crew_spec_match")
+        .unwrap()["params"];
+    let reviewer = json!({"agent_did":"did:key:actual-reviewer", "display_name":"Nightly Reviewer", "inference_profile_id":"review-profile"});
+    let agents = vec![
+        reviewer.clone(),
+        json!({"agent_did":"did:key:nightly-reviewer", "display_name":"Other Reviewer", "inference_profile_id":"wrong"}),
+    ];
+    let check = |agents: Vec<Value>, max_turns| {
+        let evidence = stage(&[
+            ("agents", agents),
+            (
+                "profiles",
+                vec![
+                    json!({"profile_id":"review-profile", "reasoning_effort":"medium", "execution_id":"limits", "backend_id":"backend"}),
+                    json!({"profile_id":"original"}),
+                ],
+            ),
+            (
+                "executions",
+                vec![
+                    json!({"execution_id":"limits", "max_turns":max_turns, "max_total_tokens":120000, "deadline_duration_secs":1200}),
+                ],
+            ),
+            ("backends", vec![json!({"backend_id":"backend"})]),
+        ]);
+        CrewSpecMatch.evaluate(params, &evidence).score_bp.unwrap()
+    };
+    assert_eq!(check(agents.clone(), 25), 10000);
+    assert!(check(agents.clone(), 24) < 10000);
+    assert!(check(vec![agents[1].clone()], 25) < 10000);
+    assert!(check(vec![reviewer.clone(), reviewer], 25) < 10000);
+}
+
+#[test]
 fn exact_link_rejects_a_prefixed_session_or_call_id() {
     let params = json!({"links":[{"capture":"requests","source_match":{"field":"content","equals":"token"},"field":"session_id","target_capture":"sessions","target_key":"session_id","exact":true}]});
     let mut evidence = stage(&[

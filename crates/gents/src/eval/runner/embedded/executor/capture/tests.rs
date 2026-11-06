@@ -547,6 +547,44 @@ fn capture_reference_requires_one_named_agent_and_its_actual_did() {
 }
 
 #[test]
+fn nightly_reviewer_fixture_captures_requests_for_the_actual_unique_agent() {
+    let case: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/configurator_evals/ladder/l1_inference/cases/held_nightly_automation_reviewer.json"
+    )))
+    .unwrap();
+    let fire = case["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|stage| stage["stage_id"] == "fire")
+        .unwrap();
+    let captures = fire["capture"].as_array().unwrap();
+    assert_eq!(captures[0]["name"], "role_agents");
+    let request = captures
+        .iter()
+        .find(|capture| capture["name"] == "completed_review")
+        .unwrap();
+    let bind = |rows| {
+        bind_capture_subject(
+            &request["filter"],
+            "unused",
+            CaptureBindings::default(),
+            &BTreeMap::from([("role_agents".into(), CaptureResult::Documents { rows })]),
+        )
+    };
+    let reviewer =
+        json!({"display_name":"Nightly Reviewer", "agent_did":"did:key:actual-reviewer"});
+    let decoy = json!({"display_name":"Other Reviewer", "agent_did":"did:key:nightly-reviewer"});
+    let bound = bind(vec![reviewer.clone(), decoy.clone()]).unwrap();
+    assert_eq!(bound["agent_did"], json!({"_eq":"did:key:actual-reviewer"}));
+    assert_eq!(bound["content"], json!({"_like":"%nightly-digest%"}));
+    assert_eq!(bound["lifecycle_state"], json!({"_eq":"completed"}));
+    assert!(bind(vec![decoy]).is_err());
+    assert!(bind(vec![reviewer.clone(), reviewer]).is_err());
+}
+
+#[test]
 fn capture_request_binding_requires_the_current_stage_request() {
     let filter = json!({"request_id":{"_eq":"$request"}});
     let bindings = CaptureBindings {
