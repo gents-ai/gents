@@ -1364,6 +1364,8 @@ def toolOperationCaseJson (name : String) (schema history goal create selfConfig
       goalTools := goal
       goalCreate := create
       selfConfig := selfConfig
+      queryTools := .none
+      writeTools := .none
       selfConfigCategories := if category == "all" then .all else if category == "none" then .none
         else .only {category} (fun _ => ()) }
   Json.mkObj [("name", toJson name), ("schema", toJson schema), ("history", toJson history),

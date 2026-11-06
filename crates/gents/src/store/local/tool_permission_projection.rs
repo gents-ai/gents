@@ -527,6 +527,7 @@ mod tests {
                 .await?
                 .is_some());
         }
+        drop(view);
         txn.commit().await?;
         assert!(
             node.nac_manager()
