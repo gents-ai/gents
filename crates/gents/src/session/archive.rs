@@ -145,7 +145,7 @@ async fn apply_in_txn(
         Decision::Applied => {
             let mutation = format!(
                 r#"mutation($input: AgentSessionMutationInputArg!) {{ update_AgentSession(
-            docID: "{}", filter: {{ {filter} }}, input: $input
+            filter: {{ _docID: {{ _eq: "{}" }}, {filter} }}, input: $input
         ) {{ _docID }} }}"#,
                 escape_graphql_string(&row.doc_id)
             );

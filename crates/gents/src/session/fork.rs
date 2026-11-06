@@ -200,7 +200,7 @@ pub async fn publish_fork_relationships(
             access.add_resource_relationship("AgentMessage", doc_id, "parent", "sessions", &intent.session_doc_id).await?;
             access.add_actor_relationship("AgentMessage", doc_id, "working_agent", &identity::Did::new(&intent.agent_did)?).await?;
             let response = access.transact_write("session.mark_fork_parent_linked", |txn| {
-                let mutation = format!(r#"mutation($input: AgentMessageMutationInputArg!) {{ update_AgentMessage(docID: "{doc}", filter: {{ creator_did: {{ _eq: "{creator}" }}, parent_linked: {{ _eq: false }} }}, input: $input) {{ _docID }} }}"#);
+                let mutation = format!(r#"mutation($input: AgentMessageMutationInputArg!) {{ update_AgentMessage(filter: {{ _docID: {{ _eq: "{doc}" }}, creator_did: {{ _eq: "{creator}" }}, parent_linked: {{ _eq: false }} }}, input: $input) {{ _docID }} }}"#);
                 Box::pin(async move { txn.execute_client_signed_update(
                     &mutation, &json!({"input": {"parent_linked": true}}), gents_protocol::schemas::AGENT_MESSAGE,
                 ).await })

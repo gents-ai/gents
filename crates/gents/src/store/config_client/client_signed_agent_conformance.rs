@@ -1,6 +1,23 @@
 use super::client_signed_agent::{create_route, CreateRoute};
 
 #[test]
+fn signed_update_uses_one_physical_target_with_additional_scope_predicates() {
+    let variables = serde_json::json!({"input": {"archived_at": null}});
+    let scoped = r#"mutation($input: AgentSessionMutationInputArg!) {
+        update_AgentSession(filter: {_docID: {_eq: "physical"}, node_did: {_eq: "node"}, session_id: {_eq: "session"}}, input: $input) {_docID}
+    }"#;
+    assert_eq!(
+        super::client_signed_agent::update_target(scoped, &variables, "AgentSession").unwrap(),
+        "physical"
+    );
+    let both = r#"mutation($input: AgentSessionMutationInputArg!) {
+        update_AgentSession(docID: "physical", filter: {node_did: {_eq: "node"}}, input: $input) {_docID}
+    }"#;
+    assert!(super::client_signed_agent::update_target(both, &variables, "AgentSession").is_err());
+    assert!(super::client_signed_agent::update_target(scoped, &variables, "AgentMessage").is_err());
+}
+
+#[test]
 fn client_goal_graphs_use_the_bundled_canonical_lineage() {
     for (name, sdl) in [
         (
