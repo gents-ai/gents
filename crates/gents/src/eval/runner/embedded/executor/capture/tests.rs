@@ -237,9 +237,16 @@ fn generated_document_capture_cases_match_lean() {
 
 #[tokio::test]
 async fn l1_backend_capture_grades_metadata_without_retaining_auth() {
-    let home = EmbeddedHome::create_temp("eval-backend-metadata")
+    let mut home = EmbeddedHome::create_trial_temp("eval-backend-metadata")
         .await
         .unwrap();
+    let evaluator = crate::eval::runner::embedded::home::bind_test_evaluator(&mut home);
+    let evaluator_did = crate::NodeIdentity::did(evaluator.as_ref());
+    crate::eval::runner::embedded::executor::install::grant_trial_operations(&home, evaluator_did)
+        .await
+        .unwrap();
+    let access = home.client_access(evaluator_did).unwrap();
+    crate::test_support::bootstrap_signed_test_node(&access, home.did()).await;
     let plan = DesiredStateApplyPlan::new(vec![desired(
         Collection::InferenceBackend,
         json!({
@@ -249,13 +256,9 @@ async fn l1_backend_capture_grades_metadata_without_retaining_auth() {
         }),
     )])
     .unwrap();
-    apply(
-        &ConfigAccess::local(home.node.clone()),
-        "eval.test.backend_metadata",
-        &plan,
-    )
-    .await
-    .unwrap();
+    apply(&access, "eval.test.backend_metadata", &plan)
+        .await
+        .unwrap();
 
     let case: Value = serde_json::from_slice(
         &std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(
@@ -283,13 +286,16 @@ async fn l1_backend_capture_grades_metadata_without_retaining_auth() {
     )
     .stages
     .remove(0);
-    evidence.captures = run_captures(
-        &home.node,
+    evidence.captures = run_captures_with_access(
+        &access,
         home.did(),
         "session-metadata",
         home.path(),
         &[capture],
-        CaptureBindings::default(),
+        CaptureBindings {
+            evaluator_did: Some(evaluator_did),
+            ..CaptureBindings::default()
+        },
     )
     .await;
     let CaptureResult::Documents { rows } = &evidence.captures["backends"] else {
