@@ -216,6 +216,21 @@ pub struct ToolPolicySurface {
     pub plugin_tools: EndpointScope<String, ()>,
 }
 
+pub(crate) fn configured_self_config_category_set(categories: &[String]) -> BTreeSet<String> {
+    self_config_category_scope(categories)
+        .keys()
+        .into_iter()
+        .collect()
+}
+
+fn self_config_category_scope(categories: &[String]) -> EndpointScope<String, ()> {
+    EndpointScope::<String, ()>::only_units(
+        categories
+            .iter()
+            .map(|category| category.trim().to_string()),
+    )
+}
+
 /// A native node operation attributable to one independently removable tool
 /// source. Document ACP and native grant authorization remain independent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -433,11 +448,7 @@ impl ToolPolicySurface {
                         .iter()
                         .map(|category| category.to_string()),
                 ),
-                Some(categories) => EndpointScope::<String, ()>::only_units(
-                    categories
-                        .iter()
-                        .map(|category| category.trim().to_string()),
-                ),
+                Some(categories) => self_config_category_scope(categories),
             }
         };
 

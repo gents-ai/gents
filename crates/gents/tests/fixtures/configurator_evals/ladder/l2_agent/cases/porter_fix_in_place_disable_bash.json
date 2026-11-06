@@ -101,7 +101,9 @@
                     },
                     {
                       "field": "built_ins",
-                      "equals": null
+                      "equals": {
+                        "enable_schema_tool": true
+                      }
                     },
                     {
                       "field": "integrations",
@@ -320,7 +322,9 @@
                     },
                     {
                       "field": "built_ins",
-                      "equals": null
+                      "equals": {
+                        "enable_schema_tool": true
+                      }
                     },
                     {
                       "field": "integrations",

@@ -345,7 +345,7 @@ impl Check for CrewSpecMatch {
                 tally.record(category, agent.is_some(), || format!("agent {id} absent"));
                 tally.expectations(category, &format!("agent {id}"), agent, &agent_tests);
                 tally.expectations(category, &format!("{id} context"), context, &context_tests);
-                tally.expectations(category, &format!("{id} tools"), tools_row, &tools_tests);
+                tally.tools_expectations(category, &format!("{id} tools"), tools_row, &tools_tests);
                 if let Some(expected) = spec.datastore {
                     use crate::documents::{DatastoreToolSurfaceDocument, SurfaceToolDecl};
                     let selected =

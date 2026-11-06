@@ -56,6 +56,10 @@ pub(crate) struct FieldPath {
 }
 
 impl FieldPath {
+    pub(crate) fn is_exact(&self, field: &str) -> bool {
+        self.field == field && self.fallback_field.is_none()
+    }
+
     pub(crate) fn resolve(&self, mut lookup: impl FnMut(&str) -> Option<Value>) -> Option<Value> {
         let actual = lookup(&self.field);
         match &self.fallback_field {
