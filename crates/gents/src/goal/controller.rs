@@ -297,11 +297,12 @@ mod client_goal_binding_tests {
         let cases = snapshot.request_input_cases[0]["client_goal_claim_binding_cases"]
             .as_array()
             .unwrap();
-        assert_eq!(cases.len(), 8);
+        assert_eq!(cases.len(), 16);
         for case in cases {
             let visible = case["visible"].as_bool().unwrap();
             let matches = case["matches"].as_bool().unwrap();
             let root = case["root"].as_bool().unwrap();
+            let agent = case["agent"].as_bool().unwrap();
             let goal: GoalDocument = serde_json::from_value(serde_json::json!({
                 "_docID": "physical-goal",
                 "goal_id": if matches { "goal" } else { "other-goal" },
@@ -312,7 +313,7 @@ mod client_goal_binding_tests {
             }))
             .unwrap();
             assert_eq!(
-                client_goal_claim_binding(visible.then_some(&goal), Some("goal"), root),
+                client_goal_claim_binding(visible.then_some(&goal), Some("goal"), root, agent),
                 case["expected"].as_bool().unwrap(),
                 "{case}"
             );
