@@ -1023,6 +1023,14 @@ async fn fork_rolls_back_at_every_mutation_position() {
     let (db, user, client, binding) = crate::test_support::signed_test_node("fork-rollback").await;
     let node = &db.node;
     let node_did = db.node_identity.did();
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
     let messages = (1..=3)
         .map(|sequence| format!("turn {sequence}"))
         .collect::<Vec<_>>();
@@ -1054,8 +1062,8 @@ async fn fork_rolls_back_at_every_mutation_position() {
         )
         .await
         .unwrap();
-        save_compaction_entry_with_requester_did(
-            node,
+        compaction_entries::save_compaction_entry_with_access(
+            &agent_access,
             &binding.agent_did,
             SOURCE,
             node_did,
@@ -1470,19 +1478,72 @@ async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
 
 #[tokio::test]
 async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    for (owner, summary) in [
-        ("did:key:owner", "local summary"),
-        ("did:key:other", "foreign summary"),
+    use crate::store::identity::NodeIdentity;
+    let (local_db, local_user, local_client, local_binding) =
+        crate::test_support::signed_test_node("compaction-local").await;
+    let (foreign_db, foreign_user, foreign_client, foreign_binding) =
+        crate::test_support::signed_test_node("compaction-foreign").await;
+    let local_node = local_db.node_identity.did();
+    let foreign_node = foreign_db.node_identity.did();
+    assert_ne!(local_node, foreign_node);
+    for (db, user, client, binding, summary) in [
+        (
+            &local_db,
+            &local_user,
+            &local_client,
+            &local_binding,
+            "local summary",
+        ),
+        (
+            &foreign_db,
+            &foreign_user,
+            &foreign_client,
+            &foreign_binding,
+            "foreign summary",
+        ),
     ] {
-        save_compaction_entry(
-            &node,
-            owner,
-            "same-chain",
-            owner,
-            "request",
-            "request-doc",
+        let session = "same-chain";
+        let agent =
+            crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), binding)
+                .unwrap();
+        let agent_access = crate::ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            identity::Did::new(agent.did()).unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        publish_signed_history(db, user, client, binding, session, &["work".into()]).await;
+        let request_id = format!("{session}-request-0");
+        let response = client.execute(&format!(
+            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{ _docID }} }}"#,
+            escape_graphql_string(&request_id),
+        )).await.unwrap();
+        let [row] = response["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .as_slice()
+        else {
+            panic!("compaction request must be unique")
+        };
+        let doc = row["_docID"].as_str().unwrap();
+        let state = load_prompt_compaction_state(
+            &db.node,
+            &binding.agent_did,
+            session,
+            db.node_identity.did(),
+            Some(user.did()),
+            None,
+        )
+        .await
+        .unwrap();
+        compaction_entries::save_compaction_entry_with_access(
+            &agent_access,
+            &binding.agent_did,
+            session,
+            db.node_identity.did(),
+            Some(user.did()),
+            &request_id,
+            doc,
             summary,
             &[],
             &[],
@@ -1490,25 +1551,54 @@ async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
             1,
             100,
             10,
+            &state.generation,
         )
         .await
         .unwrap();
     }
-    let local = load_compaction_entries(&crate::store::config_client::ConfigAccess::local(node.clone()), "same-chain", "did:key:owner", None)
-        .await
-        .unwrap();
-    let foreign = load_compaction_entries(&crate::store::config_client::ConfigAccess::local(node.clone()), "same-chain", "did:key:other", None)
-        .await
-        .unwrap();
+    let local = load_compaction_entries(
+        &local_client,
+        "same-chain",
+        local_node,
+        Some(local_user.did()),
+    )
+    .await
+    .unwrap();
+    let foreign = load_compaction_entries(
+        &foreign_client,
+        "same-chain",
+        foreign_node,
+        Some(foreign_user.did()),
+    )
+    .await
+    .unwrap();
     assert_eq!(local.len(), 1);
     assert_eq!(foreign.len(), 1);
     assert_eq!(local[0].summary, "local summary");
     assert_eq!(foreign[0].summary, "foreign summary");
     assert!(load_compaction_entries(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &local_client,
         "same-chain",
-        "did:key:owner",
-        Some("did:key:requester")
+        foreign_node,
+        Some(local_user.did())
+    )
+    .await
+    .unwrap()
+    .is_empty());
+    assert!(load_compaction_entries(
+        &foreign_client,
+        "same-chain",
+        local_node,
+        Some(foreign_user.did())
+    )
+    .await
+    .unwrap()
+    .is_empty());
+    assert!(load_compaction_entries(
+        &local_client,
+        "same-chain",
+        local_node,
+        Some(foreign_user.did())
     )
     .await
     .unwrap()

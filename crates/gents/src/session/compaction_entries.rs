@@ -444,7 +444,7 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn save_compaction_entry_with_access(
+pub(super) async fn save_compaction_entry_with_access(
     access: &crate::ConfigAccess,
     agent_did: &str,
     session_id: &str,
