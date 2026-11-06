@@ -127,12 +127,12 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
         bind_test_evaluator(&mut spec, &mut home);
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
-        let agent_did = install(&spec, &home, &workspace).await.unwrap();
-        let (runtime, _agent) = boot_runtime(
+        let agent_did = Box::pin(install(&spec, &home, &workspace)).await.unwrap();
+        let (runtime, _agent) = Box::pin(boot_runtime(
             &home,
             home.identity.clone(),
             DocumentRuntimeOptions::default(),
-        )
+        ))
         .await
         .unwrap();
         let request_id = uuid::Uuid::new_v4().to_string();
