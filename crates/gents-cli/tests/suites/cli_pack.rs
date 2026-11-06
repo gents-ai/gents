@@ -884,6 +884,320 @@ fn pack_install_expect_digest_mismatch_writes_nothing() -> Result<()> {
     Ok(())
 }
 
+/// The preview an install review shows reports the pack, what it would write
+/// and the collections it declares, writes nothing, and its digest is the one
+/// the reviewed install is then pinned to.
+#[test]
+fn pack_install_preview_reports_the_review_and_writes_nothing() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("node");
+    run_init_json(
+        temp.path(),
+        &["--node-name", "pack-review", "--home", dir_arg(&home)],
+    )?;
+    let pack = temp.path().join("documents_fixture");
+    copy_dir_all(&fixture_pack_dir("documents_fixture"), &pack)?;
+    let preview = run_cli_json(
+        temp.path(),
+        &[
+            "pack",
+            "install",
+            dir_arg(&pack),
+            "--home",
+            dir_arg(&home),
+            "--registry",
+            UNROUTABLE_REGISTRY,
+            "--preview",
+        ],
+    )?;
+    anyhow::ensure!(
+        preview["coordinate"] == "fixture/documents_fixture"
+            && preview["version"] == "1.0.0"
+            && preview["kind"] == "documents"
+            && preview["would_write"] == false
+            && preview["collections"] == serde_json::json!(["FixtureJob"])
+            && preview["authority"] == serde_json::json!([]),
+        "the preview does not report the review: {preview}"
+    );
+    let documents = preview["documents"]
+        .as_array()
+        .context("the preview lists no documents")?;
+    anyhow::ensure!(
+        documents
+            .iter()
+            .any(|document| document["collection"] == "Agent"
+                && document["id"] == "fixture-worker"
+                && document["name"] == "Fixture worker"
+                && document["content"]["display_name"] == "Fixture worker"),
+        "the preview does not list the pack's agent and what it holds: {preview}"
+    );
+    anyhow::ensure!(
+        gents::pack::read_home_install(&home, "fixture/documents_fixture")?.is_none(),
+        "a preview installed the pack"
+    );
+    let shown = run_cli_json(temp.path(), &["pack", "show", dir_arg(&pack)])?;
+    anyhow::ensure!(
+        shown["digest"] == preview["digest"],
+        "the previewed digest is not the pack's: {preview} {shown}"
+    );
+    Ok(())
+}
+
+/// `dependee_fixture` copied to `dir` with a second required slot, `checker`,
+/// for a second agent, so the install can't choose either binding by itself.
+fn two_slot_dependee(dir: &std::path::Path) -> Result<std::path::PathBuf> {
+    let pack = dir.join("dependee_fixture");
+    copy_dir_all(&fixture_pack_dir("dependee_fixture"), &pack)?;
+    let manifest_path = pack.join("manifest.json");
+    let mut manifest = read_json_file(&manifest_path)?;
+    manifest["inference_slots"]
+        .as_array_mut()
+        .context("the fixture declares its slots")?
+        .push(serde_json::json!({
+            "name": "checker",
+            "description": "Checks the dependee's work.",
+            "agents": ["fixture-checker"],
+        }));
+    std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+    let config_path = pack.join("pack_config.json");
+    let mut config = read_json_file(&config_path)?;
+    config["agents"]
+        .as_array_mut()
+        .context("the fixture has agents")?
+        .push(serde_json::json!({
+            "agent_id": "fixture-checker",
+            "display_name": "Fixture checker",
+            "context_id": "fixture-dependee-context",
+            "inference_profile_id": "gents:inference-slot:checker",
+        }));
+    std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
+    Ok(pack)
+}
+
+fn slot<'a>(needs: &'a Value, name: &str) -> Result<&'a Value> {
+    needs["slots"]
+        .as_array()
+        .and_then(|slots| slots.iter().find(|slot| slot["name"] == name))
+        .with_context(|| format!("the preview does not report slot {name}: {needs}"))
+}
+
+/// A preview of a pack whose slots the install can't bind by itself reports
+/// the slots, the node's profiles and which are still unbound, instead of
+/// refusing; once they are bound it reports them bound. The install itself
+/// still refuses the unbound slots.
+#[test]
+fn pack_install_preview_reports_the_slots_still_to_bind() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("node");
+    let initialized = run_init_json(
+        temp.path(),
+        &["--node-name", "pack-slots", "--home", dir_arg(&home)],
+    )?;
+    let profile = format!("{}:default-profile", node_did_from_init(&initialized)?);
+    let pack = two_slot_dependee(temp.path())?;
+    let install = |extra: &[&str]| {
+        let mut args = vec![
+            "pack",
+            "install",
+            dir_arg(&pack),
+            "--home",
+            dir_arg(&home),
+            "--registry",
+            UNROUTABLE_REGISTRY,
+        ];
+        args.extend_from_slice(extra);
+        args.into_iter().map(str::to_owned).collect::<Vec<_>>()
+    };
+    let args = install(&["--preview"]);
+    let preview = run_cli_json(
+        temp.path(),
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+    )?;
+    let needs = &preview["inference_needs"];
+    anyhow::ensure!(
+        preview["would_write"] == false
+            && needs["unbound"] == serde_json::json!(["worker", "checker"]),
+        "the preview does not report the unbound slots: {preview}"
+    );
+    anyhow::ensure!(
+        *slot(needs, "checker")?
+            == serde_json::json!({
+                "name": "checker", "description": "Checks the dependee's work.",
+                "optional": false, "packs": ["fixture/dependee_fixture"],
+                "profile": null, "automatic": false,
+            }),
+        "{needs}"
+    );
+    anyhow::ensure!(
+        needs["profiles"].as_array().is_some_and(|profiles| profiles
+            .iter()
+            .any(|option| option["profile_id"] == profile.as_str() && option["usable"] == true)),
+        "the preview does not offer the node's profile: {needs}"
+    );
+    anyhow::ensure!(
+        preview["documents"]
+            .as_array()
+            .is_some_and(|documents| documents.iter().any(|document| {
+                document["collection"] == "Agent"
+                    && document["id"] == "fixture-checker"
+                    && document["name"] == "Fixture checker"
+            })),
+        "the preview does not list what it would write: {preview}"
+    );
+
+    let args = install(&[]);
+    let refusal = run_cli_failure_stderr(
+        temp.path(),
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+    )?;
+    anyhow::ensure!(
+        refusal.contains("requires explicit inference slot bindings for: worker, checker"),
+        "the install did not refuse the unbound slots: {refusal}"
+    );
+    anyhow::ensure!(
+        gents::pack::read_home_install(&home, "fixture/dependee_fixture")?.is_none(),
+        "the refused install installed the pack"
+    );
+
+    let worker = format!("worker={profile}");
+    let checker = format!("checker={profile}");
+    let args = install(&[
+        "--preview",
+        "--inference-slot",
+        &worker,
+        "--inference-slot",
+        &checker,
+    ]);
+    let preview = run_cli_json(
+        temp.path(),
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+    )?;
+    let needs = &preview["inference_needs"];
+    anyhow::ensure!(
+        needs["unbound"] == serde_json::json!([])
+            && slot(needs, "worker")?["profile"] == profile.as_str()
+            && slot(needs, "checker")?["profile"] == profile.as_str()
+            && slot(needs, "checker")?["automatic"] == false,
+        "the preview does not report the chosen bindings: {preview}"
+    );
+    Ok(())
+}
+
+/// A preview reports the declared collections the node already has, which
+/// the install shares, and none on a node that has none of them.
+#[test]
+fn pack_install_preview_reports_the_collections_it_shares() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("node");
+    run_init_json(
+        temp.path(),
+        &["--node-name", "pack-shared", "--home", dir_arg(&home)],
+    )?;
+    let pack = temp.path().join("documents_fixture");
+    copy_dir_all(&fixture_pack_dir("documents_fixture"), &pack)?;
+    let install = |extra: &str| {
+        let mut args = vec![
+            "pack",
+            "install",
+            dir_arg(&pack),
+            "--home",
+            dir_arg(&home),
+            "--registry",
+            UNROUTABLE_REGISTRY,
+        ];
+        if !extra.is_empty() {
+            args.push(extra);
+        }
+        run_cli_json(temp.path(), &args)
+    };
+    let fresh = install("--preview")?;
+    anyhow::ensure!(
+        fresh["shared_collections"] == serde_json::json!([]),
+        "a fresh node shares no collection: {fresh}"
+    );
+    install("")?;
+    let again = install("--preview")?;
+    anyhow::ensure!(
+        again["shared_collections"] == serde_json::json!(["FixtureJob"]),
+        "the preview does not report the collection the node has: {again}"
+    );
+    Ok(())
+}
+
+/// A pack with one required slot on a node with one usable profile is bound
+/// by the install itself, and the preview says so.
+#[test]
+fn pack_install_preview_reports_the_binding_it_chooses_itself() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("node");
+    let initialized = run_init_json(
+        temp.path(),
+        &["--node-name", "pack-auto-slot", "--home", dir_arg(&home)],
+    )?;
+    let profile = format!("{}:default-profile", node_did_from_init(&initialized)?);
+    let preview = run_cli_json(
+        temp.path(),
+        &[
+            "pack",
+            "install",
+            dir_arg(&fixture_pack_dir("documents_fixture")),
+            "--home",
+            dir_arg(&home),
+            "--registry",
+            UNROUTABLE_REGISTRY,
+            "--preview",
+        ],
+    )?;
+    let needs = &preview["inference_needs"];
+    let worker = slot(needs, "worker")?;
+    anyhow::ensure!(
+        needs["unbound"] == serde_json::json!([])
+            && worker["profile"] == profile.as_str()
+            && worker["automatic"] == true
+            && worker["description"] == "Executes the fixture's one task.",
+        "the preview does not report the binding it chose: {preview}"
+    );
+    Ok(())
+}
+
+/// A dependency's required slots are the install's too: a slot the pack binds
+/// by itself but its dependency can't is still unbound, and binding each name
+/// once binds it for both.
+#[test]
+fn pack_install_preview_reports_a_dependencys_slots_still_to_bind() -> Result<()> {
+    let scratch = tempfile::tempdir()?;
+    let dependee = two_slot_dependee(scratch.path())?;
+    let setup = DependentHome::with_dependee("pack-dependency-slots", &dependee)?;
+    let profile = setup
+        .install_args
+        .last()
+        .and_then(|binding| binding.strip_prefix("worker="))
+        .context("the install arguments end with the worker binding")?
+        .to_owned();
+    let unbound = &setup.install_args[..setup.install_args.len() - 2];
+    let mut args: Vec<&str> = unbound.iter().map(String::as_str).collect();
+    args.push("--preview");
+    let preview = run_cli_json(setup.tempdir.path(), &args)?;
+    let needs = &preview["inference_needs"];
+    anyhow::ensure!(
+        needs["unbound"] == serde_json::json!(["worker", "checker"])
+            && slot(needs, "worker")?["packs"]
+                == serde_json::json!(["fixture/dependent_fixture", "fixture/dependee_fixture"])
+            && slot(needs, "worker")?["profile"] == Value::Null
+            && slot(needs, "checker")?["packs"] == serde_json::json!(["fixture/dependee_fixture"]),
+        "the preview does not report the dependency's slots: {preview}"
+    );
+    let worker = format!("worker={profile}");
+    let checker = format!("checker={profile}");
+    args.extend(["--inference-slot", &worker, "--inference-slot", &checker]);
+    let preview = run_cli_json(setup.tempdir.path(), &args)?;
+    anyhow::ensure!(
+        preview["inference_needs"]["unbound"] == serde_json::json!([]),
+        "binding each slot once does not bind the dependency's: {preview}"
+    );
+    Ok(())
+}
+
 #[test]
 fn pack_install_wire_wires_the_agent() -> Result<()> {
     let fixture = wire_fixture(true)?;
