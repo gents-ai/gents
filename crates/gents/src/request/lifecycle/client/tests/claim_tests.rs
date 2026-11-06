@@ -28,6 +28,7 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
         Arc::new(KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap());
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let (node, endpoint) = serve_client_node(runtime.as_ref()).await;
+    grant_operator_user(&node, runtime.as_ref(), &user).await;
     let first = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     let second = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     let first_signer =
@@ -35,11 +36,7 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
     let second_signer =
         crate::store::identity::resolve_agent_identity(runtime.as_ref(), &second).unwrap();
     let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
-    for did in [
-        user.did(),
-        first.agent_did.as_str(),
-        second.agent_did.as_str(),
-    ] {
+    for did in [first.agent_did.as_str(), second.agent_did.as_str()] {
         for permission in [
             NodePermission::DocumentRead,
             NodePermission::DocumentUpdate,
@@ -393,20 +390,20 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
         let owner = KeyIdentity::load_or_create(home.path().join("owner.key"), None).unwrap();
         let (node, endpoint) = serve_client_node(runtime.as_ref()).await;
+        grant_operator_user(&node, runtime.as_ref(), &user).await;
+        grant_operator_user(&node, runtime.as_ref(), &owner).await;
         let binding = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
         let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
-        for did in [user.did(), owner.did(), binding.agent_did.as_str()] {
-            let subject = ::identity::Did::new(did).unwrap();
-            for permission in [
-                NodePermission::DocumentRead,
-                NodePermission::DocumentUpdate,
-                NodePermission::DacRelationAdd,
-            ] {
-                admin
-                    .grant_node_permission(&subject, permission)
-                    .await
-                    .unwrap();
-            }
+        let subject = ::identity::Did::new(binding.agent_did.as_str()).unwrap();
+        for permission in [
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::DacRelationAdd,
+        ] {
+            admin
+                .grant_node_permission(&subject, permission)
+                .await
+                .unwrap();
         }
         let user_access = client_access(&endpoint, &user);
         if name == "invoke_denied_at_check" {
@@ -681,10 +678,10 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     let collaborator =
         KeyIdentity::load_or_create(home.path().join("collaborator.key"), None).unwrap();
     let (node, endpoint) = serve_client_node(runtime.as_ref()).await;
+    grant_operator_user(&node, runtime.as_ref(), &user).await;
     let binding = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
     for did in [
-        user.did(),
         foreign.did(),
         collaborator.did(),
         binding.agent_did.as_str(),
@@ -1444,10 +1441,11 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
     let collaborator =
         KeyIdentity::load_or_create(home.path().join("collaborator.key"), None).unwrap();
     let (node, endpoint) = serve_client_node(runtime.as_ref()).await;
+    grant_operator_user(&node, runtime.as_ref(), &user).await;
     let binding = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
     let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
-    for did in [user.did(), collaborator.did(), agent.did()] {
+    for did in [collaborator.did(), agent.did()] {
         for permission in [
             NodePermission::DocumentRead,
             NodePermission::DocumentUpdate,
