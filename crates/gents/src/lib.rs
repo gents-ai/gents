@@ -205,6 +205,30 @@ pub(crate) mod test_support {
         access
     }
 
+    pub(crate) async fn bootstrap_signed_test_node(
+        access: &crate::store::config_client::ConfigAccess,
+        node_did: &str,
+    ) {
+        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+
+        let node_input = serde_json::json!({"node_did": node_did});
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: crate::Collection::Node,
+            add: node_input.clone(),
+            update: node_input,
+        }])
+        .unwrap();
+        access
+            .transact_write("test.signed_node", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                })
+            })
+            .await
+            .unwrap();
+    }
+
     pub(crate) async fn signed_test_node(
         name: &str,
     ) -> (
@@ -237,22 +261,7 @@ pub(crate) mod test_support {
                 .unwrap();
         }
         let access = db.client_access(&user);
-        let node_input = serde_json::json!({"node_did": runtime.did()});
-        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-            collection: crate::Collection::Node,
-            add: node_input.clone(),
-            update: node_input,
-        }])
-        .unwrap();
-        access
-            .transact_write("test.signed_node", |txn| {
-                let plan = &plan;
-                Box::pin(async move {
-                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
-                })
-            })
-            .await
-            .unwrap();
+        bootstrap_signed_test_node(&access, runtime.did()).await;
         let binding = crate::store::identity::provision_agent_identity_authorized(
             &db.node, runtime, &user_did,
         )
