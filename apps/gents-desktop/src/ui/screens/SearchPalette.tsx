@@ -12,23 +12,22 @@ import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import {
   Bell,
-  Inbox,
-  LayoutGrid,
-  ListTree,
+  Command as CommandIcon,
+  Play,
   Package,
-  Plus,
   Search,
-  Settings,
+  Waypoints,
   Workflow,
 } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import { Dialog, DialogContent, DialogTitle } from "@gents/ui/components/dialog";
 import { Kbd } from "@gents/ui/components/kbd";
 import { cn } from "@gents/ui/lib/utils";
-import { currentRoute, navigate, reviewNavigation, type Route } from "@/lib/router";
+import { navigate, type Route } from "@/lib/router";
 import { isLocalNode } from "@/lib/firstRun";
 import { shownNodes, useHidden } from "@/lib/hidden";
-import { switchedRoute } from "@/app/NodeSwitcher";
+import { switchToNode } from "@/app/NodeSwitcher";
+import { previousNode } from "../../hooks/activeNode";
 import { NodeAvatar } from "./AgentAvatar";
 import { NodeActivity } from "@/app/NodeActivity";
 import { packOrigin } from "./agent/ListDetail";
@@ -39,11 +38,21 @@ import {
   type SearchFilter,
 } from "@/lib/search";
 import { useApp } from "@/app/AppContext";
+import "@/commands/app";
+import {
+  keysHint,
+  registerCommand,
+  useAriaKeys,
+  useCommands,
+  useKeysHint,
+} from "@/commands/commands";
 import { useHomeDid, useSelectedNodeDid } from "@/hooks/useClient";
+import { useFlag } from "@/preferences";
+import { automationsOf } from "./automations/model";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { useFleet } from "../hooks/useFleet";
 import { isListed, useAgentSections } from "./agent/sections";
-import { SETTINGS_SECTIONS } from "./settings/sections";
+import { shownSettingsSections } from "./settings/sections";
 import { KIND, openItem } from "./MailboxItem";
 import { openInStack } from "./MailboxStack";
 import { NodeAgentStack } from "./NodeBehaviorStack";
@@ -51,81 +60,59 @@ import { SessionStatus } from "./SessionStatus";
 import { agentName } from "./behavior";
 import { Hint } from "./Hint";
 import { SEARCH_FIELD } from "@/lib/textAssist";
-import { useFlag } from "@/preferences";
 import { readInstalledPacks, shortName, useInstalledPacks } from "./packs/model";
 
-const IS_MAC = navigator.platform.toUpperCase().includes("MAC");
-/** The palette's shortcut, as shown and as `aria-keyshortcuts` names it. */
-export const SEARCH_KEYS = IS_MAC ? "⌘K" : "Ctrl+K";
-export const SEARCH_ARIA_KEYS = IS_MAC ? "Meta+K" : "Control+K";
-
-const store = createStore<{ open: boolean }>(() => ({ open: false }));
-export const openSearch = () => store.setState({ open: true });
+const store = createStore<{ open: boolean; kind: SearchFilter; asked: number }>(() => ({
+  open: false,
+  kind: "all",
+  asked: 0,
+}));
+/** Opens the palette, on one kind of result if `kind` is given. */
+export const openSearch = (opts: { kind?: SearchFilter } = {}) =>
+  store.setState((s) => ({ open: true, kind: opts.kind ?? "all", asked: s.asked + 1 }));
 const closeSearch = () => store.setState({ open: false });
+
+registerCommand({
+  id: "search",
+  title: "Search",
+  group: "Help",
+  keys: { key: "k", mod: true },
+  palette: false,
+  run: () => openSearch(),
+});
+registerCommand({
+  id: "node.switch",
+  title: "Switch node…",
+  group: "Nodes",
+  keys: { key: "o", mod: true },
+  desktopOnly: true,
+  icon: Waypoints,
+  run: () => openSearch({ kind: "node" }),
+});
 
 const FILTERS: { id: SearchFilter; label: string }[] = [
   { id: "all", label: "All" },
   { id: "session", label: "Sessions" },
   { id: "agent", label: "Agents" },
+  { id: "node", label: "Nodes" },
   { id: "setting", label: "Settings" },
   { id: "action", label: "Actions" },
-];
-
-type Action = { key: string; title: string; route: Route; icon: typeof Plus };
-
-/* offered only while the Packs experimental feature is on */
-const PACKS_ACTION: Action = {
-  key: "action:packs",
-  title: "Go to packs",
-  route: { name: "packs" },
-  icon: Package,
-};
-
-const ACTIONS: Action[] = [
-  {
-    key: "action:new",
-    title: "New session",
-    route: { name: "session", sessionId: null },
-    icon: Plus,
-  },
-  {
-    key: "action:sessions",
-    title: "Go to sessions",
-    route: { name: "sessions" },
-    icon: ListTree,
-  },
-  {
-    key: "action:mailbox",
-    title: "Go to mailbox",
-    route: { name: "mailbox" },
-    icon: Inbox,
-  },
-  {
-    key: "action:nodes",
-    title: "Go to nodes",
-    route: { name: "agents" },
-    icon: LayoutGrid,
-  },
-  {
-    key: "action:settings",
-    title: "Open settings",
-    route: { name: "settings" },
-    icon: Settings,
-  },
 ];
 
 /** The title bar's way in, beside the history it shares a scope with: search
     covers every node the app holds, not the one selected in the rail. */
 export function SearchButton({ className }: { className?: string }) {
+  const keys = useKeysHint("search");
+  const aria = useAriaKeys("search");
   return (
-    <Hint label="Search" keys={SEARCH_KEYS}>
+    <Hint label="Search" keys={keys}>
       <Button
         variant="ghost"
         size="icon-sm"
         aria-label="Search"
-        aria-keyshortcuts={SEARCH_ARIA_KEYS}
+        aria-keyshortcuts={aria}
         className={className}
-        onClick={openSearch}
+        onClick={() => openSearch()}
       >
         <Search />
       </Button>
@@ -174,6 +161,8 @@ function useEntries(): SearchEntry[] {
   const homeDid = useHomeDid();
   const selected = useSelectedNodeDid();
   const sections = useAgentSections();
+  const commands = useCommands();
+  const automationsOn = useFlag("automations");
   const hidden = useHidden();
   const { actions } = useApp();
   const packsOn = useFlag("packs");
@@ -200,6 +189,8 @@ function useEntries(): SearchEntry[] {
       return n?.node.displayName ?? n?.label ?? "Node";
     };
     const nodeDid = selected ?? nodes[0]?.nodeDid ?? null;
+    const last = previousNode() !== selected ? previousNode() : null;
+    const rank = (did: string) => (did === selected ? 0 : did === last ? 1 : 2);
     return searchEntries({
       sessions: Object.values(fleet.sessions),
       attention: nodes.flatMap((n) =>
@@ -221,13 +212,33 @@ function useEntries(): SearchEntry[] {
               pack: packOrigin(a.tags),
             })),
         ),
-      nodes: shownNodes(nodes, hidden, null).map((n) => ({
-        nodeDid: n.nodeDid,
-        name: nodeName(n.nodeDid),
-        avatar: n.nodeConfig?.avatar ?? null,
-        place: isLocalNode(n, homeDid) ? "Local" : "Remote",
-        offline: !n.dialSucceeded,
-      })),
+      /* the node in use, then the one used before it, then this machine's
+         and the remote ones, as the switcher has them; hidden ones left out */
+      nodes: [...shownNodes(nodes, hidden, null)]
+        .sort(
+          (a, b) =>
+            rank(a.nodeDid) - rank(b.nodeDid) ||
+            Number(!isLocalNode(a, homeDid)) - Number(!isLocalNode(b, homeDid)),
+        )
+        .map((n) => ({
+          nodeDid: n.nodeDid,
+          name: nodeName(n.nodeDid),
+          avatar: n.nodeConfig?.avatar ?? null,
+          place: isLocalNode(n, homeDid) ? "Local" : "Remote",
+          offline: !n.dialSucceeded,
+          current: n.nodeDid === selected,
+          last: n.nodeDid === last,
+        })),
+      /* the page shows the active node's, so search finds those */
+      automations:
+        automationsOn && nodeDid && fleet.nodes[nodeDid]
+          ? automationsOf(fleet.nodes[nodeDid]!).map((a) => ({
+              id: a.id,
+              name: a.name,
+              when: a.when,
+              icon: Play,
+            }))
+          : [],
       agentName: (s) => agentName(s.agentId, fleet.nodes[s.nodeDid] ?? null),
       nodeName,
       places: [
@@ -240,7 +251,7 @@ function useEntries(): SearchEntry[] {
               icon: s.icon,
             }))
           : []),
-        ...SETTINGS_SECTIONS.map((s) => ({
+        ...shownSettingsSections().map((s) => ({
           key: `setting:app:${s.id}`,
           title: s.label,
           group: "App settings",
@@ -257,9 +268,18 @@ function useEntries(): SearchEntry[] {
             }))
           : []),
       ],
-      actions: packsOn ? [...ACTIONS, PACKS_ACTION] : ACTIONS,
+      /* every command that can run here, as the palette opens */
+      actions: commands
+        .filter((c) => c.palette !== false && (c.when?.() ?? true))
+        .map((c) => ({
+          key: `command:${c.id}`,
+          title: c.title,
+          icon: c.icon ?? CommandIcon,
+          keys: keysHint(c.id),
+          run: () => void c.run(0),
+        })),
     });
-  }, [fleet, selected, sections, homeDid, hidden, packsOn, packsHere, installed]);
+  }, [fleet, selected, sections, homeDid, commands, automationsOn, hidden, packsHere, installed]);
 }
 
 function PaletteBody({
@@ -271,7 +291,10 @@ function PaletteBody({
   const selected = useSelectedNodeDid();
   const entries = useEntries();
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<SearchFilter>("all");
+  const [filter, setFilter] = useState<SearchFilter>(() => store.getState().kind);
+  /* asked again while open, as the node key does, it turns to that kind */
+  const asked = useStore(store, (s) => s.asked);
+  useEffect(() => setFilter(store.getState().kind), [asked]);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const deferred = useDeferredValue(query);
   const groups = useMemo(
@@ -310,15 +333,7 @@ function PaletteBody({
        page; one on another node is reached through its session, which
        carries the switch to that node */
     if (e.kind === "node") {
-      /* as the nav's node switcher does, asked first since a draft stays
-         with the node it was written for */
-      const here = currentRoute();
-      const next = here ? switchedRoute(here, e.nodeDid) : null;
-      if (e.nodeDid !== selected)
-        reviewNavigation({ name: "sessions", nodeDid: e.nodeDid }, () => {
-          actions.selectNode(e.nodeDid);
-          if (next) navigate(next);
-        });
+      if (e.nodeDid !== selected) switchToNode(e.nodeDid, actions.selectNode);
     } else if (e.kind === "attention") {
       if (e.item.nodeDid === selected) openInStack(e.item);
       else void openItem(e.item, actions.openMailboxItem);
@@ -328,6 +343,7 @@ function PaletteBody({
         sessionId: e.session.sessionId,
         nodeDid: e.session.nodeDid,
       });
+    else if (e.kind === "action") e.run();
     else navigate(e.route);
   };
 
@@ -507,12 +523,22 @@ function Row({
         active && "bg-accent",
       )}
     >
-      <EntryIcon entry={e} />
-      <span className="min-w-0 flex-1 truncate">
-        {e.title}
-        {e.subtitle && <span className="ml-2 text-muted-foreground">{e.subtitle}</span>}
-      </span>
-      {e.kind === "node" && <NodeActivity nodeDid={e.nodeDid} />}
+      {e.kind === "node" ? (
+        <NodeResult entry={e} />
+      ) : (
+        <>
+          <EntryIcon entry={e} />
+          <span className="min-w-0 flex-1 truncate">
+            {e.title}
+            {e.subtitle && (
+              <span className="ml-2 text-muted-foreground">{e.subtitle}</span>
+            )}
+          </span>
+        </>
+      )}
+      {e.kind === "action" && e.keys && (
+        <Kbd className="shrink-0 bg-transparent text-muted-foreground">{e.keys}</Kbd>
+      )}
       {e.kind === "session" && (
         <NodeAgentStack
           nodeDid={e.session.nodeDid}
@@ -546,4 +572,32 @@ function EntryIcon({ entry: e }: { entry: SearchEntry }) {
     );
   const Icon = e.icon;
   return <Icon className={box} />;
+}
+
+/* a node's row: its portrait, name, where it is and what it has going on;
+   the one in use is marked, and the one before it names the key that goes
+   back to it */
+function NodeResult({ entry: e }: { entry: Extract<SearchEntry, { kind: "node" }> }) {
+  const lastKeys = useKeysHint("node.last");
+  return (
+    <>
+      <NodeAvatar
+        name={e.name}
+        avatar={e.avatar}
+        rollId={e.nodeDid}
+        className="size-4 shrink-0"
+      />
+      <span className="min-w-0 flex-1 truncate">
+        {e.title}
+        {e.subtitle && <span className="ml-2 text-muted-foreground">{e.subtitle}</span>}
+      </span>
+      <NodeActivity nodeDid={e.nodeDid} />
+      {e.current && (
+        <span className="shrink-0 text-xs text-muted-foreground">Current</span>
+      )}
+      {e.last && lastKeys && (
+        <Kbd className="shrink-0 bg-transparent text-muted-foreground">{lastKeys}</Kbd>
+      )}
+    </>
+  );
 }

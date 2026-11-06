@@ -1,0 +1,153 @@
+name: Release docs bundle
+
+# Exports the CLI and configuration reference from the published x86_64 Linux
+# CLI and attaches it to the release. It is its own workflow so a docs failure
+# never changes the Release Linux gents conclusion that release-container.yml
+# requires.
+
+on:
+  workflow_run:
+    workflows:
+      - Release Linux gents
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag whose published Linux CLI exports the bundle.
+        required: true
+        type: string
+
+concurrency:
+  group: release-docs-${{ github.event.workflow_run.head_branch || inputs.release_tag || github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  publish:
+    name: Export and attach docs bundle
+    # A failed Linux run can still have published the x86_64 CLI; the download
+    # step fails when it did not.
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (github.event.workflow_run.conclusion != 'cancelled' &&
+         startsWith(github.event.workflow_run.head_branch, 'v'))
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Resolve release
+        id: release
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+          WORKFLOW_RUN_TAG: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_run" ]]; then
+            release_tag="${WORKFLOW_RUN_TAG}"
+          else
+            release_tag="${REQUESTED_TAG}"
+          fi
+          if [[ ! "${release_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "::error::Release tag '${release_tag}' is not a supported semantic version."
+            exit 1
+          fi
+          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.release.outputs.release_tag }}
+          persist-credentials: false
+
+      - name: Download published Linux CLI
+        id: cli
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          assets="${RUNNER_TEMP}/cli"
+          rm -rf "${assets}"
+          mkdir -p "${assets}"
+          archive="gents-x86_64-unknown-linux-gnu.tar.gz"
+          gh release download "${RELEASE_TAG}" --dir "${assets}" \
+            --pattern "${archive}" \
+            --pattern SHA256SUMS-cli-linux.txt
+          (
+            cd "${assets}"
+            if ! grep -q "  ${archive}\$" SHA256SUMS-cli-linux.txt; then
+              echo "::error::SHA256SUMS-cli-linux.txt has no entry for ${archive}."
+              exit 1
+            fi
+            sha256sum -c --ignore-missing SHA256SUMS-cli-linux.txt
+            tar -xzf "${archive}"
+          )
+
+          binary="${assets}/gents-x86_64-unknown-linux-gnu/gents"
+          version_output="$("${binary}" version)"
+          printf '%s\n' "${version_output}"
+          expected_prefix="gents ${RELEASE_TAG#v} ("
+          if [[ "${version_output}" != "${expected_prefix}"* ]]; then
+            echo "::error::Published gents version output does not start with '${expected_prefix}'."
+            exit 1
+          fi
+          echo "binary=${binary}" >> "${GITHUB_OUTPUT}"
+
+      - name: Export docs bundle
+        id: docs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_BIN: ${{ steps.cli.outputs.binary }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          release_version="${RELEASE_TAG#v}"
+          docs_dir="${RUNNER_TEMP}/docs-dist"
+          rm -rf "${docs_dir}"
+          make dist-docs DIST_DIR="${docs_dir}" RELEASE_BIN="${RELEASE_BIN}" RELEASE_VERSION="${release_version}"
+
+          archive="${docs_dir}/gents-docs-${release_version}.tar.gz"
+          (
+            cd "${docs_dir}"
+            sha256sum -c SHA256SUMS-docs.txt
+          )
+          archive_files="$(tar -tzf "${archive}")"
+          for required in manifest.json cli.json config/index.json; do
+            if ! grep -qx "${required}" <<<"${archive_files}"; then
+              echo "::error::Docs bundle is missing ${required} at its root."
+              exit 1
+            fi
+          done
+          release_commit="$(gh api "repos/${GH_REPO}/commits/${RELEASE_TAG}" --jq '.sha')"
+          if ! tar -xzOf "${archive}" manifest.json | grep -q "\"commit\": \"${release_commit}\""; then
+            echo "::error::Docs bundle manifest does not name ${RELEASE_TAG}'s commit ${release_commit}."
+            exit 1
+          fi
+          {
+            echo "archive=${archive}"
+            echo "checksum_file=${docs_dir}/SHA256SUMS-docs.txt"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Attach docs bundle to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ARCHIVE: ${{ steps.docs.outputs.archive }}
+          CHECKSUM_FILE: ${{ steps.docs.outputs.checksum_file }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "${RELEASE_TAG}" "${ARCHIVE}" "${CHECKSUM_FILE}" --clobber

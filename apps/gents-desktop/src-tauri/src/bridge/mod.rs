@@ -112,7 +112,8 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(init(platform_bridge_config()))
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init());
     #[cfg(target_os = "macos")]
     let builder = builder.invoke_handler(tauri::generate_handler![
         windows::desktop_window_setup_complete,

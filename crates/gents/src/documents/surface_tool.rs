@@ -111,20 +111,23 @@ pub fn merge_datastore_tool_surfaces<'a>(
 
 /// One bound read tool: one collection, a fixed projection, optional filter
 /// fills. The model never names the collection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct QueryToolDecl {
     pub tool_name: String,
     pub collection: String,
     #[cfg_attr(feature = "typescript", ts(as = "Option<String>", optional))]
+    #[schemars(default)]
     pub description: String,
     /// Projection allowlist; omit `fields` at call time to return all of these.
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional))]
+    #[schemars(default)]
     pub fields: Vec<String>,
     #[cfg_attr(
         feature = "typescript",
         ts(as = "Option<Vec<WriteToolField>>", optional)
     )]
+    #[schemars(default)]
     pub filter_fields: Vec<WriteToolField>,
 }
 
@@ -220,6 +223,78 @@ impl SurfaceToolDecl {
     }
 }
 
+/// The authored shape the `Deserialize` impl below accepts. It trims `kind`
+/// with `str::trim`: a create entry's `kind` is absent, null, blank, `create`
+/// or `write`, and a query entry's is `query` or `read`. The canonical values
+/// stay an enum, and the padded spellings are one extra pattern member.
+impl schemars::JsonSchema for SurfaceToolDecl {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SurfaceToolDecl".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let create = generator.subschema_for::<WriteToolDecl>();
+        let query = generator.subschema_for::<QueryToolDecl>();
+        let space = trimmed_class();
+        let padded_create = super::noted(
+            serde_json::json!({
+                "type": "string",
+                "pattern": format!("^{space}*(create|write)?{space}*$")
+            }),
+            "Surrounding whitespace is trimmed; blank means create.",
+        );
+        let padded_query = super::noted(
+            serde_json::json!({
+                "type": "string",
+                "pattern": format!("^{space}*(query|read){space}*$")
+            }),
+            "Surrounding whitespace is trimmed.",
+        );
+        schemars::json_schema!({
+            "anyOf": [
+                {
+                    "allOf": [create],
+                    "properties": { "kind": { "anyOf": [
+                        { "enum": ["create", "write", null] },
+                        padded_create
+                    ] } }
+                },
+                {
+                    "allOf": [query],
+                    "properties": { "kind": { "anyOf": [
+                        { "enum": ["query", "read"] },
+                        padded_query
+                    ] } },
+                    "required": ["kind"]
+                }
+            ]
+        })
+    }
+}
+
+/// The characters `str::trim` removes, as an ECMA-262 class: spelled out
+/// because regex engines disagree on what `\s` covers.
+fn trimmed_class() -> String {
+    let mut class = String::from("[");
+    let mut spaces = ('\0'..=char::MAX).filter(|c| c.is_whitespace()).peekable();
+    while let Some(first) = spaces.next() {
+        let mut last = first;
+        while let Some(&next) = spaces.peek() {
+            if u32::from(next) != u32::from(last) + 1 {
+                break;
+            }
+            last = next;
+            spaces.next();
+        }
+        class.push_str(&format!("\\u{:04X}", u32::from(first)));
+        if last != first {
+            class.push_str(&format!("-\\u{:04X}", u32::from(last)));
+        }
+    }
+    class.push(']');
+    class
+}
+
 impl Serialize for SurfaceToolDecl {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -295,6 +370,31 @@ where
     )
     .map(Some)
     .map_err(D::Error::custom)
+}
+
+/// Schema for [`deserialize_optional_surface_tools`]: entries as a list, as
+/// the stored `{"entries": ...}` envelope, or null; an entry may also be the
+/// JSON text of one declaration.
+pub(crate) fn surface_tools_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let entry = generator.subschema_for::<SurfaceToolDecl>();
+    let entries = schemars::json_schema!({
+        "anyOf": [
+            { "type": "array", "items": { "anyOf": [entry, { "type": "string" }] } },
+            { "type": "string" },
+            { "type": "null" }
+        ]
+    });
+    schemars::json_schema!({
+        "anyOf": [
+            entries.clone(),
+            {
+                "type": "object",
+                "properties": { "entries": entries },
+                "required": ["entries"],
+                "additionalProperties": false
+            }
+        ]
+    })
 }
 
 pub(crate) fn serialize_optional_surface_tools<S>(

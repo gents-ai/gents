@@ -10,7 +10,7 @@ fn job_undeclared(job: &PluginJobDeclaration) -> bool {
     !job.0
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PackPlugin {
     pub name: String,
     pub description: String,
@@ -47,7 +47,7 @@ pub struct PackPlugin {
 }
 
 /// A host function a plugin artifact may import (wasm module `gents`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HostImport {
     /// `run_script(ptr, len) -> i32` and `read_result(ptr, cap) -> i32`: the
@@ -81,7 +81,7 @@ impl Default for PackPlugin {
 /// A pack-owned native process. Its first stdout line is a JSON object injected
 /// as `service`; subsequent output is drained. `{pack}` and `{state}` are host
 /// paths, never shell substitutions. Requires the existing child-process grant.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PluginService {
     pub argv: Vec<String>,
@@ -94,7 +94,19 @@ pub struct PluginService {
 }
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum BindAccess {
     #[default]
@@ -127,7 +139,7 @@ impl std::str::FromStr for BindAccess {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PluginDirBinding {
     pub input_field: String,
@@ -165,7 +177,7 @@ impl PluginDirBinding {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PluginLimits {
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -17,7 +17,7 @@ use crate::backend_provider::BackendProviderKind;
 
 /// Where a Claude platform backend is served from. Only the fields the
 /// backend's provider kind uses are set.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct ClaudePlatform {

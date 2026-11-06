@@ -8,7 +8,7 @@ use super::surface_tool::{
     deserialize_optional_surface_tools, serialize_optional_surface_tools, SurfaceToolDecl,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct DatastoreToolSurfaceDocument {
@@ -23,6 +23,7 @@ pub struct DatastoreToolSurfaceDocument {
         skip_serializing_if = "super::serde_helpers::is_enabled"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub enabled: bool,
     #[serde(
         default,
@@ -31,6 +32,7 @@ pub struct DatastoreToolSurfaceDocument {
     )]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    #[schemars(schema_with = "super::surface_tool::surface_tools_schema")]
     pub entries: Option<Vec<SurfaceToolDecl>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -41,6 +43,7 @@ pub struct DatastoreToolSurfaceDocument {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
 }
 

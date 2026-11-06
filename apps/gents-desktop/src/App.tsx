@@ -64,6 +64,7 @@ import { AgentScreen } from "./ui/screens/agent/AgentScreen";
 import { SettingsScreen } from "./ui/screens/settings/SettingsScreen";
 import { AgentsScreen } from "./ui/screens/AgentsScreen";
 import { MailboxScreen } from "./ui/screens/MailboxScreen";
+import { AutomationsScreen } from "./ui/screens/AutomationsScreen";
 import { PacksScreen } from "./ui/screens/PacksScreen";
 import { PluginPageScreen } from "./ui/screens/PluginPageScreen";
 import { PluginAccessPrompt } from "./ui/screens/PluginAccessPrompt";
@@ -307,9 +308,11 @@ function RouteScreen({ route }: { route: Route }) {
     case "sessionsArchived":
       return <SessionsScreen archived entry={route} />;
     case "session":
-      return <SessionScreen />;
+      return <SessionScreen nodeDid={route.nodeDid} sessionId={route.sessionId} />;
     case "mailbox":
       return <MailboxScreen />;
+    case "automations":
+      return <AutomationsScreen item={route.item} />;
     case "packs":
       return <PacksScreen item={route.item} />;
     case "agents":

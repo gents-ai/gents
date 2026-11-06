@@ -45,7 +45,8 @@ pub use installation::{
     PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub use loader::{
-    decode_pack_config, ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,
+    authored_document_schema, authored_pack_config_schema, decode_pack_config,
+    ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,
 };
 pub use manifest_validation::{validate_manifest, validate_pack_manifest};
 pub use plugin::{
@@ -61,7 +62,7 @@ pub use ux::{
 
 mod asset_path;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PackKind {
     Documents,
@@ -69,7 +70,7 @@ pub enum PackKind {
     Plugins,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PackMetadata {
     pub kind: PackKind,
     #[serde(default = "default_namespace")]
@@ -80,6 +81,7 @@ pub struct PackMetadata {
         deserialize_with = "crate::documents::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
     pub assets: Vec<String>,
     #[serde(
@@ -87,6 +89,7 @@ pub struct PackMetadata {
         deserialize_with = "crate::documents::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub dependencies: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inference_slots: Vec<PackInferenceSlot>,
@@ -101,7 +104,7 @@ pub struct PackMetadata {
     pub ux: Vec<PackUxPlugin>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PackInferenceSlot {
     pub name: String,
@@ -124,7 +127,7 @@ fn default_namespace() -> String {
     crate::pack::archive::DEFAULT_NAMESPACE.to_owned()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PackManifest {
     pub manifest_version: u32,
@@ -140,12 +143,14 @@ pub struct PackManifest {
         deserialize_with = "crate::documents::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub schemas: Vec<String>,
     #[serde(
         default,
         deserialize_with = "crate::documents::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub external_dependencies: Vec<PackageExternalDependency>,
 }
 
@@ -172,7 +177,7 @@ impl PackManifest {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PackageExternalDependency {
     pub service_id: String,
