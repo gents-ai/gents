@@ -493,6 +493,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                                 &home,
                                 &identity.coordinate,
                                 Some(&identity),
+                                &changes,
                             )
                             .await
                         } else {
