@@ -764,6 +764,7 @@ def snapshotClientCasesJson : String :=
     ++ "\"plugin_reference_cases\":"
       ++ PackInstallation.casesJson ++ ","
     ++ "\"plugin_pin_cases\":" ++ PackInstallation.pinCasesJson ++ ","
+    ++ "\"pack_document_ownership_cases\":" ++ PackInstallation.ownershipCasesJson ++ ","
     ++ "\"pack_wire_lock_cases\":" ++ PackInstallation.wireLockCasesJson ++ ","
     ++ "\"pack_wire_target_cases\":" ++ PackInstallation.wireTargetCasesJson ++ ","
     ++ "\"pack_finality_cases\":" ++ PackInstallation.finalityCasesJson ++ ","

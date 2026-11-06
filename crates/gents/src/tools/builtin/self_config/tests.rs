@@ -1195,7 +1195,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         Box::pin(async move {
             txn.execute_client_signed_update(
                 &format!(r#"mutation($input: AgentMutationInputArg!) {{ update_Agent(docID: "{doc}", input: $input) {{ _docID }} }}"#),
-                &json!({"input": {"tags": ["gents:pack:plugin_documents_fixture", "user:favorite"]}}),
+                &json!({"input": {"tags": ["gents:pack:fixture/plugin_documents_fixture", "user:favorite"]}}),
                 gents_protocol::schemas::AGENT,
             ).await
         })
@@ -1246,7 +1246,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         .unwrap();
     assert_eq!(
         tags["data"]["Agent"][0]["tags"],
-        json!(["gents:pack:plugin_documents_fixture", "user:favorite"])
+        json!(["gents:pack:fixture/plugin_documents_fixture", "user:favorite"])
     );
     let store = crate::pack::store::PackStore::new(home.path());
     let installed_path = store
