@@ -350,16 +350,7 @@ pub(crate) async fn wire_pack_plugins(
 /// Offline command access owns its node and store claim. DefraDB background
 /// tasks may retain the database after a handle drops, so shutdown must finish
 /// before this command releases its access. HTTP access has no owned node here.
-#[cfg(test)]
-pub(super) async fn install_documents_command(
-    access: gents::store::config_client::ConfigAccess,
-    pack: &PackSource,
-    args: &PackInstallArgs,
-) -> Result<()> {
-    install_documents_command_with_local(access, pack, args, None).await
-}
-
-async fn install_documents_command_with_local(
+pub(super) async fn install_documents_command_with_local(
     access: gents::store::config_client::ConfigAccess,
     pack: &PackSource,
     args: &PackInstallArgs,
