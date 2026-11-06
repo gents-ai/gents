@@ -19,6 +19,9 @@ import {
 } from "../../../lib/managedServerStartup";
 import { Fact, Group, PathFact, Row, StackedRow } from "./rows";
 import { useApp } from "@/app/AppContext";
+import { useFleet } from "@/ui/hooks/useFleet";
+import { nodeOf } from "@/hooks/fleetStore";
+import { engineerAgentOf } from "@/ui/lib/engineer";
 import { ManagedRuntimeUnavailableError } from "../../../lib/managedRuntimeReadiness";
 import { useStartup } from "@/hooks/useClient";
 import { errorText } from "../../../lib/errorText";
@@ -90,6 +93,7 @@ export function LocalServer() {
   const status = stores.localServer.use.status();
   const readFailure = stores.localServer.use.readFailure();
   const wait = stores.localServer.use.wait();
+  const localNode = useFleet((fleet) => nodeOf(fleet, status?.nodeDid));
   const operating = stores.localServer.use.operation() !== null;
   const statusError = readFailure
     ? `Could not check the background node: ${readFailure}`
@@ -138,6 +142,19 @@ export function LocalServer() {
     setBusy(true);
     setAuthorityError(null);
     try {
+      if (authority.toolRoot && authority.toolRoot !== status?.effectiveToolRoot) {
+        const engineer = localNode ? engineerAgentOf(localNode) : undefined;
+        if (!status?.nodeDid || !engineer) {
+          throw new Error(
+            "The Engineer agent is not available on this runtime, so the workspace folder cannot be published.",
+          );
+        }
+        await actions.selectAgentWorkspaceRoot(
+          status.nodeDid,
+          engineer.agentDid,
+          authority.toolRoot,
+        );
+      }
       let next = await actions.restartLocalServer(name, authority);
       if (!next.pairingReady) {
         const paired = await actions
