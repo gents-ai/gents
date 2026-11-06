@@ -154,7 +154,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
             ).await
         })
     }).await?;
-    let legacy_cid = legacy["data"]["create_InferenceBackend"][0]["_version"][0]["cid"]
+    let legacy_cid = legacy["data"]["add_InferenceBackend"][0]["_version"][0]["cid"]
         .as_str()
         .context("protected legacy create has no composite CID")?
         .to_owned();
