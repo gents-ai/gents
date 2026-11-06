@@ -304,6 +304,20 @@ impl Fixture {
             before["wrapup_requested"], before["wrapup_completed"], before["tokens_used"], before["token_budget"])).await;
     }
     pub async fn seed_child(&self, conflicting: bool) {
+        self.seed_child_with_targets(
+            conflicting,
+            Some(self.session_doc_id.clone()),
+            Some(self.agent_doc_id.clone()),
+        )
+        .await;
+    }
+
+    pub async fn seed_child_with_targets(
+        &self,
+        conflicting: bool,
+        session_doc: Option<String>,
+        agent_doc: Option<String>,
+    ) {
         let mut create = prepare_goal_continuation(
             &self.parent,
             self.parent.agent_did.clone(),
@@ -317,6 +331,8 @@ impl Fixture {
         .unwrap();
         create.input.goal_assignment =
             Some(continuation_assignment(&self.goal, &self.parent, None).unwrap());
+        create.session_doc_id = session_doc;
+        create.agent_doc_id = agent_doc;
         if conflicting {
             create.input.queue.as_mut().unwrap().key = Some("goal:foreign".into());
         }
@@ -721,10 +737,18 @@ impl Fixture {
             .unwrap();
             expected.input.goal_assignment =
                 Some(continuation_assignment(&g, &self.parent, child.doc_id.as_deref()).unwrap());
+            assert_eq!(
+                child.session_doc_id.as_deref(),
+                Some(self.session_doc_id.as_str())
+            );
+            assert_eq!(
+                child.agent_doc_id.as_deref(),
+                Some(self.agent_doc_id.as_str())
+            );
+            expected.session_doc_id = Some(self.session_doc_id.clone());
+            expected.agent_doc_id = Some(self.agent_doc_id.clone());
             if child.admission_kind.as_deref() == Some("client") {
                 expected.admission = AgentRequestAdmissionRecord::client(self.user.did());
-                expected.session_doc_id = child.session_doc_id.clone();
-                expected.agent_doc_id = child.agent_doc_id.clone();
             }
             let actual: GoalBackedRequestFingerprint =
                 serde_json::from_value(serde_json::to_value(child).unwrap()).unwrap();

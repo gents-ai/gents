@@ -51,6 +51,141 @@ async fn verified_client_lifecycle(
 struct PublicationContracts {
     goal_claimed_publication_cases: Vec<PublicationCase>,
     goal_claimed_identity_cases: Vec<IdentityCase>,
+    goal_claimed_target_cases: Vec<serde_json::Value>,
+}
+
+#[tokio::test]
+async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
+    let contracts: PublicationContracts = gents_lean_contract::load_contract_snapshot().unwrap();
+    let before = &contracts
+        .goal_claimed_publication_cases
+        .iter()
+        .find(|case| case.name == "claimed_active_publishes_without_reclaim")
+        .unwrap()
+        .before;
+    for case in &contracts.goal_claimed_target_cases {
+        let fixture = Fixture::new(before).await;
+        let name = case["name"].as_str().unwrap();
+        let duplicate = name == "duplicate-after-revocation";
+        let forged = matches!(
+            name,
+            "wrong-session" | "wrong-agent" | "missing-session" | "missing-agent"
+        );
+        if duplicate || forged {
+            let session = match name {
+                "wrong-session" => Some("different-session".to_owned()),
+                "missing-session" => None,
+                _ => Some(fixture.session_doc_id.clone()),
+            };
+            let agent = match name {
+                "wrong-agent" => Some("different-agent".to_owned()),
+                "missing-agent" => None,
+                _ => Some(fixture.agent_doc_id.clone()),
+            };
+            fixture.seed_child_with_targets(false, session, agent).await;
+        }
+        let request_id = goal_continuation_identity(&fixture.goal.goal_id, PARENT, 1)
+            .unwrap()
+            .request_id;
+        let filter = format!(
+            "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{_docID}} }}",
+            escape_graphql_string(&request_id)
+        );
+        if duplicate {
+            let rows = fixture.agent_access().execute(&filter).await.unwrap();
+            let doc = rows["data"]["AgentRequest"][0]["_docID"].as_str().unwrap();
+            fixture
+                .agent_access()
+                .delete_resource_relationship(
+                    "AgentRequest",
+                    doc,
+                    "parent",
+                    "agents",
+                    &fixture.agent_doc_id,
+                )
+                .await
+                .unwrap();
+            fixture
+                .agent_access()
+                .delete_resource_relationship(
+                    "AgentRequest",
+                    doc,
+                    "session",
+                    "sessions",
+                    &fixture.session_doc_id,
+                )
+                .await
+                .unwrap();
+        }
+        let observed = fixture.current_goal().await;
+        let txn = ConfigApplyTxn::begin_local_with_signer(
+            &fixture.node,
+            identity::Did::new(fixture.agent.did()).unwrap(),
+            fixture.agent.managed_agent_signer().unwrap(),
+        )
+        .await
+        .unwrap();
+        let result = stage_claimed_continuation(
+            &txn,
+            fixture.agent.as_ref(),
+            &observed,
+            PARENT,
+            "Original signed continuation",
+            false,
+            &std::sync::Mutex::new(None),
+        )
+        .await;
+        if forged {
+            assert!(
+                result.is_err(),
+                "{name} must not recover a foreign signed target"
+            );
+            assert_eq!(case["committed"], false);
+            txn.discard().await.unwrap();
+        } else {
+            let receipt = result.unwrap().expect("matching claimed publication");
+            assert_eq!(receipt.created, !duplicate);
+            let row = txn
+                .execute(&format!(
+                    "{{ AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {} }} }}",
+                    escape_graphql_string(&receipt.doc_id),
+                    SIGNED_REQUEST_FIELDS
+                ))
+                .await
+                .unwrap();
+            let row: AgentRequestRow =
+                serde_json::from_value(row["data"]["AgentRequest"][0].clone()).unwrap();
+            assert_eq!(
+                row.session_doc_id.as_deref(),
+                Some(fixture.session_doc_id.as_str())
+            );
+            assert_eq!(
+                row.agent_doc_id.as_deref(),
+                Some(fixture.agent_doc_id.as_str())
+            );
+            crate::request::admission::verify_request_receipt_signature(&row).unwrap();
+            let owners = txn
+                .document_owners("AgentRequest", std::slice::from_ref(&receipt.doc_id))
+                .await
+                .unwrap();
+            assert_eq!(
+                owners[0].owner.as_ref().map(identity::Did::as_str),
+                Some(fixture.agent.did())
+            );
+            if case["commit"] == true {
+                txn.commit().await.unwrap();
+            } else {
+                txn.discard().await.unwrap();
+            }
+            let user = fixture.user_access().execute(&filter).await.unwrap();
+            let visible = !user["data"]["AgentRequest"].as_array().unwrap().is_empty();
+            assert_eq!(
+                visible, case["grants"],
+                "{name}: User visibility follows modeled grants"
+            );
+        }
+        fixture.node.shutdown().await.expect("node shutdown");
+    }
 }
 
 #[derive(Deserialize)]
