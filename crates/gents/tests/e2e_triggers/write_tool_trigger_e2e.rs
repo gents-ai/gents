@@ -375,19 +375,13 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
     let (handle, shutdown_tx) =
         boot_agent_with_action_trigger(&db, &fixture, "b6-multifield", task_id, trigger_id).await;
 
-    let variables = json!({"input": {
-        "drift_sig": DRIFT_SIG, "summary": SUMMARY, "target_paths": TARGET_PATHS, "status": "open",
-    }});
-    fixture.access.transact_write("test.action_request", |txn| {
-        let variables = &variables;
-        Box::pin(async move {
-            let response = txn.execute_client_signed_create(
-                "mutation($input: ActionRequestMutationInputArg!) { create_ActionRequest(input: $input) { _docID } }",
-                variables, ACTION_REQUEST_SDL,
-            ).await?;
-            Ok::<_, anyhow::Error>(gents::store::graphql::created_doc_id(&response, "ActionRequest")?)
-        })
-    }).await.expect("create User-signed ActionRequest");
+    gents::store::config_client::create_authored_document(
+        &fixture.access,
+        "ActionRequest",
+        &json!({"drift_sig": DRIFT_SIG, "summary": SUMMARY, "target_paths": TARGET_PATHS, "status": "open"}),
+        gents::store::config_client::DocumentSchemaSource::UserAuthored,
+        ACTION_REQUEST_SDL,
+    ).await.expect("create User-signed ActionRequest");
 
     let request = wait_for_one_agent_request(&fixture.access, trigger_id).await;
     assert_multi_field_render(&request, trigger_id);

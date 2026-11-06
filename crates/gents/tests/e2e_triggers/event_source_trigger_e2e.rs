@@ -226,18 +226,15 @@ async fn fetch_event_trigger(access: &ConfigAccess, trigger_id: &str) -> EventTr
 }
 
 async fn write_webhook_event(access: &ConfigAccess, external_id: &str, kind: &str) -> String {
-    let variables =
-        serde_json::json!({"input": {"external_id": external_id, "payload": "{}", "kind": kind}});
-    access.transact_write("test.webhook_event", |txn| {
-        let variables = &variables;
-        Box::pin(async move {
-            let response = txn.execute_client_signed_create(
-                "mutation($input: WebhookEventMutationInputArg!) { create_WebhookEvent(input: $input) { _docID } }",
-                variables, WEBHOOK_EVENT_SDL,
-            ).await?;
-            gents::store::graphql::created_doc_id(&response, "WebhookEvent")
-        })
-    }).await.expect("write User-signed WebhookEvent")
+    gents::store::config_client::create_authored_document(
+        access,
+        "WebhookEvent",
+        &serde_json::json!({"external_id": external_id, "payload": "{}", "kind": kind}),
+        gents::store::config_client::DocumentSchemaSource::UserAuthored,
+        WEBHOOK_EVENT_SDL,
+    )
+    .await
+    .expect("write User-signed WebhookEvent")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

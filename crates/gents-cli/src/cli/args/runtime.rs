@@ -226,7 +226,7 @@ pub(crate) struct WriteArgs {
 pub(crate) enum DocumentCommand {
     #[command(
         about = "Create one document in a collection and print its document id",
-        long_about = "Create one document in a collection and print its document id.\n\nThis is an operator command: it refuses protected eval/optimization and canonical configuration collections. Writes to the home runtime are signed as the home node; an unrelated explicit endpoint uses anonymous access with a warning. The mutation input schema is validated before writing."
+        long_about = "Create one application document using the held User identity. Supply the locally authored schema for the collection; remote schema observations cannot authorize signing."
     )]
     Create(DocumentCreateArgs),
 }
@@ -237,6 +237,8 @@ pub(crate) struct DocumentCreateArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the live runtime")]
     pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Locally authored SDL for the application collection")]
+    pub(crate) schema: PathBuf,
     #[arg(
         value_name = "COLLECTION",
         help = "Collection (GraphQL type), e.g. Goal"
