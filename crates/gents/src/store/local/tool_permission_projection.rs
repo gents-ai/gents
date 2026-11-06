@@ -265,31 +265,46 @@ fn external(error: impl std::fmt::Display) -> Error {
 mod tests {
     use super::*;
     use crate::store::graphql::escape_graphql_string;
+    use crate::store::identity::NodeIdentity;
 
-    #[tokio::test]
-    async fn selected_datastore_query_grants_collection_access_until_removed() -> anyhow::Result<()>
-    {
-        let node_did = "did:key:node";
-        let agent_did = "did:key:agent";
-        let sibling_did = "did:key:sibling";
+    async fn projection_node(
+    ) -> anyhow::Result<(tempfile::TempDir, crate::KeyIdentity, Arc<defra_node::Node>)> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("runtime");
+        let runtime = crate::KeyIdentity::load_or_create(&path, None)?;
+        let key = crate::store::identity::load_file_identity(&path)?.private_key_bytes();
         let projector = Arc::new(
             super::super::runtime_document_projection::RuntimeDocumentProjector::new(
-                node_did,
+                runtime.did(),
                 crate::tools::surface::ToolCeiling::meta_only(),
             )?,
         );
         let node = Arc::new(
             defra_node::Node::builder()
-                .with_node_identity_did(node_did)
+                .with_node_identity_did(runtime.did())
+                .with_signing_key(defra_node::SigningKey::Ed25519(key))
                 .with_node_acp_enabled()
                 .with_document_projector(projector)
                 .build()
                 .await?,
         );
         crate::ensure_runtime_schemas(&node).await?;
-        let node_value = escape_graphql_string(node_did);
-        let agent_value = escape_graphql_string(agent_did);
-        let sibling_value = escape_graphql_string(sibling_did);
+        Ok((directory, runtime, node))
+    }
+
+    #[tokio::test]
+    async fn selected_datastore_query_grants_collection_access_until_removed() -> anyhow::Result<()>
+    {
+        let (_directory, runtime, node) = projection_node().await?;
+        let binding = crate::store::identity::provision_agent_identity(&runtime)?;
+        let sibling_binding = crate::store::identity::provision_agent_identity(&runtime)?;
+        let agent_signer = crate::store::identity::resolve_agent_identity(&runtime, &binding)?;
+        let node_value = escape_graphql_string(runtime.did());
+        let agent_value = escape_graphql_string(&binding.agent_did);
+        let sibling_value = escape_graphql_string(&sibling_binding.agent_did);
+        let nonce = escape_graphql_string(&binding.creation_nonce);
+        let sibling_nonce = escape_graphql_string(&sibling_binding.creation_nonce);
+        let owner = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
         let entries = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
             "entries": [{"kind":"query", "tool_name":"find_probe", "collection":"Probe",
                 "description":"Find a probe", "fields":["name"]}]
@@ -308,18 +323,23 @@ mod tests {
                 r#"mutation {{ create_AgentContext(input: {{node_did:"{node_value}",context_id:"context",tools_id:"tools"}}) {{_docID}} }}"#
             ),
             format!(
-                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"nonce",context_id:"context",enabled:true}}) {{_docID}} }}"#
+                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"{nonce}",context_id:"context",enabled:true}}) {{_docID}} }}"#
             ),
             format!(
-                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{sibling_value}",creation_nonce:"sibling-nonce",enabled:true}}) {{_docID}} }}"#
+                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{sibling_value}",creation_nonce:"{sibling_nonce}",enabled:true}}) {{_docID}} }}"#
             ),
         ] {
-            let response = node.execute(&mutation).await;
-            anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
+            owner
+                .write("test.tool_projection.create", &mutation)
+                .await?;
         }
-        let agent = identity::Did::new(agent_did)?;
-        let sibling = identity::Did::new(sibling_did)?;
-        let access = crate::ConfigAccess::local_as(node.clone(), agent.clone());
+        let agent = identity::Did::new(&binding.agent_did)?;
+        let sibling = identity::Did::new(&sibling_binding.agent_did)?;
+        let access = crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            agent.clone(),
+            agent_signer.as_ref(),
+        )?;
         let model = crate::lean_vocab_test::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
@@ -348,18 +368,15 @@ mod tests {
                 .await?,
             expected("none"),
         );
-        let response = node.execute(&format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:true}}}}) {{_docID}} }}"#)).await;
-        anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
-        let response = node.execute(&format!(r#"mutation {{ update_DatastoreToolSurface(filter: {{node_did:{{_eq:"{node_value}"}},surface_id:{{_eq:"surface"}}}},input:{{enabled:false}}) {{_docID}} }}"#)).await;
-        anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
+        owner.write("test.tool_projection.schema_enable", &format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:true}}}}) {{_docID}} }}"#)).await?;
+        owner.write("test.tool_projection.surface_disable", &format!(r#"mutation {{ update_DatastoreToolSurface(filter: {{node_did:{{_eq:"{node_value}"}},surface_id:{{_eq:"surface"}}}},input:{{enabled:false}}) {{_docID}} }}"#)).await?;
         assert_eq!(
             node.nac_manager()
                 .check_permission(&agent, NodePermission::CollectionGet)
                 .await?,
             expected("schema"),
         );
-        let response = node.execute(&format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:false}}}}) {{_docID}} }}"#)).await;
-        anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
+        owner.write("test.tool_projection.schema_disable", &format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:false}}}}) {{_docID}} }}"#)).await?;
         assert_eq!(
             node.nac_manager()
                 .check_permission(&agent, NodePermission::CollectionGet)
@@ -374,25 +391,13 @@ mod tests {
     #[tokio::test]
     async fn selected_schema_tool_grants_and_revokes_only_its_native_source() -> anyhow::Result<()>
     {
-        let node_did = "did:key:node";
-        let agent_did = "did:key:agent";
-        let projector = Arc::new(
-            super::super::runtime_document_projection::RuntimeDocumentProjector::new(
-                node_did,
-                crate::tools::surface::ToolCeiling::meta_only(),
-            )?,
-        );
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(node_did)
-                .with_node_acp_enabled()
-                .with_document_projector(projector)
-                .build()
-                .await?,
-        );
-        crate::ensure_runtime_schemas(&node).await?;
-        let node_value = escape_graphql_string(node_did);
-        let agent_value = escape_graphql_string(agent_did);
+        let (_directory, runtime, node) = projection_node().await?;
+        let binding = crate::store::identity::provision_agent_identity(&runtime)?;
+        let agent_signer = crate::store::identity::resolve_agent_identity(&runtime, &binding)?;
+        let node_value = escape_graphql_string(runtime.did());
+        let agent_value = escape_graphql_string(agent_signer.did());
+        let nonce = escape_graphql_string(&binding.creation_nonce);
+        let owner = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
         for mutation in [
             format!(
                 r#"mutation {{ create_Tools(input: {{node_did:"{node_value}",tools_id:"tools",built_ins:{{enable_schema_tool:true}}}}) {{_docID}} }}"#
@@ -401,38 +406,31 @@ mod tests {
                 r#"mutation {{ create_AgentContext(input: {{node_did:"{node_value}",context_id:"context",tools_id:"tools"}}) {{_docID}} }}"#
             ),
             format!(
-                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"nonce",context_id:"context",enabled:true}}) {{_docID}} }}"#
+                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"{nonce}",context_id:"context",enabled:true}}) {{_docID}} }}"#
             ),
         ] {
-            let response = node.execute(&mutation).await;
-            anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
+            owner
+                .write("test.tool_projection.create", &mutation)
+                .await?;
         }
-        let agent = identity::Did::new(agent_did)?;
+        let agent = identity::Did::new(agent_signer.did())?;
         assert!(
             node.nac_manager()
                 .check_permission(&agent, NodePermission::CollectionPatch)
                 .await?
         );
-        let owner = defra_core::RequestContext::default().with_identity(Some(node_did.to_owned()));
-        node.add_nac_actor_relationship_as(
-            &owner,
-            NodePermission::CollectionPatch.as_str(),
-            agent_did,
-        )
-        .await?;
-        let response = node.execute(&format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:false}}}}) {{_docID}} }}"#)).await;
-        anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
+        owner
+            .grant_node_permission(&agent, NodePermission::CollectionPatch)
+            .await?;
+        owner.write("test.tool_projection.schema_disable", &format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:false}}}}) {{_docID}} }}"#)).await?;
         assert!(
             node.nac_manager()
                 .check_permission(&agent, NodePermission::CollectionPatch)
                 .await?
         );
-        node.delete_nac_actor_relationship_as(
-            &owner,
-            NodePermission::CollectionPatch.as_str(),
-            agent_did,
-        )
-        .await?;
+        owner
+            .revoke_node_permission(&agent, NodePermission::CollectionPatch)
+            .await?;
         assert!(
             !node
                 .nac_manager()
