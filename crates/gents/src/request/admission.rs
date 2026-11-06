@@ -1760,6 +1760,18 @@ pub(crate) async fn load_request_for_admission_test(
 }
 
 #[cfg(test)]
+pub(crate) async fn load_request_for_admission_test_as(
+    node: &Arc<EmbeddedNode>,
+    doc_id: &str,
+    actor: &str,
+) -> Result<AgentRequest> {
+    let row = load_signed_request_as(node, doc_id, actor)
+        .await
+        .map_err(anyhow::Error::from)?;
+    row_into_agent_request(row, doc_id)
+}
+
+#[cfg(test)]
 mod title_tests;
 
 #[cfg(test)]

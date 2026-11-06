@@ -1292,14 +1292,6 @@ pub(super) mod tests {
         }
     }
 
-    pub(in crate::runtime::agent::daemon) fn test_agent_with_deadline(
-        deadline: Duration,
-    ) -> Arc<ResolvedAgent> {
-        let mut agent_config = ResolvedAgent::clone(&test_agent());
-        agent_config.deadline_duration = deadline;
-        Arc::new(agent_config)
-    }
-
     fn test_agent() -> Arc<ResolvedAgent> {
         let identity: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_or_create(
