@@ -199,6 +199,21 @@ fn pending_call(
     }
 }
 
+async fn seeded_pending_call(
+    node: &std::sync::Arc<EmbeddedNode>,
+    signer: &crate::store::identity::ManagedAgentSigner,
+    call_id: &str,
+) -> super::super::controller::PendingCallMetadata {
+    let request =
+        super::super::tests::seeded_request(node, signer, &format!("request-{call_id}")).await;
+    let mut metadata = pending_call(call_id, signer);
+    metadata.request_id = request.request_id;
+    metadata.request_doc_id = request.doc_id;
+    metadata.session_id = request.session_id;
+    metadata.requester_did = request.requester_did;
+    metadata
+}
+
 /// Lean: InferenceCall.Persistence.recovery_winner_cannot_be_reopened.
 #[tokio::test]
 async fn recovery_winner_rejects_late_running_persistence() {
@@ -237,7 +252,9 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
     let (db, signer, snapshot) = fixture("queued").await;
     let node = db.node.clone();
     let call = InferenceCallRecord::without_controller(pending_call("recovery-cas-call", &signer));
-    let other = InferenceCallRecord::without_controller(pending_call("other-call", &signer));
+    let other = InferenceCallRecord::without_controller(
+        seeded_pending_call(&node, &signer, "other-call").await,
+    );
     let other_doc = persist_call_queued(node.clone(), &other).await.unwrap();
     assert!(
         persist_existing_call_running(node.clone(), &call, &other_doc)
@@ -328,7 +345,7 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
         .clone()
         .acquire(
             node.clone(),
-            pending_call("holder-call", &signer),
+            seeded_pending_call(&node, &signer, "holder-call").await,
             "recovery-cas",
             None,
             None,
@@ -339,14 +356,9 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
     let waiting_node = node.clone();
     let waiting_signer = signer.clone();
     let waiting = tokio::spawn(async move {
+        let pending = seeded_pending_call(&waiting_node, &waiting_signer, "waiting-call").await;
         waiting_controller
-            .acquire(
-                waiting_node,
-                pending_call("waiting-call", &waiting_signer),
-                "recovery-cas",
-                None,
-                None,
-            )
+            .acquire(waiting_node, pending, "recovery-cas", None, None)
             .await
     });
     let queued = tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -464,7 +476,7 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
         .clone()
         .acquire(
             node.clone(),
-            pending_call("aborted-finalizer-call", &signer),
+            seeded_pending_call(&node, &signer, "aborted-finalizer-call").await,
             "recovery-cas",
             None,
             None,
