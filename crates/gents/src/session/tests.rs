@@ -587,37 +587,55 @@ async fn exact_compaction_redelivery_is_idempotent() {
 
 #[tokio::test]
 async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    let turns = [
-        ("request-cursor-old", None, "sparse-old"),
-        (
-            "request-cursor-remote",
-            Some("did:key:requester"),
-            "sparse-remote",
-        ),
-        ("request-cursor-latest", None, "sparse-latest"),
-    ];
-    for (index, (request_id, requester, text)) in turns.into_iter().enumerate() {
-        import_history_observation(
-            &node,
-            request_id,
-            "session-cursor",
-            "did:key:owner",
-            requester,
-            text,
-            &format!("scope-fixture-{index}"),
-            index as u32 + 1,
-            None,
+    use crate::store::identity::NodeIdentity;
+    let (db, user, client, binding) = crate::test_support::signed_test_node("history-cursor").await;
+    let session_id = "session-cursor";
+    let keys = publish_signed_history(
+        &db,
+        &user,
+        &client,
+        &binding,
+        session_id,
+        &[
+            "sparse-old".into(),
+            "removed".into(),
+            "sparse-latest".into(),
+        ],
+    )
+    .await;
+    let response = client
+        .execute(&format!(
+            r#"{{AgentMessage(filter: {{message_key: {{_eq: "{}"}}}}, limit: 2) {{_docID}}}}"#,
+            escape_graphql_string(&keys[1])
+        ))
+        .await
+        .unwrap();
+    let [row] = response["data"]["AgentMessage"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("middle message must be unique")
+    };
+    let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
+    let deleted = client
+        .write(
+            "test.remove_middle_header",
+            &format!(r#"mutation {{delete_AgentMessage(filter: {{_docID: {{_eq: "{doc}"}}}}) {{_docID}}}}"#,),
         )
-        .await;
-    }
-
+        .await
+        .unwrap();
+    let deleted_rows = crate::store::graphql::mutation_documents(&deleted, "delete_AgentMessage")
+        .unwrap()
+        .unwrap();
+    assert_eq!(deleted_rows.len(), 1);
+    assert_eq!(deleted_rows[0]["_docID"], row["_docID"]);
+    let node_did = db.node_identity.did();
     let local = history::load_sequenced_history_projection(
-        &node,
-        "session-cursor",
-        "did:key:owner",
-        None,
+        &db.node,
+        session_id,
+        node_did,
+        Some(user.did()),
         None,
         None,
         None,
@@ -628,12 +646,11 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
         local.iter().map(|row| row.sequence).collect::<Vec<_>>(),
         vec![1, 3]
     );
-
     let rows = history::load_sequenced_history_projection(
-        &node,
-        "session-cursor",
-        "did:key:owner",
-        None,
+        &db.node,
+        session_id,
+        node_did,
+        Some(user.did()),
         None,
         Some(1),
         None,
@@ -643,6 +660,7 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].sequence, 3);
     assert_eq!(rows[0].message, Message::user("sparse-latest"));
+    db.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
