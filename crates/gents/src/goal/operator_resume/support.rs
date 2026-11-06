@@ -26,14 +26,15 @@ pub(crate) struct ClaudeAccounts {
 
 pub(crate) struct Fixture {
     pub node: Arc<EmbeddedNode>,
-    pub identity: Arc<KeyIdentity>,
+    pub identity: Arc<dyn NodeIdentity>,
     pub user: Arc<KeyIdentity>,
     pub agent: Arc<dyn NodeIdentity>,
     pub session_doc_id: String,
     pub agent_doc_id: String,
     pub goal: GoalDocument,
     pub parent: crate::request::watcher::AgentRequest,
-    _temp: tempfile::TempDir,
+    user_access: ConfigAccess,
+    _db: crate::support::TestDb,
 }
 impl Fixture {
     pub async fn new(before: &Value) -> Self {
@@ -49,48 +50,29 @@ impl Fixture {
         terminal_parent: bool,
         earlier: Option<&str>,
     ) -> Self {
-        let temp = tempfile::tempdir().unwrap();
-        let identity =
-            Arc::new(KeyIdentity::load_or_create(temp.path().join("target.key"), None).unwrap());
-        let user =
-            Arc::new(KeyIdentity::load_or_create(temp.path().join("user.key"), None).unwrap());
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(identity.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        crate::store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
-        let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+        let (db, user, user_access, binding) =
+            crate::test_support::signed_test_node("goal-operator").await;
+        let node = db.node.clone();
+        let identity = db.node_identity.clone();
+        let user = Arc::new(user);
         let agent =
             crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
-        let user_access =
-            ConfigAccess::local_as(node.clone(), ::identity::Did::new(user.did()).unwrap());
-        let doc = user_access
-            .transact_write("test.goal_fixture.node", |txn| {
-                Box::pin(async {
-                    let created = txn.execute_with_variables(
-                "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
-                &json!({"input": {"node_did": identity.did()}}),
-            ).await?;
-                    let doc = crate::store::graphql::created_doc_id(&created, "Node")?;
-                    Ok::<_, anyhow::Error>(doc)
-                })
-            })
-            .await
-            .unwrap();
-        user_access
-            .add_actor_relationship(
-                "Node",
-                &doc,
-                "runtime_reader",
-                &::identity::Did::new(identity.did()).unwrap(),
-            )
-            .await
-            .unwrap();
+        let admin =
+            ConfigAccess::local_as(node.clone(), ::identity::Did::new(identity.did()).unwrap());
+        let actor = ::identity::Did::new(agent.did()).unwrap();
+        for permission in [
+            crate::store::config_client::NodePermission::CollectionGet,
+            crate::store::config_client::NodePermission::DocumentRead,
+            crate::store::config_client::NodePermission::DocumentUpdate,
+            crate::store::config_client::NodePermission::DocumentDelete,
+            crate::store::config_client::NodePermission::DacRelationAdd,
+            crate::store::config_client::NodePermission::DacRelationDelete,
+        ] {
+            admin
+                .grant_node_permission(&actor, permission)
+                .await
+                .unwrap();
+        }
         let context = format!("{}:context", binding.agent_did);
         let tools = format!("{}:tools", binding.agent_did);
         let profile = format!("{}:inference", binding.agent_did);
@@ -112,8 +94,8 @@ impl Fixture {
             })
             .await
             .unwrap();
-        crate::inference::backends::registry::set_backend_probe_status(
-            &node,
+        crate::inference::backends::registry::set_backend_probe_status_as(
+            &admin,
             identity.did(),
             &backend,
             "healthy",
@@ -246,7 +228,8 @@ impl Fixture {
             agent_doc_id,
             goal,
             parent,
-            _temp: temp,
+            user_access,
+            _db: db,
         };
         f.seed_goal_snapshot(before).await;
         f
@@ -261,10 +244,7 @@ impl Fixture {
     }
 
     pub fn user_access(&self) -> ConfigAccess {
-        ConfigAccess::local_as(
-            self.node.clone(),
-            ::identity::Did::new(self.user.did()).unwrap(),
-        )
+        self.user_access.clone()
     }
 
     pub async fn seed_goal_snapshot(&self, before: &Value) {
@@ -381,14 +361,11 @@ impl Fixture {
         crate::sign_agent_request_create(self.user.as_ref(), &mut create)
             .await
             .unwrap();
-        let access = ConfigAccess::local_as(
-            self.node.clone(),
-            ::identity::Did::new(self.user.did()).unwrap(),
-        );
+        let access = self.user_access();
         crate::request::lifecycle::submit_client_request(&access, &create)
             .await
             .unwrap();
-        ConfigAccess::local_as(self.node.clone(), ::identity::Did::new(&self.parent.agent_did).unwrap())
+        self.agent_access()
             .write("test.goal.other_request_state", &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{}" }}) {{ _docID }} }}"#, escape_graphql_string(id), escape_graphql_string(state))).await.unwrap();
     }
     pub async fn claude_accounts(&self) -> ClaudeAccounts {
@@ -428,12 +405,22 @@ impl Fixture {
         }
         let [(a, a_credential), (b, b_credential)] = <[_; 2]>::try_from(accounts).unwrap();
         let profile = json!({"node_did": did, "profile_id": PROFILE, "backend_id": a, "model_name": "test-model"});
-        let mut agent = crate::load_agent(&self.node, &self.parent.agent_did)
+        let (_, mut agent) = access
+            .transact_readonly("test.claude_accounts.agent", |txn| {
+                Box::pin(async {
+                    crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        Collection::Agent,
+                        &did,
+                        &self.parent.agent_did,
+                    )
+                    .await
+                })
+            })
             .await
             .unwrap()
             .unwrap();
-        agent.inference_profile_id = PROFILE.to_owned();
-        let agent = serde_json::to_value(agent).unwrap();
+        agent["inference_profile_id"] = PROFILE.into();
         let plan = DesiredStateApplyPlan::new(vec![
             DesiredStateApplyDocument {
                 collection: Collection::InferenceProfile,

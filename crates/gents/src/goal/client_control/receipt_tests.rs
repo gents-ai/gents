@@ -70,7 +70,7 @@ struct Driver {
 impl Driver {
     async fn new(initial: &Value) -> Self {
         let fixture = Fixture::new_with_parent_state(&initial["goal"]["execution"], false).await;
-        execute(&fixture.user_access(), &format!(r#"mutation {{ update_Goal(docID: "{}", input: {{ objective: "{}" }}) {{ _docID }} }}"#,
+        execute(&fixture.agent_access(), &format!(r#"mutation {{ update_Goal(docID: "{}", input: {{ objective: "{}" }}) {{ _docID }} }}"#,
             escape_graphql_string(&fixture.goal.doc_id), escape_graphql_string(initial["goal"]["objective"].as_str().unwrap()))).await;
         let access = ConfigAccess::local_as(
             fixture.node.clone(),

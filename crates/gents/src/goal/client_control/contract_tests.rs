@@ -74,7 +74,7 @@ async fn generated_goal_client_controls_drive_signed_commands() {
             case.facts["unfinished_request"] == false,
         )
         .await;
-        execute(&fixture.user_access(), &format!(r#"mutation {{ update_Goal(docID: "{}", input: {{ objective: "{}" }}) {{ _docID }} }}"#,
+        execute(&fixture.agent_access(), &format!(r#"mutation {{ update_Goal(docID: "{}", input: {{ objective: "{}" }}) {{ _docID }} }}"#,
             escape_graphql_string(&fixture.goal.doc_id), escape_graphql_string(case.before["objective"].as_str().unwrap()))).await;
         let access = crate::ConfigAccess::local_as(
             fixture.node.clone(),
