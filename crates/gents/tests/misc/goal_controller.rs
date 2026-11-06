@@ -59,39 +59,73 @@ async fn goal_creation_actors(db: &TestDb) -> (gents::KeyIdentity, Arc<dyn NodeI
     let agent = gents::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .expect("goal agent identity");
     let admin = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
-    let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
-        "node_did": db.node_identity.did(), "agent_did": binding.agent_did,
-        "creation_nonce": binding.creation_nonce, "display_name": "Goal fixture Agent",
-        "inference_profile_id": "goal-fixture-profile", "enabled": true,
-    }))
-    .unwrap();
-    let created = admin
-        .write(
-            "test.goal_creation_agent",
-            &format!("mutation {{ create_Agent(input: {input}) {{ _docID }} }}",),
-        )
-        .await
-        .unwrap();
-    let agent_doc = gents::store::graphql::created_doc_id(&created, "Agent").unwrap();
-    admin
-        .add_actor_relationship(
-            "Agent",
-            &agent_doc,
-            "session_writer",
-            &user.did().parse().unwrap(),
-        )
-        .await
-        .unwrap();
-    admin
-        .add_actor_relationship(
-            "Agent",
-            &agent_doc,
-            "executor",
-            &agent.did().parse().unwrap(),
-        )
-        .await
-        .unwrap();
+    for actor in [user.did(), agent.did()] {
+        for permission in [
+            gents::store::config_client::NodePermission::DocumentRead,
+            gents::store::config_client::NodePermission::DocumentUpdate,
+            gents::store::config_client::NodePermission::DocumentDelete,
+            gents::store::config_client::NodePermission::CollectionGet,
+            gents::store::config_client::NodePermission::DacRelationAdd,
+            gents::store::config_client::NodePermission::DacRelationDelete,
+        ] {
+            admin
+                .grant_node_permission(&actor.parse().unwrap(), permission)
+                .await
+                .unwrap();
+        }
+    }
     let access = db.client_access(&user);
+    let docs = [
+        (
+            gents::Collection::Node,
+            serde_json::json!({"node_did": db.node_identity.did()}),
+        ),
+        (
+            gents::Collection::Agent,
+            serde_json::json!({
+                "node_did": db.node_identity.did(), "agent_did": binding.agent_did,
+                "creation_nonce": binding.creation_nonce, "display_name": "Goal fixture Agent",
+                "inference_profile_id": "goal-fixture-profile", "enabled": true,
+            }),
+        ),
+        (
+            gents::Collection::InferenceBackend,
+            serde_json::json!({
+                "node_did": db.node_identity.did(), "backend_id": "goal-fixture-backend",
+                "name": "Goal fixture", "provider_kind": "OpenAiCompatible",
+                "openai_wire_api": "chat_completions", "auth": {"kind": "unauthenticated"},
+                "endpoint": "http://127.0.0.1:1", "enabled": true,
+            }),
+        ),
+        (
+            gents::Collection::InferenceProfile,
+            serde_json::json!({
+                "node_did": db.node_identity.did(), "profile_id": "goal-fixture-profile",
+                "backend_id": "goal-fixture-backend", "model_name": "goal-fixture-model",
+            }),
+        ),
+    ];
+    let plan = gents::store::config_client::DesiredStateApplyPlan::new(
+        docs.into_iter()
+            .map(
+                |(collection, value)| gents::store::config_client::DesiredStateApplyDocument {
+                    collection,
+                    add: value.clone(),
+                    update: value,
+                },
+            )
+            .collect(),
+    )
+    .unwrap();
+    access
+        .transact_write("test.goal_creation_configuration", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .expect("publish client-owned Node and Agent");
     let spec = RequestSpec::new(
         RequestPurpose::Normal,
         RequestIdentity {
@@ -1848,7 +1882,7 @@ async fn controller_block_rejects_same_status_from_an_older_continuation() {
 
 #[tokio::test]
 async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
-    let db = test_db("goal-model-create").await;
+    let db = crate::support::test_signed_db("goal-model-create").await;
     let (user, agent) = goal_creation_actors(&db).await;
     let client = db.client_access(&user);
     let created = gents::goal::create_goal_for_session_from_access(
@@ -1934,7 +1968,7 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
 
 #[tokio::test]
 async fn clearing_a_goal_also_clears_its_creation_claim() {
-    let db = test_db("goal-model-create-clear").await;
+    let db = crate::support::test_signed_db("goal-model-create-clear").await;
     let (_user, agent) = goal_creation_actors(&db).await;
     let access = ConfigAccess::local_managed_agent(
         db.node.clone(),
@@ -1978,7 +2012,7 @@ async fn clearing_a_goal_also_clears_its_creation_claim() {
 
 #[tokio::test]
 async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_spend() {
-    let db = test_db("goal-baseline-prior-usage").await;
+    let db = crate::support::test_signed_db("goal-baseline-prior-usage").await;
     let (user, agent) = goal_creation_actors(&db).await;
     let client = db.client_access(&user);
     let request_doc = goal_fixture_request(&db, &user, &agent, "parent-baseline").await;
@@ -2046,7 +2080,7 @@ async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_
 
 #[tokio::test]
 async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
-    let db = test_db("goal-baseline-idempotent").await;
+    let db = crate::support::test_signed_db("goal-baseline-idempotent").await;
     let (user, agent) = goal_creation_actors(&db).await;
     let client = db.client_access(&user);
     let request_doc = goal_fixture_request(&db, &user, &agent, "parent-idempotent").await;
@@ -2136,7 +2170,7 @@ async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
 
 #[tokio::test]
 async fn fresh_goal_with_zero_prior_usage_starts_charging_from_zero() {
-    let db = test_db("goal-baseline-zero").await;
+    let db = crate::support::test_signed_db("goal-baseline-zero").await;
     let (user, agent) = goal_creation_actors(&db).await;
     let client = db.client_access(&user);
     let request_doc = goal_fixture_request(&db, &user, &agent, "parent-zero").await;
@@ -2683,7 +2717,7 @@ async fn goal_backed_submission_discards_goal_when_request_staging_fails() {
 
 #[tokio::test]
 async fn concurrent_model_goal_create_converges_to_one_physical_goal() {
-    let db = test_db("goal-model-create-concurrent").await;
+    let db = crate::support::test_signed_db("goal-model-create-concurrent").await;
     let (user, _agent) = goal_creation_actors(&db).await;
     let client = db.client_access(&user);
     let left_client = client.clone();
