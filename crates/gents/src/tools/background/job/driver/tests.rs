@@ -369,16 +369,11 @@ async fn settled_job_row_holds_exactly_one_receipt() {
         serde_json::from_value(row["plugin_execution_receipt"].clone()).unwrap();
     assert_eq!(stored, evidence("step"));
 
-    let mut late = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
-        admission.node.clone(),
-        admission.tool.actor().clone(),
+    let mut late = load_lifecycle(
+        &admission.tool.access().unwrap(),
         admission.tool.doc_id().unwrap(),
-        admission.tool.node_did(),
-        admission.tool.session_id(),
-        admission.tool.requester_did(),
     )
     .await
-    .unwrap()
     .unwrap();
     // A late settler adopts the durable terminal and writes no second receipt.
     late.stage_plugin_receipt(Some(evidence("another step")));
@@ -461,16 +456,11 @@ async fn settle_of_a_lifecycle_loaded_by_doc_id_publishes_the_persisted_evidence
     let admission = bare_job_row("driver-persisted-evidence").await;
     store_running_progress(&admission).await;
     persist_step_state(&admission, &evidence("persisted")).await;
-    let mut loaded = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
-        admission.node.clone(),
-        admission.tool.actor().clone(),
+    let mut loaded = load_lifecycle(
+        &admission.tool.access().unwrap(),
         admission.tool.doc_id().unwrap(),
-        admission.tool.node_did(),
-        admission.tool.session_id(),
-        admission.tool.requester_did(),
     )
     .await
-    .unwrap()
     .unwrap();
     settle_plugin_job(&mut loaded, Settlement::Refused(Refusal::Stalled))
         .await
@@ -642,7 +632,7 @@ use crate::pack::{write_home_install, HomePackInstall, PackKind};
 use crate::plugin::store;
 use crate::plugin::tests::constant_output_wat;
 use crate::plugin::tests::executor::installed_plugin;
-use crate::tools::background::job::input::tests::{agent_did, insert, insert_as, node_did, Job};
+use crate::tools::background::job::input::tests::{agent_did, insert_as, node_did, Job};
 use gents_protocol::job::{
     DynamicMode, JobChildState, JobOrigin, PluginJobDeclaration, PluginJobSettings,
 };
@@ -1514,9 +1504,10 @@ async fn idle(driver: &JobDriver) {
 }
 
 /// A child request of `step`'s row that is still processing.
+/// A live child of the job row, created by the job's Agent as a spawn is.
 async fn live_child(step: &Stepper, node_did: &str) -> String {
-    insert(
-        &step.job.node,
+    insert_as(
+        &step.job.access,
         "AgentRequest",
         json!({
             "request_id": "child-1",
@@ -1835,12 +1826,21 @@ async fn a_guest_trap_is_a_step_failure() {
     step.close().await;
 }
 
+/// A well-formed DID of an Agent that does not own the job row.
+fn other_agent() -> identity::Did {
+    let home = tempfile::tempdir().unwrap();
+    let other =
+        crate::store::identity::KeyIdentity::load_or_create(home.path().join("other"), None)
+            .unwrap();
+    identity::Did::new(crate::NodeIdentity::did(&other)).unwrap()
+}
+
 #[tokio::test]
 async fn in_flight_job_rejects_a_wake_from_another_agent() {
     let step = stepper(json!({"effects": {}})).await;
     let driver = JobDriver::new(step.job.runtime.clone());
     let actor = super::super::input::tests::agent_actor();
-    let other = identity::Did::new("did:test:other-agent").unwrap();
+    let other = other_agent();
     let result = driver
         .hold_steps(&step.row, &actor, async {
             assert!(driver.kick(&step.row, &other).is_err());
@@ -1859,7 +1859,7 @@ async fn in_flight_job_rejects_a_wake_from_another_agent() {
 async fn step_does_not_switch_to_the_job_owner_when_given_another_actor() {
     let step = stepper(json!({"effects": {}})).await;
     let before = step.row_json(&step.row).await;
-    let other = identity::Did::new("did:test:other-agent").unwrap();
+    let other = other_agent();
     assert!(run_step(&step.job.runtime, &step.row, &other)
         .await
         .is_err());
