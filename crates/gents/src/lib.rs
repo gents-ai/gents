@@ -542,8 +542,6 @@ pub use documents::template::{
     check_template_vocabulary, parse_template_for_validation, render_template, TemplateError,
     TemplateScope, VariableRef,
 };
-#[cfg(test)]
-pub(crate) use documents::upsert_node;
 pub use documents::{
     default_inference_profile_id_for_agent, default_inference_profile_id_for_node,
     deserialize_dual_shape, ensure_node, is_reserved_builtin_tool_name, list_agents,

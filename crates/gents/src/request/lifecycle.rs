@@ -56,8 +56,8 @@ pub(crate) mod queue;
 mod recovery;
 #[cfg(test)]
 pub(crate) use recovery::{
-    recover_expired_generation_with_access_for_test, recover_expired_generation_with_facts,
-    RecoveryResult, RecoverySelectionChoice, RecoverySelectionRejected,
+    recover_expired_generation_with_access_for_test, RecoveryResult, RecoverySelectionChoice,
+    RecoverySelectionRejected,
 };
 mod task_title;
 #[cfg(test)]

@@ -30,8 +30,6 @@ mod tools;
 mod trigger;
 mod write_tool;
 
-#[cfg(test)]
-pub(crate) use principal::upsert_node;
 pub use principal::{load_node, Node};
 
 pub use callback::{
