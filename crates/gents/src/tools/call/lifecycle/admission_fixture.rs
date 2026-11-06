@@ -169,6 +169,7 @@ pub struct PublishedAdmission {
     pub tool: ToolCallLifecycle,
     pub node_did: String,
     pub runtime: Arc<dyn NodeIdentity>,
+    pub client: crate::ConfigAccess,
 }
 
 pub(crate) async fn complete_child_managed(
@@ -780,6 +781,7 @@ pub async fn published_admission_with_owner(
             tool,
             node_did,
             runtime,
+            client,
         },
         request,
     ))
