@@ -25,7 +25,8 @@ abbrev allFields := ConfigDocuments.Collection.fields
 references stay editable and raw-key/OAuth-account protection is enforced by
 the Rust `validate` typed auth guard. -/
 def protectedKey (t : Target) (k : FieldKey) : Bool :=
-  (t == .task && k == "agent_did") || k == t.uniqueField || ["node_did", "created_at", "updated_at", "created_by",
+  (t == .task && k == "agent_did") || (t == .agent && k == "creation_nonce") ||
+    k == t.uniqueField || ["node_did", "created_at", "updated_at", "created_by",
     "artifact_bytes", "canonical_args", "signer_did", "provenance"].contains k
 
 def writableFields (t : Target) : List FieldKey :=
@@ -48,6 +49,10 @@ theorem unique_field_protected :
 
 theorem node_did_never_writable :
     ∀ t ∈ allTargets, "node_did" ∉ writableFields t := by decide
+
+theorem agent_creation_nonce_protected :
+    "creation_nonce" ∈ protectedFields .agent ∧
+    "creation_nonce" ∉ writableFields .agent := by decide
 
 theorem auth_reference_editable : "auth" ∈ writableFields .inferenceBackend := by decide
 

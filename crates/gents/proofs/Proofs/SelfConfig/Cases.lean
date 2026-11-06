@@ -256,6 +256,14 @@ def scenarios : List CaseRow := examplesToRows ++
     , target := .agent, guarded := false, validates := true
     , doc := [("node_did", "did:key:node-a")]
     , patch := [("node_did", some "did:key:node-b")] }
+  , { name := "agent_creation_nonce_set_rejected"
+    , target := .agent, guarded := false, validates := true
+    , doc := [("agent_did", "worker"), ("creation_nonce", "original")]
+    , patch := [("creation_nonce", some "replacement")] }
+  , { name := "agent_creation_nonce_clear_rejected"
+    , target := .agent, guarded := false, validates := true
+    , doc := [("agent_did", "worker"), ("creation_nonce", "original")]
+    , patch := [("creation_nonce", none)] }
   , { name := "agent_invalid_reference_rejected"
     , target := .agent, guarded := false, validates := false
     , doc := [("context_id", "context-1")]

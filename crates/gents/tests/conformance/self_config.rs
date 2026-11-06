@@ -305,6 +305,7 @@ fn decode_candidate(candidate: &LeanAgentCandidate) -> AgentCandidate {
             .map(|agent| {
                 serde_json::from_value(serde_json::json!({
                     "agent_did": agent.agent_did,
+                    "creation_nonce": agent.creation_nonce,
                     "node_did": node_did,
                     "context_id": agent.context_id,
                     "inference_profile_id": agent.inference_profile_id,

@@ -109,6 +109,7 @@ impl SelfConfigTarget {
             .filter(|field| {
                 *field != self.unique_field()
                     && !(self == Self::Task && *field == "agent_did")
+                    && !(self == Self::Agent && *field == "creation_nonce")
                     && ![
                         "node_did",
                         "created_at",

@@ -109,6 +109,7 @@ pub(crate) struct LeanAgentResolvedSession {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCandidateAgent {
     pub(crate) agent_did: String,
+    pub(crate) creation_nonce: String,
     pub(crate) context_id: Option<String>,
     pub(crate) inference_profile_id: String,
     pub(crate) enabled: bool,

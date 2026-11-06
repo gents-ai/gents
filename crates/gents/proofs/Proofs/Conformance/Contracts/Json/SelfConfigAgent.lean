@@ -84,6 +84,7 @@ private def candidateFixtureJson (f : CandidateFixture) : String :=
     ++ "\"node_did\":" ++ jsonString f.nodeDid ++ ","
     ++ "\"agents\":" ++ jsonArray (f.agents.map fun (id, a) =>
         "{\"agent_did\":" ++ jsonString id ++ ","
+          ++ "\"creation_nonce\":" ++ jsonString id ++ ","
           ++ "\"context_id\":" ++ jsonOptionalString a.contextId ++ ","
           ++ "\"inference_profile_id\":" ++ jsonString a.profileId ++ ","
           ++ "\"enabled\":" ++ agentBool a.enabled ++ "}") ++ ","
