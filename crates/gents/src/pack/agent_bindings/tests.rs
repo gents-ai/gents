@@ -98,17 +98,33 @@ fn offline_authoring_keeps_slots_out_of_canonical_agents() {
     }
 }
 
-async fn load(access: &ConfigAccess, owner: &str, name: &str, label: &str) -> BoundPackConfig {
+async fn load(
+    access: &ConfigAccess,
+    node: &Arc<defra_node::Node>,
+    root: &KeyIdentity,
+    name: &str,
+    label: &str,
+) -> BoundPackConfig {
     let value = config(label);
-    load_pack_install_config(
-        access,
+    let actor = access.actor_did().unwrap();
+    let local = ConfigAccess::local_as(node.clone(), identity::Did::new(&actor).unwrap());
+    let provisioner = AgentProvisioner {
+        node,
+        runtime: root,
+        actor: None,
+        selected_agent_did: None,
+        node_binding: None,
+    };
+    load_pack_install_config_with_provisioner(
+        &local,
         &manifest(name),
         &PackInstallOptions {
-            node_did: owner.to_owned(),
+            node_did: root.did().to_owned(),
         },
         &|_| Ok(serde_json::to_vec(&value)?),
         &|_| None,
         InstalledVia::Operator,
+        Some(&provisioner),
     )
     .await
     .unwrap()
@@ -148,17 +164,26 @@ async fn fixture() -> (
     let directory = tempfile::tempdir().unwrap();
     let root = KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
     let user = KeyIdentity::load_or_create(directory.path().join("user.key"), None).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
     let node = Arc::new(
         crate::test_support::node_builder()
             .with_node_identity_did(root.did())
+            .with_node_acp_owner(user.did().to_owned())
+            .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
             .build()
             .await
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(user.did().to_owned()).unwrap(),
+    let access = ConfigAccess::Graphql(
+        crate::store::config_client::GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"),
+            user.did(),
+        )
+        .with_client_signing_capability(user.client_signing_capability().unwrap())
+        .unwrap()
+        .with_client_signed_agent_creates(),
     );
     let seed = crate::store::config_client::DesiredStateApplyPlan::new(vec![
         (crate::Collection::Node, json!({"node_did":root.did()})),
@@ -180,8 +205,8 @@ async fn fixture() -> (
 #[tokio::test]
 async fn installed_agents_reuse_bindings_and_reject_stale_preparation() {
     let (_directory, root, node, access) = fixture().await;
-    let first = load(&access, root.did(), "one", "Worker").await;
-    let competing = load(&access, root.did(), "one", "Worker").await;
+    let first = load(&access, &node, &root, "one", "Worker").await;
+    let competing = load(&access, &node, &root, "one", "Worker").await;
     assert_ne!(first.agent_bindings, competing.agent_bindings);
     let report = install(&access, root.did(), &first).await.unwrap();
     assert_eq!(
@@ -189,10 +214,10 @@ async fn installed_agents_reuse_bindings_and_reject_stale_preparation() {
         Some(&first.agent_bindings["worker"].agent_did)
     );
     assert!(install(&access, root.did(), &competing).await.is_err());
-    let upgraded = load(&access, root.did(), "one", "Renamed").await;
+    let upgraded = load(&access, &node, &root, "one", "Renamed").await;
     assert_eq!(first.agent_bindings, upgraded.agent_bindings);
     install(&access, root.did(), &upgraded).await.unwrap();
-    let another_install = load(&access, root.did(), "two", "Renamed").await;
+    let another_install = load(&access, &node, &root, "two", "Renamed").await;
     assert_ne!(first.agent_bindings, another_install.agent_bindings);
     let expected = &first.agent_bindings["worker"];
     let actual = access.execute("{ Agent { agent_did creation_nonce display_name } Task { agent_did } AgentTarget { agent_did } PackInstallation { agent_bindings } }").await.unwrap();
@@ -212,7 +237,7 @@ async fn installed_agents_reuse_bindings_and_reject_stale_preparation() {
         actual["data"]["PackInstallation"][0]["agent_bindings"],
         serde_json::to_value(&first.agent_bindings).unwrap()
     );
-    let stale = load(&access, root.did(), "one", "Stale").await;
+    let stale = load(&access, &node, &root, "one", "Stale").await;
     super::super::remove_pack(
         &access,
         root.did(),
@@ -289,8 +314,19 @@ async fn dependency_slot_is_provisioned_once_and_owned_by_its_installation() {
     root_manifest.metadata.dependencies = vec!["fixture/dependency".into()];
     let raw = json!({"node":{},"tasks":[{"task_id":"dependent","agent_did":"gents:agent-slot:fixture/dependency#worker","prompt_template":"Execute"}]});
     let root_archive = archive(&root_manifest, &raw);
-    let prepared = super::super::prepare_document_pack_archive(
-        &access,
+    let local = ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(access.actor_did().unwrap()).unwrap(),
+    );
+    let provisioner = AgentProvisioner {
+        node: &node,
+        runtime: &root,
+        actor: None,
+        selected_agent_did: None,
+        node_binding: None,
+    };
+    let prepared = super::super::prepare_document_pack_archive_with_provisioner(
+        &local,
         root.did(),
         &root_archive,
         &BTreeMap::from([("model".into(), "profile".into())]),
@@ -298,6 +334,7 @@ async fn dependency_slot_is_provisioned_once_and_owned_by_its_installation() {
         InstalledVia::Operator,
         None,
         &|_| None,
+        Some(&provisioner),
     )
     .await
     .unwrap();
