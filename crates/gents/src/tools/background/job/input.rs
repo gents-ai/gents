@@ -1544,6 +1544,12 @@ pub(crate) mod tests {
         })
     }
 
+    /// A fresh Agent binding under the fixture node identity, for fixtures that
+    /// install more Agents than the shared `agent_binding()`.
+    pub(crate) fn fresh_agent_binding() -> gents_protocol::agent_identity::AgentIdentityBinding {
+        crate::store::identity::provision_agent_identity(node_identity()).unwrap()
+    }
+
     pub(crate) fn managed_agent() -> &'static Arc<dyn crate::store::identity::NodeIdentity> {
         static AGENT: std::sync::OnceLock<Arc<dyn crate::store::identity::NodeIdentity>> =
             std::sync::OnceLock::new();

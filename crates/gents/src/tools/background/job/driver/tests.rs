@@ -640,7 +640,7 @@ use crate::pack::{write_home_install, HomePackInstall, PackKind};
 use crate::plugin::store;
 use crate::plugin::tests::constant_output_wat;
 use crate::plugin::tests::executor::installed_plugin;
-use crate::tools::background::job::input::tests::{agent_did, insert, node_did, Job};
+use crate::tools::background::job::input::tests::{agent_did, insert, insert_as, node_did, Job};
 use gents_protocol::job::{
     DynamicMode, JobChildState, JobOrigin, PluginJobDeclaration, PluginJobSettings,
 };
@@ -690,14 +690,21 @@ async fn write_inference(job: &Job) {
     })
     .collect();
     let plan = DesiredStateApplyPlan::new(documents).unwrap();
-    ConfigAccess::transact_local_write(&job.node, None, "test.driver.inference", |txn| {
-        let plan = &plan;
-        Box::pin(
-            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
-        )
-    })
-    .await
-    .unwrap();
+    job_owner(job)
+        .transact_write("test.driver.inference", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .unwrap();
+}
+
+/// The runtime owner's signed access to the job fixture's node: setup writes
+/// of node-owned configuration go through it, not through the Agent.
+fn job_owner(job: &Job) -> ConfigAccess {
+    ConfigAccess::local_as(job.node.clone(), identity::Did::new(node_did()).unwrap())
 }
 
 pub(crate) async fn write_step_tools(job: &Job, settings: Option<&PluginJobSettings>) {
@@ -708,7 +715,7 @@ pub(crate) async fn write_step_tools(job: &Job, settings: Option<&PluginJobSetti
         "integrations": {"plugins": [{"plugin": "acme/engine", "job": settings}]},
     }))
     .unwrap();
-    crate::store::config_client::write_tools_document(&job.access, &tools)
+    crate::store::config_client::write_tools_document(&job_owner(job), &tools)
         .await
         .unwrap();
 }
@@ -850,18 +857,21 @@ async fn stepper_wat(wat: &str) -> Stepper {
     let mut job = new_job(Some(&settings), None).await;
     write_inference(&job).await;
     for agent in ["a", "b"] {
-        insert(
-            &job.node,
-            "Agent",
-            json!({"agent_did": agent, "node_did": node_did(), "context_id": "context",
-                       "inference_profile_id": "inference", "enabled": true}),
+        // Each target's Agent is a real signed fixture Agent of the runtime owner.
+        let binding = super::super::input::tests::fresh_agent_binding();
+        crate::test_support::install_test_agent_binding_with_access(
+            node_did(),
+            &format!("Target fixture agent {agent}"),
+            &binding,
+            &job_owner(&job),
         )
         .await;
-        insert(
-            &job.node,
+        insert_as(
+            &job_owner(&job),
             "AgentTarget",
             json!({"target_id": format!("t-{agent}"), "node_did": node_did(),
-                       "target_node_did": node_did(), "agent_did": agent, "name": agent}),
+                       "target_node_did": node_did(), "agent_did": binding.agent_did,
+                       "name": agent}),
         )
         .await;
     }
