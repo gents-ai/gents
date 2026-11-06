@@ -1,7 +1,4 @@
 use super::*;
-use crate::runtime::agent::p2p_reconcile::{
-    reconcile_peer_tick, EnrollmentEndpointEntry, GraphqlPairingStateStore, PairingStateStore,
-};
 use crate::support::enrollment::{
     authorize_enrollment_peer, signed_enrollment_offer, wait_for_peer_identity,
 };
@@ -359,25 +356,14 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
         EndpointScope::<String, ()>::only_units(["DeploymentNote".into()]),
     );
     let options = json!({"peer_id":peer_id,"peer_did":remote.node_identity.did(),"collections":["DeploymentNote"]});
-    let preview = call(
+    // Application collections are refused for preview and apply alike.
+    let preview = Tool::call(
         &tool,
-        json!({"argv":["pairings","preview"],"options":options}),
+        serde_json::from_value(json!({"argv":["pairings","preview"],"options":options})).unwrap(),
     )
-    .await;
-    assert!(preview["outcome"]["current"].is_null());
-    assert!(
-        preview["outcome"]["local_schema"]["DeploymentNote"]["version_id"]
-            .as_str()
-            .is_some_and(|version| !version.is_empty())
-    );
-    assert_eq!(
-        preview["outcome"]["local_schema"]["DeploymentNote"]["branchable"],
-        true
-    );
-    assert_eq!(
-        preview["outcome"]["peer_schema_compatibility"],
-        "not_checked"
-    );
+    .await
+    .unwrap_err();
+    assert!(preview.to_string().contains("protocol collections"), "{preview}");
     let wrong_did = Tool::call(&tool, serde_json::from_value(json!({"argv":["pairings","apply"],"options":{"peer_id":peer_id,"peer_did":identity.did(),"collections":["DeploymentNote"]}})).unwrap()).await.unwrap_err();
     assert!(wrong_did.to_string().contains("signed enrollment"));
     assert!(tool.overlay(&peer_id).await.unwrap().is_none());
@@ -389,7 +375,7 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     );
     assert!(Tool::call(
         &readonly,
-        serde_json::from_value(json!({"argv":["pairings","apply"],"options":options})).unwrap()
+        serde_json::from_value(json!({"argv":["pairings","revoke"],"options":{"peer_id":peer_id}})).unwrap()
     )
     .await
     .unwrap_err()
@@ -411,160 +397,17 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     assert!(forbidden
         .to_string()
         .contains("changing grants or ACP cannot enable"));
-    let applied = call(
+    // Application collections do not sync over P2P: pairing refuses them and
+    // leaves enrollment and the overlay untouched.
+    let refused = Tool::call(
         &tool,
-        json!({"argv":["pairings","apply"],"options":options}),
+        serde_json::from_value(json!({"argv":["pairings","apply"],"options":options})).unwrap(),
     )
-    .await;
-    assert_eq!(applied["outcome"]["unchanged"], false);
-    assert_eq!(
-        applied["outcome"]["local_schema"],
-        preview["outcome"]["local_schema"]
-    );
-    assert_eq!(
-        applied["outcome"]["peer_schema_compatibility"],
-        "not_checked"
-    );
-    let retried = call(
-        &tool,
-        json!({"argv":["pairings","apply"],"options":options}),
-    )
-    .await;
-    assert_eq!(retried["outcome"]["unchanged"], true);
-    let projection = GraphqlEnrollmentStore::new(local.node.clone(), identity.clone())
-        .load_projection()
-        .await
-        .unwrap();
-    let active = projection
-        .active
-        .iter()
-        .find(|a| a.request.request_id == enrollment.request_id)
-        .unwrap();
-    let entry = EnrollmentEndpointEntry {
-        desired_id: peer_id.clone(),
-        peer_id: peer_id.clone(),
-        node_did: remote.node_identity.did().into(),
-        address: address.clone(),
-        request_digest: active.request.request_digest.clone(),
-        authorization_sequence: active.revision.sequence,
-        authorization_expires_at: active.revision.authorization_expires_at.clone(),
-    };
-    let store = GraphqlPairingStateStore::for_enrollment_materialization(
-        local.node.clone(),
-        identity.clone(),
-        entry,
-    );
-    let admin = EmbeddedRemoteP2pAdmin::new(local.node.clone());
-    let tick = reconcile_peer_tick(&admin, &store, &peer_id).await.unwrap();
-    assert!(tick.live_route_matches, "{tick:?}");
-    let inspected = call(
-        &tool,
-        json!({"argv":["network","get"],"options":{"peer_id":peer_id}}),
-    )
-    .await;
-    assert_eq!(inspected["outcome"]["connected"], true, "{inspected}");
-    let compact = call(
-        &tool,
-        json!({"argv":["pairings","get"],"options":{"peer_id":peer_id}}),
-    )
-    .await;
-    assert_eq!(compact["outcome"]["desired"].as_array().unwrap().len(), 1);
-    assert_eq!(compact["outcome"]["applied"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        compact["observations"]["enrolled_peers"][0]["peer_id"],
-        peer_id
-    );
-    assert_eq!(
-        compact["observations"]["connected_peers"]["observed_count"],
-        1
-    );
-    let replicators = compact["observations"]["replicators"]["items"]
-        .as_array()
-        .unwrap();
-    assert!(!replicators.is_empty());
-    assert!(replicators
-        .iter()
-        .all(|row| row.get("collections").is_none()
-            && row.get("filters").is_none()
-            && row["collection_count"].as_u64().is_some()));
-    let detail = call(&tool, compact["observations"]["details_call"].clone()).await;
-    assert!(detail["observations"]["replicators"]["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|row| row["collections"].is_array() && row.get("filters").is_some()));
-    let absent = call(
-        &tool,
-        json!({"argv":["pairings","get"],"options":{"peer_id":"unrelated-peer"}}),
-    )
-    .await;
-    assert_eq!(absent["outcome"]["desired"], json!([]));
-    assert_eq!(absent["outcome"]["applied"], json!([]));
-    assert_eq!(absent["observations"]["enrolled_peers"], json!([]));
-    assert_eq!(absent["observations"]["replicators"]["observed_count"], 0);
-    assert_eq!(
-        absent["observations"]["connected_peers"]["observed_count"],
-        0
-    );
-    assert!(store
-        .load_applied(&peer_id)
-        .await
-        .unwrap()
-        .state
-        .collections
-        .contains("DeploymentNote"));
-    ConfigAccess::local(remote.node.clone()).write("test.p2p.note", "mutation {create_DeploymentNote(input: {text: \"Previous image remains pinned until review\"}) {_docID}}").await.unwrap();
-    let document = ConfigAccess::local(remote.node.clone())
-        .execute("{DeploymentNote(limit: 1) {_docID}}")
-        .await
-        .unwrap();
-    let doc_id = document["data"]["DeploymentNote"][0]["_docID"]
-        .as_str()
-        .unwrap_or_else(|| panic!("missing created document: {document}"));
-    let synced = call(&tool, json!({"argv":["sync","documents"],"options":{"peer_id":peer_id,"collection":"DeploymentNote","doc_ids":[doc_id]}})).await;
-    assert_eq!(
-        synced["outcome"]["missing_document_ids"],
-        json!([]),
-        "{synced}"
-    );
-    let read = ConfigAccess::local(local.node.clone())
-        .execute(&format!(
-            "{{DeploymentNote(filter: {{_docID: {{_eq: {}}}}}) {{text}}}}",
-            quoted(doc_id)
-        ))
-        .await
-        .unwrap();
-    assert_eq!(
-        read["data"]["DeploymentNote"][0]["text"],
-        "Previous image remains pinned until review"
-    );
-    let absent_id = "bae-00000000-0000-5000-8000-000000000000";
-    let partial = call(
-        &tool,
-        json!({"argv":["sync","documents"],"options":{"peer_id":peer_id,"collection":"DeploymentNote","doc_ids":[doc_id,absent_id]}}),
-    )
-    .await;
-    assert_eq!(partial["outcome"]["observed_document_ids"], json!([doc_id]));
-    assert_eq!(
-        partial["outcome"]["missing_document_ids"],
-        json!([absent_id])
-    );
-    assert!(partial["next_call"].is_object());
-    call(
-        &tool,
-        json!({"argv":["pairings","revoke"],"options":{"peer_id":peer_id}}),
-    )
-    .await;
-    reconcile_peer_tick(&admin, &store, &peer_id).await.unwrap();
+    .await
+    .unwrap_err();
+    assert!(refused.to_string().contains("protocol collections"), "{refused}");
     assert!(tool.overlay(&peer_id).await.unwrap().is_none());
-    assert!(!store
-        .load_applied(&peer_id)
-        .await
-        .unwrap()
-        .state
-        .collections
-        .contains("DeploymentNote"));
-    assert!(GraphqlEnrollmentStore::new(local.node.clone(), identity)
+    assert!(GraphqlEnrollmentStore::new(local.node.clone(), identity.clone())
         .load_projection()
         .await
         .unwrap()
@@ -674,25 +517,31 @@ async fn node_requested_enrollment_is_approved_and_paired_by_the_offering_node()
     assert_eq!(entry["peer_did"], candidate.node_identity.did());
     assert_eq!(entry["decided_by"], server.node_identity.did());
     assert!(entry["decided_at"].is_string());
-    let applied = call(
+    // Application collections do not sync over P2P: the approved enrollment
+    // stands, but pairing for DeploymentNote is refused.
+    let refused = Tool::call(
         &server_tool,
-        json!({"action":"pairings_apply","peer_id":candidate_peer,"peer_did":candidate.node_identity.did(),"collections":["DeploymentNote"]}),
+        serde_json::from_value(json!({"action":"pairings_apply","peer_id":candidate_peer,"peer_did":candidate.node_identity.did(),"collections":["DeploymentNote"]})).unwrap(),
     )
-    .await;
-    assert_eq!(applied["outcome"]["unchanged"], false, "{applied}");
+    .await
+    .unwrap_err();
+    assert!(refused.to_string().contains("protocol collections"), "{refused}");
 }
 
 #[tokio::test]
 async fn p2p_rejects_foreign_actor_and_preserves_another_overlays_owner() {
     let db = crate::support::test_p2p_db("engineer-p2p-owned").await;
     let access = ConfigAccess::local(db.node.clone());
+    let agent_binding = crate::store::identity::provision_agent_identity(db.node_identity.as_ref()).unwrap();
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &agent_binding).unwrap();
     access.write("test.p2p.overlay", "mutation {create_DataPlanePairingDesired(input: {peer_id: \"foreign-route\", node_did: \"did:key:another\", source: \"another-owner\", collections: [\"DeploymentNote\"], replicator_addresses: null, template: \"app-collections\"}) {_docID}}").await.unwrap();
     let tool = P2pTool::new(
         db.node.clone(),
         Some(db.node_identity.clone()),
         true,
         EndpointScope::all(),
-    );
+    )
+    .with_invoking_agent(Some(agent.clone()));
     let result = Tool::call(
         &tool,
         serde_json::from_value(
@@ -710,7 +559,8 @@ async fn p2p_rejects_foreign_actor_and_preserves_another_overlays_owner() {
         Some(db.node_identity.clone()),
         true,
         EndpointScope::<String, ()>::only_units(["DeploymentNote".into()]),
-    );
+    )
+    .with_invoking_agent(Some(agent.clone()));
     let result = Tool::call(
         &scoped,
         serde_json::from_value(
@@ -801,9 +651,9 @@ async fn help_and_scope_distinguish_capability_limits_from_collection_grants() {
         .await
         .unwrap_err()
         .to_string();
-    assert!(denied.contains("outside this tool's P2P collection grant"));
-    assert!(denied.contains("applies from the agent's next request, not in this turn"));
-    assert!(!denied.contains("never supported"));
+    // Application collections are refused before the grant is consulted, so an
+    // in-grant or out-of-grant collection gets the same refusal.
+    assert!(denied.contains("protocol collections"), "{denied}");
     let empty = tool
         .checked_collections(json!({"collections":[]}).as_object().unwrap())
         .await
