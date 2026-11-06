@@ -434,8 +434,8 @@ impl Harness {
             while !marker.exists() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            crate::request::interrupt::interrupt_request_by_doc_id(
-                &self.node,
+            crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+                &self.agent_access,
                 &doc_id,
                 self.owner(),
                 Some(&self.agent_config.agent_did),
