@@ -2,6 +2,7 @@ import Proofs.PluginJob.Admission
 import Proofs.PluginJob.Adoption
 import Proofs.PluginJob.Step
 import Proofs.PluginJob.Authority
+import Proofs.PluginJob.ExecutionIdentity
 import Proofs.PluginJob.RecoveryTrace
 import Proofs.Recovery.Sweeps.PluginJob
 import Lean
@@ -21,7 +22,8 @@ by `provenanceOf`, `recordAfterInstall`, `callOrigin`,
 samples built from the `Types` constructors and rendered in the
 `gents_protocol::job` spellings, with echoes from `stepEcho`, origin from
 `callOrigin` and host codes from `Refusal.code`. Lineage: by `DurableLineage.openingRequest`.
-Recovery: by one tick of the registered `pluginJobRecoverySweep`.
+Recovery: by one tick of the registered `pluginJobRecoverySweep`. Wake: by
+`ExecutionIdentity.wakeOutcome` over the agent labels `selected` and `other`.
 -/
 
 open PluginJob ToolPolicy Lean
@@ -1674,6 +1676,21 @@ private def wireRecoveryCases : List Json := Id.run do
               let c := { c with name := s!"wire_recovery_{cases.length}" }
               cases := cases ++ [render c trace]
   return cases
+
+def wakeCases : List (String × ExecutionIdentity.Work × ExecutionIdentity.Work) :=
+  [ ("same_agent_coalesces", ⟨"row", "selected"⟩, ⟨"row", "selected"⟩)
+  , ("changed_agent_refused", ⟨"row", "selected"⟩, ⟨"row", "other"⟩)
+  , ("other_row_independent", ⟨"row", "selected"⟩, ⟨"other-row", "selected"⟩)
+  , ("other_row_other_agent_independent", ⟨"row", "selected"⟩, ⟨"other-row", "other"⟩) ]
+
+private def workJson (work : ExecutionIdentity.Work) : Json :=
+  Json.mkObj [("document", toJson work.document), ("agent", toJson work.agent)]
+
+def wakeCasesJson : String :=
+  (toJson (wakeCases.map fun (name, running, wake) => Json.mkObj
+    [("name", toJson name), ("running", workJson running), ("wake", workJson wake),
+     ("expected", Json.mkObj
+       [("outcome", toJson (ExecutionIdentity.wakeOutcome running wake).toContract)])])).compress
 
 def admissionCasesJson : String :=
   (toJson (((admissionCases ++ sourceBoundaryCases).map fun c => render c) ++

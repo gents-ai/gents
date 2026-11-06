@@ -1921,6 +1921,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::recovery_sweeps::generated_plugin_job_recovery_cases_drive_redrive_owner")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "plugin_job_wake_cases"
+      "PluginJobWakeCases"
+      "tools::background::job::driver::tests::generated_plugin_job_wake_cases_keep_the_selected_agent")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "restart_disposition_cases"
       "RestartDispositionCases"
       "conformance::background::generated_plugin_job_restart_and_foreground_rows_match_owners")

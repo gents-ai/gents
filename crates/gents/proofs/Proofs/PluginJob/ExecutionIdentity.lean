@@ -28,4 +28,36 @@ theorem accepted_wake_keeps_actor (running wake : Work)
   simp [acceptsWake] at accepted
   exact accepted.2
 
+/-- A wake or immediate step meets the step in flight on its row. Another row's
+work is independent; the same actor coalesces into one re-run of the in-flight
+step; any other actor is refused and leaves the in-flight step unchanged. -/
+inductive WakeOutcome where
+  | independent
+  | coalesced
+  | refused
+  deriving BEq, DecidableEq, Repr
+
+def WakeOutcome.toContract : WakeOutcome → String
+  | .independent => "independent"
+  | .coalesced => "coalesced"
+  | .refused => "refused"
+
+def wakeOutcome (running wake : Work) : WakeOutcome :=
+  if running.document != wake.document then .independent
+  else if acceptsWake running wake then .coalesced else .refused
+
+theorem running_row_actor_change_refused (running wake : Work)
+    (same : running.document = wake.document) (different : running.agent ≠ wake.agent) :
+    wakeOutcome running wake = .refused := by
+  simp [wakeOutcome, same, actor_change_refused running wake different]
+
+theorem coalesced_wake_keeps_actor (running wake : Work)
+    (coalesced : wakeOutcome running wake = .coalesced) : running.agent = wake.agent := by
+  unfold wakeOutcome at coalesced
+  split at coalesced
+  · cases coalesced
+  · split at coalesced
+    · exact accepted_wake_keeps_actor running wake (by assumption)
+    · cases coalesced
+
 end PluginJob.ExecutionIdentity

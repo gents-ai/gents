@@ -2636,6 +2636,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "PluginJobRecoveryCases",
             !snapshot.plugin_job_recovery_cases.is_empty(),
         ),
+        (
+            "plugin_job_wake_cases",
+            "PluginJobWakeCases",
+            !snapshot.plugin_job_wake_cases.is_empty(),
+        ),
     ] {
         assert!(present, "{category} must emit rows");
         emitted.insert((category.into(), domain.into()));

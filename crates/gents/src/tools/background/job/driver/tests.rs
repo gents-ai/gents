@@ -1573,6 +1573,69 @@ async fn recovery_hold_and_deferred_step_keep_runtime_retirement_busy() {
 }
 
 #[tokio::test]
+async fn generated_plugin_job_wake_cases_keep_the_selected_agent() {
+    use crate::lean_vocab_test::{lean_plugin_job_wake_cases, LeanPluginJobWakeOutcome};
+    use futures::FutureExt;
+
+    let cases = lean_plugin_job_wake_cases();
+    assert!(cases
+        .iter()
+        .any(|case| case.expected.outcome == LeanPluginJobWakeOutcome::Refused));
+    let node = super::super::input::tests::open().await;
+    let home = tempfile::tempdir().unwrap();
+    let runtime = JobRuntime::new(
+        node.clone(),
+        Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
+        home.path().to_path_buf(),
+        None,
+    );
+    let other = identity::Did::new("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap();
+    let actor = |label: &str| match label {
+        "selected" => super::super::input::tests::agent_actor(),
+        "other" => other.clone(),
+        label => panic!("unmodeled agent label {label}"),
+    };
+    for case in cases {
+        let (running, wake) = (case.running.document.clone(), case.wake.document.clone());
+        let (running_actor, wake_actor) = (actor(&case.running.agent), actor(&case.wake.agent));
+        for immediate in [false, true] {
+            let driver = JobDriver::new(runtime.clone());
+            let held = driver.permits.acquire_many(4).await.unwrap();
+            let observed = driver
+                .hold_steps(&running, &running_actor, async {
+                    let accepted = if immediate {
+                        match driver.step_now(&wake, &wake_actor).now_or_never() {
+                            None => None,
+                            Some(None) => Some(true),
+                            Some(Some(outcome)) => Some(outcome.is_ok()),
+                        }
+                    } else {
+                        Some(driver.kick(&wake, &wake_actor).is_ok())
+                    };
+                    let mut in_flight = driver.in_flight.lock().unwrap();
+                    let joined = in_flight[&running].dirty;
+                    let independent = running != wake && in_flight.contains_key(&wake);
+                    if accepted.is_none() {
+                        // The dropped immediate step leaves its row's entry behind.
+                        in_flight.remove(&wake);
+                    }
+                    match (accepted, joined, independent) {
+                        (Some(true), true, false) => LeanPluginJobWakeOutcome::Coalesced,
+                        (Some(false), false, false) => LeanPluginJobWakeOutcome::Refused,
+                        (Some(true) | None, false, true) => LeanPluginJobWakeOutcome::Independent,
+                        observed => panic!("{}: unclassified wake {observed:?}", case.name),
+                    }
+                })
+                .await
+                .unwrap();
+            assert_eq!(observed, case.expected.outcome, "{} immediate={immediate}", case.name);
+            drop(held);
+            idle(&driver).await;
+        }
+    }
+}
+
+#[tokio::test]
 async fn two_wakes_during_a_step_produce_exactly_one_rerun() {
     let step = stepper(json!({"effects": {}})).await;
     live_child(&step, "did-owner").await;
