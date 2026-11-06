@@ -164,83 +164,87 @@ mod tests {
 
     #[tokio::test]
     async fn retained_requests_preserve_content_and_lineage_under_the_trial_identity() {
+        use crate::request::lifecycle::{
+            build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
+            RequestSigner, RequestSpec, RetryLink,
+        };
+        use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
         let runs = tempfile::tempdir().unwrap();
         let path = runs.path().join("trial/home");
-        std::fs::create_dir_all(&path).unwrap();
-        let identity = KeyIdentity::load_or_create(path.join("node.key"), None).unwrap();
-        let did = identity.did().to_owned();
-        let node = std::sync::Arc::new(
-            crate::defra_node::Node::builder()
-                .data_path(&path)
-                .with_regolith_options(crate::store::local::storage_backend::regolith_options())
-                .with_node_identity_did(&did)
-                .build()
-                .await
-                .unwrap(),
-        );
-        let policy = node
-            .add_dac_policy_as(
-                &defra_core::RequestContext::default().with_identity(Some(did.clone())),
-                r#"
-name: Retained request reader test
-resources:
-  - name: requests
-    relations:
-      - name: reader
-    permissions:
-      - name: read
-        expr: reader
-      - name: update
-      - name: delete
-"#,
-            )
-            .await
-            .unwrap();
-        ConfigAccess::local(node.clone())
-            .add_collection(&crate::store::schema::AGENT_REQUEST_SCHEMA.replace(
-                "type AgentRequest ",
-                &format!(
-                    "type AgentRequest @policy(id: \"{}\", resource: \"requests\") ",
-                    escape_graphql_string(&policy)
-                ),
-            ))
-            .await
-            .unwrap();
+        let home = EmbeddedHome::create_trial_retained(&path).await.unwrap();
+        let db = crate::support::test_db_from_home(home);
+        let (db, user, client, binding) =
+            crate::test_support::signed_test_node_from_db(db, "eval-inspect-retained").await;
+        let did = db.node_identity.did().to_owned();
         let content = "original \"prompt\"\nwith full content";
-        let query = format!(
-            r#"mutation {{
-                root: create_AgentRequest(input: {{ request_id: "root", purpose: "normal", node_did: "{did}", session_id: "session", content: "{}", lifecycle_state: "completed", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }}
-                child: create_AgentRequest(input: {{ request_id: "child", purpose: "normal", node_did: "{did}", session_id: "child-session", content: "child prompt", lifecycle_state: "completed", created_at: "2026-01-01T00:00:01Z", retry_root_request: "root", retry_parent_request: "root", caused_by_parent_request_id: "root", caused_by_parent_tool_call_id: "call", caused_by_trigger_id: "trigger", caused_by_source_doc_id: "source", runtime_source_request_id: "root", runtime_source_kind: "session_message" }}) {{ _docID }}
-                other: create_AgentRequest(input: {{ request_id: "foreign", purpose: "normal", node_did: "did:key:other", content: "unrelated" }}) {{ _docID }}
-            }}"#,
-            escape_graphql_string(content),
-            did = escape_graphql_string(&did),
-        );
-        ConfigAccess::write_local(&node, "eval.inspect.test.requests", &query)
-            .await
-            .unwrap();
-        let denied = KeyIdentity::load_or_create(runs.path().join("denied.key"), None).unwrap();
-        let original_owner_query = format!(
-            r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}}}) {{content}} }}"#,
-            escape_graphql_string(&did)
-        );
-        let denied_rows = ConfigAccess::transact_local_write(
-            &node,
-            Some(denied.did().parse().unwrap()),
-            "eval.inspect.test.denied_read",
-            |txn| {
-                let query = original_owner_query.clone();
-                Box::pin(async move { txn.execute(&query).await })
-            },
+        let request_spec = |request_id: &str, body: &str, created_at: &str| {
+            RequestSpec::new(
+                RequestPurpose::Normal,
+                RequestIdentity {
+                    request_id: request_id.to_owned(),
+                    node_did: did.clone(),
+                    requester_did: Some(user.did().to_owned()),
+                    agent_did: binding.agent_did.clone(),
+                    session_id: "session".to_owned(),
+                    content: body.to_owned(),
+                    execution_origin: ExecutionOrigin::Interactive,
+                    created_at: created_at.to_owned(),
+                },
+                AgentRequestAdmissionRecord::client(user.did()),
+            )
+        };
+        let root = build_signed_client_request(
+            &client,
+            request_spec("root", content, "2026-01-01T00:00:00Z"),
+            RequestSigner::Identity(&user),
         )
         .await
         .unwrap();
+        submit_client_request(&client, &root).await.unwrap();
+        let response = client
+            .execute("{ AgentRequest(filter: {request_id: {_eq: \"root\"}}) { _docID } }")
+            .await
+            .unwrap();
+        let root_doc = response["data"]["AgentRequest"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mut child = request_spec("child", "child prompt", "2026-01-01T00:00:01Z");
+        child.retry = Some(RetryLink {
+            parent_request_id: Some("root".into()),
+            parent_request_doc_id: Some(root_doc.clone()),
+            root_request_id: "root".into(),
+            retry_count: 1,
+            max_retries: 3,
+        });
+        let child = build_signed_client_request(&client, child, RequestSigner::Identity(&user))
+            .await
+            .unwrap();
+        submit_client_request(&client, &child).await.unwrap();
+        let denied = KeyIdentity::load_or_create(runs.path().join("denied.key"), None).unwrap();
+        let admin = ConfigAccess::local_as(db.node.clone(), identity::Did::new(&did).unwrap());
+        admin
+            .grant_node_permission(
+                &identity::Did::new(denied.did()).unwrap(),
+                crate::store::config_client::NodePermission::DocumentRead,
+            )
+            .await
+            .unwrap();
+        let denied_access =
+            ConfigAccess::local_as(db.node.clone(), identity::Did::new(denied.did()).unwrap());
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}}}) {{content}} }}"#,
+            escape_graphql_string(&did)
+        );
+        let denied_rows = denied_access.execute(&query).await.unwrap();
         assert!(denied_rows["data"]["AgentRequest"]
             .as_array()
             .unwrap()
             .is_empty());
-        node.shutdown().await.expect("shutdown node");
-        drop(node);
+        drop(denied_access);
+        drop(admin);
+        db.node.shutdown().await.expect("shutdown node");
+        drop(db);
         let key = std::fs::read(path.join("node.key")).unwrap();
         let at = locator(&did, "trial");
         for _ in 0..2 {
@@ -252,12 +256,13 @@ resources:
             assert_eq!(requests[0].request.content.as_deref(), Some(content));
             assert!(!requests[0].request_doc_id.is_empty());
             let child = &requests[1].request;
-            assert_eq!(child.session_id.as_deref(), Some("child-session"));
+            assert_eq!(child.session_id.as_deref(), Some("session"));
             assert_eq!(child.retry_root_request.as_deref(), Some("root"));
-            assert_eq!(child.caused_by_parent_request_id.as_deref(), Some("root"));
-            assert_eq!(child.caused_by_parent_tool_call_id.as_deref(), Some("call"));
-            assert_eq!(child.caused_by_source_doc_id.as_deref(), Some("source"));
-            assert_eq!(child.runtime_source_request_id.as_deref(), Some("root"));
+            assert_eq!(child.retry_parent_request.as_deref(), Some("root"));
+            assert_eq!(
+                child.retry_parent_request_doc_id.as_deref(),
+                Some(root_doc.as_str())
+            );
             assert_eq!(std::fs::read(path.join("node.key")).unwrap(), key);
         }
     }
@@ -275,7 +280,10 @@ resources:
         let held_text = format!("{held:#}");
         assert!(
             held_text.contains("already open in this process")
-                || held_text.contains("already locked for read-write access"),
+                || held_text.contains("already locked for read-write access")
+                || (held_text.contains("another Gents runtime")
+                    && held_text.contains("already using")
+                    && held_text.contains(&path.display().to_string())),
             "{held:#}"
         );
         close(home).await;
