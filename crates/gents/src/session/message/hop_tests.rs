@@ -9,16 +9,17 @@ pub(super) fn cause(
     message: &crate::tools::call::lifecycle::admission_fixture::PublishedSessionMessage,
     caller_hop: u32,
 ) -> SessionMessageCause {
+    let tool = &message.admission.tool;
     SessionMessageCause {
         caller_node_did: message.admission.node_did.clone(),
-        caller_agent_did: message.admission.tool.actor().to_string(),
-        caller_session_id: "caller-session".to_owned(),
-        caller_requester_did: None,
-        caller_request_id: "caller-request".to_owned(),
-        caller_request_doc_id: message.admission.tool.request_doc_id().unwrap().to_owned(),
+        caller_agent_did: tool.actor().to_string(),
+        caller_session_id: tool.session_id().to_owned(),
+        caller_requester_did: tool.requester_did().map(str::to_owned),
+        caller_request_id: tool.request_id().to_owned(),
+        caller_request_doc_id: tool.request_doc_id().unwrap().to_owned(),
         caller_hop,
-        tool_call_id: "hop-tool".to_owned(),
-        tool_call_doc_id: "hop-tool-doc".to_owned(),
+        tool_call_id: tool.tool_call_id().to_owned(),
+        tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
         correlation: None,
     }
 }
@@ -71,13 +72,20 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
         } else {
             "processing"
         };
-        let response = node
-            .execute(&format!(
-                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#,
-                escape_graphql_string(&message.caused_request_doc_id)
-            ))
-            .await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
+        message
+            .admission
+            .tool
+            .access()
+            .unwrap()
+            .write(
+                "test.set_hop_state",
+                &format!(
+                    r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&message.caused_request_doc_id)
+                ),
+            )
+            .await
+            .unwrap();
         let cause = cause(&message, case.caller_hop);
         let body = RenderedBody {
             content: "again".to_owned(),
@@ -111,7 +119,8 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
             "{name}"
         );
         assert_eq!(
-            create.caused_by_parent_tool_call_doc_id.as_deref() == Some("hop-tool-doc"),
+            create.caused_by_parent_tool_call_doc_id.as_deref()
+                == Some(cause.tool_call_doc_id.as_str()),
             case.names_caller_tool_call,
             "{name}"
         );
@@ -165,8 +174,9 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
         .unwrap()
         .unwrap();
     let load_tool = || {
-        crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
+        crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            tool.actor().clone(),
             &tool_doc_id,
             tool.node_did(),
             tool.session_id(),
