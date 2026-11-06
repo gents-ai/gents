@@ -264,6 +264,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) identity_agent_creation_exposure_cases: Vec<serde_json::Value>,
     pub(crate) identity_created_agent_access_cases: Vec<serde_json::Value>,
     pub(crate) identity_client_agent_creation_cases: Vec<LeanIdentityClientAgentCreationCase>,
+    pub(crate) identity_client_document_creation_cases: Vec<serde_json::Value>,
     pub(crate) identity_agent_block_signing_cases: Vec<LeanAgentBlockSigningCase>,
     pub(crate) node_file_request_access_cases: Vec<serde_json::Value>,
     pub(crate) identity_private_journal_policy: LeanPrivateJournalPolicy,

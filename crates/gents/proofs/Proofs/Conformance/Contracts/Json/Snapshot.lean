@@ -613,6 +613,8 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.NodeProvisioningConformance.agentCreatorCasesJson ++ ","
     ++ "\"identity_client_agent_creation_cases\":"
       ++ Identity.ClientAgentCreation.casesJson ++ ","
+    ++ "\"identity_client_document_creation_cases\":"
+      ++ Identity.ClientAgentCreation.documentCreateCasesJson ++ ","
     ++ "\"identity_agent_block_signing_cases\":"
       ++ Identity.AgentBlockSigning.casesJson ++ ","
     ++ "\"mailbox_runtime_notice_case\":" ++ Identity.MailboxAccess.runtimeNoticeCasesJson ++ ","

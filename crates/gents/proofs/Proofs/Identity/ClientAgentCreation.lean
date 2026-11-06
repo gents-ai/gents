@@ -173,4 +173,60 @@ def caseJson (c : Case) : Json := Json.mkObj
 
 def casesJson : String := (toJson (cases.map caseJson)).compress
 
+/-- Arbitrary application collections are signable only with SDL the caller
+explicitly supplied as its own authored input. A remote schema is an observation,
+not authority to choose the bytes signed by the User. -/
+inductive DocumentSchemaSource where
+  | authored | remote
+  deriving BEq, DecidableEq, Repr
+
+structure DocumentCreateInput where
+  source : DocumentSchemaSource
+  singleCollection : Bool
+  applicationCollection : Bool
+  matchesLive : Bool
+  heldSigner : Bool
+  http : Bool
+  deriving Repr
+
+def documentCreateRoute (input : DocumentCreateInput) : Route :=
+  if input.source == .authored && input.singleCollection && input.applicationCollection &&
+      input.matchesLive && input.heldSigner && input.http then .signed else .refuse
+
+theorem remote_document_schema_refused (input : DocumentCreateInput)
+    (remote : input.source = .remote) : documentCreateRoute input = .refuse := by
+  simp [documentCreateRoute, remote]
+
+theorem document_create_has_no_native_fallback (input : DocumentCreateInput) :
+    documentCreateRoute input ≠ .native := by
+  unfold documentCreateRoute
+  split <;> decide
+
+structure DocumentCreateCase where
+  name : String
+  input : DocumentCreateInput
+
+def validDocumentInput : DocumentCreateInput := ⟨.authored, true, true, true, true, true⟩
+
+def documentCreateCases : List DocumentCreateCase :=
+  [ ⟨"authored", validDocumentInput⟩
+  , ⟨"remote", { validDocumentInput with source := .remote }⟩
+  , ⟨"multiple-collections", { validDocumentInput with singleCollection := false }⟩
+  , ⟨"protected", { validDocumentInput with applicationCollection := false }⟩
+  , ⟨"schema-mismatch", { validDocumentInput with matchesLive := false }⟩
+  , ⟨"no-signer", { validDocumentInput with heldSigner := false }⟩
+  , ⟨"non-http", { validDocumentInput with http := false }⟩ ]
+
+def documentCreateCaseJson (c : DocumentCreateCase) : Json := Json.mkObj
+  [("name", toJson c.name),
+   ("source", toJson (if c.input.source == .authored then "authored" else "remote")),
+   ("single_collection", toJson c.input.singleCollection),
+   ("application_collection", toJson c.input.applicationCollection),
+   ("matches_live", toJson c.input.matchesLive),
+   ("held_signer", toJson c.input.heldSigner),
+   ("http", toJson c.input.http),
+   ("expected_route", toJson (routeString (documentCreateRoute c.input)))]
+
+def documentCreateCasesJson : String := (toJson (documentCreateCases.map documentCreateCaseJson)).compress
+
 end Identity.ClientAgentCreation

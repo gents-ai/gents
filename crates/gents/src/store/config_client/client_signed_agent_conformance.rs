@@ -744,6 +744,35 @@ fn modeled_agent_create_intent_drives_the_transaction_route() {
 }
 
 #[test]
+fn modeled_authored_document_creation_requires_trusted_schema_and_held_user() {
+    use super::authored_document::{document_create_allowed, DocumentSchemaSource};
+    for case in
+        &crate::lean_vocab_test::lean_contract_snapshot().identity_client_document_creation_cases
+    {
+        let flag = |name: &str| case[name].as_bool().expect("modeled boolean");
+        let source = match case["source"].as_str().expect("modeled schema source") {
+            "authored" => DocumentSchemaSource::UserAuthored,
+            "remote" => DocumentSchemaSource::RemoteObservation,
+            other => panic!("unknown schema source {other}"),
+        };
+        let actual = document_create_allowed(
+            source,
+            flag("single_collection"),
+            flag("application_collection"),
+            flag("matches_live"),
+            flag("held_signer"),
+            flag("http"),
+        );
+        assert_eq!(
+            actual,
+            case["expected_route"] == "signed",
+            "{}",
+            case["name"]
+        );
+    }
+}
+
+#[test]
 fn modeled_configuration_create_collections_use_trusted_schemas() {
     let case = crate::lean_vocab_test::lean_identity_household_cases()
         .iter()
