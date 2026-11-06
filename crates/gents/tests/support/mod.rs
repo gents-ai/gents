@@ -117,53 +117,74 @@ pub async fn managed_agent_with_binding(
     Arc<dyn NodeIdentity>,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
-    let binding = gents::store::identity::provision_agent_identity(db.node_identity.as_ref())
-        .expect("provision managed test Agent");
-    let agent = gents::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
-        .expect("resolve managed test Agent");
-    let access = gents::ConfigAccess::local(db.node.clone());
-    let node_input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
-        "node_did": db.node_identity.did(),
-    }))
-    .expect("render test node");
-    let created_node = access
-        .write(
-            "test.managed_agent.node",
-            &format!("mutation {{ create_Node(input: {node_input}) {{ _docID }} }}"),
-        )
+    use gents::store::config_client::{
+        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
+    };
+
+    let user = tokio::task::spawn_blocking(|| fixtures::test_identity("managed-agent-owner"))
         .await
-        .expect("install test node");
-    let node_doc = gents::store::graphql::created_doc_id(&created_node, "Node").unwrap();
-    let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
-        "node_did": db.node_identity.did(),
-        "agent_did": binding.agent_did.clone(),
-        "creation_nonce": binding.creation_nonce.clone(),
+        .expect("create held test user");
+    let user_did = identity::Did::new(user.did()).expect("valid user DID");
+    let runtime = db.node_identity.as_ref();
+    assert_ne!(user.did(), runtime.did());
+    let admin = gents::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(runtime.did()).expect("valid runtime DID"),
+    );
+    for permission in [
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DacRelationAdd,
+        NodePermission::CollectionGet,
+    ] {
+        admin
+            .grant_node_permission(&user_did, permission)
+            .await
+            .expect("grant test user Node access");
+    }
+    let access = db.client_access(&user);
+    let node = serde_json::json!({"node_did": runtime.did()});
+    let node_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: gents::Collection::Node,
+        add: node.clone(),
+        update: node,
+    }])
+    .expect("render test Node");
+    access
+        .transact_write("test.managed_agent.node", |txn| {
+            let plan = &node_plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .expect("install test Node as user");
+    let binding = gents::store::identity::provision_agent_identity_authorized(
+        &db.node, runtime, &user_did,
+    )
+    .await
+    .expect("provision managed test Agent");
+    let agent = gents::store::identity::resolve_agent_identity(runtime, &binding)
+        .expect("resolve managed test Agent");
+    let document = serde_json::json!({
+        "node_did": runtime.did(),
+        "agent_did": binding.agent_did,
+        "creation_nonce": binding.creation_nonce,
         "display_name": "Test agent",
         "inference_profile_id": format!("{}:inference", binding.agent_did),
         "enabled": true,
-    }))
+    });
+    let agent_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: gents::Collection::Agent,
+        add: document.clone(),
+        update: document,
+    }])
     .expect("render test Agent");
-    let created_agent = access
-        .write(
-            "test.managed_agent",
-            &format!("mutation {{ create_Agent(input: {input}) {{ _docID }} }}"),
-        )
-        .await
-        .expect("install managed test Agent");
-    let agent_doc = gents::store::graphql::created_doc_id(&created_agent, "Agent").unwrap();
     access
-        .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
+        .transact_write("test.managed_agent", |txn| {
+            let plan = &agent_plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
         .await
-        .expect("link Agent to node");
-    access
-        .add_actor_relationship(
-            "Agent",
-            &agent_doc,
-            "executor",
-            &identity::Did::new(agent.did()).unwrap(),
-        )
-        .await
-        .expect("grant Agent executor");
+        .expect("install managed test Agent as user");
     (agent, binding)
 }
 
