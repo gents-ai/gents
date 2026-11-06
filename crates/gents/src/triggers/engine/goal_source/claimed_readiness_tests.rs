@@ -584,3 +584,278 @@ async fn readiness_stop_rejects_a_replaced_claim_epoch() {
     );
     db.node.shutdown().await.expect("node shutdown");
 }
+
+#[tokio::test]
+async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
+    use crate::request::lifecycle::{
+        build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
+        RequestSigner, RequestSpec,
+    };
+    use crate::runtime::status::{ReconcilePhase, RuntimeStatusHandle};
+    use crate::NodeIdentity;
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+
+    let db = test_db("goal-unclaimed-live-readiness").await;
+    let fixture = crate::support::managed_agent_fixture(&db).await;
+    let agent = fixture.agent.clone();
+    let actor = identity::Did::new(agent.did()).unwrap();
+    let agent_access =
+        ConfigAccess::local_managed_agent(db.node.clone(), actor.clone(), agent.as_ref()).unwrap();
+    let request_id = "readiness-parent";
+    let spec = RequestSpec::new(
+        RequestPurpose::Normal,
+        RequestIdentity {
+            node_did: db.node_identity.did().into(),
+            requester_did: Some(fixture.user.did().into()),
+            agent_did: agent.did().into(),
+            session_id: SESSION.into(),
+            request_id: request_id.into(),
+            content: "continue work".into(),
+            execution_origin: ExecutionOrigin::Interactive,
+            created_at: "2026-07-15T00:00:00Z".into(),
+        },
+        AgentRequestAdmissionRecord::client(fixture.user.did()),
+    );
+    let request = build_signed_client_request(
+        &fixture.access,
+        spec,
+        RequestSigner::Identity(&fixture.user),
+    )
+    .await
+    .unwrap();
+    submit_client_request(&fixture.access, &request)
+        .await
+        .unwrap();
+    let found = agent_access
+        .execute(
+            "{AgentRequest(filter: {request_id: {_eq: \"readiness-parent\"}}, limit: 2) {_docID}}",
+        )
+        .await
+        .unwrap();
+    let rows = found["data"]["AgentRequest"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    let request_doc = rows[0]["_docID"].as_str().unwrap();
+    let session_doc = request.session_doc_id.as_deref().unwrap();
+    let changed = agent_access.write("test.goal_readiness_parent", &format!(r#"mutation {{update_AgentRequest(docID: "{}", input: {{lifecycle_state: "completed", terminalized_at: "2026-07-15T00:00:01Z"}}) {{_docID}}}}"#, escape_graphql_string(request_doc))).await.unwrap();
+    assert_eq!(
+        changed["data"]["update_AgentRequest"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let node_did = db.node_identity.did();
+    let agent_did = agent.did();
+    agent_access.transact_write("test.goal_readiness_activity", |txn| {
+        Box::pin(async move {
+            let input = json!({"call_id":"readiness-activity", "node_did":node_did,
+                "agent_did":agent_did, "session_id":SESSION, "request_id":request_id,
+                "request_doc_id":request_doc, "call_seq":1, "call_kind":"inference",
+                "attempt":1, "call_state":"completed"});
+            let response = txn.execute_with_variables(
+                "mutation($input: InferenceCallMutationInputArg!) {create_InferenceCall(input: $input) {_docID}}",
+                &json!({"input":input}),
+            ).await?;
+            let doc = crate::store::graphql::created_doc_id(&response, "InferenceCall")?;
+            txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
+            Ok::<_, anyhow::Error>(())
+        })
+    }).await.unwrap();
+    let goal = set_goal_from_access(
+        &agent_access,
+        db.node_identity.did(),
+        SESSION,
+        Some("Wait for an available Agent"),
+        Some(GoalStatus::Active),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let unavailable = crate::runtime::snapshot::UnavailableAgent::new(
+        AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
+        "test fixture identity",
+    )
+    .with_watcher_identity(agent.clone());
+    let snapshot = Arc::new(ActiveRuntimeSnapshot {
+        generation: 1,
+        node: None,
+        local_did: db.node_identity.did().to_owned(),
+        default_agent_did: agent.did().to_owned(),
+        agents: Default::default(),
+        tool_surfaces: Default::default(),
+        backend_admission_configs: Default::default(),
+        unavailable_agents: [(agent.did().to_owned(), unavailable)]
+            .into_iter()
+            .collect(),
+        active_schedules: Default::default(),
+        unavailable_schedules: Default::default(),
+        active_event_triggers: Default::default(),
+        unavailable_event_triggers: Default::default(),
+        active_tasks: Default::default(),
+        dispatchers: Default::default(),
+        agent_executor_capacities: Default::default(),
+        agent_executor_queue_capacities: Default::default(),
+    });
+    let (owner, status) = RuntimeStatusHandle::start(db.node.clone(), db.node_identity.did());
+    status.publish_applied(&snapshot).await;
+    assert!(status.goal_reconcile_settled().await);
+    let (_tx, rx) = watch::channel(snapshot);
+    let controller = GoalSource::new(rx, db.node.clone(), CancellationToken::new())
+        .with_runtime_status(status.clone());
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().goal_readiness_gate_cases;
+    for (name, process, reason, phase) in [
+        (
+            "missing_readiness_defers_continuation",
+            NodeReadinessProcessState::Recovering,
+            None,
+            ReconcilePhase::Idle,
+        ),
+        (
+            "backend_recovery_defers_even_when_settled",
+            NodeReadinessProcessState::Ready,
+            Some(AgentReadinessUnavailableReason::BackendTemporarilyUnavailable),
+            ReconcilePhase::Idle,
+        ),
+        (
+            "unsettled_invalid_agent_defers",
+            NodeReadinessProcessState::Ready,
+            Some(AgentReadinessUnavailableReason::RuntimeConfigurationInvalid),
+            ReconcilePhase::Applying,
+        ),
+        (
+            "settled_invalid_agent_stops_active_goal",
+            NodeReadinessProcessState::Ready,
+            Some(AgentReadinessUnavailableReason::RuntimeConfigurationInvalid),
+            ReconcilePhase::Idle,
+        ),
+    ] {
+        let modeled = cases
+            .iter()
+            .find(|case| case.name == name)
+            .expect("modeled readiness case");
+        status.set_reconcile_phase(phase).await;
+        assert_eq!(
+            status.goal_reconcile_settled().await,
+            modeled.settled,
+            "{name}"
+        );
+        let readiness = NodeReadinessSnapshot {
+            format_version: NODE_READINESS_FORMAT_VERSION,
+            process_state: process,
+            active_generation: 1,
+            router_generation: 1,
+            default_agent_did: agent.did().into(),
+            agents: vec![AgentReadinessEntry {
+                agent_did: agent.did().into(),
+                state: if reason.is_some() {
+                    AgentReadinessState::Unavailable
+                } else {
+                    AgentReadinessState::Ready
+                },
+                reason,
+            }],
+        };
+        crate::runtime::node_readiness_publisher::upsert_node_readiness(
+            &db.node,
+            db.node_identity.did(),
+            &readiness,
+            &Utc::now().to_rfc3339(),
+        )
+        .await
+        .unwrap();
+        let current = agent_access
+            .transact_readonly("test.goal_readiness.current", |txn| {
+                Box::pin(crate::goal::load_canonical_goal_in_txn(
+                    txn,
+                    db.node_identity.did(),
+                    SESSION,
+                ))
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            controller
+                .build_intent(&actor, current)
+                .await
+                .unwrap()
+                .is_none(),
+            "{name}"
+        );
+        let current = agent_access
+            .transact_readonly("test.goal_readiness.after", |txn| {
+                Box::pin(crate::goal::load_canonical_goal_in_txn(
+                    txn,
+                    db.node_identity.did(),
+                    SESSION,
+                ))
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            current.infrastructure_retry_count.unwrap_or_default(),
+            modeled.expected_retries,
+            "{name}"
+        );
+        match modeled.expected_gate.as_str() {
+            "await_readiness" => {
+                assert_eq!(current.parsed_status(), Some(GoalStatus::Active), "{name}");
+                assert!(
+                    current
+                        .last_failure
+                        .as_deref()
+                        .is_some_and(|v| v.starts_with(crate::goal::GOAL_READINESS_WAIT_PREFIX)),
+                    "{name}"
+                );
+                assert_eq!(
+                    current.continuation_sequence(),
+                    goal.continuation_sequence(),
+                    "{name}"
+                );
+                assert!(controller
+                    .build_intent(&actor, current.clone())
+                    .await
+                    .unwrap()
+                    .is_none());
+                let repeated = agent_access
+                    .transact_readonly("test.goal_readiness.repeated", |txn| {
+                        Box::pin(crate::goal::load_canonical_goal_in_txn(
+                            txn,
+                            db.node_identity.did(),
+                            SESSION,
+                        ))
+                    })
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    serde_json::to_value(repeated).unwrap(),
+                    serde_json::to_value(current).unwrap(),
+                    "{name}: unchanged readiness must not rewrite the Goal"
+                );
+            }
+            "agent_unavailable" => {
+                assert_eq!(current.parsed_status(), Some(GoalStatus::Paused), "{name}");
+                assert_eq!(
+                    current.last_failure.as_deref(),
+                    Some(
+                        format!(
+                            "agent {} is unavailable: {}",
+                            agent.did(),
+                            AgentReadinessUnavailableReason::RuntimeConfigurationInvalid
+                                .public_message()
+                        )
+                        .as_str()
+                    ),
+                    "{name}"
+                );
+            }
+            other => panic!("unexpected modeled readiness decision {other}"),
+        }
+    }
+    owner.close().await.unwrap();
+    db.node.shutdown().await.unwrap();
+}

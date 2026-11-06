@@ -5271,50 +5271,6 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
 }
 
 #[tokio::test]
-async fn settled_invalid_agent_pauses_goal_with_its_reason() {
-    use gents_protocol::row::{
-        AgentReadinessUnavailableReason as Reason, NodeReadinessProcessState as Process,
-    };
-    let db = test_db("goal-readiness-settled").await;
-    seed_completed_request(&db, "parent-invalid-behavior").await;
-    set_goal(
-        &db.node,
-        db.node_identity.did(),
-        SESSION,
-        Some("Report a permanently invalid behavior"),
-        Some(GoalStatus::Active),
-        None,
-    )
-    .await
-    .expect("set goal");
-    publish_node_readiness(
-        &db,
-        Process::Ready,
-        Some(Reason::RuntimeConfigurationInvalid),
-    )
-    .await;
-    publish_reconcile_phase(&db, "idle").await;
-    let (mut source, _tx) = unready_source(&db);
-    assert!(
-        tokio::time::timeout(Duration::from_millis(300), source.next_fire())
-            .await
-            .is_err()
-    );
-    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(goal.parsed_status(), Some(GoalStatus::Paused));
-    assert_eq!(
-        goal.last_failure.as_deref(),
-        Some("agent test is unavailable: runtime configuration is invalid")
-    );
-    assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
-    assert_eq!(goal.continuation_sequence(), 0);
-    assert!(goal_children(&db).await.is_empty());
-}
-
-#[tokio::test]
 async fn claimed_continuation_waits_for_readiness_before_materializing() {
     use gents_protocol::row::NodeReadinessProcessState as Process;
     let db = test_db("goal-claimed-readiness").await;
