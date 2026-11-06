@@ -288,9 +288,11 @@ impl AcpService {
                     &self.config.node_did,
                     &self.config.agent_did,
                     &session,
-                    &self.config.current_model.model_id,
-                    &self.config.current_model.name,
-                    self.config.current_model.effective_context_window(),
+                    super::usage::SessionModel {
+                        id: &self.config.current_model.model_id,
+                        display_name: &self.config.current_model.name,
+                        context_window: self.config.current_model.effective_context_window(),
+                    },
                 )
                 .await?;
                 Ok(RequestOutcome {
