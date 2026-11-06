@@ -2339,7 +2339,7 @@ mod tests {
             .transact_readonly("init.test.root_owner", |txn| {
                 let root_doc = &root_doc;
                 Box::pin(async move {
-                    txn.document_owners("WorkspaceRoot", &[root_doc.clone()])
+                    txn.document_owners("WorkspaceRoot", std::slice::from_ref(root_doc))
                         .await
                 })
             })
@@ -2382,7 +2382,10 @@ mod tests {
         let agent_owner = runtime
             .transact_readonly("init.test.agent_owner", |txn| {
                 let agent_doc = &agent_doc;
-                Box::pin(async move { txn.document_owners("Agent", &[agent_doc.clone()]).await })
+                Box::pin(async move {
+                    txn.document_owners("Agent", std::slice::from_ref(agent_doc))
+                        .await
+                })
             })
             .await
             .unwrap();
