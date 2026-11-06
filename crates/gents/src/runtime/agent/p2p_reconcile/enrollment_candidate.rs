@@ -402,7 +402,7 @@ pub async fn write_enrollment_request(
 ) -> Result<String> {
     anyhow::ensure!(
         node.node_identity_did() == Some(request.candidate_did.as_str()),
-        "enrollment request author must be the local runtime Node"
+        "enrollment request author must be the local peer identity"
     );
     let runtime = identity::Did::new(&request.candidate_did)?;
     let admin = identity::Did::new(&request.admin_did)?;
