@@ -641,6 +641,26 @@ def wireTargetAllowed (localTarget preview remove : Bool) : Bool :=
 
 theorem graphql_wire_cannot_publish_pin : wireTargetAllowed false false false = false := by decide
 
+/-- Untagged documents retain the existing adoption behavior. A tagged document
+can be written only by the same full pack coordinate; an old unqualified tag
+does not establish a publisher identity. -/
+def packDocumentWriteAllowed (coordinate : String) (origin : Option String) : Bool :=
+  match origin with
+  | none => true
+  | some existing => existing == coordinate
+
+def packDocumentRemovalAllowed (coordinate : String) (origin : Option String) : Bool :=
+  packDocumentWriteAllowed coordinate origin
+
+theorem pack_document_other_publisher_refused :
+    packDocumentWriteAllowed "other/demo" (some "acme/demo") = false := by decide
+
+theorem pack_document_unqualified_origin_refused :
+    packDocumentWriteAllowed "acme/demo" (some "demo") = false := by decide
+
+theorem pack_document_untagged_adoptable :
+    packDocumentWriteAllowed "acme/demo" none = true := by decide
+
 /-- Only a node-local installer can inspect or publish plugin bytes. A remote
 GraphQL install may write plugin-free documents, but recorded pack metadata is
 not evidence of host file availability. -/

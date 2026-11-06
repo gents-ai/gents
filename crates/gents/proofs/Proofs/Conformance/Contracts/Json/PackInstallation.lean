@@ -3,6 +3,14 @@ import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.Contracts.PackInstallation
 
+def ownershipCasesJson : String := jsonArray (
+  ["acme/demo", "other/demo", "acme/other"].flatMap fun coordinate =>
+    [none, some "acme/demo", some "other/demo", some "demo"].map fun origin =>
+      "{\"coordinate\":" ++ jsonString coordinate ++
+      ",\"origin\":" ++ (match origin with | none => "null" | some value => jsonString value) ++
+      ",\"allowed\":" ++ toString (Configuration.packDocumentWriteAllowed coordinate origin) ++
+      ",\"removal_allowed\":" ++ toString (Configuration.packDocumentRemovalAllowed coordinate origin) ++ "}")
+
 def finalityCasesJson : String := jsonArray (Configuration.packFinalityCases.map fun attempts =>
   let name := fun event : Configuration.PackAttemptEvidence => match event with
     | .noCommit => "no_commit" | .unknownCommit => "unknown_commit"

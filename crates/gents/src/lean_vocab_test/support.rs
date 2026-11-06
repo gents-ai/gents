@@ -328,6 +328,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) claude_platform_cases: Vec<serde_json::Value>,
     pub(crate) plugin_reference_cases: Vec<serde_json::Value>,
     pub(crate) plugin_pin_cases: Vec<serde_json::Value>,
+    pub(crate) pack_document_ownership_cases: Vec<serde_json::Value>,
     pub(crate) pack_wire_lock_cases: Vec<serde_json::Value>,
     pub(crate) pack_wire_target_cases: Vec<serde_json::Value>,
     pub(crate) pack_finality_cases: Vec<serde_json::Value>,

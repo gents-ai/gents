@@ -54,7 +54,7 @@ fn config(tools: &[(&str, &str)]) -> PackConfig {
         "node": {"node_did": OWNER},
         "tools": tools
             .iter()
-            .map(|(id, name)| json!({"tools_id": id, "display_name": name, "node_did": OWNER, "tags": ["gents:pack:demo"]}))
+            .map(|(id, name)| json!({"tools_id": id, "display_name": name, "node_did": OWNER, "tags": ["gents:pack:acme/demo"]}))
             .collect::<Vec<_>>(),
     }))
     .unwrap()
@@ -115,6 +115,70 @@ async fn tools_ids(access: &ConfigAccess) -> Vec<String> {
         .collect();
     ids.sort();
     ids
+}
+
+#[tokio::test]
+async fn same_named_packs_from_different_publishers_cannot_overwrite_documents() {
+    let access = access().await;
+    install(
+        &access,
+        "1",
+        &config(&[("shared", "Original")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let before = access
+        .execute("{ Tools(filter: {tools_id: {_eq: \"shared\"}}) { tools_id display_name tags } }")
+        .await
+        .unwrap();
+    let mut other = identity("2");
+    other.coordinate = "other/demo".into();
+    let mut foreign = config(&[("shared", "Replacement")]);
+    let mut value = serde_json::to_value(&foreign).unwrap();
+    value["tools"][0]["tags"] = json!(["gents:pack:other/demo"]);
+    foreign = serde_json::from_value(value).unwrap();
+    let result = super::super::install_pack_documents(
+        &access,
+        OWNER,
+        &other,
+        &foreign,
+        DriftPolicy::Overwrite,
+    )
+    .await;
+    assert!(result.is_err());
+    let after = access
+        .execute("{ Tools(filter: {tools_id: {_eq: \"shared\"}}) { tools_id display_name tags } }")
+        .await
+        .unwrap();
+    assert_eq!(before, after);
+}
+
+#[tokio::test]
+async fn removal_refuses_a_document_with_another_pack_origin() {
+    let access = access().await;
+    install(
+        &access,
+        "1",
+        &config(&[("shared", "Original")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    access.write("test.change_origin", r#"mutation {
+        update_Tools(filter: {tools_id: {_eq: "shared"}}, input: {tags: ["gents:pack:other/demo"]}) {_docID}
+    }"#).await.unwrap();
+    let before = access
+        .execute("{ Tools(filter: {tools_id: {_eq: \"shared\"}}) { tools_id display_name tags } }")
+        .await
+        .unwrap();
+    let result = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Overwrite).await;
+    assert!(result.is_err());
+    let after = access
+        .execute("{ Tools(filter: {tools_id: {_eq: \"shared\"}}) { tools_id display_name tags } }")
+        .await
+        .unwrap();
+    assert_eq!(before, after);
 }
 
 #[tokio::test]

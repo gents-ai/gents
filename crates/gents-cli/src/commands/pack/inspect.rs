@@ -15,10 +15,10 @@ pub(super) async fn show(args: PackShowArgs) -> Result<()> {
         .dependencies
         .iter()
         .map(|dependency| {
-            let (_, name) = super::split_namespace(dependency);
+            let (namespace, name) = super::split_namespace(dependency);
             Ok(json!({
                 "pack": dependency,
-                "origin_tag": gents::pack::pack_origin_tag(name)?,
+                "origin_tag": gents::pack::pack_origin_tag(&format!("{namespace}/{name}"))?,
             }))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -35,7 +35,7 @@ pub(super) async fn show(args: PackShowArgs) -> Result<()> {
         })
         .collect::<Result<Vec<_>>>()?;
     crate::print_json(&json!({
-        "origin_tag": gents::pack::pack_origin_tag(&manifest.name)?,
+        "origin_tag": gents::pack::pack_origin_tag(&format!("{}/{}", manifest.metadata.namespace, manifest.name))?,
         "source": pack.describe(),
         "dependency_origins": dependency_origins,
         "manifest": manifest,

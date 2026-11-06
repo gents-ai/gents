@@ -525,7 +525,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     let owner = crate::store::graphql::escape_graphql_string(&node_did);
     let tagged = node
         .execute(&format!(
-            r#"mutation {{ update_Agent(filter: {{node_did: {{_eq: "{owner}"}}, agent_id: {{_eq: "fixture-worker"}}}}, input: {{tags: ["gents:pack:plugin_documents_fixture", "user:favorite"]}}) {{_docID}} }}"#
+            r#"mutation {{ update_Agent(filter: {{node_did: {{_eq: "{owner}"}}, agent_id: {{_eq: "fixture-worker"}}}}, input: {{tags: ["gents:pack:fixture/plugin_documents_fixture", "user:favorite"]}}) {{_docID}} }}"#
         ))
         .await;
     assert!(!tagged.has_errors(), "{:?}", tagged.errors);
@@ -573,7 +573,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     assert!(!tags.has_errors(), "{:?}", tags.errors);
     assert_eq!(
         tags.data.unwrap()["Agent"][0]["tags"],
-        json!(["gents:pack:plugin_documents_fixture", "user:favorite"])
+        json!(["gents:pack:fixture/plugin_documents_fixture", "user:favorite"])
     );
     let store = crate::pack::store::PackStore::new(home.path());
     let installed_path = store

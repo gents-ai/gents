@@ -200,7 +200,7 @@ fn scenario_staging_explicitly_binds_the_initialized_profile() {
         .all(|agent| agent.inference_profile_id == "default-profile"));
     assert!(config.agents.iter().all(|agent| agent
         .tags
-        .contains(&"gents:pack:documents_fixture".to_owned())));
+        .contains(&"gents:pack:fixture/documents_fixture".to_owned())));
     assert!(config.inference_profiles.is_empty());
     assert!(config.inference_backends.is_empty());
 }
