@@ -76,7 +76,7 @@ async fn names(access: &ConfigAccess) -> Result<Vec<String>> {
 
 async fn assert_access_control(
     node: &Arc<EmbeddedNode>,
-    principal: &str,
+    identity: &KeyIdentity,
     address: SocketAddr,
     phase: &str,
 ) {
@@ -99,7 +99,11 @@ async fn assert_access_control(
         "unexpected schema refusal: {refused_schema:#}"
     );
 
-    let signed = ConfigAccess::graphql_as(endpoint, principal);
+    let signed = ConfigAccess::Graphql(
+        gents::store::config_client::GraphqlEndpoint::as_principal(endpoint, identity.did())
+            .with_client_signing_capability(identity.client_signing_capability().unwrap())
+            .unwrap(),
+    );
     signed
         .write("test.nac.signed", &insert(&format!("signed-{phase}")))
         .await
@@ -152,24 +156,32 @@ fn serve_phase(
 #[test]
 fn served_home_admits_only_its_principal_across_restart() -> Result<()> {
     let home = tempfile::tempdir()?;
-    let identity = KeyIdentity::load_or_create(home.path().join("principal.key"), None)?;
+    let identity = Arc::new(KeyIdentity::load_or_create(
+        home.path().join("principal.key"),
+        None,
+    )?);
     let principal = identity.did().to_string();
     let data_dir = home.path().join("data");
 
     serve_phase(&data_dir, &principal, |node, address| {
-        let principal = principal.clone();
+        let identity = identity.clone();
         Box::pin(async move {
             node.add_collection(SCHEMA).await?;
-            assert_access_control(node, &principal, address, "first").await;
+            assert_access_control(node, identity.as_ref(), address, "first").await;
             Ok(())
         })
     })?;
     serve_phase(&data_dir, &principal, |node, address| {
-        let principal = principal.clone();
+        let identity = identity.clone();
         Box::pin(async move {
-            assert_access_control(node, &principal, address, "restarted").await;
-            let signed =
-                ConfigAccess::graphql_as(format!("http://{address}/api/v0/graphql"), &principal);
+            assert_access_control(node, identity.as_ref(), address, "restarted").await;
+            let signed = ConfigAccess::Graphql(
+                gents::store::config_client::GraphqlEndpoint::as_principal(
+                    format!("http://{address}/api/v0/graphql"),
+                    identity.did(),
+                )
+                .with_client_signing_capability(identity.client_signing_capability()?)?,
+            );
             assert_eq!(
                 names(&signed).await?,
                 [

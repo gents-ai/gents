@@ -187,7 +187,8 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
     assert!(
         signed_direct_materializer.contains("AgentRequestAdmissionRecord::local_self(&agent_did)")
     );
-    assert!(signed_direct_materializer.contains("RequestSigner::RegisteredTarget"));
+    assert!(signed_direct_materializer.contains("RequestSigner::Identity(identity.as_ref())"));
+    assert!(signed_direct_materializer.contains("ConfigAccess::local_managed_agent"));
     assert!(signed_direct_materializer.contains("identity::Did::new(agent_did.clone())"));
     assert!(signed_direct_materializer.contains("verify_fresh_local_self_request"));
     assert!(signed_direct_materializer.contains("claim_with_identity"));
@@ -303,7 +304,8 @@ fn session_message_admission_has_no_child_or_bridge_authority() {
                 .next()
         })
         .expect("peer admission branch");
-    assert!(peer_verifier.contains("fresh_member_authorized_for_agent"));
+    assert!(peer_verifier.contains("observation.signer_matches_requester"));
+    assert!(peer_verifier.contains("observation.requester_matches_target"));
     assert!(verifier.contains("request_hop_admitted"));
     assert!(request_schema.contains("runtime_source_kind: String @index @immutable"));
     assert!(!request_schema.contains("runtime_bridge_author_did"));

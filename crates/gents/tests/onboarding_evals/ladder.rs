@@ -148,6 +148,7 @@ fn l2_checks_follow_selected_context_and_tools_and_reject_a_wrong_grant() {
             "tools_id": "engineer-tools",
             "host": {"bash": {"mode":"Off"}, "root":"/eval/workspace"},
             "self_config": subject["tools"][0]["self_config"],
+            "built_ins": subject["tools"][0]["built_ins"],
         })).unwrap()).unwrap(),
     ]});
     let registry = CheckRegistry::builtin();
