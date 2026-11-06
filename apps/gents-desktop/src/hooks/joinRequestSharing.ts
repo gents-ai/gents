@@ -31,9 +31,8 @@ export const JOIN_REQUESTS_REFRESH_MS = 15_000;
 /** Sharing as the runtime this desktop runs offers it: requests to join,
     approved with a lease or denied, who has access, revoked by their request,
     and what was decided. A runtime too old to list members and history offers
-    requests alone. Invites aren't offered yet and another node's sharing isn't
-    reachable from here, so those read as unavailable and their actions are
-    refused. A lease can't be extended, so there's no renewing. */
+    requests alone. Another node's sharing isn't reachable from here, so it
+    reads as unavailable and its actions are refused. */
 export function createJoinRequestSharing({
   api,
   ownNodeDid,
@@ -72,13 +71,11 @@ export function createJoinRequestSharing({
       return {
         requests: pending.map(joinRequestOf),
         members: (members ?? []).map(memberOf),
-        invites: [],
         history: (history?.history ?? []).map(decisionOf),
         historyLimits: history && historyLimitsOf(history),
         available: {
           requests: true,
           members: members !== null,
-          invites: false,
           history: history !== null,
         },
       };
@@ -126,7 +123,7 @@ async function answered<T>(read: Promise<T>): Promise<T | null> {
 }
 
 /* the runtime knows a party only by DID */
-const partyOf = (did: string): SharingParty => ({ did, name: null, device: false });
+const partyOf = (did: string): SharingParty => ({ did, name: null });
 
 /* and a profile only by name */
 const profileOf = (name: string): ShareProfile => ({ id: name, name, grants: [] });
@@ -140,7 +137,6 @@ export function joinRequestOf(view: JoinRequestView): JoinRequest {
     profile: profileOf(view.profile ?? ""),
     requestedAt: view.issuedAt,
     expiresAt: view.expiresAt,
-    inviteId: null,
   };
 }
 

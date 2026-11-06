@@ -97,12 +97,11 @@ describe("the runtime's join requests as sharing", () => {
   it("maps a pending request to a node-wide request known by its DID", () => {
     expect(joinRequestOf(pending())).toEqual({
       requestId: "request-1",
-      from: { did: "did:key:z6MkCandidateLaptop", name: null, device: false },
+      from: { did: "did:key:z6MkCandidateLaptop", name: null },
       scope: { kind: "node" },
       profile: { id: "client", name: "client", grants: [] },
       requestedAt: "2026-11-05T11:55:00Z",
       expiresAt: "2026-11-05T12:00:00Z",
-      inviteId: null,
     });
   });
 
@@ -115,7 +114,7 @@ describe("the runtime's join requests as sharing", () => {
   it("maps a member to a node-wide grant by DID, with no name and no start", () => {
     expect(memberOf(member())).toEqual({
       requestId: "request-0",
-      party: { did: "did:key:z6MkMemberPhone", name: null, device: false },
+      party: { did: "did:key:z6MkMemberPhone", name: null },
       scope: { kind: "node" },
       profile: { id: "client", name: "client", grants: [] },
       leaseExpiresAt: "2026-12-05T12:00:00Z",
@@ -125,9 +124,9 @@ describe("the runtime's join requests as sharing", () => {
   it("maps a record to a line of history, a revoked one by its revoking", () => {
     expect(decisionOf(entry({ state: "denied" }))).toEqual({
       kind: "denied",
-      party: { did: "did:key:z6MkMemberPhone", name: null, device: false },
+      party: { did: "did:key:z6MkMemberPhone", name: null },
       scope: { kind: "node" },
-      by: { did: "did:key:z6MkOperator", name: null, device: false },
+      by: { did: "did:key:z6MkOperator", name: null },
       at: "2026-11-01T12:00:00Z",
     });
     expect(
@@ -163,7 +162,6 @@ describe("the runtime's join requests as sharing", () => {
     expect(state.available).toEqual({
       requests: true,
       members: true,
-      invites: false,
       history: true,
     });
   });
@@ -180,7 +178,6 @@ describe("the runtime's join requests as sharing", () => {
     expect(state.available).toEqual({
       requests: true,
       members: false,
-      invites: false,
       history: false,
     });
   });
@@ -261,12 +258,7 @@ describe("the runtime's join requests as sharing", () => {
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
-  it("offers no renewing, since a lease can't be extended", () => {
-    const { sharing } = binding();
-    expect(sharing.renew).toBeUndefined();
-  });
-
-  it("refuses decisions for another node, and everything it doesn't offer", async () => {
+  it("refuses decisions for another node", async () => {
     const { api, sharing } = binding();
     await expect(
       sharing.approve(OTHER, "request-1", DEFAULT_LEASE_SECONDS),
@@ -274,12 +266,6 @@ describe("the runtime's join requests as sharing", () => {
     await expect(sharing.deny(OTHER, "request-1")).rejects.toThrow("newer runtime");
     expect(api.decideJoinRequest).not.toHaveBeenCalled();
     await expect(sharing.revoke(OTHER, "request-1")).rejects.toThrow("newer runtime");
-    await expect(sharing.profiles(OWN, { kind: "node" })).rejects.toThrow(
-      "newer runtime",
-    );
-    await expect(sharing.readInvite("gents://invite/x")).rejects.toThrow(
-      "newer runtime",
-    );
   });
 
   it("reads an open page again while it is open, so new requests arrive", () => {
