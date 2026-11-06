@@ -1544,19 +1544,6 @@ async fn context_create_selecting_granted_tools_requires_the_grant() {
     .expect("an agent holding the grant may create a Context that selects it");
 }
 
-pub(super) async fn build_agent_node() -> std::sync::Arc<defra_node::Node> {
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let node = crate::test_support::node_builder()
-        .data_path(tempdir.path().join("data"))
-        .build()
-        .await
-        .expect("node");
-    crate::ensure_runtime_schemas(&node)
-        .await
-        .expect("runtime schemas register");
-    std::sync::Arc::new(node)
-}
-
 pub(super) fn node_identity(label: &str) -> std::sync::Arc<dyn crate::NodeIdentity> {
     let tempdir = tempfile::tempdir().expect("identity tempdir");
     std::sync::Arc::new(
