@@ -96,6 +96,7 @@ tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"]
 uuid.workspace = true
 rig-core.workspace = true
 reqwest = { workspace = true, features = ["stream"] }
+reqwest-provider = { package = "reqwest", version = "0.13", default-features = false }
 rmcp = { version = "1.2.0", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
 tokio-util = "0.7"
 tempfile = "3"

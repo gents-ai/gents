@@ -81,6 +81,26 @@ fn post(url: &str) -> Request<Bytes> {
 }
 
 #[tokio::test]
+async fn credential_client_does_not_follow_redirects() {
+    let url = one_shot_server("302 Found", &[("location", "/other")], "").await;
+    let request = Request::builder()
+        .method("GET")
+        .uri(&url)
+        .header("authorization", "Bearer test-credential")
+        .body(Bytes::new())
+        .unwrap();
+    let client = ProviderHttpClient::new(ProviderHttpClient::credential_client().unwrap());
+    let error = client
+        .send::<Bytes, Bytes>(request)
+        .await
+        .err()
+        .expect("redirect rejected");
+    assert!(
+        matches!(error, http_client::Error::InvalidStatusCodeWithMessage(status, _) if status == StatusCode::FOUND)
+    );
+}
+
+#[tokio::test]
 async fn streaming_429_keeps_anthropic_unified_reset() {
     let url = one_shot_server(
         "429 Too Many Requests",

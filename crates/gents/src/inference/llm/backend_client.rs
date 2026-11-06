@@ -154,9 +154,7 @@ fn api_key_http(
     node: &Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
 ) -> Result<crate::inference::clients::provider_http::ProviderHttpClient> {
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?;
+    let client = crate::inference::clients::provider_http::ProviderHttpClient::credential_client()?;
     Ok(
         match crate::inference::usage_observation::UsageAccount::for_agent(agent) {
             Some(account) => {

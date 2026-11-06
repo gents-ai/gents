@@ -4171,6 +4171,7 @@ dependencies = [
  "regex",
  "regolith",
  "reqwest 0.12.28",
+ "reqwest 0.13.2",
  "rig-core",
  "rmcp",
  "same-file",
