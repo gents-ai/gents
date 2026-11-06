@@ -693,6 +693,32 @@ pub(super) async fn owned_test_hook_with_folded_case(
     owned_test_hook_with_identity_policy(Some(identity), FailurePolicy::default(), Some(case)).await
 }
 
+/// Writes one signed request through its managed Agent, the actor that owns the
+/// row, and returns its document id with the row read back through the same access.
+async fn write_signed_owned_request(
+    access: &crate::store::config_client::ConfigAccess,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+) -> (String, gents_protocol::row::AgentRequestRow) {
+    let result = access
+        .write("test.owned_loop_request", &create.graphql_mutation().unwrap())
+        .await
+        .unwrap();
+    let doc_id =
+        gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest").unwrap();
+    let loaded = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
+            crate::store::graphql::escape_graphql_string(&doc_id),
+            crate::request::admission::SIGNED_REQUEST_FIELDS,
+        ))
+        .await
+        .unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(loaded["data"]["AgentRequest"][0].clone()).unwrap();
+    crate::request::admission::verify_request_receipt_signature(&row).unwrap();
+    (doc_id, row)
+}
+
 async fn owned_test_hook_with_identity_policy(
     identity: Option<Arc<dyn crate::NodeIdentity>>,
     policy: FailurePolicy,
@@ -704,24 +730,44 @@ async fn owned_test_hook_with_identity_policy(
     crate::request::lifecycle::RequestLifecycle,
     rapidhash::RapidHashMap<u64, String>,
 ) {
-    // Unsigned fixtures still need a well-formed node DID: every loop and
-    // provider-input owner parses it as a DID.
+    // Every fixture runs under a held node root. An unsigned fixture gets a
+    // fresh root instead of the literal DID the identity crate rejects, so the
+    // Agent, its requests and its loop writes are all signed actors.
     let unsigned_node_key_dir = tempfile::tempdir().unwrap();
-    let unsigned_node_identity = crate::KeyIdentity::load_or_create(
-        unsigned_node_key_dir.path().join("node.key"),
-        None,
-    )
-    .unwrap();
-    let unsigned_node_did = crate::NodeIdentity::did(&unsigned_node_identity).to_owned();
-    let node_did = identity
-        .as_ref()
-        .map_or(unsigned_node_did.as_str(), |identity| identity.did());
+    let root: Arc<dyn crate::NodeIdentity> = match identity.clone() {
+        Some(identity) => identity,
+        None => Arc::new(
+            crate::KeyIdentity::load_or_create(
+                unsigned_node_key_dir.path().join("node.key"),
+                None,
+            )
+            .unwrap(),
+        ),
+    };
+    let node_did_owned = root.did().to_owned();
+    let node_did = node_did_owned.as_str();
     let requester_did = identity.as_ref().map(|_| node_did);
-    let agent_did = crate::triggers::callback::test_agent_did();
     let data_path = std::env::temp_dir().join(format!("agent-owned-loop-{}", uuid::Uuid::new_v4()));
     let builder = defra_node::Node::builder().with_node_identity_did(node_did);
     let node = Arc::new(builder.data_path(&data_path).build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
+    let binding = crate::store::identity::provision_agent_identity(root.as_ref()).unwrap();
+    let agent_identity =
+        crate::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
+    let agent_did = binding.agent_did.clone();
+    crate::test_support::install_test_agent_binding(
+        &node,
+        node_did,
+        "Owned loop test agent",
+        &binding,
+    )
+    .await;
+    let agent_access = crate::store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        ::identity::Did::new(&agent_did).unwrap(),
+        agent_identity.as_ref(),
+    )
+    .unwrap();
     let session_id = uuid::Uuid::new_v4().to_string();
     let request_id = uuid::Uuid::new_v4().to_string();
     crate::session::ensure_session_with_agent_did_and_requester_did(
@@ -734,53 +780,30 @@ async fn owned_test_hook_with_identity_policy(
     .await
     .unwrap();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mutation = if let Some(identity) = identity.as_ref() {
-        crate::request::lifecycle::build_signed_request(
-            crate::request::lifecycle::RequestSpec::new(
-                gents_protocol::request_admission::RequestPurpose::Normal,
-                crate::request::lifecycle::RequestIdentity {
-                    requester_did: requester_did.map(str::to_owned),
-                    request_id: request_id.clone(),
-                    node_did: node_did.to_owned(),
-                    agent_did: agent_did.clone(),
-                    session_id: session_id.clone(),
-                    content: "owned loop test".to_owned(),
-                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
-                    created_at: now,
-                },
-                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                    node_did,
-                ),
+    let create = crate::request::lifecycle::build_signed_request(
+        crate::request::lifecycle::RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            crate::request::lifecycle::RequestIdentity {
+                requester_did: requester_did.map(str::to_owned),
+                request_id: request_id.clone(),
+                node_did: node_did.to_owned(),
+                agent_did: agent_did.clone(),
+                session_id: session_id.clone(),
+                content: "owned loop test".to_owned(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: now,
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                agent_did.clone(),
             ),
-            crate::request::lifecycle::RequestSigner::Identity(identity.as_ref()),
-        )
-        .await
-        .unwrap()
-        .graphql_mutation()
-        .unwrap()
-    } else {
-        format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "{}", agent_did: "{}", session_id: "{}", request_hop: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(&request_id),
-            crate::store::graphql::escape_graphql_string(node_did),
-            crate::store::graphql::escape_graphql_string(&agent_did),
-            crate::store::graphql::escape_graphql_string(&session_id),
-            crate::store::graphql::escape_graphql_string(&request_id),
-            crate::store::graphql::escape_graphql_string(&now),
-        )
-    };
-    crate::store::config_client::ConfigAccess::write_local(
-        &node,
-        "agent.owned_loop_test_request",
-        &mutation,
+        ),
+        crate::request::lifecycle::RequestSigner::Identity(agent_identity.as_ref()),
     )
     .await
     .unwrap();
+    let (_, row) = write_signed_owned_request(&agent_access, &create).await;
     let mut folded_docs = rapidhash::RapidHashMap::default();
     if let Some(case) = folded_case {
-        let signer = identity
-            .as_ref()
-            .expect("folded fixture requires signed identity");
         let mut predecessor = request_id.clone();
         for folded in &case.folded {
             let id = format!("{request_id}-folded-{}", folded.request_id);
@@ -798,7 +821,7 @@ async fn owned_test_hook_with_identity_policy(
                         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 },
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                    node_did,
+                    agent_did.clone(),
                 ),
             );
             spec.input.queue = Some(gents_protocol::request_input::RequestQueue {
@@ -813,46 +836,15 @@ async fn owned_test_hook_with_identity_policy(
             });
             let create = crate::request::lifecycle::build_signed_request(
                 spec,
-                crate::request::lifecycle::RequestSigner::Identity(signer.as_ref()),
+                crate::request::lifecycle::RequestSigner::Identity(agent_identity.as_ref()),
             )
             .await
             .unwrap();
-            let result = crate::store::config_client::ConfigAccess::local(node.clone())
-                .write("test.folded_request", &create.graphql_mutation().unwrap())
-                .await
-                .unwrap();
-            let doc =
-                gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest").unwrap();
-            let loaded = crate::store::config_client::ConfigAccess::local(node.clone())
-                .execute(&format!(
-                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-                    crate::store::graphql::escape_graphql_string(&doc),
-                    crate::request::admission::SIGNED_REQUEST_FIELDS,
-                ))
-                .await
-                .unwrap();
-            let signed_row =
-                serde_json::from_value(loaded["data"]["AgentRequest"][0].clone()).unwrap();
-            crate::request::admission::verify_request_receipt_signature(&signed_row).unwrap();
+            let (doc, _) = write_signed_owned_request(&agent_access, &create).await;
             folded_docs.insert(folded.request_id, doc);
             predecessor = id;
         }
     }
-    let loaded = crate::store::graphql::graphql_with_transaction_retry(
-        &node,
-        &format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
-            crate::store::graphql::escape_graphql_string(&request_id),
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        ),
-        "load owned loop test request",
-    )
-    .await
-    .unwrap();
-    let row: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&loaded, "AgentRequest")
-            .unwrap()
-            .unwrap();
     let hook = DefraSessionHook::resume_with_identity_policy(
         node.clone(),
         &session_id,
@@ -874,6 +866,7 @@ async fn owned_test_hook_with_identity_policy(
         row.try_into().unwrap(),
         60,
     );
+    lifecycle.bind_managed_agent(agent_identity.as_ref()).unwrap();
     if let Some(case) = folded_case {
         let admitted = case
             .folded
