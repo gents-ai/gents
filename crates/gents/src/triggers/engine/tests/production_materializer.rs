@@ -1,5 +1,33 @@
 use super::*;
 
+async fn signed_materializer_agent(
+    name: &str,
+) -> (
+    crate::support::TestDb,
+    crate::KeyIdentity,
+    crate::ConfigAccess,
+    Arc<ResolvedAgent>,
+) {
+    let (db, user, access, binding) = crate::test_support::signed_test_node(name).await;
+    let template = tokio::task::spawn_blocking(|| integration_test_agent("materializer-template"))
+        .await
+        .expect("build test agent template");
+    let identity =
+        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+            .expect("derive the fixture's held Agent from its runtime key");
+    let mut agent = (*template).clone();
+    agent.agent_did = binding.agent_did.clone();
+    agent.agent_identity = identity;
+    agent.node = Arc::new(crate::store::identity::RuntimeNode {
+        node_did: db.node_identity.did().to_owned(),
+        identity: db.node_identity.clone(),
+        default_agent_did: binding.agent_did,
+        display_name: None,
+        enabled: true,
+    });
+    (db, user, access, Arc::new(agent))
+}
+
 async fn materializer_with_node() -> (Arc<defra_node::Node>, ProductionMaterializer) {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -388,18 +416,12 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
 
 #[tokio::test]
 async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire() {
-    let behavior = integration_test_agent("general");
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("goal-task-atomic-idempotent").await;
     let node_did = behavior.node_did().to_string();
     let agent_did = behavior.agent_did.clone();
     let agent_identity = behavior.agent_identity.clone();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(&node_did)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node = db.node.clone();
     let access = crate::ConfigAccess::local_managed_agent(
         node.clone(),
         agent_did.parse().unwrap(),
@@ -753,19 +775,13 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
 
 #[tokio::test]
 async fn durable_goal_task_replay_retains_its_admitted_assignment() {
-    let behavior = integration_test_agent("general");
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("goal-task-retained-assignment").await;
     let agent_did = behavior.agent_did.clone();
     let agent_identity = behavior.agent_identity.clone();
     let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let owner = snapshot.local_did.clone();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(&owner)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node = db.node.clone();
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let session = "replaced-task-goal-session";
@@ -952,31 +968,19 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
 
 #[tokio::test]
 async fn goal_task_identity_and_recovery_are_scoped_by_node_did() {
-    let first_behavior = integration_test_agent("general");
+    let (first_db, _first_user, _first_client_access, first_behavior) =
+        signed_materializer_agent("goal-task-first-node").await;
     let first_did = first_behavior.node_did().to_string();
     let first_agent = first_behavior.agent_did.clone();
-    let first_node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(&first_did)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(first_node.as_ref()).await.unwrap();
+    let first_node = first_db.node.clone();
     let first_snapshot = snapshot_with_agent_and_schedules(first_behavior, RapidHashMap::new());
     let (_first_tx, first_rx) = watch::channel(first_snapshot);
     let first_materializer = ProductionMaterializer::new(first_node.clone(), first_rx);
-    let second_behavior = integration_test_agent("general");
+    let (second_db, _second_user, _second_client_access, second_behavior) =
+        signed_materializer_agent("goal-task-second-node").await;
     let second_did = second_behavior.node_did().to_string();
     let second_agent = second_behavior.agent_did.clone();
-    let second_node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(&second_did)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(second_node.as_ref()).await.unwrap();
+    let second_node = second_db.node.clone();
     let second_snapshot = snapshot_with_agent_and_schedules(second_behavior, RapidHashMap::new());
     let (_second_tx, second_rx) = watch::channel(second_snapshot);
     let second_materializer = ProductionMaterializer::new(second_node.clone(), second_rx);
@@ -1052,18 +1056,12 @@ async fn goal_task_identity_and_recovery_are_scoped_by_node_did() {
 
 #[tokio::test]
 async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id() {
-    let behavior = integration_test_agent("general");
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("goal-task-foreign-collision").await;
     let node_did = behavior.node_did().to_string();
     let agent_did = behavior.agent_did.clone();
     let agent_identity = behavior.agent_identity.clone();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(&node_did)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node = db.node.clone();
     let access = crate::ConfigAccess::local_managed_agent(
         node.clone(),
         agent_did.parse().unwrap(),
