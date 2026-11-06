@@ -260,6 +260,10 @@ async fn create_client_fixture_request(
     Ok(row.try_into()?)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the modeled claim supplies its own identity, generation, and clock"
+)]
 async fn claim_fixture_request(
     node: Arc<EmbeddedNode>,
     node_did: &str,
