@@ -3,7 +3,8 @@ use crate::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
 use anyhow::anyhow;
 use gents_protocol::output::origin::{lookup_message, resolve_origin, ObservedMessage};
 use gents_protocol::output::reconstruction::{
-    reconstruct_message, reconstruct_stream, DependencyDenial, ObservedSegment,
+    fork_copy_observations, is_fork_copy_for, reconstruct_message, reconstruct_stream,
+    DependencyDenial, ObservedSegment,
 };
 use gents_protocol::output::{
     MessageBlock, MessagePublication, OutputSource, OutputWriter, PayloadRef, ReconstructionError,
@@ -184,6 +185,17 @@ fn build_selection(
                 "hydration root is outside target session"
             )));
         }
+        if let Some(copies) = fork_copy_observations(root.message, &segments) {
+            collect_fork_copy(&input, root, &copies, &segments, &mut selected)?;
+            if let Some(publications) = publications.as_mut() {
+                publications.push(CanonicalPublicationOrigin {
+                    header_doc_id: root.doc_id.to_owned(),
+                    origin_doc_id: root.doc_id.to_owned(),
+                    sequence: root.message.sequence,
+                });
+            }
+            continue;
+        }
         let origin = resolve_origin(
             &headers,
             input.denied_headers,
@@ -218,6 +230,60 @@ fn build_selection(
     }
     collect_effect_children(&input, &segments, &bases, &mut selected)?;
     Ok(selected)
+}
+
+/// Refines `Hydration.collectOne`'s fork-copy branch: a fork with
+/// destination-owned copies selects its header and those copies, and neither
+/// its origin nor the source request, tool calls or closures.
+fn collect_fork_copy(
+    input: &CanonicalClosureInput<'_>,
+    root: ObservedMessage<'_>,
+    copies: &[ObservedSegment<'_>],
+    segments: &[ObservedSegment<'_>],
+    selected: &mut BTreeSet<HydrationDocument>,
+) -> ClosureResult<()> {
+    let references = root.message.payload_references();
+    let physical = segments
+        .iter()
+        .filter(|row| {
+            references
+                .iter()
+                .any(|reference| is_fork_copy_for(root.message, row.segment, &reference.close_doc_id))
+        })
+        .collect::<Vec<_>>();
+    if let Some(denied) = physical
+        .iter()
+        .find(|row| input.denied_segments.iter().any(|id| id == row.doc_id))
+    {
+        return Err(CanonicalClosureError::Unclassified(anyhow!(
+            "fork copy {} is denied",
+            denied.doc_id
+        )));
+    }
+    reconstruct_message(
+        copies,
+        input.denied_segments,
+        input.dependency_denials,
+        root.message,
+    )
+    .map_err(reconstruction_failure)?;
+    selected.insert(HydrationDocument {
+        collection: SessionHydrationCollection::AgentMessage,
+        doc_id: root.doc_id.to_owned(),
+        requester_did: root.message.requester_did.clone().unwrap_or_default(),
+        node_did: root.message.node_did.clone(),
+        session_id: root.message.session_id.clone(),
+    });
+    for row in physical {
+        selected.insert(HydrationDocument {
+            collection: SessionHydrationCollection::AgentOutputSegment,
+            doc_id: row.doc_id.to_owned(),
+            requester_did: row.segment.requester_did.clone().unwrap_or_default(),
+            node_did: row.segment.node_did.clone(),
+            session_id: row.segment.session_id.clone(),
+        });
+    }
+    Ok(())
 }
 
 fn collect_effect_children(
@@ -918,7 +984,18 @@ mod tests {
             }
         }
 
-        for case in crate::lean_vocab_test::lean_session_hydration_closure_cases() {
+        let cases = crate::lean_vocab_test::lean_session_hydration_closure_cases();
+        for name in [
+            "fork_copy_without_origin",
+            "fork_copy_preferred_over_visible_origin",
+            "fork_copy_acp_denied",
+        ] {
+            assert!(
+                cases.iter().any(|case| case.name == name),
+                "modeled closure case {name} is missing"
+            );
+        }
+        for case in cases {
             let Some(closure) = assert_input(
                 &case.closure_input,
                 case.expected_closure_documents.as_ref(),

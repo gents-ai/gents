@@ -23,7 +23,7 @@ pub(super) async fn load_header(
         })
 }
 
-/// `None` when no header is visible to this reader under its own ACP.
+/// `None` when no header is observed for this reader.
 async fn find_header(
     access: ReadAccess<'_, '_>,
     header_doc_id: &str,
@@ -165,16 +165,24 @@ fn validate_fork(
     .map_err(anyhow::Error::new)
 }
 
-/// Returns the deepest origin this reader can see, validated hop by hop. A
-/// published fork holds destination-owned copies of its content, so an origin
-/// outside the reader's grant ends the provenance walk instead of failing the
-/// read; the returned fork header then resolves its copies.
+/// How a fork header's origin chain bears on a read.
+#[derive(Clone, Copy)]
+pub(super) enum OriginWalk {
+    /// The content resolves through the origin, so each hop must be visible.
+    Required,
+    /// The content resolves from destination-owned copies; the chain is
+    /// provenance only and ends at the first origin this reader cannot see.
+    Provenance,
+}
+
+/// Returns the deepest origin reached, validated hop by hop.
 pub(super) async fn validate_origin_chain(
     access: ReadAccess<'_, '_>,
     first: &super::super::canonical_rows::TranscriptMessageRow,
     node_did: &str,
     requester_did: Option<&str>,
     cache: &mut ReadCache,
+    walk: OriginWalk,
 ) -> Result<super::super::canonical_rows::TranscriptMessageRow> {
     let mut active = BTreeSet::new();
     active.insert(first.doc_id.clone());
@@ -190,16 +198,24 @@ pub(super) async fn validate_origin_chain(
             active.insert(origin_message_doc_id.clone()),
             "canonical fork origin cycle at {origin_message_doc_id}"
         );
-        let Some(origin) = find_header(
+        let origin = find_header(
             access,
             origin_message_doc_id,
             node_did,
             requester_did,
             cache,
         )
-        .await?
-        else {
-            return Ok(child);
+        .await?;
+        let origin = match (origin, walk) {
+            (Some(origin), _) => origin,
+            (None, OriginWalk::Provenance) => return Ok(child),
+            (None, OriginWalk::Required) => {
+                return Err(anyhow::Error::new(
+                    CanonicalOutputReadError::MissingCanonicalHeader {
+                        header_doc_id: origin_message_doc_id.clone(),
+                    },
+                ))
+            }
         };
         validate_fork(&child, &origin)?;
         child = origin;

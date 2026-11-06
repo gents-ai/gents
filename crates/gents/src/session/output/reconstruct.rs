@@ -1,6 +1,9 @@
 use anyhow::Result;
-use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
-use gents_protocol::output::{MessagePublication, OutputSource};
+use anyhow::Context as _;
+use gents_protocol::output::reconstruction::{
+    fork_copy_observations, reconstruct_message, ObservedSegment,
+};
+use gents_protocol::output::OutputSource;
 use rapidhash::{HashSetExt, RapidHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -9,7 +12,7 @@ use super::super::canonical_rows::{
     decode_output_segment_row, decode_scoped_request_output_segments, AGENT_OUTPUT_SEGMENT_FIELDS,
 };
 use super::access::{rows_value, ReadAccess, ReadCache, RequestOutputRows};
-use super::headers::{load_header, validate_origin_chain};
+use super::headers::{load_header, validate_origin_chain, OriginWalk};
 use super::ReconstructedScopedMessage;
 #[cfg(test)]
 use super::{record_request_output_scan, SOURCE_OUTPUT_QUERIES};
@@ -241,10 +244,8 @@ pub(super) async fn load_referenced_segments(
     Ok(records)
 }
 
-/// A fork header whose visible provenance ends at a fork resolves each logical
-/// payload reference to the closure copied into its own session at fork
-/// publication. The copy's source coordinate is that logical closing record, so
-/// its closing row is presented under the identity the immutable header names.
+/// The records copied into a fork header's own session for its references,
+/// at their physical identities.
 async fn load_fork_copies(
     access: ReadAccess<'_, '_>,
     header: &super::super::canonical_rows::TranscriptMessageRow,
@@ -255,37 +256,84 @@ async fn load_fork_copies(
         .message
         .payload_references()
         .into_iter()
-        .map(|reference| reference.close_doc_id.clone())
+        .map(|reference| {
+            format!(
+                r#""{}""#,
+                crate::store::graphql::escape_graphql_string(&reference.close_doc_id)
+            )
+        })
         .collect::<BTreeSet<_>>();
     if logicals.is_empty() {
         return Ok(Vec::new());
     }
     let session_id = &header.message.session_id;
-    let filter = logicals
-        .iter()
-        .map(|id| format!(r#""{}""#, crate::store::graphql::escape_graphql_string(id)))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let filter = logicals.into_iter().collect::<Vec<_>>().join(", ");
     let scope = super::super::query::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{ AgentOutputSegment(filter: {{ {scope}, request_doc_id: {{ _in: [{filter}] }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
     );
     let response = access.query(&query, "load_fork_output_copies").await?;
-    let rows = decode_scoped_request_output_segments(
+    decode_scoped_request_output_segments(
         rows_value(&response, "AgentOutputSegment")?,
         node_did,
         Some(session_id),
         requester_did,
-    )?;
-    Ok(rows
-        .into_iter()
-        .map(|mut row| {
-            if row.segment.close.is_some() && logicals.contains(&row.segment.request_doc_id) {
-                row.doc_id.clone_from(&row.segment.request_doc_id);
-            }
-            row
+    )
+}
+
+/// Resolves a fork header from the copies in its own session, refining
+/// `SessionFork.resolveIn`. The origin chain is walked only as provenance for
+/// replay evidence; content never depends on it. `None` for a fork published
+/// before destination-owned copies existed.
+async fn reconstruct_fork_copy(
+    access: ReadAccess<'_, '_>,
+    header: &super::super::canonical_rows::TranscriptMessageRow,
+    node_did: &str,
+    requester_did: Option<&str>,
+    cache: &mut ReadCache,
+) -> Result<Option<ReconstructedScopedMessage>> {
+    if !matches!(
+        header.message.publication,
+        gents_protocol::output::MessagePublication::Fork { .. }
+    ) {
+        return Ok(None);
+    }
+    let copies = load_fork_copies(access, header, node_did, requester_did).await?;
+    let observed = copies
+        .iter()
+        .map(|row| ObservedSegment {
+            doc_id: &row.doc_id,
+            segment: &row.segment,
         })
-        .collect())
+        .collect::<Vec<_>>();
+    let Some(presented) = fork_copy_observations(&header.message, &observed) else {
+        return Ok(None);
+    };
+    let message = reconstruct_message(&presented, &[], &[], &header.message)
+        .map_err(anyhow::Error::new)
+        .with_context(|| format!("reconstructing fork copy {}", header.doc_id))?;
+    let segments = presented
+        .iter()
+        .map(|record| super::super::canonical_rows::OutputSegmentRow {
+            doc_id: record.doc_id.to_owned(),
+            segment: record.segment.clone(),
+        })
+        .collect();
+    let origin = validate_origin_chain(
+        access,
+        header,
+        node_did,
+        requester_did,
+        cache,
+        OriginWalk::Provenance,
+    )
+    .await?;
+    Ok(Some(ReconstructedScopedMessage {
+        header: header.clone(),
+        origin,
+        message,
+        segments,
+    }))
 }
 
 pub(super) async fn reconstruct_scoped_message(
@@ -317,8 +365,20 @@ pub(super) async fn reconstruct_scoped_message_with_facts(
     cache: &mut ReadCache,
 ) -> Result<ReconstructedScopedMessage> {
     let header = load_header(access, header_doc_id, node_did, requester_did, cache).await?;
-    let origin = validate_origin_chain(access, &header, node_did, requester_did, cache).await?;
-    let copied = matches!(origin.message.publication, MessagePublication::Fork { .. });
+    if let Some(copied) =
+        reconstruct_fork_copy(access, &header, node_did, requester_did, cache).await?
+    {
+        return Ok(copied);
+    }
+    let origin = validate_origin_chain(
+        access,
+        &header,
+        node_did,
+        requester_did,
+        cache,
+        OriginWalk::Required,
+    )
+    .await?;
     let request_hint = origin.message.request_doc_id.clone();
     let reconstruct = |segments: &[super::super::canonical_rows::OutputSegmentRow]| {
         let observed = segments
@@ -353,21 +413,17 @@ pub(super) async fn reconstruct_scoped_message_with_facts(
     } else {
         BTreeSet::new()
     };
-    let mut segments = if copied {
-        load_fork_copies(access, &header, node_did, requester_did).await?
-    } else {
-        load_referenced_segments(
-            access,
-            &header,
-            request_hint.as_deref(),
-            node_did,
-            requester_did,
-            cache,
-        )
-        .await?
-    };
+    let mut segments = load_referenced_segments(
+        access,
+        &header,
+        request_hint.as_deref(),
+        node_did,
+        requester_did,
+        cache,
+    )
+    .await?;
     let mut reconstructed = reconstruct(&segments);
-    if let (false, Err((error, _))) = (copied, &reconstructed) {
+    if let Err((error, _)) = &reconstructed {
         let stale = segments
             .iter()
             .map(|row| &row.segment.request_doc_id)

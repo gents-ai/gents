@@ -96,9 +96,9 @@ pub struct ForkRelationshipIntent {
     message_doc_ids: Vec<String>,
 }
 
-struct ForkPublication {
-    outcome: ForkOutcome,
-    intent: ForkRelationshipIntent,
+pub(super) struct ForkPublication {
+    pub(super) outcome: ForkOutcome,
+    pub(super) intent: ForkRelationshipIntent,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -162,17 +162,26 @@ pub async fn fork_on(
     access: &ConfigAccess,
     params: ForkParams<'_>,
 ) -> Result<ForkOutcome, ForkError> {
+    let publication = commit_fork(access, params).await?;
+    publish_fork_relationships(access, publication.intent).await?;
+    Ok(publication.outcome)
+}
+
+/// The fork and all of its destination-owned content commit in one
+/// transaction; relationship publication follows from the returned intent.
+pub(super) async fn commit_fork(
+    access: &ConfigAccess,
+    params: ForkParams<'_>,
+) -> Result<ForkPublication, ForkError> {
     let child = uuid::Uuid::new_v4().to_string();
-    let publication = access
+    access
         .transact_write("session.fork", |txn| {
             let child = child.clone();
             let params = params.clone();
             Box::pin(async move { fork_in_txn(txn, &params, &child, None).await })
         })
         .await
-        .map_err(fork_error)?;
-    publish_fork_relationships(access, publication.intent).await?;
-    Ok(publication.outcome)
+        .map_err(fork_error)
 }
 
 /// Retry only an intent returned by the committed fork creation or an earlier

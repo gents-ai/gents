@@ -402,11 +402,19 @@ fn provider_coordinate_for_candidate_inner(
             "canonical replay reference has a missing or conflicting physical close {close_id}"
         );
         let close = &matches[0].segment;
+        // A fork copy reproduces the origin's close in the reader's session,
+        // verified against that origin when the fork was published.
+        let copied = gents_protocol::output::reconstruction::is_fork_copy_for(
+            &reconstructed.header.message,
+            close,
+            &close_id,
+        );
         anyhow::ensure!(
             close.node_did == header.node_did
                 && close.requester_did == header.requester_did
-                && close.session_id == header.session_id
-                && close.request_doc_id == request_doc_id
+                && (copied
+                    || (close.session_id == header.session_id
+                        && close.request_doc_id == request_doc_id))
                 && matches!(&close.writer, OutputWriter::RequestExecution { execution_generation: writer } if writer == execution_generation)
                 && matches!(
                     &close.close,
