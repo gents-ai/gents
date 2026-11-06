@@ -20,7 +20,6 @@ fn fixture_identities() -> &'static (Arc<crate::KeyIdentity>, Arc<dyn NodeIdenti
 struct CaptureFixture {
     db: crate::support::TestDb,
     _user: crate::KeyIdentity,
-    client: crate::ConfigAccess,
     agent: Arc<dyn NodeIdentity>,
     lifecycle: crate::request::lifecycle::RequestLifecycle,
 }
@@ -72,7 +71,6 @@ impl CaptureFixture {
         Self {
             db,
             _user: user,
-            client,
             agent,
             lifecycle,
         }
@@ -724,8 +722,7 @@ async fn deleted_blocks_never_publish_dangling_references() {
         .await
         .unwrap();
     let id = escape_graphql_string(&leaves[0].doc_id);
-    let deleted = fixture
-        .client
+    let deleted = access
         .write(
             "test.delete_capture_block",
             &format!(r#"mutation {{ delete_RenderedRequestBlock(docID: "{id}") {{ _docID }} }}"#),
