@@ -1069,6 +1069,7 @@ async fn serve_foreground(
                 graphql: graphql_url.clone(),
                 node_did: identity.did().to_string(),
                 agent_did: args.codex_shim_agent_did.clone(),
+                runtime_identity: identity.clone(),
                 auth_token: codex_shim_auth_token,
                 bind_addr: args.codex_shim_bind_addr,
                 port: args.codex_shim_port,

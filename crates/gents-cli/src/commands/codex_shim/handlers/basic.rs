@@ -324,6 +324,7 @@ mod tests {
             ),
             node_did: Arc::from(DID),
             agent_did: Arc::from("default"),
+            agent_signer: None,
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),
             poll_interval: Duration::from_millis(10),

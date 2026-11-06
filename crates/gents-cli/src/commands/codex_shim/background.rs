@@ -461,6 +461,7 @@ mod tests {
             ),
             node_did: Arc::from("did:test:background-watcher"),
             agent_did: Arc::from("did:test:background-watcher:default"),
+            agent_signer: None,
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),
             poll_interval,
