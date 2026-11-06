@@ -60,21 +60,6 @@ fn replacement(
 }
 
 #[cfg(test)]
-pub(super) async fn agent_preview(
-    node: &Arc<EmbeddedNode>,
-    owner: &str,
-    args: &ConfigureAgentParams,
-    ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
-) -> Result<String> {
-    match agent_apply(node, owner, args, ceiling, true).await {
-        Ok(result) => Ok(result),
-        Err(error) => {
-            ordered! {"admitted":false,"committed":false,"rejection":format!("{error:#}")}.pretty()
-        }
-    }
-}
-
-#[cfg(test)]
 pub(super) async fn agent_mutate(
     node: &Arc<EmbeddedNode>,
     owner: &str,

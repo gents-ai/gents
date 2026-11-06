@@ -1,3 +1,4 @@
+use super::agent_management::{model_agent_mutate, model_agent_preview};
 use super::command::{agents::agent_params, contracts::help_patch_contracts};
 use super::*;
 
@@ -164,6 +165,48 @@ impl SelfConfigFixture {
                 "runtime_reader",
                 &identity::Did::new(&self.agent_did).unwrap(),
             )
+            .await
+            .unwrap();
+    }
+
+    async fn grant_account_fixture_selections(
+        &self,
+        documents: &[(crate::Collection, String, bool)],
+    ) {
+        self.user_access
+            .transact_write("test.account_choice.grant_selections", |txn| {
+                Box::pin(async move {
+                    let actor = identity::Did::new(&self.agent_did)?;
+                    for (collection, id, write) in documents {
+                        let (doc, _) =
+                            crate::store::config_client::read_desired_state_record_in_txn(
+                                txn,
+                                *collection,
+                                self.node_did(),
+                                id,
+                            )
+                            .await?
+                            .expect("account choice configuration exists");
+                        txn.add_actor_relationship(
+                            collection.graphql_type(),
+                            &doc,
+                            "selection_manager",
+                            &actor,
+                        )
+                        .await?;
+                        if *write {
+                            txn.add_actor_relationship(
+                                collection.graphql_type(),
+                                &doc,
+                                "writer",
+                                &actor,
+                            )
+                            .await?;
+                        }
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
             .await
             .unwrap();
     }
@@ -4722,18 +4765,14 @@ async fn backend_choice_uses_runtime_visible_default_in_agent_transaction() {
     }
 }
 
-async fn account_choice_core(
-    agent: &str,
-) -> (
-    std::sync::Arc<defra_node::Node>,
-    std::sync::Arc<dyn crate::NodeIdentity>,
-    SelfConfigCore,
-) {
-    let node = build_agent_node().await;
-    let identity = node_identity(agent);
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, agent).await;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+async fn account_choice_core(name: &str) -> (SelfConfigFixture, SelfConfigCore) {
+    let fixture = SelfConfigFixture::new(name).await;
+    fixture.grant_node_reader().await;
+    fixture.grant_user_relation_delete().await;
+    fixture.grant_agent_relation_delete().await;
+    let owner = fixture.node_did().to_owned();
+    let agent = fixture.agent_did().to_owned();
+    let access = fixture.user_access();
     for (id, kind, auth) in [
         (
             "chat-original",
@@ -4756,7 +4795,7 @@ async fn account_choice_core(
             "endpoint": "http://127.0.0.1:1/v1", "auth": auth,
         }))
         .unwrap();
-        crate::store::config_client::write_inference_backend_document(&access, &backend)
+        crate::store::config_client::write_inference_backend_document(access, &backend)
             .await
             .unwrap();
     }
@@ -4771,7 +4810,7 @@ async fn account_choice_core(
             "model_name": "test-model",
         }))
         .unwrap();
-        crate::store::config_client::write_inference_profile_document(&access, &profile)
+        crate::store::config_client::write_inference_profile_document(access, &profile)
             .await
             .unwrap();
     }
@@ -4814,21 +4853,45 @@ async fn account_choice_core(
         .collect(),
     )
     .unwrap();
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "test.compaction",
-        |txn| {
+    access
+        .transact_write("test.compaction", |txn| {
             let plan = &plan;
             Box::pin(async move {
                 crate::store::config_client::apply_desired_state_plan(txn, plan).await
             })
-        },
-    )
-    .await
-    .unwrap();
-    let core = SelfConfigCore::new(node.clone(), owner, agent.into()).unwrap();
-    (node, identity, core)
+        })
+        .await
+        .unwrap();
+    fixture.grant_selected_configuration().await;
+    let mut selections = vec![(crate::Collection::Compaction, compaction, true)];
+    selections.push((
+        crate::Collection::AgentContext,
+        format!("{agent}:context"),
+        false,
+    ));
+    selections.extend(
+        ["p-original", "p-chat-b", "p-grok"]
+            .into_iter()
+            .map(|id| (crate::Collection::InferenceProfile, id.to_owned(), false)),
+    );
+    selections.extend(
+        ["c-original", "c-chat-b"]
+            .into_iter()
+            .map(|id| (crate::Collection::Compaction, id.to_owned(), false)),
+    );
+    selections.extend(
+        ["ctx-original", "ctx-chat-b"]
+            .into_iter()
+            .map(|id| (crate::Collection::AgentContext, id.to_owned(), false)),
+    );
+    selections.extend(
+        ["chat-original", "chat-b", "grok-original"]
+            .into_iter()
+            .map(|id| (crate::Collection::InferenceBackend, id.to_owned(), false)),
+    );
+    fixture.grant_account_fixture_selections(&selections).await;
+    let core = fixture.core();
+    (fixture, core)
 }
 
 async fn assert_account_choice_refused(
@@ -4846,7 +4909,7 @@ async fn assert_account_choice_refused(
 
 #[tokio::test]
 async fn profile_self_config_cannot_pick_another_account() {
-    let (_, _, core) = account_choice_core("pick").await;
+    let (_fixture, core) = account_choice_core("pick").await;
     let owner = core.node_did().to_owned();
     let to = |backend: &str| vec![("backend_id".into(), Some(json!(backend)))];
     assert_account_choice_refused(&core, || profile_request(to("chat-b"))).await;
@@ -4866,7 +4929,7 @@ async fn profile_self_config_cannot_pick_another_account() {
 
 #[tokio::test]
 async fn agent_profile_pick_cannot_switch_account() {
-    let (_, _, core) = account_choice_core("agent-pick").await;
+    let (_fixture, core) = account_choice_core("agent-pick").await;
     let to = |profile: &str| vec![("inference_profile_id".into(), Some(json!(profile)))];
     assert_account_choice_refused(&core, || agent_request(&core, to("p-chat-b"))).await;
     core.apply(agent_request(&core, to("p-original")))
@@ -4880,17 +4943,21 @@ async fn agent_profile_pick_cannot_switch_account() {
         .unwrap();
 }
 
-async fn grok_accounts_core(agent: &str, original: bool, g2: bool) -> SelfConfigCore {
-    let (node, _, core) = account_choice_core(agent).await;
+async fn grok_accounts_core(
+    agent: &str,
+    original: bool,
+    g2: bool,
+) -> (SelfConfigFixture, SelfConfigCore) {
+    let (fixture, core) = account_choice_core(agent).await;
     let owner = core.node_did().to_owned();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let access = fixture.user_access();
     let backend: crate::InferenceBackend = serde_json::from_value(json!({
         "node_did": owner, "backend_id": "grok-g2", "name": "grok-g2",
         "provider_kind": "XaiGrokOAuth", "endpoint": "http://127.0.0.1:1/v1",
         "auth": {"kind":"node_oauth","account_ref":"g2"},
     }))
     .unwrap();
-    crate::store::config_client::write_inference_backend_document(&access, &backend)
+    crate::store::config_client::write_inference_backend_document(access, &backend)
         .await
         .unwrap();
     let profile: crate::documents::InferenceProfile = serde_json::from_value(json!({
@@ -4898,9 +4965,19 @@ async fn grok_accounts_core(agent: &str, original: bool, g2: bool) -> SelfConfig
         "model_name": "test-model",
     }))
     .unwrap();
-    crate::store::config_client::write_inference_profile_document(&access, &profile)
+    crate::store::config_client::write_inference_profile_document(access, &profile)
         .await
         .unwrap();
+    fixture
+        .grant_account_fixture_selections(&[
+            (crate::Collection::InferenceBackend, "grok-g2".into(), false),
+            (
+                crate::Collection::InferenceProfile,
+                "p-grok-g2".into(),
+                false,
+            ),
+        ])
+        .await;
     let provider = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
     for (account_ref, enabled) in [(None, original), (Some("g2"), g2)] {
         let original_id = crate::inference::auth::credential::oauth_credential_id(&owner, provider);
@@ -4926,11 +5003,11 @@ async fn grok_accounts_core(agent: &str, original: bool, g2: bool) -> SelfConfig
             provider_account_key: None,
             label: None,
         };
-        crate::inference::auth::credential::upsert_oauth_credential(&node, &credential)
+        crate::inference::auth::credential::upsert_oauth_credential_on(access, &credential)
             .await
             .unwrap();
     }
-    core
+    (fixture, core)
 }
 
 #[tokio::test]
@@ -4943,21 +5020,21 @@ async fn default_account_follows_the_resolver() {
         core.apply(agent_request(&core, to(profile))).await.unwrap();
     };
 
-    let core = grok_accounts_core("default-g2", false, true).await;
+    let (_fixture, core) = grok_accounts_core("default-g2", false, true).await;
     assert_account_choice_refused(&core, || agent_request(&core, to("p-grok"))).await;
     accepted(core, "p-grok-g2").await;
 
-    let core = grok_accounts_core("default-original", true, true).await;
+    let (_fixture, core) = grok_accounts_core("default-original", true, true).await;
     assert_account_choice_refused(&core, || agent_request(&core, to("p-grok-g2"))).await;
     accepted(core, "p-grok").await;
 
-    let core = grok_accounts_core("default-none", false, false).await;
+    let (_fixture, core) = grok_accounts_core("default-none", false, false).await;
     accepted(core, "p-grok").await;
 }
 
 #[tokio::test]
 async fn compaction_profile_pick_cannot_switch_account() {
-    let (_, _, core) = account_choice_core("compaction-pick").await;
+    let (_fixture, core) = account_choice_core("compaction-pick").await;
     let to = |profile: &str| {
         profile_target_request(
             Some("compaction"),
@@ -4973,7 +5050,7 @@ async fn compaction_profile_pick_cannot_switch_account() {
 
 #[tokio::test]
 async fn compaction_reference_pick_cannot_switch_account() {
-    let (_, _, core) = account_choice_core("compaction-ref-pick").await;
+    let (_fixture, core) = account_choice_core("compaction-ref-pick").await;
     let context = |compaction: &str| {
         protect_working_agent(
             anchored_request(
@@ -5002,7 +5079,8 @@ async fn compaction_reference_pick_cannot_switch_account() {
 
 #[tokio::test]
 async fn agent_management_profile_pick_cannot_switch_account() {
-    let (node, identity, core) = account_choice_core("agent-pick").await;
+    let (fixture, core) = account_choice_core("agent-pick").await;
+    let node = &fixture.db.node;
     let owner = core.node_did().to_owned();
     let params = |action: &str, argv: &[&str]| {
         agent_params(
@@ -5034,7 +5112,7 @@ async fn agent_management_profile_pick_cannot_switch_account() {
             "clone",
             &[
                 "--from",
-                "agent-pick",
+                fixture.agent_did(),
                 "--display-name",
                 "Picker clone",
                 "--profile",
@@ -5042,45 +5120,41 @@ async fn agent_management_profile_pick_cannot_switch_account() {
             ],
         )
     };
-    let edit = params("edit", &["--id", "agent-pick", "--profile", "p-chat-b"]);
+    let edit = params(
+        "edit",
+        &["--id", fixture.agent_did(), "--profile", "p-chat-b"],
+    );
     for refused in [create("p-chat-b"), clone("p-chat-b"), edit] {
-        let error = agent_mutate(
-            &node,
-            &owner,
-            identity.as_ref(),
-            &refused,
-            &Default::default(),
-        )
-        .await
-        .expect_err("switching to another account must be refused");
+        let error = model_agent_mutate(&core, fixture.agent.as_ref(), &refused)
+            .await
+            .expect_err("switching to another account must be refused");
         assert!(
             format!("{error:#}").contains("selects another"),
             "{error:#}"
         );
     }
-    assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 1);
+    assert_eq!(crate::list_agents(node, &owner).await.unwrap().len(), 1);
     for accepted in [
         create("p-grok"),
         clone("p-grok"),
-        params("edit", &["--id", "agent-pick", "--profile", "p-original"]),
-        params("edit", &["--id", "agent-pick", "--profile", "p-grok"]),
+        params(
+            "edit",
+            &["--id", fixture.agent_did(), "--profile", "p-original"],
+        ),
+        params(
+            "edit",
+            &["--id", fixture.agent_did(), "--profile", "p-grok"],
+        ),
     ] {
-        agent_mutate(
-            &node,
-            &owner,
-            identity.as_ref(),
-            &accepted,
-            &Default::default(),
-        )
-        .await
-        .unwrap();
+        model_agent_mutate(&core, fixture.agent.as_ref(), &accepted)
+            .await
+            .unwrap();
     }
 }
 
 #[tokio::test]
 async fn agent_preview_agrees_with_the_account_choice_fence() {
-    let (node, _, core) = account_choice_core("preview-pick").await;
-    let owner = core.node_did().to_owned();
+    let (fixture, core) = account_choice_core("preview-pick").await;
     let create = [
         "--display-name",
         "Picker",
@@ -5091,8 +5165,13 @@ async fn agent_preview_agrees_with_the_account_choice_fence() {
         "--preset",
         "write",
     ];
-    let clone = ["--from", "preview-pick", "--display-name", "Picker clone"];
-    let edit = ["--id", "preview-pick"];
+    let clone = [
+        "--from",
+        fixture.agent_did(),
+        "--display-name",
+        "Picker clone",
+    ];
+    let edit = ["--id", fixture.agent_did()];
     for (operation, argv, profile, admitted) in [
         ("create", &create[..], "p-chat-b", false),
         ("clone", &clone[..], "p-chat-b", false),
@@ -5107,12 +5186,8 @@ async fn agent_preview_agrees_with_the_account_choice_fence() {
             .map(|arg| (*arg).to_owned())
             .collect();
         let params = agent_params("preview", Some(operation.into()), &argv).unwrap();
-        let preview: Value = serde_json::from_str(
-            &agent_preview(&node, &owner, &params, &Default::default())
-                .await
-                .unwrap(),
-        )
-        .unwrap();
+        let preview: Value =
+            serde_json::from_str(&model_agent_preview(&core, &params).await.unwrap()).unwrap();
         assert_eq!(
             preview["admitted"], admitted,
             "{operation} {profile}: {preview}"
@@ -5130,35 +5205,43 @@ async fn agent_preview_agrees_with_the_account_choice_fence() {
 
 #[tokio::test]
 async fn agent_clone_inherited_compaction_cannot_switch_account() {
-    let (node, identity, core) = account_choice_core("clone-pick").await;
+    let (fixture, core) = account_choice_core("clone-pick").await;
+    let node = &fixture.db.node;
     let owner = core.node_did().to_owned();
-    let sources = ["original", "chat-b"]
-        .into_iter()
-        .map(|account| {
-            let value = json!({"node_did": owner, "agent_did": format!("src-{account}"),
-                "context_id": format!("ctx-{account}"), "inference_profile_id": "p-original"});
-            crate::store::config_client::DesiredStateApplyDocument {
-                collection: crate::Collection::Agent,
-                add: value.clone(),
-                update: value,
-            }
-        })
-        .collect();
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(sources).unwrap();
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "test.sources",
-        |txn| {
-            let plan = &plan;
+    let original = fixture.install_sibling("src-original").await;
+    let chat_b = fixture.install_sibling("src-chat-b").await;
+    fixture
+        .user_access()
+        .transact_write("test.sources", |txn| {
+            let sources = [(&original, "ctx-original"), (&chat_b, "ctx-chat-b")];
+            let owner = &owner;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                let mut documents = Vec::new();
+                for (id, context) in sources {
+                    let (_, mut value) =
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::Agent,
+                            owner,
+                            id,
+                        )
+                        .await?
+                        .expect("source Agent exists");
+                    value["context_id"] = json!(context);
+                    value["inference_profile_id"] = json!("p-original");
+                    documents.push(crate::store::config_client::DesiredStateApplyDocument {
+                        collection: crate::Collection::Agent,
+                        add: value.clone(),
+                        update: value,
+                    });
+                }
+                let plan = crate::store::config_client::DesiredStateApplyPlan::new(documents)?;
+                crate::store::config_client::apply_desired_state_plan(txn, &plan).await
             })
-        },
-    )
-    .await
-    .unwrap();
-    let before = crate::list_agents(&node, &owner).await.unwrap();
+        })
+        .await
+        .unwrap();
+    let before = crate::list_agents(node, &owner).await.unwrap();
     let clone = |action: &str, source: &str, profile: &str| {
         let name = format!("{source} on {profile}");
         let argv = [
@@ -5173,25 +5256,18 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
         let operation = (action == "preview").then(|| "clone".to_owned());
         agent_params(action, operation, &argv).unwrap()
     };
-    for (source, profile) in [("src-chat-b", "p-original"), ("src-chat-b", "p-grok")] {
+    for (source, profile) in [(chat_b.as_str(), "p-original"), (chat_b.as_str(), "p-grok")] {
         let preview: Value = serde_json::from_str(
-            &agent_preview(
-                &node,
-                &owner,
-                &clone("preview", source, profile),
-                &Default::default(),
-            )
-            .await
-            .unwrap(),
+            &model_agent_preview(&core, &clone("preview", source, profile))
+                .await
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(preview["admitted"], false, "{source} {profile}: {preview}");
-        let error = agent_mutate(
-            &node,
-            &owner,
-            identity.as_ref(),
+        let error = model_agent_mutate(
+            &core,
+            fixture.agent.as_ref(),
             &clone("clone", source, profile),
-            &Default::default(),
         )
         .await
         .expect_err("inheriting another account's compaction must be refused");
@@ -5200,14 +5276,12 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
             "{error:#}"
         );
     }
-    assert_eq!(crate::list_agents(&node, &owner).await.unwrap(), before);
+    assert_eq!(crate::list_agents(node, &owner).await.unwrap(), before);
     for profile in ["p-original", "p-grok"] {
-        agent_mutate(
-            &node,
-            &owner,
-            identity.as_ref(),
-            &clone("clone", "src-original", profile),
-            &Default::default(),
+        model_agent_mutate(
+            &core,
+            fixture.agent.as_ref(),
+            &clone("clone", &original, profile),
         )
         .await
         .unwrap();
