@@ -66,7 +66,10 @@ instance (s : ResolvedSnapshot) : Decidable s.wellFormed := by
   infer_instance
 
 /-- A tool surface that cannot be built makes its agent unavailable before
-publication. Other runnable agents and the default selection remain intact. -/
+publication. Other runnable agents and the default selection remain intact.
+Native ACP determines whether the selected agent can read the WorkspaceRoot
+that admits its configured host tools; the model receives the resulting
+surface-build failure without inferring authority from another actor. -/
 def demote (s : ResolvedSnapshot) (agent : AgentDid) : ResolvedSnapshot :=
   { s with runnable := s.runnable.erase agent, unavailable := insert agent s.unavailable }
 
