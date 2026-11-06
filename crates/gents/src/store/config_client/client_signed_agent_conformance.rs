@@ -1022,6 +1022,82 @@ async fn client_agent_genesis_is_signed_by_the_authenticated_desktop_principal(
 }
 
 #[tokio::test]
+async fn large_client_signed_agent_document_crosses_websocket_frame_boundaries(
+) -> anyhow::Result<()> {
+    use crate::store::identity::NodeIdentity;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    let directory = tempfile::tempdir()?;
+    let actor = crate::store::identity::KeyIdentity::load_or_create(
+        directory.path().join("desktop.key"),
+        None,
+    )?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .enable_signing()
+            .with_node_acp_owner(actor.did().to_owned())
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await?,
+    );
+    let context = defra_core::RequestContext::default().with_identity(Some(actor.did().to_owned()));
+    let policy = node
+        .add_dac_policy_with_counter_as(
+            &context,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
+        .await?;
+    assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
+    node.add_collection(gents_protocol::schemas::AGENT).await?;
+    let endpoint = super::GraphqlEndpoint::as_principal(
+        format!("http://{address}/api/v0/graphql"),
+        actor.did(),
+    )
+    .with_client_signing_capability(actor.client_signing_capability()?)?
+    .with_client_signed_agent_creates();
+    let access = super::ConfigAccess::Graphql(endpoint);
+    let input = json!({
+        "agent_did": actor.did(), "creation_nonce": "large-desktop-test",
+        "node_did": node.node_identity_did().unwrap(), "display_name": "Client agent",
+        "description": "history ✓".repeat(200_000), "context_id": null, "inference_profile_id": "profile",
+        "enabled": true, "tags": ["one", "two"], "created_at": null,
+        "updated_at": "2026-08-14T12:00:00.120000000Z"
+    });
+    let response = access
+        .transact_write("test.large_client_signed_agent", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                txn.execute_desired_state_mutation(
+                    "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID _version { cid } } }",
+                    &json!({"input": input}),
+                    crate::Collection::Agent,
+                    true,
+                )
+                .await
+            })
+        })
+        .await?;
+    let rows = &response["data"]["add_Agent"];
+    let cid = rows[0]["_version"][0]["cid"].as_str().expect("genesis CID");
+    let (block, signature) = node
+        .authorized_signed_block_bytes(cid, Some(actor.did()))
+        .await?;
+    let block = defra_core::block::Block::from_dag_cbor(&block)?;
+    let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
+    let signer = db::block::verify::verified_signature_signer_did(&block, &signature)
+        .map_err(anyhow::Error::msg)?;
+    assert_eq!(signer, actor.did());
+    assert_ne!(node.node_identity_did(), Some(actor.did()));
+    assert!(rows[0]["_docID"].is_string());
+    node.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
 ) -> anyhow::Result<()> {
     use crate::store::identity::NodeIdentity;
