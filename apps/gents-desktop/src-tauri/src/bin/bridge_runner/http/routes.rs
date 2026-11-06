@@ -146,7 +146,16 @@ pub(super) async fn handle_request(
         }
         ("GET", "/desktop/packs/installed") => {
             let home = fixture.node_home().to_path_buf();
-            json(run_pack(runtime, move || packs::installed(home, None)).await?)
+            let node_did = fixture.node_did().to_owned();
+            let access = fixture
+                .desktop_core()
+                .local_home_operator_access(&node_did, &home)?;
+            json(
+                run_pack(runtime, move || {
+                    packs::installed_with_access(home, None, access, node_did)
+                })
+                .await?,
+            )
         }
         ("POST", "/desktop/packs/search") => {
             let query = decode::<PackSearchRequest>(&request.body, "decoding pack search")?;

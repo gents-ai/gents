@@ -17,12 +17,21 @@ pub(crate) async fn outdated_packs(
     } else {
         None
     };
-    let installed = gents::pack::installed_packs(
+    outdated_packs_on(
         scope.graphql.is_none().then_some(home.as_path()),
         node.as_ref()
             .map(|(access, owner)| (access, owner.as_str())),
+        registry,
     )
-    .await?;
+    .await
+}
+
+pub(crate) async fn outdated_packs_on(
+    home: Option<&std::path::Path>,
+    node: Option<(&gents::ConfigAccess, &str)>,
+    registry: Option<&str>,
+) -> Result<Vec<Value>> {
+    let installed = gents::pack::installed_packs(home, node).await?;
     let client = RegistryClient::new(resolve_registry_url(registry));
     let mut report = Vec::new();
     for pack in installed {

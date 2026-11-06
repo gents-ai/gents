@@ -48,6 +48,22 @@ pub async fn installed(home: PathBuf, registry: Option<String>) -> Result<Value>
     Ok(serde_json::json!({ "packs": packs }))
 }
 
+/// Lists a home's installations using the calling operator's authenticated access.
+pub async fn installed_with_access(
+    home: PathBuf,
+    registry: Option<String>,
+    access: ConfigAccess,
+    node_did: String,
+) -> Result<Value> {
+    let packs = command::update::outdated_packs_on(
+        Some(&home),
+        Some((&access, &node_did)),
+        registry.as_deref(),
+    )
+    .await?;
+    Ok(serde_json::json!({ "packs": packs }))
+}
+
 pub async fn search(registry: Option<String>, query: String, page: u32) -> Result<Value> {
     capture_report(command::registry::search(PackSearchArgs {
         query: Some(query),
