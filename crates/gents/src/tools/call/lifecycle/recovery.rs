@@ -212,7 +212,7 @@ impl super::ToolCallLifecycle {
         executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
     ) -> Result<TerminalParentToolReport> {
         let accesses = recovery_accesses(node, node_did, identities)?;
-        let rows = load_running_tool_call_rows_for_agent(node, node_did).await?;
+        let rows = load_running_tool_call_rows_for_agent(node_did, &accesses).await?;
         let mut report = TerminalParentToolReport::default();
 
         for row in rows {
@@ -225,8 +225,7 @@ impl super::ToolCallLifecycle {
                 continue;
             }
 
-            let Some((access, parent)) =
-                selected_running_parent(node, node_did, &row, &accesses).await?
+            let Some((access, parent)) = selected_running_parent(node_did, &row, &accesses).await?
             else {
                 continue;
             };
@@ -285,18 +284,15 @@ impl super::ToolCallLifecycle {
     ) -> Result<OrphanedBackgroundToolReport> {
         let accesses = recovery_accesses(node, node_did, identities)?;
         executions.recover_retained_foreground().await;
-        let rows = load_running_tool_call_rows_for_agent(node, node_did).await?;
+        let rows = load_running_tool_call_rows_for_agent(node_did, &accesses).await?;
         let mut report = OrphanedBackgroundToolReport::default();
-        let mut running_background = rapidhash::RapidHashSet::default();
 
         for row in rows {
             if row.node_did.as_deref() != Some(node_did) || !is_background_tool_row(&row) {
                 continue;
             }
-            running_background.insert(row.doc_id.clone());
             let registered = executions.contains(&row.tool_call_id, &row.doc_id).await;
-            let Some((access, parent)) =
-                selected_running_parent(node, node_did, &row, &accesses).await?
+            let Some((access, parent)) = selected_running_parent(node_did, &row, &accesses).await?
             else {
                 if unresolved_parent_warning_due(&row.doc_id) {
                     tracing::warn!(doc_id = %row.doc_id, tool_call_id = %row.tool_call_id, "background tool parent or validated agent is unavailable");
@@ -469,9 +465,8 @@ impl super::ToolCallLifecycle {
             );
         }
 
-        // A record whose execution is neither live here nor running is left
-        // from a crash after settlement, or from a group that outlived its
-        // settled row. Stop what is still proven owned, then forget it.
+        // Filtered absence does not prove settlement. Retain an unresolved
+        // process record until its selected Agent can observe the terminal row.
         let records = {
             let executions = executions.clone();
             tokio::task::spawn_blocking(move || executions.process_record_list())
@@ -479,12 +474,29 @@ impl super::ToolCallLifecycle {
                 .context("enumerating retained background process records")?
         };
         for record in records {
-            if running_background.contains(&record.tool_call_doc_id)
-                || executions
-                    .contains(&record.tool_call_id, &record.tool_call_doc_id)
-                    .await
+            if executions
+                .contains(&record.tool_call_id, &record.tool_call_doc_id)
+                .await
             {
                 continue;
+            }
+            match selected_agent_observes_terminal_tool(
+                &accesses,
+                node_did,
+                &record.tool_call_doc_id,
+                &record.tool_call_id,
+            )
+            .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::warn!(doc_id = %record.tool_call_doc_id, "retaining unresolved background process record");
+                    continue;
+                }
+                Err(error) => {
+                    tracing::warn!(doc_id = %record.tool_call_doc_id, %error, "retaining background process record after failed terminal observation");
+                    continue;
+                }
             }
             let (before, after) = record.identity.stop().await;
             if crate::tools::exec::ProcessStopOutcome::from_observations(before, after)
@@ -594,7 +606,7 @@ impl super::ToolCallLifecycle {
         identities: &RecoveryIdentities,
     ) -> Result<BackgroundCompletionSideEffectReport> {
         let accesses = recovery_accesses(node, node_did, identities)?;
-        let rows = load_pending_background_completion_rows(node, node_did).await?;
+        let rows = load_pending_background_completion_rows(node_did, &accesses).await?;
         let mut report = BackgroundCompletionSideEffectReport::default();
 
         for row in rows {
@@ -621,35 +633,29 @@ impl super::ToolCallLifecycle {
                 session_id,
                 row.requester_did.as_deref(),
             );
-            let Some(parent) =
-                lookup_parent_request(node, node_did, request_id, Some((request_doc_id, &scope)))
+            let Some((access, _parent)) =
+                selected_parent_request(&accesses, node_did, request_id, request_doc_id, &scope)
                     .await?
             else {
                 continue;
             };
-            let Some(access) = parent
-                .agent_did
-                .as_deref()
-                .and_then(|did| accesses.get(did))
-            else {
-                continue;
-            };
-            let output = match crate::tools::background::status::canonical_tool_output(
-                node,
-                &row.doc_id,
-                request_doc_id,
-                session_id,
-                node_did,
-                row.requester_did.as_deref(),
-            )
-            .await
-            {
-                Ok(output) => output,
-                Err(error) => {
-                    tracing::warn!(doc_id = %row.doc_id, error = %error, "canonical background output is unresolved");
-                    continue;
-                }
-            };
+            let output =
+                match crate::tools::background::status::observe_canonical_tool_output_with_access(
+                    access,
+                    &row.doc_id,
+                    request_doc_id,
+                    session_id,
+                    node_did,
+                    row.requester_did.as_deref(),
+                )
+                .await
+                {
+                    Ok(output) => output.into_text(),
+                    Err(error) => {
+                        tracing::warn!(doc_id = %row.doc_id, error = %error, "canonical background output is unresolved");
+                        continue;
+                    }
+                };
             // A session-message completion returns its result to this session
             // (Lean `CausalHop.return_keeps_caller_hop`).
             let wake =
@@ -945,7 +951,7 @@ async fn recover_stuck_running_tool_calls(
     accesses: &RecoveryAccesses,
     executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
 ) -> Result<usize> {
-    let rows = load_running_tool_call_rows_for_agent(node, node_did).await?;
+    let rows = load_running_tool_call_rows_for_agent(node_did, accesses).await?;
 
     let mut recovered = 0;
     for row in rows {
@@ -959,8 +965,7 @@ async fn recover_stuck_running_tool_calls(
         }
 
         let deadline_at = parse_datetime(row.deadline_at.as_deref());
-        let Some((access, parent)) =
-            selected_running_parent(node, node_did, &row, accesses).await?
+        let Some((access, parent)) = selected_running_parent(node_did, &row, accesses).await?
         else {
             continue;
         };
@@ -1055,16 +1060,19 @@ async fn append_recovered_background_tool_completion(
 }
 
 async fn load_running_tool_call_rows_for_agent(
-    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
+    accesses: &RecoveryAccesses,
 ) -> Result<Vec<RunningToolCallRow>> {
     let escaped = escape_graphql_string(node_did);
-    load_running_tool_call_rows_with_filter(node, &format!(r#", node_did: {{ _eq: "{escaped}" }}"#))
-        .await
+    load_running_tool_call_rows_with_filter(
+        accesses,
+        &format!(r#", node_did: {{ _eq: "{escaped}" }}"#),
+    )
+    .await
 }
 
 async fn load_running_tool_call_rows_with_filter(
-    node: &std::sync::Arc<EmbeddedNode>,
+    accesses: &RecoveryAccesses,
     extra_filter: &str,
 ) -> Result<Vec<RunningToolCallRow>> {
     let query = format!(
@@ -1089,33 +1097,23 @@ async fn load_running_tool_call_rows_with_filter(
     }}"#
     );
 
-    let resp = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "load_running_tool_call_rows_with_filter",
-    )
-    .await?;
-
-    let values = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let mut rows = Vec::with_capacity(values.len());
-    for value in values {
-        match serde_json::from_value::<RunningToolCallRow>(value.clone()) {
-            Ok(row) => rows.push(row),
-            Err(error) => {
-                tracing::warn!(
-                    doc_id = value
-                        .get("_docID")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or(""),
+    let mut rows = Vec::new();
+    let mut seen = rapidhash::RapidHashSet::default();
+    for access in accesses.values() {
+        let response = access.execute(&query).await?;
+        let values = response
+            .pointer("/data/AgentToolCall")
+            .and_then(serde_json::Value::as_array)
+            .context("running tool-call recovery query omitted rows")?;
+        for value in values {
+            match serde_json::from_value::<RunningToolCallRow>(value.clone()) {
+                Ok(row) if seen.insert(row.doc_id.clone()) => rows.push(row),
+                Ok(_) => {}
+                Err(error) => tracing::warn!(
+                    doc_id = value.get("_docID").and_then(serde_json::Value::as_str).unwrap_or(""),
                     error = %error,
                     "skipping malformed running tool-call row during recovery"
-                );
+                ),
             }
         }
     }
@@ -1123,8 +1121,8 @@ async fn load_running_tool_call_rows_with_filter(
 }
 
 async fn load_pending_background_completion_rows(
-    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
+    accesses: &RecoveryAccesses,
 ) -> Result<Vec<TerminalBackgroundToolRow>> {
     let node_did = escape_graphql_string(node_did);
     let query = format!(
@@ -1153,31 +1151,24 @@ async fn load_pending_background_completion_rows(
             }}
         }}"#
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "load_pending_background_completion_rows",
-    )
-    .await?;
-    let values = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut rows = Vec::with_capacity(values.len());
-    for value in values {
-        match serde_json::from_value::<TerminalBackgroundToolRow>(value.clone()) {
-            Ok(row) => rows.push(row),
-            Err(error) => tracing::warn!(
-                doc_id = value
-                    .get("_docID")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(""),
-                error = %error,
-                "skipping malformed terminal background row during side-effect recovery"
-            ),
+    let mut rows = Vec::new();
+    let mut seen = rapidhash::RapidHashSet::default();
+    for access in accesses.values() {
+        let response = access.execute(&query).await?;
+        let values = response
+            .pointer("/data/AgentToolCall")
+            .and_then(serde_json::Value::as_array)
+            .context("background completion recovery query omitted rows")?;
+        for value in values {
+            match serde_json::from_value::<TerminalBackgroundToolRow>(value.clone()) {
+                Ok(row) if seen.insert(row.doc_id.clone()) => rows.push(row),
+                Ok(_) => {}
+                Err(error) => tracing::warn!(
+                    doc_id = value.get("_docID").and_then(serde_json::Value::as_str).unwrap_or(""),
+                    error = %error,
+                    "skipping malformed terminal background row during side-effect recovery"
+                ),
+            }
         }
     }
     Ok(rows)
@@ -1218,7 +1209,7 @@ fn background_completion_projection(
 /// `exact` narrows the lookup to one physical request (`_docID`) within an
 /// exact session scope filter.
 async fn lookup_parent_request(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     node_did: &str,
     request_id: &str,
     exact: Option<(&str, &str)>,
@@ -1242,17 +1233,10 @@ async fn lookup_parent_request(
         }} }}"#
     );
 
-    let resp = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "lookup_parent_request",
-    )
-    .await?;
+    let resp = access.execute(&query).await?;
 
     let value = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
+        .pointer("/data/AgentRequest")
         .context("AgentRequest field missing from parent recovery query")?;
     let rows: Vec<AgentRequestRow> = serde_json::from_value(value.clone())
         .context("decode parent AgentRequest rows for tool-call recovery")?;
@@ -1264,7 +1248,6 @@ async fn lookup_parent_request(
 }
 
 async fn selected_running_parent<'a>(
-    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     row: &RunningToolCallRow,
     accesses: &'a RecoveryAccesses,
@@ -1283,19 +1266,94 @@ async fn selected_running_parent<'a>(
         &row.session_id,
         row.requester_did.as_deref(),
     );
-    let Some(parent) =
-        lookup_parent_request(node, node_did, request_id, Some((request_doc_id, &scope))).await?
-    else {
-        return Ok(None);
-    };
-    let Some(access) = parent
-        .agent_did
-        .as_deref()
-        .and_then(|did| accesses.get(did))
-    else {
-        return Ok(None);
-    };
-    Ok(Some((access, parent)))
+    selected_parent_request(accesses, node_did, request_id, request_doc_id, &scope).await
+}
+
+async fn selected_parent_request<'a>(
+    accesses: &'a RecoveryAccesses,
+    node_did: &str,
+    request_id: &str,
+    request_doc_id: &str,
+    scope: &str,
+) -> Result<Option<(&'a crate::ConfigAccess, AgentRequestRow)>> {
+    for (agent_did, access) in accesses {
+        let Some(parent) =
+            lookup_parent_request(access, node_did, request_id, Some((request_doc_id, scope)))
+                .await?
+        else {
+            continue;
+        };
+        if parent.agent_did.as_deref() == Some(agent_did.as_str()) {
+            return Ok(Some((access, parent)));
+        }
+    }
+    Ok(None)
+}
+
+async fn selected_agent_observes_terminal_tool(
+    accesses: &RecoveryAccesses,
+    node_did: &str,
+    tool_doc_id: &str,
+    tool_call_id: &str,
+) -> Result<bool> {
+    #[derive(Deserialize)]
+    struct ObservedTool {
+        #[serde(flatten)]
+        row: RunningToolCallRow,
+        lifecycle_state: Option<String>,
+    }
+    let query = format!(
+        r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{
+            _docID request_id request_doc_id requester_did node_did session_id
+            tool_call_id tool_name deadline_at await_mode cancel_cause job_pin lifecycle_state
+        }} }}"#,
+        escape_graphql_string(tool_doc_id)
+    );
+    for (agent_did, access) in accesses {
+        let response = access.execute(&query).await?;
+        let values = response
+            .pointer("/data/AgentToolCall")
+            .and_then(serde_json::Value::as_array)
+            .context("terminal tool observation omitted rows")?;
+        anyhow::ensure!(values.len() <= 1, "terminal tool observation is ambiguous");
+        let Some(value) = values.first() else {
+            continue;
+        };
+        let observed: ObservedTool = serde_json::from_value(value.clone())?;
+        let row = observed.row;
+        if row.doc_id != tool_doc_id
+            || row.tool_call_id != tool_call_id
+            || row.node_did.as_deref() != Some(node_did)
+            || !observed
+                .lifecycle_state
+                .as_deref()
+                .and_then(ToolCallState::from_persisted)
+                .is_some_and(ToolCallState::is_terminal)
+        {
+            continue;
+        }
+        let (Some(request_id), Some(request_doc_id)) = (
+            non_empty(row.request_id.as_deref()),
+            non_empty(row.request_doc_id.as_deref()),
+        ) else {
+            continue;
+        };
+        let scope = crate::session::session_scope_filter(
+            node_did,
+            &row.session_id,
+            row.requester_did.as_deref(),
+        );
+        let Some(parent) =
+            lookup_parent_request(access, node_did, request_id, Some((request_doc_id, &scope)))
+                .await?
+        else {
+            continue;
+        };
+        if parent.agent_did.as_deref() == Some(agent_did.as_str()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 async fn load_recovery_lifecycle(
@@ -1653,5 +1711,96 @@ impl RecoveryOutcome {
                 }
                 Self::Failed | Self::ProcessLost => None,
             })
+    }
+}
+
+#[cfg(test)]
+mod actor_read_tests {
+    use super::*;
+    use crate::tools::call::lifecycle::admission_fixture::{
+        published_admission_with_owner, PublishedAdmissionOptions,
+    };
+
+    #[tokio::test]
+    async fn recovery_discovers_user_owned_tool_and_parent_as_selected_agent() {
+        let (mut admission, parent) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "recovery-selected-agent-observation".into(),
+            tool_name: Some("bash".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let node = admission.node.clone();
+        let doc_id = admission.tool.doc_id().unwrap().to_owned();
+        let query = format!(
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(&doc_id),
+            escape_graphql_string(&parent.request().doc_id),
+        );
+        let node_view = crate::ConfigAccess::local(node.clone())
+            .execute(&query)
+            .await;
+        if let Ok(response) = node_view {
+            assert_eq!(response["data"]["AgentToolCall"], serde_json::json!([]));
+            assert_eq!(response["data"]["AgentRequest"], serde_json::json!([]));
+        }
+
+        let identities: Vec<std::sync::Arc<dyn crate::store::identity::NodeIdentity>> =
+            vec![std::sync::Arc::new(
+                admission.tool.managed_agent_signer().unwrap(),
+            )];
+        let accesses = recovery_accesses(&node, &admission.node_did, &identities).unwrap();
+        let rows = load_running_tool_call_rows_for_agent(&admission.node_did, &accesses)
+            .await
+            .unwrap();
+        let row = rows.iter().find(|row| row.doc_id == doc_id).unwrap();
+        let (access, selected) = selected_running_parent(&admission.node_did, row, &accesses)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            selected.doc_id.as_deref(),
+            Some(parent.request().doc_id.as_str())
+        );
+        assert_eq!(access.actor_did().as_deref(), selected.agent_did.as_deref());
+        let tool_call_id = admission.tool.tool_call_id().to_owned();
+        assert!(!selected_agent_observes_terminal_tool(
+            &accesses,
+            &admission.node_did,
+            &doc_id,
+            &tool_call_id
+        )
+        .await
+        .unwrap());
+        assert!(!selected_agent_observes_terminal_tool(
+            &RecoveryAccesses::new(),
+            &admission.node_did,
+            &doc_id,
+            &tool_call_id
+        )
+        .await
+        .unwrap());
+        assert!(admission
+            .tool
+            .complete_owned("finished", None)
+            .await
+            .unwrap());
+        assert!(selected_agent_observes_terminal_tool(
+            &accesses,
+            &admission.node_did,
+            &doc_id,
+            &tool_call_id
+        )
+        .await
+        .unwrap());
+        assert!(!selected_agent_observes_terminal_tool(
+            &accesses,
+            &admission.node_did,
+            &doc_id,
+            "wrong-tool"
+        )
+        .await
+        .unwrap());
+        node.shutdown().await.unwrap();
     }
 }
