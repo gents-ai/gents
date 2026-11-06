@@ -1409,8 +1409,18 @@ mod tests {
         let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         }));
-        let access =
-            ConfigAccess::graphql_as(format!("http://{address}/api/v0/graphql"), identity.did());
+        let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+            identity.private_key_bytes(),
+        )
+        .unwrap();
+        let access = ConfigAccess::Graphql(
+            gents::store::config_client::GraphqlEndpoint::as_principal(
+                format!("http://{address}/api/v0/graphql"),
+                identity.did(),
+            )
+            .with_client_signing_capability(capability)
+            .unwrap(),
+        );
         let row = view("s1", "call-1", "alpha", JobState::Running, 1);
         let error = control_job_remote(&access, &row, JobControlKind::Stop)
             .await
