@@ -1358,7 +1358,8 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
 
 #[tokio::test]
 async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
-    let access = access().await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
     let home = tempfile::tempdir().unwrap();
     let current = identity("2");
     super::super::write_home_install(
@@ -1379,7 +1380,7 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
     .unwrap();
     record_plugin_store_change(
         &access,
-        OWNER,
+        owner,
         home.path(),
         "acme/demo",
         Some(&identity("1")),
@@ -1398,15 +1399,34 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
         response["data"]["PackInstallation"][0]["digest"],
         current.digest
     );
+    let record_id = access
+        .execute("{ PackInstallation { _docID } }")
+        .await
+        .unwrap()["data"]["PackInstallation"][0]["_docID"]
+        .clone();
     super::super::forget_home_install(home.path(), "acme/demo").unwrap();
-    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
+    record_plugin_store_change(&access, owner, home.path(), "acme/demo", None)
         .await
         .unwrap();
     let response = access
         .execute("{ PackInstallation { _docID } }")
         .await
         .unwrap();
-    assert_eq!(response["data"]["PackInstallation"], json!([]));
+    let retained = crate::lean_vocab_test::lean_plugin_reference_cases()
+        .iter()
+        .find(|case| !case["root_ships"].as_array().unwrap().is_empty())
+        .unwrap()["retain_notification_record"]
+        .as_bool()
+        .unwrap();
+    assert_eq!(
+        !response["data"]["PackInstallation"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        retained
+    );
+    assert_eq!(response["data"]["PackInstallation"][0]["_docID"], record_id);
+    node.shutdown().await.expect("node shutdown");
 }
 
 const NOTE_SDL: &str = "type FixtureNote @index(fields: [\"text\", \"job_row_doc_id\"], unique: true) {\n  text: String\n  job_row_doc_id: String\n  chain_root_doc_id: String\n}\ntype Other { key: String @index(unique: true) }\n";
