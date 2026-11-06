@@ -131,7 +131,8 @@ theorem foreign_source_reconciles_disabled (state : ToolGrantProjection)
 theorem managed_reconcile_preserves_direct (state : ToolGrantProjection)
     (source : ToolGrantSource) (derived : String) (authorized committed : Bool) :
     (reconcileManagedToolGrant state source derived authorized committed).direct = state.direct := by
-  simp [reconcileManagedToolGrant, changeToolGrant]
+  unfold reconcileManagedToolGrant changeToolGrant
+  split <;> simp
 
 /-- Rebinding a tool replaces its old source and adds its new one in the same
 native transaction, so neither a failed removal nor a failed addition publishes
