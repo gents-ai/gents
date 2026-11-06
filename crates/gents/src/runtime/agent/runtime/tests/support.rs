@@ -99,6 +99,14 @@ pub(super) async fn plugin_runtime_fixture(
             })
         })
         .await?;
+    let runtime_access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+    crate::inference::backends::registry::set_backend_probe_status_as(
+        &runtime_access,
+        runtime.did(),
+        backend_id,
+        "healthy",
+    )
+    .await?;
     let observed = user_access.execute("{ Node { _docID node_did } }").await?;
     let node_doc = observed["data"]["Node"]
         .as_array()

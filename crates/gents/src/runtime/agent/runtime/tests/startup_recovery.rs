@@ -252,6 +252,29 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
     );
 }
 
+async fn delete_tools_document(access: &crate::ConfigAccess, tools_id: &str) {
+    let response = access
+        .execute(&format!(
+            r#"{{ Tools(filter: {{ tools_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
+            escape_graphql_string(tools_id),
+        ))
+        .await
+        .unwrap();
+    let doc_id = response["data"]["Tools"][0]["_docID"]
+        .as_str()
+        .expect("Tools document to delete")
+        .to_owned();
+    let doc_id = doc_id.as_str();
+    access
+        .transact_write("test.delete_tools_document", |txn| {
+            Box::pin(async move {
+                txn.delete_configuration_document("Tools", doc_id).await
+            })
+        })
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config() {
     let fixture = held_runtime_fixture(
@@ -264,6 +287,17 @@ async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config()
     let identity = fixture.db.node_identity.clone();
     let default_agent_did = fixture.agent.did().to_owned();
     let context_id = format!("{default_agent_did}:context");
+    // A selection edge may only name a Tools document that exists. The dangling
+    // state is reached the way it can occur in a node: publish the reference
+    // while the document is present, then delete the document.
+    write_runtime_documents(
+        &fixture.user_access,
+        vec![(
+            crate::Collection::Tools,
+            serde_json::json!({"node_did": identity.did(), "tools_id": "missing-tools"}),
+        )],
+    )
+    .await;
     merge_fixture_document(
         &fixture.user_access,
         "test.invalid_context",
@@ -273,6 +307,7 @@ async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config()
         serde_json::json!({"tools_id": "missing-tools"}),
     )
     .await;
+    delete_tools_document(&fixture.user_access, "missing-tools").await;
 
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
@@ -741,6 +776,15 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
         fixture.agent.as_ref(),
     )
     .unwrap();
+    create_user_agent_session(
+        &fixture.user_access,
+        identity.did(),
+        Some(fixture.agent.did()),
+        "session-unavailable-runtime",
+        fixture.agent.did(),
+        Some(fixture.agent.did()),
+    )
+    .await;
     let request_doc_id = create_held_agent_request(
         &node,
         identity.did(),
@@ -1309,6 +1353,15 @@ async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
         broken_identity.as_ref(),
     )
     .unwrap();
+    create_user_agent_session(
+        &fixture.user_access,
+        &node_did,
+        Some(broken),
+        "session-missing-plugin",
+        broken,
+        Some(broken),
+    )
+    .await;
     let request_doc_id = create_held_agent_request(
         &node,
         &node_did,
