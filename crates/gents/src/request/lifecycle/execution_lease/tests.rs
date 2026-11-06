@@ -283,7 +283,7 @@ async fn commit_signer_identities(access: &crate::ConfigAccess, doc_id: &str) ->
 async fn request_row(access: &crate::ConfigAccess, doc_id: &str) -> AgentRequestRow {
     let response = access
         .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ _docID request_id node_did lifecycle_state execution_generation execution_lease_expires_at terminal_output terminalized_at failure_reason }} }}"#,
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ _docID request_id node_did agent_did lifecycle_state execution_generation execution_lease_expires_at terminal_output terminalized_at failure_reason }} }}"#,
             escape_graphql_string(doc_id),
         ))
         .await
