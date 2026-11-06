@@ -656,7 +656,18 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
         panic!("middle message must be unique")
     };
     let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
-    let deleted = client
+    // Ordinary mutations are not client-signed; the owning Agent removes the
+    // message it authored through its own managed signer.
+    let agent =
+        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+            .unwrap();
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let deleted = agent_access
         .write(
             "test.remove_middle_header",
             &format!(r#"mutation {{delete_AgentMessage(filter: {{_docID: {{_eq: "{doc}"}}}}) {{_docID}}}}"#,),
