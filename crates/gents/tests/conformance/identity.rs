@@ -402,13 +402,16 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
     use crate::lean_vocab_test::{
         lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
     };
+    use gents::store::config_client::{
+        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
+    };
     use gents::store::graphql::{created_doc_id, escape_graphql_string};
+    use gents::NodeIdentity;
 
     let case = lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("modeled configuration case");
-    let node = Arc::new(defra_node::Node::builder().build().await?);
     let owner = &case
         .objects
         .iter()
@@ -421,44 +424,6 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
         .find(|object| object.id == "agent-created")
         .unwrap()
         .owner;
-    let owner_access = gents::ConfigAccess::local_as(node.clone(), Did::new(owner)?);
-    let agent_access = gents::ConfigAccess::local_as(node.clone(), Did::new(agent)?);
-    let context = defra_core::RequestContext::default().with_identity(Some(owner.clone()));
-    let policy = node
-        .add_dac_policy_with_counter_as(&context, &case.policy_yaml, 0)
-        .await?;
-    assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
-    let policy = escape_graphql_string(&policy);
-    owner_access.add_collection(&format!(
-        "type Node @policy(id: \"{policy}\", resource: \"nodes\") {{ node_did: String }}\ntype Tools @policy(id: \"{policy}\", resource: \"configuration\") {{ node_did: String, tools_id: String, value: String }}"
-    )).await?;
-    let node_response = owner_access
-        .write(
-            "test.configuration.node",
-            "mutation { create_Node(input: {node_did: \"test-node\"}) { _docID } }",
-        )
-        .await?;
-    let node_doc = created_doc_id(&node_response, "Node")?;
-    let create = |id: &str| {
-        format!(
-        "mutation {{ create_Tools(input: {{ node_did: \"test-node\", tools_id: \"{}\", value: \"initial\" }}) {{ _docID }} }}",
-        escape_graphql_string(id)
-    )
-    };
-    let selected_response = owner_access
-        .write("test.configuration.selected", &create("selected"))
-        .await?;
-    let selected_doc = created_doc_id(&selected_response, "Tools")?;
-    let created_response = agent_access
-        .write("test.configuration.agent_owned", &create("agent-created"))
-        .await?;
-    let agent_doc = created_doc_id(&created_response, "Tools")?;
-    owner_access
-        .add_resource_relationship("Tools", &selected_doc, "parent", "nodes", &node_doc)
-        .await?;
-    agent_access
-        .add_resource_relationship("Tools", &agent_doc, "parent", "nodes", &node_doc)
-        .await?;
     let runtime = case
         .relations
         .iter()
@@ -471,8 +436,140 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
             _ => None,
         })
         .expect("modeled runtime reader");
-    owner_access
-        .add_actor_relationship("Node", &node_doc, "runtime_reader", &Did::new(runtime)?)
+    let sibling = case
+        .actions
+        .iter()
+        .find_map(|action| match action {
+            LeanIdentityAction::Check { actor, .. }
+                if actor != owner && actor != agent && actor != runtime =>
+            {
+                Some(actor)
+            }
+            _ => None,
+        })
+        .expect("modeled sibling");
+
+    let db = crate::support::test_signed_db("modeled-configuration-native").await;
+    let fixture = crate::support::managed_agent_fixture(&db).await;
+    let node = db.node.clone();
+    let node_did = db.node_identity.did();
+    let user_access = fixture.access.clone();
+    let agent_access = gents::ConfigAccess::local_managed_agent(
+        node.clone(),
+        Did::new(fixture.agent.did())?,
+        fixture.agent.as_ref(),
+    )?;
+    let sibling_binding = gents::store::identity::provision_agent_identity_authorized(
+        &node,
+        db.node_identity.as_ref(),
+        &Did::new(fixture.user.did())?,
+    )
+    .await?;
+    let sibling_signer = gents::store::identity::resolve_agent_identity(
+        db.node_identity.as_ref(),
+        &sibling_binding,
+    )?;
+    let sibling_access = gents::ConfigAccess::local_managed_agent(
+        node.clone(),
+        Did::new(sibling_signer.did())?,
+        sibling_signer.as_ref(),
+    )?;
+    let runtime_access = gents::ConfigAccess::local_as(node.clone(), Did::new(node_did)?);
+    for actual in [
+        fixture.user.did(),
+        fixture.agent.did(),
+        sibling_signer.did(),
+    ] {
+        for permission in [
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::CollectionGet,
+            NodePermission::DacRelationAdd,
+            NodePermission::DacRelationDelete,
+        ] {
+            runtime_access
+                .grant_node_permission(&Did::new(actual)?, permission)
+                .await?;
+        }
+    }
+    let actual_actor = |modeled: &str| -> anyhow::Result<Did> {
+        let actual = if modeled == owner {
+            fixture.user.did()
+        } else if modeled == agent {
+            fixture.agent.did()
+        } else if modeled == sibling {
+            sibling_signer.did()
+        } else if modeled == runtime {
+            node_did
+        } else {
+            anyhow::bail!("unknown modeled actor {modeled}")
+        };
+        Ok(Did::new(actual)?)
+    };
+    let access_for = |modeled: &str| -> anyhow::Result<gents::ConfigAccess> {
+        if modeled == owner {
+            Ok(user_access.clone())
+        } else if modeled == agent {
+            Ok(agent_access.clone())
+        } else if modeled == sibling {
+            Ok(sibling_access.clone())
+        } else if modeled == runtime {
+            Ok(runtime_access.clone())
+        } else {
+            anyhow::bail!("unknown modeled actor {modeled}")
+        }
+    };
+    assert_eq!(
+        case.policy_yaml,
+        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY
+    );
+    let selected =
+        serde_json::json!({"node_did":node_did,"tools_id":"selected", "display_name":"initial"});
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: gents::Collection::Tools,
+        add: selected.clone(),
+        update: selected,
+    }])?;
+    user_access
+        .transact_write("test.configuration.selected", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await?;
+    let query = |id: &str| {
+        format!(
+        "{{ Tools(filter: {{node_did: {{_eq: \"{}\"}}, tools_id: {{_eq: \"{}\"}}}}) {{_docID display_name}} }}",
+        escape_graphql_string(node_did), escape_graphql_string(id),
+    )
+    };
+    let selected_doc = user_access.execute(&query("selected")).await?["data"]["Tools"][0]["_docID"]
+        .as_str()
+        .expect("selected Tools physical ID")
+        .to_owned();
+    let created = agent_access.write("test.configuration.agent_owned", &format!(
+        "mutation {{ create_Tools(input: {{node_did: \"{}\", tools_id: \"agent-created\", display_name: \"initial\"}}) {{_docID}} }}",
+        escape_graphql_string(node_did),
+    )).await?;
+    let agent_doc = created_doc_id(&created, "Tools")?;
+    let node_doc = user_access
+        .transact_readonly("test.configuration.node", |txn| {
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>(
+                    gents::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        gents::Collection::Node,
+                        node_did,
+                        node_did,
+                    )
+                    .await?
+                    .expect("Node physical ID")
+                    .0,
+                )
+            })
+        })
+        .await?;
+    agent_access
+        .add_resource_relationship("Tools", &agent_doc, "parent", "nodes", &node_doc)
         .await?;
 
     for (step, action) in case.actions.iter().enumerate() {
@@ -481,24 +578,24 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
                 let LeanIdentitySubject::Actor { actor } = &relation.subject else {
                     anyhow::bail!("configuration relation must name an actor");
                 };
-                let actor = Did::new(actor)?;
+                let actual = actual_actor(actor)?;
                 if matches!(action, LeanIdentityAction::Grant { .. }) {
-                    owner_access
-                        .add_actor_relationship("Tools", &selected_doc, &relation.relation, &actor)
+                    user_access
+                        .add_actor_relationship("Tools", &selected_doc, &relation.relation, &actual)
                         .await?;
                     if relation.relation == "reader" {
                         assert!(agent_access
-                            .add_actor_relationship("Tools", &selected_doc, "writer", &actor)
+                            .add_actor_relationship("Tools", &selected_doc, "writer", &actual)
                             .await
                             .is_err());
                     }
                 } else {
-                    owner_access
+                    user_access
                         .delete_actor_relationship(
                             "Tools",
                             &selected_doc,
                             &relation.relation,
-                            &actor,
+                            &actual,
                         )
                         .await?;
                 }
@@ -510,13 +607,7 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
                 expected,
                 ..
             } if permission == "read" => {
-                let access = gents::ConfigAccess::local_as(node.clone(), Did::new(actor)?);
-                let response = access
-                    .execute(&format!(
-                        "{{ Tools(filter: {{ tools_id: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
-                        escape_graphql_string(id)
-                    ))
-                    .await?;
+                let response = access_for(actor)?.execute(&query(id)).await?;
                 let visible = !response["data"]["Tools"].as_array().unwrap().is_empty();
                 assert_eq!(visible, *expected, "modeled {actor} reading {id}");
             }
@@ -527,34 +618,45 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
                 expected,
                 ..
             } if permission == "update" => {
-                let access = gents::ConfigAccess::local_as(node.clone(), Did::new(actor)?);
+                let access = access_for(actor)?;
                 let doc_id = if id == "selected" {
                     &selected_doc
                 } else {
                     &agent_doc
                 };
-                let query = format!(
-                    "{{ Tools(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ value }} }}",
-                    escape_graphql_string(doc_id)
-                );
-                let before =
-                    owner_access.execute(&query).await?["data"]["Tools"][0]["value"].clone();
+                let before = user_access.execute(&query(id)).await?["data"]["Tools"][0]
+                    ["display_name"]
+                    .clone();
                 let value = format!("update-{step}");
-                let result = access.write("test.configuration.update", &format!(
-                    "mutation {{ update_Tools(docID: \"{}\", input: {{value: \"{}\"}}) {{ _docID }} }}",
-                    escape_graphql_string(doc_id), escape_graphql_string(&value)
-                )).await;
-                let updated = match result {
-                    Ok(response) => !response["data"]["update_Tools"]
-                        .as_array()
-                        .expect("update result rows")
-                        .is_empty(),
-                    Err(error) if !*expected && error.is_graphql_rejection() => false,
-                    Err(error) => return Err(error.into()),
+                let updated = if actor == owner {
+                    let document =
+                        serde_json::json!({"node_did":node_did,"tools_id":id,"display_name":value});
+                    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                        collection: gents::Collection::Tools,
+                        add: document.clone(),
+                        update: document,
+                    }])?;
+                    access
+                        .transact_write("test.configuration.update", |txn| {
+                            let plan = &plan;
+                            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                        })
+                        .await
+                        .is_ok()
+                } else {
+                    match access.write("test.configuration.update", &format!(
+                        "mutation {{ update_Tools(docID: \"{}\", input: {{display_name: \"{}\"}}) {{_docID}} }}",
+                        escape_graphql_string(doc_id), escape_graphql_string(&value),
+                    )).await {
+                        Ok(response) => !response["data"]["update_Tools"].as_array().expect("update rows").is_empty(),
+                        Err(error) if !*expected && error.is_graphql_rejection() => false,
+                        Err(error) => return Err(error.into()),
+                    }
                 };
                 assert_eq!(updated, *expected, "modeled {actor} updating {id}");
-                let after =
-                    owner_access.execute(&query).await?["data"]["Tools"][0]["value"].clone();
+                let after = user_access.execute(&query(id)).await?["data"]["Tools"][0]
+                    ["display_name"]
+                    .clone();
                 assert_eq!(
                     after,
                     if *expected {
@@ -568,52 +670,54 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
             _ => {}
         }
     }
-    let sibling = case
-        .actions
-        .iter()
-        .find_map(|action| match action {
-            LeanIdentityAction::Check { actor, .. }
-                if actor != owner && actor != agent && actor != runtime =>
-            {
-                Some(actor)
-            }
-            _ => None,
-        })
-        .expect("modeled sibling");
+    let actual_agent = Did::new(fixture.agent.did())?;
     for observation in &case.configuration_atomic_cases {
         let commit = observation["commit"].as_bool().unwrap();
-        let result = owner_access.transact_write("test.configuration.atomic", |txn| {
-            let node_doc = &node_doc;
-            Box::pin(async move {
-                let response = txn.execute("mutation { create_Tools(input: {node_did: \"test-node\", tools_id: \"atomic\"}) { _docID } }").await?;
-                let doc_id = created_doc_id(&response, "Tools")?;
-                txn.add_resource_relationship("Tools", &doc_id, "parent", "nodes", node_doc).await?;
-                txn.add_actor_relationship("Tools", &doc_id, "reader", &Did::new(agent)?).await?;
-                if !commit {
-                    anyhow::bail!("modeled abort");
-                }
-                Ok::<_, anyhow::Error>(())
+        let document = serde_json::json!({"node_did":node_did,"tools_id":"atomic"});
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: gents::Collection::Tools,
+            add: document.clone(),
+            update: document,
+        }])?;
+        let result = user_access
+            .transact_write("test.configuration.atomic", |txn| {
+                let plan = &plan;
+                let actual_agent = &actual_agent;
+                Box::pin(async move {
+                    apply_desired_state_plan(txn, plan).await?;
+                    let (doc, _) = gents::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        gents::Collection::Tools,
+                        node_did,
+                        "atomic",
+                    )
+                    .await?
+                    .expect("atomic Tools physical ID");
+                    txn.add_actor_relationship("Tools", &doc, "reader", actual_agent)
+                        .await?;
+                    if !commit {
+                        anyhow::bail!("modeled abort");
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })
             })
-        }).await;
+            .await;
         assert_eq!(
             result.is_ok(),
             commit,
             "modeled transaction outcome: {result:?}"
         );
-        for (actor, field) in [
+        for (modeled, field) in [
             (owner, "owner_read"),
             (agent, "agent_read"),
             (sibling, "sibling_read"),
         ] {
-            let access = gents::ConfigAccess::local_as(node.clone(), Did::new(actor)?);
-            let rows = access
-                .execute("{ Tools(filter: {tools_id: {_eq: \"atomic\"}}) { _docID } }")
-                .await?;
+            let rows = access_for(modeled)?.execute(&query("atomic")).await?;
             let visible = !rows["data"]["Tools"].as_array().unwrap().is_empty();
             assert_eq!(
                 visible,
                 observation[field].as_bool().unwrap(),
-                "modeled {actor} {field}"
+                "modeled {modeled} {field}"
             );
         }
     }
