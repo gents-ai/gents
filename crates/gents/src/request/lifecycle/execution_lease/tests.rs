@@ -44,37 +44,16 @@ where
 
 async fn test_node() -> (
     Arc<EmbeddedNode>,
-    tempfile::TempDir,
+    crate::support::TestDb,
     Arc<dyn crate::store::identity::NodeIdentity>,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
-    let dir = tempfile::tempdir().unwrap();
-    let identity: Arc<dyn crate::store::identity::NodeIdentity> = Arc::new(
-        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
-            .unwrap(),
-    );
-    let user =
-        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("user.key"), None)
-            .unwrap();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(identity.did())
-            .with_node_acp_enabled()
-            .data_path(dir.path().join("db"))
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::bootstrap_test_node(&node, identity.as_ref(), &user).await;
-    let agent = crate::test_support::install_test_agent_as(
-        &node,
-        identity.as_ref(),
-        &user,
-        "lease fixture",
-    )
-    .await;
-    (node, dir, identity, agent)
+    let db = crate::support::test_signed_db("execution-lease-fixture").await;
+    let (db, _user, _access, agent) =
+        crate::test_support::signed_test_node_from_db(db, "execution-lease-owner").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
+    (node, db, identity, agent)
 }
 
 #[tokio::test]
