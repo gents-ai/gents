@@ -11,6 +11,17 @@ where
     parsed
 }
 
+fn test_agent_identity() -> (
+    crate::KeyIdentity,
+    gents_protocol::agent_identity::AgentIdentityBinding,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime =
+        crate::KeyIdentity::load_or_create(directory.path().join("runtime"), None).unwrap();
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
+    (runtime, binding)
+}
+
 #[test]
 fn task_hooks_are_compact_explicit_and_preserve_order() {
     let authored = json!({"task_id":"code", "node_did":"did:key:test", "agent_did":"coder",
@@ -51,6 +62,7 @@ fn task_hook_skip_codes_round_trip_and_old_records_remain_readable() {
 
 #[test]
 fn null_defaults_are_compact_but_explicit_disable_and_tags_survive() {
+    use crate::NodeIdentity;
     let task: Task = serde_json::from_value(json!({"task_id":"code", "node_did":"did:key:test",
         "agent_did":"coder", "prompt_template":"work", "enabled":null,"hooks":null,"tags":null}))
     .unwrap();
@@ -65,20 +77,25 @@ fn null_defaults_are_compact_but_explicit_disable_and_tags_survive() {
     round_trip::<AgentContext>(
         json!({"context_id":"code", "node_did":"did:key:test", "tags":["coding"]}),
     );
-    round_trip::<Agent>(json!({"agent_did":"coder", "node_did":"did:key:test",
-        "inference_profile_id":"fast", "enabled":false, "tags":["coding"]}));
+    let (runtime, binding) = test_agent_identity();
+    round_trip::<Agent>(
+        json!({"agent_did":binding.agent_did, "creation_nonce":binding.creation_nonce, "node_did":runtime.did(),
+        "inference_profile_id":"fast", "enabled":false, "tags":["coding"]}),
+    );
 }
 
 #[test]
 fn required_scope_and_inference_selection_do_not_default() {
+    use crate::NodeIdentity;
     assert!(serde_json::from_value::<Task>(
         json!({"task_id":"code", "agent_did":"coder", "prompt_template":"work"})
     )
     .is_err());
-    assert!(serde_json::from_value::<Agent>(
-        json!({"agent_did":"coder", "node_did":"did:key:test"})
-    )
-    .is_err());
+    let (runtime, binding) = test_agent_identity();
+    let error = serde_json::from_value::<Agent>(json!({"agent_did":binding.agent_did,
+        "creation_nonce":binding.creation_nonce, "node_did":runtime.did()}))
+    .unwrap_err();
+    assert!(error.to_string().contains("inference_profile_id"));
     assert!(serde_json::from_value::<InferenceProfile>(
         json!({"profile_id":"fast", "backend_id":"api", "model_name":"model"})
     )
@@ -90,6 +107,7 @@ fn required_scope_and_inference_selection_do_not_default() {
 
 #[test]
 fn config_rejects_typos_wrong_tag_types_and_removed_fields() {
+    use crate::NodeIdentity;
     assert!(
         serde_json::from_value::<Task>(json!({"task_id":"code", "node_did":"did:key:test",
         "agent_did":"coder", "prompt_template":"work", "hook":[]}))
@@ -99,11 +117,12 @@ fn config_rejects_typos_wrong_tag_types_and_removed_fields() {
         json!({"context_id":"code", "node_did":"did:key:test", "tags":[7]})
     )
     .is_err());
-    assert!(
-        serde_json::from_value::<Agent>(json!({"agent_did":"coder", "node_did":"did:key:test",
+    let (runtime, binding) = test_agent_identity();
+    let error = serde_json::from_value::<Agent>(json!({"agent_did":binding.agent_did,
+        "creation_nonce":binding.creation_nonce, "node_did":runtime.did(),
         "inference_profile_id":"fast", "model_name":"old-override"}))
-        .is_err()
-    );
+    .unwrap_err();
+    assert!(error.to_string().contains("model_name"));
     assert!(serde_json::from_value::<Tools>(
         json!({"tools_id":"code", "node_did":"did:key:test", "host":{"bashh":{}}})
     )
