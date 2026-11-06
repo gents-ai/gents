@@ -202,7 +202,7 @@ async fn service_enablement_at_use_matches_model() {
     wrong_actor.configuration = crate::inference::resolved::ResolvedConfiguration::Documents(
         crate::inference::resolved::SelectedConfiguration::new(
             node.clone(),
-            identity::Did::new("did:test:other").unwrap(),
+            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
             vec![],
         ),
     );

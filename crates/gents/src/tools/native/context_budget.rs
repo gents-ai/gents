@@ -572,6 +572,18 @@ mod tests {
 
     use super::*;
 
+    fn agent_context_did() -> String {
+        crate::triggers::callback::test_agent_did()
+    }
+
+    fn agent_codex_did() -> String {
+        let root = crate::triggers::callback::test_root_identity();
+        crate::store::identity::derive_agent_identity(&root, &"d".repeat(64))
+            .unwrap()
+            .did()
+            .to_owned()
+    }
+
     #[test]
     fn omitted_reduction_collections_are_not_reported_as_zero() {
         let result = decode::<CompactionEnvelope>(
@@ -650,7 +662,8 @@ mod tests {
                 }) { _docID }
             }"#,
         ] {
-            let response = node.execute(mutation).await;
+            let mutation = mutation.replace("agent-context", &agent_context_did());
+            let response = node.execute(&mutation).await;
             assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
         }
 
@@ -680,6 +693,7 @@ mod tests {
             pre_compaction_input_tokens: None,
         };
         let accounting = escape_graphql_string(&serde_json::to_string(&accounting).unwrap());
+        let agent_context = escape_graphql_string(&agent_context_did());
         let response = node
             .execute(&format!(
                 r#"mutation {{
@@ -688,7 +702,7 @@ mod tests {
                         request_id: "request-context",
                         request_doc_id: "request-context-doc",
                         node_did: "did:key:z-context",
-                        agent_did: "agent-context",
+                        agent_did: "{agent_context}",
                         call_kind: "inference",
                         call_seq: 1,
                         queued_at: "2026-06-03T11:00:00Z",
@@ -726,14 +740,14 @@ mod tests {
     async fn seed_foreign_dispatches(node: &EmbeddedNode) {
         for (agent_did, session_id, request_id, call_id, queued_at) in [
             (
-                "agent-codex",
+                agent_codex_did(),
                 "session-codex",
                 "request-codex",
                 "codex-call",
                 "2026-06-03T12:00:00Z",
             ),
             (
-                "agent-context",
+                agent_context_did(),
                 "session-other",
                 "request-other",
                 "other-call",
@@ -824,7 +838,7 @@ mod tests {
         seed_foreign_dispatches(node.as_ref()).await;
         let tool = ContextBudgetTool::new(node, "did:key:z-context");
 
-        let output = call_as(&tool, "agent-context", "session-context").await;
+        let output = call_as(&tool, &agent_context_did(), "session-context").await;
         let parsed: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
 
         let last = parsed.last_request.expect("own request accounting");
@@ -833,7 +847,7 @@ mod tests {
         assert_eq!(parsed.max_tokens, Some(1000));
         assert_eq!(parsed.current_estimate, Some(650));
         assert_eq!(parsed.scope.node_did, "did:key:z-context");
-        assert_eq!(parsed.scope.agent_did, "agent-context");
+        assert_eq!(parsed.scope.agent_did, agent_context_did());
         assert_eq!(parsed.scope.session_id, "session-context");
         assert_eq!(parsed.session_compaction_count, 1);
         assert_eq!(parsed.request_reduction_count, 1);
@@ -848,7 +862,7 @@ mod tests {
         );
 
         // The other agent sees only its own dispatch, never the caller's.
-        let output = call_as(&tool, "agent-codex", "session-codex").await;
+        let output = call_as(&tool, &agent_codex_did(), "session-codex").await;
         let parsed: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
         assert_eq!(
             parsed.last_request.expect("codex accounting").call_id,
@@ -857,7 +871,7 @@ mod tests {
         assert_eq!(parsed.compaction_count, 1);
 
         // A different agent inside the caller's session gets no foreign accounting.
-        let output = call_as(&tool, "agent-codex", "session-context").await;
+        let output = call_as(&tool, &agent_codex_did(), "session-context").await;
         let parsed: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed.last_request, None);
     }
@@ -866,7 +880,7 @@ mod tests {
     async fn fallback_context_window_does_not_use_another_nodes_profile() {
         let node = seeded_node().await;
         let tool = ContextBudgetTool::new(Arc::clone(&node), "did:key:z-context");
-        let output = call_as(&tool, "agent-context", "session-without-accounting").await;
+        let output = call_as(&tool, &agent_context_did(), "session-without-accounting").await;
         let own: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
         assert_eq!(own.max_tokens, Some(1000));
 
@@ -883,10 +897,11 @@ mod tests {
                     input: { inference_profile_id: "foreign-profile" }) { _docID }
             }"#,
         ] {
-            let response = node.execute(mutation).await;
+            let mutation = mutation.replace("agent-context", &agent_context_did());
+            let response = node.execute(&mutation).await;
             assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
         }
-        let output = call_as(&tool, "agent-context", "session-without-accounting").await;
+        let output = call_as(&tool, &agent_context_did(), "session-without-accounting").await;
         let scoped: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
         assert_eq!(scoped.max_tokens, None);
     }
@@ -910,7 +925,7 @@ mod tests {
         let node = seeded_node().await;
         let tool = ContextBudgetTool::new(node, "did:key:z-context");
 
-        let output = call_as(&tool, "agent-context", "session-context").await;
+        let output = call_as(&tool, &agent_context_did(), "session-context").await;
         let parsed: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
 
         assert_eq!(parsed.max_tokens, Some(1000));
