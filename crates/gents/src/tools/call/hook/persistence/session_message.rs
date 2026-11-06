@@ -310,15 +310,23 @@ impl DefraSessionHook {
                 .await?;
         }
         if target.node_did == caller.node_did {
-            let max_request_hop =
+            let observation =
                 crate::request::admission::max_request_hop(&self.node, &caller.node_did).await?;
-            if let Some(max_request_hop) = max_request_hop.filter(|bound| {
-                !crate::request::lifecycle::request_hop_within_bound(Some(*bound), plan.hop())
-            }) {
-                refuse!(
+            match (observation.admit(plan.hop()), observation.bound()) {
+                (None, _) => refuse!(
+                    FailureClass::ServiceUnavailable,
+                    service_unavailable_payload(
+                        tool_name,
+                        "/session_id",
+                        "this node's max_request_hop could not be read".to_owned(),
+                        true,
+                    )
+                ),
+                (Some(false), Some(max_request_hop)) => refuse!(
                     FailureClass::ArgumentInvalid,
                     hop_exceeded_payload(tool_name, plan.hop(), max_request_hop)
-                );
+                ),
+                _ => {}
             }
         }
         let receipt = match crate::session::message::commit(

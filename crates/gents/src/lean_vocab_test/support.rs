@@ -2568,6 +2568,7 @@ pub(crate) struct LeanKillCase {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCausalHopContract {
     pub(crate) default_max_request_hop: Option<u32>,
+    pub(crate) cap_observation_cases: Vec<LeanCapObservationCase>,
     pub(crate) step_cases: Vec<LeanCausalHopStepCase>,
     pub(crate) chain_cases: Vec<LeanCausalHopChainCase>,
     pub(crate) call_cases: Vec<LeanCausalHopCallCase>,
@@ -2578,6 +2579,17 @@ pub(crate) struct LeanCausalHopContract {
     pub(crate) deferred_creation_cases: Vec<LeanDeferredCreationCase>,
     pub(crate) write_cases: Vec<LeanSessionMessageWriteCase>,
     pub(crate) session_target_cases: Vec<LeanSessionTargetCase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanCapObservationCase {
+    pub(crate) name: String,
+    pub(crate) visible: bool,
+    pub(crate) cap: Option<u32>,
+    pub(crate) hop: u32,
+    pub(crate) expected_bound: Option<u32>,
+    pub(crate) expected: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

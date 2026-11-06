@@ -566,9 +566,10 @@ pub use request::lifecycle::{
     build_signed_request, enqueue_local_steering_request, next_request_hop,
     request_hop_within_bound, task_session_title, write_manual_agent_request,
     write_manual_agent_request_with_conversation_title, BackgroundWakeRedriveReport,
-    EnqueuedAgentRequest, ParentLink, RecoveryReport, RequestHopCause, RequestIdentity,
-    RequestLifecycle, RequestSigner, RequestSpec, RetryLink, TerminalRedriveReport,
-    TerminalRepairReport, TERMINAL_REDRIVE_BATCH_LIMIT, TERMINAL_REDRIVE_CAP,
+    EnqueuedAgentRequest, ParentLink, RecoveryReport, RequestHopCapObservation, RequestHopCause,
+    RequestIdentity, RequestLifecycle, RequestSigner, RequestSpec, RetryLink,
+    TerminalRedriveReport, TerminalRepairReport, TERMINAL_REDRIVE_BATCH_LIMIT,
+    TERMINAL_REDRIVE_CAP,
 };
 pub use request::streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
 pub use request::watcher::{AgentRequest, DefraWatcher, Watcher};

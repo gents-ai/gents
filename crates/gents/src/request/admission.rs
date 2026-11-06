@@ -1209,19 +1209,18 @@ async fn request_hop_admitted(node: &EmbeddedNode, row: &AgentRequestRow) -> Adm
     let max_request_hop = max_request_hop(node, target)
         .await
         .map_err(AgentRequestAdmissionError::unavailable)?;
-    Ok(crate::request::lifecycle::request_hop_within_bound(
-        max_request_hop,
-        hop,
-    ))
+    Ok(max_request_hop.admit(hop).unwrap_or(false))
 }
 
 pub(crate) async fn max_request_hop(
     node: &EmbeddedNode,
     node_did: &str,
-) -> anyhow::Result<Option<u32>> {
-    Ok(crate::documents::load_node(node, node_did)
-        .await?
-        .and_then(|node_doc| node_doc.max_request_hop))
+) -> anyhow::Result<crate::request::lifecycle::RequestHopCapObservation> {
+    Ok(crate::request::lifecycle::RequestHopCapObservation::of(
+        crate::documents::load_node(node, node_did)
+            .await?
+            .map(|node_doc| node_doc.max_request_hop),
+    ))
 }
 
 fn request_workspace(row: &AgentRequestRow) -> crate::request::lifecycle::WorkspaceLineage {

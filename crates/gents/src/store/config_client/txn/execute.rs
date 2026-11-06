@@ -1015,6 +1015,31 @@ impl ConfigApplyTxn<'_> {
         node_did: &str,
         provider: &str,
     ) -> Result<defra_node::QueryResponse> {
+        self.execute_runtime_metadata_query(
+            node_did,
+            &crate::inference::auth::credential::runtime_account_query(node_did, provider),
+        )
+        .await
+    }
+
+    /// Read only the runtime Node's hop cap as this transaction's bound
+    /// runtime. Native document ACP still filters the Node row.
+    pub(super) async fn execute_runtime_hop_cap_query(
+        &self,
+        node_did: &str,
+    ) -> Result<defra_node::QueryResponse> {
+        self.execute_runtime_metadata_query(
+            node_did,
+            &super::runtime_hop_cap::runtime_hop_cap_query(node_did),
+        )
+        .await
+    }
+
+    async fn execute_runtime_metadata_query(
+        &self,
+        node_did: &str,
+        query: &str,
+    ) -> Result<defra_node::QueryResponse> {
         let TxnBackend::Embedded {
             node,
             agent_signer: Some(agent_signer),
@@ -1031,9 +1056,8 @@ impl ConfigApplyTxn<'_> {
         }
         let runtime =
             identity::Did::new(node_did).map_err(ConfigClientError::RelationshipTargetIdentity)?;
-        let query = crate::inference::auth::credential::runtime_account_query(node_did, provider);
-        graphql::ensure_query_document(&query)?;
-        self.execute_local_response_with_actor(&query, Some(runtime), None)
+        graphql::ensure_query_document(query)?;
+        self.execute_local_response_with_actor(query, Some(runtime), None)
             .await
     }
 
