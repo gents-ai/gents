@@ -28,8 +28,7 @@ where
         request: AgentRequest,
         shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<()> {
-        self.process_request_with_capacity(request, None, shutdown)
-            .await
+        Box::pin(self.process_request_with_capacity(request, None, shutdown)).await
     }
 
     /// `capacity` is the post-dequeue worker permit; this call owns it until
