@@ -37,8 +37,13 @@ where
 
 impl VerifiedPackTxn<'_, '_> {
     pub async fn read(&self, document: &str) -> Result<Value> {
+        self.read_with_variables(document, &serde_json::json!({}))
+            .await
+    }
+
+    pub async fn read_with_variables(&self, document: &str, variables: &Value) -> Result<Value> {
         super::graphql::ensure_query_document(document)?;
-        self.inner.execute(document).await
+        self.inner.execute_with_variables(document, variables).await
     }
 
     pub async fn apply(

@@ -250,11 +250,9 @@ pub async fn prepare_pack_evidence(
     scope: &PackApprovalScope,
     mutation: &PackMutation,
 ) -> Result<PackEvidence, PackEvidenceError> {
-    let capability = actor.client_signing_capability()?;
-    if capability.did() != actor.did() || access.actor_did().as_deref() != Some(actor.did()) {
+    if access.actor_did().as_deref() != Some(actor.did()) {
         return Err(PackEvidenceError::Mismatch);
     }
-    let schema = trusted_schema(mutation)?;
     let observed = match mutation {
         PackMutation::Create { .. } => None,
         PackMutation::Update { doc_id, .. } | PackMutation::Delete { doc_id, .. } => Some(
@@ -265,6 +263,39 @@ pub async fn prepare_pack_evidence(
                 .await?,
         ),
     };
+    prepare_pack_evidence_observed(actor, scope, mutation, observed).await
+}
+
+/// Use the caller's transaction snapshot, including its earlier staged writes.
+pub async fn prepare_pack_evidence_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    actor: &dyn NodeIdentity,
+    scope: &PackApprovalScope,
+    mutation: &PackMutation,
+) -> Result<PackEvidence, PackEvidenceError> {
+    if txn.actor_did() != Some(actor.did()) {
+        return Err(PackEvidenceError::Mismatch);
+    }
+    let observed = match mutation {
+        PackMutation::Create { .. } => None,
+        PackMutation::Update { doc_id, .. } | PackMutation::Delete { doc_id, .. } => {
+            Some(snapshot(txn, doc_id).await?)
+        }
+    };
+    prepare_pack_evidence_observed(actor, scope, mutation, observed).await
+}
+
+async fn prepare_pack_evidence_observed(
+    actor: &dyn NodeIdentity,
+    scope: &PackApprovalScope,
+    mutation: &PackMutation,
+    observed: Option<ClientUpdateSnapshot>,
+) -> Result<PackEvidence, PackEvidenceError> {
+    let capability = actor.client_signing_capability()?;
+    if capability.did() != actor.did() {
+        return Err(PackEvidenceError::Mismatch);
+    }
+    let schema = trusted_schema(mutation)?;
     let requested = mutation.clone();
     let signing = (*capability.config).clone();
     let graph =
@@ -624,7 +655,16 @@ mod tests {
             doc_id: created,
             input: json!({"version": "2"}),
         };
-        let evidence = prepare_pack_evidence(&access, &actor, &scope, &update).await?;
+        let evidence = access
+            .transact_readonly("test.pack_evidence.prepare_in_txn", |txn| {
+                let actor = &actor;
+                let scope = &scope;
+                let update = &update;
+                Box::pin(
+                    async move { prepare_pack_evidence_in_txn(txn, actor, scope, update).await },
+                )
+            })
+            .await?;
         access
             .transact_verified_pack("test.pack_evidence.update", |txn| {
                 let evidence = evidence.clone();

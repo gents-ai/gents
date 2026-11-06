@@ -22,7 +22,7 @@ mod client_agent_publication;
 mod client_pack_evidence;
 mod client_signed_agent;
 pub use client_pack_evidence::{
-    prepare_pack_evidence, prepare_pack_relationship, PackApprovalScope, PackEvidence,
+    prepare_pack_evidence, prepare_pack_evidence_in_txn, prepare_pack_relationship, PackApprovalScope, PackEvidence,
     PackEvidenceError, PackMutation, PackRelationship, PackRelationshipEvidence,
     PackRelationshipTarget,
 };
