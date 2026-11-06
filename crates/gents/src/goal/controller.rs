@@ -206,9 +206,11 @@ fn client_goal_claim_binding(
     goal: Option<&GoalDocument>,
     goal_id: Option<&str>,
     opening_verified: bool,
+    opening_agent_matches: bool,
 ) -> bool {
     goal.is_some_and(|goal| {
         opening_verified
+            && opening_agent_matches
             && goal_id == Some(goal.goal_id.as_str())
             && goal
                 .assignment_root_request_doc_id
@@ -220,14 +222,17 @@ fn client_goal_claim_binding(
 async fn client_goal_opening_verified_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     goal: Option<&GoalDocument>,
-) -> Result<bool> {
-    let Some(goal) = goal else { return Ok(false) };
+    agent_did: &str,
+) -> Result<(bool, bool)> {
+    let Some(goal) = goal else {
+        return Ok((false, false));
+    };
     let Some(root) = goal
         .assignment_root_request_doc_id
         .as_deref()
         .filter(|id| !id.is_empty())
     else {
-        return Ok(false);
+        return Ok((false, false));
     };
     let response = txn.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
@@ -240,10 +245,14 @@ async fn client_goal_opening_verified_in_txn(
             .cloned()
             .context("Goal opening query omitted rows")?,
     )?;
-    Ok(
-        matches!(rows.as_slice(), [row] if row.doc_id.as_deref() == Some(root)
-        && super::request_assignment::request_belongs_to_goal(goal, row)),
-    )
+    let [row] = rows.as_slice() else {
+        return Ok((false, false));
+    };
+    Ok((
+        row.doc_id.as_deref() == Some(root)
+            && super::request_assignment::request_belongs_to_goal(goal, row),
+        row.agent_did.as_deref() == Some(agent_did),
+    ))
 }
 
 pub(crate) async fn fence_goal_continuation_claim_in_txn(
@@ -261,11 +270,13 @@ pub(crate) async fn fence_goal_continuation_claim_in_txn(
     }
     let goal = load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id).await?;
     if client_goal {
-        let opening_verified = client_goal_opening_verified_in_txn(txn, goal.as_ref()).await?;
+        let (opening_verified, opening_agent_matches) =
+            client_goal_opening_verified_in_txn(txn, goal.as_ref(), &request.agent_did).await?;
         if !client_goal_claim_binding(
             goal.as_ref(),
             request.caused_by_trigger_id.as_deref(),
             opening_verified,
+            opening_agent_matches,
         ) {
             return Ok(GoalClaimFence::Rejected);
         }

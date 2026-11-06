@@ -46,6 +46,7 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
         "missing",
         "hidden",
         "stale",
+        "wrong-agent-root",
         "changed-edge",
         "changed-session",
     ] {
@@ -163,13 +164,74 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
                 .await
                 .unwrap();
             assert!(response["data"]["Goal"].as_array().unwrap().is_empty());
-        } else if scenario == "stale" {
+        } else if scenario == "stale" || scenario == "wrong-agent-root" {
+            let other = if scenario == "wrong-agent-root" {
+                let binding = crate::store::identity::provision_agent_identity_authorized(
+                    &f.node,
+                    f.identity.as_ref(),
+                    &user_did,
+                )
+                .await
+                .unwrap();
+                let node_did = f.identity.did();
+                let selected_agent = f.agent.did();
+                let (_, mut document) = user
+                    .transact_readonly("test.goal.source_agent", |txn| {
+                        Box::pin(async move {
+                            crate::store::config_client::read_desired_state_record_in_txn(
+                                txn,
+                                crate::Collection::Agent,
+                                node_did,
+                                selected_agent,
+                            )
+                            .await
+                        })
+                    })
+                    .await
+                    .unwrap()
+                    .unwrap();
+                document["agent_did"] = binding.agent_did.clone().into();
+                document["creation_nonce"] = binding.creation_nonce.clone().into();
+                document["display_name"] = "other Goal Agent".into();
+                let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                    crate::store::config_client::DesiredStateApplyDocument {
+                        collection: crate::Collection::Agent,
+                        add: document.clone(),
+                        update: document,
+                    },
+                ])
+                .unwrap();
+                user.transact_write("test.goal.other_agent", |txn| {
+                    let plan = &plan;
+                    Box::pin(async move {
+                        crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                    })
+                })
+                .await
+                .unwrap();
+                Some(binding)
+            } else {
+                None
+            };
+            let opening_agent = other
+                .as_ref()
+                .map_or(f.agent.did(), |binding| binding.agent_did.as_str());
+            let opening_agent_doc = if other.is_some() {
+                crate::goal::client_control::agent_document_for_test(
+                    &user,
+                    f.identity.did(),
+                    opening_agent,
+                )
+                .await
+            } else {
+                f.agent_doc_id.clone()
+            };
             let mut opening = AgentRequestCreate::base(
                 RequestPurpose::Normal,
                 "new-goal-opening",
                 f.identity.did(),
                 f.user.did(),
-                f.agent.did(),
+                opening_agent,
                 SESSION,
                 "new assignment",
                 "interactive",
@@ -177,7 +239,7 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
                 AgentRequestAdmissionRecord::client(f.user.did()),
             );
             opening.session_doc_id = Some(f.session_doc_id.clone());
-            opening.agent_doc_id = Some(f.agent_doc_id.clone());
+            opening.agent_doc_id = Some(opening_agent_doc.clone());
             opening.input.goal_assignment = Some(GoalAssignmentInput {
                 goal_id: f.goal.goal_id.clone(),
                 root_request_doc_id: None,
@@ -185,9 +247,30 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
             crate::sign_agent_request_create(f.user.as_ref(), &mut opening)
                 .await
                 .unwrap();
-            crate::request::lifecycle::submit_client_request(&user, &opening)
-                .await
-                .unwrap();
+            if other.is_some() {
+                let input = crate::request::lifecycle::client_request_input(&opening).unwrap();
+                let session_doc = &f.session_doc_id;
+                let selected_agent = f.agent.did();
+                user.transact_write("test.goal.foreign_agent_opening", |txn| {
+                    let input = &input;
+                    let agent_doc = &opening_agent_doc;
+                    Box::pin(async move {
+                        let response = txn.execute_client_signed_create(
+                            "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                            &serde_json::json!({"input": input}), gents_protocol::schemas::AGENT_REQUEST,
+                        ).await?;
+                        let doc = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                        txn.add_resource_relationship("AgentRequest", &doc, "parent", "agents", agent_doc).await?;
+                        txn.add_resource_relationship("AgentRequest", &doc, "session", "sessions", session_doc).await?;
+                        txn.add_actor_relationship("AgentRequest", &doc, "reader", &::identity::Did::new(selected_agent)?).await?;
+                        Ok::<_, anyhow::Error>(())
+                    })
+                }).await.unwrap();
+            } else {
+                crate::request::lifecycle::submit_client_request(&user, &opening)
+                    .await
+                    .unwrap();
+            }
             let new_root = request_rows(&user)
                 .await
                 .into_iter()
@@ -195,6 +278,20 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
                 .unwrap()
                 .doc_id
                 .unwrap();
+            if other.is_some() {
+                let visible = agent.execute(&format!(
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID agent_did }} }}"#,
+                    escape_graphql_string(&new_root),
+                )).await.unwrap();
+                let rows = visible["data"]["AgentRequest"].as_array().unwrap();
+                assert_eq!(
+                    rows.len(),
+                    1,
+                    "foreign opening must be visible to the selected Agent"
+                );
+                assert_eq!(rows[0]["agent_did"], opening_agent);
+                assert_ne!(opening_agent, f.agent.did());
+            }
             update_goal_root(&user, &f.goal.doc_id, Some(&new_root)).await;
         }
 
