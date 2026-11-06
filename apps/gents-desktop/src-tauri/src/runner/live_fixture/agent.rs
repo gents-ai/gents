@@ -53,11 +53,19 @@ pub(super) async fn spawn_live_node(
     std::fs::create_dir_all(&tool_root)
         .with_context(|| format!("creating live tool root {}", tool_root.display()))?;
     seed_repo_workspace(&tool_root)?;
+    let tool_root = gents::tools::surface::resolve_configured_tool_root(&tool_root)?;
 
     let node_did = home.identity.did().to_string();
-    let docs =
-        seed_live_agent_documents(home, config_actor, &node_did, name, backend, target_backend)
-            .await?;
+    let docs = seed_live_agent_documents(
+        home,
+        config_actor,
+        &node_did,
+        name,
+        &tool_root,
+        backend,
+        target_backend,
+    )
+    .await?;
     let agent = Gents::from_default_agent_documents(
         home.node.clone(),
         Arc::clone(&home.identity),
@@ -91,6 +99,7 @@ async fn seed_live_agent_documents(
     config_actor: &PrincipalIdentity,
     node_did: &str,
     agent_name: &str,
+    tool_root: &std::path::Path,
     backend: &LiveBackendConfig,
     target_backend: Option<&LiveBackendConfig>,
 ) -> Result<LiveAgentDocs> {
@@ -101,6 +110,9 @@ async fn seed_live_agent_documents(
     };
     use serde_json::json;
     let inference = inference::LiveInferenceSettings::from_env()?;
+    let tool_root = tool_root
+        .to_str()
+        .context("fixture tool root is not UTF-8")?;
     let config_actor_did = config_actor.did();
     anyhow::ensure!(
         home.node.node_identity_did() == Some(node_did),
@@ -200,11 +212,11 @@ async fn seed_live_agent_documents(
         ],
         "tools":[
             {"node_did":node_did,"tools_id":tools_id,"display_name":"Live Repo Audit Tools",
-             "host":{"files":{"mode":"ReadOnly"},"bash":{"mode":"Unrestricted","background_enabled":true}},
+             "host":{"root":tool_root,"files":{"mode":"ReadOnly"},"bash":{"mode":"Unrestricted","background_enabled":true}},
              "built_ins":{"enable_context_budget":true},
              "agents":{"target_ids":[target_id],"enabled":true}},
             {"node_did":node_did,"tools_id":target_tools_id,"display_name":"Live Repo Audit Target Tools",
-             "host":{"files":{"mode":"ReadOnly"}},"built_ins":{"enable_context_budget":true}}
+             "host":{"root":tool_root,"files":{"mode":"ReadOnly"}},"built_ins":{"enable_context_budget":true}}
         ],
         "agent_targets":[{"node_did":node_did,"target_id":target_id,"target_node_did":node_did,"agent_did":target_agent_did,"name":"repo-audit","description":"Local repository audit agent for the desktop live fixture"}],
         "inference_profiles":[
@@ -244,6 +256,16 @@ async fn seed_live_agent_documents(
             })
         })
         .await?;
+    gents::tools::surface::set_workspace_root_with_readers(
+        &access,
+        node_did,
+        tool_root,
+        Some("Live desktop fixture workspace"),
+        true,
+        &[agent_did.clone(), target_agent_did.clone()],
+    )
+    .await
+    .context("publishing fixture workspace root and Agent readers")?;
     Ok(LiveAgentDocs {
         agent_did,
         target_agent_did,
