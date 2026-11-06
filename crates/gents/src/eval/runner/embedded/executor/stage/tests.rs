@@ -125,9 +125,9 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
             .await
             .unwrap();
         bind_test_evaluator(&mut spec, &mut home);
-        let agent_did = install(&spec, &home, &dir.path().join("workspace"))
-            .await
-            .unwrap();
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let agent_did = install(&spec, &home, &workspace).await.unwrap();
         let (runtime, _agent) = boot_runtime(
             &home,
             home.identity.clone(),
