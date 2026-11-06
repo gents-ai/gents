@@ -1882,17 +1882,23 @@ resources:
 
     let root = tempfile::tempdir().unwrap();
     let key = root.path().join("identity-owner.key");
-    let (identity, reader) = tokio::task::spawn_blocking(move || {
+    let (identity, reader, denied) = tokio::task::spawn_blocking(move || {
         let identity = crate::KeyIdentity::load_or_create(key, None).unwrap();
         let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
         let reader = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
-        (identity, reader)
+        let denied_binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+        let denied =
+            crate::store::identity::resolve_agent_identity(&identity, &denied_binding).unwrap();
+        (identity, reader, denied)
     })
     .await
     .unwrap();
     let owner = identity.did();
     let reader_did = reader.did();
+    let denied_did = denied.did();
     assert_ne!(owner, reader_did);
+    assert_ne!(owner, denied_did);
+    assert_ne!(reader_did, denied_did);
     let node = Arc::new(
         EmbeddedNode::builder()
             .with_node_identity_did(owner)
@@ -1944,7 +1950,12 @@ resources:
         reader.as_ref(),
     )
     .unwrap();
-    let anonymous_access = ConfigAccess::local(node.clone());
+    let denied_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(denied_did).unwrap(),
+        denied.as_ref(),
+    )
+    .unwrap();
 
     fn count_rows<'txn, 'node>(
         txn: &'txn ConfigApplyTxn<'node>,
@@ -1958,7 +1969,7 @@ resources:
         })
     }
     for read_only in [false, true] {
-        for (access, expected) in [(&reader_access, 1), (&anonymous_access, 0)] {
+        for (access, expected) in [(&reader_access, 1), (&denied_access, 0)] {
             let visible = if read_only {
                 access
                     .transact_readonly("test.identity_readonly_query", count_rows)
@@ -1972,37 +1983,34 @@ resources:
             assert_eq!(visible, expected, "read_only={read_only}");
         }
     }
-    for (access, has_actor) in [(&reader_access, true), (&anonymous_access, false)] {
+    for (access, actor, authorized) in [
+        (&reader_access, reader_did, true),
+        (&denied_access, denied_did, false),
+    ] {
         let ids = vec![doc_id.clone()];
         let observations = access
             .transact_readonly("test.identity_owner_observation", move |txn| {
                 let ids = ids.clone();
                 Box::pin(async move {
                     let rows = txn.execute("{ IdentityFact { _docID } }").await?;
-                    let owners = txn.document_owners("IdentityFact", &ids).await;
-                    if !has_actor {
-                        assert!(matches!(
-                            owners,
-                            Err(super::ConfigClientError::RelationshipActorRequired)
-                        ));
-                        assert!(rows["data"]["IdentityFact"].as_array().unwrap().is_empty());
-                        return Ok::<_, anyhow::Error>(None);
-                    }
-                    let owners = owners?;
+                    assert_eq!(txn.actor_did(), Some(actor));
+                    let owners = txn.document_owners("IdentityFact", &ids).await?;
                     assert_eq!(owners.len(), 1);
                     assert_eq!(owners[0].doc_id, ids[0]);
-                    assert_eq!(rows["data"]["IdentityFact"].as_array().unwrap().len(), 1);
-                    Ok(Some(owners))
+                    assert_eq!(
+                        rows["data"]["IdentityFact"].as_array().unwrap().len(),
+                        usize::from(authorized)
+                    );
+                    Ok::<_, anyhow::Error>(owners)
                 })
             })
             .await
             .unwrap();
-        if let Some(observations) = observations {
-            assert_eq!(
-                observations[0].owner.as_ref().map(identity::Did::as_str),
-                Some(owner)
-            );
-        }
+        assert_eq!(observations[0].visible, authorized);
+        assert_eq!(
+            observations[0].owner.as_ref().map(identity::Did::as_str),
+            authorized.then_some(owner)
+        );
     }
     node.shutdown().await.expect("node shutdown");
 }
