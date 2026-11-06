@@ -86,7 +86,7 @@ impl Driver {
             .await
             .unwrap()
             .unwrap();
-        let current = self.fixture.goal_commit(&fixture.goal.doc_id).await.cid;
+        let current = fixture.goal_commit(&fixture.goal.doc_id).await.cid;
         Self {
             fixture,
             session_doc_id: session.doc_id,

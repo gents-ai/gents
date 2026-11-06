@@ -1,5 +1,6 @@
 use super::*;
 use crate::goal::operator_resume::support::{Fixture, PARENT, SESSION};
+use std::sync::Arc;
 
 pub(super) async fn run(case: &Value) {
     let c = &case["replacement"];

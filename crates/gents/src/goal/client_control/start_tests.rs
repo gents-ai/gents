@@ -7,6 +7,7 @@ use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::{QueueDelivery, RequestInput};
 use gents_protocol::session::SessionTitle;
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 #[path = "replacement_tests.rs"]
 mod replacement_tests;
