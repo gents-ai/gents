@@ -9,10 +9,7 @@ pub(super) async fn run(case: &Value) {
     let fixture = Fixture::new_with_parent_state(execution, start["busy"] == false).await;
     let node = &fixture.node;
     let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
-    let access = ConfigAccess::local_as(
-        node.clone(),
-        ::identity::Did::new(fixture.user.did()).unwrap(),
-    );
+    let access = fixture.user_access();
     let session = access
         .transact_readonly("test.replacement_session", |txn| {
             Box::pin(async {
@@ -46,14 +43,14 @@ pub(super) async fn run(case: &Value) {
         .await
         .unwrap();
     let owner = escape_graphql_string(identity.did());
-    access.write("test.replacement_usage", &format!(r#"mutation {{add_InferenceCall(input: {{
+    agent_access.write("test.replacement_usage", &format!(r#"mutation {{add_InferenceCall(input: {{
         call_id: "old-usage", runtime_instance_id: "contract", request_id: "{PARENT}",
-        request_doc_id: "{}", call_seq: 1, backend_id: "contract", agent_did: "contract-behavior",
+        request_doc_id: "{}", call_seq: 1, backend_id: "contract", agent_did: "{}",
         node_did: "{owner}", call_kind: "inference", attempt: 1, call_state: "completed",
         queued_at: "2026-01-01T00:00:00Z", started_at: "2026-01-01T00:00:00Z", ended_at: "2026-01-01T00:00:01Z",
         priority: 0, queue_depth_at_enqueue: 0, controller_generation: 1, backend_config_fingerprint: "contract",
         prompt_tokens: {}, completion_tokens: 0
-    }}) {{_docID}}}}"#, escape_graphql_string(old_root), c["session_usage"])).await.unwrap();
+    }}) {{_docID}}}}"#, escape_graphql_string(old_root), escape_graphql_string(fixture.agent.did()), c["session_usage"])).await.unwrap();
     let old_claim = deterministic_goal_creation_key(identity.did(), SESSION);
     agent_access.write("test.replacement_original_claim", &format!(r#"mutation {{create_GoalCreationClaim(input: {{
         creation_key: "{}", goal_id: "{}", node_did: "{owner}", session_id: "{SESSION}",
@@ -61,10 +58,7 @@ pub(super) async fn run(case: &Value) {
         objective: "Finish the original work", token_budget: 1000, created_at: "2026-01-01T00:00:00Z"
     }}) {{_docID}}}}"#, escape_graphql_string(&old_claim), escape_graphql_string(&fixture.goal.goal_id),
         escape_graphql_string(&session.doc_id), escape_graphql_string(&session.session.agent_did))).await.unwrap();
-    let original = load_canonical_goal(node, identity.did(), SESSION)
-        .await
-        .unwrap()
-        .unwrap();
+    let original = fixture.current_goal().await;
     let mut historical_doc = None;
     if !c["before"]["retained"].as_array().unwrap().is_empty() {
         let row = access
@@ -118,14 +112,7 @@ pub(super) async fn run(case: &Value) {
         .execute("{GoalCreationClaim {_docID creation_key goal_id objective token_budget}}")
         .await
         .unwrap();
-    let current = crate::store::graphql::newest_document_composite_commit(
-        node,
-        &original.doc_id,
-        "test.replacement_revision",
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let current = fixture.goal_commit(&original.doc_id).await;
     let mut initial = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "replacement-first",
@@ -313,13 +300,17 @@ pub(super) async fn run(case: &Value) {
         txn.discard().await.unwrap();
         assert!(receipt(&access, &doc_id).await.is_none());
     }
-    let after = load_canonical_goal(node, identity.did(), SESSION)
-        .await
+    let after = fixture.current_goal().await;
+    let history_response = agent_access.execute(&format!(
+        r#"{{ Goal(filter: {{node_did: {{_eq: "{}"}}, goal_id: {{_eq: "{}"}}}}, showDeleted: true, order: [{{created_at: ASC}}, {{goal_id: ASC}}]) {{{GOAL_FIELDS}}} }}"#,
+        escape_graphql_string(identity.did()), escape_graphql_string(&original.goal_id),
+    )).await.unwrap();
+    let history = history_response["data"]["Goal"]
+        .as_array()
         .unwrap()
-        .unwrap();
-    let history = load_goal_by_id(node, identity.did(), &original.goal_id)
-        .await
-        .unwrap();
+        .first()
+        .cloned()
+        .map(|row| serde_json::from_value::<GoalDocument>(row).unwrap());
     if history.is_none() {
         let diagnostic = access
             .execute(&format!(

@@ -247,6 +247,23 @@ impl Fixture {
         self.user_access.clone()
     }
 
+    pub async fn goal_commit(&self, doc_id: &str) -> crate::store::graphql::CompositeCommit {
+        self.agent_access()
+            .transact_readonly("test.goal_revision", |txn| {
+                Box::pin(async move {
+                    crate::store::graphql::newest_document_composite_commit_in_txn(
+                        txn,
+                        doc_id,
+                        "test.goal_revision",
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
     pub async fn seed_goal_snapshot(&self, before: &Value) {
         let last = if before["last_continued_from"].is_null() {
             "null".to_owned()

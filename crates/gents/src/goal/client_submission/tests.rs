@@ -19,10 +19,7 @@ async fn cross_actor_command_remains_durable_and_blocked_without_atomic_authoriz
     .await;
     let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
     let user = fixture.user.clone();
-    let access = ConfigAccess::local_as(
-        fixture.node.clone(),
-        ::identity::Did::new(user.did()).unwrap(),
-    );
+    let access = fixture.user_access();
     let session = access
         .transact_readonly("test.blocked_session", |txn| {
             Box::pin(async {

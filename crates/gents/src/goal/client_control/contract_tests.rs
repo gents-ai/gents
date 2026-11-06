@@ -33,22 +33,7 @@ pub(super) async fn try_persist_command(
     access: &crate::ConfigAccess,
     command: &SessionGoalControl,
 ) -> anyhow::Result<String> {
-    let peer = command
-        .requester_peer_id
-        .as_deref()
-        .map(|peer| format!(r#""{}""#, escape_graphql_string(peer)))
-        .unwrap_or_else(|| "null".into());
-    let session_doc = command
-        .session_doc_id
-        .as_deref()
-        .map(|id| format!("\"{}\"", escape_graphql_string(id)))
-        .unwrap_or_else(|| "null".into());
-    let response = access.write("test.goal_control", &format!(r#"mutation {{ create_AgentSessionGoalControl(input: {{
-        command_id: "{}", requester_did: "{}", requester_peer_id: {peer}, node_did: "{}", agent_did: "{}", session_id: "{}", session_doc_id: {session_doc}, intent_json: "{}"
-    }}) {{ _docID }} }}"#, escape_graphql_string(&command.command_id), escape_graphql_string(&command.requester_did),
-        escape_graphql_string(&command.node_did), escape_graphql_string(&command.agent_did), escape_graphql_string(&command.session_id),
-        escape_graphql_string(&serde_json::to_string(command)?))).await?;
-    let document = crate::store::graphql::created_doc_id(&response, "AgentSessionGoalControl")?;
+    let document = crate::goal::client_submission::publish(access, command).await?;
     crate::goal::client_submission::grant_command_relationships(access, command, &document).await?;
     Ok(document)
 }
@@ -76,10 +61,7 @@ async fn generated_goal_client_controls_drive_signed_commands() {
         .await;
         execute(&fixture.agent_access(), &format!(r#"mutation {{ update_Goal(docID: "{}", input: {{ objective: "{}" }}) {{ _docID }} }}"#,
             escape_graphql_string(&fixture.goal.doc_id), escape_graphql_string(case.before["objective"].as_str().unwrap()))).await;
-        let access = crate::ConfigAccess::local_as(
-            fixture.node.clone(),
-            ::identity::Did::new(fixture.user.did()).unwrap(),
-        );
+        let access = fixture.user_access();
         let session = access
             .transact_readonly("test.goal_session", |txn| {
                 Box::pin(async {
@@ -94,15 +76,7 @@ async fn generated_goal_client_controls_drive_signed_commands() {
             .await
             .unwrap()
             .unwrap();
-        let revision = crate::store::graphql::newest_document_composite_commit(
-            &fixture.node,
-            &fixture.goal.doc_id,
-            "test.goal_revision",
-        )
-        .await
-        .unwrap()
-        .unwrap()
-        .cid;
+        let revision = fixture.goal_commit(&fixture.goal.doc_id).await.cid;
         let before = fixture.observe().await;
         let mut operation = case.operation.clone();
         if let Some(budget) = operation.as_object_mut().unwrap().remove("budget") {
@@ -215,15 +189,7 @@ async fn generated_goal_client_controls_drive_signed_commands() {
                     case.name
                 );
                 assert_eq!(
-                    crate::store::graphql::newest_document_composite_commit(
-                        &fixture.node,
-                        &fixture.goal.doc_id,
-                        "test.unchanged_goal_revision"
-                    )
-                    .await
-                    .unwrap()
-                    .unwrap()
-                    .cid,
+                    fixture.goal_commit(&fixture.goal.doc_id).await.cid,
                     revision,
                     "{} no goal write",
                     case.name
