@@ -108,6 +108,7 @@ fn folds_into(
     let queued_user = input.queue.as_ref().is_some_and(|queue| {
         queue.source == QueueSource::User
             && queue.policy == QueuePolicy::Append
+            && queue.delivery == gents_protocol::request_input::QueueDelivery::Steer
             && queue.key.is_none()
             && !blank(queue.queued_after_request_id.as_deref())
             && queue.interrupted_request_id.is_none()
