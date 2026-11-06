@@ -1252,9 +1252,21 @@ mod tests {
                 })
             })
             .await;
-        if let Ok(response) = attempt {
-            assert_eq!(response["data"]["update_Tools"][0]["_docID"], tools_doc);
-        }
+        assert!(
+            attempt.is_err(),
+            "an unauthorized required grant must abort its Tools update"
+        );
+        let persisted = owner
+            .execute(&format!(
+                r#"{{ Tools(filter: {{_docID: {{_eq: "{}"}}}}) {{ _docID built_ins }} }}"#,
+                escape_graphql_string(&tools_doc)
+            ))
+            .await?;
+        assert_eq!(persisted["data"]["Tools"][0]["_docID"], tools_doc);
+        assert_eq!(
+            persisted["data"]["Tools"][0]["built_ins"]["enable_schema_tool"],
+            false
+        );
         assert_eq!(
             node.nac_manager()
                 .check_permission(&agent, NodePermission::CollectionPatch)
