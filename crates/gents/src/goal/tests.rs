@@ -344,13 +344,11 @@ async fn held_user_deletes_own_goal_and_claim_by_physical_id() {
         )
         .await
         .unwrap();
-    set_goal_from_access(
+    crate::goal::create_goal_for_session_from_access(
         &user_access,
         db.node_identity.did(),
         "user-delete-session",
-        Some("user-owned goal"),
-        None,
-        None,
+        "user-owned goal",
         None,
     )
     .await
@@ -378,17 +376,16 @@ async fn held_user_deletes_own_goal_and_claim_by_physical_id() {
         )
         .await
         .unwrap();
-    let other = set_goal_from_access(
+    let other = crate::goal::create_goal_for_session_from_access(
         &user_access,
         db.node_identity.did(),
         "other-delete-session",
-        Some("keep this goal"),
-        None,
-        None,
+        "keep this goal",
         None,
     )
     .await
     .unwrap();
+    let other_goal_doc_id = other.goal().doc_id.clone();
     assert_eq!(
         delete_goals_for_session_from_access(
             &user_access,
@@ -406,7 +403,7 @@ async fn held_user_deletes_own_goal_and_claim_by_physical_id() {
     let goals = rows["data"]["Goal"].as_array().unwrap();
     let claims = rows["data"]["GoalCreationClaim"].as_array().unwrap();
     assert_eq!(goals.len(), 1);
-    assert_eq!(goals[0]["_docID"], other.doc_id);
+    assert_eq!(goals[0]["_docID"], other_goal_doc_id);
     assert_eq!(claims.len(), 1);
     assert_eq!(claims[0]["session_id"], "other-delete-session");
 }
