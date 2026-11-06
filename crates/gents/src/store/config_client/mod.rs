@@ -27,13 +27,13 @@ pub(crate) use client_signed_agent::{
 };
 #[cfg(test)]
 mod client_signed_agent_conformance;
+#[cfg(test)]
+mod event_policy_conformance;
 mod common;
 mod desired_state;
 #[cfg(test)]
 mod dormant_file_request_conformance;
 mod error;
-#[cfg(test)]
-mod event_policy_conformance;
 pub(crate) mod event_source_cursor;
 mod graphql;
 mod inference_backend;
