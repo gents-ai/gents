@@ -63,7 +63,7 @@ async fn snapshot_for_agents_with_node(
     for agent_config in &agents {
         let tool_surface = agent_config
             .tools
-            .resolve(node, agent_config.node_did(), &Default::default())
+            .resolve(node, node.node_identity_did().expect("fixture node has an identity"), &Default::default())
             .await
             .unwrap();
         tool_surfaces.insert(agent_config.agent_did.clone(), Arc::new(tool_surface));
@@ -87,7 +87,7 @@ async fn snapshot_for_agents_with_admission(
     for agent_config in &agents {
         let tool_surface = agent_config
             .tools
-            .resolve(node, agent_config.node_did(), &Default::default())
+            .resolve(node, node.node_identity_did().expect("fixture node has an identity"), &Default::default())
             .await
             .unwrap();
         tool_surfaces.insert(agent_config.agent_did.clone(), Arc::new(tool_surface));
@@ -352,7 +352,7 @@ async fn slot_panic_restarts_agent() {
     let tool_surface = Arc::new(
         agent_config
             .tools
-            .resolve(&node, agent_config.node_did(), &Default::default())
+            .resolve(&node, node.node_identity_did().expect("fixture node has an identity"), &Default::default())
             .await
             .unwrap(),
     );
@@ -437,7 +437,7 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
     let tool_surface = Arc::new(
         agent_config
             .tools
-            .resolve(&node, agent_config.node_did(), &Default::default())
+            .resolve(&node, node.node_identity_did().expect("fixture node has an identity"), &Default::default())
             .await
             .unwrap(),
     );
@@ -2260,14 +2260,14 @@ async fn plugin_resolution_surfaces(
     let absent = Arc::new(
         agent_config
             .tools
-            .resolve(node, agent_config.node_did(), &absent_plugins)
+            .resolve(node, node.node_identity_did().expect("fixture node has an identity"), &absent_plugins)
             .await
             .unwrap(),
     );
     let installed = Arc::new(
         agent_config
             .tools
-            .resolve(node, agent_config.node_did(), &installed_plugins)
+            .resolve(node, node.node_identity_did().expect("fixture node has an identity"), &installed_plugins)
             .await
             .unwrap(),
     );
@@ -2352,7 +2352,7 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
     let reinstalled_surface = Arc::new(
         agent_config
             .tools
-            .resolve(&node, agent_config.node_did(), &plugins)
+            .resolve(&node, node.node_identity_did().expect("fixture node has an identity"), &plugins)
             .await
             .unwrap(),
     );
