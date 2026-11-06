@@ -899,6 +899,33 @@ pub async fn install_prepared_document_graph(
     consent: bool,
     explicit: bool,
 ) -> Result<(InstallReport, Vec<crate::plugin::store::InstalledPlugin>)> {
+    let stages = document_graph_stages(archive, prepared, explicit)?;
+    let (mut reports, plugins) = install_document_graph(
+        access,
+        owner,
+        stages,
+        policy,
+        home,
+        consent,
+        prepared.node_binding.clone(),
+    )
+    .await?;
+    let mut report = reports.pop().context("pack graph has no root report")?;
+    for (dependency, installed) in prepared.dependencies.iter().zip(reports) {
+        for (slot, did) in installed.agents {
+            report
+                .agents
+                .insert(format!("{}#{slot}", dependency.coordinate), did);
+        }
+    }
+    Ok((report, plugins))
+}
+
+fn document_graph_stages(
+    archive: &PackArchive,
+    prepared: &PreparedDocumentPackInstall,
+    explicit: bool,
+) -> Result<Vec<DocumentPackStage>> {
     let mut stages = Vec::new();
     for dependency in &prepared.dependencies {
         stages.push(DocumentPackStage {
@@ -932,25 +959,7 @@ pub async fn install_prepared_document_graph(
             .collect(),
         explicit,
     });
-    let (mut reports, plugins) = install_document_graph(
-        access,
-        owner,
-        stages,
-        policy,
-        home,
-        consent,
-        prepared.node_binding.clone(),
-    )
-    .await?;
-    let mut report = reports.pop().context("pack graph has no root report")?;
-    for (dependency, installed) in prepared.dependencies.iter().zip(reports) {
-        for (slot, did) in installed.agents {
-            report
-                .agents
-                .insert(format!("{}#{slot}", dependency.coordinate), did);
-        }
-    }
-    Ok((report, plugins))
+    Ok(stages)
 }
 
 #[derive(Clone)]
@@ -964,6 +973,63 @@ pub(super) struct DocumentPackStage {
     pub(super) bindings: PackInferenceBindings,
     pub(super) dependencies: Vec<String>,
     pub(super) explicit: bool,
+}
+
+async fn stage_document_plugins(
+    stages: &[DocumentPackStage],
+    home: Option<&Path>,
+    consent: bool,
+    owner: &str,
+) -> Result<Option<crate::plugin::install::StagedPluginInstall>> {
+    let input = stages
+        .iter()
+        .filter(|stage| !stage.manifest.metadata.plugins.is_empty())
+        .map(|stage| crate::plugin::install::PluginStageInput {
+            manifest: stage.manifest.clone(),
+            digest: stage.digest.clone(),
+            assets: stage.assets.clone(),
+            bindings: stage.bindings.clone(),
+        })
+        .collect::<Vec<_>>();
+    let has_references = stages.iter().any(|stage| {
+        stage.config.tools.iter().any(|tools| {
+            tools
+                .integrations
+                .as_ref()
+                .and_then(|integrations| integrations.plugins.as_ref())
+                .is_some_and(|references| !references.is_empty())
+        })
+    });
+    if input.is_empty() && !has_references {
+        return Ok(None);
+    }
+    Ok(Some(
+        crate::plugin::install::stage_pack_graph(
+            home.context("pack plugins require the node's local plugin home")?,
+            input,
+            consent,
+            owner,
+        )
+        .await?,
+    ))
+}
+
+async fn apply_document_graph_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    identities: &[PackIdentity],
+    documents: Vec<Vec<crate::store::config_client::DesiredStateApplyDocument>>,
+    policy: DriftPolicy,
+    node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
+) -> Result<Vec<InstallReport>> {
+    let mut reports = Vec::new();
+    for (identity, documents) in identities.iter().zip(documents) {
+        reports.push(
+            super::install_in_txn(txn, owner, identity, documents, policy, node_binding).await?,
+        );
+    }
+    super::validate_plugin_replacements_in_txn(txn, owner, identities).await?;
+    Ok(reports)
 }
 
 pub(super) async fn install_document_graph(
@@ -986,39 +1052,7 @@ pub(super) async fn install_document_graph(
             .iter()
             .map(|stage| super::installable_documents(&stage.config))
             .collect::<Result<Vec<_>>>()?;
-        let input = stages
-            .iter()
-            .filter(|stage| !stage.manifest.metadata.plugins.is_empty())
-            .map(|stage| crate::plugin::install::PluginStageInput {
-                manifest: stage.manifest.clone(),
-                digest: stage.digest.clone(),
-                assets: stage.assets.clone(),
-                bindings: stage.bindings.clone(),
-            })
-            .collect::<Vec<_>>();
-        let has_references = stages.iter().any(|stage| {
-            stage.config.tools.iter().any(|tools| {
-                tools
-                    .integrations
-                    .as_ref()
-                    .and_then(|integrations| integrations.plugins.as_ref())
-                    .is_some_and(|references| !references.is_empty())
-            })
-        });
-        let plugin_stage = if input.is_empty() && !has_references {
-            None
-        } else {
-            Some(
-                crate::plugin::install::stage_pack_graph(
-                    home.as_deref()
-                        .context("pack plugins require the node's local plugin home")?,
-                    input,
-                    consent,
-                    &owner,
-                )
-                .await?,
-            )
-        };
+        let plugin_stage = stage_document_plugins(&stages, home.as_deref(), consent, &owner).await?;
         #[cfg(test)]
         let pause = {
             let mut slot = INSTALLATION_PAUSE.lock().unwrap();
@@ -1105,22 +1139,15 @@ pub(super) async fn install_document_graph(
                         ensure_plugin_references_resolve(&packs, home.as_deref(), &digests)
                     })
                     .await??;
-                    let mut reports = Vec::new();
-                    for (identity, documents) in identities.iter().zip(documents) {
-                        reports.push(
-                            super::install_in_txn(
-                                txn,
-                                owner,
-                                identity,
-                                documents,
-                                policy,
-                                node_binding.as_ref(),
-                            )
-                            .await?,
-                        );
-                    }
-                    super::validate_plugin_replacements_in_txn(txn, owner, identities).await?;
-                    Ok::<_, anyhow::Error>(reports)
+                    apply_document_graph_in_txn(
+                        txn,
+                        owner,
+                        identities,
+                        documents,
+                        policy,
+                        node_binding.as_ref(),
+                    )
+                    .await
                 })
             })
             .await;
