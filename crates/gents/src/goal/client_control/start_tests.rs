@@ -211,13 +211,18 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                     .await
                     .unwrap();
             }
-            if case.name == "wrong_signed_agent" {
+            if matches!(case.name.as_str(), "wrong_signed_agent" | "foreign_agent") {
+                let selected_agent = if case.name == "wrong_signed_agent" {
+                    &other_binding.agent_did
+                } else {
+                    &binding.agent_did
+                };
                 session_access
                     .add_actor_relationship(
                         "AgentSession",
                         &session_doc,
                         "reader",
-                        &::identity::Did::new(&other_binding.agent_did).unwrap(),
+                        &::identity::Did::new(selected_agent).unwrap(),
                     )
                     .await
                     .unwrap();
