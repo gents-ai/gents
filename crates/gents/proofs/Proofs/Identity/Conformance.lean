@@ -1389,6 +1389,11 @@ def toolGrantorCaseJson (grantor : String) (committed : Bool) : Json :=
     ("expected_enabled", toJson (result.enabled.map toolSourceJson)),
     ("expected_grants", toJson (result.grants.map toolSourceJson))]
 
+def toolSourceChangeCaseJson (name : String) (present delete authorized : Bool) : Json :=
+  Json.mkObj [("name", toJson name), ("present", toJson present),
+    ("delete", toJson delete), ("authorized", toJson authorized),
+    ("allowed", toJson (Configuration.sourceChangeAllowed present delete authorized))]
+
 def toolOperationCaseJson (name : String) (schema history goal create selfConfig pack : Bool) (category : String) : Json :=
   let surface : ToolPolicy.Surface :=
     { ToolPolicy.ContractCases.secureMinimal with
@@ -1711,6 +1716,13 @@ def json : Json := Json.mkObj
       sessionToolCaseJson "foreign" false true false])),
    ("tool_grantor_cases", toJson ([toolGrantorCaseJson userDid true,
       toolGrantorCaseJson agentDid true, toolGrantorCaseJson userDid false])),
+   ("tool_source_change_cases", toJson ([
+      toolSourceChangeCaseJson "present-noop" true false false,
+      toolSourceChangeCaseJson "absent-noop" false true false,
+      toolSourceChangeCaseJson "add-denied" false false false,
+      toolSourceChangeCaseJson "delete-denied" true true false,
+      toolSourceChangeCaseJson "add-allowed" false false true,
+      toolSourceChangeCaseJson "delete-allowed" true true true])),
    ("tool_operation_cases", toJson toolOperationCases),
    ("managed_tool_identity_cases", toJson ([("matched", "agent", "agent"),
       ("foreign", "user", "agent"), ("empty", "", "agent")].map fun (name, claimed, derived) =>
