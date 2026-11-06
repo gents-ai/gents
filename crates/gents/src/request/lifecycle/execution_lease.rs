@@ -309,70 +309,46 @@ impl RequestLifecycle {
     }
 }
 
+/// Revoke without discarding already-published output. Selection is made under
+/// the same write gate as the generation CAS and uses immutable header metadata,
+/// exactly as `terminalSelectionMetadataValid`; corrupt bytes remain untouched.
 #[cfg(test)]
 pub(crate) async fn revoke_execution_generation(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     selection: TerminalOutput,
     reason: &str,
 ) -> Result<TerminalizeResult> {
-    terminalize_execution(
-        node,
-        identity::Did::new(
-            row.agent_did
-                .clone()
-                .context("request is missing agent DID")?,
-        )?,
-        row.doc_id.as_deref().context("missing request document")?,
-        TerminalAuthority::Revocation {
-            generation: row
-                .execution_generation
-                .as_deref()
-                .context("missing execution generation")?,
-            expiry: row
-                .execution_lease_expires_at
-                .as_deref()
-                .context("missing execution expiry")?,
+    let actor = row
+        .agent_did
+        .as_deref()
+        .context("request is missing agent DID")?;
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(actor),
+        "revocation signer differs from request actor"
+    );
+    terminalize_execution_with_access(
+        access,
+        TerminalizeSpec {
+            request_doc_id: row.doc_id.as_deref().context("missing request document")?,
+            authority: TerminalAuthority::Revocation {
+                generation: row
+                    .execution_generation
+                    .as_deref()
+                    .context("missing execution generation")?,
+                expiry: row
+                    .execution_lease_expires_at
+                    .as_deref()
+                    .context("missing execution expiry")?,
+            },
+            outcome,
+            selection: Some(selection),
+            reason,
+            fixture_now: None,
+            fixture_fresh_generation: None,
+            pending_fence: None,
         },
-        outcome,
-        Some(selection),
-        reason,
-    )
-    .await
-}
-
-/// Revoke without discarding already-published output. Selection is made under
-/// the same write gate as the generation CAS and uses immutable header metadata,
-/// exactly as `terminalSelectionMetadataValid`; corrupt bytes remain untouched.
-#[cfg(test)]
-pub(crate) async fn revoke_execution_preserving_output(
-    node: &std::sync::Arc<EmbeddedNode>,
-    row: &AgentRequestRow,
-    outcome: RequestTerminalOutcome,
-    reason: &str,
-) -> Result<TerminalizeResult> {
-    terminalize_execution(
-        node,
-        identity::Did::new(
-            row.agent_did
-                .clone()
-                .context("request is missing agent DID")?,
-        )?,
-        row.doc_id.as_deref().context("missing request document")?,
-        TerminalAuthority::Revocation {
-            generation: row
-                .execution_generation
-                .as_deref()
-                .context("missing execution generation")?,
-            expiry: row
-                .execution_lease_expires_at
-                .as_deref()
-                .context("missing execution expiry")?,
-        },
-        outcome,
-        None,
-        reason,
     )
     .await
 }
@@ -442,33 +418,6 @@ pub(crate) async fn revoke_execution_preserving_output_at_with_access(
             reason,
             fixture_now: Some(now),
             fixture_fresh_generation: Some(fresh_generation),
-            pending_fence: None,
-        },
-    )
-    .await
-}
-
-#[cfg(test)]
-async fn terminalize_execution(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: identity::Did,
-    request_doc_id: &str,
-    authority: TerminalAuthority<'_>,
-    outcome: RequestTerminalOutcome,
-    selection: Option<TerminalOutput>,
-    reason: &str,
-) -> Result<TerminalizeResult> {
-    terminalize_execution_with_time(
-        node,
-        actor,
-        TerminalizeSpec {
-            request_doc_id,
-            authority,
-            outcome,
-            selection,
-            reason,
-            fixture_now: None,
-            fixture_fresh_generation: None,
             pending_fence: None,
         },
     )
