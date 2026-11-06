@@ -104,12 +104,25 @@ async fn set_label(
 ) {
     let credential_id =
         oauth_credential_id(did, crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER);
-    let mut credential = lookup_oauth_credential_by_id_on(access, &credential_id)
+    let credential = lookup_oauth_credential_by_id_on(access, &credential_id)
         .await
         .unwrap()
         .unwrap();
-    credential.label = label.map(str::to_owned);
-    upsert_oauth_credential_on(access, &credential)
+    let doc = credential
+        .doc_id
+        .expect("stored credential has a document ID");
+    access
+        .transact_write("test.label", |txn| {
+            let doc = doc.clone();
+            Box::pin(async move {
+                super::rows::update_credential_patch_in_txn(
+                    txn,
+                    &doc,
+                    serde_json::json!({"label": label}),
+                )
+                .await
+            })
+        })
         .await
         .unwrap();
 }
