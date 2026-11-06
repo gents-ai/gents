@@ -808,6 +808,8 @@ def snapshotClientCasesJson : String :=
       ++ selfConfigFieldTablesJson ++ ","
     ++ "\"self_config_resource_read_exposure_cases\":"
       ++ selfConfigResourceReadExposureCasesJson ++ ","
+    ++ "\"policy_resource_exposure_cases\":"
+      ++ policyResourceExposureCasesJson ++ ","
     ++ "\"schema_publication_cases\":" ++ schemaPublicationCasesJson ++ ","
     ++ "\"self_config_cases\":"
       ++ selfConfigCasesJson ++ ","

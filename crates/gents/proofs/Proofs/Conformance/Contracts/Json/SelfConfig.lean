@@ -42,6 +42,14 @@ def selfConfigResourceReadExposureCasesJson : String :=
     ",\"exposed\":" ++ scBool (if resource == "effective" then effectiveReadExposed enabled
       else resourceReadExposed enabled target) ++ "}")
 
+def policyResourceExposureCasesJson : String :=
+  let cases : List (List String) :=
+    [[], ["policy"], ["agent", "tools", "profile"], ["node", "policy"],
+     ["backend", "mcp_service", "automation", "policy"]]
+  jsonArray (cases.map fun categories =>
+    "{\"categories\":" ++ jsonStringArray categories ++
+    ",\"exposed\":" ++ scBool (policyResourceExposed categories) ++ "}")
+
 def fieldValuePairJson (entry : FieldKey × FieldValue) : String :=
   "{"
     ++ "\"field\":" ++ jsonString entry.1 ++ ","
