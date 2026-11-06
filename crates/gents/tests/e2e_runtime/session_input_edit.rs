@@ -1308,7 +1308,7 @@ async fn conflicting_offline_edits_preserve_queue_and_prior_receipt(
         let worker = tokio::spawn(run_session_command_reconciler(
             owner.node.clone(),
             identity.clone(),
-            support::fixtures::session_command_agent_snapshot(&owner).await,
+            support::fixtures::session_command_agent_snapshot(owner).await,
             cancel.clone(),
         ));
         let observed = wait_row(
@@ -1394,7 +1394,7 @@ async fn conflicting_offline_edits_preserve_queue_and_prior_receipt(
     let worker = tokio::spawn(run_session_command_reconciler(
         owner.node.clone(),
         identity.clone(),
-        support::fixtures::session_command_agent_snapshot(&owner).await,
+        support::fixtures::session_command_agent_snapshot(owner).await,
         cancel.clone(),
     ));
     for suffix in ["collision-barrier-one", "collision-barrier-two"] {

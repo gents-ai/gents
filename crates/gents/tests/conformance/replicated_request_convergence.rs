@@ -438,7 +438,7 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
     let first = RequestLifecycle::redrive_terminal_convergence_with_identities(
         &db.node,
         owner_did,
-        &[agent.clone()],
+        std::slice::from_ref(&agent),
     )
     .await
     .unwrap();
@@ -464,7 +464,7 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
         let more = RequestLifecycle::redrive_terminal_convergence_with_identities(
             &db.node,
             owner_did,
-            &[agent.clone()],
+            std::slice::from_ref(&agent),
         )
         .await
         .unwrap();
@@ -473,7 +473,7 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
     let exhausted = RequestLifecycle::redrive_terminal_convergence_with_identities(
         &db.node,
         owner_did,
-        &[agent.clone()],
+        std::slice::from_ref(&agent),
     )
     .await
     .unwrap();
@@ -485,7 +485,7 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
     let foreign_run = RequestLifecycle::redrive_terminal_convergence_with_identities(
         &foreign_db.node,
         foreign_did,
-        &[foreign_agent.clone()],
+        std::slice::from_ref(&foreign_agent),
     )
     .await
     .unwrap();
@@ -534,7 +534,7 @@ pub(super) async fn terminal_redrive_window_advances_past_sixty_four_rows() {
         let report = RequestLifecycle::redrive_terminal_convergence_with_identities(
             &db.node,
             owner_did,
-            &[agent.clone()],
+            std::slice::from_ref(&agent),
         )
         .await
         .unwrap();
@@ -547,7 +547,7 @@ pub(super) async fn terminal_redrive_window_advances_past_sixty_four_rows() {
     let advanced = RequestLifecycle::redrive_terminal_convergence_with_identities(
         &db.node,
         owner_did,
-        &[agent.clone()],
+        std::slice::from_ref(&agent),
     )
     .await
     .unwrap();
@@ -577,7 +577,7 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
     let repaired = RequestLifecycle::repair_terminal_requests_with_identities(
         &db.node,
         owner_did,
-        &[agent.clone()],
+        std::slice::from_ref(&agent),
     )
     .await
     .unwrap();
@@ -600,7 +600,7 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
     let duplicate = RequestLifecycle::repair_terminal_requests_with_identities(
         &db.node,
         owner_did,
-        &[agent.clone()],
+        std::slice::from_ref(&agent),
     )
     .await
     .unwrap();
@@ -628,7 +628,7 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
     let provider_repair = RequestLifecycle::repair_terminal_requests_with_identities(
         &db.node,
         owner_did,
-        &[agent.clone()],
+        std::slice::from_ref(&agent),
     )
     .await
     .unwrap();
@@ -681,7 +681,7 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
     let runtime_interrupt_repair = RequestLifecycle::repair_terminal_requests_with_identities(
         &db.node,
         owner_did,
-        &[agent.clone()],
+        std::slice::from_ref(&agent),
     )
     .await
     .unwrap();
@@ -720,10 +720,13 @@ pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
         agent.did(),
     )
     .await;
-    let report =
-        RequestLifecycle::recover_all_with_identities(&db.node, owner_did, &[agent.clone()])
-            .await
-            .unwrap();
+    let report = RequestLifecycle::recover_all_with_identities(
+        &db.node,
+        owner_did,
+        std::slice::from_ref(&agent),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         report.requests_recovered, 1,
         "a claimed own-request must be recovered (Lean requestRecoveryStale = claimed ∨ processing)"

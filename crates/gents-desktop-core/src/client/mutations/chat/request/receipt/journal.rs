@@ -126,19 +126,6 @@ fn require_written(response: &serde_json::Value, field: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod mutation_result_tests {
-    use super::require_written;
-
-    #[test]
-    fn journal_mutation_requires_one_written_document() {
-        let empty = serde_json::json!({"data": {"update_PendingChatSubmission": []}});
-        assert!(require_written(&empty, "update_PendingChatSubmission").is_err());
-        let written = serde_json::json!({"data": {"update_PendingChatSubmission": [{"_docID": "owner-document"}]}});
-        require_written(&written, "update_PendingChatSubmission").unwrap();
-    }
-}
-
 /// The local encrypted store retains signed intent before the owner can see it.
 /// This collection stays outside the desktop replication catalog.
 pub(crate) async fn save(
@@ -201,4 +188,17 @@ pub(crate) async fn forget(node: &Arc<EmbeddedNode>, client: &str, request_id: &
     )
     .await
     .context("client journal cleanup failed")
+}
+
+#[cfg(test)]
+mod mutation_result_tests {
+    use super::require_written;
+
+    #[test]
+    fn journal_mutation_requires_one_written_document() {
+        let empty = serde_json::json!({"data": {"update_PendingChatSubmission": []}});
+        assert!(require_written(&empty, "update_PendingChatSubmission").is_err());
+        let written = serde_json::json!({"data": {"update_PendingChatSubmission": [{"_docID": "owner-document"}]}});
+        require_written(&written, "update_PendingChatSubmission").unwrap();
+    }
 }

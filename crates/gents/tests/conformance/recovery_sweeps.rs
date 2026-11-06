@@ -326,7 +326,7 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
     let outcome = gents::runtime::startup_recovery::run_startup_recovery_with_identities(
         &db.node,
         db.node_identity.did(),
-        &[agent.clone()],
+        std::slice::from_ref(&agent),
     )
     .await;
     let requests = outcome.requests.expect("startup request recovery");
@@ -363,7 +363,7 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
     let second = gents::runtime::startup_recovery::run_startup_recovery_with_identities(
         &db.node,
         db.node_identity.did(),
-        &[agent.clone()],
+        std::slice::from_ref(&agent),
     )
     .await;
     assert_eq!(
@@ -438,7 +438,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
         let startup = gents::runtime::startup_recovery::run_startup_recovery_with_identities(
             &db.node,
             db.node_identity.did(),
-            &[agent.clone()],
+            std::slice::from_ref(&agent),
         )
         .await;
         startup.tool_calls.expect("startup tool recovery");
@@ -460,7 +460,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
         let live = gents::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
             &db.node,
             db.node_identity.did(),
-            &[agent.clone()],
+            std::slice::from_ref(&agent),
             &registry,
         )
         .await
@@ -496,7 +496,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             gents::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
                 &db.node,
                 db.node_identity.did(),
-                &[agent.clone()],
+                std::slice::from_ref(&agent),
                 &registry,
             )
             .await
@@ -522,7 +522,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             gents::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
                 &db.node,
                 db.node_identity.did(),
-                &[agent.clone()],
+                std::slice::from_ref(&agent),
                 &registry,
             )
             .await
@@ -866,7 +866,7 @@ async fn request_recovery_before_output_persists_canonical_terminal_selection() 
     let report = RequestLifecycle::recover_all_with_identities(
         &db.node,
         db.node_identity.did(),
-        &[agent.clone()],
+        std::slice::from_ref(&agent),
     )
     .await
     .unwrap();
@@ -896,7 +896,7 @@ async fn request_recovery_before_output_persists_canonical_terminal_selection() 
     let second = RequestLifecycle::recover_all_with_identities(
         &db.node,
         db.node_identity.did(),
-        &[agent.clone()],
+        std::slice::from_ref(&agent),
     )
     .await
     .unwrap();
@@ -945,7 +945,7 @@ async fn request_recovery_before_output_persists_canonical_terminal_selection() 
     let report = RequestLifecycle::recover_all_with_identities(
         &db.node,
         db.node_identity.did(),
-        &[agent.clone()],
+        std::slice::from_ref(&agent),
     )
     .await
     .unwrap();

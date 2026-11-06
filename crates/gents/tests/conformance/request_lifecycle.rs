@@ -975,7 +975,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
                     let _ = RequestLifecycle::repair_terminal_requests_with_identities(
                         &db.node,
                         db.node_identity.did(),
-                        &[agent.clone()],
+                        std::slice::from_ref(&agent),
                     )
                     .await;
                 }
@@ -1146,7 +1146,7 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
                     let report = RequestLifecycle::repair_terminal_requests_with_identities(
                         &db.node,
                         db.node_identity.did(),
-                        &[agent.clone()],
+                        std::slice::from_ref(&agent),
                     )
                     .await
                     .expect("terminal repair sweep must succeed");
@@ -2247,10 +2247,6 @@ async fn fetch_request_lineage_with_access(
     serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap()
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the observation checks both model states and authenticated scope"
-)]
 async fn assert_session_observes_request_with_access(
     access: &gents::ConfigAccess,
     session_id: &str,
