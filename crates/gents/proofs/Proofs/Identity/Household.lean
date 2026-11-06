@@ -85,8 +85,8 @@ def policy : List ResourceDefinition :=
   , { name := "configuration"
       relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
         ⟨"selected_by", ["agents->executor", "configuration->selected_by"], []⟩,
-        ⟨"selection_manager", ["actor", "nodes->owner", "nodes->administrator"], ["selected_by"]⟩,
-        ⟨"writer", ["actor"], []⟩]
+        ⟨"selection_manager", ["actor", "nodes->owner", "nodes->administrator", "agents->config_writer"], ["selected_by"]⟩,
+        ⟨"writer", ["actor", "agents->config_writer"], []⟩]
       permissions := [permission "read" ["reader", "writer", "selected_by"] [("parent", "read")],
         permission "update" ["writer"] [("parent", "update")],
         permission "delete" [] [("parent", "delete")]] }
@@ -521,6 +521,26 @@ def apply (state : State) : Action → State
   | .revokeAs actor relation => if mayManage state actor relation then
       { state with relations := state.relations.filter (· != relation) } else state
   | .check .. => state
+
+/-- The role on one physical Agent controls each explicitly linked document.
+Revocation does not remove an independent direct document grant. -/
+def agentConfigWriterFixture : State :=
+  { nodeManagerFixture with relations :=
+    ⟨"agents", "agent", "config_writer", .actor "engineer"⟩ ::
+    ⟨"configuration", "config", "writer", .entitySet "agents" "agent" "config_writer"⟩ ::
+    ⟨"configuration", "config", "selection_manager", .entitySet "agents" "agent" "config_writer"⟩ ::
+    ⟨"configuration", "config", "writer", .actor "direct"⟩ :: nodeManagerFixture.relations }
+
+def agentConfigWriterRevoked : State :=
+  apply agentConfigWriterFixture (.revoke ⟨"agents", "agent", "config_writer", .actor "engineer"⟩)
+
+theorem agent_config_writer_role_revocation_is_scoped :
+    allowed 8 agentConfigWriterFixture "engineer" "configuration" "config" "update" = true ∧
+    mayManage agentConfigWriterFixture "engineer" ⟨"configuration", "config", "selected_by", .actor "target"⟩ = true ∧
+    allowed 8 agentConfigWriterRevoked "engineer" "configuration" "config" "update" = false ∧
+    mayManage agentConfigWriterRevoked "engineer" ⟨"configuration", "config", "selected_by", .actor "target"⟩ = false ∧
+    allowed 8 agentConfigWriterRevoked "direct" "configuration" "config" "update" = true := by
+  native_decide
 
 /-- ACP1 owners can manage their own document relationships. A parent tuple
 does not prove that the owner was authorized to use the target; that must be
