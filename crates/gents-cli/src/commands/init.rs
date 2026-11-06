@@ -367,6 +367,21 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
             binding,
         )
         .await?;
+        if fresh_store
+            && matches!(tool_package, ToolPackageArg::Readonly | ToolPackageArg::Write | ToolPackageArg::Yolo)
+        {
+            let root = summary.tool_root.as_deref().context("host tools require a workspace root")?;
+            let root = gents::tools::surface::resolve_configured_tool_root(Path::new(root))?;
+            let root = root.to_str().context("workspace root path must be valid UTF-8")?;
+            gents::tools::surface::set_workspace_root_with_readers(
+                &access,
+                initialized_identity.identity.did(),
+                root,
+                None,
+                true,
+                std::slice::from_ref(&summary.default_agent_did),
+            ).await.context("publishing the initial workspace root")?;
+        }
         write_init_config(&home_dir, &stored)?;
         let runtime_state_reset = if args.reset {
             clear_runtime_state(&home_dir)?
@@ -2299,6 +2314,30 @@ mod tests {
         .unwrap();
         let owner = ConfigAccess::local_as(node.clone(), client_did.clone());
         let worker = ConfigAccess::local_as(node.clone(), agent.clone());
+        let expected_root = gents::tools::surface::resolve_configured_tool_root(Path::new(
+            initial["tool_root"].as_str().unwrap(),
+        ))
+        .unwrap();
+        let roots = worker
+            .execute("{ WorkspaceRoot { _docID root_path enabled } }")
+            .await
+            .unwrap();
+        let roots = roots["data"]["WorkspaceRoot"].as_array().unwrap();
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0]["root_path"], expected_root.to_str().unwrap());
+        assert_eq!(roots[0]["enabled"], true);
+        let root_doc = roots[0]["_docID"].as_str().unwrap().to_owned();
+        let root_owner = runtime
+            .transact_readonly("init.test.root_owner", |txn| {
+                let root_doc = &root_doc;
+                Box::pin(async move {
+                    txn.document_owners("WorkspaceRoot", &[root_doc.clone()])
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(root_owner[0].owner.as_ref(), Some(&client_did));
         let node_row = runtime.execute("{ Node { _docID } }").await.unwrap();
         let doc = node_row["data"]["Node"][0]["_docID"]
             .as_str()
