@@ -70,6 +70,22 @@ async fn rows(access: &ConfigAccess, session: &str) -> Vec<Value> {
     result["data"]["AgentRequest"].as_array().unwrap().clone()
 }
 
+async fn latch(access: &ConfigAccess, parent: &AgentRequest) -> Option<String> {
+    let observed = observe_interrupt_requested_at_with_access(
+        access,
+        &parent.request_id,
+        &parent.node_did,
+        parent.requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        observed.request_doc_id.as_deref(),
+        Some(parent.doc_id.as_str())
+    );
+    observed.requested_at
+}
+
 async fn fixture(case: &LeanInterruptQueueCase) -> QueueFixture {
     use crate::request::lifecycle::{ClaimOutcome, RequestIdentity, RequestLifecycle};
 
@@ -341,9 +357,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                         )
                         .await
                         .unwrap();
-                        let latch = fetch_interrupt_requested_at_by_doc_id(&node, &parent.doc_id)
-                            .await
-                            .unwrap();
+                        let latch = latch(&fixture.agent_access, parent).await;
                         assert!(latch.is_some(), "{}: interrupt must latch", case.name);
                         if let Some(first) = &first_latch {
                             assert_eq!(&latch, first, "{}: replay changed latch", case.name);
@@ -581,9 +595,7 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             .await
             .expect("HTTP transaction must pause after modeled queue scan");
         assert_eq!(
-            fetch_interrupt_requested_at_by_doc_id(&node, &parent.doc_id)
-                .await
-                .unwrap(),
+            latch(&fixture.agent_access, parent).await,
             None,
             "staged HTTP latch must remain invisible before commit"
         );
@@ -643,9 +655,7 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
                 enqueue_generated_wake(&fixture.agent_access, &node, parent, case, entry).await,
             );
         }
-        let latched = fetch_interrupt_requested_at_by_doc_id(&node, &parent.doc_id)
-            .await
-            .unwrap();
+        let latched = latch(&fixture.agent_access, parent).await;
         assert_eq!(latched.is_some(), case.expected.latched);
         let after_commit = rows(&fixture.agent_access, &parent.session_id).await;
         let by_doc: RapidHashMap<_, _> = after_commit
@@ -705,9 +715,7 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
         .await
         .unwrap();
         assert_eq!(
-            fetch_interrupt_requested_at_by_doc_id(&node, &parent.doc_id)
-                .await
-                .unwrap(),
+            latch(&fixture.agent_access, parent).await,
             latched,
             "generated replay preserves first latch"
         );
