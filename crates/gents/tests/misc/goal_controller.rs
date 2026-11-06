@@ -3490,77 +3490,30 @@ async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
 const RENDERED_LIMIT: &str =
     "provider usage limit reached (resets at 2026-07-15T05:00:00Z): capped";
 
-async fn seed_failed_call(
+async fn usage_limited_goal_after_failed_request(
     db: &TestDb,
-    call_id: &str,
-    call_kind: &str,
-    attempt: i64,
-    ended_at: &str,
-    failure_reason: &str,
-) {
-    let response = db
-        .node
-        .execute(&format!(
-            r#"mutation {{
-                add_InferenceCall(input: {{
-                    call_id: "{call_id}",
-                    node_did: "{node_did}",
-                    request_id: "usage-limited-request",
-                    call_seq: 1,
-                    call_kind: "{call_kind}",
-                    attempt: {attempt},
-                    call_state: "failed",
-                    ended_at: "{ended_at}",
-                    failure_reason: "{failure_reason}"
-                }}) {{ _docID }}
-            }}"#,
-            call_id = gents::store::graphql::escape_graphql_string(call_id),
-            node_did = gents::store::graphql::escape_graphql_string(db.node_identity.did()),
-            call_kind = gents::store::graphql::escape_graphql_string(call_kind),
-            ended_at = gents::store::graphql::escape_graphql_string(ended_at),
-            failure_reason = gents::store::graphql::escape_graphql_string(failure_reason),
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "seed failed call: {:?}",
-        response.errors
-    );
-}
-
-async fn usage_limited_goal_after_failed_request(db: &TestDb) -> Option<String> {
-    create_request_for_agent_with_signed_fields(
-        db.node.as_ref(),
-        db.node_identity.did(),
-        "usage-limited-request",
-        SESSION,
-        "failed",
-        "2026-07-15T00:00:00Z",
-        None,
-        None,
-        None,
-        None,
-    )
-    .await;
-    set_goal(
-        &db.node,
+    agent: &Arc<dyn NodeIdentity>,
+    access: &ConfigAccess,
+) -> Option<String> {
+    set_goal_from_access(
+        access,
         db.node_identity.did(),
         SESSION,
         Some("Stop on the call that ended the request"),
         Some(GoalStatus::Active),
         None,
+        None,
     )
     .await
     .expect("set goal");
-    let (mut source, _snapshot_tx) = source(db).await;
+    let (mut source, _snapshot_tx) = source_for_agent(db, agent).await;
     assert!(
         tokio::time::timeout(Duration::from_millis(200), source.next_fire())
             .await
             .is_err()
     );
-    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+    let goal = load_goal_as(access, db.node_identity.did())
         .await
-        .expect("load goal")
         .expect("goal exists");
     (goal.parsed_status() == Some(GoalStatus::UsageLimited))
         .then_some(goal.last_failure)
@@ -3570,8 +3523,17 @@ async fn usage_limited_goal_after_failed_request(db: &TestDb) -> Option<String> 
 #[tokio::test]
 async fn compaction_usage_limit_moves_goal_to_usage_limited() {
     let db = test_db("goal-compaction-usage-limit").await;
-    seed_failed_call(
-        &db,
+    let (_user, agent, access) = goal_recovery_actors(&db, "usage-limited-request", "failed").await;
+    let request = access.execute("{AgentRequest(filter: {request_id: {_eq: \"usage-limited-request\"}}) {_docID session_doc_id}}").await.unwrap();
+    let parent = &request["data"]["AgentRequest"][0];
+    let request_doc = parent["_docID"].as_str().unwrap();
+    let session_doc = parent["session_doc_id"].as_str().unwrap();
+    seed_failed_call_from_access(
+        &access,
+        &agent,
+        db.node_identity.did(),
+        request_doc,
+        session_doc,
         "compaction-call",
         "compaction",
         1,
@@ -3579,7 +3541,7 @@ async fn compaction_usage_limit_moves_goal_to_usage_limited() {
         RENDERED_LIMIT,
     )
     .await;
-    let last_failure = usage_limited_goal_after_failed_request(&db).await;
+    let last_failure = usage_limited_goal_after_failed_request(&db, &agent, &access).await;
     assert!(
         last_failure
             .as_deref()
@@ -3591,8 +3553,17 @@ async fn compaction_usage_limit_moves_goal_to_usage_limited() {
 #[tokio::test]
 async fn a_later_limited_call_wins_over_an_earlier_retry() {
     let db = test_db("goal-later-limited-call").await;
-    seed_failed_call(
-        &db,
+    let (_user, agent, access) = goal_recovery_actors(&db, "usage-limited-request", "failed").await;
+    let request = access.execute("{AgentRequest(filter: {request_id: {_eq: \"usage-limited-request\"}}) {_docID session_doc_id}}").await.unwrap();
+    let parent = &request["data"]["AgentRequest"][0];
+    let request_doc = parent["_docID"].as_str().unwrap();
+    let session_doc = parent["session_doc_id"].as_str().unwrap();
+    seed_failed_call_from_access(
+        &access,
+        &agent,
+        db.node_identity.did(),
+        request_doc,
+        session_doc,
         "earlier-retry",
         "inference",
         2,
@@ -3600,8 +3571,12 @@ async fn a_later_limited_call_wins_over_an_earlier_retry() {
         "HttpError: Invalid status code 500",
     )
     .await;
-    seed_failed_call(
-        &db,
+    seed_failed_call_from_access(
+        &access,
+        &agent,
+        db.node_identity.did(),
+        request_doc,
+        session_doc,
         "later-compaction",
         "compaction",
         1,
@@ -3609,7 +3584,7 @@ async fn a_later_limited_call_wins_over_an_earlier_retry() {
         RENDERED_LIMIT,
     )
     .await;
-    let last_failure = usage_limited_goal_after_failed_request(&db).await;
+    let last_failure = usage_limited_goal_after_failed_request(&db, &agent, &access).await;
     assert!(
         last_failure
             .as_deref()
@@ -3793,25 +3768,19 @@ async fn opted_in_goal_resumes_at_its_reported_reset() {
 #[tokio::test]
 async fn openrouter_credits_402_moves_active_goal_to_usage_limited() {
     let db = test_db("goal-openrouter-credits-402").await;
-    create_request_for_agent_with_signed_fields(
-        db.node.as_ref(),
-        db.node_identity.did(),
-        "usage-limited-request",
-        SESSION,
-        "failed",
-        "2026-07-15T00:00:00Z",
-        None,
-        None,
-        None,
-        None,
-    )
-    .await;
+    let (_user, agent, access) = goal_recovery_actors(&db, "usage-limited-request", "failed").await;
+    let request = access.execute("{AgentRequest(filter: {request_id: {_eq: \"usage-limited-request\"}}) {_docID session_doc_id}}").await.unwrap();
+    let parent = &request["data"]["AgentRequest"][0];
     let reason = gents_loop::provider_limit::persisted_failure_reason(
         r#"HttpError: Invalid status code 402 Payment Required with message: {"error":{"code":402,"message":"Insufficient credits. Add more using https://openrouter.ai/credits"}}"#,
         chrono::Utc::now(),
     );
-    seed_failed_call(
-        &db,
+    seed_failed_call_from_access(
+        &access,
+        &agent,
+        db.node_identity.did(),
+        parent["_docID"].as_str().unwrap(),
+        parent["session_doc_id"].as_str().unwrap(),
         "openrouter-credits-call",
         "inference",
         1,
@@ -3819,26 +3788,26 @@ async fn openrouter_credits_402_moves_active_goal_to_usage_limited() {
         &reason,
     )
     .await;
-    set_goal(
-        &db.node,
+    set_goal_from_access(
+        &access,
         db.node_identity.did(),
         SESSION,
         Some("Stop on OpenRouter credits exhaustion"),
         Some(GoalStatus::Active),
         None,
+        None,
     )
     .await
     .expect("set goal");
 
-    let (mut source, _snapshot_tx) = source(&db).await;
+    let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
     assert!(
         tokio::time::timeout(Duration::from_millis(200), source.next_fire())
             .await
             .is_err()
     );
-    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+    let goal = load_goal_as(&access, db.node_identity.did())
         .await
-        .expect("load goal")
         .expect("goal exists");
     assert_eq!(goal.parsed_status(), Some(GoalStatus::UsageLimited));
     assert!(goal
