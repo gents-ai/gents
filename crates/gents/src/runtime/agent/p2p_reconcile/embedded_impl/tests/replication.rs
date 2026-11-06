@@ -66,12 +66,14 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
                 .await?;
         }
     }
-    admin_local
-        .grant_node_permission(
-            &identity::Did::new(user.did())?,
-            NodePermission::DocumentUpdate,
-        )
-        .await?;
+    for actor in [&user, &candidate] {
+        admin_local
+            .grant_node_permission(
+                &identity::Did::new(actor.did())?,
+                NodePermission::DocumentUpdate,
+            )
+            .await?;
+    }
     let receiver_model =
         &crate::lean_vocab_test::lean_contract_snapshot().identity_replica_grant_cases;
     let case = |name: &str| {
@@ -290,6 +292,101 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         count(&http(admin_address, &user)?.execute(&query).await?) != 0,
         case("after-repair")?["user_read"] == true
     );
+    let session = http(admin_address, &candidate)?.write(
+        "test.transport.private_session",
+        "mutation { create_AgentSession(input:{session_id:\"private\",node_did:\"foreign\",agent_did:\"foreign-agent\"}) {_docID} }",
+    ).await?;
+    let session = gents_protocol::graphql::extract_mutation_doc_id(&session, "AgentSession")?;
+    let session_query = format!(
+        r#"{{ AgentSession(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+        escape_graphql_string(&session)
+    );
+    assert!(gents_protocol::graphql::graphql_rows_from_response(
+        &admin_local.execute(&session_query).await?,
+        "AgentSession"
+    )
+    .is_empty());
+    assert!(gents_protocol::graphql::graphql_rows_from_response(
+        &http(admin_address, &outsider)?
+            .execute(&session_query)
+            .await?,
+        "AgentSession"
+    )
+    .is_empty());
+
+    let public_doc = candidate_local.transact_write("test.transport.public_registry", |txn| {
+        Box::pin(async move {
+            let response = txn.execute(r#"mutation { create_PeerRegistry(input:{peer_id:"public-probe",node_did:"public-node",addresses:["routing-address"]}) {_docID} }"#).await?;
+            let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "PeerRegistry")?;
+            txn.add_actor_relationship("PeerRegistry", &doc, "reader", &identity::Did::wildcard()).await?;
+            Ok::<_, anyhow::Error>(doc)
+        })
+    }).await?;
+    let mut public_arrivals = crate::subscribe_collections(admin_node, ["PeerRegistry"])?;
+    candidate_admin
+        .add_replicator(
+            &addresses,
+            &["PeerRegistry".to_owned()],
+            &Default::default(),
+        )
+        .await?;
+    push_documents_to_peer(
+        candidate_node,
+        &peer,
+        vec![P2pDocumentRequest {
+            collection: "PeerRegistry".into(),
+            doc_id: public_doc.clone(),
+        }],
+    )
+    .await?;
+    tokio::time::timeout(Duration::from_secs(20), public_arrivals.recv())
+        .await?
+        .context("replicated public registry notification closed")?;
+    {
+        let txn = admin_node.database().new_txn(false).await?;
+        let view = txn.datastore()?;
+        crate::store::config_client::transport_publication::project_transport_document(
+            &view,
+            admin_node.document_acp().as_ref(),
+            &reader,
+            "PeerRegistry",
+            &public_doc,
+        )
+        .await?;
+        drop(view);
+        txn.commit().await?;
+    }
+    let public_query = format!(
+        r#"{{ PeerRegistry(filter: {{_docID: {{_eq: "{}"}}}}) {{peer_id addresses}} }}"#,
+        escape_graphql_string(&public_doc)
+    );
+    let public = http(admin_address, &outsider)?
+        .execute(&public_query)
+        .await?;
+    let public_expected = crate::lean_vocab_test::lean_contract_snapshot()
+        .identity_discovery_policy_cases
+        .iter()
+        .find(|case| case["name"] == "outsider-read")
+        .context("missing public discovery case")?["allowed"]
+        == true;
+    assert_eq!(
+        gents_protocol::graphql::graphql_rows_from_response(&public, "PeerRegistry").len() != 0,
+        public_expected
+    );
+    assert_eq!(public["data"]["PeerRegistry"][0]["peer_id"], "public-probe");
+    assert_eq!(
+        count(&http(admin_address, &outsider)?.execute(&query).await?) != 0,
+        case("after-repair")?["outsider_read"] == true
+    );
+    assert_eq!(
+        !gents_protocol::graphql::graphql_rows_from_response(
+            &admin_local.execute(&session_query).await?,
+            "AgentSession"
+        )
+        .is_empty(),
+        case("after-repair")?["app_read"] == true
+    );
+
     candidate_local
         .delete_actor_relationship("NetworkEnrollmentRequest", &doc, "reader", &reader)
         .await?;
