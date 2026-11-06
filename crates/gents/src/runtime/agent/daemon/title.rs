@@ -96,8 +96,13 @@ where
         tokio::spawn(Box::pin(async move {
             let _service_work = service_work;
             let result: Result<()> = async {
+                let access = crate::ConfigAccess::local_managed_agent(
+                    node.clone(),
+                    identity::Did::new(&parent.agent_did)?,
+                    agent_identity.as_ref(),
+                )?;
                 if !session::session_needs_generated_title(
-                    node.as_ref(),
+                    &access,
                     &parent.node_did,
                     parent.requester_did.as_deref(),
                     &parent.session_id,
@@ -424,8 +429,13 @@ where
                         .await;
                 }
                 let preparation = async {
+                    let access = crate::ConfigAccess::local_managed_agent(
+                        self.node.clone(),
+                        identity::Did::new(&request.agent_did)?,
+                        self.agent_config.agent_identity.as_ref(),
+                    )?;
                     if !session::session_needs_generated_title(
-                        self.node.as_ref(),
+                        &access,
                         &request.node_did,
                         parent.requester_did.as_deref(),
                         &request.session_id,
@@ -435,7 +445,7 @@ where
                         return Ok(None);
                     }
                     let recent = session::load_recent_titles_for_agent(
-                        self.node.as_ref(),
+                        &access,
                         &request.node_did,
                         &request.session_id,
                         RECENT_TITLE_LIMIT,

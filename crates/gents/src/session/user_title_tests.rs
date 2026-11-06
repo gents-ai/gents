@@ -304,3 +304,169 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
         node.shutdown().await.expect("shut down test node");
     }
 }
+
+#[tokio::test]
+async fn title_observation_uses_selected_agent_session_access() {
+    use crate::store::identity::NodeIdentity;
+    use gents_protocol::agent_identity::AgentIdentityBinding;
+
+    async fn reserve(
+        db: &crate::support::TestDb,
+        user: &crate::KeyIdentity,
+        access: &crate::ConfigAccess,
+        agent: &AgentIdentityBinding,
+        session: &str,
+    ) {
+        crate::request::lifecycle::build_signed_client_request(
+            access,
+            crate::request::lifecycle::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                crate::request::lifecycle::RequestIdentity {
+                    request_id: format!("{session}-request"),
+                    node_did: db.node_identity.did().to_owned(),
+                    requester_did: Some(user.did().to_owned()),
+                    agent_did: agent.agent_did.clone(),
+                    session_id: session.to_owned(),
+                    content: "work".into(),
+                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: "2026-09-22T00:00:00Z".into(),
+                },
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+            ),
+            crate::request::lifecycle::RequestSigner::Identity(user),
+        )
+        .await
+        .unwrap();
+    }
+
+    let (db, user, owner, first) = crate::test_support::signed_test_node("title-observation").await;
+    let user_did = user.did().to_owned();
+    let second = crate::store::identity::provision_agent_identity_authorized(
+        &db.node,
+        db.node_identity.as_ref(),
+        &identity::Did::new(&user_did).unwrap(),
+    )
+    .await
+    .unwrap();
+    crate::test_support::install_test_agent_binding_with_access(
+        &db.node,
+        db.node_identity.did(),
+        "Other title agent",
+        &second,
+        &owner,
+    )
+    .await;
+    let first_identity =
+        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &first).unwrap();
+    let second_identity =
+        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &second).unwrap();
+    let first_access = crate::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(first_identity.did()).unwrap(),
+        first_identity.as_ref(),
+    )
+    .unwrap();
+    let second_access = crate::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(second_identity.did()).unwrap(),
+        second_identity.as_ref(),
+    )
+    .unwrap();
+    let runtime_access = crate::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(db.node_identity.did()).unwrap(),
+    );
+    let node_did = db.node_identity.did();
+    for (agent, session) in [
+        (&first, "title-target"),
+        (&first, "title-recent"),
+        (&second, "title-foreign"),
+    ] {
+        reserve(&db, &user, &owner, agent, session).await;
+    }
+    for (session, title) in [
+        ("title-recent", "Prior title"),
+        ("title-foreign", "Foreign title"),
+    ] {
+        owner
+            .transact_write("test.title_observation", |txn| {
+                let user_did = &user_did;
+                Box::pin(async move {
+                    apply_title_in_txn(
+                        txn,
+                        node_did,
+                        Some(user_did.as_str()),
+                        session,
+                        Some(title),
+                        SessionTitleSource::User,
+                        "2026-09-23T00:00:00Z",
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+    }
+    assert!(super::observations::session_needs_generated_title(
+        &first_access,
+        node_did,
+        Some(user_did.as_str()),
+        "title-target"
+    )
+    .await
+    .unwrap());
+    assert!(!super::observations::session_needs_generated_title(
+        &runtime_access,
+        node_did,
+        Some(user_did.as_str()),
+        "title-target"
+    )
+    .await
+    .unwrap());
+    assert!(!super::observations::session_needs_generated_title(
+        &second_access,
+        node_did,
+        Some(user_did.as_str()),
+        "title-target"
+    )
+    .await
+    .unwrap());
+    assert_eq!(
+        super::observations::load_recent_titles_for_agent(
+            &first_access,
+            node_did,
+            "title-target",
+            5,
+        )
+        .await
+        .unwrap(),
+        vec!["Prior title"]
+    );
+    owner
+        .transact_write("test.title_observation.rename", |txn| {
+            let user_did = &user_did;
+            Box::pin(async move {
+                apply_title_in_txn(
+                    txn,
+                    node_did,
+                    Some(user_did.as_str()),
+                    "title-target",
+                    Some("Chosen title"),
+                    SessionTitleSource::User,
+                    "2026-09-23T00:00:01Z",
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    assert!(!super::observations::session_needs_generated_title(
+        &first_access,
+        node_did,
+        Some(user_did.as_str()),
+        "title-target"
+    )
+    .await
+    .unwrap());
+    db.node.shutdown().await.expect("node shutdown");
+}

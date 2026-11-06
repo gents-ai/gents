@@ -1859,7 +1859,7 @@ pub(super) mod tests {
         );
         assert!(
             crate::session::session_needs_generated_title(
-                &node,
+                &admission.client,
                 &admission.node_did,
                 wake.requester_did.as_deref(),
                 &wake.session_id,
@@ -1958,7 +1958,7 @@ pub(super) mod tests {
         .expect("daemon must persist pending title work before test shutdown");
         assert!(
             crate::session::session_needs_generated_title(
-                &node,
+                &admission.client,
                 &admission.node_did,
                 wake.requester_did.as_deref(),
                 &wake.session_id,

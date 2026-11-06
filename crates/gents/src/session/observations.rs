@@ -1,4 +1,4 @@
-use super::query::{decode_session_row, load_agent_session, validate_agent_session};
+use super::query::{decode_session_row, validate_agent_session};
 use super::sessions::{
     load_agent_session_row_in_txn, patch_session_in_txn, touch_activity_value, touched_observation,
     SESSION_SCOPE_FIELDS,
@@ -667,7 +667,7 @@ pub async fn apply_title_in_txn(
 }
 
 pub(crate) async fn load_recent_titles_for_agent(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     node_did: &str,
     exclude_session_id: &str,
     limit: usize,
@@ -689,14 +689,10 @@ pub(crate) async fn load_recent_titles_for_agent(
         }}"#
     );
 
-    let resp = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "load_recent_titles_for_agent",
-    )
-    .await?;
-
-    let rows = crate::store::graphql::rows::<serde_json::Value>(&resp, "AgentSession")?;
+    let resp = access.execute(&query).await?;
+    let rows = resp["data"]["AgentSession"]
+        .as_array()
+        .context("recent title query omitted AgentSession rows")?;
     let mut sessions: Vec<gents_protocol::session::AgentSession> = rows
         .iter()
         .map(|row| decode_session_row(row).map(|row| row.session))
@@ -735,14 +731,22 @@ pub(crate) async fn load_recent_titles_for_agent(
 }
 
 pub(crate) async fn session_needs_generated_title(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
 ) -> Result<bool> {
-    let Some(session) = load_agent_session(node, node_did, session_id, requester_did).await? else {
+    let Some(row) = access
+        .transact_readonly("session.needs_generated_title", |txn| {
+            Box::pin(load_agent_session_row_in_txn(
+                txn, node_did, session_id, requester_did,
+            ))
+        })
+        .await?
+    else {
         return Ok(false);
     };
+    let session = row.session;
     validate_agent_session(&session)?;
 
     Ok(match session.title.as_ref() {

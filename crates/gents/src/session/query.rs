@@ -158,6 +158,7 @@ pub fn public_request_filter(scope: &str) -> String {
     }
 }
 
+#[cfg(test)]
 pub(super) async fn load_agent_session_row(
     node: &EmbeddedNode,
     node_did: &str,
@@ -172,6 +173,7 @@ pub(super) async fn load_agent_session_row(
         })
 }
 
+#[cfg(test)]
 pub(super) async fn load_agent_session_rows(
     node: &EmbeddedNode,
     node_did: &str,
@@ -198,6 +200,7 @@ pub(super) async fn load_agent_session_rows(
     rows.iter().map(decode_session_row).collect()
 }
 
+#[cfg(test)]
 pub(super) async fn load_agent_session(
     node: &EmbeddedNode,
     node_did: &str,
