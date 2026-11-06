@@ -156,8 +156,6 @@ struct ScopedWatcherFixture {
 
 impl ScopedWatcherFixture {
     async fn new() -> Self {
-        use crate::store::identity::NodeIdentity;
-
         let db = crate::support::test_signed_db("scoped-watcher").await;
         let (home, _user, client_access, binding) =
             crate::test_support::signed_test_node_from_db(db, "scoped-watcher-user").await;
