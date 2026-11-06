@@ -3031,11 +3031,11 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_mcp_health_cases_match_health_checker_transitions",
         },
         ConformanceConsumer::RustTest {
-            id: "gents_desktop_bridge::tests::operations_interrupt::interrupt_request_reaches_only_the_named_request",
+            id: "gents_desktop_bridge::tests::operations_interrupt::interrupt_uses_hosting_runtime_and_preserves_other_requests",
             package: "gents-desktop-bridge",
             source_path: "crates/gents-desktop-bridge/src/tests/operations_interrupt.rs",
             module_path: "gents_desktop_bridge::tests::operations_interrupt",
-            function: "interrupt_request_reaches_only_the_named_request",
+            function: "interrupt_uses_hosting_runtime_and_preserves_other_requests",
         },
         ConformanceConsumer::RustTest {
             id: "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_derives_cancel_causes_from_request_and_tool",
