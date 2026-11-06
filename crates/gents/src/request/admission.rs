@@ -1900,6 +1900,34 @@ mod tests {
                 db.node.clone(),
                 identity::Did::new(runtime.did()).unwrap(),
             );
+            let runtime_did = runtime.did().to_owned();
+            let agent_did = agent.did().to_owned();
+            admin
+                .transact_write("test.admission_fixture_executor", |txn| {
+                    let runtime_did = &runtime_did;
+                    let agent_did = &agent_did;
+                    Box::pin(async move {
+                        let (agent_doc, _) =
+                            crate::store::config_client::read_desired_state_record_in_txn(
+                                txn,
+                                crate::Collection::Agent,
+                                runtime_did,
+                                agent_did,
+                            )
+                            .await?
+                            .ok_or_else(|| anyhow::anyhow!("fixture Agent document is missing"))?;
+                        txn.add_actor_relationship(
+                            "Agent",
+                            &agent_doc,
+                            "executor",
+                            &identity::Did::new(agent_did)?,
+                        )
+                        .await?;
+                        Ok::<_, anyhow::Error>(())
+                    })
+                })
+                .await
+                .unwrap();
             Self {
                 db,
                 runtime,
@@ -1937,12 +1965,68 @@ mod tests {
             create
         }
 
+        /// Signs `create` as the runtime and writes it through the runtime's access.
         async fn create_signed_request(&self, mut create: AgentRequestCreate) -> String {
             crate::sign_agent_request_create(self.runtime.as_ref(), &mut create)
                 .await
                 .unwrap();
+            self.insert_signed_request(&create).await
+        }
+
+        /// Signs `create` as the managed Agent. Only a request the Agent authors for
+        /// itself (requester and signer both its DID) is admitted as local-self.
+        async fn create_agent_signed_request(&self, mut create: AgentRequestCreate) -> String {
+            crate::sign_agent_request_create(self.agent.as_ref(), &mut create)
+                .await
+                .unwrap();
+            self.insert_signed_request(&create).await
+        }
+
+        fn agent_self_create(
+            &self,
+            request_id: &str,
+            session_id: &str,
+            content: &str,
+            input: Option<serde_json::Value>,
+        ) -> AgentRequestCreate {
+            let agent_did = self.agent.did();
+            let mut create = AgentRequestCreate::base(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                request_id,
+                self.runtime.did(),
+                agent_did,
+                agent_did,
+                session_id,
+                content,
+                "interactive",
+                "2026-09-01T00:00:00Z",
+                AgentRequestAdmissionRecord::local_self(agent_did),
+            );
+            if let Some(input) = input {
+                create.input = serde_json::from_value(input).unwrap();
+            }
+            create
+        }
+
+        /// Writes a signed request through the runtime's access and stages the
+        /// `working_agent` edge that lets its target Agent read and terminalize it.
+        async fn insert_signed_request(&self, create: &AgentRequestCreate) -> String {
             let mutation = create.graphql_mutation().unwrap();
-            self.write_as_runtime(mutation, "AgentRequest").await
+            let doc_id = self.write_as_runtime(mutation, "AgentRequest").await;
+            self.grant_working_agent(&doc_id, &create.agent_did).await;
+            doc_id
+        }
+
+        async fn grant_working_agent(&self, doc_id: &str, agent_did: &str) {
+            self.admin
+                .add_actor_relationship(
+                    "AgentRequest",
+                    doc_id,
+                    "working_agent",
+                    &identity::Did::new(agent_did).unwrap(),
+                )
+                .await
+                .unwrap();
         }
 
         async fn write_as_runtime(&self, mutation: String, collection: &'static str) -> String {
@@ -2012,30 +2096,20 @@ mod tests {
 
     #[tokio::test]
     async fn signed_input_cannot_expand_context_or_spoof_runtime_queue() {
-        let temp = tempfile::tempdir().unwrap();
-        let identity = KeyIdentity::load_or_create(temp.path().join("input.key"), None).unwrap();
-        let node = std::sync::Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(identity.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(&node).await.unwrap();
-        let owner = crate::store::graphql::escape_graphql_string(identity.did());
-        let agent_did = crate::triggers::callback::test_agent_did();
-        let agent = crate::store::graphql::escape_graphql_string(&agent_did);
-        for mutation in [
-            format!(
-                r#"mutation {{ create_AgentContext(input: {{ context_id: "context", node_did: "{owner}", skill_ids: ["allowed"] }}) {{ _docID }} }}"#
-            ),
-            format!(
-                r#"mutation {{ create_Agent(input: {{ agent_did: "{agent}", node_did: "{owner}", context_id: "context", inference_profile_id: "inference", enabled: true }}) {{ _docID }} }}"#
-            ),
-        ] {
-            let result = node.execute(&mutation).await;
-            assert!(!result.has_errors(), "{:?}", result.errors);
-        }
+        let fixture = AdmissionFixture::new("signed-input").await;
+        let agent_did = fixture.agent.did().to_owned();
+        let owner = crate::store::graphql::escape_graphql_string(fixture.runtime.did());
+        let context = crate::store::graphql::escape_graphql_string(&format!("{agent_did}:context"));
+        fixture
+            .admin
+            .write(
+                "test.admission_context_allowlist",
+                &format!(
+                    r#"mutation {{ update_AgentContext(filter: {{ node_did: {{ _eq: "{owner}" }}, context_id: {{ _eq: "{context}" }} }}, input: {{ skill_ids: ["allowed"] }}) {{ _docID }} }}"#
+                ),
+            )
+            .await
+            .unwrap();
         for (index, input, allowed) in [
             (
                 0,
@@ -2058,38 +2132,31 @@ mod tests {
                 false,
             ),
         ] {
-            let mut create = AgentRequestCreate::base(
-                gents_protocol::request_admission::RequestPurpose::Normal,
-                format!("input-{index}"),
-                identity.did(),
-                identity.did(),
-                agent_did.as_str(),
+            let create = fixture.agent_self_create(
+                &format!("input-{index}"),
                 "session",
                 "work",
-                "interactive",
-                "2026-09-01T00:00:00Z",
-                AgentRequestAdmissionRecord::local_self(identity.did()),
+                Some(input),
             );
-            create.input = serde_json::from_value(input).unwrap();
-            crate::sign_agent_request_create(&identity, &mut create)
+            let doc_id = fixture.create_agent_signed_request(create).await;
+            let request = super::load_request_for_admission_test(fixture.node(), &doc_id)
                 .await
                 .unwrap();
-            let result = node.execute(&create.graphql_mutation().unwrap()).await;
-            assert!(!result.has_errors(), "{:?}", result.errors);
-            let doc =
-                crate::store::graphql::single_mutation_document(&result, "create_AgentRequest")
-                    .unwrap()
-                    .unwrap()["_docID"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned();
-            let request = super::load_request_for_admission_test(&node, &doc)
-                .await
-                .unwrap();
-            let admitted =
-                super::verify_fresh_local_self_request(&node, &identity, &request, &agent_did).await;
+            let admitted = super::verify_fresh_local_self_request(
+                fixture.node(),
+                fixture.runtime.as_ref(),
+                &request,
+                &agent_did,
+            )
+            .await;
             assert_eq!(admitted.is_ok(), allowed, "case {index}: {admitted:?}");
         }
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
     }
 
     #[tokio::test]
@@ -2472,6 +2539,7 @@ mod tests {
                         "AgentRequest",
                     )
                     .await;
+                fixture.grant_working_agent(&doc_id, &agent_did).await;
 
                 super::terminalize_pending_request_rejection(
                     fixture.node(),
@@ -2610,65 +2678,19 @@ mod tests {
 
     #[tokio::test]
     async fn final_verifier_returns_the_exact_fresh_signed_snapshot() {
-        let temp = tempfile::tempdir().unwrap();
-        let identity: Arc<dyn NodeIdentity> =
-            Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(identity.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
-        let owner = crate::store::graphql::escape_graphql_string(identity.did());
-        let agent_did = crate::triggers::callback::test_agent_did();
-        let agent = crate::store::graphql::escape_graphql_string(&agent_did);
-        let seeded = node.execute(&format!(r#"mutation {{ create_Agent(input: {{agent_did:"{agent}",node_did:"{owner}",inference_profile_id:"inference",enabled:true}}) {{_docID}} }}"#)).await;
-        assert!(!seeded.has_errors(), "{:?}", seeded.errors);
+        let fixture = AdmissionFixture::new("final-verifier").await;
+        let agent_did = fixture.agent.did().to_owned();
         let request_id = uuid::Uuid::new_v4().to_string();
-        let mut create = AgentRequestCreate::base(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            request_id,
-            identity.did(),
-            identity.did(),
-            agent_did.as_str(),
-            uuid::Uuid::new_v4().to_string(),
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let create = fixture.agent_self_create(
+            &request_id,
+            &session_id,
             "durable signed content",
-            "interactive",
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            AgentRequestAdmissionRecord::local_self(identity.did()),
+            None,
         );
-        crate::sign_agent_request_create(identity.as_ref(), &mut create)
-            .await
-            .unwrap();
-        let response = node.execute(&create.graphql_mutation().unwrap()).await;
-        assert!(
-            !response.has_errors(),
-            "create signed request: {:?}",
-            response.errors
-        );
-        let doc_id = response
-            .data
-            .as_ref()
-            .and_then(|data| {
-                data.get("create_AgentRequest")
-                    .or_else(|| data.get("add_AgentRequest"))
-            })
-            .and_then(|value| {
-                value.get("_docID").or_else(|| {
-                    value
-                        .as_array()
-                        .and_then(|rows| rows.first())
-                        .and_then(|row| row.get("_docID"))
-                })
-            })
-            .and_then(serde_json::Value::as_str)
-            .expect("created request doc id")
-            .to_string();
+        let doc_id = fixture.create_agent_signed_request(create).await;
 
-        let row = super::load_signed_request(node.as_ref(), &doc_id)
+        let row = super::load_signed_request(fixture.node().as_ref(), &doc_id)
             .await
             .unwrap();
         super::verify_request_receipt_signature(&row)
@@ -2676,11 +2698,23 @@ mod tests {
         let mut queued = super::row_into_agent_request(row, &doc_id).unwrap();
         queued.content = "stale queued content".to_string();
 
-        let runtime_state = node.execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{_docID: {{_eq:"{}"}}}}, input: {{execution_generation:"previous-claim",max_total_tokens:0}}) {{_docID}} }}"#,
-            crate::store::graphql::escape_graphql_string(&doc_id))).await;
-        assert!(!runtime_state.has_errors(), "{:?}", runtime_state.errors);
+        fixture
+            .admin
+            .write(
+                "test.final_verifier.runtime_state",
+                &format!(
+                    r#"mutation {{ update_AgentRequest(filter: {{_docID: {{_eq:"{}"}}}}, input: {{execution_generation:"previous-claim",max_total_tokens:0}}) {{_docID}} }}"#,
+                    crate::store::graphql::escape_graphql_string(&doc_id)
+                ),
+            )
+            .await
+            .unwrap();
         let (_authority_owner, authority) = enrollment_authority_channel();
-        let verifier = AgentRequestAdmissionVerifier::new(node.clone(), identity, authority);
+        let verifier = AgentRequestAdmissionVerifier::new(
+            fixture.node().clone(),
+            fixture.runtime.clone(),
+            authority,
+        );
         let verified = verifier.verify_fresh(&queued, &agent_did).await.unwrap();
         assert_eq!(verified.content, "durable signed content");
         assert_ne!(verified.content, queued.content);
@@ -2690,21 +2724,27 @@ mod tests {
         );
         assert_eq!(verified.max_total_tokens, Some(0));
 
-        let response = node
-            .execute(&format!(
-                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline: "2099-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
-                crate::store::graphql::escape_graphql_string(&queued.doc_id),
-            ))
-            .await;
-        assert!(
-            !response.has_errors(),
-            "inject preclaim deadline: {:?}",
-            response.errors
-        );
+        fixture
+            .admin
+            .write(
+                "test.final_verifier.preclaim_deadline",
+                &format!(
+                    r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline: "2099-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+                    crate::store::graphql::escape_graphql_string(&queued.doc_id),
+                ),
+            )
+            .await
+            .unwrap();
         let error = verifier.verify_fresh(&queued, &agent_did).await.unwrap_err();
         assert!(error
             .to_string()
             .contains("caller-authored execution deadline"));
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
     }
 
     #[tokio::test]
