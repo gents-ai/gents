@@ -51,13 +51,16 @@ structure Observation where
 
 /-- Join the observed native document fields in the model; Rust supplies
 physical IDs, immutable identity derivation, selected plugin fields, and the
-reviewed host records without independently deciding the authorization. -/
+reviewed host records without independently deciding the authorization. These
+observations assume well-formed Tools and a ceiling that permits the selected
+plugins; the existing ToolPolicy owner models the general ceiling. -/
 def selections (input : Observation) : List Identity.Configuration.PluginDeleteSelection :=
   input.agents.flatMap fun agent =>
     input.contexts.flatMap fun context =>
       input.tools.flatMap fun tools =>
         if agent.nodeDid == input.node && context.nodeDid == input.node &&
-            tools.nodeDid == input.node && agent.contextId == context.contextId &&
+            tools.nodeDid == input.node && !agent.contextId.isEmpty &&
+            agent.contextId == context.contextId && !context.toolsId.isEmpty &&
             context.toolsId == tools.toolsId then
           tools.plugins.map fun plugin =>
             ⟨tools.docId, context.docId, plugin.coordinate, plugin.pin,
