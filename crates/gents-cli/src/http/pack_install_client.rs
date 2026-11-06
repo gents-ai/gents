@@ -494,7 +494,7 @@ pub(crate) async fn install_remote(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::store::identity::{KeyIdentity, NodeIdentity};
+    use gents::store::identity::KeyIdentity;
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_async;
 

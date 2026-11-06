@@ -2,12 +2,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use futures_util::{SinkExt, StreamExt};
 use gents::store::config_client::{
     ConfigAccess, ConfigApplyTxn, PackApprovalError, PackApprovalScope, PackEffectApprover,
     PackEvidence, PackMutation, PackRelationship, PackRelationshipEvidence,
@@ -180,7 +179,7 @@ impl SessionApprover {
             return Err(PackApprovalError::Refused("no pending pack effect".into()));
         }
         send(
-            &mut self.socket.lock().await,
+            &mut *self.socket.lock().await,
             json!({"type":"applied", "id":id, "result":result}),
         )
         .await
@@ -307,7 +306,7 @@ async fn run(
     let result = run_inner(&socket, &state, home, access, user_access).await;
     if let Err((error, outcome)) = result {
         let _ = send(
-            &mut socket.lock().await,
+            &mut *socket.lock().await,
             json!({"type":"failed", "error":format!("{error:#}"), "outcome":outcome}),
         )
         .await;
@@ -322,7 +321,7 @@ async fn run_inner(
     user_access: ConfigAccess,
 ) -> std::result::Result<(), (anyhow::Error, &'static str)> {
     let prepare = async {
-        let ClientMessage::Start { request } = receive(&mut socket.lock().await).await? else {
+        let ClientMessage::Start { request } = receive(&mut *socket.lock().await).await? else {
             anyhow::bail!("pack session requires a start request");
         };
         anyhow::ensure!(
@@ -418,14 +417,14 @@ async fn run_inner(
         nonce: uuid::Uuid::new_v4().to_string(),
     };
     send(
-        &mut socket.lock().await,
+        &mut *socket.lock().await,
         json!({"type":"ready", "scope":scope, "preparation":stage.preparation()}),
     )
     .await
     .map_err(|error| (error, "not_installed"))?;
     let schemas = match tokio::time::timeout(
         std::time::Duration::from_secs(300),
-        receive(&mut socket.lock().await),
+        receive(&mut *socket.lock().await),
     )
     .await
     .map_err(|error| {
@@ -514,7 +513,7 @@ async fn run_inner(
         .map_err(|error| (error, "unconfirmed"))?;
     let result = json!({"pack":received.root.manifest().name, "source":received.root.label(), "digest":received.root.digest(), "owner":state.node_did, "inference":prepared.inference, "dependency_inference":prepared.dependency_inference, "origin_tag":origin_tag, "dependencies":received.root.manifest().metadata.dependencies, "schemas":schemas, "apply":report});
     send(
-        &mut socket.lock().await,
+        &mut *socket.lock().await,
         json!({"type":"finished", "result":result}),
     )
     .await
