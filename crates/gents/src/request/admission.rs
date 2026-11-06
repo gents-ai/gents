@@ -1796,6 +1796,35 @@ mod tests {
     use crate::store::schema::ensure_runtime_schemas;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 
+    #[test]
+    fn generated_client_claim_queue_candidates_match_the_model() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().request_input_cases;
+        for case in cases {
+            let input: gents_protocol::request_input::RequestInput =
+                serde_json::from_value(case["input"].clone()).unwrap();
+            for (agent_message, expected) in [
+                (false, "expected_client_claim_queue_candidate"),
+                (true, "expected_agent_message_claim_queue_candidate"),
+            ] {
+                assert_eq!(
+                    super::client_claim_queue_candidate(Some(&input), agent_message),
+                    case[expected].as_bool().unwrap(),
+                    "{}: local agent message {agent_message}",
+                    case["name"]
+                );
+            }
+        }
+        for name in [
+            "client-goal-original-edge-preserved",
+            "goal-source-needs-owned-admission",
+            "client-unrelated-runtime-queue-denied",
+            "client-local-agent-message-steering-candidate",
+        ] {
+            assert!(cases.iter().any(|case| case["name"] == name), "{name}");
+        }
+        assert!(super::client_claim_queue_candidate(None, false));
+    }
+
     #[tokio::test]
     async fn pending_rejection_requires_the_selected_managed_agent() {
         let dir = tempfile::tempdir().unwrap();
