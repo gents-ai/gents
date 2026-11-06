@@ -141,10 +141,6 @@ async fn live_feed_change_does_not_reopen_the_subscription() {
     assert_eq!(tokio::time::Instant::now(), started);
 }
 
-async fn test_node() -> Arc<defra_node::Node> {
-    Arc::new(crate::test_support::node_builder().build().await.unwrap())
-}
-
 struct ScopedWatcherFixture {
     node: Arc<defra_node::Node>,
     node_did: String,
@@ -156,7 +152,7 @@ struct ScopedWatcherFixture {
 
 impl ScopedWatcherFixture {
     async fn new() -> Self {
-        let db = crate::support::test_signed_db("scoped-watcher").await;
+        let db = crate::support::test_db("scoped-watcher").await;
         let (home, _user, client_access, binding) =
             crate::test_support::signed_test_node_from_db(db, "scoped-watcher-user").await;
         let node = home.node.clone();
@@ -213,6 +209,48 @@ impl ScopedWatcherFixture {
         })
     }
 
+    async fn insert_request(
+        &self,
+        request_id: &str,
+        session_id: &str,
+        lifecycle_state: &str,
+        created_at: &str,
+    ) -> String {
+        let mut input = self.request_input(request_id, session_id);
+        input["lifecycle_state"] = serde_json::json!(lifecycle_state);
+        input["created_at"] = serde_json::json!(created_at);
+        self.create_request(input).await
+    }
+
+    async fn insert_incoherent_request(&self, request_id: &str, session_id: &str) -> String {
+        let mut input = self.request_input(request_id, session_id);
+        input["request_hop"] = serde_json::json!(1);
+        input["caused_by_parent_request_id"] = serde_json::json!("parent-req-exists");
+        self.create_request(input).await
+    }
+
+    async fn update_request(&self, doc_id: &str, input: serde_json::Value) {
+        let doc = crate::store::graphql::escape_graphql_string(doc_id);
+        let input = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
+        self.access
+            .write(
+                "test.watcher.update",
+                &format!(
+                    r#"mutation {{ update_AgentRequest(docID: "{doc}", input: {input}) {{ _docID }} }}"#
+                ),
+            )
+            .await
+            .expect("update watcher request as selected agent");
+    }
+
+    async fn set_completed(&self, doc_id: &str) {
+        self.update_request(
+            doc_id,
+            serde_json::json!({ "lifecycle_state": "completed" }),
+        )
+        .await;
+    }
+
     async fn request_row(&self, doc_id: &str) -> serde_json::Value {
         let doc = crate::store::graphql::escape_graphql_string(doc_id);
         let response = self.access.execute(&format!(
@@ -226,181 +264,6 @@ impl ScopedWatcherFixture {
     }
 }
 
-async fn insert_incoherent_agent_request(
-    node: &defra_node::Node,
-    node_did: &str,
-    request_id: &str,
-) -> String {
-    use crate::store::graphql::escape_graphql_string;
-
-    let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_node_did = escape_graphql_string(node_did);
-    let created_at = chrono::Utc::now().to_rfc3339();
-
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{escaped_request_id}",
-                purpose: "normal",
-                node_did: "{escaped_node_did}",
-                session_id: "sess-incoherent",
-                agent_did: "general",
-                content: "test",
-                lifecycle_state: "pending",
-                backend_id: "",
-                created_at: "{created_at}",
-                retry_count: 0,
-                max_retries: 0,
-                request_hop: 1,
-                caused_by_parent_request_id: "parent-req-exists"
-            }}) {{ _docID }}
-        }}"#
-    );
-
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create_AgentRequest (incoherent) failed: {:?}",
-        response.errors
-    );
-
-    let lookup = format!(
-        r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
-                _docID
-            }}
-        }}"#
-    );
-    let response = node.execute(&lookup).await;
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|rows| rows.as_array())
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("_docID"))
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned)
-        .expect("AgentRequest _docID")
-}
-
-async fn insert_agent_request_row(
-    node: &defra_node::Node,
-    node_did: &str,
-    request_id: &str,
-    session_id: &str,
-    lifecycle_state: &str,
-    created_at: &str,
-) -> String {
-    let request_id = crate::store::graphql::escape_graphql_string(request_id);
-    let node_did = crate::store::graphql::escape_graphql_string(node_did);
-    let session_id = crate::store::graphql::escape_graphql_string(session_id);
-    let lifecycle_state = crate::store::graphql::escape_graphql_string(lifecycle_state);
-    let created_at = crate::store::graphql::escape_graphql_string(created_at);
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                purpose: "normal",
-                node_did: "{node_did}",
-                session_id: "{session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
-                superseded_by_request: "",
-                agent_did: "general",
-                content: "test",
-                lifecycle_state: "{lifecycle_state}",
-                backend_id: "",
-                created_at: "{created_at}",
-                retry_count: 0,
-                max_retries: 0
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create_AgentRequest failed: {:?}",
-        response.errors
-    );
-
-    let lookup = format!(
-        r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
-                _docID
-            }}
-        }}"#
-    );
-    let response = node.execute(&lookup).await;
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|rows| rows.as_array())
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("_docID"))
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned)
-        .expect("AgentRequest _docID")
-}
-
-async fn set_request_terminal_completed(node: &defra_node::Node, doc_id: &str) {
-    let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                input: {{
-                    lifecycle_state: "completed"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "update_AgentRequest terminal failed: {:?}",
-        response.errors
-    );
-}
-
-async fn set_request_processing(node: &defra_node::Node, doc_id: &str) {
-    let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                input: {{ lifecycle_state: "processing" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "update AgentRequest processing failed: {:?}",
-        response.errors
-    );
-}
-
-async fn set_request_interrupt_requested_at(node: &defra_node::Node, doc_id: &str, at: &str) {
-    let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
-    let at = crate::store::graphql::escape_graphql_string(at);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                input: {{ interrupt_requested_at: "{at}" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "update_AgentRequest interrupt failed: {:?}",
-        response.errors
-    );
-}
-
 #[tokio::test]
 async fn generated_release_cases_preserve_native_session_order() {
     use crate::lean_vocab_test::{lean_event_delivery_transition_cases, LeanEventDeliveryAction};
@@ -410,31 +273,22 @@ async fn generated_release_cases_preserve_native_session_order() {
             continue;
         };
         cases += 1;
-        let node = test_node().await;
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let owner = "did:key:z-watcher-release";
+        let fixture = ScopedWatcherFixture::new().await;
         let session = format!("session-{doc}");
-        let head = insert_agent_request_row(
-            node.as_ref(),
-            owner,
-            "native-head",
-            &session,
-            "pending",
-            "2026-03-12T00:00:00Z",
-        )
-        .await;
-        for request_id in &case.pre.persistent_set {
-            insert_agent_request_row(
-                node.as_ref(),
-                owner,
-                request_id,
-                &format!("session-{request_id}"),
-                "pending",
-                "2026-03-12T00:00:00Z",
-            )
+        let head = fixture
+            .insert_request("native-head", &session, "pending", "2026-03-12T00:00:00Z")
             .await;
+        for request_id in &case.pre.persistent_set {
+            fixture
+                .insert_request(
+                    request_id,
+                    &format!("session-{request_id}"),
+                    "pending",
+                    "2026-03-12T00:00:00Z",
+                )
+                .await;
         }
-        let mut watcher = DefraWatcher::new_legacy(node.clone(), owner).expect("request watcher");
+        let mut watcher = fixture.watcher();
         watcher.processed_request_ids = case
             .pre
             .processed_set
@@ -466,7 +320,7 @@ async fn generated_release_cases_preserve_native_session_order() {
         let mut expected = case.post.processed_set.clone();
         expected.sort();
         assert_eq!(retained, expected, "{}", case.name);
-        set_request_terminal_completed(node.as_ref(), &head).await;
+        fixture.set_completed(&head).await;
         let released =
             tokio::time::timeout(std::time::Duration::from_secs(2), watcher.next_request())
                 .await
@@ -492,29 +346,15 @@ async fn generated_release_cases_preserve_native_session_order() {
 
 #[tokio::test]
 async fn native_arrival_head_is_delivered_despite_reverse_lexical_timestamp_tie() {
-    let node = test_node().await;
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let owner = "did:key:z-watcher-native-head";
-    let first = insert_agent_request_row(
-        node.as_ref(),
-        owner,
-        "z-first",
-        "same-session",
-        "pending",
-        "2026-03-12T00:00:00Z",
-    )
-    .await;
-    let later = insert_agent_request_row(
-        node.as_ref(),
-        owner,
-        "a-later",
-        "same-session",
-        "pending",
-        "2026-03-12T00:00:00Z",
-    )
-    .await;
-    let watcher = DefraWatcher::new_legacy(node.clone(), owner).expect("request watcher");
-    let held = crate::store::config_client::ConfigApplyTxn::begin_local(&node, None)
+    let fixture = ScopedWatcherFixture::new().await;
+    let first = fixture
+        .insert_request("z-first", "same-session", "pending", "2026-03-12T00:00:00Z")
+        .await;
+    let later = fixture
+        .insert_request("a-later", "same-session", "pending", "2026-03-12T00:00:00Z")
+        .await;
+    let watcher = fixture.watcher();
+    let held = crate::store::config_client::ConfigApplyTxn::begin_local(&fixture.node, None)
         .await
         .unwrap();
     let pending = tokio::time::timeout(Duration::from_secs(5), watcher.pending_requests())
@@ -539,7 +379,7 @@ async fn native_arrival_head_is_delivered_despite_reverse_lexical_timestamp_tie(
             .request_id,
         "z-first"
     );
-    set_request_terminal_completed(node.as_ref(), &first).await;
+    fixture.set_completed(&first).await;
     assert_eq!(
         watcher
             .pending_requests()
@@ -563,39 +403,28 @@ async fn native_arrival_head_is_delivered_despite_reverse_lexical_timestamp_tie(
 
 #[tokio::test]
 async fn pending_requests_skip_queued_same_session_rows_until_claimable() {
-    let node = test_node().await;
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let fixture = ScopedWatcherFixture::new().await;
+    let active_doc_id = fixture
+        .insert_request(
+            "req-active",
+            "sess-queue",
+            "processing",
+            "2026-03-12T00:00:00Z",
+        )
+        .await;
+    fixture
+        .insert_request(
+            "req-queued",
+            "sess-queue",
+            "pending",
+            "2026-03-12T00:00:01Z",
+        )
+        .await;
+    fixture
+        .insert_request("req-other", "sess-other", "pending", "2026-03-12T00:00:02Z")
+        .await;
 
-    let node_did = "did:key:z-watcher-queue";
-    let active_doc_id = insert_agent_request_row(
-        node.as_ref(),
-        node_did,
-        "req-active",
-        "sess-queue",
-        "processing",
-        "2026-03-12T00:00:00Z",
-    )
-    .await;
-    insert_agent_request_row(
-        node.as_ref(),
-        node_did,
-        "req-queued",
-        "sess-queue",
-        "pending",
-        "2026-03-12T00:00:01Z",
-    )
-    .await;
-    insert_agent_request_row(
-        node.as_ref(),
-        node_did,
-        "req-other",
-        "sess-other",
-        "pending",
-        "2026-03-12T00:00:02Z",
-    )
-    .await;
-
-    let watcher = DefraWatcher::new_legacy(node.clone(), node_did).expect("request watcher");
+    let watcher = fixture.watcher();
     let pending = watcher.pending_requests().await.unwrap();
     assert_eq!(
         pending
@@ -605,7 +434,7 @@ async fn pending_requests_skip_queued_same_session_rows_until_claimable() {
         vec!["req-other"]
     );
 
-    set_request_terminal_completed(node.as_ref(), &active_doc_id).await;
+    fixture.set_completed(&active_doc_id).await;
     let pending = watcher.pending_requests().await.unwrap();
     assert_eq!(
         pending
@@ -618,36 +447,31 @@ async fn pending_requests_skip_queued_same_session_rows_until_claimable() {
 
 #[tokio::test]
 async fn pending_requests_include_interrupted_queued_rows_for_terminalization() {
-    let node = test_node().await;
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let fixture = ScopedWatcherFixture::new().await;
+    fixture
+        .insert_request(
+            "req-active",
+            "sess-queue",
+            "processing",
+            "2026-03-12T00:00:00Z",
+        )
+        .await;
+    let queued_doc_id = fixture
+        .insert_request(
+            "req-queued-interrupt",
+            "sess-queue",
+            "pending",
+            "2026-03-12T00:00:01Z",
+        )
+        .await;
+    fixture
+        .update_request(
+            &queued_doc_id,
+            serde_json::json!({ "interrupt_requested_at": chrono::Utc::now().to_rfc3339() }),
+        )
+        .await;
 
-    let node_did = "did:key:z-watcher-queued-interrupt";
-    insert_agent_request_row(
-        node.as_ref(),
-        node_did,
-        "req-active",
-        "sess-queue",
-        "processing",
-        "2026-03-12T00:00:00Z",
-    )
-    .await;
-    let queued_doc_id = insert_agent_request_row(
-        node.as_ref(),
-        node_did,
-        "req-queued-interrupt",
-        "sess-queue",
-        "pending",
-        "2026-03-12T00:00:01Z",
-    )
-    .await;
-    set_request_interrupt_requested_at(
-        node.as_ref(),
-        &queued_doc_id,
-        &chrono::Utc::now().to_rfc3339(),
-    )
-    .await;
-
-    let watcher = DefraWatcher::new_legacy(node, node_did).expect("request watcher");
+    let watcher = fixture.watcher();
     let pending = watcher.pending_requests().await.unwrap();
     assert_eq!(
         pending
@@ -929,24 +753,26 @@ async fn revoked_request_is_not_rejected_or_reported_as_terminalized() {
 
 #[tokio::test]
 async fn incoherent_live_row_still_blocks_a_second_same_session_claim() {
-    let node = test_node().await;
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let fixture = ScopedWatcherFixture::new().await;
+    let incoherent_doc_id = fixture
+        .insert_incoherent_request("req-incoherent-active", "sess-incoherent")
+        .await;
+    fixture
+        .update_request(
+            &incoherent_doc_id,
+            serde_json::json!({ "lifecycle_state": "processing" }),
+        )
+        .await;
+    fixture
+        .insert_request(
+            "req-valid-pending",
+            "sess-incoherent",
+            "pending",
+            "2026-03-12T00:00:01Z",
+        )
+        .await;
 
-    let node_did = "did:key:z-watcher-coherence-active";
-    let incoherent_doc_id =
-        insert_incoherent_agent_request(node.as_ref(), node_did, "req-incoherent-active").await;
-    set_request_processing(node.as_ref(), &incoherent_doc_id).await;
-    insert_agent_request_row(
-        node.as_ref(),
-        node_did,
-        "req-valid-pending",
-        "sess-incoherent",
-        "pending",
-        "2026-03-12T00:00:01Z",
-    )
-    .await;
-
-    let watcher = DefraWatcher::new_legacy(node, node_did).expect("request watcher");
+    let watcher = fixture.watcher();
     assert!(watcher.pending_requests().await.unwrap().is_empty());
 }
 
@@ -969,40 +795,23 @@ async fn try_fetch_request_terminalizes_incoherent_parent_linkage() {
 
 #[tokio::test]
 async fn pending_requests_are_scoped_by_node_did_without_host_identity() {
-    let node = test_node().await;
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = "did:key:z-watcher-workspace-owner";
-    let now = "2026-08-21T00:00:00Z";
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "req-owned",
-                purpose: "normal",
-                node_did: "{node_did}",
-                session_id: "sess-owned",
-                retry_parent_request: "",
-                retry_root_request: "req-owned",
-                superseded_by_request: "",
-                agent_did: "general",
-                content: "test",
-                lifecycle_state: "pending",
-                backend_id: "",
-                created_at: "{now}",
-                retry_count: 0,
-                max_retries: 0,
-                workspace_id: "ws-1",
-                workspace_owner_node_did: "{node_did}",
-                workspace_authority: "readWrite"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    let fixture = ScopedWatcherFixture::new().await;
+    let node_did = fixture.node_did.as_str();
+    let mut input = fixture.request_input("req-owned", "sess-owned");
+    input["created_at"] = serde_json::json!("2026-08-21T00:00:00Z");
+    input["workspace_id"] = serde_json::json!("ws-1");
+    input["workspace_owner_node_did"] = serde_json::json!(node_did);
+    input["workspace_authority"] = serde_json::json!("readWrite");
+    fixture.create_request(input).await;
 
-    let foreign =
-        DefraWatcher::new_legacy(node.clone(), "did:key:foreign").expect("request watcher");
+    let foreign = DefraWatcher::for_agents(
+        fixture.node.clone(),
+        "did:key:foreign",
+        vec![fixture.agent.clone()],
+    )
+    .expect("request watcher");
     assert!(foreign.pending_requests().await.unwrap().is_empty());
-    let owner = DefraWatcher::new_legacy(node, node_did).expect("request watcher");
+    let owner = fixture.watcher();
     let pending = owner.pending_requests().await.unwrap();
     assert_eq!(
         pending

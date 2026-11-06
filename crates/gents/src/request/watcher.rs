@@ -215,7 +215,7 @@ pub struct DefraWatcher {
     node_did: String,
     subscription: events::DocumentChangeSubscription,
     processed_request_ids: cooldown::ProcessedRequests,
-    agents: Option<Vec<Arc<dyn crate::store::identity::NodeIdentity>>>,
+    agents: Vec<Arc<dyn crate::store::identity::NodeIdentity>>,
     scan_failed: bool,
 }
 
@@ -236,16 +236,9 @@ impl DefraWatcher {
             node_did: node_did.to_string(),
             subscription,
             processed_request_ids: RapidHashMap::new(),
-            agents: Some(Vec::new()),
+            agents: Vec::new(),
             scan_failed: false,
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new_legacy(node: Arc<EmbeddedNode>, node_did: &str) -> Result<Self> {
-        let mut watcher = Self::new(node, node_did)?;
-        watcher.agents = None;
-        Ok(watcher)
     }
 
     pub fn for_agents(
@@ -293,10 +286,6 @@ impl Watcher for DefraWatcher {
         &mut self,
         mut agents: Vec<Arc<dyn crate::store::identity::NodeIdentity>>,
     ) -> Result<()> {
-        #[cfg(test)]
-        if self.agents.is_none() {
-            return Ok(());
-        }
         for agent in &agents {
             anyhow::ensure!(
                 agent.did() != self.node_did,
@@ -306,24 +295,21 @@ impl Watcher for DefraWatcher {
         }
         agents.sort_by(|a, b| a.did().cmp(b.did()));
         agents.dedup_by(|a, b| a.did() == b.did());
-        let unchanged = self.agents.as_ref().is_some_and(|previous| {
-            previous.len() == agents.len()
-                && previous
-                    .iter()
-                    .zip(&agents)
-                    .all(|(a, b)| a.did() == b.did())
-        });
+        let unchanged = self.agents.len() == agents.len()
+            && self
+                .agents
+                .iter()
+                .zip(&agents)
+                .all(|(a, b)| a.did() == b.did());
         if !unchanged {
             self.scan_failed = false;
         }
-        self.agents = Some(agents);
+        self.agents = agents;
         Ok(())
     }
 
     fn retains_agent(&self, agent_did: &str) -> bool {
-        self.agents
-            .as_ref()
-            .is_none_or(|agents| agents.iter().any(|agent| agent.did() == agent_did))
+        self.agents.iter().any(|agent| agent.did() == agent_did)
     }
 
     async fn next_request(&mut self) -> Option<Result<AgentRequest>> {

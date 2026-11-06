@@ -2117,7 +2117,10 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             node: None,
             local_did: String::new(),
             default_agent_did: "general".into(),
-            agents: Default::default(),
+            agents: rapidhash::RapidHashMap::from_iter([(
+                fixture.agent_config.agent_did.clone(),
+                fixture.agent_config.clone(),
+            )]),
             tool_surfaces: Default::default(),
             backend_admission_configs: Default::default(),
             unavailable_agents: Default::default(),
@@ -2174,11 +2177,12 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
         let router_gate = gate.clone();
         let router_node = fixture.node.clone();
         let router_did = fixture.identity.did().to_owned();
+        let router_agent = fixture.agent_config.agent_identity.clone();
         let router_task = tokio::spawn(async move {
             run_router_with_watcher(RouterInputs {
                 node: router_node.clone(),
                 node_did: router_did.clone(),
-                watcher: DefraWatcher::new_legacy(router_node, &router_did)
+                watcher: DefraWatcher::for_agents(router_node, &router_did, vec![router_agent])
                     .expect("request watcher"),
                 active_snapshot_rx: snapshot_rx,
                 shutdown: shutdown_rx,

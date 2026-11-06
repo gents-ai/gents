@@ -1123,7 +1123,20 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         retry_keys[1].rsplit_once(':').unwrap().0,
         "unrelated transcript writes must not advance the queue-local generation"
     );
-    let mut watcher = DefraWatcher::new_legacy(node.clone(), &did).expect("request watcher");
+    let agent = crate::load_agent(&node, &agent_did)
+        .await
+        .unwrap()
+        .expect("fixture Agent binding");
+    let agent_identity = crate::store::identity::resolve_agent_identity(
+        admission.runtime.as_ref(),
+        &gents_protocol::agent_identity::AgentIdentityBinding {
+            agent_did: agent.agent_did,
+            creation_nonce: agent.creation_nonce,
+        },
+    )
+    .unwrap();
+    let mut watcher = DefraWatcher::for_agents(node.clone(), &did, vec![agent_identity])
+        .expect("request watcher");
     let second_request = watcher.next_request().await.unwrap().unwrap();
     assert_ne!(second_request.request_id, first_id);
     assert_eq!(second_request.agent_did, agent_did);

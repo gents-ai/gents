@@ -58,116 +58,42 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
 
 impl DefraWatcher {
     pub async fn try_fetch_request(&self, doc_id: &str) -> anyhow::Result<Option<AgentRequest>> {
-        if self.agents.is_some() {
-            return Ok(self
-                .pending_requests()
-                .await?
-                .into_iter()
-                .find(|request| request.doc_id == doc_id));
-        }
-        let escaped_doc_id = crate::store::graphql::escape_graphql_string(doc_id);
-        let escaped_node_did = crate::store::graphql::escape_graphql_string(&self.node_did);
-        let query = format!(
-            r#"{{
-                AgentRequest(
-                    filter: {{
-                        _docID: {{ _eq: "{doc_id}" }},
-                        node_did: {{ _eq: "{node_did}" }},
-                        lifecycle_state: {{ _eq: "{pending}" }}
-                    }},
-                    limit: 1
-                ) {{{fields}
-                    lifecycle_state
-                    interrupt_requested_at
-                    valid_until
-                }}
-            }}"#,
-            doc_id = escaped_doc_id,
-            node_did = escaped_node_did,
-            fields = AGENT_REQUEST_FIELDS,
-            pending = RequestLifecycleState::Pending.as_str()
-        );
-
-        let resp = crate::store::graphql::graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "watcher query",
-        )
-        .await?;
-
-        let (rows, malformed) = parse_active_runtime_rows(resp.data.as_ref())?;
-        for row in malformed {
-            self.terminalize_malformed_pending_request(&row).await;
-        }
-        let Some(row) = rows.into_iter().next() else {
-            return Ok(None);
-        };
-        let request = match AgentRequest::try_from(row.clone()) {
-            Ok(request) => {
-                if !self.row_is_claimable(&row, &request).await? {
-                    return Ok(None);
-                }
-                request
-            }
-            Err(error) => {
-                self.terminalize_incoherent_pending_request(&row, &error)
-                    .await;
-                return Ok(None);
-            }
-        };
-        Ok(Some(request))
+        Ok(self
+            .pending_requests()
+            .await?
+            .into_iter()
+            .find(|request| request.doc_id == doc_id))
     }
 
     pub(crate) async fn pending_requests(&self) -> anyhow::Result<Vec<AgentRequest>> {
         let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         let node_did = crate::store::graphql::escape_graphql_string(&self.node_did);
-        let actors: Vec<Option<std::sync::Arc<dyn crate::store::identity::NodeIdentity>>> =
-            match &self.agents {
-                Some(agents) => agents.iter().cloned().map(Some).collect(),
-                None => vec![None],
-            };
         let mut rows = Vec::new();
         let mut positions = rapidhash::RapidHashMap::default();
         let mut seen = RapidHashSet::default();
         let mut failure = None;
-        for identity in actors {
-            let actor = identity
-                .as_ref()
-                .map(|identity| identity::Did::new(identity.did()))
-                .transpose()?;
-            let access = match (&actor, &identity) {
-                (Some(actor), Some(identity)) => crate::ConfigAccess::local_managed_agent(
-                    self.node.clone(),
-                    actor.clone(),
-                    identity.as_ref(),
-                )?,
-                _ => crate::ConfigAccess::local(self.node.clone()),
-            };
-            if let Some(actor) = &actor {
-                if let Err(error) =
-                    crate::request::lifecycle::recover_delegated_client_request_relationships_with_access(
-                        &access,
-                        &self.node_did,
-                        actor,
-                    )
-                    .await
-                {
-                    tracing::warn!(agent_did = %actor, %error, "delegated request relationship recovery failed");
-                }
+        for identity in &self.agents {
+            let actor = identity::Did::new(identity.did())?;
+            let access = crate::ConfigAccess::local_managed_agent(
+                self.node.clone(),
+                actor.clone(),
+                identity.as_ref(),
+            )?;
+            if let Err(error) =
+                crate::request::lifecycle::recover_delegated_client_request_relationships_with_access(
+                    &access,
+                    &self.node_did,
+                    &actor,
+                )
+                .await
+            {
+                tracing::warn!(agent_did = %actor, %error, "delegated request relationship recovery failed");
             }
-            let actor_name = actor
-                .as_ref()
-                .map_or("legacy test", identity::Did::as_str)
-                .to_owned();
-            let agent_filter = actor
-                .as_ref()
-                .map(|did| {
-                    format!(
-                        "agent_did: {{ _eq: \"{}\" }},",
-                        crate::store::graphql::escape_graphql_string(did.as_str())
-                    )
-                })
-                .unwrap_or_default();
+            let actor_name = actor.as_str().to_owned();
+            let agent_filter = format!(
+                "agent_did: {{ _eq: \"{}\" }},",
+                crate::store::graphql::escape_graphql_string(actor.as_str())
+            );
             let query = format!(
                 r#"{{
                 AgentRequest(
@@ -229,7 +155,7 @@ impl DefraWatcher {
                 .collect::<Vec<_>>();
             let order = crate::store::config_client::ConfigAccess::transact_local_readonly(
                 &self.node,
-                actor.clone(),
+                Some(actor.clone()),
                 "watcher.request_arrival_positions",
                 |txn| {
                     let doc_ids = &doc_ids;
@@ -254,9 +180,7 @@ impl DefraWatcher {
             };
             positions.extend(order);
             observed.retain(|row| {
-                actor
-                    .as_ref()
-                    .is_none_or(|did| row.agent_did.as_deref() == Some(did.as_str()))
+                row.agent_did.as_deref() == Some(actor.as_str())
                     && row
                         .doc_id
                         .as_ref()
@@ -292,7 +216,6 @@ impl DefraWatcher {
         did: &str,
     ) -> Option<&dyn crate::store::identity::NodeIdentity> {
         self.agents
-            .as_deref()?
             .iter()
             .find(|identity| identity.did() == did)
             .map(|identity| identity.as_ref())
@@ -380,114 +303,6 @@ impl DefraWatcher {
             tracing::error!(doc_id = %row.doc_id, error = %gents_protocol::error_chain::ErrorChain(&error),
                 "failed to terminalize malformed AgentRequest");
         }
-    }
-
-    /// Candidate delivery must use the same native arrival order as the claim
-    /// owner; timestamp ties otherwise hide the only claimable session head.
-    /// Pre-journal rows retain their legacy order ahead of journaled requests.
-    async fn order_by_native_arrival(&self, rows: &mut [AgentRequestRow]) -> anyhow::Result<()> {
-        let doc_ids = rows
-            .iter()
-            .filter_map(|row| row.doc_id.clone())
-            .collect::<Vec<_>>();
-        let order = crate::store::config_client::ConfigAccess::transact_local_readonly(
-            &self.node,
-            None,
-            "watcher.request_arrival_order",
-            |txn| {
-                let doc_ids = &doc_ids;
-                Box::pin(async move {
-                    crate::triggers::engine::durable::request_arrival_order(txn, doc_ids).await
-                })
-            },
-        )
-        .await?;
-        let positions = order
-            .iter()
-            .enumerate()
-            .map(|(index, doc_id)| (doc_id.as_str(), index))
-            .collect::<rapidhash::RapidHashMap<_, _>>();
-        rows.sort_by_key(|row| {
-            row.doc_id
-                .as_deref()
-                .and_then(|id| positions.get(id).copied())
-        });
-        Ok(())
-    }
-
-    async fn row_is_claimable(
-        &self,
-        row: &AgentRequestRow,
-        request: &AgentRequest,
-    ) -> anyhow::Result<bool> {
-        if !is_pending(row) {
-            return Ok(false);
-        }
-        match preclaim_signal(row) {
-            PreclaimSignal::Terminal => return Ok(true),
-            PreclaimSignal::Malformed => {
-                tracing::warn!(
-                    doc_id = row.doc_id.as_deref().unwrap_or_default(),
-                    request_id = %row.request_id,
-                    "watcher refusing to claim AgentRequest with malformed valid_until"
-                );
-                return Ok(false);
-            }
-            PreclaimSignal::None => {}
-        }
-
-        if !replays_pending_request(request.purpose) {
-            return Ok(false);
-        }
-        if request.purpose.is_auxiliary() {
-            return Ok(true);
-        }
-
-        let session_id = crate::store::graphql::escape_graphql_string(&request.session_id);
-        let owner = crate::store::graphql::escape_graphql_string(&request.node_did);
-        let row_doc_id = request.doc_id.as_str();
-        let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
-        let query = format!(
-            r#"{{
-                AgentRequest(
-                    filter: {{
-                        session_id: {{ _eq: "{session_id}" }},
-                        node_did: {{ _eq: "{owner}" }},
-                        purpose: {{ _eq: "normal" }},
-                        lifecycle_state: {{ _in: {active_runtime_states} }}
-                    }},
-                    order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
-                ) {{
-                    _docID
-                    request_id
-                    lifecycle_state
-                    created_at
-                }}
-            }}"#,
-            session_id = session_id,
-            active_runtime_states = active_runtime_states,
-        );
-        let resp = crate::store::graphql::graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "watcher session queue query",
-        )
-        .await?;
-
-        let mut rows: Vec<AgentRequestRow> = crate::store::graphql::rows(&resp, "AgentRequest")?;
-        self.order_by_native_arrival(&mut rows).await?;
-
-        let active_blocker = rows.iter().any(|candidate| {
-            candidate.doc_id.as_deref() != Some(row_doc_id) && !is_pending(candidate)
-        });
-        if active_blocker {
-            return Ok(false);
-        }
-
-        Ok(rows
-            .iter()
-            .find(|candidate| is_pending(candidate))
-            .is_some_and(|candidate| candidate.doc_id.as_deref() == Some(row_doc_id)))
     }
 }
 
