@@ -1153,8 +1153,16 @@ def pluginDeleteCase (name : String) (installed selected managed pinnedSame : Bo
     ("pinned_same", toJson pinnedSame),
     ("source_count", toJson (Configuration.pluginDeleteSources state).length)]
 
+def pluginDeleteUnpinnedCase : Json :=
+  let root : Configuration.PluginDeleteRoot := ⟨"team/worker", "digest-b"⟩
+  let selection : Configuration.PluginDeleteSelection :=
+    ⟨"tools-doc", "context-doc", "team/worker", none, agentDid, agentDid, true⟩
+  let state : Configuration.PluginDeleteProjection := { roots := [root], selections := [selection] }
+  Json.mkObj [("name", toJson "unpinned-upgrade"),
+    ("source_count", toJson (Configuration.pluginDeleteSources state).length)]
+
 def pluginDeleteCases : List Json :=
-  [pluginDeleteCase "selected-installed" true true true true,
+  [pluginDeleteUnpinnedCase, pluginDeleteCase "selected-installed" true true true true,
    pluginDeleteCase "uninstalled" false true true true,
    pluginDeleteCase "disabled" true false true true,
    pluginDeleteCase "foreign-actor" true true false true,
