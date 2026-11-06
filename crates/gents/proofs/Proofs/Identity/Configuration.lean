@@ -756,6 +756,9 @@ def inferenceSelfConfigFixture : State :=
      ⟨"configuration", "new-execution", "execution-owner"⟩] ++ inferenceUsersetFixture.objects }
   let granted := grantInferenceSelfConfiguration base "agent-doc" "agent"
     ["profile", "sampling", "execution", "new-execution", "retry"] true true
+  let granted := apply granted (.grant
+    ⟨"configuration", "backend-metadata", "selection_manager",
+      .entitySet "agents" "agent-doc" "config_writer"⟩)
   ["context", "tools"].foldl (fun state id => apply state
     (.grant ⟨"configuration", id, "writer", .entitySet "agents" "agent-doc" "config_writer"⟩)) granted
 
@@ -785,6 +788,22 @@ theorem selected_inference_manager_can_rebind_its_sources :
     [mayManage inferenceUsersetFixture "agent" edge,
      mayManage inferenceSelfConfigFixture "agent" edge,
      mayManage inferenceSelfConfigFixture "sibling" edge] = [false, true, false] := by native_decide
+
+/-- The User's explicit self-configuration grant permits the Agent to attach
+profiles to the selected backend metadata. It does not grant backend writes,
+Node administration, or access to credentials; revoking config_writer removes
+this derived manager authority. -/
+theorem selected_backend_manager_is_scoped_and_revocable :
+    let edge : Relation := ⟨"configuration", "backend-metadata", "selected_by",
+      .entitySet "configuration" "profile" "selected_by"⟩
+    let revoked := apply inferenceSelfConfigFixture
+      (.revoke ⟨"agents", "agent-doc", "config_writer", .actor "agent"⟩)
+    [mayManage inferenceUsersetFixture "agent" edge,
+     mayManage inferenceSelfConfigFixture "agent" edge,
+     mayManage inferenceSelfConfigFixture "sibling" edge,
+     mayManage revoked "agent" edge,
+     allowed 8 inferenceSelfConfigFixture "agent" "configuration" "backend-metadata" "update"] =
+      [false, true, false, false, false] := by native_decide
 
 theorem failed_inference_grant_is_atomic (state : State) (agentDoc agent : String)
     (documents : List String) (authorized : Bool) :
