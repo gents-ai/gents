@@ -68,7 +68,10 @@ async fn grant_configured_workspace_root_readers(
         "{{ WorkspaceRoot(filter: {{node_did: {{_eq: \"{}\"}}, root_path: {{_eq: \"{}\"}}}}) {{_docID node_did root_path enabled}} }}",
         escape_graphql_string(&node_did), escape_graphql_string(root),
     );
-    let roots = owner_access.execute(&query).await?;
+    let roots = owner_access
+        .execute(&query)
+        .await
+        .context("reading configured WorkspaceRoot as the bootstrap User")?;
     let rows = roots["data"]["WorkspaceRoot"]
         .as_array()
         .context("User cannot observe configured WorkspaceRoot")?;
@@ -92,7 +95,8 @@ async fn grant_configured_workspace_root_readers(
                     .map_err(anyhow::Error::from)
             })
         })
-        .await?;
+        .await
+        .context("reading native WorkspaceRoot ownership as the bootstrap User")?;
     anyhow::ensure!(
         owners.len() == 1
             && owners[0].owner.as_ref().map(|did| did.as_str()) == Some(bootstrap_user.did()),
@@ -101,13 +105,24 @@ async fn grant_configured_workspace_root_readers(
     let runtime = identity_from_init(init)?;
     for binding in bindings {
         gents::tools::surface::grant_workspace_root_reader(access, root, &binding.agent_did)
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "granting configured WorkspaceRoot reader to Agent {} as the enrolled User",
+                    binding.agent_did
+                )
+            })?;
         let agent = gents::store::identity::resolve_agent_identity(&runtime, binding)?;
         let reader = gents::ConfigAccess::Graphql(
             gents::store::config_client::GraphqlEndpoint::as_principal(graphql, &binding.agent_did)
                 .with_client_signing_capability(agent.client_signing_capability()?)?,
         );
-        let visible = reader.execute(&query).await?;
+        let visible = reader
+            .execute(&query)
+            .await
+            .with_context(|| {
+                format!("reading configured WorkspaceRoot as Agent {}", binding.agent_did)
+            })?;
         let rows = visible["data"]["WorkspaceRoot"]
             .as_array()
             .context("selected Agent cannot read WorkspaceRoot")?;

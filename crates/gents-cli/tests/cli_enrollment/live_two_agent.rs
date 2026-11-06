@@ -60,8 +60,11 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                 wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
             let pending = core
                 .request_status_enrollment_with_label(&status, Some("live isolation"))
-                .await?;
-            wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
+                .await
+                .context("requesting fresh desktop enrollment")?;
+            wait_for_runtime_enrollment_request(&graphql, &pending.request_id)
+                .await
+                .context("observing fresh desktop enrollment request on runtime")?;
             run_cli_json_with_env(
                 &runtime_home,
                 &[
@@ -73,7 +76,8 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                     home,
                 ],
                 &owner_env,
-            )?;
+            )
+            .context("granting Node administration to the enrolling desktop User")?;
             run_cli_json_with_env(
                 &runtime_home,
                 &[
@@ -85,9 +89,14 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                     home,
                 ],
                 &owner_env,
-            )?;
-            wait_for_chat_ready_enrollment(&core, &node_did).await?;
-            wait_for_client_node_readiness(&core, &node_did).await?;
+            )
+            .context("approving fresh desktop enrollment")?;
+            wait_for_chat_ready_enrollment(&core, &node_did)
+                .await
+                .context("waiting for enrolled desktop chat readiness")?;
+            wait_for_client_node_readiness(&core, &node_did)
+                .await
+                .context("waiting for enrolled desktop Node readiness")?;
 
             let mut agent = core
                 .store()
@@ -101,14 +110,21 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                 agent_did: agent.agent_did.clone(),
                 creation_nonce: agent.creation_nonce.clone(),
             };
-            let second = core.provision_agent_identity(&node_did).await?;
+            let second = core
+                .provision_agent_identity(&node_did)
+                .await
+                .context("provisioning the second Agent identity")?;
             assert_ne!(first.agent_did, second.agent_did);
             agent.agent_did = second.agent_did.clone();
             agent.creation_nonce = second.creation_nonce.clone();
             agent.display_name = Some("live second agent".into());
-            core.save_agent(&agent).await?;
+            core.save_agent(&agent)
+                .await
+                .context("publishing the second Agent as the enrolled desktop User")?;
             let access = core.operator_access(&node_did)?;
-            grant_configured_workspace_root_readers(&access, &graphql, &init, &owner_home, &[&second]).await?;
+            grant_configured_workspace_root_readers(&access, &graphql, &init, &owner_home, &[&second])
+                .await
+                .context("granting the second Agent access to its configured WorkspaceRoot")?;
             let user_did = core.node_identity().did().to_owned();
             assert_ne!(user_did, node_did);
             let mut requests = Vec::new();
