@@ -10,7 +10,6 @@ use rig::completion::{
 use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 
 use super::*;
-use crate::ensure_runtime_schemas;
 use crate::session;
 use crate::test_support::first_content;
 use crate::turn::prompt::{LayeredPromptBuilder, PromptBuilder};
@@ -46,6 +45,77 @@ fn test_message_tokens(messages: &[Message]) -> usize {
 
 fn test_reduction_admission() -> ReductionAdmission {
     ReductionAdmission::required(1, 0)
+}
+
+struct CompactionFixture {
+    db: crate::support::TestDb,
+    _user: crate::KeyIdentity,
+    agent: Arc<dyn crate::store::identity::NodeIdentity>,
+    lifecycle: crate::request::lifecycle::RequestLifecycle,
+}
+
+impl CompactionFixture {
+    async fn new(name: &str, request_id: &str, session_id: &str) -> Self {
+        use crate::store::identity::NodeIdentity;
+        use gents_protocol::request_admission::{
+            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        };
+        let (db, user, client, binding) = crate::test_support::signed_test_node(name).await;
+        let agent =
+            crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+                .unwrap();
+        let create = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            request_id,
+            db.node_identity.did(),
+            user.did(),
+            agent.did(),
+            session_id,
+            "compaction",
+            "interactive",
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            AgentRequestAdmissionRecord::client(user.did()),
+        );
+        let mut lifecycle =
+            crate::tools::call::lifecycle::admission_fixture::pending_client_fixture_request(
+                &db.node,
+                &client,
+                db.node_identity.clone(),
+                &user,
+                agent.as_ref(),
+                create,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            lifecycle.claim_with_identity().await.unwrap(),
+            crate::request::lifecycle::ClaimOutcome::Claimed
+        );
+        Self {
+            db,
+            _user: user,
+            agent,
+            lifecycle,
+        }
+    }
+
+    fn writer(&self) -> crate::request::streaming::DefraStreamWriter {
+        crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+            self.db.node.clone(),
+            &self.lifecycle,
+            std::time::Duration::from_millis(1),
+        )
+        .unwrap()
+    }
+
+    fn access(&self) -> crate::ConfigAccess {
+        crate::ConfigAccess::local_managed_agent(
+            self.db.node.clone(),
+            identity::Did::new(self.agent.did()).unwrap(),
+            self.agent.as_ref(),
+        )
+        .unwrap()
+    }
 }
 
 fn required_reduction(result: &ReductionResult) -> ExactReduction<'_> {
@@ -1871,10 +1941,6 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
         armed_labels, scope_request, test_scope, CaptureScopeKind,
     };
     use crate::inference::rendered_request::RenderedRequestCaptureSink;
-    use crate::store::identity::{KeyIdentity, NodeIdentity};
-    use gents_protocol::request_admission::{
-        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
-    };
 
     let model = ScriptedSummaryModel::new(vec![
         ScriptedSummaryModel::malformed_summary_turn(),
@@ -1891,70 +1957,19 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
     );
     let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    let keys = tempfile::tempdir().unwrap();
-    let identity = KeyIdentity::load_or_create(keys.path().join("compaction.key"), None).unwrap();
-    let mut create = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        uuid::Uuid::new_v4().to_string(),
-        identity.did(),
-        identity.did(),
-        "general",
-        uuid::Uuid::new_v4().to_string(),
-        "compaction scope fixture",
-        "interactive",
-        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::local_self(identity.did()),
-    );
-    crate::sign_agent_request_create(&identity, &mut create)
+    let mut fixture = CompactionFixture::new(
+        "compaction-scopes",
+        "compaction-scopes-request",
+        "compaction-scopes-session",
+    )
+    .await;
+    let writer = fixture.writer();
+    fixture
+        .lifecycle
+        .begin_owned_execution(&writer)
         .await
         .unwrap();
-    let created = crate::store::config_client::ConfigAccess::write_local_response(
-        &node,
-        "test.compaction.capture_scope_request",
-        &create.graphql_mutation().unwrap(),
-    )
-    .await
-    .unwrap();
-    let doc_id = crate::store::graphql::single_mutation_document(&created, "create_AgentRequest")
-        .unwrap()
-        .unwrap()["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let loaded = crate::store::graphql::graphql_with_transaction_retry(
-        node.as_ref(),
-        &format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
-            crate::store::graphql::escape_graphql_string(&doc_id),
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        ),
-        "load compaction capture fixture",
-    )
-    .await
-    .unwrap();
-    let row: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&loaded, "AgentRequest")
-            .unwrap()
-            .unwrap();
-    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
-        node.clone(),
-        "general",
-        identity.did(),
-        row.try_into().unwrap(),
-        60,
-    );
-    assert_eq!(
-        lifecycle.claim().await.unwrap(),
-        crate::request::lifecycle::ClaimOutcome::Claimed
-    );
-    let writer = crate::request::streaming::DefraStreamWriter::new(
-        node.clone(),
-        identity.did(),
-        std::time::Duration::from_millis(1),
-    );
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let lifecycle = &fixture.lifecycle;
 
     let sink: RenderedRequestCaptureSink = std::sync::Arc::new(|_| Box::pin(async { Ok(()) }));
     let mut scope = test_scope(
@@ -2751,18 +2766,17 @@ fn safe_to_reduce_accepts_a_native_order_reasoning_text_turn() {
 
 #[tokio::test]
 async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
-    let data_path = std::env::temp_dir().join(format!("gents-compactor-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        crate::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
-    session::create_session_with_id(&node, "session-1", "general", "did:test:test")
-        .await
-        .unwrap();
+    let mut fixture = CompactionFixture::new(
+        "compaction-integration",
+        "request-compaction-test",
+        "session-1",
+    )
+    .await;
+    let node = fixture.db.node.clone();
+    let node_did = fixture.db.node_identity.did().to_owned();
+    let requester_did = fixture.lifecycle.request().requester_did.clone().unwrap();
+    let agent_did = fixture.lifecycle.request().agent_did.clone();
+    let access = fixture.access();
 
     let model = MockSummaryModel::new(
         &serde_json::json!({
@@ -2811,42 +2825,13 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     };
     let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 
-    let node_did = "did:test:test";
-    let mut lifecycle = {
-        let now = crate::store::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let request_id = crate::store::graphql::escape_graphql_string("request-compaction-test");
-        let session_id = crate::store::graphql::escape_graphql_string("session-1");
-        let node_did = crate::store::graphql::escape_graphql_string(node_did);
-        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_did: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "compaction", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", request_hop: 0, failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#)).await;
-        assert!(!created.has_errors(), "{:#?}", created.errors);
-        let row = node.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        ))
-        .await;
-        let row: gents_protocol::row::AgentRequestRow =
-            crate::store::graphql::first_row(&row, "AgentRequest")
-                .unwrap()
-                .unwrap();
-        let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
-            node.clone(),
-            "general",
-            &node_did,
-            row.try_into().unwrap(),
-            60,
-        );
-        assert_eq!(
-            lifecycle.claim().await.unwrap(),
-            crate::request::lifecycle::ClaimOutcome::Claimed
-        );
-        lifecycle
-    };
-    let writer = crate::request::streaming::DefraStreamWriter::new(
-        node.clone(),
-        node_did,
-        std::time::Duration::from_millis(1),
-    );
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let writer = fixture.writer();
+    fixture
+        .lifecycle
+        .begin_owned_execution(&writer)
+        .await
+        .unwrap();
+    let lifecycle = &fixture.lifecycle;
     let request_doc_id = lifecycle.request().doc_id.clone();
 
     for turn in 0..55u32 {
@@ -2856,7 +2841,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             })],
         };
         writer
-            .publish_authored_message(&lifecycle, &format!("input:{turn}"), &user)
+            .publish_authored_message(lifecycle, &format!("input:{turn}"), &user)
             .await
             .unwrap();
 
@@ -2885,7 +2870,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             )
             .await;
         let mut published = writer
-            .publish_native_turn(&lifecycle, turn as usize, 0, &assistant_tool_call)
+            .publish_native_turn(lifecycle, turn as usize, 0, &assistant_tool_call)
             .await
             .unwrap();
         let accepted = published
@@ -2898,7 +2883,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         let mut tool = crate::tools::call::lifecycle::ToolCallLifecycle::from_accepted(
             node.clone(),
             node_did.to_string(),
-            None,
+            Some(requester_did.clone()),
             accepted,
             deadline,
             crate::tools::call::lifecycle::AwaitMode::Foreground,
@@ -2922,14 +2907,15 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             )
             .await;
         writer
-            .publish_native_turn(&lifecycle, turn as usize, 1, &assistant)
+            .publish_native_turn(lifecycle, turn as usize, 1, &assistant)
             .await
             .unwrap();
     }
 
-    let history = session::load_history(&node, "session-1", node_did, None)
-        .await
-        .unwrap();
+    let history =
+        session::load_history_with_access(&access, "session-1", &node_did, Some(&requester_did))
+            .await
+            .unwrap();
     assert!(
         !safe_to_reduce(&history),
         "an older unresolved call requires provider repair"
@@ -2955,7 +2941,6 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .unwrap();
 
     let reduction = required_reduction(&result);
-    let summary = reduction.checkpoint;
     let sequence_rows = durable_before
         .iter()
         .cloned()
@@ -2966,51 +2951,70 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         session_cursor_for_reduction(GROUPED_PROFILE, &sequence_rows, 0, reduction)
             .unwrap()
             .expect("exact reduction must resolve to a durable cursor");
-    session::save_compaction_entry(
-        &node,
-        "did:test:test",
+    let state = session::load_prompt_compaction_state_with_access(
+        &access,
         "session-1",
-        "did:test:test",
-        "request-compaction-test",
-        &request_doc_id,
-        summary,
-        &result.files_read,
-        &result.files_modified,
-        reduction.messages_compacted().unwrap(),
-        compacted_through_sequence,
-        result.original_token_estimate,
-        result.compacted_token_estimate,
+        &node_did,
+        Some(&requester_did),
+        None,
+    )
+    .await
+    .unwrap();
+    session::save_exact_compaction_entry(
+        &access,
+        session::NewExactSessionCompaction {
+            agent_did: &agent_did,
+            session_id: "session-1",
+            node_did: &node_did,
+            requester_did: Some(&requester_did),
+            request_id: "request-compaction-test",
+            request_doc_id: &request_doc_id,
+            files_read: &result.files_read,
+            files_modified: &result.files_modified,
+            compacted_through_sequence,
+            original_tokens: result.original_token_estimate,
+            compacted_tokens: result.compacted_token_estimate,
+            expected_generation: &state.generation,
+        },
+        reduction,
     )
     .await
     .unwrap();
 
-    let entries = session::load_compaction_entries(&crate::store::config_client::ConfigAccess::local(node.clone()), "session-1", "did:test:test", None)
-        .await
-        .unwrap();
+    let entries =
+        session::load_compaction_entries(&access, "session-1", &node_did, Some(&requester_did))
+            .await
+            .unwrap();
     assert_eq!(entries.len(), 1);
     assert!(entries[0].summary.contains("inspected the source files"));
 
-    let resumed_history = session::load_history(&node, "session-1", "did:test:test", None)
-        .await
-        .unwrap();
+    let resumed_history =
+        session::load_history_with_access(&access, "session-1", &node_did, Some(&requester_did))
+            .await
+            .unwrap();
     assert_eq!(
         durable_before, resumed_history,
         "compaction must not mutate the durable transcript the timeline is built from"
     );
 
-    let state =
-        session::load_prompt_compaction_state(&node, node_did, "session-1", node_did, None, None)
-            .await
-            .unwrap();
+    let state = session::load_prompt_compaction_state_with_access(
+        &access,
+        "session-1",
+        &node_did,
+        Some(&requester_did),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         state.compacted_through_sequence,
         Some(compacted_through_sequence)
     );
-    let next_request_history = session::load_sequenced_history_projection(
-        &node,
+    let next_request_history = session::load_sequenced_history_projection_on(
+        &access,
         "session-1",
-        node_did,
-        None,
+        &node_did,
+        Some(&requester_did),
         None,
         state.compacted_through_sequence,
         None,
@@ -3072,8 +3076,6 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             .collect::<Vec<_>>(),
         resumed_history.iter().collect::<Vec<_>>()
     );
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 fn scoped_call(id: &str) -> AssistantContent {
