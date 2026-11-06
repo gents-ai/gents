@@ -1,16 +1,26 @@
 use super::*;
 use crate::runtime::agent::p2p_reconcile::session_goal_control::process_command;
-use gents_protocol::goal_control::{GoalOperation, GoalRevision, SESSION_GOAL_CONTROL_VERSION};
+use gents_protocol::goal_control::{
+    GoalControlOutcome, GoalOperation, GoalRevision, SESSION_GOAL_CONTROL_VERSION,
+};
 use serde_json::json;
 use std::sync::Arc;
 
 #[tokio::test]
-async fn cross_actor_command_remains_durable_and_blocked_without_atomic_authorization() {
+async fn cross_actor_stale_goal_rejection_is_durable_and_recoverable() {
     let modeled = crate::lean_vocab_test::lean_contract_snapshot()
-        .goal_client_start_cases
+        .goal_client_control_cases
         .iter()
-        .find(|case| case["name"] == "authority_unavailable")
-        .expect("modeled unavailable authorization");
+        .find(|case| case["name"] == "active_authorized_idle_foreign_document_pause")
+        .expect("modeled foreign Goal revision");
+    assert_eq!(modeled["facts"]["authorized"], true);
+    assert_eq!(modeled["facts"]["unfinished_request"], false);
+    assert_eq!(modeled["expected_revision"]["document"], "foreign-goal");
+    assert_eq!(
+        modeled["expected_revision"]["composite"],
+        "revision-current"
+    );
+    assert!(modeled["expected"].is_null());
     let fixture = crate::goal::operator_resume::support::Fixture::new(&json!({
         "status": "active", "sequence": 0, "blocked_audits": 0,
         "wrapup_requested": false, "wrapup_completed": false,
@@ -35,6 +45,7 @@ async fn cross_actor_command_remains_durable_and_blocked_without_atomic_authoriz
         .unwrap()
         .unwrap();
     let now = Utc::now();
+    let current_revision = fixture.goal_commit(&fixture.goal.doc_id).await.cid;
     let command = SessionGoalControl {
         version: SESSION_GOAL_CONTROL_VERSION,
         command_id: "blocked-control".into(),
@@ -54,7 +65,7 @@ async fn cross_actor_command_remains_durable_and_blocked_without_atomic_authoriz
         expires_at: (now + chrono::Duration::minutes(5)).to_rfc3339(),
         expected: Some(GoalRevision {
             document: "absent-goal".into(),
-            composite: "absent-revision".into(),
+            composite: current_revision,
         }),
         operation: GoalOperation::Pause {},
         initial_request: None,
@@ -84,20 +95,21 @@ async fn cross_actor_command_remains_durable_and_blocked_without_atomic_authoriz
     process_command(&fixture.node, &identity, doc_id, fixture.agent.as_ref())
         .await
         .unwrap();
-    assert_eq!(modeled["published"].as_bool(), Some(false));
     assert_eq!(access.execute("{ AgentSessionGoalControl { _docID intent_json } AgentRequest { _docID } Goal { _docID status } }").await.unwrap(), before);
-    assert!(
-        recover_session_goal_control(&access, user.as_ref(), &prepared)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(
+    let recovered = recover_session_goal_control(&access, user.as_ref(), &prepared)
+        .await
+        .unwrap()
+        .expect("modeled rejection must be recoverable");
+    recovered.validate_for(&prepared).unwrap();
+    assert!(matches!(
+        recovered.outcome,
+        GoalControlOutcome::Rejected { .. }
+    ));
+    assert_eq!(
         submit_prepared_session_goal_control(&access, user.as_ref(), &prepared)
             .await
-            .unwrap_err()
-            .to_string()
-            .contains("blocked")
+            .unwrap(),
+        recovered
     );
     assert_eq!(access.execute("{ AgentSessionGoalControl { _docID intent_json } AgentRequest { _docID } Goal { _docID status } }").await.unwrap(), before);
     fixture.node.shutdown().await.expect("node shutdown");
