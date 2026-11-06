@@ -227,6 +227,103 @@ fn insert_exact_segment(
     Ok(())
 }
 
+/// Loads the copies each page fork header resolves within its own session
+/// (`gents_protocol::output::reconstruction::fork_copy_observations`) and
+/// returns the headers they cover; those need nothing from their origin.
+async fn load_fork_copies(
+    access: TranscriptAccess<'_>,
+    page_headers: &[TranscriptMessageRow],
+    records: &mut BTreeMap<String, OutputSegmentRow>,
+    query_count: &mut u64,
+    queried_rows: &mut usize,
+) -> Result<BTreeSet<String>> {
+    let mut scopes = BTreeMap::<(String, String, Option<String>), BTreeSet<String>>::new();
+    for header in page_headers {
+        if !matches!(header.message.publication, MessagePublication::Fork { .. }) {
+            continue;
+        }
+        scopes
+            .entry((
+                header.message.session_id.clone(),
+                header.message.node_did.clone(),
+                header.message.requester_did.clone(),
+            ))
+            .or_default()
+            .extend(
+                header
+                    .message
+                    .payload_references()
+                    .into_iter()
+                    .map(|reference| reference.close_doc_id.clone()),
+            );
+    }
+    let mut copies = Vec::new();
+    for ((session_id, node_did, requester_did), logicals) in &scopes {
+        if logicals.is_empty() {
+            continue;
+        }
+        if logicals.len() > MAX_CANONICAL_DEPENDENCY_ROWS {
+            bail!(
+                "canonical transcript page names more than {MAX_CANONICAL_DEPENDENCY_ROWS} fork copies"
+            );
+        }
+        let logical_filter = logicals
+            .iter()
+            .map(|id| format!("\"{}\"", escape_graphql_string(id)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let session = escape_graphql_string(session_id);
+        let query = format!(
+            r#"query DesktopForkCopies {{
+  AgentOutputSegment(filter: {{ session_id: {{ _eq: "{session}" }}, request_doc_id: {{ _in: [{logical_filter}] }}, {} }}, limit: {}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}
+}}"#,
+            scope_filter(node_did, requester_did.as_deref()),
+            MAX_CANONICAL_DEPENDENCY_ROWS.saturating_add(1)
+        );
+        let data = access.execute(&query, "canonical fork copies").await?;
+        *query_count += 1;
+        let rows = parse_canonical_rows(&data, AGENT_OUTPUT_SEGMENT_NAME, decode_output_segment_row)?;
+        *queried_rows = queried_rows.saturating_add(rows.len());
+        if rows.len() > MAX_CANONICAL_DEPENDENCY_ROWS {
+            bail!(
+                "canonical fork copies exceed bounded dependency read of {MAX_CANONICAL_DEPENDENCY_ROWS} rows"
+            );
+        }
+        for row in rows {
+            anyhow::ensure!(
+                row.segment.session_id == *session_id
+                    && row.segment.node_did == *node_did
+                    && row.segment.requester_did == *requester_did
+                    && logicals.contains(&row.segment.request_doc_id),
+                "canonical fork copy crossed its session scope"
+            );
+            copies.push(row);
+        }
+    }
+    let observed = copies
+        .iter()
+        .map(|row| gents_protocol::output::reconstruction::ObservedSegment {
+            doc_id: &row.doc_id,
+            segment: &row.segment,
+        })
+        .collect::<Vec<_>>();
+    let copied = page_headers
+        .iter()
+        .filter(|header| {
+            gents_protocol::output::reconstruction::fork_copy_observations(
+                &header.message,
+                &observed,
+            )
+            .is_some()
+        })
+        .map(|header| header.doc_id.clone())
+        .collect();
+    for row in copies {
+        insert_exact_segment(records, row)?;
+    }
+    Ok(copied)
+}
+
 async fn load_page_canonical_dependencies(
     access: TranscriptAccess<'_>,
     page_headers: &[TranscriptMessageRow],
@@ -238,8 +335,20 @@ async fn load_page_canonical_dependencies(
         insert_exact_header(&mut known_headers, header)?;
     }
     validate_known_header_identities(&known_headers)?;
+    let mut query_count = 0_u64;
+    let mut queried_rows = 0_usize;
+    let mut records = BTreeMap::<String, OutputSegmentRow>::new();
+    let copied = load_fork_copies(
+        access,
+        page_headers,
+        &mut records,
+        &mut query_count,
+        &mut queried_rows,
+    )
+    .await?;
     let mut pending_origins = page_headers
         .iter()
+        .filter(|header| !copied.contains(&header.doc_id))
         .filter_map(|header| match &header.message.publication {
             MessagePublication::Fork {
                 origin_message_doc_id,
@@ -253,8 +362,6 @@ async fn load_page_canonical_dependencies(
         })
         .collect::<VecDeque<_>>();
     let mut queried_headers = BTreeSet::new();
-    let mut query_count = 0_u64;
-    let mut queried_rows = 0_usize;
 
     while let Some((origin_id, node_did, requester_did, depth)) = pending_origins.pop_front() {
         if known_headers.contains_key(&origin_id) || !queried_headers.insert(origin_id.clone()) {
@@ -309,6 +416,7 @@ async fn load_page_canonical_dependencies(
 
     let mut close_scopes = known_headers
         .values()
+        .filter(|header| !copied.contains(&header.doc_id))
         .flat_map(|header| {
             header
                 .message
@@ -414,7 +522,6 @@ async fn load_page_canonical_dependencies(
             .or_insert_with(BTreeSet::new)
             .insert(serde_json::to_string(&closure.segment.source)?);
     }
-    let mut records = BTreeMap::<String, OutputSegmentRow>::new();
     for closure in closures {
         insert_exact_segment(&mut records, closure)?;
     }

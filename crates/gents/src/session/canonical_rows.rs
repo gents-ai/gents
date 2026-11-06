@@ -372,6 +372,30 @@ pub(crate) async fn fork_message_bound_variables(
     )
 }
 
+/// A fork copy is a child of its destination session, bound by that session
+/// rather than by a request the destination never ran.
+pub(crate) async fn fork_output_segment_bound_variables(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    segment: &gents_protocol::output::OutputSegment,
+) -> Result<serde_json::Value> {
+    let (session_doc, agent) = session_child_binding_in_txn(
+        txn,
+        &segment.node_did,
+        &segment.session_id,
+        segment.requester_did.as_deref(),
+    )
+    .await?;
+    let mut variables = output_segment_create_variables(segment)?;
+    variables["input"]["session_doc_id"] = session_doc.into();
+    variables["input"]["agent_did"] = agent.into();
+    variables["input"]["creator_did"] = txn
+        .actor_did()
+        .context("session child creator missing")?
+        .into();
+    variables["input"]["parent_linked"] = false.into();
+    Ok(variables)
+}
+
 fn transcript_message_variables_with_binding(
     message: &gents_protocol::output::TranscriptMessage,
     session_doc: String,

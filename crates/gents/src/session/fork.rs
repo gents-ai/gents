@@ -2,18 +2,21 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
-use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, TranscriptMessage};
+use gents_protocol::output::{
+    MessageBlock, MessagePublication, MessageRole, SourceClose, TranscriptMessage,
+};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::{json, Value};
 
 use super::canonical_rows::{
-    decode_transcript_message_row, AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
+    decode_transcript_message_row, OutputSegmentRow, AGENT_MESSAGE_FIELDS,
+    CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use super::compaction_entries::{
     compaction_key, validate_compaction_chain, CompactionGenerationRow,
 };
 use super::history::sequence_message_key;
-use super::output::reader::load_canonical_message_in_txn;
+use super::output::reader::load_canonical_message_segments_in_txn;
 use super::query::session_scope_filter;
 use super::sessions::{
     ensure_session_in_txn, load_agent_session_owner_in_txn, load_agent_session_row_in_txn,
@@ -89,12 +92,13 @@ pub struct ForkRelationshipIntent {
     agent_doc_id: String,
     agent_did: String,
     session_pending: bool,
+    segment_doc_ids: Vec<String>,
     message_doc_ids: Vec<String>,
 }
 
-struct ForkPublication {
-    outcome: ForkOutcome,
-    intent: ForkRelationshipIntent,
+pub(super) struct ForkPublication {
+    pub(super) outcome: ForkOutcome,
+    pub(super) intent: ForkRelationshipIntent,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -158,17 +162,26 @@ pub async fn fork_on(
     access: &ConfigAccess,
     params: ForkParams<'_>,
 ) -> Result<ForkOutcome, ForkError> {
+    let publication = commit_fork(access, params).await?;
+    publish_fork_relationships(access, publication.intent).await?;
+    Ok(publication.outcome)
+}
+
+/// The fork and all of its destination-owned content commit in one
+/// transaction; relationship publication follows from the returned intent.
+pub(super) async fn commit_fork(
+    access: &ConfigAccess,
+    params: ForkParams<'_>,
+) -> Result<ForkPublication, ForkError> {
     let child = uuid::Uuid::new_v4().to_string();
-    let publication = access
+    access
         .transact_write("session.fork", |txn| {
             let child = child.clone();
             let params = params.clone();
             Box::pin(async move { fork_in_txn(txn, &params, &child, None).await })
         })
         .await
-        .map_err(fork_error)?;
-    publish_fork_relationships(access, publication.intent).await?;
-    Ok(publication.outcome)
+        .map_err(fork_error)
 }
 
 /// Retry only an intent returned by the committed fork creation or an earlier
@@ -178,44 +191,110 @@ pub async fn publish_fork_relationships(
     mut intent: ForkRelationshipIntent,
 ) -> Result<(), ForkError> {
     let result: Result<()> = async {
-        anyhow::ensure!(access.actor_did().as_deref() == Some(intent.creator_did.as_str()),
-            "fork relationship retry requires its creating actor");
+        anyhow::ensure!(
+            access.actor_did().as_deref() == Some(intent.creator_did.as_str()),
+            "fork relationship retry requires its creating actor"
+        );
         if intent.session_pending {
             super::sessions::grant_created_session_relationships(
-                access, &intent.session_doc_id, &intent.agent_doc_id, &intent.agent_did,
-            ).await?;
+                access,
+                &intent.session_doc_id,
+                &intent.agent_doc_id,
+                &intent.agent_did,
+            )
+            .await?;
             intent.session_pending = false;
         }
-        while let Some(doc_id) = intent.message_doc_ids.last() {
-            let doc = crate::store::graphql::escape_graphql_string(doc_id);
-            let creator = crate::store::graphql::escape_graphql_string(&intent.creator_did);
-            let response = access.execute(&format!(r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{doc}" }}, creator_did: {{ _eq: "{creator}" }} }}, limit: 2) {{ _docID parent_linked }} }}"#)).await?;
-            let rows = response["data"]["AgentMessage"].as_array().context("fork relationship status omitted rows")?;
-            anyhow::ensure!(rows.len() == 1 && rows[0]["_docID"].as_str() == Some(doc_id.as_str()), "fork relationship status lost its creation binding");
-            if rows[0]["parent_linked"] == true {
-                intent.message_doc_ids.pop();
-                continue;
-            }
-            anyhow::ensure!(rows[0]["parent_linked"] == false, "fork relationship marker is missing");
-            access.add_resource_relationship("AgentMessage", doc_id, "parent", "sessions", &intent.session_doc_id).await?;
-            access.add_actor_relationship("AgentMessage", doc_id, "working_agent", &identity::Did::new(&intent.agent_did)?).await?;
-            let response = access.transact_write("session.mark_fork_parent_linked", |txn| {
-                let mutation = format!(r#"mutation($input: AgentMessageMutationInputArg!) {{ update_AgentMessage(filter: {{ _docID: {{ _eq: "{doc}" }}, creator_did: {{ _eq: "{creator}" }}, parent_linked: {{ _eq: false }} }}, input: $input) {{ _docID }} }}"#);
-                Box::pin(async move { txn.execute_client_signed_update(
-                    &mutation, &json!({"input": {"parent_linked": true}}), gents_protocol::schemas::AGENT_MESSAGE,
-                ).await })
-            }).await?;
-            let rows = crate::store::graphql::mutation_documents(&response, "update_AgentMessage")?.context("fork relationship marker omitted mutation result")?;
-            anyhow::ensure!(rows.len() == 1 && rows[0]["_docID"].as_str() == Some(doc_id.as_str()), "fork relationship marker lost its creation binding");
-            intent.message_doc_ids.pop();
+        for (collection, schema, doc_ids) in [
+            (
+                "AgentOutputSegment",
+                gents_protocol::schemas::AGENT_OUTPUT_SEGMENT,
+                &mut intent.segment_doc_ids,
+            ),
+            (
+                "AgentMessage",
+                gents_protocol::schemas::AGENT_MESSAGE,
+                &mut intent.message_doc_ids,
+            ),
+        ] {
+            link_fork_children(
+                access,
+                collection,
+                schema,
+                &intent.creator_did,
+                &intent.session_doc_id,
+                &intent.agent_did,
+                doc_ids,
+            )
+            .await?;
         }
         Ok(())
-    }.await;
+    }
+    .await;
     result.map_err(|source| ForkError::ForkRelationshipIncomplete {
         session_id: intent.session_id.clone(),
         intent: Box::new(intent),
         source,
     })
+}
+
+/// Links each created child to the fork session and marks it, last first, so a
+/// retry resumes after the last child whose marker committed.
+async fn link_fork_children(
+    access: &ConfigAccess,
+    collection: &str,
+    schema: &str,
+    creator_did: &str,
+    session_doc_id: &str,
+    agent_did: &str,
+    doc_ids: &mut Vec<String>,
+) -> Result<()> {
+    let creator = crate::store::graphql::escape_graphql_string(creator_did);
+    while let Some(doc_id) = doc_ids.last() {
+        let doc = crate::store::graphql::escape_graphql_string(doc_id);
+        let response = access.execute(&format!(r#"{{ {collection}(filter: {{ _docID: {{ _eq: "{doc}" }}, creator_did: {{ _eq: "{creator}" }} }}, limit: 2) {{ _docID parent_linked }} }}"#)).await?;
+        let rows = response["data"][collection]
+            .as_array()
+            .context("fork relationship status omitted rows")?;
+        anyhow::ensure!(
+            rows.len() == 1 && rows[0]["_docID"].as_str() == Some(doc_id.as_str()),
+            "fork relationship status lost its creation binding"
+        );
+        if rows[0]["parent_linked"] == true {
+            doc_ids.pop();
+            continue;
+        }
+        anyhow::ensure!(
+            rows[0]["parent_linked"] == false,
+            "fork relationship marker is missing"
+        );
+        access
+            .add_resource_relationship(collection, doc_id, "parent", "sessions", session_doc_id)
+            .await?;
+        access
+            .add_actor_relationship(
+                collection,
+                doc_id,
+                "working_agent",
+                &identity::Did::new(agent_did)?,
+            )
+            .await?;
+        let update = format!("update_{collection}");
+        let response = access.transact_write("session.mark_fork_parent_linked", |txn| {
+            let mutation = format!(r#"mutation($input: {collection}MutationInputArg!) {{ {update}(filter: {{ _docID: {{ _eq: "{doc}" }}, creator_did: {{ _eq: "{creator}" }}, parent_linked: {{ _eq: false }} }}, input: $input) {{ _docID }} }}"#);
+            Box::pin(async move { txn.execute_client_signed_update(
+                &mutation, &json!({"input": {"parent_linked": true}}), schema,
+            ).await })
+        }).await?;
+        let rows = crate::store::graphql::mutation_documents(&response, &update)?
+            .context("fork relationship marker omitted mutation result")?;
+        anyhow::ensure!(
+            rows.len() == 1 && rows[0]["_docID"].as_str() == Some(doc_id.as_str()),
+            "fork relationship marker lost its creation binding"
+        );
+        doc_ids.pop();
+    }
+    Ok(())
 }
 
 /// The caller retains `child` before this call. Prefix publication and its exact
@@ -301,8 +380,9 @@ pub async fn fork_edit_on(
                     EditForkDecision::Reuse => {
                         let escaped = crate::store::graphql::escape_graphql_string(&child);
                         let owner = crate::store::graphql::escape_graphql_string(params.caller_node_did);
-                        let rows = txn.execute(&format!(r#"{{ AgentMessage(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{escaped}" }}, parent_linked: {{ _eq: false }} }}, limit: 1) {{ _docID }} AgentSession(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{escaped}" }}, relationships_pending: {{ _eq: true }} }}, limit: 1) {{ _docID }} }}"#)).await?;
+                        let rows = txn.execute(&format!(r#"{{ AgentMessage(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{escaped}" }}, parent_linked: {{ _eq: false }} }}, limit: 1) {{ _docID }} AgentOutputSegment(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{escaped}" }}, parent_linked: {{ _eq: false }} }}, limit: 1) {{ _docID }} AgentSession(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{escaped}" }}, relationships_pending: {{ _eq: true }} }}, limit: 1) {{ _docID }} }}"#)).await?;
                         anyhow::ensure!(rows["data"]["AgentMessage"].as_array().is_some_and(Vec::is_empty), ForkError::ForkRecoveryIntentRequired(child));
+                        anyhow::ensure!(rows["data"]["AgentOutputSegment"].as_array().is_some_and(Vec::is_empty), ForkError::ForkRecoveryIntentRequired(child));
                         anyhow::ensure!(rows["data"]["AgentSession"].as_array().is_some_and(Vec::is_empty), ForkError::ForkRecoveryIntentRequired(child));
                         Ok(None)
                     },
@@ -400,6 +480,39 @@ fn fork_header(
         blocks: origin.blocks.clone(),
         created_at: origin.created_at.clone(),
     }
+}
+
+/// The closing record a logical reference names and the flushes within its
+/// exact extent, as the source reconstruction observed them.
+fn fork_closure_records<'a>(
+    segments: &'a [OutputSegmentRow],
+    logical: &str,
+) -> Result<Vec<&'a OutputSegmentRow>> {
+    let closings = segments
+        .iter()
+        .filter(|row| row.doc_id == logical && row.segment.close.is_some())
+        .collect::<Vec<_>>();
+    let [closing] = closings.as_slice() else {
+        anyhow::bail!("fork reference {logical} has no unique closing record");
+    };
+    let Some(SourceClose::Closed {
+        segments: extent, ..
+    }) = &closing.segment.close
+    else {
+        anyhow::bail!("fork reference {logical} names a retraction");
+    };
+    let mut seen = BTreeSet::new();
+    Ok(segments
+        .iter()
+        .filter(|row| {
+            row.segment.request_doc_id == closing.segment.request_doc_id
+                && row.segment.source == closing.segment.source
+                && row.segment.session_id == closing.segment.session_id
+                && (row.doc_id == closing.doc_id
+                    || row.segment.ordinal.is_some_and(|ordinal| ordinal < *extent))
+                && seen.insert(row.doc_id.as_str())
+        })
+        .collect())
 }
 
 fn fork_compaction(origin: &Value, child: &str, params: &ForkParams<'_>) -> Result<Value> {
@@ -626,9 +739,11 @@ async fn fork_in_txn(
         .context("fork requires an explicit creating actor")?
         .to_owned();
     let mut message_doc_ids = Vec::with_capacity(retained.len());
+    let mut segment_doc_ids = Vec::new();
+    let mut copied_closures = BTreeSet::new();
 
     for origin in &retained {
-        let (resolved, _) = load_canonical_message_in_txn(
+        let (resolved, segments) = load_canonical_message_segments_in_txn(
             txn,
             &origin.doc_id,
             params.caller_node_did,
@@ -662,6 +777,31 @@ async fn fork_in_txn(
             &response,
             "AgentMessage",
         )?);
+        for reference in origin.message.payload_references() {
+            let logical = &reference.close_doc_id;
+            if !copied_closures.insert(logical.clone()) {
+                continue;
+            }
+            for record in fork_closure_records(&segments, logical)? {
+                let mut copy = record.segment.clone();
+                copy.session_id = child.to_owned();
+                copy.request_doc_id.clone_from(logical);
+                let response = txn
+                    .execute_client_signed_create(
+                        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                        &crate::session::canonical_rows::fork_output_segment_bound_variables(
+                            txn, &copy,
+                        )
+                        .await?,
+                        gents_protocol::schemas::AGENT_OUTPUT_SEGMENT,
+                    )
+                    .await?;
+                segment_doc_ids.push(crate::store::graphql::created_doc_id(
+                    &response,
+                    "AgentOutputSegment",
+                )?);
+            }
+        }
     }
 
     let mut copied_compactions = 0u32;
@@ -707,6 +847,7 @@ async fn fork_in_txn(
             agent_doc_id,
             agent_did: agent.to_owned(),
             session_pending: true,
+            segment_doc_ids,
             message_doc_ids,
         },
     })

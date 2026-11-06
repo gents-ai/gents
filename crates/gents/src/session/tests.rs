@@ -889,7 +889,7 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
         .iter()
         .find(|case| case["name"] == "three_user_turns")
         .unwrap();
-    let (db, user, client, binding) = crate::test_support::signed_test_node("edit-fork").await;
+    let (db, user, client, binding) = fork_reader_node("edit-fork").await;
     let node = &db.node;
     let node_did = db.node_identity.did();
     let modeled_messages = case["messages"].as_array().unwrap();
@@ -943,13 +943,274 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
     node.shutdown().await.expect("shut down test node");
 }
 
+/// The shared fixture installs its Agent as the non-admin user, which the
+/// native source projection refuses; this fixture installs it as the node.
+async fn fork_reader_node(
+    name: &str,
+) -> (
+    crate::support::TestDb,
+    crate::KeyIdentity,
+    crate::ConfigAccess,
+    gents_protocol::agent_identity::AgentIdentityBinding,
+) {
+    use crate::store::config_client::NodePermission;
+    use crate::store::identity::NodeIdentity;
+    let (db, user, client) = crate::test_support::signed_test_node_without_agent(name).await;
+    let runtime = db.node_identity.as_ref();
+    let admin =
+        crate::ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
+    let user_did = identity::Did::new(user.did()).unwrap();
+    admin
+        .grant_node_permission(&user_did, NodePermission::DacRelationDelete)
+        .await
+        .unwrap();
+    let binding =
+        crate::store::identity::provision_agent_identity_authorized(&db.node, runtime, &user_did)
+            .await
+            .unwrap();
+    crate::test_support::install_test_agent_binding_with_access(
+        &db.node,
+        runtime.did(),
+        "Default fixture agent",
+        &binding,
+        &admin,
+    )
+    .await;
+    crate::test_support::set_test_default_agent_as(&client, runtime.did(), &binding.agent_did)
+        .await;
+    (db, user, client, binding)
+}
+
+async fn session_doc_id(client: &crate::ConfigAccess, session: &str) -> String {
+    let session = escape_graphql_string(session);
+    let response = client
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{session}" }} }}, limit: 2) {{ _docID }} }}"#
+        ))
+        .await
+        .unwrap();
+    let [row] = response["data"]["AgentSession"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("session must be unique")
+    };
+    row["_docID"].as_str().unwrap().to_owned()
+}
+
+async fn delete_session_rows(client: &crate::ConfigAccess, collection: &str, session: &str) {
+    let session = escape_graphql_string(session);
+    let response = client
+        .write(
+            "test.remove_source_rows",
+            &format!(
+                r#"mutation {{ delete_{collection}(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID }} }}"#
+            ),
+        )
+        .await
+        .unwrap();
+    let deleted =
+        crate::store::graphql::mutation_documents(&response, &format!("delete_{collection}"))
+            .unwrap()
+            .unwrap();
+    assert!(!deleted.is_empty(), "{collection} rows of {session} must exist");
+    let remaining = client
+        .execute(&format!(
+            r#"{{ {collection}(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID }} }}"#
+        ))
+        .await
+        .unwrap();
+    assert!(remaining["data"][collection]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn a_reader_granted_only_the_fork_reads_its_whole_retained_transcript() {
+    use crate::store::config_client::NodePermission;
+    use crate::store::identity::NodeIdentity;
+    const SOURCE: &str = "shared-fork-source";
+    let case = crate::lean_vocab_test::lean_contract_snapshot()
+        .session_document_cases
+        .fork
+        .iter()
+        .find(|case| case["name"] == "exact_copy")
+        .unwrap();
+    let reads = |grant: &str| {
+        case["readers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|reader| reader["grant"] == grant)
+            .unwrap()["reads_transcript"]
+            .as_bool()
+            .unwrap()
+    };
+    let (db, user, client, binding) = fork_reader_node("shared-fork-reader").await;
+    let node_did = db.node_identity.did();
+    let messages = (1..=3)
+        .map(|turn| format!("shared-{turn}"))
+        .collect::<Vec<_>>();
+    publish_signed_history(&db, &user, &client, &binding, SOURCE, &messages).await;
+    let fork_of = |source: &'static str, turn: u32| ForkParams {
+        source_session_id: source,
+        boundary: ForkBoundary::UserTurn(turn),
+        caller_node_did: node_did,
+        caller_requester_did: Some(user.did()),
+        target_agent_did: None,
+    };
+    let receipt = fork_on(&client, fork_of(SOURCE, 2)).await.unwrap();
+    assert_eq!(receipt.copied_messages, 2);
+    let child: &'static str = Box::leak(receipt.session_id.clone().into_boxed_str());
+    let owned = history_on(&client, child, node_did, Some(user.did()), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        owned,
+        messages[..2]
+            .iter()
+            .map(|text| Message::user(text.as_str()))
+            .collect::<Vec<_>>()
+    );
+    let grandchild = fork_on(&client, fork_of(child, 2)).await.unwrap();
+    assert_eq!(grandchild.copied_messages, 2);
+
+    let sharee =
+        tokio::task::spawn_blocking(|| crate::support::fixtures::test_identity("fork-sharee"))
+            .await
+            .unwrap();
+    let sharee_did = identity::Did::new(sharee.did()).unwrap();
+    let admin = crate::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(node_did).unwrap(),
+    );
+    for permission in [NodePermission::DocumentRead, NodePermission::CollectionGet] {
+        admin
+            .grant_node_permission(&sharee_did, permission)
+            .await
+            .unwrap();
+    }
+    let sharee_access = crate::ConfigAccess::local_as(db.node.clone(), sharee_did.clone());
+    let source_doc = session_doc_id(&client, SOURCE).await;
+    let child_doc = session_doc_id(&client, child).await;
+    let grandchild_doc = session_doc_id(&client, &grandchild.session_id).await;
+    let requester = user.did();
+    let sharee = &sharee_access;
+    let sharee_history = |session: String| async move {
+        history_on(sharee, &session, node_did, Some(requester), None).await
+    };
+    let sharee_reads = |session: String| {
+        let expected = &owned;
+        async move {
+            sharee_history(session)
+                .await
+                .is_ok_and(|history| history == *expected)
+        }
+    };
+    let share = |doc: &str, grant: bool| {
+        let doc = doc.to_owned();
+        let client = &client;
+        let sharee_did = &sharee_did;
+        async move {
+            if grant {
+                client
+                    .add_actor_relationship("AgentSession", &doc, "reader", sharee_did)
+                    .await
+                    .unwrap();
+            } else {
+                client
+                    .delete_actor_relationship("AgentSession", &doc, "reader", sharee_did)
+                    .await
+                    .unwrap();
+            }
+        }
+    };
+
+    assert_eq!(
+        sharee_reads(child.to_owned()).await,
+        reads("unrelated_session")
+    );
+    share(&source_doc, true).await;
+    assert_eq!(
+        sharee_history(SOURCE.to_owned()).await.unwrap().len(),
+        3,
+        "the source grant is effective"
+    );
+    assert_eq!(sharee_reads(child.to_owned()).await, reads("source_session"));
+    share(&source_doc, false).await;
+    share(&child_doc, true).await;
+    assert!(reads("child_session"));
+    assert!(
+        sharee_reads(child.to_owned()).await,
+        "a direct reader of only the fork reads its retained transcript"
+    );
+    assert!(
+        sharee_history(SOURCE.to_owned())
+            .await
+            .map_or(true, |history| history.is_empty()),
+        "the fork grant reveals nothing of the source session"
+    );
+    share(&child_doc, false).await;
+    assert_eq!(
+        sharee_reads(child.to_owned()).await,
+        reads("unrelated_session")
+    );
+    share(&grandchild_doc, true).await;
+    assert!(
+        sharee_reads(grandchild.session_id.clone()).await,
+        "a reader of only a fork of a fork reads its retained transcript"
+    );
+    assert!(!sharee_reads(child.to_owned()).await);
+
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    admin
+        .grant_node_permission(
+            &identity::Did::new(agent.did()).unwrap(),
+            NodePermission::DocumentDelete,
+        )
+        .await
+        .unwrap();
+    let source_owner = crate::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    delete_session_rows(&source_owner, "AgentOutputSegment", SOURCE).await;
+    assert_eq!(
+        history_on(&client, child, node_did, Some(user.did()), None)
+            .await
+            .unwrap(),
+        owned,
+        "an owner whose origin headers remain reads the fork from its copies"
+    );
+    delete_session_rows(&source_owner, "AgentMessage", SOURCE).await;
+    share(&child_doc, true).await;
+    for session in [child.to_owned(), grandchild.session_id.clone()] {
+        assert_eq!(
+            history_on(&client, &session, node_did, Some(user.did()), None)
+                .await
+                .unwrap(),
+            owned
+        );
+        assert!(
+            sharee_reads(session).await,
+            "deleting the source keeps the fork readable"
+        );
+    }
+    db.node.shutdown().await.expect("shut down test node");
+}
+
 #[tokio::test]
 async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_current_agent() {
     use crate::NodeIdentity as _;
     const SOURCE: &str = "retained-source";
     const CHILD: &str = "retained-child";
     let (mut db, user, client, binding) =
-        crate::test_support::signed_test_node("retained-edit-fork").await;
+        fork_reader_node("retained-edit-fork").await;
     let node_did = db.node_identity.did().to_owned();
     let messages = (1..=3)
         .map(|sequence| format!("retained-{sequence}"))
@@ -982,7 +1243,7 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
     let mutation = format!(
         r#"mutation($input: AgentMutationInputArg!) {{ update_Agent(docID: "{doc}", input: $input) {{ _docID }} }}"#
     );
-    client
+    crate::ConfigAccess::local_as(db.node.clone(), identity::Did::new(&node_did).unwrap())
         .transact_write("test.disable_fork_agent", |txn| {
             let mutation = &mutation;
             Box::pin(async move {
@@ -1079,7 +1340,7 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
 async fn fork_rolls_back_at_every_mutation_position() {
     use crate::store::identity::NodeIdentity;
     const SOURCE: &str = "fork-rollback-source";
-    let (db, user, client, binding) = crate::test_support::signed_test_node("fork-rollback").await;
+    let (db, user, client, binding) = fork_reader_node("fork-rollback").await;
     let node = &db.node;
     let node_did = db.node_identity.did();
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
@@ -1148,12 +1409,16 @@ async fn fork_rolls_back_at_every_mutation_position() {
         caller_requester_did: Some(user.did()),
         target_agent_did: None,
     };
-    let (outcome, writes) =
+    let (publication, writes) =
         crate::store::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
-            || fork_on(&client, params.clone()),
+            || super::fork::commit_fork(&client, params.clone()),
             || session_rewrite_rows(&client),
         )
         .await;
+    let outcome = publication.outcome;
+    super::fork::publish_fork_relationships(&client, publication.intent)
+        .await
+        .unwrap();
     assert_eq!(outcome.copied_messages, 3);
     assert_eq!(outcome.copied_compaction_entries, 2);
     assert!(
