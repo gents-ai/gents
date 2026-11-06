@@ -552,14 +552,52 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
     }
 
     for case in cases {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        // Each case runs under its own held node root, whose managed Agent signs
+        // the captures. The node DID, Agent and session are real, so the sink's
+        // signer and session-binding checks run unchanged.
+        let key_dir = tempfile::tempdir().unwrap();
+        let root: Arc<dyn crate::NodeIdentity> = Arc::new(
+            crate::KeyIdentity::load_or_create(key_dir.path().join("node.key"), None).unwrap(),
+        );
+        // The Lean node witness only distinguishes cases; each case's held root
+        // already gives it a distinct, real node DID.
+        let _ = case.node_did;
+        let node_did = root.did().to_owned();
+        let node = Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(&node_did)
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let sink = DefraRenderedRequestSink::new(node.clone());
+        let binding = crate::store::identity::provision_agent_identity(root.as_ref()).unwrap();
+        let agent =
+            crate::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
+        let agent_did = binding.agent_did.clone();
+        crate::test_support::install_test_agent_binding(
+            &node,
+            &node_did,
+            "Capture test agent",
+            &binding,
+        )
+        .await;
+        let session_id = format!("session-{}", case.session_id);
+        crate::session::ensure_session_with_agent_did_and_requester_did(
+            &node,
+            &session_id,
+            &node_did,
+            &agent_did,
+            None,
+        )
+        .await
+        .unwrap();
+        let sink = DefraRenderedRequestSink::new_managed(node.clone(), agent.as_ref()).unwrap();
 
         let rendered_for_witness =
             |witness: u64| -> crate::inference::rendered_request::RenderedCompletionRequest {
-                let node_did = format!("did:key:z6Mk-sink-{}", case.node_did);
-                let session_id = format!("session-{}", case.session_id);
+                let node_did = node_did.clone();
+                let session_id = session_id.clone();
                 let request_doc_id = format!("bae-request-doc-{}", case.request_id);
                 let assembly_trace =
                     crate::inference::rendered_request::AssemblyTrace::from_effective_messages(
@@ -584,8 +622,8 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
                     turn_index: case.turn_index,
                     attempt: case.attempt,
                     node_did,
-                    requester_did: "did:key:z6Mk-requester".to_string(),
-                    agent_did: "behavior-sink".to_string(),
+                    requester_did: String::new(),
+                    agent_did: agent_did.clone(),
                     session_id,
                     model_name: "sink-model".to_string(),
                     source: RenderedRequestSource::OpenAiChatCompletions,

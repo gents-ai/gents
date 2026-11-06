@@ -641,9 +641,20 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
             }
         }
 
-        let rows = crate::turn::provider_context_reduction::load_for_request(&crate::store::config_client::ConfigAccess::local(node.clone()), request_doc_id)
-            .await
-            .unwrap();
+        // The reduction rows are agent-owned, so they are read as the Agent that
+        // wrote them; the node identity cannot see them.
+        let agent_access = crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            agent.did().parse().unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        let rows = crate::turn::provider_context_reduction::load_for_request(
+            &agent_access,
+            request_doc_id,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             rows.len(),
             expected_rows,
