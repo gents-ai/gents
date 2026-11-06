@@ -1533,7 +1533,13 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
     )
     .await
     .unwrap();
-    let deleted = path.owner.write("test.remove_imported_header", &format!(
+    // The requester holds DocumentDelete above; a Local access bound to it is the signed
+    // route, since the client-signed endpoint refuses ordinary mutations by design.
+    let deleted = crate::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(lifecycle.request().requester_did.as_deref().unwrap()).unwrap(),
+    )
+    .write("test.remove_imported_header", &format!(
             r#"mutation {{ delete_AgentMessage(filter: {{ _docID: {{ _eq: "{escaped_message}" }} }}) {{ _docID }} }}"#
         ))
         .await.unwrap();

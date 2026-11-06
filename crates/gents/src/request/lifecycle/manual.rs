@@ -142,6 +142,15 @@ mod tests {
         (node, did, agent)
     }
 
+    /// Reads through the agent's own signed access: ACP filters unsigned node reads.
+    async fn agent_query(node: &Arc<EmbeddedNode>, agent: &dyn NodeIdentity, query: &str) -> Value {
+        crate::ConfigAccess::local_managed_agent(node.clone(), agent.did().parse().unwrap(), agent)
+            .unwrap()
+            .execute(query)
+            .await
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn writes_manual_request_with_rendered_template_and_manual_lineage() {
         let (node, node_did, agent) = test_node().await;
@@ -176,18 +185,9 @@ mod tests {
                 }}
             }}"#
         );
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "query failed: {:?}",
-            response.errors
-        );
-
-        let rows = response
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentRequest"))
-            .and_then(Value::as_array)
+        let response = agent_query(&node, agent.as_ref(), &query).await;
+        let rows = response["data"]["AgentRequest"]
+            .as_array()
             .cloned()
             .unwrap_or_default();
         assert_eq!(rows.len(), 1, "expected exactly one row, got {rows:?}");
@@ -231,20 +231,9 @@ mod tests {
                 }}
             }}"#
         );
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "query failed: {:?}",
-            response.errors
-        );
-        let content = response
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentRequest"))
-            .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("content"))
-            .and_then(Value::as_str)
+        let response = agent_query(&node, agent.as_ref(), &query).await;
+        let content = response["data"]["AgentRequest"][0]["content"]
+            .as_str()
             .expect("request content");
 
         assert!(content.starts_with("tick "));
@@ -283,17 +272,9 @@ mod tests {
                 }}
             }}"#
         );
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "query failed: {:?}",
-            response.errors
-        );
-        let row = response
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentRequest"))
-            .and_then(Value::as_array)
+        let response = agent_query(&node, agent.as_ref(), &query).await;
+        let row = response["data"]["AgentRequest"]
+            .as_array()
             .and_then(|rows| rows.first())
             .expect("expected request row");
 
@@ -330,17 +311,9 @@ mod tests {
                 }}
             }}"#
         );
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "request query failed: {:?}",
-            response.errors
-        );
-        let request = response
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentRequest"))
-            .and_then(Value::as_array)
+        let response = agent_query(&node, agent.as_ref(), &query).await;
+        let request = response["data"]["AgentRequest"]
+            .as_array()
             .and_then(|rows| rows.first())
             .expect("request row");
         let session_id = request
@@ -365,17 +338,9 @@ mod tests {
                 }}
             }}"#
         );
-        let session_response = node.execute(&session_query).await;
-        assert!(
-            !session_response.has_errors(),
-            "session query failed: {:?}",
-            session_response.errors
-        );
-        let sessions = session_response
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentSession"))
-            .and_then(Value::as_array)
+        let session_response = agent_query(&node, agent.as_ref(), &session_query).await;
+        let sessions = session_response["data"]["AgentSession"]
+            .as_array()
             .expect("session rows");
         assert!(
             sessions.is_empty(),
