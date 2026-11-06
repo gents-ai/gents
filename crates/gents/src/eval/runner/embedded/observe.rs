@@ -685,10 +685,15 @@ mod tests {
             )
             .await
             .unwrap();
-        let agent_access = ConfigAccess::local_as(
+        let agent_identity =
+            crate::store::identity::resolve_agent_identity(home.identity.as_ref(), &binding)
+                .unwrap();
+        let agent_access = ConfigAccess::local_managed_agent(
             home.node.clone(),
             identity::Did::new(&binding.agent_did).unwrap(),
-        );
+            agent_identity.as_ref(),
+        )
+        .unwrap();
         let session_doc = agent_access
             .transact_write("test.observe.session", |txn| {
                 let did = &did;
@@ -767,11 +772,12 @@ mod tests {
         tool.fail("denied", FailureClass::ArgumentInvalid)
             .await
             .unwrap();
-        let writer = DefraStreamWriter::new(
+        let writer = DefraStreamWriter::new_for_lifecycle(
             home.node.clone(),
-            &binding.agent_did,
+            &request,
             Duration::from_millis(1),
-        );
+        )
+        .unwrap();
         writer
             .start_provider_attempt(
                 &request.request().doc_id,
@@ -797,8 +803,29 @@ mod tests {
             .unwrap();
         let request_doc_id = escape_graphql_string(&request.request().doc_id);
         let did_literal = escape_graphql_string(&did);
-        let response = home . node . execute (& format ! (r#"mutation {{ create_InferenceCall(input: {{ request_id: "req-evidence", request_doc_id: "{request_doc_id}", node_did: "{did_literal}", call_id: "inference-1", call_kind: "inference", attempt: 0, call_seq: 3, call_state: "failed", failure_reason: "HTTP 503", prompt_tokens: 11, completion_tokens: 7, queued_at: "2026-01-01T00:00:00Z", started_at: "2026-01-01T00:00:01Z", ended_at: "2026-01-01T00:00:02Z" }}) {{ _docID }} }}"#)) . await ;
-        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        let mutation = format!(
+            r#"mutation {{ create_InferenceCall(input: {{ request_id: "req-evidence", request_doc_id: "{request_doc_id}", node_did: "{did_literal}", call_id: "inference-1", call_kind: "inference", attempt: 0, call_seq: 3, call_state: "failed", failure_reason: "HTTP 503", prompt_tokens: 11, completion_tokens: 7, queued_at: "2026-01-01T00:00:00Z", started_at: "2026-01-01T00:00:01Z", ended_at: "2026-01-01T00:00:02Z" }}) {{ _docID }} }}"#
+        );
+        agent_access
+            .transact_write("test.observe.inference", |txn| {
+                let mutation = &mutation;
+                let session_doc = &session_doc;
+                Box::pin(async move {
+                    let response = txn.execute(mutation).await?;
+                    let doc = crate::store::graphql::created_doc_id(&response, "InferenceCall")?;
+                    txn.add_resource_relationship(
+                        "InferenceCall",
+                        &doc,
+                        "parent",
+                        "sessions",
+                        session_doc,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
         request
             .terminalize_owned(
                 RequestTerminalOutcome::Failed,
@@ -809,7 +836,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let evidence = collect_request_evidence(&home.node, "req-evidence")
+        let evidence = collect_request_evidence_with_access(&agent_access, "req-evidence")
             .await
             .unwrap();
         assert!(
