@@ -223,13 +223,15 @@ mod tests {
         submit_client_request(&client, &child).await.unwrap();
         let denied = KeyIdentity::load_or_create(runs.path().join("denied.key"), None).unwrap();
         let admin = ConfigAccess::local_as(db.node.clone(), identity::Did::new(&did).unwrap());
-        admin
-            .grant_node_permission(
-                &identity::Did::new(denied.did()).unwrap(),
-                crate::store::config_client::NodePermission::DocumentRead,
-            )
-            .await
-            .unwrap();
+        for permission in [
+            crate::store::config_client::NodePermission::DocumentRead,
+            crate::store::config_client::NodePermission::CollectionGet,
+        ] {
+            admin
+                .grant_node_permission(&identity::Did::new(denied.did()).unwrap(), permission)
+                .await
+                .unwrap();
+        }
         let denied_access =
             ConfigAccess::local_as(db.node.clone(), identity::Did::new(denied.did()).unwrap());
         let query = format!(
