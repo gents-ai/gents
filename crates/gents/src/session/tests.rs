@@ -803,27 +803,71 @@ async fn create_session_with_id_is_idempotent() {
 
 #[tokio::test]
 async fn create_session_with_agent_did_rejects_mismatched_existing_binding() {
-    let data_path =
-        std::env::temp_dir().join(format!("gents-session-binding-{}", uuid::Uuid::new_v4()));
-    let node = std::sync::Arc::new(
-        crate::test_support::node_builder()
-            .data_path(&data_path)
-            .build()
+    use crate::store::identity::NodeIdentity;
+
+    let (db, user, access, binding) =
+        crate::test_support::signed_test_node("session-binding").await;
+    let node_did = db.node_identity.did();
+    let other = crate::test_support::install_test_agent_as(
+        &db.node,
+        db.node_identity.as_ref(),
+        &user,
+        "Other fixture agent",
+    )
+    .await;
+    assert_ne!(binding.agent_did, other.agent_did);
+    crate::request::lifecycle::build_signed_client_request(
+        &access,
+        crate::request::lifecycle::RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            crate::request::lifecycle::RequestIdentity {
+                request_id: "session-binding-request".into(),
+                node_did: node_did.into(),
+                requester_did: Some(user.did().into()),
+                agent_did: binding.agent_did.clone(),
+                session_id: "session-1".into(),
+                content: "work".into(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: "2026-09-22T00:00:00Z".into(),
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+        ),
+        crate::request::lifecycle::RequestSigner::Identity(&user),
+    )
+    .await
+    .unwrap();
+
+    async fn ensure(
+        access: &crate::store::config_client::ConfigAccess,
+        node_did: &str,
+        requester_did: &str,
+        agent_did: &str,
+    ) -> anyhow::Result<bool> {
+        access
+            .transact_write("test.session.binding", |txn| {
+                Box::pin(async move {
+                    ensure_session_in_txn(
+                        txn,
+                        "session-1",
+                        node_did,
+                        agent_did,
+                        Some(requester_did),
+                        None,
+                        None,
+                        "2026-09-22T00:00:00Z",
+                    )
+                    .await
+                })
+            })
             .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
-
-    create_session_with_agent_did(&node, "session-1", "did:test:test", "general")
+    }
+    assert!(!ensure(&access, node_did, user.did(), &binding.agent_did)
         .await
-        .unwrap();
-
-    let error = create_session_with_agent_did(&node, "session-1", "did:test:test", "code")
+        .unwrap());
+    let error = ensure(&access, node_did, user.did(), &other.agent_did)
         .await
         .unwrap_err();
     assert!(error.to_string().contains("agent mismatch"));
-
-    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 async fn session_rewrite_rows(node: &defra_node::Node) -> Vec<Vec<String>> {
