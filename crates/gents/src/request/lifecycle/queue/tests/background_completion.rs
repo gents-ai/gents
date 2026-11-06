@@ -388,15 +388,37 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         .await
         .unwrap();
         agent_write(&db, "test.desktop_foreign_control", &bad).await;
-        session::ensure_session_with_agent_did_and_requester_did(
-            &db.node,
-            "other-session",
-            db.node_did(),
-            db.agent_did(),
-            Some(desktop.did()),
-        )
-        .await
-        .unwrap();
+        // Agent-owned, so the ensure sees the session the Agent's own write may
+        // already have created instead of colliding with it.
+        let desktop_did = desktop.did().to_owned();
+        let node_did = db.node_did().to_owned();
+        let agent_did = db.agent_did().to_owned();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.agent_access
+            .transact_write("test.foreign_control_session", |txn| {
+                let (desktop_did, node_did, agent_did, now) = (
+                    desktop_did.as_str(),
+                    node_did.as_str(),
+                    agent_did.as_str(),
+                    now.as_str(),
+                );
+                Box::pin(async move {
+                    session::ensure_session_in_txn(
+                        txn,
+                        "other-session",
+                        node_did,
+                        agent_did,
+                        Some(desktop_did),
+                        None,
+                        None,
+                        now,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
         let bad = crate::request::binding::load_agent_request_with_access(&db.agent_access, "foreign-control")
             .await
             .unwrap()
