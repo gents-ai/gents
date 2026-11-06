@@ -334,7 +334,7 @@ mod tests {
             let child_doc = child.doc_id().unwrap().to_owned();
             let generation = parent.execution_generation().unwrap().to_owned();
             let request_doc = parent.request_doc_id().unwrap().to_owned();
-            let agent = parent.node_did().to_owned();
+            let agent = request_owner.actor_did().unwrap().as_str().to_owned();
             let session = parent.session_id().to_owned();
             let normal = name.ends_with("_normal");
             if normal {
@@ -343,9 +343,13 @@ mod tests {
                     .await
                     .unwrap();
             }
-            let result = ConfigAccess::transact_local_write(
-                &node,
-                None,
+            let access = ConfigAccess::local_with_optional_agent_signer(
+                node.clone(),
+                request_owner.actor_did().unwrap(),
+                request_owner.managed_agent_signer(),
+            )
+            .unwrap();
+            let result = access.transact_write(
                 "test.plugin_child_accounting",
                 |txn| {
                     let request_doc = request_doc.clone();
@@ -394,7 +398,7 @@ mod tests {
             } else {
                 result.unwrap();
             }
-            let response = ConfigAccess::local(node.clone()).execute(&format!(
+            let response = access.execute(&format!(
                 r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state started_at stuck_since terminal_output }} }}"#,
                 escape_graphql_string(&child_doc),
             )).await.unwrap();

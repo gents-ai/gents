@@ -357,9 +357,14 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
     let session_id = format!("session-{request_id}");
     let now = chrono::Utc::now().to_rfc3339();
     let agent_did = crate::triggers::callback::test_agent_did();
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node identity")
+        .to_owned();
     let mutation = format!(
-        r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "did:test:test", agent_did: "{}", session_id: "{}", retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#,
+        r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "{}", agent_did: "{}", session_id: "{}", retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#,
         crate::store::graphql::escape_graphql_string(&request_id),
+        crate::store::graphql::escape_graphql_string(&node_did),
         crate::store::graphql::escape_graphql_string(&agent_did),
         crate::store::graphql::escape_graphql_string(&session_id),
         crate::store::graphql::escape_graphql_string(&request_id),
@@ -381,7 +386,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
         &agent_did,
-        "did:test:test",
+        &node_did,
         row.try_into().unwrap(),
         60,
     );
@@ -519,7 +524,8 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         };
         assert_eq!(*raw_generation, case.authority.generation, "{}", case.name);
         let writer =
-            DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(1));
+            DefraStreamWriter::new_for_lifecycle(node.clone(), &lifecycle, Duration::from_millis(1))
+            .unwrap();
         let generation = lifecycle.execution_generation().unwrap().to_owned();
         let request_doc_id = lifecycle.request().doc_id.clone();
         let empty_state = output_state(&node, &request_doc_id).await;
@@ -914,7 +920,8 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             .unwrap();
         let mut lifecycle = claimed(&node, &case.name).await;
         let writer =
-            DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(1));
+            DefraStreamWriter::new_for_lifecycle(node.clone(), &lifecycle, Duration::from_millis(1))
+            .unwrap();
         lifecycle.begin_owned_execution(&writer).await.unwrap();
         let request = lifecycle.request().clone();
         let generation = lifecycle.execution_generation().unwrap().to_owned();
