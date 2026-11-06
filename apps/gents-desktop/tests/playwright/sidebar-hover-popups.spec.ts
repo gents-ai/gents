@@ -121,7 +121,9 @@ test.describe("the hover panel and what opens from it", () => {
     /* a frame where plugin pages' frames are staged, over the page beside
        the rail, as a plugin page's frame sits */
     await page.evaluate(async (left) => {
-      const { stageElement } = await import("/src/ui/contrib/frame-stage.ts");
+      const { stageElement } = await import(
+        /* @vite-ignore */ `${"/src/ui/contrib/frame-stage.ts"}`
+      );
       const frame = document.createElement("iframe");
       frame.style.cssText = `position:fixed;top:0;bottom:0;left:${left}px;right:0;width:calc(100vw - ${left}px);height:100vh;border:0;pointer-events:auto`;
       stageElement().appendChild(frame);
