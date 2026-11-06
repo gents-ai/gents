@@ -46,6 +46,121 @@ fn oauth_backend(
 }
 
 #[tokio::test]
+async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
+    use crate::NodeIdentity;
+    let (db, user, user_access, _binding) =
+        crate::test_support::signed_test_node("health-runtime-owner").await;
+    let other = crate::support::test_db("health-foreign-owner").await;
+    let node = db.node.clone();
+    let did = db.node_identity.did();
+    let other_did = other.node_identity.did();
+    let models = ModelsListener::start();
+    let mut configured = backend("runtime-probe", models.endpoint());
+    configured.node_did = did.to_owned();
+    oauth_backend_configuration(&user_access, &configured).await;
+
+    let visible =
+        crate::inference::backends::registry::list_enabled_backends_for_runtime(&node, did)
+            .await
+            .unwrap();
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].backend_id, configured.backend_id);
+    let doc = crate::inference::backends::registry::capture_backend_document(&node, &configured)
+        .await
+        .unwrap();
+    crate::inference::backends::registry::set_backend_probe_status_for_connection(
+        &node,
+        &configured,
+        &doc,
+        "healthy",
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    let observation = user_access
+        .transact_readonly("test.runtime_probe.observation", |txn| {
+            Box::pin(async move {
+                crate::inference::backends::registry::lookup_backend_observation_in_txn(
+                    txn,
+                    did,
+                    "runtime-probe",
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(observation.probe_status.as_deref(), Some("healthy"));
+    assert!(
+        crate::inference::backends::registry::list_enabled_backends_for_runtime(&node, other_did)
+            .await
+            .is_err()
+    );
+    let health = BackendHealthMap::new();
+    let outcome = run_backend_probe_cycle(
+        node.clone(),
+        &reqwest::Client::new(),
+        &health,
+        &probe_options(),
+        other_did,
+    )
+    .await;
+    assert!(outcome.promotable.is_empty());
+    assert!(health.get("runtime-probe").await.is_none());
+    assert_eq!(models.requests(), 0);
+
+    let escaped = crate::store::graphql::escape_graphql_string(did);
+    let response = user_access
+        .execute(&format!(
+            r#"{{ Node(filter: {{node_did: {{_eq: "{escaped}"}}}}) {{_docID}} }}"#
+        ))
+        .await
+        .unwrap();
+    let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "Node");
+    let parent = rows[0]["_docID"].as_str().unwrap();
+    crate::ConfigAccess::local_as(node.clone(), identity::Did::new(did).unwrap())
+        .grant_node_permission(
+            &identity::Did::new(user.did()).unwrap(),
+            crate::store::config_client::NodePermission::DacRelationDelete,
+        )
+        .await
+        .unwrap();
+    user_access
+        .delete_actor_relationship(
+            "Node",
+            parent,
+            "runtime_reader",
+            &identity::Did::new(did).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        crate::inference::backends::registry::list_enabled_backends_for_runtime(&node, did)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        crate::inference::backends::registry::capture_backend_document(&node, &configured)
+            .await
+            .is_err()
+    );
+    assert!(
+        crate::inference::backends::registry::set_backend_probe_status_for_connection(
+            &node,
+            &configured,
+            &doc,
+            "healthy",
+            Utc::now(),
+        )
+        .await
+        .is_err()
+    );
+    models.shutdown().await;
+}
+
+#[tokio::test]
 async fn oauth_kinds_probe_the_credential_document_fresh_is_healthy_and_promotes() {
     let (db, _user, user_access, _binding) =
         crate::test_support::signed_test_node("health-oauth").await;

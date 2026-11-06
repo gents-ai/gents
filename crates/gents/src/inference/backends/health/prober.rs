@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::inference::backends::registry::{
-    capture_backend_document, list_enabled_backends_for_agent,
+    capture_backend_document, list_enabled_backends_for_runtime,
     set_backend_probe_status_for_connection,
 };
 
@@ -36,7 +36,7 @@ pub(super) async fn run_scheduled_backend_probe_cycle(
     if cancel.is_some_and(CancellationToken::is_cancelled) {
         return ProbeCycleOutcome::default();
     }
-    let backends = match list_enabled_backends_for_agent(node.as_ref(), node_did).await {
+    let backends = match list_enabled_backends_for_runtime(&node, node_did).await {
         Ok(backends) => backends,
         Err(error) => {
             tracing::warn!(error = %error, "backend probe: could not list backends");

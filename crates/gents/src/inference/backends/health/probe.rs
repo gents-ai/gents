@@ -362,7 +362,7 @@ pub(super) async fn record_probe_event(
     }
 
     if event == ProbeEvent::ProbeSuccess {
-        match crate::inference::backends::registry::lookup_backend_observation(
+        match crate::inference::backends::registry::lookup_backend_observation_for_runtime(
             node,
             &backend.node_did,
             &backend.backend_id,

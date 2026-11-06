@@ -329,10 +329,14 @@ async fn query_backend_records(
         "query_backend_records",
     )
     .await?;
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("InferenceBackendMetadata"))
+    decode_backend_records(response.data.as_ref(), skip_unknown_kind)
+}
+
+fn decode_backend_records(
+    data: Option<&serde_json::Value>,
+    skip_unknown_kind: bool,
+) -> Result<Vec<(String, InferenceBackend)>> {
+    data.and_then(|data| data.get("InferenceBackendMetadata"))
         .and_then(serde_json::Value::as_array)
         .context("InferenceBackend query did not return rows")?
         .iter()
@@ -385,19 +389,14 @@ pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceB
     )
 }
 
-pub async fn list_enabled_backends_for_agent(
-    node: &EmbeddedNode,
-    node_did: &str,
-) -> Result<Vec<InferenceBackend>> {
-    anyhow::ensure!(
-        !node_did.trim().is_empty(),
-        "backend owner must be nonempty"
-    );
-    let filter = format!(
+fn enabled_backend_filter(node_did: &str) -> String {
+    format!(
         r#"filter: {{ node_did: {{ _eq: "{}" }}, enabled: {{ _eq: true }} }}"#,
         escape_graphql_string(node_did)
-    );
-    let records = query_backend_records(node, &filter, true).await?;
+    )
+}
+
+fn unique_backends(records: Vec<(String, InferenceBackend)>) -> Result<Vec<InferenceBackend>> {
     let mut ids = std::collections::BTreeSet::new();
     records
         .into_iter()
@@ -409,6 +408,47 @@ pub async fn list_enabled_backends_for_agent(
             Ok(backend)
         })
         .collect()
+}
+
+pub async fn list_enabled_backends_for_agent(
+    node: &EmbeddedNode,
+    node_did: &str,
+) -> Result<Vec<InferenceBackend>> {
+    anyhow::ensure!(
+        !node_did.trim().is_empty(),
+        "backend owner must be nonempty"
+    );
+    unique_backends(query_backend_records(node, &enabled_backend_filter(node_did), true).await?)
+}
+
+/// Lists the held Node's visible backend configuration for its operational prober.
+pub(crate) async fn list_enabled_backends_for_runtime(
+    node: &Arc<EmbeddedNode>,
+    node_did: &str,
+) -> Result<Vec<InferenceBackend>> {
+    let access = crate::inference::auth::credential::runtime_credential_access(node, node_did)?;
+    let filter = enabled_backend_filter(node_did);
+    let response = access
+        .execute(&format!(
+            "query {{ InferenceBackendMetadata({filter}) {{ _docID {BACKEND_CONFIG_FIELDS} }} }}"
+        ))
+        .await?;
+    unique_backends(decode_backend_records(response.get("data"), true)?)
+}
+
+pub(crate) async fn lookup_backend_observation_for_runtime(
+    node: &Arc<EmbeddedNode>,
+    node_did: &str,
+    backend_id: &str,
+) -> Result<Option<InferenceBackendObservation>> {
+    let access = crate::inference::auth::credential::runtime_credential_access(node, node_did)?;
+    access
+        .transact_readonly("backend_registry.runtime_observation", |txn| {
+            Box::pin(
+                async move { lookup_backend_observation_in_txn(txn, node_did, backend_id).await },
+            )
+        })
+        .await
 }
 
 pub async fn lookup_backend_observation(
@@ -516,7 +556,7 @@ pub(crate) async fn set_backend_probe_status_for_connection(
     last_probe: chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
     write_probe_observation(
-        &crate::ConfigAccess::local(node.clone()),
+        &crate::inference::auth::credential::runtime_credential_access(node, &backend.node_did)?,
         &backend.node_did,
         &backend.backend_id,
         serde_json::json!({"probe_status": probe_status, "last_probe": last_probe.to_rfc3339()}),
@@ -590,7 +630,7 @@ pub(crate) async fn capture_backend_document(
     node: &Arc<EmbeddedNode>,
     backend: &InferenceBackend,
 ) -> Result<String> {
-    crate::ConfigAccess::local(node.clone())
+    crate::inference::auth::credential::runtime_credential_access(node, &backend.node_did)?
         .transact_readonly("backend_registry.capture_probe", |txn| {
             Box::pin(async move {
                 let (doc, value) = crate::store::config_client::read_desired_state_record_in_txn(
@@ -623,7 +663,7 @@ pub(crate) async fn record_model_catalog_for_document(
     doc: &str,
     catalog: BackendModelCatalog,
 ) -> Result<()> {
-    crate::ConfigAccess::local(node.clone())
+    crate::inference::auth::credential::runtime_credential_access(node, &backend.node_did)?
         .transact_write("backend_registry.record_catalog_document", |txn| {
             let catalog = catalog.clone();
             Box::pin(async move {
