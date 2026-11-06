@@ -937,6 +937,7 @@ export function createDesktopUiHarness(
   let removed = false;
   let provisioned = scenario !== "empty-fleet";
   let pairingStatusReads = 0;
+  let pairingAuthorized = scenario === "storage-recovery";
   let managedServer: ManagedServerStatus = {
     state: "disabled",
     autoStart: false,
@@ -2166,7 +2167,11 @@ export function createDesktopUiHarness(
     scenario === "startup-port-in-use"
       ? ({
           async managedServerStatus() {
-            if (managedServer.state === "running" && !managedServer.pairingReady) {
+            if (
+              pairingAuthorized &&
+              managedServer.state === "running" &&
+              !managedServer.pairingReady
+            ) {
               pairingStatusReads += 1;
               if (pairingStatusReads >= 2) {
                 managedServer = { ...managedServer, pairingReady: true };
@@ -2197,6 +2202,7 @@ export function createDesktopUiHarness(
             return clone(managedServer);
           },
           async enrollManagedServer() {
+            pairingAuthorized = true;
             managedServer = { ...managedServer, pairingReady: true };
           },
           async commitManagedServerAutoStart(nodeName) {
