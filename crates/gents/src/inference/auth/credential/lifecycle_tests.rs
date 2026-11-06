@@ -376,6 +376,13 @@ async fn signed_account_delete_requires_user_document_delete_permission() {
         panic!("one signed User-owned credential must exist");
     };
     let credential_id = credential.credential_id.clone();
+    let admin = ConfigAccess::local_as(db.node.clone(), node_did.parse().unwrap());
+    // The fixture's OperatorUser grant includes DocumentDelete; withdraw it so
+    // the denial below is the user's own missing permission.
+    admin
+        .revoke_node_permission(&user.did().parse().unwrap(), NodePermission::DocumentDelete)
+        .await
+        .unwrap();
 
     let error = remove(&access, node_did, &credential_id).await.unwrap_err();
     let typed =
@@ -396,7 +403,6 @@ async fn signed_account_delete_requires_user_document_delete_permission() {
         1
     );
 
-    let admin = ConfigAccess::local_as(db.node.clone(), node_did.parse().unwrap());
     admin
         .grant_node_permission(&user.did().parse().unwrap(), NodePermission::DocumentDelete)
         .await

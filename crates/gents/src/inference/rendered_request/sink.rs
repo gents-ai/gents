@@ -89,7 +89,7 @@ impl DefraRenderedRequestSink {
     async fn stored_fact(&self, rendered: &RenderedCompletionRequest) -> Result<Option<Value>> {
         let capture_key = &rendered.capture_key;
         let response = self.access_for_capture(rendered)?.transact_readonly(
-            "rendered_request::lookup",
+            "rendered_request.lookup",
             |txn| {
                 Box::pin(async move {
                     let (session_doc_id, _) = capture_session_binding(txn, rendered).await?;
