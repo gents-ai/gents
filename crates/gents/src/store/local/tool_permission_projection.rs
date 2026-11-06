@@ -472,6 +472,32 @@ mod tests {
                 .await?,
             allowed
         );
+        for (name, nonce) in [("missing", None), ("malformed", Some("not-a-nonce"))] {
+            let foreign = crate::KeyIdentity::load_or_create(directory.path().join(name), None)?;
+            let mut input = json!({"node_did":runtime.did(),"agent_did":foreign.did(),
+                "context_id":"context","enabled":true});
+            if let Some(nonce) = nonce {
+                input["creation_nonce"] = json!(nonce);
+            }
+            access.transact_write("test.user_signed_invalid_agent", |txn| {
+                let input = &input;
+                Box::pin(async move {
+                    txn.execute_desired_state_mutation(
+                        "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID _version { cid } } }",
+                        &json!({"input":input}), crate::Collection::Agent, true,
+                    ).await
+                })
+            }).await?;
+            assert_eq!(
+                node.nac_manager()
+                    .check_permission(
+                        &identity::Did::new(foreign.did())?,
+                        NodePermission::CollectionPatch
+                    )
+                    .await?,
+                allowed
+            );
+        }
         // Install a legacy source to exercise cleanup after upgrading the projector.
         let projector = ToolPermissionProjection::new(
             Arc::new(crate::KeyIdentity::load_or_create(&path, None)?),
