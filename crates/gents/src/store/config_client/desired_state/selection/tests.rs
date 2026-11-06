@@ -3,11 +3,35 @@ use std::sync::Arc;
 use anyhow::Context;
 use serde_json::json;
 
-use super::{apply_selection_changes, tool_reference_ids, Change};
+use super::{apply_selection_changes, selected_ids, Change};
 use crate::lean_vocab_test::lean_identity_household_cases;
-use crate::store::config_client::ConfigAccess;
+use crate::store::config_client::{config_projection, ConfigAccess};
 use crate::store::identity::NodeIdentity;
 use crate::Collection;
+
+/// A canonical document whose required fields the fixture does not exercise
+/// hold placeholders; `fields` override them.
+pub(crate) fn canonical(
+    collection: Collection,
+    node_did: &str,
+    fields: serde_json::Value,
+) -> serde_json::Value {
+    let mut document = match collection {
+        Collection::Agent => json!({"creation_nonce":"nonce", "inference_profile_id":"profile"}),
+        Collection::InferenceProfile => json!({"backend_id":"backend", "model_name":"model"}),
+        Collection::Task => json!({"prompt_template":"work"}),
+        _ => json!({}),
+    };
+    document["node_did"] = json!(node_did);
+    document[collection.unique_field()] = json!("fixture");
+    for (field, value) in fields.as_object().expect("fixture fields") {
+        document[field] = value.clone();
+    }
+    config_projection(collection, Some(&document))
+        .expect("canonical fixture")
+        .1
+        .expect("canonical fixture projection")
+}
 
 #[test]
 fn modeled_tools_reference_sets_include_disabled_agent_targets() {
@@ -22,8 +46,13 @@ fn modeled_tools_reference_sets_include_disabled_agent_targets() {
             .iter()
             .map(|id| json!({"mcp_service_id":id}))
             .collect::<Vec<_>>();
-        let tools = json!({"agents":{"enabled":case["agents_enabled"], "target_ids":case["targets"]},
-            "remote":{"services":services}, "datastore":{"datastore_tool_surface_ids":case["surfaces"]}});
+        let tools = canonical(
+            Collection::Tools,
+            "did:key:fixture",
+            json!({"agents":{"enabled":case["agents_enabled"], "target_ids":case["targets"]},
+            "remote":{"services":services}, "datastore":{"datastore_tool_surface_ids":case["surfaces"]}}),
+        );
+        let selected = selected_ids(Collection::Tools, "did:key:fixture", Some(&tools)).unwrap();
         for collection in [
             Collection::AgentTarget,
             Collection::ToolServiceRegistry,
@@ -36,7 +65,7 @@ fn modeled_tools_reference_sets_include_disabled_agent_targets() {
                 .map(|id| id.as_str().unwrap().to_owned())
                 .collect::<std::collections::BTreeSet<_>>();
             assert_eq!(
-                tool_reference_ids(Some(&tools), collection),
+                selected.get(&collection).cloned().unwrap_or_default(),
                 expected,
                 "modeled {}",
                 case["name"]
@@ -479,27 +508,44 @@ async fn modeled_inference_selection_changes_stage_shared_native_edges() -> anyh
             node_did: owner.did().into(),
             doc_id: agent_doc,
             before: None,
-            after: json!({"inference_profile_id":"profile"}),
+            after: canonical(
+                Collection::Agent,
+                owner.did(),
+                json!({"inference_profile_id":"profile"}),
+            ),
         },
         Change {
             collection: Collection::InferenceProfile,
             node_did: owner.did().into(),
             doc_id: profile_doc.clone(),
             before: None,
-            after: json!({"sampling_id":"sampling", "execution_id":"execution"}),
+            after: canonical(
+                Collection::InferenceProfile,
+                owner.did(),
+                json!({"sampling_id":"sampling", "execution_id":"execution"}),
+            ),
         },
         Change {
             collection: Collection::InferenceExecution,
             node_did: owner.did().into(),
             doc_id: execution_doc,
             before: None,
-            after: json!({"retry_policy_id":"retry"}),
+            after: canonical(
+                Collection::InferenceExecution,
+                owner.did(),
+                json!({"retry_policy_id":"retry"}),
+            ),
         },
     ];
     access
         .transact_write("test.inference.select", |txn| {
             let changes = &changes;
-            Box::pin(async move { apply_selection_changes(txn, changes, |_| true).await })
+            Box::pin(async move {
+                apply_selection_changes(txn, changes, |collection| {
+                    collection != Collection::InferenceBackend
+                })
+                .await
+            })
         })
         .await?;
     for case in model
@@ -512,13 +558,26 @@ async fn modeled_inference_selection_changes_stage_shared_native_edges() -> anyh
                 collection: Collection::InferenceProfile,
                 node_did: owner.did().into(),
                 doc_id: profile_doc.clone(),
-                before: Some(json!({"sampling_id":"sampling", "execution_id":"execution"})),
-                after: json!({"sampling_id":"sampling", "execution_id":null}),
+                before: Some(canonical(
+                    Collection::InferenceProfile,
+                    owner.did(),
+                    json!({"sampling_id":"sampling", "execution_id":"execution"}),
+                )),
+                after: canonical(
+                    Collection::InferenceProfile,
+                    owner.did(),
+                    json!({"sampling_id":"sampling", "execution_id":null}),
+                ),
             }];
             access
                 .transact_write("test.inference.remove_execution", |txn| {
                     let change = &change;
-                    Box::pin(async move { apply_selection_changes(txn, change, |_| true).await })
+                    Box::pin(async move {
+                        apply_selection_changes(txn, change, |collection| {
+                            collection != Collection::InferenceBackend
+                        })
+                        .await
+                    })
                 })
                 .await?;
         }
@@ -621,20 +680,33 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
             node_did: owner.did().into(),
             doc_id: agent_doc.clone(),
             before: None,
-            after: json!({"context_id":"context"}),
+            after: canonical(
+                Collection::Agent,
+                owner.did(),
+                json!({"context_id":"context"}),
+            ),
         },
         Change {
             collection: Collection::AgentContext,
             node_did: owner.did().into(),
             doc_id: context_doc.clone(),
             before: None,
-            after: json!({"skill_ids":["skill"], "tools_id":"tools"}),
+            after: canonical(
+                Collection::AgentContext,
+                owner.did(),
+                json!({"skill_ids":["skill"], "tools_id":"tools"}),
+            ),
         },
     ];
     access
         .transact_write("test.skill.select", |txn| {
             let changes = &changes;
-            Box::pin(async move { apply_selection_changes(txn, changes, |_| true).await })
+            Box::pin(async move {
+                apply_selection_changes(txn, changes, |collection| {
+                    collection != Collection::InferenceProfile
+                })
+                .await
+            })
         })
         .await?;
     for case in &model.configuration_tools_selection_cases {
@@ -804,13 +876,26 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
         collection: Collection::AgentContext,
         node_did: owner.did().into(),
         doc_id: context_doc.clone(),
-        before: Some(json!({"skill_ids":["skill"], "display_name":"before"})),
-        after: json!({"skill_ids":["skill"], "display_name":"after"}),
+        before: Some(canonical(
+            Collection::AgentContext,
+            owner.did(),
+            json!({"skill_ids":["skill"], "display_name":"before"}),
+        )),
+        after: canonical(
+            Collection::AgentContext,
+            owner.did(),
+            json!({"skill_ids":["skill"], "display_name":"after"}),
+        ),
     }];
     access
         .transact_write("test.skill.unrelated", |txn| {
             let changes = &unrelated;
-            Box::pin(async move { apply_selection_changes(txn, changes, |_| true).await })
+            Box::pin(async move {
+                apply_selection_changes(txn, changes, |collection| {
+                    collection != Collection::InferenceProfile
+                })
+                .await
+            })
         })
         .await?;
     let response = ConfigAccess::local_as(node.clone(), selected_did.clone())
@@ -826,13 +911,26 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
         collection: Collection::AgentContext,
         node_did: owner.did().into(),
         doc_id: context_doc,
-        before: Some(json!({"skill_ids":["skill"]})),
-        after: json!({"skill_ids":null}),
+        before: Some(canonical(
+            Collection::AgentContext,
+            owner.did(),
+            json!({"skill_ids":["skill"]}),
+        )),
+        after: canonical(
+            Collection::AgentContext,
+            owner.did(),
+            json!({"skill_ids":null}),
+        ),
     }];
     access
         .transact_write("test.skill.deselect", |txn| {
             let changes = &removal;
-            Box::pin(async move { apply_selection_changes(txn, changes, |_| true).await })
+            Box::pin(async move {
+                apply_selection_changes(txn, changes, |collection| {
+                    collection != Collection::InferenceProfile
+                })
+                .await
+            })
         })
         .await?;
     let response = ConfigAccess::local_as(node.clone(), selected_did)

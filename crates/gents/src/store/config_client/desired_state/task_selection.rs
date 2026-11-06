@@ -2,10 +2,17 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::{read::read_record, selection::Change, ConfigApplyTxn};
+use crate::documents::references_of;
 use crate::Collection;
 
-fn selected_agent(value: Option<&Value>) -> Option<&str> {
-    value.and_then(|value| value["agent_did"].as_str())
+fn selected_agent(node_did: &str, value: Option<&Value>) -> Result<Option<String>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    Ok(references_of(Collection::Task, value, node_did)?
+        .into_iter()
+        .find(|reference| reference.collection == Collection::Agent)
+        .map(|reference| reference.id))
 }
 
 /// The Task owner manages its target Agent userset in the same transaction as
@@ -18,14 +25,14 @@ pub(super) async fn apply_task_selections(
         .iter()
         .filter(|change| change.collection == Collection::Task)
     {
-        let old = selected_agent(change.before.as_ref());
-        let new = selected_agent(Some(&change.after));
+        let old = selected_agent(&change.node_did, change.before.as_ref())?;
+        let new = selected_agent(&change.node_did, Some(&change.after))?;
         if old == new {
             continue;
         }
         for (agent, add) in [(old, false), (new, true)] {
             let Some(agent) = agent else { continue };
-            let (agent_doc, _) = read_record(txn, Collection::Agent, &change.node_did, agent)
+            let (agent_doc, _) = read_record(txn, Collection::Agent, &change.node_did, &agent)
                 .await?
                 .context("Task target Agent is unavailable")?;
             if add {

@@ -1,66 +1,62 @@
+use std::collections::VecDeque;
+
 use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::{read::read_record, ConfigApplyTxn};
+use crate::documents::{references_of, RequiredReference};
 use crate::Collection;
 
 /// Each physical link follows the revocable Agent self-configuration role.
-/// Independent actor grants are not changed by this publication.
+/// Independent actor grants are not changed by this publication. The walk is
+/// the Agent's InferenceProfile and the canonical references below it.
 pub(super) async fn grant_selected_inference(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     agent_doc: &str,
     agent_document: &Value,
 ) -> Result<()> {
-    let Some(profile_id) = reference(agent_document, "inference_profile_id") else {
-        return Ok(());
-    };
-    let profile = grant(
-        txn,
-        node_did,
-        agent_doc,
-        Collection::InferenceProfile,
-        profile_id,
-    )
-    .await?;
-    if let Some(id) = reference(&profile, "backend_id") {
-        let (backend_doc, _) = read_record(txn, Collection::InferenceBackend, node_did, id)
-            .await?
-            .context("selected InferenceBackendMetadata is unavailable")?;
-        txn.add_entity_set_relationship(
-            Collection::InferenceBackend.graphql_type(),
-            &backend_doc,
-            "selection_manager",
-            "agents",
-            agent_doc,
-            "config_writer",
-        )
-        .await?;
-    }
-    if let Some(id) = reference(&profile, "sampling_id") {
-        grant(txn, node_did, agent_doc, Collection::InferenceSampling, id).await?;
-    }
-    if let Some(id) = reference(&profile, "execution_id") {
-        let execution = grant(txn, node_did, agent_doc, Collection::InferenceExecution, id).await?;
-        if let Some(id) = reference(&execution, "retry_policy_id") {
-            grant(
-                txn,
-                node_did,
+    let mut pending = selected(Collection::Agent, node_did, agent_document)?
+        .filter(|reference| reference.collection == Collection::InferenceProfile)
+        .collect::<VecDeque<_>>();
+    while let Some(reference) = pending.pop_front() {
+        if reference.collection == Collection::InferenceBackend {
+            let (backend_doc, _) =
+                read_record(txn, Collection::InferenceBackend, node_did, &reference.id)
+                    .await?
+                    .context("selected InferenceBackendMetadata is unavailable")?;
+            txn.add_entity_set_relationship(
+                Collection::InferenceBackend.graphql_type(),
+                &backend_doc,
+                "selection_manager",
+                "agents",
                 agent_doc,
-                Collection::InferenceRetryPolicy,
-                id,
+                "config_writer",
             )
             .await?;
+            continue;
         }
+        let document = grant(
+            txn,
+            node_did,
+            agent_doc,
+            reference.collection,
+            &reference.id,
+        )
+        .await?;
+        pending.extend(selected(reference.collection, node_did, &document)?);
     }
     Ok(())
 }
 
-fn reference<'a>(document: &'a Value, field: &str) -> Option<&'a str> {
-    document
-        .get(field)
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())
+fn selected(
+    collection: Collection,
+    node_did: &str,
+    document: &Value,
+) -> Result<impl Iterator<Item = RequiredReference>> {
+    Ok(references_of(collection, document, node_did)?
+        .into_iter()
+        .filter(|reference| !reference.id.is_empty()))
 }
 
 async fn grant(
@@ -98,6 +94,7 @@ async fn grant(
 mod tests {
     use std::sync::Arc;
 
+    use super::super::selection::tests::canonical;
     use super::*;
     use crate::store::config_client::{ConfigAccess, NodePermission};
     use crate::store::identity::NodeIdentity;
@@ -476,8 +473,16 @@ mod tests {
             collection: Collection::InferenceProfile,
             node_did: runtime_did.clone(),
             doc_id: profile.clone(),
-            before: Some(serde_json::json!({"execution_id":"execution"})),
-            after: serde_json::json!({"execution_id":"new-execution"}),
+            before: Some(canonical(
+                Collection::InferenceProfile,
+                &runtime_did,
+                serde_json::json!({"execution_id":"execution"}),
+            )),
+            after: canonical(
+                Collection::InferenceProfile,
+                &runtime_did,
+                serde_json::json!({"execution_id":"new-execution"}),
+            ),
         };
         let rebind = agent
             .transact_write("test.inference.rebind", |txn| {
@@ -632,6 +637,55 @@ mod tests {
                 .check_permission(&actor, NodePermission::DocumentUpdate)
                 .await?
         );
+        node.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn self_config_grant_reads_only_agents_with_a_profile() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("runtime");
+        let runtime = crate::KeyIdentity::load_or_create(&path, None)?;
+        let key = crate::store::identity::load_file_identity(&path)?.private_key_bytes();
+        let node = Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(runtime.did())
+                .with_signing_key(defra_node::SigningKey::Ed25519(key))
+                .with_node_acp_enabled()
+                .build()
+                .await?,
+        );
+        crate::ensure_runtime_schemas(&node).await?;
+        let binding = crate::store::identity::provision_agent_identity(&runtime)?;
+        crate::store::identity::grant_agent_node_capabilities(&node, &runtime, &binding).await?;
+        let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+        let node_did = crate::store::graphql::escape_graphql_string(runtime.did());
+        let agent_did = crate::store::graphql::escape_graphql_string(&binding.agent_did);
+        let nonce = crate::store::graphql::escape_graphql_string(&binding.creation_nonce);
+        owner.write("test.profileless.context", &format!(r#"mutation {{ create_AgentContext(input: {{node_did:"{node_did}",context_id:"context"}}) {{_docID}} }}"#)).await?;
+        owner.write("test.profileless.agent", &format!(r#"mutation {{ create_Agent(input: {{node_did:"{node_did}",agent_did:"{agent_did}",creation_nonce:"{nonce}",context_id:"context"}}) {{_docID}} }}"#)).await?;
+        let runtime_did = runtime.did().to_owned();
+        let read = owner
+            .transact_readonly("test.profileless.read", |txn| {
+                let agent_did = &binding.agent_did;
+                let runtime_did = &runtime_did;
+                Box::pin(async move {
+                    read_record(txn, Collection::Agent, runtime_did, agent_did).await
+                })
+            })
+            .await;
+        assert!(read.is_err(), "{read:?}");
+        let grant = owner
+            .transact_write("test.profileless.grant", |txn| {
+                let agent_did = &binding.agent_did;
+                let runtime_did = &runtime_did;
+                Box::pin(async move {
+                    super::super::grant_selected_self_configuration(txn, runtime_did, agent_did)
+                        .await
+                })
+            })
+            .await;
+        assert!(grant.is_err());
         node.shutdown().await?;
         Ok(())
     }

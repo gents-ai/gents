@@ -34,10 +34,13 @@ pub struct ConfigReferences {
     documents: BTreeMap<(Collection, String), Value>,
 }
 
-struct RequiredReference {
-    collection: Collection,
-    id: String,
-    field: &'static str,
+/// One canonical reference edge: `field` of the source document names `id` in
+/// `collection`. Blank IDs are reported so callers can reject them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RequiredReference {
+    pub(crate) collection: Collection,
+    pub(crate) id: String,
+    pub(crate) field: &'static str,
 }
 
 impl ConfigReferences {
@@ -246,179 +249,7 @@ impl ConfigReferences {
         collection: Collection,
         value: &Value,
     ) -> Result<Vec<RequiredReference>> {
-        let mut references = Vec::new();
-        let mut push = |collection, id: &str, field| {
-            references.push(RequiredReference {
-                collection,
-                id: id.to_owned(),
-                field,
-            })
-        };
-        match collection {
-            Collection::Node => {
-                let doc: Node = decode(value)?;
-                if let Some(id) = doc.default_agent_did.as_deref() {
-                    push(Collection::Agent, id, "default_agent_did");
-                }
-            }
-            Collection::Agent => {
-                let doc: Agent = decode(value)?;
-                if let Some(id) = doc.context_id.as_deref() {
-                    push(Collection::AgentContext, id, "context_id");
-                }
-                push(
-                    Collection::InferenceProfile,
-                    &doc.inference_profile_id,
-                    "inference_profile_id",
-                );
-            }
-            Collection::AgentContext => {
-                let doc: AgentContext = decode(value)?;
-                if let Some(id) = doc.tools_id.as_deref() {
-                    push(Collection::Tools, id, "tools_id");
-                }
-                if let Some(id) = doc.compaction_id.as_deref() {
-                    push(Collection::Compaction, id, "compaction_id");
-                }
-                for id in &doc.skill_ids {
-                    push(Collection::Skill, id, "skill_ids");
-                }
-            }
-            Collection::Compaction => {
-                let doc: CompactionConfig = decode(value)?;
-                if let Some(id) = doc.inference_profile_id.as_deref() {
-                    push(Collection::InferenceProfile, id, "inference_profile_id");
-                }
-            }
-            Collection::Tools => {
-                let doc: Tools = decode(value)?;
-                if let Some(remote) = &doc.remote {
-                    for service in &remote.services {
-                        push(
-                            Collection::ToolServiceRegistry,
-                            &service.mcp_service_id,
-                            "remote.services.mcp_service_id",
-                        );
-                    }
-                }
-                if let Some(agents) = &doc.agents {
-                    for id in &agents.target_ids {
-                        push(Collection::AgentTarget, id, "agents.target_ids");
-                    }
-                }
-                if let Some(datastore) = &doc.datastore {
-                    for id in datastore.datastore_tool_surface_ids.iter().flatten() {
-                        push(
-                            Collection::DatastoreToolSurface,
-                            id,
-                            "datastore.datastore_tool_surface_ids",
-                        );
-                    }
-                }
-            }
-            Collection::AgentTarget => {
-                let doc: AgentTargetDocument = decode(value)?;
-                if doc.target_node_did == self.node_did {
-                    push(Collection::Agent, &doc.agent_did, "agent_did");
-                }
-            }
-            Collection::InferenceProfile => {
-                let doc: InferenceProfile = decode(value)?;
-                push(Collection::InferenceBackend, &doc.backend_id, "backend_id");
-                if let Some(id) = doc.sampling_id.as_deref() {
-                    push(Collection::InferenceSampling, id, "sampling_id");
-                }
-                if let Some(id) = doc.execution_id.as_deref() {
-                    push(Collection::InferenceExecution, id, "execution_id");
-                }
-            }
-            Collection::InferenceExecution => {
-                let doc: InferenceExecution = decode(value)?;
-                if let Some(id) = doc.retry_policy_id.as_deref() {
-                    push(Collection::InferenceRetryPolicy, id, "retry_policy_id");
-                }
-            }
-            Collection::ProjectionAcpBinding => {
-                let doc: ProjectionAcpBinding = decode(value)?;
-                if let Some(id) = doc.agent_did.as_deref() {
-                    push(Collection::Agent, id, "agent_did");
-                }
-            }
-            Collection::Task => {
-                let doc: Task = decode(value)?;
-                push(Collection::Agent, &doc.agent_did, "agent_did");
-            }
-            Collection::Trigger => {
-                let doc: Trigger = decode(value)?;
-                push(Collection::Task, &doc.task_id, "task_id");
-                match &doc.source {
-                    TriggerSource::Schedule { schedule_id } => {
-                        push(Collection::Schedule, schedule_id, "source.schedule_id")
-                    }
-                    TriggerSource::Event { event_source_id } => push(
-                        Collection::EventSource,
-                        event_source_id,
-                        "source.event_source_id",
-                    ),
-                }
-            }
-            Collection::Callback => {
-                let doc: Callback = decode(value)?;
-                if let CallbackHandler::Module { module_id, .. } = &doc.handler {
-                    push(Collection::CallbackModule, module_id, "handler.module_id");
-                }
-                let selection = match &doc.handler {
-                    CallbackHandler::BuiltIn {
-                        workspace_agents, ..
-                    }
-                    | CallbackHandler::Module {
-                        workspace_agents, ..
-                    } => workspace_agents.as_ref(),
-                    CallbackHandler::Plugin { .. } => None,
-                };
-                if let Some(selection) = selection {
-                    push(
-                        Collection::Agent,
-                        &selection.writer_agent_did,
-                        "handler.workspace_agents.writer_agent_did",
-                    );
-                    push(
-                        Collection::Agent,
-                        &selection.integrator_agent_did,
-                        "handler.workspace_agents.integrator_agent_did",
-                    );
-                    for reader in &selection.readers {
-                        push(
-                            Collection::Agent,
-                            &reader.agent_did,
-                            "handler.workspace_agents.readers.agent_did",
-                        );
-                    }
-                }
-            }
-            Collection::CallbackBinding => {
-                let doc: CallbackBinding = decode(value)?;
-                push(Collection::Agent, &doc.agent_did, "agent_did");
-                push(
-                    Collection::EventSource,
-                    &doc.event_source_id,
-                    "event_source_id",
-                );
-                push(Collection::Callback, &doc.callback_id, "callback_id");
-            }
-            Collection::InferenceBackend
-            | Collection::InferenceSampling
-            | Collection::InferenceRetryPolicy
-            | Collection::DatastoreToolSurface
-            | Collection::Schedule
-            | Collection::EventSource
-            | Collection::ToolServiceRegistry
-            | Collection::RepositoryPlacement
-            | Collection::EvalDefinition
-            | Collection::Skill
-            | Collection::CallbackModule => {}
-        }
-        Ok(references)
+        references_of(collection, value, &self.node_did)
     }
 
     pub fn validate_removal(&self, collection: Collection, id: &str) -> Result<()> {
@@ -666,6 +497,188 @@ impl ConfigReferences {
         }
         Ok(())
     }
+}
+
+/// Every reference edge of one canonical document, decoded through its typed
+/// configuration struct. `node_did` is the owner whose AgentTargets are local.
+pub(crate) fn references_of(
+    collection: Collection,
+    value: &Value,
+    node_did: &str,
+) -> Result<Vec<RequiredReference>> {
+    let mut references = Vec::new();
+    let mut push = |collection, id: &str, field| {
+        references.push(RequiredReference {
+            collection,
+            id: id.to_owned(),
+            field,
+        })
+    };
+    match collection {
+        Collection::Node => {
+            let doc: Node = decode(value)?;
+            if let Some(id) = doc.default_agent_did.as_deref() {
+                push(Collection::Agent, id, "default_agent_did");
+            }
+        }
+        Collection::Agent => {
+            let doc: Agent = decode(value)?;
+            if let Some(id) = doc.context_id.as_deref() {
+                push(Collection::AgentContext, id, "context_id");
+            }
+            push(
+                Collection::InferenceProfile,
+                &doc.inference_profile_id,
+                "inference_profile_id",
+            );
+        }
+        Collection::AgentContext => {
+            let doc: AgentContext = decode(value)?;
+            if let Some(id) = doc.tools_id.as_deref() {
+                push(Collection::Tools, id, "tools_id");
+            }
+            if let Some(id) = doc.compaction_id.as_deref() {
+                push(Collection::Compaction, id, "compaction_id");
+            }
+            for id in &doc.skill_ids {
+                push(Collection::Skill, id, "skill_ids");
+            }
+        }
+        Collection::Compaction => {
+            let doc: CompactionConfig = decode(value)?;
+            if let Some(id) = doc.inference_profile_id.as_deref() {
+                push(Collection::InferenceProfile, id, "inference_profile_id");
+            }
+        }
+        Collection::Tools => {
+            let doc: Tools = decode(value)?;
+            if let Some(remote) = &doc.remote {
+                for service in &remote.services {
+                    push(
+                        Collection::ToolServiceRegistry,
+                        &service.mcp_service_id,
+                        "remote.services.mcp_service_id",
+                    );
+                }
+            }
+            if let Some(agents) = &doc.agents {
+                for id in &agents.target_ids {
+                    push(Collection::AgentTarget, id, "agents.target_ids");
+                }
+            }
+            if let Some(datastore) = &doc.datastore {
+                for id in datastore.datastore_tool_surface_ids.iter().flatten() {
+                    push(
+                        Collection::DatastoreToolSurface,
+                        id,
+                        "datastore.datastore_tool_surface_ids",
+                    );
+                }
+            }
+        }
+        Collection::AgentTarget => {
+            let doc: AgentTargetDocument = decode(value)?;
+            if doc.target_node_did == node_did {
+                push(Collection::Agent, &doc.agent_did, "agent_did");
+            }
+        }
+        Collection::InferenceProfile => {
+            let doc: InferenceProfile = decode(value)?;
+            push(Collection::InferenceBackend, &doc.backend_id, "backend_id");
+            if let Some(id) = doc.sampling_id.as_deref() {
+                push(Collection::InferenceSampling, id, "sampling_id");
+            }
+            if let Some(id) = doc.execution_id.as_deref() {
+                push(Collection::InferenceExecution, id, "execution_id");
+            }
+        }
+        Collection::InferenceExecution => {
+            let doc: InferenceExecution = decode(value)?;
+            if let Some(id) = doc.retry_policy_id.as_deref() {
+                push(Collection::InferenceRetryPolicy, id, "retry_policy_id");
+            }
+        }
+        Collection::ProjectionAcpBinding => {
+            let doc: ProjectionAcpBinding = decode(value)?;
+            if let Some(id) = doc.agent_did.as_deref() {
+                push(Collection::Agent, id, "agent_did");
+            }
+        }
+        Collection::Task => {
+            let doc: Task = decode(value)?;
+            push(Collection::Agent, &doc.agent_did, "agent_did");
+        }
+        Collection::Trigger => {
+            let doc: Trigger = decode(value)?;
+            push(Collection::Task, &doc.task_id, "task_id");
+            match &doc.source {
+                TriggerSource::Schedule { schedule_id } => {
+                    push(Collection::Schedule, schedule_id, "source.schedule_id")
+                }
+                TriggerSource::Event { event_source_id } => push(
+                    Collection::EventSource,
+                    event_source_id,
+                    "source.event_source_id",
+                ),
+            }
+        }
+        Collection::Callback => {
+            let doc: Callback = decode(value)?;
+            if let CallbackHandler::Module { module_id, .. } = &doc.handler {
+                push(Collection::CallbackModule, module_id, "handler.module_id");
+            }
+            let selection = match &doc.handler {
+                CallbackHandler::BuiltIn {
+                    workspace_agents, ..
+                }
+                | CallbackHandler::Module {
+                    workspace_agents, ..
+                } => workspace_agents.as_ref(),
+                CallbackHandler::Plugin { .. } => None,
+            };
+            if let Some(selection) = selection {
+                push(
+                    Collection::Agent,
+                    &selection.writer_agent_did,
+                    "handler.workspace_agents.writer_agent_did",
+                );
+                push(
+                    Collection::Agent,
+                    &selection.integrator_agent_did,
+                    "handler.workspace_agents.integrator_agent_did",
+                );
+                for reader in &selection.readers {
+                    push(
+                        Collection::Agent,
+                        &reader.agent_did,
+                        "handler.workspace_agents.readers.agent_did",
+                    );
+                }
+            }
+        }
+        Collection::CallbackBinding => {
+            let doc: CallbackBinding = decode(value)?;
+            push(Collection::Agent, &doc.agent_did, "agent_did");
+            push(
+                Collection::EventSource,
+                &doc.event_source_id,
+                "event_source_id",
+            );
+            push(Collection::Callback, &doc.callback_id, "callback_id");
+        }
+        Collection::InferenceBackend
+        | Collection::InferenceSampling
+        | Collection::InferenceRetryPolicy
+        | Collection::DatastoreToolSurface
+        | Collection::Schedule
+        | Collection::EventSource
+        | Collection::ToolServiceRegistry
+        | Collection::RepositoryPlacement
+        | Collection::EvalDefinition
+        | Collection::Skill
+        | Collection::CallbackModule => {}
+    }
+    Ok(references)
 }
 
 fn decode<T>(value: &Value) -> Result<T>

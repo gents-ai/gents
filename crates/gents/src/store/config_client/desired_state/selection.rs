@@ -1,10 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::read::read_record;
 use super::ConfigApplyTxn;
+use crate::documents::references_of;
 use crate::Collection;
 
 pub(super) struct Change {
@@ -15,45 +16,35 @@ pub(super) struct Change {
     pub(super) after: Value,
 }
 
-fn reference_ids(value: Option<&Value>, field: &str) -> BTreeSet<String> {
-    value
-        .and_then(|value| value[field].as_str())
-        .map(str::to_owned)
-        .into_iter()
-        .collect()
+/// Selected IDs per target collection, from the canonical reference owner.
+fn selected_ids(
+    collection: Collection,
+    node_did: &str,
+    value: Option<&Value>,
+) -> Result<BTreeMap<Collection, BTreeSet<String>>> {
+    let mut selected: BTreeMap<Collection, BTreeSet<String>> = BTreeMap::new();
+    if let Some(value) = value {
+        for reference in references_of(collection, value, node_did)? {
+            selected
+                .entry(reference.collection)
+                .or_default()
+                .insert(reference.id);
+        }
+    }
+    Ok(selected)
 }
 
-fn skill_ids(value: Option<&Value>) -> BTreeSet<String> {
-    value
-        .and_then(|value| value["skill_ids"].as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_owned)
-        .collect()
-}
-
-fn tool_reference_ids(value: Option<&Value>, source: Collection) -> BTreeSet<String> {
-    let Some(value) = value else {
-        return BTreeSet::new();
-    };
-    let (path, member) = match source {
-        Collection::AgentTarget => ("/agents/target_ids", None),
-        Collection::ToolServiceRegistry => ("/remote/services", Some("mcp_service_id")),
-        Collection::DatastoreToolSurface => ("/datastore/datastore_tool_surface_ids", None),
-        _ => return BTreeSet::new(),
-    };
-    value
-        .pointer(path)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| match member {
-            Some(field) => item.get(field).and_then(Value::as_str),
-            None => item.as_str(),
-        })
-        .map(str::to_owned)
-        .collect()
+/// Documents whose references grant `selected_by` on the selected document.
+fn selects_configuration(collection: Collection) -> bool {
+    matches!(
+        collection,
+        Collection::Agent
+            | Collection::AgentContext
+            | Collection::Compaction
+            | Collection::InferenceProfile
+            | Collection::InferenceExecution
+            | Collection::Tools
+    )
 }
 
 pub(super) fn context_hierarchy_enabled(bound: fn(Collection) -> bool) -> bool {
@@ -76,42 +67,24 @@ pub(super) async fn apply_selection_changes(
     changes: &[Change],
     bound: fn(Collection) -> bool,
 ) -> Result<()> {
-    for change in changes {
-        let references: &[(Collection, &str)] = match change.collection {
-            Collection::Agent => &[
-                (Collection::AgentContext, "context_id"),
-                (Collection::InferenceProfile, "inference_profile_id"),
-            ],
-            Collection::AgentContext => &[
-                (Collection::Skill, "skill_ids"),
-                (Collection::Compaction, "compaction_id"),
-                (Collection::Tools, "tools_id"),
-            ],
-            Collection::Compaction => &[(Collection::InferenceProfile, "inference_profile_id")],
-            Collection::InferenceProfile => &[
-                (Collection::InferenceBackend, "backend_id"),
-                (Collection::InferenceSampling, "sampling_id"),
-                (Collection::InferenceExecution, "execution_id"),
-            ],
-            Collection::InferenceExecution => {
-                &[(Collection::InferenceRetryPolicy, "retry_policy_id")]
-            }
-            Collection::Tools => &[
-                (Collection::AgentTarget, "agents.target_ids"),
-                (Collection::ToolServiceRegistry, "remote.services"),
-                (
-                    Collection::DatastoreToolSurface,
-                    "datastore.datastore_tool_surface_ids",
-                ),
-            ],
-            _ => continue,
-        };
+    for change in changes
+        .iter()
+        .filter(|change| selects_configuration(change.collection))
+    {
         let (target_resource, target_relation) = if change.collection == Collection::Agent {
             ("agents", "executor")
         } else {
             ("configuration", "selected_by")
         };
-        for &(source, field) in references {
+        let before = selected_ids(change.collection, &change.node_did, change.before.as_ref())?;
+        let after = selected_ids(change.collection, &change.node_did, Some(&change.after))?;
+        let sources = before
+            .keys()
+            .chain(after.keys())
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let unselected = BTreeSet::new();
+        for source in sources {
             if !bound(source)
                 || (source == Collection::InferenceBackend
                     && source.graphql_type() != "InferenceBackendMetadata")
@@ -121,20 +94,11 @@ pub(super) async fn apply_selection_changes(
             {
                 continue;
             }
-            let ids = |value| {
-                if change.collection == Collection::Tools {
-                    tool_reference_ids(value, source)
-                } else if field == "skill_ids" {
-                    skill_ids(value)
-                } else {
-                    reference_ids(value, field)
-                }
-            };
-            let before = ids(change.before.as_ref());
-            let after = ids(Some(&change.after));
+            let before = before.get(&source).unwrap_or(&unselected);
+            let after = after.get(&source).unwrap_or(&unselected);
             for (ids, add) in [
-                (before.difference(&after), false),
-                (after.difference(&before), true),
+                (before.difference(after), false),
+                (after.difference(before), true),
             ] {
                 for id in ids {
                     let (source_doc, _) = read_record(txn, source, &change.node_did, id)
@@ -171,4 +135,4 @@ pub(super) async fn apply_selection_changes(
 #[cfg(test)]
 mod compaction_tests;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
