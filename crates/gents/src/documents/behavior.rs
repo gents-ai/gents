@@ -10,7 +10,7 @@ use super::serde_helpers::{
     is_enabled, rows_with_doc_id,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct Agent {
@@ -33,6 +33,7 @@ pub struct Agent {
         skip_serializing_if = "is_enabled"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub enabled: bool,
     #[serde(
         default,
@@ -40,6 +41,7 @@ pub struct Agent {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]

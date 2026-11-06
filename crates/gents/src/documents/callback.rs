@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct Callback {
@@ -19,6 +19,7 @@ pub struct Callback {
     )]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub capabilities: Vec<String>,
     #[serde(
         default = "super::serde_helpers::default_enabled",
@@ -26,6 +27,7 @@ pub struct Callback {
         skip_serializing_if = "super::serde_helpers::is_enabled"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub enabled: bool,
     #[serde(
         default,
@@ -33,10 +35,11 @@ pub struct Callback {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -73,6 +76,7 @@ pub enum CallbackHandler {
             feature = "typescript",
             ts(as = "Option<Vec<crate::documents::PortSpec>>", optional = nullable)
         )]
+        #[schemars(transform = crate::documents::accepts_null)]
         outputs: Vec<crate::documents::PortSpec>,
     },
 }
@@ -120,14 +124,14 @@ pub struct PortSpec {
     pub required: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum BuiltInCallback {
     CreateWorkspace,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct CallbackBinding {
@@ -144,6 +148,7 @@ pub struct CallbackBinding {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub input_fields: Vec<String>,
     #[serde(
         default = "super::serde_helpers::default_enabled",
@@ -151,6 +156,7 @@ pub struct CallbackBinding {
         skip_serializing_if = "super::serde_helpers::is_enabled"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub enabled: bool,
     #[serde(
         default,
@@ -158,12 +164,13 @@ pub struct CallbackBinding {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
 }
 
 // Resource limits retain their executor defaults when absent; signer_did is
 // provenance, not execution owner.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct CallbackModule {
@@ -190,6 +197,7 @@ pub struct CallbackModule {
         skip_serializing_if = "super::serde_helpers::is_enabled"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -209,6 +217,7 @@ pub struct CallbackModule {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
 }
 

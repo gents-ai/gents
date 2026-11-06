@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Reusable task definition; the trigger engine renders templates into an
 /// AgentRequest before the owned loop executes it.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct Task {
@@ -22,6 +22,7 @@ pub struct Task {
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
         skip_serializing_if = "super::serde_helpers::is_disabled"
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub emit_outcome: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -37,6 +38,7 @@ pub struct Task {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<TaskHook>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub hooks: Vec<TaskHook>,
     #[serde(
         default = "super::serde_helpers::default_enabled",
@@ -44,6 +46,7 @@ pub struct Task {
         skip_serializing_if = "super::serde_helpers::is_enabled"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -60,12 +63,13 @@ pub struct Task {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
 }
 
 /// A task-owned host command, using the behavior's HostTools.root and inherited
 /// host environment.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct TaskHook {
@@ -86,10 +90,11 @@ pub struct TaskHook {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<i64>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub skip_exit_codes: Vec<i64>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum TaskHookPhase {

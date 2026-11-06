@@ -7,7 +7,18 @@ vi.mock("@/lib/router", async (actual) => ({
   ...(await actual<typeof import("../src/ui/lib/router")>()),
   navigate,
 }));
-vi.mock("@/screens/SearchPalette", () => ({ openSearch }));
+/* the palette registers its own command; this stand-in does the same */
+vi.mock("@/screens/SearchPalette", async () => {
+  const { registerCommand } = await import("@/commands/commands");
+  registerCommand({
+    id: "search",
+    title: "Search",
+    group: "Help",
+    keys: { key: "k", mod: true },
+    run: () => openSearch(),
+  });
+  return { openSearch };
+});
 
 import { useHistoryInputs } from "../src/ui/lib/history-inputs";
 import { Shortcuts } from "../src/ui/screens/Shortcuts";

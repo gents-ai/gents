@@ -434,6 +434,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::NativeFsRunner(args) => {
             return commands::native_fs_runner::native_fs_runner(args);
         }
+        Command::DocsBundle(args) => return commands::docs_bundle::docs_bundle(args),
         Command::Codex(args) => {
             return commands::codex::codex(args).await;
         }
@@ -534,7 +535,9 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Optimization { command } => {
             commands::optimization::dispatch(command, runtime).await
         }
-        Command::NativeFsRunner(_) => unreachable!("handled before telemetry initialization"),
+        Command::NativeFsRunner(_) | Command::DocsBundle(_) => {
+            unreachable!("handled before telemetry initialization")
+        }
     };
     telemetry.shutdown();
     result

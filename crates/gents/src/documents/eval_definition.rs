@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub const LLM_JUDGE_CHECK: &str = "llm_judge";
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum EvalSplit {
@@ -14,7 +14,7 @@ pub enum EvalSplit {
     HeldOut,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum EvalTier {
@@ -22,7 +22,9 @@ pub enum EvalTier {
     Acceptance,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum EvalReducer {
@@ -32,14 +34,14 @@ pub enum EvalReducer {
     LastStage,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum EvalSubjectKind {
     Agent,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EvalSubject {
@@ -50,13 +52,14 @@ pub struct EvalSubject {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub inference_slots: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub host_bash: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EvalFixtureDocument {
@@ -79,7 +82,7 @@ pub struct EvalFixtureDocument {
     pub expired_client_request: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EvalFixtureFile {
@@ -88,7 +91,7 @@ pub struct EvalFixtureFile {
     pub contents: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EvalFixtures {
@@ -99,6 +102,7 @@ pub struct EvalFixtures {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub assets: Vec<String>,
     #[serde(
         default,
@@ -109,6 +113,7 @@ pub struct EvalFixtures {
         feature = "typescript",
         ts(as = "Option<Vec<EvalFixtureDocument>>", optional = nullable)
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub documents: Vec<EvalFixtureDocument>,
     #[serde(
         default,
@@ -119,6 +124,7 @@ pub struct EvalFixtures {
         feature = "typescript",
         ts(as = "Option<Vec<EvalFixtureFile>>", optional = nullable)
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub files: Vec<EvalFixtureFile>,
     /// App-collection SDL to install in the trial before its documents.
     #[serde(
@@ -127,6 +133,7 @@ pub struct EvalFixtures {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub schemas: Vec<String>,
     /// Authored SDL for signing stage seeds; the trial does not install it.
     #[serde(
@@ -142,7 +149,7 @@ fn default_weight() -> u32 {
     1
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EvalCheckRef {
@@ -156,7 +163,7 @@ pub struct EvalCheckRef {
     pub weight: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(tag = "kind", rename_all = "snake_case"))]
@@ -190,7 +197,7 @@ impl EvalCapture {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EvalStage {
@@ -228,6 +235,7 @@ pub struct EvalStage {
         feature = "typescript",
         ts(as = "Option<Vec<EvalCheckRef>>", optional = nullable)
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub checks: Vec<EvalCheckRef>,
     #[serde(
         default,
@@ -238,13 +246,14 @@ pub struct EvalStage {
         feature = "typescript",
         ts(as = "Option<Vec<EvalCapture>>", optional = nullable)
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub capture: Vec<EvalCapture>,
 }
 
 /// Once a settling stage's home is quiet, sends `prompt` as a new user turn
 /// and settles again, until the capture named `until` holds a row or `max`
 /// prods have been sent. The number sent is stage evidence, never a failure.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EvalContinuation {
@@ -253,7 +262,7 @@ pub struct EvalContinuation {
     pub until: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EvalCase {
@@ -275,12 +284,13 @@ pub struct EvalCase {
         feature = "typescript",
         ts(as = "Option<BTreeMap<String, u64>>", optional = nullable)
     )]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub goal: BTreeMap<String, u64>,
 }
 
 /// A pack-carried eval definition; identity is `(definition_id,
 /// comparability_version, desired_state_document_digest)`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EvalDefinition {
@@ -307,6 +317,7 @@ pub struct EvalDefinition {
         skip_serializing_if = "Vec::is_empty"
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
 }
 

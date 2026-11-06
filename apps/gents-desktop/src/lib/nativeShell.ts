@@ -98,6 +98,16 @@ export function announceWindowSetupComplete() {
   return invoke<void>("desktop_window_setup_complete");
 }
 
+/** a UX plugin's page in a window of its own, or that window brought
+    forward when it is already open */
+export function openPluginWindow(request: {
+  pluginId: string;
+  nodeDid: string | null;
+  title: string;
+}) {
+  return invoke<void>("desktop_open_plugin_window", request);
+}
+
 export const canPickDirectory = inNativeShell;
 
 export async function confirmPluginMessage(
@@ -127,6 +137,25 @@ export async function pickDirectory(options: {
     title: options.title,
   });
   return typeof picked === "string" ? picked : null;
+}
+
+/** Whether the desktop app may post notifications: the plugin answers
+    only granted or not, so asking again is what tells a refusal from a
+    question never asked. */
+export async function notificationsGranted(): Promise<boolean> {
+  return (await import("@tauri-apps/plugin-notification")).isPermissionGranted();
+}
+
+export async function requestNotifications() {
+  return (await import("@tauri-apps/plugin-notification")).requestPermission();
+}
+
+/** Posts a notification, settling once the system took it or failing with
+    why it didn't. The plugin's sendNotification neither waits for nor
+    returns the native call, so a refusal would vanish; this is the call it
+    makes. */
+export async function postNotification(options: { title: string; body?: string }) {
+  await invoke("plugin:notification|notify", { options });
 }
 
 export async function homeFolder(): Promise<string | null> {

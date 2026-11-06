@@ -15,6 +15,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import type { DesktopApp } from "../src/hooks/desktopApp";
 import { MailboxScreen } from "../src/ui/screens/MailboxScreen";
+import { CommandKeys } from "../src/ui/commands/dispatch";
 import { MailboxStack, openInStack } from "../src/ui/screens/MailboxStack";
 import { mailboxSeen } from "../src/ui/app/mailboxSeen";
 import { listViews } from "../src/ui/app/listViews";
@@ -77,6 +78,7 @@ function Page({ route = { name: "mailbox" } }: { route?: Route }) {
     <>
       {route.name === "mailbox" && <MailboxScreen />}
       <MailboxStack route={route} />
+      <CommandKeys />
     </>
   );
 }

@@ -93,6 +93,9 @@ uuid.workspace = true
 url = "2"
 semver = "1"
 tempfile = "3"
+# `gents __docs-bundle --archive` packs the reference bundle itself so its
+# bytes do not depend on the host tar.
+tar = "0.4"
 notify = { version = "8.2", default-features = false, features = ["macos_kqueue"] }
 wait-timeout = "0.2"
 # `gents eval init` holds a draft's check params to each check's schema.

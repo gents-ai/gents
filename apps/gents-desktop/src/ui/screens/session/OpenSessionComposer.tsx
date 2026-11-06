@@ -301,7 +301,7 @@ export function OpenSessionComposer({
       <div
         aria-hidden
         className={cn(
-          "pointer-events-none absolute inset-x-0 bottom-full h-8 bg-gradient-to-t from-background to-transparent transition-opacity duration-200",
+          "pointer-events-none absolute inset-x-0 bottom-full h-8 bg-linear-to-t/srgb from-background to-transparent transition-opacity duration-200",
           atBottom ? "opacity-0" : "opacity-100",
         )}
       />

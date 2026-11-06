@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "plugin-window",
+  "description": "A UX plugin's page in a window of its own: the client's snapshot and lifecycle, the node list, links out, and the page's own plugin reads and calls. No chat, configuration, pack or runtime administration.",
+  "windows": ["gents-plugin-*"],
+  "platforms": ["macOS", "windows", "linux"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-set-title",
+    "core:window:allow-set-theme",
+    "core:webview:allow-set-webview-zoom",
+    "opener:default",
+    "dialog:allow-open",
+    "gents-desktop-bridge:default",
+    "gents-desktop-bridge:fleet-read",
+    "gents-desktop-bridge:external-links",
+    "gents-desktop-bridge:ux-plugins-read",
+    "gents-desktop-bridge:ux-plugins-call"
+  ]
+}

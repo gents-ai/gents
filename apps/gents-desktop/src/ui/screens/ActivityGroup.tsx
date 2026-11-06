@@ -341,14 +341,14 @@ export function ActivityGroup({
           <div
             aria-hidden
             className={cn(
-              "pointer-events-none absolute inset-x-0 top-0 h-6 bg-gradient-to-b from-background to-transparent transition-opacity duration-200",
+              "pointer-events-none absolute inset-x-0 top-0 h-6 bg-linear-to-b/srgb from-background to-transparent transition-opacity duration-200",
               capped && more.above ? "opacity-100" : "opacity-0",
             )}
           />
           <div
             aria-hidden
             className={cn(
-              "pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-background to-transparent transition-opacity duration-200",
+              "pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-linear-to-t/srgb from-background to-transparent transition-opacity duration-200",
               capped && more.below ? "opacity-100" : "opacity-0",
             )}
           />
@@ -425,7 +425,7 @@ export function Reasoning({ text, stateKey }: { text: string; stateKey?: string 
         >
           <Markdown>{text}</Markdown>
           {!all && clipped && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-background to-transparent" />
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-linear-to-t/srgb from-background to-transparent" />
           )}
         </div>
         {(all || clipped) && (
