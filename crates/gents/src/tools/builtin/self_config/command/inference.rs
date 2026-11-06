@@ -27,7 +27,7 @@ impl ConfigCommandTool {
                     rest.len() <= 1,
                     "{resource} get accepts at most one ID and --agent AGENT_DID"
                 );
-                let core = self.target_core(agent_did.as_deref(), resource).await?;
+                let core = self.read_target_core(agent_did.as_deref()).await?;
                 match rest.first() {
                     Some(id) => self.exact_read(target, id).await,
                     None => self.bound_read(&core, target).await,
@@ -244,7 +244,11 @@ impl ConfigCommandTool {
         if agent_did.is_none() && matches!(verb, "preview" | "edit") {
             self.require_named_profile_owner(verb).await?;
         }
-        let core = self.target_core(agent_did.as_deref(), "profile").await?;
+        let core = if verb == "get" {
+            self.read_target_core(agent_did.as_deref()).await?
+        } else {
+            self.target_core(agent_did.as_deref(), "profile").await?
+        };
         let mut rest = target_args.as_slice();
         let target_name = rest
             .first()

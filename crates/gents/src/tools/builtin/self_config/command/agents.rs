@@ -328,12 +328,26 @@ impl ConfigCommandTool {
         agent_did: Option<&str>,
         operation: &str,
     ) -> Result<SelfConfigCore> {
+        self.target_core_for(agent_did, Some(operation)).await
+    }
+
+    pub(super) async fn read_target_core(&self, agent_did: Option<&str>) -> Result<SelfConfigCore> {
+        self.target_core_for(agent_did, None).await
+    }
+
+    async fn target_core_for(
+        &self,
+        agent_did: Option<&str>,
+        catalog_operation: Option<&str>,
+    ) -> Result<SelfConfigCore> {
         let agent_did = match agent_did {
             Some(id) => self.resolve_agent_did(id).await?,
             None => self.core.agent_did().to_owned(),
         };
         let agent_did = agent_did.as_str();
-        self.ensure_agent_catalog(operation, Some(agent_did))?;
+        if let Some(operation) = catalog_operation {
+            self.ensure_agent_catalog(operation, Some(agent_did))?;
+        }
         let invoking_agent_did = self.core.agent_did().to_owned();
         SelfConfigCore::new(
             self.node.clone(),
