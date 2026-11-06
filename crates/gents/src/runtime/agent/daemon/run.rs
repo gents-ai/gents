@@ -173,10 +173,13 @@ where
         for candidate in candidates {
             match self
                 .request_admission
-                .verify_fresh(&candidate, &self.agent_config.agent_did)
+                .verify_fresh_for_claim_with_identity(
+                    &candidate,
+                    self.agent_config.agent_identity.as_ref(),
+                )
                 .await
             {
-                Ok(verified) => admitted.push(verified.doc_id),
+                Ok((verified, _)) => admitted.push(verified.doc_id),
                 Err(error) => tracing::debug!(
                     request_id = %request.request_id,
                     candidate_request_id = %candidate.request_id,
