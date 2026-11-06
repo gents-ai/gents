@@ -10,6 +10,7 @@ import { Input } from "@gents/ui/components/input";
 import { inNativeShell } from "../../../lib/nativeShell";
 import type { SurfaceContext } from "@/app/surfaces";
 import { keyEventOf, type HandedKey } from "./handedKeys";
+import { nextSeq } from "./order";
 import { seeThrough } from "./seeThrough";
 
 const RECENTS_KEY = "gents-browser-recents";
@@ -104,7 +105,7 @@ function follow() {
 /** Drops a page a previous load of this window left behind: the native view
     outlives a reload of the app's page, which starts with none open. */
 export function resetBrowser() {
-  void invoke("browser_close").catch(() => {});
+  void invoke("browser_close", { seq: nextSeq() }).catch(() => {});
   follow();
 }
 
@@ -118,7 +119,7 @@ const subscribe = (notify: () => void) => {
 function open(url: string) {
   page = { ...page, opened: true, url, loading: true };
   for (const notify of listeners) notify();
-  void invoke("browser_open", { url }).catch(() => {});
+  void invoke("browser_open", { url, seq: nextSeq() }).catch(() => {});
 }
 
 function closePage() {
@@ -131,7 +132,7 @@ function closePage() {
     canGoForward: false,
   };
   for (const notify of listeners) notify();
-  void invoke("browser_close").catch(() => {});
+  void invoke("browser_close", { seq: nextSeq() }).catch(() => {});
 }
 
 export function BrowserSurface(_: SurfaceContext) {

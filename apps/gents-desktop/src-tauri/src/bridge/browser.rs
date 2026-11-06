@@ -667,24 +667,51 @@ fn with_main(
         .map_err(|error| error.to_string())
 }
 
+/* the latest `seq` applied; see `in_order` */
+#[cfg(target_os = "macos")]
+static APPLIED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Runs `work` unless a later command already ran. The commands are async,
+/// each on a thread of its own, so they can reach the main thread out of
+/// order; a placement arriving after the hide that followed it would put
+/// the page back, unseen behind the app and taking its clicks. Each command
+/// carries the window's increasing `seq`, and an older one is dropped.
+#[cfg(target_os = "macos")]
+fn in_order(
+    webview: &tauri::Webview,
+    seq: u64,
+    work: impl FnOnce(*mut std::ffi::c_void) + Send + 'static,
+) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    with_main(webview, move |main| {
+        if APPLIED.fetch_max(seq, Ordering::SeqCst) <= seq {
+            work(main);
+        }
+    })
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub async fn browser_open(webview: tauri::Webview, url: String) -> Result<(), String> {
+pub async fn browser_open(webview: tauri::Webview, url: String, seq: u64) -> Result<(), String> {
     let url = parse(&url)?.to_string();
     let app = webview.app_handle().clone();
-    with_main(&webview, move |main| mac::open(app, main, url))
+    in_order(&webview, seq, move |main| mac::open(app, main, url))
 }
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub async fn browser_place(webview: tauri::Webview, placement: Placement) -> Result<(), String> {
-    with_main(&webview, move |main| mac::place(main, placement))
+pub async fn browser_place(
+    webview: tauri::Webview,
+    placement: Placement,
+    seq: u64,
+) -> Result<(), String> {
+    in_order(&webview, seq, move |main| mac::place(main, placement))
 }
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub async fn browser_hide(webview: tauri::Webview) -> Result<(), String> {
-    with_main(&webview, |_| mac::hide())
+pub async fn browser_hide(webview: tauri::Webview, seq: u64) -> Result<(), String> {
+    in_order(&webview, seq, |_| mac::hide())
 }
 
 #[cfg(target_os = "macos")]
@@ -695,6 +722,6 @@ pub async fn browser_go(webview: tauri::Webview, action: String) -> Result<(), S
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub async fn browser_close(webview: tauri::Webview) -> Result<(), String> {
-    with_main(&webview, |_| mac::close())
+pub async fn browser_close(webview: tauri::Webview, seq: u64) -> Result<(), String> {
+    in_order(&webview, seq, |_| mac::close())
 }
