@@ -6,6 +6,7 @@ pub(super) fn seed_runner_node_home(
     node_home: &Path,
     node_name: &str,
     node_did: &str,
+    default_agent_did: &str,
     operator_graphql: &str,
     peer_id: &str,
     listen_address: &str,
@@ -24,9 +25,11 @@ pub(super) fn seed_runner_node_home(
     std::fs::write(
         node_home.join("runtime.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
+            "home": node_home,
             "graphql": operator_graphql,
             "node_name": node_name,
             "node_did": node_did,
+            "default_agent_did": default_agent_did,
             "p2p_transport": "iroh",
             "p2p_peer_id": peer_id,
             "p2p_listen_addresses": [listen_address],
