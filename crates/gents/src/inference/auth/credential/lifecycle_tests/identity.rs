@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn a_chatgpt_account_matches_across_key_forms() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     let id = json!({ "https://api.openai.com/auth": { "chatgpt_account_id": "acct-ws" }, "chatgpt_user_id": "user-a" });
     let fallback_only = chatgpt_with(
@@ -36,7 +36,7 @@ async fn a_chatgpt_account_matches_across_key_forms() {
 
 #[tokio::test]
 async fn a_key_form_the_sign_in_does_not_compute_is_rewritten() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     let id = json!({ "https://api.openai.com/auth": { "chatgpt_account_id": "acct-ws" }, "chatgpt_user_id": "user-a" });
     let both = chatgpt_with(
@@ -66,7 +66,7 @@ async fn a_key_form_the_sign_in_does_not_compute_is_rewritten() {
 
 #[tokio::test]
 async fn an_upgraded_claude_row_with_its_own_account_id_is_filled() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     let mut input = raw_row(did, CLAUDE_OAUTH_PROVIDER);
     input["account_id"] = json!("label-a");
@@ -93,7 +93,7 @@ async fn an_upgraded_claude_row_with_its_own_account_id_is_filled() {
 
 #[tokio::test]
 async fn an_upgraded_claude_row_with_another_account_id_is_not_overwritten() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     let mut input = raw_row(did, CLAUDE_OAUTH_PROVIDER);
     input["account_id"] = json!("label-a");
@@ -113,7 +113,7 @@ async fn an_upgraded_claude_row_with_another_account_id_is_not_overwritten() {
 
 #[tokio::test]
 async fn a_row_with_no_identity_is_filled() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     seed_raw(&access, raw_row(did, CHATGPT_CODEX_PROVIDER)).await;
 
@@ -127,7 +127,7 @@ async fn a_row_with_no_identity_is_filled() {
 
 #[tokio::test]
 async fn a_keyless_sign_in_adds_beside_a_keyed_row() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     store(
         &access,
@@ -145,7 +145,7 @@ async fn a_keyless_sign_in_adds_beside_a_keyed_row() {
 
 #[tokio::test]
 async fn a_stored_key_beside_other_tokens_is_not_trusted() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     let mut stale = grok(did, "principal-2", "refresh-1");
     stale.provider_account_key = Some("user:principal-1".into());
@@ -193,7 +193,7 @@ async fn a_stored_key_beside_other_tokens_is_not_trusted() {
 
 #[tokio::test]
 async fn a_claude_row_with_a_stale_key_is_not_overwritten() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     store(
         &access,
@@ -221,7 +221,7 @@ async fn a_claude_row_with_a_stale_key_is_not_overwritten() {
 
 #[tokio::test]
 async fn a_claude_row_matches_on_its_stored_key() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     store(
         &access,
@@ -246,7 +246,7 @@ async fn a_claude_row_matches_on_its_stored_key() {
 
 #[tokio::test]
 async fn padded_values_compare_trimmed() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     store(&access, grok(did, "principal-1", "refresh-1")).await;
     let padded = grok(did, "principal-1 ", "refresh-2");

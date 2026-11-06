@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn list_accounts_is_ordered_token_free_and_marks_the_default() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     let a = store(
         &access,
@@ -71,7 +71,7 @@ async fn list_accounts_is_ordered_token_free_and_marks_the_default() {
 
 #[tokio::test]
 async fn a_cloud_workspace_token_is_not_an_account() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     let mut cloud = Product::Grok.sign_in(did, "a", "refresh-1");
     cloud.provider = "gents-cloud".into();
@@ -100,7 +100,7 @@ async fn a_cloud_workspace_token_is_not_an_account() {
 
 #[tokio::test]
 async fn a_label_change_is_validated_unique_and_renames_the_backend() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     store(&access, Product::Claude.sign_in(did, "a", "refresh-a")).await;
     let b = store(&access, Product::Claude.sign_in(did, "b", "refresh-b")).await;
@@ -134,7 +134,7 @@ async fn a_label_change_is_validated_unique_and_renames_the_backend() {
 
 #[tokio::test]
 async fn disable_keeps_the_tokens() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     let a = store(&access, Product::Grok.sign_in(did, "a", "refresh-a")).await;
     let before = rows(&access, did, XAI_OAUTH_PROVIDER).await.remove(0);
@@ -153,7 +153,7 @@ async fn disable_keeps_the_tokens() {
 
 #[tokio::test]
 async fn remove_deletes_the_row() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     let a = store(&access, Product::ChatGpt.sign_in(did, "a", "refresh-a")).await;
     let b = store(&access, Product::ChatGpt.sign_in(did, "b", "refresh-b")).await;
@@ -171,7 +171,7 @@ async fn remove_deletes_the_row() {
 
 #[tokio::test]
 async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     for product in PRODUCTS {
         let spec = preset(product);
@@ -229,7 +229,7 @@ async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
 
 #[tokio::test]
 async fn another_nodes_account_is_not_touched() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let other_db = crate::support::test_db("credential-other-node").await;
     let mine = db.node_identity.did();
     let theirs = other_db.node_identity.did();
@@ -253,7 +253,7 @@ async fn another_nodes_account_is_not_touched() {
 
 #[tokio::test]
 async fn a_provider_no_backend_reads_is_refused() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     let mut credential = Product::Grok.sign_in(did, "a", "refresh-1");
     credential.provider = "other-provider".into();

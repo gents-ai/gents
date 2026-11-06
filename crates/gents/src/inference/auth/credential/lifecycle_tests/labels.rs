@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn a_new_account_gets_the_next_free_name() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     for (product, name) in [
         (Product::ChatGpt, "ChatGPT"),
         (Product::Claude, "Claude"),
@@ -53,7 +53,7 @@ async fn a_new_account_gets_the_next_free_name() {
 
 #[tokio::test]
 async fn a_label_names_and_a_refresh_renames() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     for product in PRODUCTS {
         let did = db.node_identity.did().to_owned();
         let signed = labeled(&access, product.sign_in(&did, "a", "refresh-1"), "Work").await;
@@ -76,7 +76,7 @@ async fn a_label_names_and_a_refresh_renames() {
 
 #[tokio::test]
 async fn labels_are_unique_per_provider_and_clean() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     labeled(
         &access,

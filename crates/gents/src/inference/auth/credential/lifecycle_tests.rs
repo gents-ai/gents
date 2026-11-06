@@ -75,13 +75,27 @@ impl Product {
     }
 }
 
-async fn access() -> (
-    crate::support::TestDb,
-    crate::KeyIdentity,
-    ConfigAccess,
-    gents_protocol::agent_identity::AgentIdentityBinding,
-) {
-    crate::test_support::signed_test_node("credential-interactive-sign-in").await
+async fn access() -> (crate::support::TestDb, crate::KeyIdentity, ConfigAccess) {
+    use crate::store::config_client::NodePermission;
+    use crate::NodeIdentity;
+
+    let (db, user, access) =
+        crate::test_support::signed_test_node_without_agent("credential-interactive-sign-in").await;
+    let runtime = ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(db.node_identity.did()).unwrap(),
+    );
+    let actor = identity::Did::new(user.did()).unwrap();
+    for permission in [
+        NodePermission::DocumentDelete,
+        NodePermission::DacRelationDelete,
+    ] {
+        runtime
+            .grant_node_permission(&actor, permission)
+            .await
+            .unwrap();
+    }
+    (db, user, access)
 }
 
 async fn store(access: &ConfigAccess, credential: OAuthCredential) -> SignIn {
@@ -225,7 +239,7 @@ async fn remove(access: &ConfigAccess, did: &str, credential_id: &str) -> Result
 
 #[tokio::test]
 async fn a_first_sign_in_is_the_original_account() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     for product in PRODUCTS {
         let did = db.node_identity.did().to_owned();
         let signed = store(&access, product.sign_in(&did, "a", "refresh-1")).await;
@@ -248,7 +262,7 @@ async fn a_first_sign_in_is_the_original_account() {
 
 #[tokio::test]
 async fn another_account_is_added_beside_the_first() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     for product in PRODUCTS {
         let did = db.node_identity.did().to_owned();
         let provider = product.provider();
@@ -291,7 +305,7 @@ async fn another_account_is_added_beside_the_first() {
 
 #[tokio::test]
 async fn the_same_account_refreshes_in_place() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     for product in PRODUCTS {
         let did = db.node_identity.did().to_owned();
         let provider = product.provider();
@@ -317,7 +331,7 @@ async fn the_same_account_refreshes_in_place() {
 
 #[tokio::test]
 async fn two_concurrent_first_sign_ins_both_store() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     for product in PRODUCTS {
         let did = db.node_identity.did().to_owned();
         let (a, b) = tokio::join!(

@@ -241,18 +241,26 @@ pub(crate) mod test_support {
         signed_test_node_from_db(db, name).await
     }
 
-    pub(crate) async fn signed_test_node_from_db(
+    pub(crate) async fn signed_test_node_without_agent(
+        name: &str,
+    ) -> (
+        crate::support::TestDb,
+        crate::KeyIdentity,
+        crate::store::config_client::ConfigAccess,
+    ) {
+        let db = crate::support::test_db(name).await;
+        signed_test_node_without_agent_from_db(db, name).await
+    }
+
+    async fn signed_test_node_without_agent_from_db(
         db: crate::support::TestDb,
         name: &str,
     ) -> (
         crate::support::TestDb,
         crate::KeyIdentity,
         crate::store::config_client::ConfigAccess,
-        gents_protocol::agent_identity::AgentIdentityBinding,
     ) {
-        use crate::store::config_client::{
-            ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
-        };
+        use crate::store::config_client::{ConfigAccess, NodePermission};
         use crate::store::identity::NodeIdentity;
 
         let fixture_name = name.to_owned();
@@ -279,6 +287,24 @@ pub(crate) mod test_support {
         }
         let access = db.client_access(&user);
         bootstrap_signed_test_node(&access, runtime.did()).await;
+        (db, user, access)
+    }
+
+    pub(crate) async fn signed_test_node_from_db(
+        db: crate::support::TestDb,
+        name: &str,
+    ) -> (
+        crate::support::TestDb,
+        crate::KeyIdentity,
+        crate::store::config_client::ConfigAccess,
+        gents_protocol::agent_identity::AgentIdentityBinding,
+    ) {
+        use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use crate::store::identity::NodeIdentity;
+
+        let (db, user, access) = signed_test_node_without_agent_from_db(db, name).await;
+        let runtime = db.node_identity.as_ref();
+        let user_did = identity::Did::new(user.did()).unwrap();
         let binding = crate::store::identity::provision_agent_identity_authorized(
             &db.node, runtime, &user_did,
         )

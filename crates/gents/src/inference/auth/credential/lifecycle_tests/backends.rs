@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn only_added_accounts_create_a_backend() {
     for product in PRODUCTS {
-        let (db, _user, access, _binding) = access().await;
+        let (db, _user, access) = access().await;
         let did = db.node_identity.did().to_owned();
         store(&access, product.sign_in(&did, "a", "refresh-a")).await;
         assert!(backends(&access, &did).await.is_empty(), "{product:?}");
@@ -57,7 +57,7 @@ async fn only_added_accounts_create_a_backend() {
 #[tokio::test]
 async fn each_accounts_backend_keeps_its_own_models() {
     for product in PRODUCTS {
-        let (db, _user, access, _binding) = access().await;
+        let (db, _user, access) = access().await;
         let did = db.node_identity.did().to_owned();
         let spec = preset(product);
         let original = crate::InferenceBackend {
@@ -133,7 +133,7 @@ async fn each_accounts_backend_keeps_its_own_models() {
 #[tokio::test]
 async fn a_lost_backend_comes_back_at_the_next_sign_in() {
     for product in PRODUCTS {
-        let (db, _user, access, _binding) = access().await;
+        let (db, _user, access) = access().await;
         let did = db.node_identity.did().to_owned();
         store(&access, product.sign_in(&did, "a", "refresh-a")).await;
         let b = store(&access, product.sign_in(&did, "b", "refresh-b")).await;
@@ -174,7 +174,7 @@ async fn a_lost_backend_comes_back_at_the_next_sign_in() {
 
 #[tokio::test]
 async fn an_invalid_config_fails_an_add_with_a_clear_error() {
-    let (db, _user, access, _binding) = access().await;
+    let (db, _user, access) = access().await;
     let did = db.node_identity.did();
     store(&access, Product::Claude.sign_in(did, "a", "refresh-a")).await;
     access.transact_write("test.seed_invalid_profile", |txn| {
