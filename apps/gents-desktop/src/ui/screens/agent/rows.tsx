@@ -214,3 +214,24 @@ export function Unfold({
     </div>
   );
 }
+
+/** Configuration shown read-only: values at full strength, and nothing
+    offered that would change them. Editors mark what only changes things
+    with `data-readonly-hide`. */
+export function ReadOnlyConfig({
+  readOnly,
+  children,
+}: {
+  readOnly: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <fieldset
+      disabled={readOnly}
+      data-readonly={readOnly ? "" : undefined}
+      className="m-0 min-w-0 border-0 p-0 data-readonly:[&_*:disabled]:opacity-100! data-readonly:[&_[data-disabled]]:opacity-100! data-readonly:[&_[data-readonly-hide]]:hidden"
+    >
+      {children}
+    </fieldset>
+  );
+}

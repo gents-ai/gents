@@ -25,12 +25,16 @@ import { Switch } from "@gents/ui/components/switch";
 import { Pencil } from "lucide-react";
 import { Fragment, useState } from "react";
 
-function SkillEditor({
+export function SkillEditor({
   deployment,
   skill,
+  preview,
 }: {
   deployment: NodeView;
   skill: SkillView;
+  /** a skill a pack would add: the pack it comes from, and where the
+      agents that would use it open */
+  preview?: { pack: string; agentHref: (agentId: string) => string };
 }) {
   const { changeConfig } = useApp().actions;
   const base = {
@@ -81,7 +85,7 @@ function SkillEditor({
   const id = (f: string) => `${skill.skillId}-${f}`;
   const [editing, setEditing] = useState(false);
   const users = skillUsers(deployment, skill.skillId);
-  const pack = packOrigin(skill.tags);
+  const pack = preview?.pack ?? packOrigin(skill.tags);
   const title = d.draft.displayName.trim() || d.draft.name.trim() || skill.skillId;
   return (
     <>
@@ -124,12 +128,15 @@ function SkillEditor({
                   <Fragment key={agent.agentId}>
                     {i > 0 && ", "}
                     <a
-                      href={href({
-                        name: "agent",
-                        nodeDid: deployment.nodeDid,
-                        section: "agents",
-                        item: agent.agentId,
-                      })}
+                      href={
+                        preview?.agentHref(agent.agentId) ??
+                        href({
+                          name: "agent",
+                          nodeDid: deployment.nodeDid,
+                          section: "agents",
+                          item: agent.agentId,
+                        })
+                      }
                       className="text-foreground underline-offset-2 hover:underline"
                     >
                       {agent.displayName}

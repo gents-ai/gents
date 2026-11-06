@@ -28,15 +28,23 @@ import {
   resetInstalledPacks,
   statusOf,
   resourceTree,
+  nodeLinks,
   rememberPacksQuery,
   rememberPacksView,
   rememberPacksAuthor,
   showPublisher,
   publisherOf,
 } from "../src/ui/screens/packs/model";
+import { packSettings } from "../src/ui/screens/agent/packContents";
 import { renderIn, testApp, withFlags } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
+const windows = vi.hoisted(() => ({ can: false, opened: [] as string[] }));
+vi.mock("../src/ui/screens/PluginPageScreen", async (original) => ({
+  ...(await original<typeof import("../src/ui/screens/PluginPageScreen")>()),
+  canOpenPageWindows: () => windows.can,
+  openPageWindow: (pluginId: string) => void windows.opened.push(pluginId),
+}));
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }),
 }));
@@ -104,7 +112,12 @@ function show(item?: string, api: Record<string, unknown> = {}) {
       searchPacks: async () => ({
         packs: [
           { namespace: "demo", name: "research", description: "Research" },
-          { namespace: "acme", name: "docs", description: "A documents page" },
+          {
+            namespace: "acme",
+            name: "docs",
+            description: "A documents page",
+            latest: "1.0.0",
+          },
         ],
         has_more: false,
       }),
@@ -190,12 +203,91 @@ describe("what a pack added, as it fits together", () => {
         ],
       },
     ];
-    const tree = resourceTree(fit, parts);
+    const { tree, other } = resourceTree(parts, [], nodeLinks(fit));
+    expect(other).toEqual([]);
     expect(
       tree.map((r) => [r.name, r.children.map((c) => `${c.name} (${c.relation})`)]),
     ).toEqual([
       ["Worker", ["Run (runs it)", "Its tools (it uses)"]],
       ["Spare", []],
+    ]);
+  });
+});
+
+describe("what an installed pack added, its settings under what owns them", () => {
+  it("folds contexts and their compaction into agents, and nests targets under their caller", () => {
+    const pack = "gents/code_review";
+    const tags = ["gents:pack:code_review"];
+    const lenses = ["recon", "scan", "verify", "triage"];
+    const owner = deployment.nodeDid;
+    const fit = {
+      ...deployment,
+      agents: lenses.map((l) => ({
+        ...deployment.agents[0]!,
+        agentId: `review-${l}`,
+        displayName: `Review ${l}`,
+        contextId: `review-${l}-context`,
+        tags,
+      })),
+      contexts: [
+        ...lenses.map((l) => ({
+          node_did: owner,
+          context_id: `review-${l}-context`,
+          tools_id: `review-${l}-tools`,
+          compaction_id: "review-compaction",
+          tags,
+        })),
+        { node_did: owner, context_id: "spare-context", tags },
+      ],
+      compactions: [{ node_did: owner, compaction_id: "review-compaction", tags }],
+      tools: [
+        ...lenses.map((l) => ({
+          node_did: owner,
+          tools_id: `review-${l}-tools`,
+          display_name: `${l} tools`,
+          tags,
+        })),
+        {
+          node_did: owner,
+          tools_id: "review-caller",
+          display_name: "Review caller",
+          agents: { target_ids: lenses.map((l) => `code-review-${l}`) },
+          tags,
+        },
+      ],
+      agentTargets: lenses.map((l) => ({
+        node_did: owner,
+        target_id: `code-review-${l}`,
+        target_node_did: owner,
+        agent_id: `review-${l}`,
+        name: `code-review-${l}`,
+        tags,
+      })),
+      skills: [],
+      tasks: [],
+    } as typeof deployment;
+    const parts = partsOf(fit, pack, {}, []);
+    expect(parts.map(partLabel)).toEqual(["4 agents", "5 tool sets"]);
+    const { tree, other } = resourceTree(
+      parts,
+      packSettings(fit, pack),
+      nodeLinks(fit),
+    );
+    expect(tree.map((r) => r.kind)).toEqual([
+      "Agent",
+      "Agent",
+      "Agent",
+      "Agent",
+      "Tool set",
+    ]);
+    expect(tree[0]!.children.map((c) => `${c.name} (${c.relation})`)).toEqual([
+      "recon tools (it uses)",
+    ]);
+    expect(
+      tree[4]!.children.map((c) => `${c.name}: ${c.kind} · ${c.relation}`),
+    ).toEqual(lenses.map((l) => `code-review-${l}: Agent target · calls Review ${l}`));
+    expect(other.map((r) => `${r.kind} ${r.id}`)).toEqual([
+      "Agent context spare-context",
     ]);
   });
 });
@@ -240,6 +332,19 @@ describe("the Packs page", () => {
     expect(within(registry).getAllByRole("button", { name: "Install" })).toHaveLength(
       1,
     );
+  });
+
+  it("says a registry pack has no version yet, in place of Install", async () => {
+    show(undefined, {
+      searchPacks: async () => ({
+        packs: [{ namespace: "acme", name: "draft" }],
+        has_more: false,
+      }),
+    });
+    fireEvent.click(await screen.findByRole("tab", { name: "Registry" }));
+    const registry = await screen.findByRole("list", { name: "Registry packs" });
+    expect(await within(registry).findByText("No version")).toBeInTheDocument();
+    expect(within(registry).queryByRole("button", { name: "Install" })).toBeNull();
   });
 
   it("returns to the list and search it left, while the app runs", async () => {
@@ -327,6 +432,38 @@ describe("the Packs page", () => {
     expect(within(versions).getByText(/Latest/)).toBeInTheDocument();
   });
 
+  it("opens a pack's page in place, or in a new window on a modified click", async () => {
+    windows.can = true;
+    windows.opened = [];
+    show(RESEARCH);
+    const pages = await screen.findByRole("region", { name: "Pages" });
+    const board = within(pages).getByRole("link", { name: "Board" });
+    expect(board.getAttribute("title")).toMatch(/-click to open in a new window$/);
+    expect(within(pages).queryByRole("button")).toBeNull();
+    expect(fireEvent.click(board, { metaKey: true })).toBe(false);
+    expect(fireEvent.click(board, { ctrlKey: true })).toBe(false);
+    expect(windows.opened).toEqual(["demo.board", "demo.board"]);
+    windows.can = false;
+  });
+
+  it("keeps a pack's link and removal in its page's menu, and Update in view", async () => {
+    show(RESEARCH);
+    const page = await screen.findByTestId("pack-page");
+    expect(
+      await within(page).findByRole("button", { name: "Update" }),
+    ).toBeInTheDocument();
+    expect(within(page).queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(within(page).queryByRole("button", { name: "Install" })).toBeNull();
+    await act(async () => {
+      fireEvent.click(
+        within(page).getByRole("button", { name: `More for ${RESEARCH}` }),
+      );
+    });
+    expect(
+      (await screen.findAllByRole("menuitem")).map((item) => item.textContent),
+    ).toEqual(["Copy a link", "Remove"]);
+  });
+
   it("turns a pack's plugin off on this device", async () => {
     show(RESEARCH);
     const plugins = await screen.findByRole("region", { name: "Interface plugins" });
@@ -336,29 +473,6 @@ describe("the Packs page", () => {
     expect(uxDecisions()["demo.board"]).toBe(false);
   });
 
-  it("asks before an install that would grant the pack authority", async () => {
-    const installPack = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("this pack needs --grant-authority"))
-      .mockResolvedValueOnce(undefined);
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    show(undefined, { installPack });
-    fireEvent.click(await screen.findByRole("tab", { name: "Registry" }));
-    const registry = await screen.findByRole("list", { name: "Registry packs" });
-    const install = await within(registry).findByRole("button", { name: "Install" });
-    await act(async () => {
-      fireEvent.click(install);
-    });
-    await waitFor(() => expect(installPack).toHaveBeenCalledTimes(2));
-    expect(confirm).toHaveBeenCalled();
-    expect(installPack.mock.calls[0]![0]).toMatchObject({
-      package: "acme/docs",
-      grantAuthority: false,
-    });
-    expect(installPack.mock.calls[1]![0]).toMatchObject({ grantAuthority: true });
-    confirm.mockRestore();
-  });
-
   it("only browses on a node whose packs are installed on that machine", async () => {
     withFlags({ packs: true });
     const listInstalledPacks = vi.fn(async () => ({ packs: [research] }));
@@ -366,7 +480,7 @@ describe("the Packs page", () => {
       api: {
         listInstalledPacks,
         searchPacks: async () => ({
-          packs: [{ namespace: "acme", name: "docs" }],
+          packs: [{ namespace: "acme", name: "docs", latest: "1.0.0" }],
           has_more: false,
         }),
       },
@@ -388,6 +502,9 @@ describe("where Packs is reached", () => {
     for (const route of [
       { name: "packs" as const },
       { name: "packs" as const, item: RESEARCH },
+      { name: "packs" as const, item: RESEARCH, doc: "Agent:r1" },
+      { name: "packs" as const, review: "3" },
+      { name: "packs" as const, review: "3", doc: "Skill:a:b" },
     ]) {
       expect(parseRoute(pathFor(route))).toEqual(route);
     }

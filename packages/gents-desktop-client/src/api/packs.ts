@@ -23,7 +23,7 @@ export function createPackCommands(
       invokeDesktop("desktop_pack_search", { query, page }),
     packInfo: (pack: string) => invokeDesktop("desktop_pack_info", { package: pack }),
     installPack: (request: PackInstallRequest) =>
-      invokeDesktop("desktop_pack_install", { request }).then(() => undefined),
+      invokeDesktop("desktop_pack_install", { request }),
     updatePack: (pack: string, edited: PackEditedChoice) =>
       invokeDesktop("desktop_pack_update", { package: pack, edited }).then(
         () => undefined,

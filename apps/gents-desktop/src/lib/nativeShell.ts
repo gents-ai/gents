@@ -202,6 +202,19 @@ export async function pickFiles(): Promise<string[]> {
   return typeof selected === "string" ? [selected] : (selected ?? []);
 }
 
+/** A `.pack` file the person picks to install, or null when they cancel. */
+export async function pickPackFile(): Promise<string | null> {
+  if (!inNativeShell()) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open({
+    multiple: false,
+    directory: false,
+    title: "Install from file",
+    filters: [{ name: "Pack", extensions: ["pack"] }],
+  });
+  return typeof picked === "string" ? picked : null;
+}
+
 export async function listenFileDrop(
   handler: (event: { type: string; paths?: string[]; x: number; y: number }) => void,
 ): Promise<() => void> {

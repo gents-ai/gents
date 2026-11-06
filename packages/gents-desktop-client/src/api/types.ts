@@ -114,6 +114,7 @@ import type {
   PackInfo,
   PackEditedChoice,
   PackInstallRequest,
+  PackInstallReport,
   PackPluginSlot,
   PackSlotProfile,
   PackWireRequest,
@@ -474,7 +475,8 @@ export type DesktopApiAdapter = {
   ) => Promise<{ packs: FoundPack[]; has_more: boolean }>;
   /** a registry pack's page: owner, homepage, plugins and versions */
   packInfo: (pack: string) => Promise<PackInfo>;
-  installPack: (request: PackInstallRequest) => Promise<void>;
+  /** installs a pack, or with `preview` reports what installing it would write */
+  installPack: (request: PackInstallRequest) => Promise<PackInstallReport>;
   updatePack: (pack: string, edited: PackEditedChoice) => Promise<void>;
   removePack: (pack: string) => Promise<void>;
   bindPackPlugin: (plugin: string, profile: string | null) => Promise<void>;

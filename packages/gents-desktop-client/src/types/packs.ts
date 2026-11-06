@@ -7,6 +7,11 @@ export type { PackPluginSlotView as PackPluginSlot } from "../generated/PackPlug
 export type { PackInferenceProfileOption as PackSlotProfile } from "../generated/PackInferenceProfileOption.js";
 export type { EditedDocuments as PackEditedChoice } from "../generated/EditedDocuments.js";
 export type { PackInstallRequest } from "../generated/PackInstallRequest.js";
+export type { PackInstallView as PackInstallReport } from "../generated/PackInstallView.js";
+export type { PackReviewDocumentView as PackReviewDocument } from "../generated/PackReviewDocumentView.js";
+export type { PackAuthorityAskView as PackAuthorityAsk } from "../generated/PackAuthorityAskView.js";
+export type { PackInferenceNeedsView as PackInferenceNeeds } from "../generated/PackInferenceNeedsView.js";
+export type { PackInferenceSlotNeedView as PackInferenceSlotNeed } from "../generated/PackInferenceSlotNeedView.js";
 export type { PackWireRequest } from "../generated/PackWireRequest.js";
 export type { DynamicWorkflowsView as DynamicWorkflows } from "../generated/DynamicWorkflowsView.js";
 export type { DynamicWorkflowSummary } from "../generated/DynamicWorkflowSummary.js";

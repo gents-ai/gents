@@ -1,11 +1,19 @@
 import { useStore } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { createStore } from "zustand/vanilla";
 import type { InstalledPack, PackInfo } from "@source-inc/gents-desktop-client";
 import type { UxPluginRecord } from "@/contrib/plugins-store";
 import type { Contribution } from "@/contrib/types";
 import type { NodeView } from "../../../hooks/fleetStore";
 import { errorText } from "../../../lib/errorText";
-import { packContents, type PackItem } from "../agent/packContents";
+import type { RegistryPage } from "../agent/useRegistrySearch";
+import {
+  kindOf,
+  PACK_KINDS,
+  packContents,
+  SETTING_KINDS,
+  type PackItem,
+} from "../agent/packContents";
 
 type PackApi = {
   listInstalledPacks: () => Promise<{ packs: InstalledPack[] }>;
@@ -63,21 +71,42 @@ export function publisherOf(
   return { name: owner, yours: Boolean(me) && owner === me };
 }
 
-/* Which list the Packs page shows and what it searches, kept while the app
-   runs so a pack opened and closed returns to the same place. */
+type PacksView = "installed" | "registry";
+
+/* Which list the Packs page shows, what it searches, the registry's page it
+   last showed and where each list was scrolled to, kept while the app runs
+   so a pack opened and closed returns to the same place. */
 const listView = createStore<{
-  view: "installed" | "registry";
+  view: PacksView;
   query: string;
   /** the publisher (namespace) the registry list is narrowed to */
   author: string | null;
-}>(() => ({ view: "installed", query: "", author: null }));
+  registry: RegistryPage | null;
+  scroll: Record<PacksView, number>;
+}>(() => ({
+  view: "installed",
+  query: "",
+  author: null,
+  registry: null,
+  scroll: { installed: 0, registry: 0 },
+}));
 
-export const usePacksListView = () => useStore(listView);
-export const rememberPacksView = (view: "installed" | "registry") =>
-  listView.setState({ view });
+/* what the page draws from; the registry's page and the scroll are read
+   when the list mounts, so a scroll doesn't draw the page again */
+export const usePacksListView = () =>
+  useStore(
+    listView,
+    useShallow(({ view, query, author }) => ({ view, query, author })),
+  );
+export const packsListView = () => listView.getState();
+export const rememberPacksView = (view: PacksView) => listView.setState({ view });
 export const rememberPacksQuery = (query: string) => listView.setState({ query });
 export const rememberPacksAuthor = (author: string | null) =>
   listView.setState({ author });
+export const keepRegistryPage = (registry: RegistryPage) =>
+  listView.setState({ registry });
+export const rememberPacksScroll = (view: PacksView, top: number) =>
+  listView.setState((s) => ({ scroll: { ...s.scroll, [view]: top } }));
 /** the registry's packs from one publisher, on the Packs page */
 export const showPublisher = (author: string) =>
   listView.setState({ view: "registry", query: "", author });
@@ -95,26 +124,54 @@ export async function readPackInfo(api: PackApi, pack: string) {
   }
 }
 
+/** forgets what was read, and the registry page and places the lists kept */
+/* Which rows of a pack's page are open or shut and how far down it was, kept
+   while the app runs so coming back from one of its items finds it as it was. */
+type PackPlace = { shut: Record<string, boolean>; other: boolean; top: number };
+const NO_PLACE: PackPlace = { shut: {}, other: false, top: 0 };
+const packPlaces = createStore<Record<string, PackPlace>>(() => ({}));
+export const usePackPlace = (place: string) =>
+  useStore(packPlaces, (s) => s[place] ?? NO_PLACE);
+export const packPlaceTop = (place: string) => packPlaces.getState()[place]?.top ?? 0;
+export const keepPackPlace = (place: string, patch: Partial<PackPlace>) =>
+  packPlaces.setState((s) => ({
+    ...s,
+    [place]: { ...NO_PLACE, ...s[place], ...patch },
+  }));
+
 export function resetInstalledPacks() {
   installed.setState({ packs: null, unread: null, info: {} }, true);
+  listView.setState({ registry: null, scroll: { installed: 0, registry: 0 } });
+  packPlaces.setState({}, true);
 }
 
 export const shortName = (pack: string) => pack.slice(pack.lastIndexOf("/") + 1);
 export const namespaceOf = (pack: string) =>
   pack.includes("/") ? pack.slice(0, pack.indexOf("/")) : "";
 
-/** Two letters standing for a pack where it has no picture. */
-export function initials(pack: string) {
-  const words = shortName(pack)
-    .split(/[-_\s.]+/)
-    .filter(Boolean);
-  const letters =
-    words.length > 1 ? words[0]![0]! + words[1]![0]! : (words[0] ?? "?").slice(0, 2);
-  return letters.toUpperCase();
-}
-
 export const text = (value: unknown): string | null =>
   typeof value === "string" && value.trim() ? value : null;
+
+/** a version's size, as the registry lists it */
+export function sizeOf(
+  info: { versions?: unknown } | undefined | null,
+  version: string | null,
+) {
+  if (!info || !Array.isArray(info.versions)) return null;
+  const v = info.versions.find(
+    (x) =>
+      typeof x === "object" &&
+      x !== null &&
+      (x as { version?: unknown }).version === version,
+  ) as { size_bytes?: unknown } | undefined;
+  return typeof v?.size_bytes === "number" ? v.size_bytes : null;
+}
+
+export function bytes(n: number) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export type PackVersion = { version: string; publishedAt: string | null };
 
@@ -202,19 +259,81 @@ export function partsOf(
 /** One thing a pack added, with what it's tied to nested under it. */
 export type Resource = {
   section: string;
+  /** the collection a review reports it in, where it came from a review */
+  collection?: string;
   /** its kind, as a word */
   kind: string;
   id: string;
   name: string;
-  /** how it relates to the agent it's nested under */
+  /** how it relates to what it's nested under */
   relation: string | null;
   children: Resource[];
 };
 
-/** What a pack added, the way it fits together: each agent with the tasks
-    that run it and the tool sets and skills its context gives it, then
-    whatever isn't tied to one of its agents. */
-export function resourceTree(node: NodeView, parts: readonly PackPart[]): Resource[] {
+/** How a pack's documents are tied together: the agent a task runs, the
+    context an agent runs with (its tool set, skills and compaction), the
+    targets a tool set calls, and the agent a target reaches. */
+export type ResourceLinks = {
+  agentOfTask: (taskId: string) => string | null | undefined;
+  contextOfAgent: (agentId: string) =>
+    | {
+        context_id?: string | null;
+        tools_id?: string | null;
+        skill_ids?: readonly string[] | null;
+        compaction_id?: string | null;
+      }
+    | undefined;
+  targetsOfTools: (toolsId: string) => readonly string[];
+  agentOfTarget: (targetId: string) => string | null | undefined;
+};
+
+/** the ties among what a node has */
+export function nodeLinks(node: NodeView): ResourceLinks {
+  return {
+    agentOfTask: (taskId) => node.tasks.find((x) => x.taskId === taskId)?.agentId,
+    contextOfAgent: (agentId) => {
+      const agent = node.agents.find((x) => x.agentId === agentId);
+      return agent?.contextId
+        ? node.contexts.find((c) => c.context_id === agent.contextId)
+        : undefined;
+    },
+    targetsOfTools: (toolsId) => {
+      const tools = node.tools.find((t) => t.tools_id === toolsId);
+      return [
+        ...(tools?.agents?.target_ids ?? []),
+        /* a tool set also reaches agents through its plugins' background jobs */
+        ...(tools?.integrations?.plugins ?? []).flatMap(
+          (plugin) => plugin.job?.agent_targets ?? [],
+        ),
+      ];
+    },
+    agentOfTarget: (targetId) =>
+      node.agentTargets?.find((t) => t.target_id === targetId)?.agent_id,
+  };
+}
+
+/** What a pack added, the way it fits together. */
+export type ResourceTree = {
+  /** each agent with the tasks that run it, the tool sets and skills its
+      context gives it and the targets that reach it, then whatever else
+      people look for, each tool set with the targets it calls */
+  tree: Resource[];
+  /** the settings that belong to nothing else it added */
+  other: Resource[];
+};
+
+const capital = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
+
+/** What a pack added, the way it fits together. An agent's context, and the
+    compaction that context uses, are part of the agent: its page shows them.
+    A target is listed under the tool set that calls it, or else under the
+    agent it reaches. A setting none of that ties to anything is listed in
+    `other`, never left out. */
+export function resourceTree(
+  parts: readonly PackPart[],
+  settings: readonly PackItem[],
+  links: ResourceLinks,
+): ResourceTree {
   const listed = parts.filter(
     (p): p is PackPart & { section: string } => p.section !== null,
   );
@@ -228,42 +347,103 @@ export function resourceTree(node: NodeView, parts: readonly PackPart[]): Resour
     const one = listed.find((p) => p.section === section)?.one ?? section;
     return {
       section,
-      kind: one.charAt(0).toUpperCase() + one.slice(1),
+      ...(item.collection ? { collection: item.collection } : {}),
+      kind: capital(one),
       id: item.id,
       name: item.name,
       relation,
       children: [],
     };
   };
+  const folded = new Set<PackItem>();
+  const setting = (collection: string, id: string | null | undefined) => {
+    const found = id
+      ? settings.find((s) => s.collection === collection && s.id === id)
+      : undefined;
+    if (found) folded.add(found);
+    return found;
+  };
+  const asSetting = (item: PackItem, relation: string | null = null): Resource => {
+    const known = SETTING_KINDS.find((k) => k.collection === item.collection);
+    return {
+      section: known?.section ?? "",
+      ...(item.collection ? { collection: item.collection } : {}),
+      kind: capital(kindOf(item.collection ?? "")),
+      id: item.id,
+      name: item.name,
+      relation,
+      children: [],
+    };
+  };
+  const agentName = (id: string | null | undefined) =>
+    of("agents").find((a) => a.id === id)?.name;
+  const called = new Set(of("tools").flatMap((t) => links.targetsOfTools(t.id)));
+  const toolSet = (item: PackItem, relation: string | null = null): Resource => ({
+    ...resource("tools", item, relation),
+    children: links.targetsOfTools(item.id).flatMap((id) => {
+      const target = setting("AgentTarget", id);
+      if (!target) return [];
+      const agent = agentName(links.agentOfTarget(id));
+      return [asSetting(target, agent ? `calls ${agent}` : "it calls")];
+    }),
+  });
   const tied = new Set<string>();
   const agents = of("agents").map((a) => {
-    const agent = node.agents.find((x) => x.agentId === a.id);
-    const context = agent?.contextId
-      ? node.contexts.find((c) => c.context_id === agent.contextId)
-      : undefined;
+    const context = links.contextOfAgent(a.id);
+    if (setting("AgentContext", context?.context_id)) {
+      setting("CompactionConfig", context?.compaction_id);
+    }
+    const tools = of("tools").filter((t) => context?.tools_id === t.id);
     const children = [
       ...of("tasks")
-        .filter((t) => node.tasks.find((x) => x.taskId === t.id)?.agentId === a.id)
+        .filter((t) => links.agentOfTask(t.id) === a.id)
         .map((t) => resource("tasks", t, "runs it")),
-      ...of("tools")
-        .filter((t) => context?.tools_id === t.id)
-        .map((t) => resource("tools", t, "it uses")),
+      ...tools.map((t) => toolSet(t, "it uses")),
       ...of("skills")
         .filter((k) => context?.skill_ids?.includes(k.id))
         .map((k) => resource("skills", k, "it uses")),
     ];
     for (const c of children) tied.add(`${c.section}:${c.id}`);
-    return { ...resource("agents", a), children };
+    const reaching = settings
+      .filter(
+        (s) =>
+          s.collection === "AgentTarget" &&
+          !called.has(s.id) &&
+          links.agentOfTarget(s.id) === a.id,
+      )
+      .map((s) => {
+        folded.add(s);
+        return asSetting(s, "reaches it");
+      });
+    return { ...resource("agents", a), children: [...children, ...reaching] };
   });
   const rest = listed
     .filter((p) => p.section !== "agents")
     .flatMap((p) =>
       p.items
         .filter((i) => !tied.has(`${p.section}:${i.id}`))
-        .map((i) => resource(p.section, i)),
+        .map((i) => (p.section === "tools" ? toolSet(i) : resource(p.section, i))),
     );
-  return [...agents, ...rest];
+  return {
+    tree: [...agents, ...rest],
+    other: settings.filter((s) => !folded.has(s)).map((s) => asSetting(s)),
+  };
 }
+
+/** what's nested under one thing a pack added, counted by kind */
+export function summaryOf(children: readonly Resource[]): string[] {
+  const counts = new Map<string, number>();
+  for (const c of children) counts.set(c.section, (counts.get(c.section) ?? 0) + 1);
+  return [...counts].map(([section, n]) => {
+    const known = [...PACK_KINDS, ...SETTING_KINDS].find((k) => k.section === section);
+    const one = known?.one ?? children.find((c) => c.section === section)!.kind;
+    return `${n} ${n === 1 ? one.toLowerCase() : (known?.many ?? `${one.toLowerCase()}s`)}`;
+  });
+}
+
+/** the settings that belong to nothing else, counted */
+export const otherLabel = (n: number) =>
+  `${n} other ${n === 1 ? "setting" : "settings"}`;
 
 export const partLabel = (p: PackPart) =>
   `${p.count} ${p.count === 1 ? p.one : p.many}`;

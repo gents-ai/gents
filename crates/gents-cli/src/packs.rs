@@ -61,6 +61,9 @@ pub async fn info(registry: Option<String>, package: String) -> Result<Value> {
     capture_report(command::account::info(PackInfoArgs { package, registry })).await
 }
 
+/// Installs `package`, or with `preview` reports what the install would
+/// write. With `expect_digest`, a pack whose content digest differs (the one
+/// a preview reported, or a link named) is refused before any write.
 #[allow(clippy::too_many_arguments)]
 pub async fn install(
     home: PathBuf,
@@ -70,6 +73,7 @@ pub async fn install(
     edited: EditedDocuments,
     grant_authority: bool,
     preview: bool,
+    expect_digest: Option<String>,
 ) -> Result<Value> {
     capture_report(command::install(PackInstallArgs {
         package,
@@ -82,7 +86,7 @@ pub async fn install(
         drift: drift(edited),
         grant_authority,
         wire: Vec::new(),
-        expect_digest: None,
+        expect_digest,
         explicit: true,
     }))
     .await
