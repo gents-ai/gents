@@ -838,7 +838,9 @@ async fn model_tool_without_data_grant_passes_its_selected_agent() -> Result<()>
     let selected = crate::store::identity::resolve_agent_identity(root.as_ref(), &binding)?;
     let fake = Arc::new(Fake::start(Reply::Text, Duration::ZERO).await);
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let (home, record) = installed(&asking(vec![request("a")]), false, true);
+    let (home, mut record) = installed(&asking(vec![request("a")]), false, true);
+    record.model_binding.as_mut().unwrap().node_did = root.did().to_owned();
+    store::write_record(home.path(), &record)?;
     assert!(record.data_grant().is_none());
     let executor = Arc::new(executor(
         &home,
