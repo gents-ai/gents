@@ -202,14 +202,48 @@ pub(crate) enum GoalClaimFence {
     Rejected,
 }
 
-fn client_goal_claim_binding(goal: Option<&GoalDocument>, goal_id: Option<&str>) -> bool {
+fn client_goal_claim_binding(
+    goal: Option<&GoalDocument>,
+    goal_id: Option<&str>,
+    opening_verified: bool,
+) -> bool {
     goal.is_some_and(|goal| {
-        goal_id == Some(goal.goal_id.as_str())
+        opening_verified
+            && goal_id == Some(goal.goal_id.as_str())
             && goal
                 .assignment_root_request_doc_id
                 .as_deref()
                 .is_some_and(|doc| !doc.is_empty())
     })
+}
+
+async fn client_goal_opening_verified_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    goal: Option<&GoalDocument>,
+) -> Result<bool> {
+    let Some(goal) = goal else { return Ok(false) };
+    let Some(root) = goal
+        .assignment_root_request_doc_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+    else {
+        return Ok(false);
+    };
+    let response = txn.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
+        escape_graphql_string(root), escape_graphql_string(&goal.node_did),
+        escape_graphql_string(&goal.session_id), crate::request::admission::SIGNED_REQUEST_FIELDS,
+    )).await?;
+    let rows: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
+        response
+            .pointer("/data/AgentRequest")
+            .cloned()
+            .context("Goal opening query omitted rows")?,
+    )?;
+    Ok(
+        matches!(rows.as_slice(), [row] if row.doc_id.as_deref() == Some(root)
+        && super::request_assignment::request_belongs_to_goal(goal, row)),
+    )
 }
 
 pub(crate) async fn fence_goal_continuation_claim_in_txn(
@@ -226,10 +260,15 @@ pub(crate) async fn fence_goal_continuation_claim_in_txn(
         });
     }
     let goal = load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id).await?;
-    if client_goal
-        && !client_goal_claim_binding(goal.as_ref(), request.caused_by_trigger_id.as_deref())
-    {
-        return Ok(GoalClaimFence::Rejected);
+    if client_goal {
+        let opening_verified = client_goal_opening_verified_in_txn(txn, goal.as_ref()).await?;
+        if !client_goal_claim_binding(
+            goal.as_ref(),
+            request.caused_by_trigger_id.as_deref(),
+            opening_verified,
+        ) {
+            return Ok(GoalClaimFence::Rejected);
+        }
     }
     let Some(goal) = goal else {
         return Ok(GoalClaimFence::Allowed);
@@ -273,7 +312,7 @@ mod client_goal_binding_tests {
             }))
             .unwrap();
             assert_eq!(
-                client_goal_claim_binding(visible.then_some(&goal), Some("goal")),
+                client_goal_claim_binding(visible.then_some(&goal), Some("goal"), root),
                 case["expected"].as_bool().unwrap(),
                 "{case}"
             );

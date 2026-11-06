@@ -21,6 +21,7 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
     for scenario in [
         "valid",
         "rootless",
+        "dangling-root",
         "missing",
         "hidden",
         "stale",
@@ -92,9 +93,14 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
             continue;
         }
 
-        if scenario == "rootless" {
+        if scenario == "rootless" || scenario == "dangling-root" {
+            let root = if scenario == "rootless" {
+                "null"
+            } else {
+                "\"missing-root-document\""
+            };
             let updated = user.write("test.goal.remove_root", &format!(
-                r#"mutation {{ update_Goal(docID: "{}", input: {{ assignment_root_request_doc_id: null }}) {{ _docID }} }}"#,
+                r#"mutation {{ update_Goal(docID: "{}", input: {{ assignment_root_request_doc_id: {root} }}) {{ _docID }} }}"#,
                 escape_graphql_string(&f.goal.doc_id),
             )).await.unwrap();
             assert_eq!(updated["data"]["update_Goal"].as_array().unwrap().len(), 1);
