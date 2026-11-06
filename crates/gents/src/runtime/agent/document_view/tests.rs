@@ -681,27 +681,102 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
     );
 }
 
+fn signed_schema(collection: crate::Collection) -> &'static str {
+    let name = collection.graphql_type();
+    gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
+        .iter()
+        .zip(gents_protocol::schemas::RUNTIME_ALL)
+        .chain(
+            gents_protocol::schemas::ALL_COLLECTION_NAMES
+                .iter()
+                .zip(gents_protocol::schemas::ALL),
+        )
+        .find_map(|(schema_name, schema)| (*schema_name == name).then_some(*schema))
+        .expect("fixture collection has a bundled schema")
+}
+
+async fn find_owned_doc(
+    access: &crate::store::config_client::ConfigAccess,
+    name: &str,
+    field: &str,
+    value: &str,
+) -> String {
+    let response = access
+        .execute(&format!(
+            r#"{{ {name}(filter: {{ {field}: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(value)
+        ))
+        .await
+        .unwrap();
+    response["data"][name][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn update_signed_document(
+    access: &crate::store::config_client::ConfigAccess,
+    collection: crate::Collection,
+    doc_id: &str,
+    input: serde_json::Value,
+) {
+    let name = collection.graphql_type();
+    let doc_id = escape_graphql_string(doc_id);
+    access
+        .transact_write("test.update_replicated_configuration", |txn| {
+            let input = &input;
+            let doc_id = &doc_id;
+            Box::pin(async move {
+                txn.execute_client_signed_update(
+                    &format!(r#"mutation($input: {name}MutationInputArg!) {{ update_{name}(docID: "{doc_id}", input: $input) {{ _docID }} }}"#),
+                    &serde_json::json!({"input": input}),
+                    signed_schema(collection),
+                ).await
+            })
+        })
+        .await
+        .unwrap();
+}
+
 async fn seed_automation(
-    node: &Arc<defra_node::Node>,
+    access: &crate::store::config_client::ConfigAccess,
     documents: Vec<(crate::Collection, serde_json::Value)>,
 ) {
-    crate::store::config_client::ConfigAccess::transact_local_write(node, None, "test.replicated_automation", |txn| {
-        let documents = &documents;
-        Box::pin(async move {
-            for (collection, input) in documents {
-                let name = collection.graphql_type();
-                txn.execute_with_variables(
-                    &format!("mutation($input: {name}MutationInputArg!) {{ create_{name}(input: $input) {{ _docID }} }}"),
-                    &serde_json::json!({"input":input}),
-                ).await?;
-            }
-            Ok::<_, anyhow::Error>(())
-        })
-    }).await.expect("seed replicated automation documents");
+    for (collection, input) in documents {
+        let name = collection.graphql_type();
+        let node_did = input["node_did"].as_str().unwrap();
+        let response = access
+            .execute(&format!(
+                r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                escape_graphql_string(node_did)
+            ))
+            .await
+            .unwrap();
+        let node_doc = response["data"]["Node"][0]["_docID"].as_str().unwrap();
+        let schema = signed_schema(collection);
+        let created = access
+            .transact_write("test.replicated_automation", |txn| {
+                let input = &input;
+                Box::pin(async move {
+                    txn.execute_client_signed_create(
+                        &format!("mutation($input: {name}MutationInputArg!) {{ create_{name}(input: $input) {{ _docID }} }}"),
+                        &serde_json::json!({"input": input}),
+                        schema,
+                    ).await
+                })
+            })
+            .await
+            .expect("seed replicated automation document");
+        let doc = crate::store::graphql::created_doc_id(&created, name).unwrap();
+        access
+            .add_resource_relationship(name, &doc, "parent", "nodes", node_doc)
+            .await
+            .unwrap();
+    }
 }
 
 async fn create_task_bound(
-    node: &Arc<defra_node::Node>,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     task_id: &str,
     agent_did: &str,
@@ -709,7 +784,7 @@ async fn create_task_bound(
     enabled: bool,
 ) {
     seed_automation(
-        node,
+        access,
         vec![(
             crate::Collection::Task,
             serde_json::json!({
@@ -725,7 +800,7 @@ async fn create_task_bound(
 }
 
 async fn create_schedule_with_concurrency(
-    node: &Arc<defra_node::Node>,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     trigger_id: &str,
     task_id: &str,
@@ -734,7 +809,7 @@ async fn create_schedule_with_concurrency(
     concurrency: &str,
 ) {
     seed_automation(
-        node,
+        access,
         vec![
             (
                 crate::Collection::Schedule,
@@ -761,7 +836,7 @@ async fn create_schedule_with_concurrency(
 }
 
 async fn create_event_trigger(
-    node: &Arc<defra_node::Node>,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     trigger_id: &str,
     task_id: &str,
@@ -771,7 +846,7 @@ async fn create_event_trigger(
 ) -> String {
     let event_source_id = format!("{trigger_id}:source");
     seed_automation(
-        node,
+        access,
         vec![
             (
                 crate::Collection::EventSource,
@@ -809,18 +884,11 @@ fn retired_reserved_id_predicate_matches_both_namespaces() {
 
 #[tokio::test]
 async fn retired_reserved_ids_are_never_visible() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-retired-ids"));
+    let (db, _user, access, _binding) =
+        crate::test_support::signed_test_node("document-view-retired-ids").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let node_did = identity.did();
-    bind_default_agent_backend(
-        &node,
-        node_did,
-        &crate::test_support::ensure_test_default_agent(&node, node_did)
-            .await
-            .agent_did,
-    )
-    .await;
 
     let graph_trigger = format!("graph-trigger-{}-{}", "a".repeat(64), "b".repeat(16));
     let mut documents = Vec::new();
@@ -855,7 +923,7 @@ async fn retired_reserved_ids_are_never_visible() {
             }),
         ));
     }
-    seed_automation(&node, documents).await;
+    seed_automation(&access, documents).await;
 
     let view = load_document_runtime_view(&node, node_did)
         .await
@@ -1013,21 +1081,14 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
 
 #[tokio::test]
 async fn load_document_runtime_view_populates_event_triggers() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-event-triggers"));
+    let (db, _user, access, _binding) =
+        crate::test_support::signed_test_node("document-view-event-triggers").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let node_did = identity.did();
-    bind_default_agent_backend(
-        &node,
-        node_did,
-        &crate::test_support::ensure_test_default_agent(&node, node_did)
-            .await
-            .agent_did,
-    )
-    .await;
 
     create_task_bound(
-        &node,
+        &access,
         node_did,
         "task-1",
         "agent-that-never-existed",
@@ -1036,7 +1097,7 @@ async fn load_document_runtime_view_populates_event_triggers() {
     )
     .await;
     create_event_trigger(
-        &node,
+        &access,
         node_did,
         "trig-1",
         "task-1",
@@ -1074,17 +1135,15 @@ async fn load_document_runtime_view_populates_event_triggers() {
 
 #[tokio::test]
 async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-resolve-schedule-active"));
+    let (db, _user, access, binding) =
+        crate::test_support::signed_test_node("document-view-resolve-schedule-active").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let node_did = identity.did();
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, node_did)
-        .await
-        .agent_did;
-    bind_default_agent_backend(&node, node_did, &default_agent_did).await;
+    let default_agent_did = binding.agent_did;
 
     create_task_bound(
-        &node,
+        &access,
         node_did,
         "task-resolve-active",
         &default_agent_did,
@@ -1093,7 +1152,7 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
     )
     .await;
     create_schedule_with_concurrency(
-        &node,
+        &access,
         node_did,
         "trigger-resolve-active",
         "task-resolve-active",
@@ -1146,17 +1205,15 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
 
 #[tokio::test]
 async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-resolve-trigger-active"));
+    let (db, _user, access, binding) =
+        crate::test_support::signed_test_node("document-view-resolve-trigger-active").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let node_did = identity.did();
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, node_did)
-        .await
-        .agent_did;
-    bind_default_agent_backend(&node, node_did, &default_agent_did).await;
+    let default_agent_did = binding.agent_did;
 
     create_task_bound(
-        &node,
+        &access,
         node_did,
         "task-trigger-active",
         &default_agent_did,
@@ -1165,7 +1222,7 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
     )
     .await;
     create_event_trigger(
-        &node,
+        &access,
         node_did,
         "trigger-active",
         "task-trigger-active",
@@ -1216,17 +1273,23 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
 
 #[tokio::test]
 async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-required-source-fill"));
+    let (db, _user, access, binding) =
+        crate::test_support::signed_test_node("document-view-required-source-fill").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let owner = identity.did();
-    let agent_did = crate::test_support::ensure_test_default_agent(&node, owner)
-        .await
-        .agent_did;
-    bind_default_agent_backend(&node, owner, &agent_did).await;
-    create_task_bound(&node, owner, "fill-task", &agent_did, "process event", true).await;
+    let agent_did = binding.agent_did;
+    create_task_bound(
+        &access,
+        owner,
+        "fill-task",
+        &agent_did,
+        "process event",
+        true,
+    )
+    .await;
     create_event_trigger(
-        &node,
+        &access,
         owner,
         "fill-trigger",
         "fill-task",
@@ -1248,7 +1311,7 @@ async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger()
         }]})
     };
     seed_automation(
-        &node,
+        &access,
         vec![(
             crate::Collection::DatastoreToolSurface,
             serde_json::json!({
@@ -1262,28 +1325,14 @@ async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger()
     .await;
 
     let tools_id = format!("{agent_did}:tools");
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "test.bind_invalid_fill",
-        |txn| {
-            let owner = owner.to_owned();
-            let tools_id = tools_id.clone();
-            Box::pin(async move {
-                txn.execute_with_variables(
-                    "mutation($input: ToolsMutationInputArg!, $owner: String!, $id: String!) { update_Tools(filter: { node_did: { _eq: $owner }, tools_id: { _eq: $id } }, input: $input) { _docID } }",
-                    &serde_json::json!({
-                        "owner": owner, "id": tools_id,
-                        "input": {"datastore": {"datastore_tool_surface_ids": ["fill-surface"]}}
-                    }),
-                )
-                .await?;
-                Ok::<_, anyhow::Error>(())
-            })
-        },
+    let tools_doc = find_owned_doc(&access, "Tools", "tools_id", &tools_id).await;
+    update_signed_document(
+        &access,
+        crate::Collection::Tools,
+        &tools_doc,
+        serde_json::json!({"datastore": {"datastore_tool_surface_ids": ["fill-surface"]}}),
     )
-    .await
-    .unwrap();
+    .await;
 
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
@@ -1301,25 +1350,20 @@ async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger()
     assert!(!snapshot.active_event_triggers.contains_key("fill-trigger"));
     assert!(snapshot.unavailable_event_triggers.contains("fill-trigger"));
 
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "test.correct_invalid_fill",
-        |txn| {
-            let owner = owner.to_owned();
-            let entries = entries(false);
-            Box::pin(async move {
-                txn.execute_with_variables(
-                    "mutation($input: DatastoreToolSurfaceMutationInputArg!, $owner: String!) { update_DatastoreToolSurface(filter: { node_did: { _eq: $owner }, surface_id: { _eq: \"fill-surface\" } }, input: $input) { _docID } }",
-                    &serde_json::json!({"owner": owner, "input": {"entries": entries}}),
-                )
-                .await?;
-                Ok::<_, anyhow::Error>(())
-            })
-        },
+    let surface_doc = find_owned_doc(
+        &access,
+        "DatastoreToolSurface",
+        "surface_id",
+        "fill-surface",
     )
-    .await
-    .unwrap();
+    .await;
+    update_signed_document(
+        &access,
+        crate::Collection::DatastoreToolSurface,
+        &surface_doc,
+        serde_json::json!({"entries": entries(false)}),
+    )
+    .await;
     let view = load_document_runtime_view(&node, owner).await.unwrap();
     let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
         .await
@@ -1331,17 +1375,15 @@ async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger()
 
 #[tokio::test]
 async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-resolve-trigger-unavailable"));
+    let (db, _user, access, binding) =
+        crate::test_support::signed_test_node("document-view-resolve-trigger-unavailable").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let node_did = identity.did();
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, node_did)
-        .await
-        .agent_did;
-    bind_default_agent_backend(&node, node_did, &default_agent_did).await;
+    let default_agent_did = binding.agent_did;
 
     create_task_bound(
-        &node,
+        &access,
         node_did,
         "task-trigger-disabled",
         &default_agent_did,
@@ -1350,7 +1392,7 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
     )
     .await;
     create_event_trigger(
-        &node,
+        &access,
         node_did,
         "trigger-task-disabled",
         "task-trigger-disabled",
@@ -1360,7 +1402,7 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
     )
     .await;
     create_event_trigger(
-        &node,
+        &access,
         node_did,
         "trigger-task-missing",
         "task-that-never-existed",
@@ -1412,17 +1454,15 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
 /// validation entirely (e.g. replicated from a peer).
 #[tokio::test]
 async fn resolve_quarantines_event_trigger_with_invalid_source_collection() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-resolve-trigger-injection"));
+    let (db, _user, access, binding) =
+        crate::test_support::signed_test_node("document-view-resolve-trigger-injection").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let node_did = identity.did();
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, node_did)
-        .await
-        .agent_did;
-    bind_default_agent_backend(&node, node_did, &default_agent_did).await;
+    let default_agent_did = binding.agent_did;
 
     create_task_bound(
-        &node,
+        &access,
         node_did,
         "task-trigger-injection",
         &default_agent_did,
@@ -1431,7 +1471,7 @@ async fn resolve_quarantines_event_trigger_with_invalid_source_collection() {
     )
     .await;
     create_event_trigger(
-        &node,
+        &access,
         node_did,
         "trigger-injection",
         "task-trigger-injection",
@@ -1441,7 +1481,7 @@ async fn resolve_quarantines_event_trigger_with_invalid_source_collection() {
     )
     .await;
     create_event_trigger(
-        &node,
+        &access,
         node_did,
         "trigger-introspection",
         "task-trigger-injection",
@@ -1480,17 +1520,15 @@ async fn resolve_quarantines_event_trigger_with_invalid_source_collection() {
 
 #[tokio::test]
 async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-resolve-schedule-unavailable"));
+    let (db, _user, access, binding) =
+        crate::test_support::signed_test_node("document-view-resolve-schedule-unavailable").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let node_did = identity.did();
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, node_did)
-        .await
-        .agent_did;
-    bind_default_agent_backend(&node, node_did, &default_agent_did).await;
+    let default_agent_did = binding.agent_did;
 
     create_task_bound(
-        &node,
+        &access,
         node_did,
         "task-resolve-disabled",
         &default_agent_did,
@@ -1499,7 +1537,7 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
     )
     .await;
     create_schedule_with_concurrency(
-        &node,
+        &access,
         node_did,
         "trigger-resolve-task-disabled",
         "task-resolve-disabled",
@@ -1509,7 +1547,7 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
     )
     .await;
     create_schedule_with_concurrency(
-        &node,
+        &access,
         node_did,
         "trigger-resolve-task-missing",
         "task-that-never-existed",
@@ -1555,17 +1593,15 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
 
 #[tokio::test]
 async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-resolve-active-tasks"));
+    let (db, _user, access, binding) =
+        crate::test_support::signed_test_node("document-view-resolve-active-tasks").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let node_did = identity.did();
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, node_did)
-        .await
-        .agent_did;
-    bind_default_agent_backend(&node, node_did, &default_agent_did).await;
+    let default_agent_did = binding.agent_did;
 
     create_task_bound(
-        &node,
+        &access,
         node_did,
         "task-active",
         &default_agent_did,
@@ -1574,7 +1610,7 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
     )
     .await;
     create_task_bound(
-        &node,
+        &access,
         node_did,
         "task-disabled",
         &default_agent_did,
@@ -1583,7 +1619,7 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
     )
     .await;
     create_task_bound(
-        &node,
+        &access,
         node_did,
         "task-missing-agent",
         "agent-that-never-existed",
