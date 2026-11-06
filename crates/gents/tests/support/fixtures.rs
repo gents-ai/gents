@@ -463,6 +463,84 @@ pub async fn bind_default_agent_backend(
     bind_agent_backend_chain(node, node_did, None, backend_id, endpoint, "default").await;
 }
 
+pub async fn bind_managed_agent_backend(
+    db: &super::TestDb,
+    fixture: &super::ManagedAgentFixture,
+    backend_id: &str,
+    endpoint: &str,
+    model_name: &str,
+) {
+    use gents::store::config_client::{
+        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+        DesiredStateApplyPlan,
+    };
+    use gents::Collection;
+
+    let owner = db.node_identity.did();
+    let agent_did = &fixture.binding.agent_did;
+    fixture
+        .access
+        .transact_write("test.bind_managed_agent_backend", |txn| {
+            Box::pin(async move {
+                let (_, mut node) =
+                    read_desired_state_record_in_txn(txn, Collection::Node, owner, owner)
+                        .await?
+                        .expect("held user must own the test Node");
+                let (_, agent) =
+                    read_desired_state_record_in_txn(txn, Collection::Agent, owner, agent_did)
+                        .await?
+                        .expect("managed test Agent must exist");
+                let profile_id = agent["inference_profile_id"]
+                    .as_str()
+                    .expect("managed Agent inference profile");
+                node["default_agent_did"] = agent_did.clone().into();
+                let profile = serde_json::json!({
+                    "node_did": owner,
+                    "profile_id": profile_id,
+                    "backend_id": backend_id,
+                    "model_name": model_name,
+                });
+                let backend = serde_json::json!({
+                    "node_did": owner,
+                    "backend_id": backend_id,
+                    "name": backend_id,
+                    "provider_kind": "OpenAiCompatible",
+                    "openai_wire_api": "chat_completions",
+                    "auth": {"kind": "unauthenticated"},
+                    "endpoint": endpoint,
+                    "max_concurrent": 1,
+                    "max_queue_depth": 100,
+                    "enabled": true,
+                });
+                let plan = DesiredStateApplyPlan::new(
+                    [
+                        (Collection::Node, node),
+                        (Collection::InferenceBackend, backend),
+                        (Collection::InferenceProfile, profile),
+                    ]
+                    .into_iter()
+                    .map(|(collection, value)| DesiredStateApplyDocument {
+                        collection,
+                        add: value.clone(),
+                        update: value,
+                    })
+                    .collect(),
+                )?;
+                apply_desired_state_plan(txn, &plan).await
+            })
+        })
+        .await
+        .expect("bind managed Agent backend as held user");
+    gents::inference::backends::registry::set_backend_probe_status_as(
+        &fixture.access,
+        owner,
+        backend_id,
+        "healthy",
+    )
+    .await
+    .expect("mark test backend healthy");
+}
+
 pub async fn bind_agent_backend(
     node: &Arc<EmbeddedNode>,
     node_did: &str,

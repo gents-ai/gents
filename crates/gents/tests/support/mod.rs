@@ -117,6 +117,18 @@ pub async fn managed_agent_with_binding(
     Arc<dyn NodeIdentity>,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
+    let fixture = managed_agent_fixture(db).await;
+    (fixture.agent, fixture.binding)
+}
+
+pub struct ManagedAgentFixture {
+    pub user: gents::KeyIdentity,
+    pub access: gents::ConfigAccess,
+    pub agent: Arc<dyn NodeIdentity>,
+    pub binding: gents_protocol::agent_identity::AgentIdentityBinding,
+}
+
+pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
     use gents::store::config_client::{
         apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
     };
@@ -157,11 +169,10 @@ pub async fn managed_agent_with_binding(
         })
         .await
         .expect("install test Node as user");
-    let binding = gents::store::identity::provision_agent_identity_authorized(
-        &db.node, runtime, &user_did,
-    )
-    .await
-    .expect("provision managed test Agent");
+    let binding =
+        gents::store::identity::provision_agent_identity_authorized(&db.node, runtime, &user_did)
+            .await
+            .expect("provision managed test Agent");
     let agent = gents::store::identity::resolve_agent_identity(runtime, &binding)
         .expect("resolve managed test Agent");
     let document = serde_json::json!({
@@ -185,7 +196,12 @@ pub async fn managed_agent_with_binding(
         })
         .await
         .expect("install managed test Agent as user");
-    (agent, binding)
+    ManagedAgentFixture {
+        user,
+        access,
+        agent,
+        binding,
+    }
 }
 
 pub async fn test_db(name: &str) -> TestDb {
