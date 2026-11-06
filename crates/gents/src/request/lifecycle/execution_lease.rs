@@ -454,6 +454,38 @@ pub(crate) async fn revoke_execution_preserving_output_at(
 }
 
 #[cfg(test)]
+pub(crate) async fn revoke_execution_preserving_output_at_with_access(
+    access: &crate::ConfigAccess,
+    row: &AgentRequestRow,
+    outcome: RequestTerminalOutcome,
+    reason: &str,
+    expected_generation: &str,
+    fresh_generation: &str,
+    now: DateTime<Utc>,
+) -> Result<TerminalizeResult> {
+    terminalize_execution_with_access(
+        access,
+        TerminalizeSpec {
+            request_doc_id: row.doc_id.as_deref().context("missing request document")?,
+            authority: TerminalAuthority::Revocation {
+                generation: expected_generation,
+                expiry: row
+                    .execution_lease_expires_at
+                    .as_deref()
+                    .context("missing execution expiry")?,
+            },
+            outcome,
+            selection: None,
+            reason,
+            fixture_now: Some(now),
+            fixture_fresh_generation: Some(fresh_generation),
+            pending_fence: None,
+        },
+    )
+    .await
+}
+
+#[cfg(test)]
 async fn terminalize_execution(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: identity::Did,
@@ -492,6 +524,31 @@ pub(crate) async fn terminalize_owned_at(
     terminalize_execution_with_time(
         node,
         identity::Did::new("did:test:agent".to_owned())?,
+        TerminalizeSpec {
+            request_doc_id,
+            authority: TerminalAuthority::Owner(generation),
+            outcome,
+            selection: Some(selection),
+            reason: "",
+            fixture_now: Some(now),
+            fixture_fresh_generation: None,
+            pending_fence: None,
+        },
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) async fn terminalize_owned_at_with_access(
+    access: &crate::ConfigAccess,
+    request_doc_id: &str,
+    generation: &str,
+    outcome: RequestTerminalOutcome,
+    selection: TerminalOutput,
+    now: DateTime<Utc>,
+) -> Result<TerminalizeResult> {
+    terminalize_execution_with_access(
+        access,
         TerminalizeSpec {
             request_doc_id,
             authority: TerminalAuthority::Owner(generation),

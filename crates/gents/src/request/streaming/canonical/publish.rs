@@ -107,6 +107,28 @@ pub(crate) async fn publish_provider_turn_at(
     publish_provider_turn_with_time(node, actor, None, generation, plan, Some(now)).await
 }
 
+#[cfg(test)]
+pub(crate) async fn publish_provider_turn_at_with_access(
+    access: &ConfigAccess,
+    generation: &str,
+    plan: ProviderPublicationPlan,
+    now: DateTime<Utc>,
+) -> Result<PublishedProviderTurn> {
+    let node = access
+        .local_node()
+        .context("fixture requires local access")?;
+    let actor = identity::Did::new(access.actor_did().context("missing fixture actor")?)?;
+    publish_provider_turn_with_time(
+        node,
+        actor,
+        access.managed_agent_signer(),
+        generation,
+        plan,
+        Some(now),
+    )
+    .await
+}
+
 pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: identity::Did,

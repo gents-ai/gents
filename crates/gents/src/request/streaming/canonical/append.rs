@@ -78,6 +78,31 @@ pub(crate) async fn append_provider_segment_at(
     Ok(result)
 }
 
+#[cfg(test)]
+pub(crate) async fn append_provider_segment_at_with_access(
+    access: &ConfigAccess,
+    generation: &str,
+    prepared: &OutputSegment,
+    now: DateTime<Utc>,
+) -> Result<String> {
+    let actor = identity::Did::new(access.actor_did().context("missing fixture actor")?)?;
+    let result = access
+        .transact_idempotent(
+            IdempotentTransactionRetry::Standard,
+            "streaming.append_provider_segment",
+            |txn| Box::pin(async move { append_in_txn_at(txn, generation, prepared, now).await }),
+        )
+        .await?;
+    crate::session::child_ownership::publish_agent_session_child_relationships_with_access(
+        access,
+        &prepared.node_did,
+        &actor,
+        &prepared.session_id,
+    )
+    .await?;
+    Ok(result)
+}
+
 pub(crate) async fn append_in_txn(
     txn: &ConfigApplyTxn<'_>,
     generation: &str,

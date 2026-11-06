@@ -26,6 +26,8 @@ mod execution_renewal;
 #[cfg(test)]
 pub(crate) use execution_renewal::renew_once_at as renew_execution_lease_once_at;
 #[cfg(test)]
+pub(crate) use execution_renewal::renew_once_at_with_access as renew_execution_lease_once_at_with_access;
+#[cfg(test)]
 pub(crate) use execution_renewal::renew_with_recheck_at;
 #[cfg(test)]
 pub(crate) use execution_renewal::{renew_in_transaction, RenewalAttemptOutcome};
@@ -36,7 +38,11 @@ pub use crate::triggers::engine::durable::request_arrival_order;
 #[cfg(test)]
 pub(crate) use execution_lease::revoke_execution_preserving_output_at;
 #[cfg(test)]
+pub(crate) use execution_lease::revoke_execution_preserving_output_at_with_access;
+#[cfg(test)]
 pub(crate) use execution_lease::terminalize_owned_at;
+#[cfg(test)]
+pub(crate) use execution_lease::terminalize_owned_at_with_access;
 pub(crate) use execution_lease::{ExecutionOwnershipLost, RequestExecutionLease};
 pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
 pub(crate) use gents_loop::execution_policy;
@@ -52,8 +58,8 @@ pub(crate) mod queue;
 mod recovery;
 #[cfg(test)]
 pub(crate) use recovery::{
-    recover_expired_generation_with_facts, RecoveryResult, RecoverySelectionChoice,
-    RecoverySelectionRejected,
+    recover_expired_generation_with_access_and_facts, recover_expired_generation_with_facts,
+    RecoveryResult, RecoverySelectionChoice, RecoverySelectionRejected,
 };
 mod task_title;
 #[cfg(test)]

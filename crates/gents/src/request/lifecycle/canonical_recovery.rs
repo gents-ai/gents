@@ -236,7 +236,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
     clippy::too_many_arguments,
     reason = "recovery facts are supplied by the conformance adapter"
 )]
-async fn recover_expired_generation_with_access_and_facts(
+pub(crate) async fn recover_expired_generation_with_access_and_facts(
     access: &ConfigAccess,
     observed: &AgentRequestRow,
     expected_generation: &str,

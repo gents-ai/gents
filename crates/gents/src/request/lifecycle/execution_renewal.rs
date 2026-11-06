@@ -139,6 +139,30 @@ pub(crate) async fn renew_once_at(
 }
 
 #[cfg(test)]
+pub(crate) async fn renew_once_at_with_access(
+    access: &crate::ConfigAccess,
+    request_doc_id: &str,
+    generation: &str,
+    expected_deadline: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<RenewalAttemptOutcome> {
+    let node = access
+        .local_node()
+        .context("fixture requires local access")?;
+    let actor = identity::Did::new(access.actor_did().context("missing fixture actor")?)?;
+    renew_once_with_time(
+        node,
+        Some(actor),
+        access.managed_agent_signer(),
+        request_doc_id,
+        generation,
+        Some(expected_deadline),
+        Some(now),
+    )
+    .await
+}
+
+#[cfg(test)]
 tokio::task_local! {
     static RENEWAL_RECHECK_TIME: DateTime<Utc>;
 }

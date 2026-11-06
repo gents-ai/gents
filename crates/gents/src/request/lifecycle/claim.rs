@@ -446,7 +446,7 @@ impl RequestLifecycle {
         Self::begin_owned_execution_with_access(&access, request_doc_id, generation, now).await
     }
 
-    async fn begin_owned_execution_with_access<F>(
+    pub(crate) async fn begin_owned_execution_with_access<F>(
         access: &crate::ConfigAccess,
         request_doc_id: &str,
         generation: &str,

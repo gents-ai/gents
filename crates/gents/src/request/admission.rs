@@ -693,6 +693,23 @@ impl AgentRequestAdmissionVerifier {
     }
 
     #[cfg(test)]
+    pub(crate) async fn verify_fresh_for_claim_at(
+        &self,
+        request: &AgentRequest,
+        agent_identity: &dyn NodeIdentity,
+        observed_at: chrono::DateTime<Utc>,
+    ) -> AdmissionResult<(AgentRequest, Option<ClientClaimAdmission>)> {
+        self.verify_fresh_with_observation(
+            request,
+            agent_identity.did(),
+            Some(observed_at),
+            true,
+            Some(agent_identity),
+        )
+        .await
+    }
+
+    #[cfg(test)]
     pub(crate) async fn verify_fresh_at(
         &self,
         request: &AgentRequest,

@@ -80,6 +80,31 @@ pub(crate) async fn close_provider_attempt_at(
     .await
 }
 
+#[cfg(test)]
+pub(crate) async fn close_provider_attempt_at_with_access(
+    access: &ConfigAccess,
+    generation: &str,
+    prepared: &OutputSegment,
+    close: ProviderAttemptClose,
+    candidate: Option<ProviderPartialCandidate>,
+    now: DateTime<Utc>,
+) -> Result<Option<String>> {
+    let node = access
+        .local_node()
+        .context("fixture requires local access")?;
+    let actor = identity::Did::new(access.actor_did().context("missing fixture actor")?)?;
+    close_provider_attempt_with_time(
+        node,
+        (actor, access.managed_agent_signer()),
+        generation,
+        prepared,
+        close,
+        candidate,
+        now,
+    )
+    .await
+}
+
 async fn close_provider_attempt_with_time(
     node: &std::sync::Arc<EmbeddedNode>,
     (actor, signer): (
