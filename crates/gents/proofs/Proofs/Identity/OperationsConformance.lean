@@ -327,4 +327,11 @@ def discoveryPolicyCasesJson : String :=
   (toJson (cases.map fun (name, actor, permission) => Json.mkObj [("name", toJson name),
     ("allowed", toJson (allowed 5 publicDiscoveryFixture actor "discovery" "directory" permission))])).compress
 
+def localRegistryWriterCasesJson : String :=
+  let cases := [("runtime-owner", "runtime", true), ("user-owner", "user", true),
+    ("foreign-owner", "foreign", true), ("other-node", "user", false)]
+  (toJson (cases.map fun (name, creator, namesRuntime) => Json.mkObj [("name", toJson name),
+    ("creator", toJson creator), ("names_runtime", toJson namesRuntime),
+    ("writer", toJson (localRegistryWriter creator "runtime" "user" namesRuntime))])).compress
+
 end Identity.OperationsConformance

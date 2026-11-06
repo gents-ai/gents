@@ -668,6 +668,8 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.OperationsConformance.replayCasesJson ++ ","
     ++ "\"identity_relationship_replay_producer_cases\":"
       ++ Identity.OperationsConformance.replayProducerCasesJson ++ ","
+    ++ "\"identity_local_registry_writer_cases\":"
+      ++ Identity.OperationsConformance.localRegistryWriterCasesJson ++ ","
     ++ "\"identity_discovery_policy_cases\":"
       ++ Identity.OperationsConformance.discoveryPolicyCasesJson ++ ","
     ++ "\"identity_replica_grant_cases\":"
