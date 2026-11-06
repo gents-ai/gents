@@ -128,10 +128,11 @@ async fn http_transaction_cursors_keep_all_pages() {
     )
     .await
     .unwrap();
-    let access = ConfigAccess::Graphql(super::GraphqlEndpoint::as_principal(
-        endpoint,
-        identity.did(),
-    ));
+    let access = ConfigAccess::Graphql(
+        super::GraphqlEndpoint::as_principal(endpoint, identity.did())
+            .with_client_signing_capability(identity.client_signing_capability().unwrap())
+            .unwrap(),
+    );
     let rows = access
         .transact_readonly("test.cursor_transport.read", |txn| {
             Box::pin(async move {
@@ -1866,8 +1867,6 @@ async fn thirty_two_hot_document_writers_converge_without_event_loss() {
 
 #[tokio::test]
 async fn embedded_transaction_carries_the_supplied_did_to_document_acp() {
-    const OWNER: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
-    const READER: &str = "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR";
     const POLICY: &str = r#"
 name: Transaction identity test
 resources:
@@ -1881,10 +1880,29 @@ resources:
       - name: delete
 "#;
 
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let root = tempfile::tempdir().unwrap();
+    let key = root.path().join("identity-owner.key");
+    let (identity, reader) = tokio::task::spawn_blocking(move || {
+        let identity = crate::KeyIdentity::load_or_create(key, None).unwrap();
+        let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+        let reader = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
+        (identity, reader)
+    })
+    .await
+    .unwrap();
+    let owner = identity.did();
+    let reader_did = reader.did();
+    assert_ne!(owner, reader_did);
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(owner)
+            .build()
+            .await
+            .unwrap(),
+    );
     let policy_id = node
         .add_dac_policy_as(
-            &defra_core::RequestContext::default().with_identity(Some(OWNER.to_owned())),
+            &defra_core::RequestContext::default().with_identity(Some(owner.to_owned())),
             POLICY,
         )
         .await
@@ -1894,10 +1912,10 @@ resources:
     ))
     .await
     .unwrap();
-    let owner = identity::Did::new(OWNER).unwrap();
+    let owner_did = identity::Did::new(owner).unwrap();
     let doc_id = ConfigAccess::transact_local_write(
         &node,
-        Some(owner),
+        Some(owner_did),
         "test.identity_owner_create",
         |txn| {
             Box::pin(async move {
@@ -1917,9 +1935,16 @@ resources:
     )
     .await
     .unwrap();
-    node.add_dac_actor_relationship(OWNER, "IdentityFact", &doc_id, "reader", READER)
+    node.add_dac_actor_relationship(owner, "IdentityFact", &doc_id, "reader", reader_did)
         .await
         .unwrap();
+    let reader_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(reader_did).unwrap(),
+        reader.as_ref(),
+    )
+    .unwrap();
+    let anonymous_access = ConfigAccess::local(node.clone());
 
     fn count_rows<'txn, 'node>(
         txn: &'txn ConfigApplyTxn<'node>,
@@ -1933,40 +1958,29 @@ resources:
         })
     }
     for read_only in [false, true] {
-        for (identity, expected) in [(Some(identity::Did::new(READER).unwrap()), 1), (None, 0)] {
+        for (access, expected) in [(&reader_access, 1), (&anonymous_access, 0)] {
             let visible = if read_only {
-                ConfigAccess::transact_local_readonly(
-                    &node,
-                    identity,
-                    "test.identity_readonly_query",
-                    count_rows,
-                )
-                .await
+                access
+                    .transact_readonly("test.identity_readonly_query", count_rows)
+                    .await
             } else {
-                ConfigAccess::transact_local_write(
-                    &node,
-                    identity,
-                    "test.identity_query",
-                    count_rows,
-                )
-                .await
+                access
+                    .transact_write("test.identity_query", count_rows)
+                    .await
             }
             .unwrap();
             assert_eq!(visible, expected, "read_only={read_only}");
         }
     }
-    for actor in [Some(READER), None] {
+    for (access, has_actor) in [(&reader_access, true), (&anonymous_access, false)] {
         let ids = vec![doc_id.clone()];
-        let observations = ConfigAccess::transact_local_readonly(
-            &node,
-            actor.map(|did| identity::Did::new(did).unwrap()),
-            "test.identity_owner_observation",
-            move |txn| {
+        let observations = access
+            .transact_readonly("test.identity_owner_observation", move |txn| {
                 let ids = ids.clone();
                 Box::pin(async move {
                     let rows = txn.execute("{ IdentityFact { _docID } }").await?;
                     let owners = txn.document_owners("IdentityFact", &ids).await;
-                    if actor.is_none() {
+                    if !has_actor {
                         assert!(matches!(
                             owners,
                             Err(super::ConfigClientError::RelationshipActorRequired)
@@ -1980,14 +1994,13 @@ resources:
                     assert_eq!(rows["data"]["IdentityFact"].as_array().unwrap().len(), 1);
                     Ok(Some(owners))
                 })
-            },
-        )
-        .await
-        .unwrap();
+            })
+            .await
+            .unwrap();
         if let Some(observations) = observations {
             assert_eq!(
                 observations[0].owner.as_ref().map(identity::Did::as_str),
-                Some(OWNER)
+                Some(owner)
             );
         }
     }
@@ -2234,7 +2247,7 @@ async fn readonly_transaction_preserves_snapshot_and_rejects_native_mutation() {
     .unwrap_err();
     assert!(
         format!("{}", ErrorChain(&error))
-            .contains("cannot execute mutation in read-only transaction"),
+            .contains("No sets or deletes are allowed in a read-only transaction"),
         "mutation must reach DefraDB's native read-only transaction guard: {}",
         ErrorChain(&error)
     );
