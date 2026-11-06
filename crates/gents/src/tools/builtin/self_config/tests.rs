@@ -6127,6 +6127,73 @@ async fn modeled_resource_reads_use_resource_category_and_native_access() {
 }
 
 #[tokio::test]
+async fn automation_read_preserves_native_selected_agent_visibility() {
+    let fixture = SelfConfigFixture::new("automation-read-native-scope").await;
+    fixture.grant_selected_configuration().await;
+    let sibling = fixture.install_sibling("Other Agent").await;
+    let task = json!({"node_did": fixture.node_did(), "task_id": "other-agent-task",
+        "agent_did": sibling, "prompt_template": "Do the work"});
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::Task,
+            add: task.clone(),
+            update: task,
+        },
+    ])
+    .unwrap();
+    fixture
+        .user_access()
+        .transact_write("test.automation_read.other_task", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .unwrap();
+    let expected = crate::lean_vocab_test::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .unwrap()
+        .configuration_task_target_cases
+        .iter()
+        .find(|case| case["name"] == "task-unrelated")
+        .unwrap()["expected"]
+        .as_bool()
+        .unwrap();
+    let access = crate::ConfigAccess::local_managed_agent(
+        fixture.db.node.clone(),
+        identity::Did::new(fixture.agent_did()).unwrap(),
+        fixture.agent.as_ref(),
+    )
+    .unwrap();
+    let response = access
+        .execute("{ Task(filter: {task_id: {_eq: \"other-agent-task\"}}) {_docID} }")
+        .await
+        .unwrap();
+    let visible = !response["data"]["Task"].as_array().unwrap().is_empty();
+    assert_eq!(visible, expected, "native selected Task access");
+    let tools = fixture.tools(&["automation"]);
+    let result = call_config_tool(
+        &tools,
+        vec![
+            "automation".into(),
+            "get".into(),
+            "task".into(),
+            "other-agent-task".into(),
+            "--agent".into(),
+            sibling,
+        ],
+    )
+    .await;
+    assert_eq!(
+        result.is_ok(),
+        expected,
+        "tool must retain invoking Agent access: {result:?}"
+    );
+}
+
+#[tokio::test]
 async fn pack_search_uses_registry_pagination_without_installing() {
     let _registry_lock = PACK_REGISTRY_ENV.lock().await;
     let app = axum::Router::new().route("/api/v1/packs", axum::routing::get(
