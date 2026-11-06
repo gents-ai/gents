@@ -31,8 +31,8 @@ async fn background_wakes_and_goal_continuations_keep_the_project_directory() {
         )
         .await
         .unwrap();
-    let wake = crate::request::binding::load_agent_request_by_doc_id(
-        &db.node,
+    let wake = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &db.agent_access,
         &enqueued.request.unwrap().doc_id,
     )
     .await

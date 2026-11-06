@@ -20,12 +20,14 @@ mod goal_assignment_wakes;
 mod management;
 mod steering;
 
-const TEST_AGENT_DID: &str = "did:test:agent";
-
 struct TestDb {
     node: Arc<EmbeddedNode>,
-    identity: Arc<crate::store::identity::KeyIdentity>,
+    identity: Arc<dyn NodeIdentity>,
     agent_identity: Arc<dyn NodeIdentity>,
+    user: crate::KeyIdentity,
+    user_access: crate::ConfigAccess,
+    agent_access: crate::ConfigAccess,
+    _db: crate::support::TestDb,
     _tempdir: TempDir,
 }
 
@@ -133,45 +135,31 @@ fn transaction_create_doc_id_accepts_both_defradb_response_shapes() {
 }
 
 async fn test_db(name: &str) -> TestDb {
-    let tempdir = tempfile::Builder::new()
-        .prefix(&format!("gents-queue-{name}-"))
-        .tempdir()
-        .expect("tempdir");
-    let identity = Arc::new(
-        crate::store::identity::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
-            .expect("test identity"),
-    );
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(tempdir.path())
-            .with_node_identity_did(identity.did())
-            .with_node_acp_enabled()
-            .build()
-            .await
-            .expect("embedded node"),
-    );
-    crate::store::schema::ensure_runtime_schemas(&node)
-        .await
-        .expect("runtime schemas");
-    let user =
-        crate::store::identity::KeyIdentity::load_or_create(tempdir.path().join("user.key"), None)
-            .expect("test user identity");
-    crate::test_support::bootstrap_test_node(&node, identity.as_ref(), &user).await;
-    let binding =
-        crate::test_support::install_test_agent_as(&node, identity.as_ref(), &user, TEST_AGENT_DID)
-            .await;
+    let (db, user, user_access, binding) = crate::test_support::signed_test_node(name).await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let agent_identity =
         crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding)
             .expect("derived test agent identity");
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent_identity.did()).unwrap(),
+        agent_identity.as_ref(),
+    )
+    .unwrap();
     TestDb {
         node,
         identity,
         agent_identity,
-        _tempdir: tempdir,
+        user,
+        user_access,
+        agent_access,
+        _db: db,
+        _tempdir: tempfile::tempdir().expect("queue fixture directory"),
     }
 }
 
-async fn queue_rows(node: &EmbeddedNode, session_id: &str) -> Vec<QueueRow> {
+async fn queue_rows(db: &TestDb, session_id: &str) -> Vec<QueueRow> {
     let escaped_session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -197,15 +185,13 @@ async fn queue_rows(node: &EmbeddedNode, session_id: &str) -> Vec<QueueRow> {
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "queue row query failed: {:?}",
-        response.errors
-    );
+    let response = db
+        .agent_access
+        .execute(&query)
+        .await
+        .expect("queue row query");
     response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("AgentRequest"))
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default()
@@ -340,6 +326,7 @@ async fn publish_signed_queue_request(
 
 struct CanonicalBackgroundFixture {
     node: Arc<EmbeddedNode>,
+    access: crate::ConfigAccess,
     parent: AgentRequest,
     lifecycle: RequestLifecycle,
     writer: DefraStreamWriter,
@@ -356,11 +343,50 @@ async fn canonical_background_fixture_with_input(
     input: &RequestInput,
 ) -> CanonicalBackgroundFixture {
     let request_id = format!("background-parent-{}", uuid::Uuid::new_v4());
-    insert_signed_queue_request(db, &request_id, session_id, input).await;
-    let request = crate::request::binding::load_agent_request(&db.node, &request_id)
+    let mut spec = crate::request::lifecycle::RequestSpec::new(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        crate::request::lifecycle::RequestIdentity {
+            request_id: request_id.clone(),
+            node_did: db.node_did().to_owned(),
+            requester_did: Some(db.user.did().to_owned()),
+            agent_did: db.agent_did().to_owned(),
+            session_id: session_id.to_owned(),
+            content: "work".to_owned(),
+            execution_origin: ExecutionOrigin::Interactive,
+            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        },
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(db.user.did()),
+    );
+    spec.input = input.clone();
+    let create = crate::request::lifecycle::build_signed_client_request(
+        &db.user_access,
+        spec,
+        crate::request::lifecycle::RequestSigner::Identity(&db.user),
+    )
+    .await
+    .expect("sign canonical fixture parent");
+    crate::request::lifecycle::submit_client_request(&db.user_access, &create)
         .await
-        .expect("load canonical fixture parent")
-        .expect("canonical fixture parent exists");
+        .expect("publish canonical fixture parent");
+    let escaped = escape_graphql_string(&request_id);
+    let response = db.agent_access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}, limit: 2) {{ {} }} }}"#,
+        crate::SIGNED_REQUEST_FIELDS,
+    )).await.expect("read canonical fixture parent");
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    let request = row.try_into().expect("decode canonical fixture parent");
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        db.node.clone(),
+        db.identity.clone(),
+        authority,
+    );
+    let (request, admission) = verifier
+        .verify_fresh_for_claim(&request, db.agent_did())
+        .await
+        .expect("verify canonical fixture client admission");
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
         db.agent_did(),
@@ -368,20 +394,27 @@ async fn canonical_background_fixture_with_input(
         request,
         60,
     );
+    lifecycle
+        .bind_managed_agent(db.agent_identity.as_ref())
+        .unwrap();
+    lifecycle.set_client_claim_admission(admission);
     assert_eq!(
         lifecycle
-            .claim()
+            .claim_with_identity()
             .await
             .expect("claim canonical fixture parent"),
         ClaimOutcome::Claimed
     );
-    let writer = DefraStreamWriter::new(db.node.clone(), db.agent_did(), Duration::ZERO);
+    let writer =
+        DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
+            .unwrap();
     lifecycle
         .begin_owned_execution(&writer)
         .await
         .expect("begin canonical fixture parent");
     CanonicalBackgroundFixture {
         node: db.node.clone(),
+        access: db.agent_access.clone(),
         parent: lifecycle.request().clone(),
         lifecycle,
         writer,
@@ -475,7 +508,8 @@ impl CanonicalBackgroundFixture {
         let tool_call_doc_id = tool
             .doc_id()
             .context("fixture tool has physical document")?;
-        persist_background_completion_with_message_canonical(
+        persist_background_completion_with_message_canonical_with_access(
+            &self.access,
             &self.node,
             &self.parent,
             notification_content,

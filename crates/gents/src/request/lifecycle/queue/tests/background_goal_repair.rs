@@ -107,7 +107,7 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
             "{}",
             case.name
         );
-        assert_eq!(queue_rows(&db.node, &parent.session_id).await.len(), 2);
+        assert_eq!(queue_rows(&db, &parent.session_id).await.len(), 2);
         let after = access
             .transact_readonly("test.goal_wake_after", |txn| {
                 Box::pin(crate::goal::load_canonical_goal_in_txn(
@@ -160,6 +160,6 @@ async fn canonical_publication_replay_preserves_one_input_and_one_wake() {
             first_message = messages.first().cloned();
         }
         assert_eq!(messages.first(), first_message.as_ref());
-        assert_eq!(queue_rows(&db.node, &parent.session_id).await.len(), 2);
+        assert_eq!(queue_rows(&db, &parent.session_id).await.len(), 2);
     }
 }

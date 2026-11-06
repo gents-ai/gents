@@ -50,41 +50,6 @@ pub(super) fn background_completion_gate(
     gate
 }
 
-/// A concurrent claim conflicts and retries, so a wake cannot precede its input.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "called from background_completion::notification_delivery and queue tests with this shape"
-)]
-#[cfg(test)]
-pub(crate) async fn persist_background_completion_with_message_canonical(
-    node: &std::sync::Arc<EmbeddedNode>,
-    parent: &AgentRequest,
-    notification_content: &str,
-    message_key: &str,
-    wake_content: &str,
-    queue: RequestQueue,
-    existing_notification_doc_id: Option<&str>,
-    native: &ToolNotificationPublication,
-    wake: crate::request::lifecycle::RequestHopCause,
-) -> Result<EnqueuedBackgroundCompletionInput> {
-    let access =
-        crate::ConfigAccess::local_as(node.clone(), identity::Did::new(&parent.agent_did)?);
-    persist_background_completion_with_message_canonical_inner(
-        &access,
-        None,
-        node,
-        parent,
-        notification_content,
-        message_key,
-        wake_content,
-        queue,
-        existing_notification_doc_id,
-        native,
-        wake,
-    )
-    .await
-}
-
 #[expect(
     clippy::too_many_arguments,
     reason = "atomic notification retains the caller's signed access and exact publication inputs"
