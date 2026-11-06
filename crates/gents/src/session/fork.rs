@@ -14,7 +14,7 @@ use super::compaction_entries::{
     compaction_key, validate_compaction_chain, CompactionGenerationRow,
 };
 use super::history::sequence_message_key;
-use super::output::reader::load_canonical_message_in_txn;
+use super::output::reader::TxnCanonicalReader;
 use super::query::session_scope_filter;
 use super::sessions::{
     ensure_session_in_txn, load_agent_session_owner_in_txn, load_agent_session_row_in_txn,
@@ -480,18 +480,20 @@ async fn fork_in_txn(
         &source_compactions,
     )?;
 
+    {
+        let mut reader =
+            TxnCanonicalReader::new(txn, params.caller_node_did, params.caller_requester_did);
+        reader.observe_headers(&headers);
+        for origin in &retained {
+            let (resolved, _) = reader.load_message(&origin.doc_id).await?;
+            anyhow::ensure!(
+                resolved == origin.message,
+                "fork origin header changed or conflicts during dependency validation"
+            );
+        }
+    }
+
     for origin in &retained {
-        let (resolved, _) = load_canonical_message_in_txn(
-            txn,
-            &origin.doc_id,
-            params.caller_node_did,
-            params.caller_requester_did,
-        )
-        .await?;
-        anyhow::ensure!(
-            resolved == origin.message,
-            "fork origin header changed or conflicts during dependency validation"
-        );
         let child_header = fork_header(
             origin.doc_id.clone(),
             child,
