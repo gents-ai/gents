@@ -3,6 +3,48 @@ use crate::ensure_runtime_schemas;
 use crate::inference::llm::message::{Text, ToolResult, ToolResultContent, UserContent};
 use crate::test_support::first_content;
 
+async fn sequenced_history_on(
+    access: &crate::ConfigAccess,
+    session_id: &str,
+    node_did: &str,
+    requester: Option<&str>,
+    after: Option<u32>,
+    excluded_request: Option<&str>,
+) -> anyhow::Result<Vec<SequencedMessage>> {
+    output::sequenced::load_sequenced_messages_using(
+        output::access::ReadAccess::Config(access),
+        session_id,
+        node_did,
+        requester,
+        None,
+        after,
+        excluded_request,
+        None,
+    )
+    .await
+}
+
+async fn history_on(
+    access: &crate::ConfigAccess,
+    session_id: &str,
+    node_did: &str,
+    requester: Option<&str>,
+    excluded_request: Option<&str>,
+) -> anyhow::Result<Vec<Message>> {
+    Ok(sequenced_history_on(
+        access,
+        session_id,
+        node_did,
+        requester,
+        None,
+        excluded_request,
+    )
+    .await?
+    .into_iter()
+    .map(|row| row.message)
+    .collect())
+}
+
 #[tokio::test]
 async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
     use crate::store::identity::NodeIdentity;
@@ -53,12 +95,11 @@ async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
         .await
         .unwrap();
     tool.complete("tool finished").await.unwrap();
-    let history = history::load_history_projection(
-        &db.node,
+    let history = history_on(
+        &client,
         session_id,
         db.node_identity.did(),
         Some(user.did()),
-        None,
         Some(&current.request().doc_id),
     )
     .await
@@ -93,12 +134,11 @@ async fn history_reconstruction_scans_a_shared_request_once() {
         .map(|sequence| format!("message {sequence}"))
         .collect::<Vec<_>>();
     publish_shared_signed_history(&db, &user, &client, &binding, session_id, &messages).await;
-    let (history, scans) = count_request_output_scans(history::load_history_projection(
-        &db.node,
+    let (history, scans) = count_request_output_scans(history_on(
+        &client,
         session_id,
         db.node_identity.did(),
         Some(user.did()),
-        None,
         None,
     ))
     .await;
@@ -121,12 +161,11 @@ async fn history_reconstruction_batches_distinct_requests() {
         .map(|index| format!("message {index}"))
         .collect::<Vec<_>>();
     publish_signed_history(&db, &user, &client, &binding, session_id, &messages).await;
-    let (history, scans) = count_request_output_scans(history::load_history_projection(
-        &db.node,
+    let (history, scans) = count_request_output_scans(history_on(
+        &client,
         session_id,
         db.node_identity.did(),
         Some(user.did()),
-        None,
         None,
     ))
     .await;
@@ -631,27 +670,18 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
     assert_eq!(deleted_rows.len(), 1);
     assert_eq!(deleted_rows[0]["_docID"], row["_docID"]);
     let node_did = db.node_identity.did();
-    let local = history::load_sequenced_history_projection(
-        &db.node,
-        session_id,
-        node_did,
-        Some(user.did()),
-        None,
-        None,
-        None,
-    )
-    .await
-    .unwrap();
+    let local = sequenced_history_on(&client, session_id, node_did, Some(user.did()), None, None)
+        .await
+        .unwrap();
     assert_eq!(
         local.iter().map(|row| row.sequence).collect::<Vec<_>>(),
         vec![1, 3]
     );
-    let rows = history::load_sequenced_history_projection(
-        &db.node,
+    let rows = sequenced_history_on(
+        &client,
         session_id,
         node_did,
         Some(user.did()),
-        None,
         Some(1),
         None,
     )
@@ -869,7 +899,7 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
         .iter()
         .position(|message| message["key"] == case["key"])
         .unwrap();
-    let before = load_history(node, SOURCE, node_did, Some(user.did()))
+    let before = history_on(&client, SOURCE, node_did, Some(user.did()), None)
         .await
         .unwrap();
     let receipt = fork_on(
@@ -887,13 +917,19 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
     let retained = usize::try_from(case["retained_count"].as_u64().unwrap()).unwrap();
     assert_eq!(receipt.copied_messages as usize, retained);
     assert_eq!(
-        load_history(node, &receipt.session_id, node_did, Some(user.did()))
-            .await
-            .unwrap(),
+        history_on(
+            &client,
+            &receipt.session_id,
+            node_did,
+            Some(user.did()),
+            None
+        )
+        .await
+        .unwrap(),
         before[..retained]
     );
     assert_eq!(
-        load_history(node, SOURCE, node_did, Some(user.did()))
+        history_on(&client, SOURCE, node_did, Some(user.did()), None)
             .await
             .unwrap(),
         before
@@ -956,7 +992,7 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
         .await
         .unwrap();
     let before = session_rewrite_rows(&client).await;
-    let history = load_history(&db.node, CHILD, &node_did, Some(user.did()))
+    let history = history_on(&client, CHILD, &node_did, Some(user.did()), None)
         .await
         .unwrap();
     assert_eq!(history.len(), 2);
@@ -971,7 +1007,7 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
     );
     assert_eq!(session_rewrite_rows(&client).await, before);
     assert_eq!(
-        load_history(&db.node, CHILD, &node_did, Some(user.did()))
+        history_on(&client, CHILD, &node_did, Some(user.did()), None)
             .await
             .unwrap(),
         history
@@ -1390,54 +1426,96 @@ pub(crate) async fn import_history_observation(
 
 #[tokio::test]
 async fn history_reads_exact_node_and_requester_scope() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    let rows = [
-        ("did:key:owner", None, "local"),
-        ("did:key:other", None, "foreign owner"),
-        (
-            "did:key:owner",
-            Some("did:key:requester"),
-            "remote requester",
-        ),
-    ];
-    for (index, (owner, requester, text)) in rows.into_iter().enumerate() {
-        import_history_observation(
-            &node,
-            &format!("request-scope-{index}"),
-            "shared-session",
-            owner,
-            requester,
-            text,
-            &format!("scope-fixture-{index}"),
-            index as u32 + 1,
-            None,
-        )
-        .await;
-    }
+    use crate::store::identity::NodeIdentity;
+    let (local_db, local_user, local_client, local_binding) =
+        crate::test_support::signed_test_node("history-local").await;
+    let (foreign_db, foreign_user, foreign_client, foreign_binding) =
+        crate::test_support::signed_test_node("history-foreign").await;
+    let local_node = local_db.node_identity.did();
+    let foreign_node = foreign_db.node_identity.did();
+    assert_ne!(local_node, foreign_node);
+    publish_signed_history(
+        &local_db,
+        &local_user,
+        &local_client,
+        &local_binding,
+        "shared-session",
+        &["local".into()],
+    )
+    .await;
+    publish_signed_history(
+        &foreign_db,
+        &foreign_user,
+        &foreign_client,
+        &foreign_binding,
+        "shared-session",
+        &["remote requester".into()],
+    )
+    .await;
     assert_eq!(
-        load_history(&node, "shared-session", "did:key:owner", None)
-            .await
-            .unwrap(),
+        history_on(
+            &local_client,
+            "shared-session",
+            local_node,
+            Some(local_user.did()),
+            None
+        )
+        .await
+        .unwrap(),
         vec![Message::user("local")]
     );
     assert_eq!(
-        load_history(
-            &node,
+        history_on(
+            &foreign_client,
             "shared-session",
-            "did:key:owner",
-            Some("did:key:requester")
+            foreign_node,
+            Some(foreign_user.did()),
+            None
         )
         .await
         .unwrap(),
         vec![Message::user("remote requester")]
     );
-    assert!(
-        load_history(&node, "shared-session", "did:key:absent", None)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(history_on(
+        &local_client,
+        "shared-session",
+        local_node,
+        Some(foreign_user.did()),
+        None
+    )
+    .await
+    .unwrap()
+    .is_empty());
+    assert!(history_on(
+        &local_client,
+        "shared-session",
+        foreign_node,
+        Some(local_user.did()),
+        None
+    )
+    .await
+    .unwrap()
+    .is_empty());
+    assert!(history_on(
+        &foreign_client,
+        "shared-session",
+        foreign_node,
+        Some(local_user.did()),
+        None
+    )
+    .await
+    .unwrap()
+    .is_empty());
+    local_db
+        .node
+        .shutdown()
+        .await
+        .expect("shut down local test node");
+    foreign_db
+        .node
+        .shutdown()
+        .await
+        .expect("shut down foreign test node");
 }
 
 #[tokio::test]
@@ -1498,20 +1576,19 @@ async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
                 .is_err(),
             "an existing canonical key cannot overwrite immutable content"
         );
-        let (header, native) =
-            load_canonical_message_from_node(&db.node, &first, node_did, Some(user.did()))
-                .await
-                .unwrap();
+        let (header, native) = load_canonical_message(client, &first, node_did, Some(user.did()))
+            .await
+            .unwrap();
         assert_eq!(header.sequence, 1);
         assert_eq!(native, message);
         assert_eq!(
-            load_history(&db.node, "same", node_did, Some(user.did()))
+            history_on(client, "same", node_did, Some(user.did()), None)
                 .await
                 .unwrap(),
             vec![message]
         );
         assert!(
-            load_history(&db.node, "same", foreign_node, Some(user.did()))
+            history_on(client, "same", foreign_node, Some(user.did()), None)
                 .await
                 .unwrap()
                 .is_empty(),
@@ -1526,12 +1603,16 @@ async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
             .await
             .unwrap();
     }
-    assert!(
-        load_history(&first_db.node, "same", first_node, Some(second_user.did()))
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(history_on(
+        &first_client,
+        "same",
+        first_node,
+        Some(second_user.did()),
+        None
+    )
+    .await
+    .unwrap()
+    .is_empty());
     first_db
         .node
         .shutdown()
@@ -1924,11 +2005,11 @@ async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates(
         left
     );
     let (left_header, left_native) =
-        load_canonical_message_from_node(&node, &left, node_did, Some(user.did()))
+        load_canonical_message(&client, &left, node_did, Some(user.did()))
             .await
             .unwrap();
     let (right_header, right_native) =
-        load_canonical_message_from_node(&node, &right, node_did, Some(user.did()))
+        load_canonical_message(&client, &right, node_did, Some(user.did()))
             .await
             .unwrap();
     assert_ne!(left_header.sequence, right_header.sequence);
@@ -1942,7 +2023,7 @@ async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates(
     assert_eq!(left_native, left_message);
     assert_eq!(right_native, right_message);
     assert_eq!(
-        load_history(&node, "append-race", node_did, Some(user.did()))
+        history_on(&client, "append-race", node_did, Some(user.did()), None)
             .await
             .unwrap()
             .len(),
