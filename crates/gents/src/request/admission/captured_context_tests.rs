@@ -28,7 +28,9 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
         crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
     let agent = crate::store::graphql::escape_graphql_string(&binding.agent_did);
     let nonce = crate::store::graphql::escape_graphql_string(&binding.creation_nonce);
-    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
+    // The runtime owns this fixture's Node, Agent and session setup; the
+    // requester only appears as the session's user and signs nothing here.
+    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(identity.did()).unwrap());
     let node_response = access
         .write(
             "test.capture.node",
