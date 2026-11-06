@@ -106,8 +106,9 @@ impl Harness {
         let mut identity =
             crate::pack::PackIdentity::new(&authored.manifest, authored.digest, Vec::new());
         identity.agent_bindings = agent_bindings;
+        let owner_access = launching.owner_access().unwrap();
         crate::pack::install_pack_documents(
-            &launching.access,
+            &owner_access,
             launching.owner(),
             &identity,
             &config,
@@ -152,7 +153,10 @@ impl Harness {
                 value["agent_did"] = json!(self.binding.agent_did);
             }
         }
-        self.launching.install(documents).await;
+        // Agent and other source-projected documents are refused for the
+        // evaluator's client access, so the Node owner writes them.
+        let owner_access = self.launching.owner_access().unwrap();
+        self.launching.install_as(&owner_access, documents).await;
     }
 
     pub(crate) async fn grant_node_permissions(

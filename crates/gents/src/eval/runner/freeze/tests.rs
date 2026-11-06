@@ -71,7 +71,25 @@ impl Launching {
         launching
     }
 
+    /// The Node owner's own signed access. Source-projected documents (Agent,
+    /// Tools, AgentContext) are refused for the evaluator's client access, so
+    /// fixtures that install them must write as the owner.
+    pub(crate) fn owner_access(&self) -> anyhow::Result<ConfigAccess> {
+        Ok(ConfigAccess::local_as(
+            self.home.node.clone(),
+            identity::Did::new(self.owner())?,
+        ))
+    }
+
     pub(crate) async fn install(&self, documents: Vec<(Collection, Value)>) {
+        self.install_as(&self.access, documents).await;
+    }
+
+    pub(crate) async fn install_as(
+        &self,
+        access: &ConfigAccess,
+        documents: Vec<(Collection, Value)>,
+    ) {
         let plan = DesiredStateApplyPlan::new(
             documents
                 .into_iter()
@@ -83,7 +101,7 @@ impl Launching {
                 .collect(),
         )
         .unwrap();
-        self.access
+        access
             .transact_write("freeze.test_fixture", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
