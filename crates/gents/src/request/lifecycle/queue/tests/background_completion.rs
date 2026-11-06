@@ -791,19 +791,30 @@ async fn many_concurrent_notifications_publish_one_wake_identity() {
 async fn restart_before_claim_preserves_pending_input_until_the_wake_completes() {
     let db = test_db("background-restart-before-claim").await;
     let node = db.node.clone();
-    let parent = root_parent(&db, "background-restart-before-claim-session").await;
-    let hints = background_hints(&parent);
-    let enqueued = persist_background_completion_with_message(
-        &node,
-        &parent,
-        "restart-safe notification",
-        "background-completion-notification:restart-before-claim:tool",
-        "review notifications",
-        hints.clone(),
-        None,
-    )
-    .await
-    .unwrap();
+    let mut fixture =
+        canonical_background_fixture(&db, "background-restart-before-claim-session").await;
+    let parent = fixture.parent.clone();
+    let tool = fixture
+        .prepare_notification("restart-safe notification")
+        .await
+        .unwrap();
+    let selection = fixture.writer.terminal_output(&parent.doc_id).await;
+    fixture
+        .lifecycle
+        .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
+        .await
+        .unwrap();
+    let enqueued = fixture
+        .publish_prepared_notification(
+            "restart-safe notification",
+            "background-completion-notification:restart-before-claim:tool",
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &tool,
+        )
+        .await
+        .unwrap();
 
     let recovery = crate::RequestLifecycle::recover_all_with_identities(
         &node,
@@ -813,22 +824,20 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
     .await
     .unwrap();
     assert_eq!(recovery.background_wakes_redriven, 0);
-    let before = crate::load_background_completion_diagnostics(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        db.node_did(),
-    )
-    .await
-    .unwrap();
+    let before = crate::load_background_completion_diagnostics(&db.agent_access, db.node_did())
+        .await
+        .unwrap();
     assert_eq!(before.pending_notifications, 1);
     assert_eq!(before.acknowledged_notifications, 0);
     assert_eq!(before.epochs[0].state, "pending");
 
-    let request = wake_agent_request(
-        &parent,
+    let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &db.agent_access,
         &enqueued.request.as_ref().expect("non-Goal wake").doc_id,
-        &enqueued.request.as_ref().expect("non-Goal wake").request_id,
-        &hints,
-    );
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
         db.agent_did(),
@@ -838,15 +847,19 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
         ExecutionOrigin::Scheduled,
         "backend-test",
     );
+    lifecycle
+        .bind_managed_agent(db.agent_identity.as_ref())
+        .unwrap();
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        db.agent_did(),
+        db.agent_identity.as_ref(),
         std::time::Duration::ZERO,
-    );
+    )
+    .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     lifecycle
         .terminalize_owned(
@@ -857,12 +870,9 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
         .await
         .unwrap();
 
-    let after = crate::load_background_completion_diagnostics(
-        &crate::store::config_client::ConfigAccess::local(node),
-        db.node_did(),
-    )
-    .await
-    .unwrap();
+    let after = crate::load_background_completion_diagnostics(&db.agent_access, db.node_did())
+        .await
+        .unwrap();
     assert_eq!(after.pending_notifications, 0);
     assert_eq!(after.acknowledged_notifications, 1);
     assert_eq!(after.epochs[0].state, "acknowledged");
@@ -872,25 +882,38 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
 async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     let db = test_db("background-response-repair-ack").await;
     let node = db.node.clone();
-    let parent = root_parent(&db, "background-response-repair-ack-session").await;
-    let hints = background_hints(&parent);
-    let enqueued = persist_background_completion_with_message(
-        &node,
-        &parent,
-        "response-persisted notification",
-        "background-completion-notification:response-persisted:tool",
-        "review notifications",
-        hints.clone(),
-        None,
+    let mut fixture =
+        canonical_background_fixture(&db, "background-response-repair-ack-session").await;
+    let parent = fixture.parent.clone();
+    let tool = fixture
+        .prepare_notification("response-persisted notification")
+        .await
+        .unwrap();
+    let selection = fixture.writer.terminal_output(&parent.doc_id).await;
+    fixture
+        .lifecycle
+        .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
+        .await
+        .unwrap();
+    let enqueued = fixture
+        .publish_prepared_notification(
+            "response-persisted notification",
+            "background-completion-notification:response-persisted:tool",
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &tool,
+        )
+        .await
+        .unwrap();
+
+    let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &db.agent_access,
+        &enqueued.request.as_ref().expect("non-Goal wake").doc_id,
     )
     .await
+    .unwrap()
     .unwrap();
-    let request = wake_agent_request(
-        &parent,
-        &enqueued.request.as_ref().expect("non-Goal wake").doc_id,
-        &enqueued.request.as_ref().expect("non-Goal wake").request_id,
-        &hints,
-    );
     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
         node.clone(),
         db.agent_did(),
@@ -900,15 +923,19 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         ExecutionOrigin::Scheduled,
         "backend-test",
     );
+    lifecycle
+        .bind_managed_agent(db.agent_identity.as_ref())
+        .unwrap();
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
         node.clone(),
-        db.agent_did(),
+        db.agent_identity.as_ref(),
         std::time::Duration::ZERO,
-    );
+    )
+    .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     writer
         .start_provider_attempt(
@@ -930,12 +957,10 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         )
         .await
         .unwrap();
-    let unpublished_terminal = crate::load_background_completion_diagnostics(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        db.node_did(),
-    )
-    .await
-    .unwrap();
+    let unpublished_terminal =
+        crate::load_background_completion_diagnostics(&db.agent_access, db.node_did())
+            .await
+            .unwrap();
     assert_eq!(unpublished_terminal.pending_notifications, 1);
     assert_eq!(unpublished_terminal.acknowledged_notifications, 0);
     lifecycle
@@ -949,14 +974,13 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .await
         .unwrap();
 
-    let terminal = node
+    let terminal = db.agent_access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state terminal_output }} }}"#,
             escape_graphql_string(&lifecycle.request().doc_id),
         ))
-        .await;
-    assert!(!terminal.has_errors(), "{:?}", terminal.errors);
-    let terminal_row = &terminal.data.as_ref().unwrap()["AgentRequest"][0];
+        .await.unwrap();
+    let terminal_row = &terminal["data"]["AgentRequest"][0];
     assert_eq!(terminal_row["lifecycle_state"], "completed");
     assert_eq!(
         terminal_row["terminal_output"],
@@ -974,12 +998,9 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     .await
     .unwrap();
     assert_eq!(first_repair.repaired, 0);
-    let first = crate::load_background_completion_diagnostics(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        db.node_did(),
-    )
-    .await
-    .unwrap();
+    let first = crate::load_background_completion_diagnostics(&db.agent_access, db.node_did())
+        .await
+        .unwrap();
     assert_eq!(first.pending_notifications, 0);
     assert_eq!(first.acknowledged_notifications, 1);
     assert_eq!(first.epochs[0].state, "acknowledged");
@@ -992,12 +1013,9 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     .await
     .unwrap();
     assert_eq!(second_repair.repaired, 0);
-    let second = crate::load_background_completion_diagnostics(
-        &crate::store::config_client::ConfigAccess::local(node),
-        db.node_did(),
-    )
-    .await
-    .unwrap();
+    let second = crate::load_background_completion_diagnostics(&db.agent_access, db.node_did())
+        .await
+        .unwrap();
     assert_eq!(
         second, first,
         "acknowledgement projection must be restart-idempotent"
