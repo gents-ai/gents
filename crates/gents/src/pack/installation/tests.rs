@@ -2551,42 +2551,79 @@ async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
 
 #[tokio::test]
 async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_documents() {
-    let (_node, access) = dependency_fixture().await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
     super::super::install_pack_documents(
         &access,
-        OWNER,
+        owner,
         &identity("1"),
-        &config(&[("owned", "Owned")]),
+        &config_owned(owner, &[("owned", "Owned")]),
         DriftPolicy::Refuse,
     )
     .await
     .unwrap();
-    access.write("test.surviving_plugin_user", r#"mutation {
-        create_Tools(input: {tools_id: "surviving-tools", node_did: "did:key:zPackInstallOwner", integrations: {plugins: [{plugin: "acme/echo"}]}}) {_docID}
-        create_AgentContext(input: {context_id: "surviving-context", node_did: "did:key:zPackInstallOwner", tools_id: "surviving-tools"}) {_docID}
-        create_Agent(input: {agent_did: "surviving-agent", node_did: "did:key:zPackInstallOwner", context_id: "surviving-context", inference_profile_id: "glm:inference"}) {_docID}
-    }"#).await.unwrap();
+    let docs = [
+        (
+            Collection::Tools,
+            json!({"tools_id":"surviving-tools", "node_did":owner, "integrations":{"plugins":[{"plugin":"acme/echo"}]}}),
+        ),
+        (
+            Collection::AgentContext,
+            json!({"context_id":"surviving-context", "node_did":owner, "tools_id":"surviving-tools"}),
+        ),
+        (
+            Collection::Agent,
+            json!({"agent_did":binding.agent_did, "creation_nonce":binding.creation_nonce, "node_did":owner, "context_id":"surviving-context", "inference_profile_id":"profile"}),
+        ),
+    ];
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(
+        docs.into_iter()
+            .map(|(collection, value)| DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect(),
+    )
+    .unwrap();
+    access
+        .transact_write("test.surviving_plugin_user", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan)
+                    .await
+                    .map(|_| ())
+            })
+        })
+        .await
+        .unwrap();
     let before = tools_ids(&access).await;
-    let error = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+    let error = remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
         .await
         .unwrap_err();
     assert!(error.to_string().contains("acme/echo"), "{error:#}");
-    assert!(error.to_string().contains("surviving-agent"), "{error:#}");
+    assert!(error.to_string().contains(&binding.agent_did), "{error:#}");
     assert_eq!(tools_ids(&access).await, before);
-    assert!(read_installed_pack(&access, OWNER, "acme/demo")
+    assert!(read_installed_pack(&access, owner, "acme/demo")
         .await
         .unwrap()
         .is_some());
-    access
-        .write(
-            "test.remove_plugin_user",
-            r#"mutation {
-        delete_Agent(filter: {agent_did: {_eq: "surviving-agent"}}) {_docID}
-    }"#,
-        )
+    let rows = access
+        .execute(&format!(
+            "{{ Agent(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{_docID}} }}",
+            crate::store::graphql::escape_graphql_string(&binding.agent_did),
+        ))
         .await
         .unwrap();
-    let error = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+    let doc = rows["data"]["Agent"][0]["_docID"].as_str().unwrap();
+    access
+        .transact_write("test.remove_plugin_user", |txn| {
+            Box::pin(async move { txn.delete_configuration_document("Agent", doc).await })
+        })
+        .await
+        .unwrap();
+    let error = remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -2594,10 +2631,11 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
         Some(PackRemovalError::ReferenceInventoryUnavailable)
     ));
     assert_eq!(tools_ids(&access).await, before);
-    assert!(read_installed_pack(&access, OWNER, "acme/demo")
+    assert!(read_installed_pack(&access, owner, "acme/demo")
         .await
         .unwrap()
         .is_some());
+    node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
