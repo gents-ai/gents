@@ -45,6 +45,34 @@ fn stub_runtime_node() -> Arc<RuntimeNode> {
     })
 }
 
+/// The readiness DB sink needs a verified native Node owner, which these fixtures do not
+/// provision. The assertions here read the runtime status row and the apply sequence, so
+/// readiness is accepted without persistence.
+struct AcceptingReadinessWriter;
+
+#[async_trait::async_trait]
+impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for AcceptingReadinessWriter {
+    async fn upsert(
+        &self,
+        _node_did: &str,
+        _snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
+        _updated_at: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Runtime status rows are keyed by the node's own identity, so fixtures pass it here.
+fn runtime_status_handle(node: &Arc<defra_node::Node>, node_did: &str) -> RuntimeStatusHandle {
+    let (_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
+        node.clone(),
+        node_did,
+        Arc::new(AcceptingReadinessWriter),
+        Duration::from_millis(1),
+    );
+    runtime_status
+}
+
 /// Revisions of one Agent share its provisioned binding and root identity, so they
 /// resolve to the same agent DID. Each fresh provisioning is a different Agent.
 struct AgentLineage {
@@ -640,8 +668,8 @@ async fn agent_slot_fans_out_background_children_to_backend_capacity() {
 async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = "did:test:reconcile-capacity-test";
-    let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did);
+    let node_did = node.node_identity_did().expect("fixture node has an identity");
+    let runtime_status = runtime_status_handle(&node, node_did);
 
     let mut agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("capacity-general"));
@@ -762,7 +790,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let node_did = identity.did().to_string();
-    let runtime_status = RuntimeStatusHandle::new(node.clone(), &node_did);
+    let runtime_status = runtime_status_handle(&node, &node_did);
 
     let mut agent_config = PendingAgent::new("general").build_with_identity_for_test(identity);
     let agent_did = agent_config.agent_did.clone();
@@ -913,8 +941,8 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = "did:test:reconcile-backend-change";
-    let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did);
+    let node_did = node.node_identity_did().expect("fixture node has an identity");
+    let runtime_status = runtime_status_handle(&node, node_did);
 
     let mut agent_config =
         PendingAgent::new("general").build_with_identity_for_test(test_identity("switch-general"));
@@ -1117,8 +1145,8 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = "did:test:reconcile-test";
-    let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did);
+    let node_did = node.node_identity_did().expect("fixture node has an identity");
+    let runtime_status = runtime_status_handle(&node, node_did);
 
     let starts = Arc::new(StdMutex::new(RapidHashMap::<String, usize>::new()));
     let lineage = AgentLineage::provision("general");
@@ -1265,8 +1293,8 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = "did:test:reconcile-failure-test";
-    let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did);
+    let node_did = node.node_identity_did().expect("fixture node has an identity");
+    let runtime_status = runtime_status_handle(&node, node_did);
 
     let lineage = AgentLineage::provision("general");
     let initial_agent = lineage.revision("general");
@@ -1516,8 +1544,12 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
             }
         }
     };
-    let (runtime_status_owner, runtime_status) =
-        RuntimeStatusHandle::start(node.clone(), "did:test:registration-failure");
+    let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
+        node.clone(),
+        node.node_identity_did().expect("fixture node has an identity"),
+        Arc::new(AcceptingReadinessWriter),
+        Duration::from_millis(1),
+    );
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
@@ -1587,8 +1619,12 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
     let replacement_snapshot =
         snapshot_for_agents_with_node(&node, "general", vec![Arc::new(replacement)], runtime_node)
             .await;
-    let (runtime_status_owner, runtime_status) =
-        RuntimeStatusHandle::start(node.clone(), "did:test:retired-drain-failure");
+    let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
+        node.clone(),
+        node.node_identity_did().expect("fixture node has an identity"),
+        Arc::new(AcceptingReadinessWriter),
+        Duration::from_millis(1),
+    );
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let runner = move |_agent: Arc<ResolvedAgent>,
                        _tool_surface: Arc<ToolSurface>,
@@ -1944,8 +1980,8 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
 async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = "did:test:reconcile-tool-surface-test";
-    let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did);
+    let node_did = node.node_identity_did().expect("fixture node has an identity");
+    let runtime_status = runtime_status_handle(&node, node_did);
     let identity = Arc::new(test_identity("tool-surface-general"));
     let runtime_node = Arc::new(RuntimeNode {
         node_did: identity.did().to_string(),
@@ -2144,8 +2180,10 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let runtime_status =
-        crate::runtime::status::RuntimeStatusHandle::new(node.clone(), "did:test:policy");
+    let runtime_status = runtime_status_handle(
+        &node,
+        node.node_identity_did().expect("fixture node has an identity"),
+    );
     let agent_config = Arc::new(
         PendingAgent::new("general")
             .build_with_identity_for_test(test_identity("policy-retirement-559")),
