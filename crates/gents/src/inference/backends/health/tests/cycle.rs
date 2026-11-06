@@ -516,6 +516,21 @@ async fn runtime_probe_cycle_scopes_same_named_backends_to_its_node() {
     crate::test_support::bootstrap_signed_test_node(&fixture.user, &foreign.node_did).await;
     fixture.seed(&local, "unknown").await;
     fixture.write(&foreign).await;
+    let admin = crate::ConfigAccess::local_as(
+        node.clone(),
+        fixture.db.node_identity.did().parse().unwrap(),
+    );
+    let foreign_actor = foreign.node_did.parse().unwrap();
+    for permission in [
+        crate::store::config_client::NodePermission::CollectionGet,
+        crate::store::config_client::NodePermission::DocumentRead,
+        crate::store::config_client::NodePermission::DocumentUpdate,
+    ] {
+        admin
+            .grant_node_permission(&foreign_actor, permission)
+            .await
+            .unwrap();
+    }
     let foreign_runtime = fixture.db.client_access(foreign_db.node_identity.as_ref());
     crate::inference::backends::registry::set_backend_probe_status_as(
         &foreign_runtime,
