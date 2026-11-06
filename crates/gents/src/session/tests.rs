@@ -2189,7 +2189,22 @@ async fn unsigned_starter_cannot_populate_the_index() {
         .iter()
         .find(|case| case["operation"] == "rename")
         .unwrap();
-    let session = super::model_test_support::model_session(&case["before"]);
+    use crate::store::identity::NodeIdentity;
+    let (db, user, access, binding) =
+        crate::test_support::signed_test_node("unsigned-starter").await;
+    let mut session = super::model_test_support::model_session(&case["before"]);
+    session.node_did = db.node_identity.did().to_owned();
+    session.requester_did = Some(user.did().to_owned());
+    session.agent_did = binding.agent_did.clone();
+    let source = session
+        .provenance
+        .as_mut()
+        .unwrap()
+        .started_by
+        .as_mut()
+        .unwrap();
+    source.node_did = session.node_did.clone();
+    source.requester_did = session.requester_did.clone();
     let source = session
         .provenance
         .as_ref()
@@ -2198,15 +2213,10 @@ async fn unsigned_starter_cannot_populate_the_index() {
         .as_ref()
         .unwrap();
     let scope = crate::session::origin::SessionScope::from(source);
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
     for provenance in [session.provenance.clone(), None] {
         let session = &session;
-        crate::store::config_client::ConfigAccess::transact_local_write(
-            &node,
-            None,
-            "test.session_starter",
-            |txn| {
+        access
+            .transact_write("test.session_starter", |txn| {
                 let provenance = provenance.clone();
                 Box::pin(async move {
                     ensure_session_in_txn(
@@ -2221,12 +2231,10 @@ async fn unsigned_starter_cannot_populate_the_index() {
                     )
                     .await
                 })
-            },
-        )
-        .await
-        .unwrap();
+            })
+            .await
+            .unwrap();
     }
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let child_scope = crate::session::origin::SessionScope::from(&session);
     assert!(
         crate::session::origin::started_by(&access, &child_scope)
@@ -2240,5 +2248,5 @@ async fn unsigned_starter_cannot_populate_the_index() {
         .unwrap()
         .started
         .is_empty());
-    node.shutdown().await.expect("shut down test node");
+    db.node.shutdown().await.expect("shut down test node");
 }
