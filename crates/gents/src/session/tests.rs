@@ -870,16 +870,16 @@ async fn create_session_with_agent_did_rejects_mismatched_existing_binding() {
     assert!(error.to_string().contains("agent mismatch"));
 }
 
-async fn session_rewrite_rows(node: &defra_node::Node) -> Vec<Vec<String>> {
-    let response = node
+async fn session_rewrite_rows(access: &crate::ConfigAccess) -> Vec<Vec<String>> {
+    let response = access
         .execute(
             "{ AgentSession { _docID session_id agent_did } \
-               AgentMessage { _docID session_id sequence message_key } \
-               CompactionEntry { _docID session_id sequence compaction_key summary } }",
+           AgentMessage { _docID session_id sequence message_key } \
+           CompactionEntry { _docID session_id sequence compaction_key summary } }",
         )
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let data = response.data.expect("session rewrite rows");
+        .await
+        .unwrap();
+    let data = &response["data"];
     ["AgentSession", "AgentMessage", "CompactionEntry"]
         .into_iter()
         .map(|collection| {
@@ -897,7 +897,7 @@ async fn session_rewrite_rows(node: &defra_node::Node) -> Vec<Vec<String>> {
 
 #[tokio::test]
 async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_source() {
-    const AGENT: &str = "did:test:edit-fork";
+    use crate::store::identity::NodeIdentity;
     const SOURCE: &str = "edit-source";
     let case = crate::lean_vocab_test::lean_contract_snapshot()
         .session_document_cases
@@ -905,36 +905,32 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
         .iter()
         .find(|case| case["name"] == "three_user_turns")
         .unwrap();
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_agent(&node, AGENT, "edit-fork").await;
-    create_session_with_agent_did(&node, SOURCE, AGENT, "edit-fork")
+    let (db, user, client, binding) = crate::test_support::signed_test_node("edit-fork").await;
+    let node = &db.node;
+    let node_did = db.node_identity.did();
+    let modeled_messages = case["messages"].as_array().unwrap();
+    for (index, message) in modeled_messages.iter().enumerate() {
+        assert_eq!(message["sequence"].as_u64().unwrap(), (index + 1) as u64);
+    }
+    let messages = modeled_messages
+        .iter()
+        .map(|message| message["key"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    let keys = publish_signed_history(&db, &user, &client, &binding, SOURCE, &messages).await;
+    let anchor = modeled_messages
+        .iter()
+        .position(|message| message["key"] == case["key"])
+        .unwrap();
+    let before = load_history(node, SOURCE, node_did, Some(user.did()))
         .await
         .unwrap();
-    for message in case["messages"].as_array().unwrap() {
-        let key = message["key"].as_str().unwrap();
-        import_history_observation(
-            &node,
-            &format!("request-{key}"),
-            SOURCE,
-            AGENT,
-            None,
-            key,
-            key,
-            u32::try_from(message["sequence"].as_u64().unwrap()).unwrap(),
-            None,
-        )
-        .await;
-    }
-    let before = load_history(&node, SOURCE, AGENT, None).await.unwrap();
-    let receipt = fork(
-        &node,
-        &identity::Did::new(AGENT).unwrap(),
+    let receipt = fork_on(
+        &client,
         ForkParams {
             source_session_id: SOURCE,
-            boundary: ForkBoundary::BeforeMessageKey(case["key"].as_str().unwrap()),
-            caller_node_did: AGENT,
-            caller_requester_did: None,
+            boundary: ForkBoundary::BeforeMessageKey(&keys[anchor]),
+            caller_node_did: node_did,
+            caller_requester_did: Some(user.did()),
             target_agent_did: None,
         },
     )
@@ -943,13 +939,15 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
     let retained = usize::try_from(case["retained_count"].as_u64().unwrap()).unwrap();
     assert_eq!(receipt.copied_messages as usize, retained);
     assert_eq!(
-        load_history(&node, &receipt.session_id, AGENT, None)
+        load_history(node, &receipt.session_id, node_did, Some(user.did()))
             .await
             .unwrap(),
         before[..retained]
     );
     assert_eq!(
-        load_history(&node, SOURCE, AGENT, None).await.unwrap(),
+        load_history(node, SOURCE, node_did, Some(user.did()))
+            .await
+            .unwrap(),
         before
     );
     node.shutdown().await.expect("shut down test node");
@@ -958,67 +956,85 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
 #[tokio::test]
 async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_current_agent() {
     use crate::NodeIdentity as _;
-    const NODE: &str = "did:test:retained-edit-fork";
     const SOURCE: &str = "retained-source";
     const CHILD: &str = "retained-child";
-    let directory = tempfile::tempdir().unwrap();
-    let identity =
-        crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
-    let builder = || {
-        defra_node::Node::builder()
-            .with_node_identity_did(identity.did())
-            .data_path(directory.path().join("data"))
-    };
-    let node = std::sync::Arc::new(builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_agent(&node, NODE, "retained-fork").await;
-    create_session_with_agent_did(&node, SOURCE, NODE, "retained-fork")
-        .await
-        .unwrap();
-    for sequence in 1..=3 {
-        let key = format!("retained-{sequence}");
-        import_history_observation(&node, &key, SOURCE, NODE, None, &key, &key, sequence, None)
-            .await;
-    }
+    let (mut db, user, client, binding) =
+        crate::test_support::signed_test_node("retained-edit-fork").await;
+    let node_did = db.node_identity.did().to_owned();
+    let messages = (1..=3)
+        .map(|sequence| format!("retained-{sequence}"))
+        .collect::<Vec<_>>();
+    let keys = publish_signed_history(&db, &user, &client, &binding, SOURCE, &messages).await;
     let params = ForkParams {
         source_session_id: SOURCE,
-        boundary: ForkBoundary::BeforeMessageKey("retained-3"),
-        caller_node_did: NODE,
-        caller_requester_did: None,
+        boundary: ForkBoundary::BeforeMessageKey(&keys[2]),
+        caller_node_did: &node_did,
+        caller_requester_did: Some(user.did()),
         target_agent_did: None,
     };
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
-    drop(
-        fork_edit_on(&access, params.clone(), CHILD, "native-client")
-            .await
-            .unwrap(),
-    );
-    crate::store::config_client::ConfigAccess::write_local(&node, "test.disable_fork_agent",
-        r#"mutation { update_Agent(filter: {node_did: {_eq: "did:test:retained-edit-fork"}, agent_did: {_eq: "retained-fork"}}, input: {enabled: false}) { _docID } }"#).await.unwrap();
-    let before = session_rewrite_rows(&node).await;
-    let history = load_history(&node, CHILD, NODE, None).await.unwrap();
-    assert_eq!(history.len(), 2);
-    drop(access);
-    node.shutdown().await.expect("shut down test node");
-    drop(node);
-
-    let node = std::sync::Arc::new(builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     assert_eq!(
-        fork_edit_on(&access, params.clone(), CHILD, "native-client")
+        fork_edit_on(&client, params.clone(), CHILD, user.did())
             .await
             .unwrap(),
         CHILD
     );
-    assert_eq!(session_rewrite_rows(&node).await, before);
+    let agent = escape_graphql_string(&binding.agent_did);
+    let response = client
+        .execute(&format!(
+            r#"{{ Agent(filter: {{agent_did: {{_eq: "{agent}"}}}}, limit: 2) {{ _docID }} }}"#
+        ))
+        .await
+        .unwrap();
+    let [row] = response["data"]["Agent"].as_array().unwrap().as_slice() else {
+        panic!("fixture Agent must be unique")
+    };
+    let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
+    let mutation = format!(
+        r#"mutation($input: AgentMutationInputArg!) {{ update_Agent(docID: "{doc}", input: $input) {{ _docID }} }}"#
+    );
+    client
+        .transact_write("test.disable_fork_agent", |txn| {
+            let mutation = &mutation;
+            Box::pin(async move {
+                txn.execute_client_signed_update(
+                    mutation,
+                    &serde_json::json!({"input":{"enabled":false}}),
+                    gents_protocol::schemas::AGENT,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
+    let before = session_rewrite_rows(&client).await;
+    let history = load_history(&db.node, CHILD, &node_did, Some(user.did()))
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 2);
+    drop(client);
+    db.simulate_process_crash().await.unwrap();
+    let client = db.client_access(&user);
     assert_eq!(
-        load_history(&node, CHILD, NODE, None).await.unwrap(),
+        fork_edit_on(&client, params.clone(), CHILD, user.did())
+            .await
+            .unwrap(),
+        CHILD
+    );
+    assert_eq!(session_rewrite_rows(&client).await, before);
+    assert_eq!(
+        load_history(&db.node, CHILD, &node_did, Some(user.did()))
+            .await
+            .unwrap(),
         history
     );
+    let foreign =
+        tokio::task::spawn_blocking(|| crate::support::fixtures::test_identity("retained-foreign"))
+            .await
+            .unwrap();
     for changed in [
         ForkParams {
-            boundary: ForkBoundary::BeforeMessageKey("retained-2"),
+            boundary: ForkBoundary::BeforeMessageKey(&keys[1]),
             ..params.clone()
         },
         ForkParams {
@@ -1026,106 +1042,118 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
             ..params.clone()
         },
         ForkParams {
-            caller_requester_did: Some("did:test:foreign"),
+            caller_requester_did: Some(foreign.did()),
             ..params.clone()
         },
     ] {
-        assert!(fork_edit_on(&access, changed, CHILD, "native-client")
+        assert!(fork_edit_on(&client, changed, CHILD, user.did())
             .await
             .is_err());
-        assert_eq!(session_rewrite_rows(&node).await, before);
+        assert_eq!(session_rewrite_rows(&client).await, before);
     }
-    assert!(
-        fork_edit_on(&access, params.clone(), CHILD, "another-native-client")
-            .await
-            .is_err()
-    );
-    assert_eq!(session_rewrite_rows(&node).await, before);
-    create_session_with_agent_did(&node, "unbound-child", NODE, "retained-fork")
+    assert!(fork_edit_on(&client, params.clone(), CHILD, foreign.did())
+        .await
+        .is_err());
+    assert_eq!(session_rewrite_rows(&client).await, before);
+    client
+        .transact_write("test.unbound_fork_session", |txn| {
+            let binding = &binding;
+            let node_did = &node_did;
+            let user = &user;
+            Box::pin(async move {
+                ensure_session_in_txn(
+                    txn,
+                    "unbound-child",
+                    node_did,
+                    &binding.agent_did,
+                    Some(user.did()),
+                    None,
+                    None,
+                    "2026-09-22T00:00:00Z",
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
         .await
         .unwrap();
-    let unbound_before = session_rewrite_rows(&node).await;
-    assert!(
-        fork_edit_on(&access, params, "unbound-child", "native-client")
-            .await
-            .is_err()
-    );
-    assert_eq!(session_rewrite_rows(&node).await, unbound_before);
-    drop(access);
-    node.shutdown().await.expect("shut down test node");
+    let unbound_before = session_rewrite_rows(&client).await;
+    assert!(fork_edit_on(&client, params, "unbound-child", user.did())
+        .await
+        .is_err());
+    assert_eq!(session_rewrite_rows(&client).await, unbound_before);
+    db.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
 async fn fork_rolls_back_at_every_mutation_position() {
-    const AGENT: &str = "did:test:fork-rollback";
+    use crate::store::identity::NodeIdentity;
     const SOURCE: &str = "fork-rollback-source";
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_agent(&node, AGENT, "fork-rollback").await;
-    create_session_with_agent_did(&node, SOURCE, AGENT, "fork-rollback")
-        .await
-        .unwrap();
-    for sequence in 1..=3u32 {
-        import_history_observation(
-            &node,
-            &format!("fork-rollback-request-{sequence}"),
+    let (db, user, client, binding) = crate::test_support::signed_test_node("fork-rollback").await;
+    let node = &db.node;
+    let node_did = db.node_identity.did();
+    let messages = (1..=3)
+        .map(|sequence| format!("turn {sequence}"))
+        .collect::<Vec<_>>();
+    publish_signed_history(&db, &user, &client, &binding, SOURCE, &messages).await;
+    for (index, summary, files, count, cursor) in [
+        (0, "early turns", vec!["/tmp/a.rs".to_string()], 2, 2),
+        (1, "later turns", vec!["/tmp/b.rs".to_string()], 1, 3),
+    ] {
+        let request_id = format!("{SOURCE}-request-{index}");
+        let response = client.execute(&format!(
+            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{ _docID }} }}"#,
+            escape_graphql_string(&request_id),
+        )).await.unwrap();
+        let [row] = response["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .as_slice()
+        else {
+            panic!("compaction source request must be unique");
+        };
+        let doc = row["_docID"].as_str().unwrap();
+        let state = load_prompt_compaction_state(
+            node,
+            &binding.agent_did,
             SOURCE,
-            AGENT,
-            None,
-            &format!("turn {sequence}"),
-            &format!("fork-rollback:{sequence}"),
-            sequence,
+            node_did,
+            Some(user.did()),
             None,
         )
-        .await;
+        .await
+        .unwrap();
+        save_compaction_entry_with_requester_did(
+            node,
+            &binding.agent_did,
+            SOURCE,
+            node_did,
+            Some(user.did()),
+            &request_id,
+            doc,
+            summary,
+            &files,
+            &[],
+            count,
+            cursor,
+            100,
+            10,
+            &state.generation,
+        )
+        .await
+        .unwrap();
     }
-    save_compaction_entry(
-        &node,
-        AGENT,
-        SOURCE,
-        AGENT,
-        "fork-rollback-compaction",
-        "fork-rollback-compaction-doc",
-        "early turns",
-        &["/tmp/a.rs".to_string()],
-        &[],
-        2,
-        2,
-        100,
-        10,
-    )
-    .await
-    .unwrap();
-    save_compaction_entry(
-        &node,
-        AGENT,
-        SOURCE,
-        AGENT,
-        "fork-rollback-compaction-2",
-        "fork-rollback-compaction-doc-2",
-        "later turns",
-        &["/tmp/b.rs".to_string()],
-        &[],
-        1,
-        3,
-        100,
-        10,
-    )
-    .await
-    .unwrap();
     let params = ForkParams {
         source_session_id: SOURCE,
         boundary: ForkBoundary::UserTurn(3),
-        caller_node_did: AGENT,
-        caller_requester_did: None,
+        caller_node_did: node_did,
+        caller_requester_did: Some(user.did()),
         target_agent_did: None,
     };
-
-    let actor = identity::Did::new(AGENT).unwrap();
     let (outcome, writes) =
         crate::store::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
-            || fork(&node, &actor, params.clone()),
-            || session_rewrite_rows(&node),
+            || fork_on(&client, params.clone()),
+            || session_rewrite_rows(&client),
         )
         .await;
     assert_eq!(outcome.copied_messages, 3);
@@ -1134,9 +1162,10 @@ async fn fork_rolls_back_at_every_mutation_position() {
         writes > 4,
         "headers, compaction, and session header are separate writes: {writes}"
     );
-    let child_entries = load_compaction_entries(&crate::store::config_client::ConfigAccess::local(node.clone()), &outcome.session_id, AGENT, None)
-        .await
-        .unwrap();
+    let child_entries =
+        load_compaction_entries(&client, &outcome.session_id, node_did, Some(user.did()))
+            .await
+            .unwrap();
     assert_eq!(child_entries.len(), 2);
     assert_eq!(child_entries[0].files_read, vec!["/tmp/a.rs"]);
     assert_eq!(child_entries[1].files_read, vec!["/tmp/a.rs", "/tmp/b.rs"]);
@@ -1509,6 +1538,134 @@ async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
     .is_empty());
 }
 
+async fn publish_signed_history(
+    db: &crate::support::TestDb,
+    user: &dyn crate::store::identity::NodeIdentity,
+    client: &crate::ConfigAccess,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    session_id: &str,
+    messages: &[String],
+) -> Vec<String> {
+    let mut keys = Vec::new();
+    for (index, message) in messages.iter().enumerate() {
+        let request_id = format!("{session_id}-request-{index}");
+        let mut lifecycle =
+            signed_claimed_authored_request(db, user, client, binding, &request_id, session_id)
+                .await;
+        let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+            db.node.clone(),
+            &lifecycle,
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        let key = canonical_rows::authored_message_key(&lifecycle.request().doc_id, "prompt");
+        writer
+            .publish_authored_message(&lifecycle, "prompt", &Message::user(message))
+            .await
+            .unwrap();
+        lifecycle
+            .terminalize_owned(
+                crate::request::lifecycle::RequestTerminalOutcome::Completed,
+                gents_protocol::output::TerminalOutput::NoMessage,
+                None,
+            )
+            .await
+            .unwrap();
+        keys.push(key);
+    }
+    keys
+}
+
+async fn signed_claimed_authored_request(
+    db: &crate::support::TestDb,
+    user: &dyn crate::store::identity::NodeIdentity,
+    client: &crate::ConfigAccess,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    request_id: &str,
+    session_id: &str,
+) -> crate::request::lifecycle::RequestLifecycle {
+    use crate::request::lifecycle::{
+        ClaimOutcome, RequestIdentity, RequestLifecycle, RequestSigner, RequestSpec,
+    };
+    let agent =
+        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), binding).unwrap();
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let create = crate::request::lifecycle::build_signed_client_request(
+        client,
+        RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            RequestIdentity {
+                request_id: request_id.into(),
+                node_did: db.node_identity.did().into(),
+                requester_did: Some(user.did().into()),
+                agent_did: binding.agent_did.clone(),
+                session_id: session_id.into(),
+                content: "race".into(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339(),
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+        ),
+        RequestSigner::Identity(user),
+    )
+    .await
+    .unwrap();
+    crate::request::lifecycle::submit_client_request(client, &create)
+        .await
+        .unwrap();
+    let response = agent_access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{ {} }} }}"#,
+            escape_graphql_string(request_id),
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
+        ))
+        .await
+        .unwrap();
+    let [row] = response["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("signed fixture request must be unique");
+    };
+    let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone()).unwrap();
+    let request = row.try_into().unwrap();
+    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        db.node.clone(),
+        db.node_identity.clone(),
+        authority,
+    );
+    let (request, admission) = verifier
+        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
+        .await
+        .unwrap();
+    assert!(
+        admission.is_some(),
+        "client request needs verified claim admission"
+    );
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
+        db.node.clone(),
+        agent.did(),
+        db.node_identity.did(),
+        request,
+        60,
+    );
+    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+    lifecycle.set_client_claim_admission(admission);
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    lifecycle
+}
+
 async fn claimed_authored_request(
     node: &std::sync::Arc<defra_node::Node>,
     request_id: &str,
@@ -1555,13 +1712,22 @@ async fn claimed_authored_request(
 #[tokio::test]
 async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates() {
     use crate::request::streaming::DefraStreamWriter;
-    use std::{sync::Arc, time::Duration};
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    let mut lifecycle =
-        claimed_authored_request(&node, "append-race-request", "did:test:test", "append-race")
-            .await;
-    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::ZERO);
+    use crate::store::identity::NodeIdentity;
+    use std::time::Duration;
+    let (db, user, client, binding) = crate::test_support::signed_test_node("append-race").await;
+    let node = db.node.clone();
+    let node_did = db.node_identity.did();
+    let mut lifecycle = signed_claimed_authored_request(
+        &db,
+        &user,
+        &client,
+        &binding,
+        "append-race-request",
+        "append-race",
+    )
+    .await;
+    let writer =
+        DefraStreamWriter::new_for_lifecycle(node.clone(), &lifecycle, Duration::ZERO).unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let left_message = Message::user("left");
     let right_message = Message::user("right");
@@ -1580,11 +1746,11 @@ async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates(
         left
     );
     let (left_header, left_native) =
-        load_canonical_message_from_node(&node, &left, "did:test:test", None)
+        load_canonical_message_from_node(&node, &left, node_did, Some(user.did()))
             .await
             .unwrap();
     let (right_header, right_native) =
-        load_canonical_message_from_node(&node, &right, "did:test:test", None)
+        load_canonical_message_from_node(&node, &right, node_did, Some(user.did()))
             .await
             .unwrap();
     assert_ne!(left_header.sequence, right_header.sequence);
@@ -1598,7 +1764,7 @@ async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates(
     assert_eq!(left_native, left_message);
     assert_eq!(right_native, right_message);
     assert_eq!(
-        load_history(&node, "append-race", "did:test:test", None)
+        load_history(&node, "append-race", node_did, Some(user.did()))
             .await
             .unwrap()
             .len(),
