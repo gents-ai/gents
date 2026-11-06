@@ -61,7 +61,8 @@ impl ConfigCommandTool {
                     let agent_did = argv.get(2).context(
                         "agent preview update requires target_id and fields in set or clear",
                     )?;
-                    let core = self.target_core(Some(agent_did), "preview edit").await?;
+                    self.ensure_agent_catalog("preview edit", Some(agent_did))?;
+                    let core = self.target_core(Some(agent_did)).await?;
                     let patch = parse_patch(&argv[3..], SelfConfigTarget::Agent)?;
                     return self
                         .patch(
@@ -86,7 +87,8 @@ impl ConfigCommandTool {
                 let agent_did = argv
                     .get(1)
                     .context("agent update requires target_id and fields in set or clear")?;
-                let core = self.target_core(Some(agent_did), "edit").await?;
+                self.ensure_agent_catalog("edit", Some(agent_did))?;
+                let core = self.target_core(Some(agent_did)).await?;
                 let (shared_ack, rest) = extract_shared(&argv[2..])?;
                 anyhow::ensure!(
                     !shared_ack,
@@ -150,7 +152,7 @@ impl ConfigCommandTool {
             .map(String::as_str)
             .context("agent context requires get, preview, or edit")?;
         let (agent_did, rest) = extract_agent_target(&argv[1..])?;
-        let core = self.target_core(agent_did.as_deref(), "context").await?;
+        let core = self.target_core(agent_did.as_deref()).await?;
         match verb {
             "get" => {
                 anyhow::ensure!(
@@ -323,31 +325,15 @@ impl ConfigCommandTool {
         Ok(())
     }
 
-    pub(super) async fn target_core(
-        &self,
-        agent_did: Option<&str>,
-        operation: &str,
-    ) -> Result<SelfConfigCore> {
-        self.target_core_for(agent_did, Some(operation)).await
-    }
-
-    pub(super) async fn read_target_core(&self, agent_did: Option<&str>) -> Result<SelfConfigCore> {
-        self.target_core_for(agent_did, None).await
-    }
-
-    async fn target_core_for(
-        &self,
-        agent_did: Option<&str>,
-        catalog_operation: Option<&str>,
-    ) -> Result<SelfConfigCore> {
+    /// Resource targets are gated by their own category (`ensure_resource`);
+    /// only the Agent command also needs the agent catalog gate, which callers
+    /// apply themselves (`NodeProvisioning.agentCommandExposed`).
+    pub(super) async fn target_core(&self, agent_did: Option<&str>) -> Result<SelfConfigCore> {
         let agent_did = match agent_did {
             Some(id) => self.resolve_agent_did(id).await?,
             None => self.core.agent_did().to_owned(),
         };
         let agent_did = agent_did.as_str();
-        if let Some(operation) = catalog_operation {
-            self.ensure_agent_catalog(operation, Some(agent_did))?;
-        }
         let invoking_agent_did = self.core.agent_did().to_owned();
         SelfConfigCore::new(
             self.node.clone(),

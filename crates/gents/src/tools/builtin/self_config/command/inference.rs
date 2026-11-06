@@ -27,7 +27,7 @@ impl ConfigCommandTool {
                     rest.len() <= 1,
                     "{resource} get accepts at most one ID and --agent AGENT_DID"
                 );
-                let core = self.read_target_core(agent_did.as_deref()).await?;
+                let core = self.target_core(agent_did.as_deref()).await?;
                 match rest.first() {
                     Some(id) => self.exact_read(target, id).await,
                     None => self.bound_read(&core, target).await,
@@ -43,7 +43,7 @@ impl ConfigCommandTool {
             }
             "preview" | "edit" => {
                 let (agent_did, rest) = extract_agent_target(&argv[1..])?;
-                let core = self.target_core(agent_did.as_deref(), resource).await?;
+                let core = self.target_core(agent_did.as_deref()).await?;
                 let (allow_drop, rest) = extract_allow_drop(&rest)?;
                 anyhow::ensure!(
                     allow_drop.is_empty() || target == SelfConfigTarget::Tools,
@@ -245,9 +245,9 @@ impl ConfigCommandTool {
             self.require_named_profile_owner(verb).await?;
         }
         let core = if verb == "get" {
-            self.read_target_core(agent_did.as_deref()).await?
+            self.target_core(agent_did.as_deref()).await?
         } else {
-            self.target_core(agent_did.as_deref(), "profile").await?
+            self.target_core(agent_did.as_deref()).await?
         };
         let mut rest = target_args.as_slice();
         let target_name = rest
