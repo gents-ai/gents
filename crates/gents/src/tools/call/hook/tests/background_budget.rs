@@ -480,6 +480,13 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
         session_id: session,
     } = fixture;
     let node = db.node.clone();
+    let node_view = crate::ConfigAccess::local(node.clone())
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+            crate::store::graphql::escape_graphql_string(&request_id),
+        ))
+        .await;
+    assert!(node_view.is_err() || node_view.unwrap()["data"]["AgentRequest"] == json!([]));
     {
         use crate::store::config_client::{
             apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,

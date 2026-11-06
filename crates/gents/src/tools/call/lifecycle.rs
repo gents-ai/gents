@@ -664,9 +664,16 @@ impl ToolCallLifecycle {
     pub(crate) async fn output_budget(&self) -> usize {
         let agent_did = match &self.request_doc_id {
             Some(doc_id) => {
-                match crate::request::binding::load_agent_request_by_doc_id(&self.node, doc_id)
-                    .await
-                {
+                let request = match self.access() {
+                    Ok(access) => {
+                        crate::request::binding::load_agent_request_by_doc_id_with_access(
+                            &access, doc_id,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                match request {
                     Ok(request) => request.map(|request| request.agent_did),
                     Err(error) => {
                         tracing::warn!(
