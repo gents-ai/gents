@@ -457,7 +457,6 @@ try {
   if (device.state !== "Booted") {
     run("xcrun", ["simctl", "boot", device.udid]);
   }
-  run("open", ["-a", "Simulator"]);
   run("xcrun", ["simctl", "bootstatus", device.udid, "-b"]);
 
   const artifactBase = artifactArgument
