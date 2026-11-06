@@ -257,10 +257,21 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
         })
         .and_then(|action| action["expected"].as_bool())
         .context("modeled foreign session update")?;
-    let admin = ConfigAccess::local_as(node.clone(), node_did.parse()?);
+    let actors = bindings
+        .iter()
+        .map(|binding| {
+            let signer =
+                gents::store::identity::resolve_agent_identity(&runtime_identity, binding)?;
+            Ok(ConfigAccess::local_managed_agent(
+                node.clone(),
+                binding.agent_did.parse()?,
+                signer.as_ref(),
+            )?)
+        })
+        .collect::<Result<Vec<_>>>()?;
     let mut session_docs = Vec::new();
-    for (_, session_id) in &requests {
-        let result = admin
+    for (target, (_, session_id)) in requests.iter().enumerate() {
+        let result = actors[target]
             .execute(&format!(
                 "{{ AgentSession(filter: {{session_id: {{_eq: \"{}\"}}}}) {{_docID}} }}",
                 escape_graphql_string(session_id),
@@ -269,17 +280,12 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
         session_docs.push(
             result["data"]["AgentSession"][0]["_docID"]
                 .as_str()
-                .context("native session document missing")?
+                .context("working Agent cannot read its native session document")?
                 .to_owned(),
         );
     }
     for (index, binding) in bindings.iter().enumerate() {
-        let signer = gents::store::identity::resolve_agent_identity(&runtime_identity, binding)?;
-        let actor = ConfigAccess::local_managed_agent(
-            node.clone(),
-            binding.agent_did.parse()?,
-            signer.as_ref(),
-        )?;
+        let actor = &actors[index];
         assert!(
             node.nac_manager()
                 .check_permission(
@@ -328,7 +334,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                 allowed, expected,
                 "native document ACP for Agent {index}, session {target}"
             );
-            let before = admin
+            let before = actors[target]
                 .execute(&format!(
                     "{{ AgentSession(filter: {{_docID: {{_eq: \"{}\"}}}}) {{tags}} }}",
                     escape_graphql_string(doc_id),
@@ -350,7 +356,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                 changed, expected,
                 "Agent {index} update of session {target}: {updated:?}"
             );
-            let after = admin
+            let after = actors[target]
                 .execute(&format!(
                     "{{ AgentSession(filter: {{_docID: {{_eq: \"{}\"}}}}) {{tags}} }}",
                     escape_graphql_string(doc_id),
