@@ -637,7 +637,7 @@ async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request()
     let deadline = Instant::now() + Duration::from_secs(30);
     let first = session.serve(requests(&["first"]), deadline).await;
     assert!(first["first"]["text"].is_string());
-    assert!(!first.to_string().contains(KEY));
+    assert!(!serde_json::to_string(&first)?.contains(KEY));
     assert_eq!(fake.requests(), 1);
     assert_eq!(
         fake.seen.lock().unwrap()[0].authorization.as_deref(),
