@@ -102,11 +102,14 @@ fn workspace_agent_selection_is_configured_and_frozen() {
             assert_eq!(action.readers.len(), 1);
             assert_eq!(action.readers[0].agent_did, expected_integrator);
             assert!(action.readers[0].agent_doc_id.is_none());
+            let claimed_handler = configured.handler.clone();
             let mut invocation = CallbackInvocationDoc {
                 invocation_id: "invocation".into(),
                 agent_did: writer.did().into(),
                 owner_node_did: node.did().into(),
                 callback_id: configured.callback_id.clone(),
+                configuration_generation: None,
+                claimed_callback: Some(serde_json::to_string(&configured).unwrap()),
                 input: source.clone(),
                 origin: crate::documents::CallbackInvocationOrigin::Event {
                     binding_id: "binding".into(),
@@ -128,6 +131,9 @@ fn workspace_agent_selection_is_configured_and_frozen() {
                 emitter: crate::documents::BuiltInCallback::CreateWorkspace,
                 workspace_agents: None,
             };
+            let claimed: crate::documents::Callback =
+                serde_json::from_str(invocation.claimed_callback.as_deref().unwrap()).unwrap();
+            assert_eq!(claimed.handler, claimed_handler);
             assert_eq!(
                 resolve_action_plan(&invocation, &configured, &source).unwrap(),
                 plan
@@ -2359,16 +2365,41 @@ async fn callback_repository_placement_reads_with_selected_agent() -> anyhow::Re
                 .await?;
         }
         let modeled_actor = case["actor"].as_str().unwrap();
-        let access = if modeled_actor == modeled_user {
-            &owner
+        let visible = if modeled_actor == modeled_user {
+            assert!(super::documents::load_repository_placement(
+                &owner,
+                "repo",
+                root.did(),
+                agent.did(),
+            )
+            .await
+            .is_err());
+            let owner_did = root.did();
+            owner
+                .transact_readonly("test.callback.owner_placement", |txn| {
+                    Box::pin(async move {
+                        crate::store::config_client::read_desired_state_document_in_txn(
+                            txn,
+                            crate::Collection::RepositoryPlacement,
+                            owner_did,
+                            "repo",
+                        )
+                        .await
+                    })
+                })
+                .await?
+                .is_some()
         } else if modeled_actor == modeled_agent {
-            &selected
+            super::documents::load_repository_placement(&selected, "repo", root.did(), agent.did())
+                .await?
+                .is_some()
         } else {
             assert_eq!(modeled_actor, modeled_sibling);
-            &sibling
+            super::documents::load_repository_placement(&sibling, "repo", root.did(), other.did())
+                .await?
+                .is_some()
         };
-        let row = super::documents::load_repository_placement(access, "repo", root.did()).await?;
-        assert_eq!(row.is_some(), case["expected"].as_bool().unwrap());
+        assert_eq!(visible, case["expected"].as_bool().unwrap());
     }
     node.shutdown().await?;
     Ok(())

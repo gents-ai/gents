@@ -42,7 +42,7 @@ fn covered_tool_operations_follow_executable_identity_model() {
         surface.self_config_categories = match category {
             "all" => EndpointScope::all(),
             "none" => EndpointScope::none(),
-            category => EndpointScope::only_units([category.to_owned()]),
+            category => EndpointScope::<String, ()>::only_units([category.to_owned()]),
         };
         assert_eq!(
             projection(&surface, flag("pack")),
@@ -52,7 +52,8 @@ fn covered_tool_operations_follow_executable_identity_model() {
         );
 
         if category == "none" {
-            surface.self_config_categories = EndpointScope::only_units(Vec::<String>::new());
+            surface.self_config_categories =
+                EndpointScope::<String, ()>::only_units(Vec::<String>::new());
             assert_eq!(
                 projection(&surface, flag("pack")),
                 item["sources"],
