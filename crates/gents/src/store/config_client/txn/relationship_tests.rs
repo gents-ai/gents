@@ -782,11 +782,14 @@ async fn http_relationships_and_ownership_use_the_transaction_actor() {
 
 #[tokio::test]
 async fn embedded_relationship_grants_and_revocations_follow_transaction_finality() {
-    const OWNER: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
     const READER: &str = "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR";
-    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let owner_did = node
+        .node_identity_did()
+        .expect("fixture node has an identity")
+        .to_owned();
     let policy = node.add_dac_policy_as(
-        &defra_core::RequestContext::default().with_identity(Some(OWNER.to_owned())),
+        &defra_core::RequestContext::default().with_identity(Some(owner_did.clone())),
         "name: TxnRelationships\nresources:\n  - name: rows\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n",
     ).await.unwrap();
     node.add_collection(&format!(
@@ -794,7 +797,7 @@ async fn embedded_relationship_grants_and_revocations_follow_transaction_finalit
     ))
     .await
     .unwrap();
-    let owner = identity::Did::new(OWNER).unwrap();
+    let owner = identity::Did::new(owner_did.as_str()).unwrap();
     let reader = identity::Did::new(READER).unwrap();
     let created = ConfigAccess::local_as(node.clone(), owner.clone())
         .write(

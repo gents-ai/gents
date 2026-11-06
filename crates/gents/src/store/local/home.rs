@@ -288,7 +288,12 @@ pub const RUNTIME_HOME_LOCK_FILES: &[&str] = &[
 /// cold backups across retirement of live node state. Moving these paths on
 /// reset would strand a running helper; it authenticates the node/build again
 /// before retirement, so retained receipts confer no authority on a fresh node.
-pub const RUNTIME_HOME_RETAINED_ENTRIES: &[&str] = &[SERVICE_UPDATES_DIR_NAME];
+/// The node bootstrap marker stays across retirement, so a retired home cannot
+/// become a fresh bootstrap attempt; the CLI writes it outside this owner.
+pub const RUNTIME_HOME_RETAINED_ENTRIES: &[&str] = &[
+    SERVICE_UPDATES_DIR_NAME,
+    ".node-bootstrap-consumed",
+];
 
 pub fn default_data_dir(home_dir: &Path) -> PathBuf {
     home_dir.join(DATA_DIR_NAME)

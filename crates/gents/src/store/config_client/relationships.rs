@@ -389,8 +389,8 @@ mod tests {
 
     #[tokio::test]
     async fn local_relationships_use_the_explicit_actor_and_are_idempotent() {
-        let node = std::sync::Arc::new(defra_node::Node::builder().build().await.unwrap());
-        let owner = identity::Did::new("did:key:owner").unwrap();
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let owner = identity::Did::new(node.node_identity_did().expect("fixture node has an identity")).unwrap();
         let reader = identity::Did::new("did:key:reader").unwrap();
         let yaml = "name: Relationship owner test\nresources:\n  - name: parents\n    relations:\n      - name: reader\n        types: [actor]\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n  - name: children\n    relations:\n      - name: parent\n        types: [parents]\n    permissions:\n      - name: read\n        expr: parent->read\n      - name: update\n      - name: delete\n";
         let policy = node

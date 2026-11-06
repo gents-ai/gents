@@ -38,6 +38,15 @@ async fn nac_node() -> (tempfile::TempDir, crate::KeyIdentity, Arc<defra_node::N
     (directory, runtime, node)
 }
 
+/// A delegate acts as a managed Agent: native relation changes by a non-node actor
+/// require its validated Agent signer.
+fn agent_delegate(runtime: &crate::KeyIdentity) -> (identity::Did, Arc<dyn NodeIdentity>) {
+    let binding = crate::store::identity::provision_agent_identity(runtime).unwrap();
+    let agent = crate::store::identity::resolve_agent_identity(runtime, &binding).unwrap();
+    let did = identity::Did::new(agent.did()).unwrap();
+    (did, agent)
+}
+
 fn did(directory: &tempfile::TempDir, name: &str) -> identity::Did {
     let key = crate::KeyIdentity::load_or_create(directory.path().join(name), None).unwrap();
     identity::Did::new(key.did()).unwrap()
@@ -62,7 +71,7 @@ async fn native_delegation_follows_modeled_holders() {
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().identity_delegation_cases;
     assert!(!cases.is_empty());
     for (index, case) in cases.iter().enumerate() {
-        let holder = did(&directory, &format!("holder-{index}"));
+        let (holder, holder_identity) = agent_delegate(&runtime);
         let target = did(&directory, &format!("target-{index}"));
         for set in recipient_sets(&case.holder) {
             set.grant(&admin, &holder).await.unwrap();
@@ -75,7 +84,9 @@ async fn native_delegation_follows_modeled_holders() {
                 .await
                 .unwrap();
         }
-        let access = ConfigAccess::local_as(node.clone(), holder);
+        let access =
+            ConfigAccess::local_managed_agent(node.clone(), holder, holder_identity.as_ref())
+                .unwrap();
         let result = match (permission, case.delete) {
             (None, false) => access.grant_node_admin(&target).await,
             (None, true) => access.revoke_node_admin(&target).await,
@@ -102,7 +113,7 @@ async fn native_delegation_follows_modeled_holders() {
 async fn refused_grant_rolls_back_the_grants_it_issued() {
     let (directory, runtime, node) = nac_node().await;
     let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
-    let delegate = did(&directory, "delegate");
+    let (delegate, delegate_identity) = agent_delegate(&runtime);
     let subject = did(&directory, "subject");
     for permission in [
         NodePermission::NacRelationAdd,
@@ -116,7 +127,11 @@ async fn refused_grant_rolls_back_the_grants_it_issued() {
             .unwrap();
     }
     let error = GrantSet::OperatorUser
-        .grant(&ConfigAccess::local_as(node.clone(), delegate), &subject)
+        .grant(
+            &ConfigAccess::local_managed_agent(node.clone(), delegate, delegate_identity.as_ref())
+                .unwrap(),
+            &subject,
+        )
         .await
         .unwrap_err();
     assert!(
