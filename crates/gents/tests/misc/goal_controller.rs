@@ -4281,93 +4281,138 @@ async fn concurrent_operator_resumes_publish_one_child() {
 async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() {
     let db = test_db("operator-resume-corrupt-receipt").await;
     let did = db.node_identity.did();
-    seed_operator_resume_parent(&db, "corrupt-parent").await;
-    set_goal(
-        &db.node,
+    let (user, agent) = goal_creation_actors(&db).await;
+    let client = db.client_access(&user);
+    let access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    seed_operator_resume_parent_with_actors(&db, &user, &agent, "corrupt-parent").await;
+    set_goal_from_access(
+        &client,
         did,
         SESSION,
         Some("Original signed work"),
         Some(GoalStatus::Paused),
         None,
+        None,
     )
     .await
     .unwrap();
-    let access = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    );
-    let first = gents::goal::resume_goal_request(
-        &access,
-        db.node_identity.as_ref(),
+    let first = gents::goal::resume_goal_request(&client, &user, did, SESSION, "corrupt-parent")
+        .await
+        .unwrap();
+    set_request_state_as(&access, &first.doc_id, "interrupted").await;
+    let goal_before = set_goal_from_access(
+        &client,
         did,
         SESSION,
-        "corrupt-parent",
+        None,
+        Some(GoalStatus::Paused),
+        None,
+        None,
     )
     .await
     .unwrap();
-    set_request_lifecycle_state(db.node.as_ref(), &first.doc_id, "interrupted").await;
-    let goal_before = set_goal(&db.node, did, SESSION, None, Some(GoalStatus::Paused), None)
+    let original = client.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
+            request_id purpose node_did requester_did session_doc_id agent_doc_id admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind agent_did session_id retry_parent_request retry_parent_request_doc_id retry_root_request retry_key content max_total_tokens input execution_origin caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id created_at retry_count max_retries valid_until request_hop caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash lifecycle_state
+        }} }}"#, gents::store::graphql::escape_graphql_string(&first.doc_id),
+    )).await.unwrap();
+    let mut forged = original["data"]["AgentRequest"][0].clone();
+    forged["content"] = serde_json::json!("unsigned replacement");
+    let agent_rows = client
+        .execute(&format!(
+            r#"{{Agent(filter: {{agent_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}}}}"#,
+            escape_graphql_string(agent.did())
+        ))
         .await
         .unwrap();
-    let original = db.node.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
-            request_id node_did requester_did admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind agent_did session_id retry_parent_request retry_parent_request_doc_id retry_root_request retry_key content max_total_tokens input execution_origin caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id created_at retry_count max_retries valid_until request_hop caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash lifecycle_state
-        }} }}"#, gents::store::graphql::escape_graphql_string(&first.doc_id),
-    )).await;
-    assert!(!original.has_errors(), "{:?}", original.errors);
-    let mut forged = original.data.unwrap()["AgentRequest"][0].clone();
-    forged["content"] = serde_json::json!("unsigned replacement");
-    let removed = db
-        .node
-        .execute(&format!(
-            r#"mutation {{ delete_AgentRequest(docID: "{}") {{ _docID }} }}"#,
-            gents::store::graphql::escape_graphql_string(&first.doc_id),
-        ))
-        .await;
-    assert!(!removed.has_errors(), "{:?}", removed.errors);
-    let inserted = db
-        .node
-        .execute(&format!(
-            "mutation {{ add_AgentRequest(input: {}) {{ _docID }} }}",
-            gents_protocol::graphql::graphql_input_literal(&forged).unwrap(),
-        ))
-        .await;
-    assert!(!inserted.has_errors(), "{:?}", inserted.errors);
-    let inserted = &inserted.data.as_ref().unwrap()["add_AgentRequest"];
-    let forged_doc_id = inserted
-        .get("_docID")
-        .or_else(|| inserted.get(0).and_then(|row| row.get("_docID")))
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let child_before = operator_resume_child_row(&db, &forged_doc_id).await;
-    assert_eq!(child_before["content"], "unsigned replacement");
-    assert!(
-        gents::goal::resume_goal_request(
-            &access,
-            db.node_identity.as_ref(),
-            did,
-            SESSION,
-            "corrupt-parent",
+    let agent_doc = agent_rows["data"]["Agent"][0]["_docID"].as_str().unwrap();
+    client
+        .add_actor_relationship(
+            "Agent",
+            agent_doc,
+            "administrator",
+            &agent.did().parse().unwrap(),
         )
         .await
-        .is_err(),
+        .unwrap();
+    let removed = access
+        .write(
+            "test.corrupt_goal_receipt.delete",
+            &format!(
+                r#"mutation {{delete_AgentRequest(docID: "{}") {{_docID}}}}"#,
+                escape_graphql_string(&first.doc_id),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        removed["data"]["delete_AgentRequest"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let session_doc = forged["session_doc_id"].as_str().unwrap().to_owned();
+    let agent_doc = forged["agent_doc_id"].as_str().unwrap().to_owned();
+    let agent_did = agent.did();
+    let forged_doc_id = access
+        .transact_write("test.corrupt_goal_receipt.insert", |txn| {
+            let forged = &forged;
+            let session_doc = &session_doc;
+            let agent_doc = &agent_doc;
+            Box::pin(async move {
+                let input = gents_protocol::graphql::graphql_input_literal(forged)?;
+                let result = txn
+                    .execute(&format!(
+                        "mutation {{add_AgentRequest(input: {input}) {{_docID}}}}"
+                    ))
+                    .await?;
+                let doc = gents::store::graphql::created_doc_id(&result, "AgentRequest")?;
+                txn.add_resource_relationship("AgentRequest", &doc, "parent", "agents", agent_doc)
+                    .await?;
+                txn.add_resource_relationship(
+                    "AgentRequest",
+                    &doc,
+                    "session",
+                    "sessions",
+                    session_doc,
+                )
+                .await?;
+                txn.add_actor_relationship(
+                    "AgentRequest",
+                    &doc,
+                    "working_agent",
+                    &agent_did.parse()?,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await
+        .unwrap();
+    let child_before = operator_resume_child_row_from_access(&client, &forged_doc_id).await;
+    assert_eq!(child_before["content"], "unsigned replacement");
+    assert!(
+        gents::goal::resume_goal_request(&client, &user, did, SESSION, "corrupt-parent",)
+            .await
+            .is_err(),
         "a matching retry key must not authenticate changed content"
     );
-    let goal_after = load_canonical_goal(db.node.as_ref(), did, SESSION)
-        .await
-        .unwrap()
-        .unwrap();
+    let goal_after = load_goal_as(&client, did).await.unwrap();
     assert_eq!(
         serde_json::to_value(goal_after).unwrap(),
         serde_json::to_value(goal_before).unwrap()
     );
     assert_eq!(
-        operator_resume_child_row(&db, &forged_doc_id).await,
+        operator_resume_child_row_from_access(&client, &forged_doc_id).await,
         child_before
     );
-    assert_eq!(goal_children(&db).await.len(), 1);
+    assert_eq!(goal_children_from_access(&client).await.len(), 1);
 }
 
 #[tokio::test]
