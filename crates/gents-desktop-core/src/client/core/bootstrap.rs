@@ -78,7 +78,7 @@ impl ClientCore {
         let node_identity = PrincipalIdentity::load_or_create(&paths).await?;
         checkpoint("paths_and_identity");
         let projection = gents::store::local::document_projector(
-            node_identity.did(),
+            Arc::new(node_identity.clone()),
             gents::tools::surface::ToolCeiling::meta_only(),
         )?;
         let mut node_builder =

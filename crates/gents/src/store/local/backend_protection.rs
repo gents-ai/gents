@@ -175,11 +175,13 @@ impl PreflightProtectedBackendStore<'_> {
     pub async fn start_node(
         self,
         key: &StoreKey,
+        runtime: Arc<dyn crate::store::identity::NodeIdentity>,
         http: Option<defra_node::HttpConfig>,
         p2p: Option<defra_node::P2PConfig>,
     ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
         self.start_node_with_tool_ceiling(
             key,
+            runtime,
             http,
             p2p,
             crate::tools::surface::ToolCeiling::meta_only(),
@@ -190,11 +192,15 @@ impl PreflightProtectedBackendStore<'_> {
     pub async fn start_node_with_tool_ceiling(
         self,
         key: &StoreKey,
+        runtime: Arc<dyn crate::store::identity::NodeIdentity>,
         http: Option<defra_node::HttpConfig>,
         p2p: Option<defra_node::P2PConfig>,
         ceiling: crate::tools::surface::ToolCeiling,
     ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
-        let projection = super::document_projector(&self.node_did, ceiling)
+        if runtime.did() != self.node_did {
+            return Err(BackendProtectionError::WrongNode);
+        }
+        let projection = super::document_projector(runtime, ceiling)
             .map_err(|error| BackendProtectionError::Schema(error.into()))?;
         let mut builder = super::store_key::persistent_builder(&self.store.data, key)
             .map_err(|error| BackendProtectionError::Schema(error.into()))?

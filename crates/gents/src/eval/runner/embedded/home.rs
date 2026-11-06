@@ -223,7 +223,12 @@ impl EmbeddedHome {
         .await?;
         let (http, client_endpoint) = trial_http().await?;
         let (node, backend_admission) = protected
-            .start_node(&store_key, Some(http), p2p.as_ref().map(|p| p(&path)))
+            .start_node(
+                &store_key,
+                identity.clone(),
+                Some(http),
+                p2p.as_ref().map(|p| p(&path)),
+            )
             .await?;
         if initialize_schemas {
             ensure_runtime_schemas(&node)
@@ -362,6 +367,7 @@ impl EmbeddedHome {
         let (node, admission) = protected
             .start_node(
                 &self.store_key,
+                self.identity.clone(),
                 Some(http),
                 self.p2p.as_ref().map(|p| p(&self.path)),
             )

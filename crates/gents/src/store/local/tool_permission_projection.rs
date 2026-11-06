@@ -20,16 +20,18 @@ const PERMISSIONS: &[NodePermission] = &[
 
 pub(super) struct ToolPermissionProjection {
     node: identity::Did,
+    runtime: Arc<dyn crate::store::identity::NodeIdentity>,
     ceiling: crate::tools::surface::ToolCeiling,
 }
 
 impl ToolPermissionProjection {
     pub(super) fn new(
-        node: &str,
+        runtime: Arc<dyn crate::store::identity::NodeIdentity>,
         ceiling: crate::tools::surface::ToolCeiling,
     ) -> std::result::Result<Self, identity::Error> {
         Ok(Self {
-            node: identity::Did::new(node)?,
+            node: identity::Did::new(runtime.did())?,
+            runtime,
             ceiling,
         })
     }
@@ -108,10 +110,20 @@ impl ToolPermissionProjection {
             else {
                 continue;
             };
-            if identity::Did::new(agent).is_err() {
+            let Some(nonce) = field(&value, "creation_nonce") else {
+                continue;
+            };
+            let binding = gents_protocol::agent_identity::AgentIdentityBinding {
+                agent_did: agent.to_owned(),
+                creation_nonce: nonce.to_owned(),
+            };
+            if let Err(error) =
+                crate::store::identity::resolve_agent_identity(self.runtime.as_ref(), &binding)
+            {
                 tracing::warn!(
                     agent_did = agent,
-                    "invalid Agent identity cannot receive tool permissions"
+                    error = %error,
+                    "unmanaged Agent identity cannot receive tool permissions"
                 );
                 continue;
             }
@@ -275,7 +287,7 @@ mod tests {
         let key = crate::store::identity::load_file_identity(&path)?.private_key_bytes();
         let projector = Arc::new(
             super::super::runtime_document_projection::RuntimeDocumentProjector::new(
-                runtime.did(),
+                Arc::new(crate::KeyIdentity::load_or_create(&path, None)?),
                 crate::tools::surface::ToolCeiling::meta_only(),
             )?,
         );
@@ -389,7 +401,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn user_signed_configuration_cannot_grant_schema_to_foreign_identity() -> anyhow::Result<()> {
+    async fn user_signed_configuration_cannot_grant_schema_to_foreign_identity(
+    ) -> anyhow::Result<()> {
         use crate::store::config_client::{ConfigAccess, GraphqlEndpoint};
         use serde_json::json;
 
@@ -401,24 +414,37 @@ mod tests {
         let key = crate::store::identity::load_file_identity(&path)?.private_key_bytes();
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr()?;
-        let projector = Arc::new(super::super::runtime_document_projection::RuntimeDocumentProjector::new(
-            runtime.did(), crate::tools::surface::ToolCeiling::meta_only(),
-        )?);
-        let node = Arc::new(defra_node::Node::builder()
-            .with_node_identity_did(runtime.did())
-            .with_signing_key(defra_node::SigningKey::Ed25519(key))
-            .with_node_acp_enabled()
-            .with_http(defra_node::HttpConfig::with_listener(listener)?)
-            .with_document_projector(projector).build().await?);
+        let projector = Arc::new(
+            super::super::runtime_document_projection::RuntimeDocumentProjector::new(
+                Arc::new(crate::KeyIdentity::load_or_create(&path, None)?),
+                crate::tools::surface::ToolCeiling::meta_only(),
+            )?,
+        );
+        let node = Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(runtime.did())
+                .with_signing_key(defra_node::SigningKey::Ed25519(key))
+                .with_node_acp_enabled()
+                .with_http(defra_node::HttpConfig::with_listener(listener)?)
+                .with_document_projector(projector)
+                .build()
+                .await?,
+        );
         crate::ensure_runtime_schemas(&node).await?;
         let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
         let user_did = identity::Did::new(user.did())?;
-        for permission in [NodePermission::CollectionGet, NodePermission::DocumentRead, NodePermission::DocumentUpdate] {
+        for permission in [
+            NodePermission::CollectionGet,
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+        ] {
             owner.grant_node_permission(&user_did, permission).await?;
         }
-        let access = ConfigAccess::Graphql(GraphqlEndpoint::as_principal(
-            format!("http://{address}/api/v0/graphql"), user.did(),
-        ).with_client_signing_capability(user.client_signing_capability()?)?.with_client_signed_agent_creates());
+        let access = ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), user.did())
+                .with_client_signing_capability(user.client_signing_capability()?)?
+                .with_client_signed_agent_creates(),
+        );
         for (collection, mutation, input) in [
             (crate::Collection::Tools, "mutation($input: ToolsMutationInputArg!) { create_Tools(input: $input) { _docID _version { cid } } }", json!({"node_did":runtime.did(),"tools_id":"tools","built_ins":{"enable_schema_tool":true}})),
             (crate::Collection::AgentContext, "mutation($input: AgentContextMutationInputArg!) { create_AgentContext(input: $input) { _docID _version { cid } } }", json!({"node_did":runtime.did(),"context_id":"context","tools_id":"tools"})),
@@ -429,11 +455,23 @@ mod tests {
                 Box::pin(async move { txn.execute_desired_state_mutation(mutation, &json!({"input":input}), collection, true).await })
             }).await?;
         }
-        let cases = crate::lean_vocab_test::lean_identity_household_cases().iter()
-            .find(|case| case.name == "configuration-explicit-grants").unwrap();
-        let allowed = cases.managed_tool_identity_cases.iter()
-            .find(|case| case["name"] == "foreign").unwrap()["allowed"].as_bool().unwrap();
-        assert_eq!(node.nac_manager().check_permission(&user_did, NodePermission::CollectionPatch).await?, allowed);
+        let cases = crate::lean_vocab_test::lean_identity_household_cases()
+            .iter()
+            .find(|case| case.name == "configuration-explicit-grants")
+            .unwrap();
+        let allowed = cases
+            .managed_tool_identity_cases
+            .iter()
+            .find(|case| case["name"] == "foreign")
+            .unwrap()["allowed"]
+            .as_bool()
+            .unwrap();
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&user_did, NodePermission::CollectionPatch)
+                .await?,
+            allowed
+        );
         node.shutdown().await?;
         Ok(())
     }

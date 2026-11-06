@@ -18,12 +18,14 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
     let key = StoreKey::from_host(&[7; 32])?;
     let other_key = StoreKey::from_host(&[8; 32])?;
     let identity_path = home.join("node.key");
-    let did = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-        Ok(crate::KeyIdentity::load_or_create(identity_path, None)?
-            .did()
-            .to_owned())
+    let runtime = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        Ok(std::sync::Arc::new(crate::KeyIdentity::load_or_create(
+            identity_path,
+            None,
+        )?))
     })
     .await??;
+    let did = runtime.did().to_owned();
     let cases = crate::lean_vocab_test::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
@@ -66,7 +68,7 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
         .await?
         .preflight(&key, Some(&did))
         .await?;
-    let (node, admission) = protected.start_node(&key, None, None).await?;
+    let (node, admission) = protected.start_node(&key, runtime, None, None).await?;
     crate::ensure_runtime_schemas(&node).await?;
     for entry in gents_migration::DEFAULT_BASELINE.iter() {
         let collection = node

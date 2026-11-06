@@ -12,10 +12,10 @@ mod tool_permission_projection;
 /// The caller supplies the host's tool ceiling; transport publication remains
 /// scoped to the native Node administrator of this store.
 pub fn document_projector(
-    node_did: &str,
+    node: std::sync::Arc<dyn crate::store::identity::NodeIdentity>,
     ceiling: crate::tools::surface::ToolCeiling,
 ) -> std::result::Result<std::sync::Arc<dyn db::DocumentMutationProjector>, identity::Error> {
     Ok(std::sync::Arc::new(
-        runtime_document_projection::RuntimeDocumentProjector::new(node_did, ceiling)?,
+        runtime_document_projection::RuntimeDocumentProjector::new(node, ceiling)?,
     ))
 }

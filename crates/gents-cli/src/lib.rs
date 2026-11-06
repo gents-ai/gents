@@ -701,7 +701,9 @@ pub(crate) async fn resolve_config_access(
     let protected = protected
         .preflight(&store_key, Some(runtime_identity.did()))
         .await?;
-    let (node, _admission) = protected.start_node(&store_key, None, None).await?;
+    let (node, _admission) = protected
+        .start_node(&store_key, runtime_identity.clone(), None, None)
+        .await?;
     let migration_node = node.clone();
     let access = ConfigAccess::claimed_local_as(
         node,

@@ -12,7 +12,7 @@ pub(super) struct RuntimeDocumentProjector {
 
 impl RuntimeDocumentProjector {
     pub(super) fn new(
-        node: &str,
+        node: std::sync::Arc<dyn crate::store::identity::NodeIdentity>,
         ceiling: ToolCeiling,
     ) -> std::result::Result<Self, identity::Error> {
         Ok(Self {
@@ -108,7 +108,7 @@ mod tests {
         let runtime = crate::KeyIdentity::load_or_create(&path, None)?;
         let key = crate::store::identity::load_file_identity(&path)?.private_key_bytes();
         let projector = RuntimeDocumentProjector::new(
-            runtime.did(),
+            Arc::new(crate::KeyIdentity::load_or_create(&path, None)?),
             crate::tools::surface::ToolCeiling::meta_only(),
         )?;
         let node = Arc::new(
