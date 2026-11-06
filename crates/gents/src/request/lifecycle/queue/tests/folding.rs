@@ -193,6 +193,42 @@ pub(super) async fn claim_head(
     claim_request(db, bound, request, admitted).await
 }
 
+/// Signed fixture rows are verified by the Agent's admission owner before
+/// claim, as the daemon does; unsigned fixture rows carry no admission.
+async fn verify_claim_admission(
+    db: &TestDb,
+    request: crate::request::watcher::AgentRequest,
+) -> (
+    crate::request::watcher::AgentRequest,
+    Option<crate::request::admission::ClientClaimAdmission>,
+) {
+    let escaped = escape_graphql_string(&request.doc_id);
+    let response = db
+        .agent_access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ admission_kind }} }}"#
+        ))
+        .await
+        .unwrap();
+    let signed = response["data"]["AgentRequest"][0]["admission_kind"]
+        .as_str()
+        .is_some_and(|kind| !kind.is_empty());
+    if !signed {
+        return (request, None);
+    }
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        db.node.clone(),
+        db.identity.clone(),
+        authority,
+    );
+    verifier
+        .verify_fresh_for_claim_with_identity(&request, db.agent_identity.as_ref())
+        .await
+        .expect("verify signed fixture admission")
+}
+
 async fn claim_request(
     db: &TestDb,
     bound: &RapidHashMap<u64, String>,
@@ -200,6 +236,7 @@ async fn claim_request(
     admitted: &[u64],
 ) -> ActiveTurn {
     let head = request.request_id.clone();
+    let (request, client_claim) = verify_claim_admission(db, request).await;
     let mut lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
         db.agent_did(),
@@ -208,9 +245,10 @@ async fn claim_request(
         60,
     );
     lifecycle.bind_managed_agent(db.agent_identity.as_ref()).unwrap();
+    lifecycle.set_client_claim_admission(client_claim);
     lifecycle.set_fold_admitted(admitted.iter().map(|id| bound[id].clone()).collect());
     assert_eq!(
-        lifecycle.claim().await.unwrap(),
+        lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed,
         "head {head} must claim"
     );
