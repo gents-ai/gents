@@ -1103,7 +1103,7 @@ pub async fn install_prepared_document_graph(
     explicit: bool,
 ) -> Result<(InstallReport, Vec<crate::plugin::store::InstalledPlugin>)> {
     let stages = document_graph_stages(archive, prepared, explicit)?;
-    let (mut reports, plugins) = install_document_graph(
+    let (reports, plugins) = install_document_graph(
         access,
         owner,
         stages,
@@ -1113,6 +1113,13 @@ pub async fn install_prepared_document_graph(
         prepared.node_binding.clone(),
     )
     .await?;
+    Ok((assemble_document_graph_report(prepared, reports)?, plugins))
+}
+
+pub fn assemble_document_graph_report(
+    prepared: &PreparedDocumentPackInstall,
+    mut reports: Vec<InstallReport>,
+) -> Result<InstallReport> {
     let mut report = reports.pop().context("pack graph has no root report")?;
     for (dependency, installed) in prepared.dependencies.iter().zip(reports) {
         for (slot, did) in installed.agents {
@@ -1121,7 +1128,7 @@ pub async fn install_prepared_document_graph(
                 .insert(format!("{}#{slot}", dependency.coordinate), did);
         }
     }
-    Ok((report, plugins))
+    Ok(report)
 }
 
 pub(super) fn document_graph_stages(
