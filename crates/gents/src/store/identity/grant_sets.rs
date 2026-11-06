@@ -13,7 +13,8 @@ pub enum GrantSet {
     /// The native `admin` relation, granted only to the User `gents init`
     /// creates. It includes DAC bypass.
     HouseholdOwner,
-    /// Relationship-management authority bounded by what the holder holds.
+    /// Relationship-management authority bounded by what the holder holds,
+    /// plus read-only `NacStatus` to explain other identities' node grants.
     PolicyDelegate,
 }
 
@@ -57,6 +58,7 @@ impl GrantSet {
                 NodePermission::NacRelationDelete,
                 NodePermission::DacRelationAdd,
                 NodePermission::DacRelationDelete,
+                NodePermission::NacStatus,
             ],
         }
     }

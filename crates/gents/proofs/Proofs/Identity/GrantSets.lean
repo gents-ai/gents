@@ -56,7 +56,9 @@ native held-bounded rule. Schema authority is not in it.
 bypass. It carries no permission list because admin implies every one.
 
 `policyDelegate` is the relationship-management authority: an Agent holding
-it can hand out only the permissions it already holds. -/
+it can hand out only the permissions it already holds. It also holds the
+read-only `get-nac-status`, so it can explain any identity's node grants; that
+permission is not admin-class and confers no change authority. -/
 def GrantSet.permissions : GrantSet → List String
   | .agentBaseline => NodeProvisioning.requiredPermissions
   | .operatorUser =>
@@ -64,7 +66,8 @@ def GrantSet.permissions : GrantSet → List String
        "add-dac-relation", "delete-dac-relation", "add-nac-relation", "delete-nac-relation"]
   | .householdOwner => []
   | .policyDelegate =>
-      ["add-nac-relation", "delete-nac-relation", "add-dac-relation", "delete-dac-relation"]
+      ["add-nac-relation", "delete-nac-relation", "add-dac-relation", "delete-dac-relation",
+       "get-nac-status"]
 
 def GrantSet.nativeAdmin : GrantSet → Bool
   | .householdOwner => true
@@ -401,6 +404,26 @@ theorem engineer_policy_admits_held_operations :
 theorem engineer_policy_refuses_unheld :
     policyToolAdmits [policyCategory] (holderOf (receives .defaultAgent))
       ⟨.permission "patch-collection", false, true, false⟩ = false := by decide
+
+/-! ### Explaining other identities' node grants
+
+`get-nac-status` lets its holder read any subject's node permissions through
+native NAC. It is outside the admin class, so the policy tool may grant it
+exactly when the Agent holds it and `add-nac-relation`. -/
+
+theorem engineer_holds_nac_status :
+    (holderOf (receives .defaultAgent)).holds "get-nac-status" = true := by decide
+
+theorem nac_status_outside_admin_class : adminClass.contains "get-nac-status" = false := by
+  decide
+
+theorem engineer_policy_grants_nac_status :
+    policyToolAdmits [policyCategory] (holderOf (receives .defaultAgent))
+      ⟨.permission "get-nac-status", false, true, false⟩ = true := by decide
+
+theorem enrolled_user_cannot_grant_nac_status :
+    admits (holderOf (receives .enrolledUser))
+      ⟨.permission "get-nac-status", false, true, false⟩ = false := by decide
 
 /-! ### Self-lockout under `self_config_no_lockout`
 
