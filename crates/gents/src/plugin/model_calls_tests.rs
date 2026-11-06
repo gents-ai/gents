@@ -485,15 +485,17 @@ async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request()
         .expect("configuration model");
     let dir = tempfile::tempdir()?;
     let key_dir = dir.path().to_owned();
-    let (owner, runtime, agent, sibling) = tokio::task::spawn_blocking(move || -> Result<_> {
+    let (owner, runtime) = tokio::task::spawn_blocking(move || -> Result<_> {
         Ok((
             crate::KeyIdentity::load_or_create(key_dir.join("node"), None)?,
             crate::KeyIdentity::load_or_create(key_dir.join("runtime"), None)?,
-            crate::KeyIdentity::load_or_create(key_dir.join("agent"), None)?,
-            crate::KeyIdentity::load_or_create(key_dir.join("sibling"), None)?,
         ))
     })
     .await??;
+    let agent_binding = crate::store::identity::provision_agent_identity(&runtime)?;
+    let sibling_binding = crate::store::identity::provision_agent_identity(&runtime)?;
+    let agent = crate::store::identity::resolve_agent_identity(&runtime, &agent_binding)?;
+    let sibling = crate::store::identity::resolve_agent_identity(&runtime, &sibling_binding)?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await?
         .into_std()?;
