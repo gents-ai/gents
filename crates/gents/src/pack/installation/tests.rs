@@ -1172,15 +1172,16 @@ async fn an_explicitly_installed_documents_dependency_survives_its_dependent() {
 
 #[tokio::test]
 async fn an_upgrade_that_drops_a_documents_dependency_releases_it() {
-    let (_node, access) = dependency_fixture().await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
     let (_guards, dependee, dependent) = documents_dependency_pair(false, false);
-    install_dependent_with_dependee(&access, &dependee, &dependent, None).await;
+    install_dependent_with_dependee(&access, &node, &runtime, &dependee, &dependent, None).await;
     let agents = access.execute("{ Agent { agent_did } }").await.unwrap();
     let before = agents["data"]["Agent"].as_array().unwrap().len();
 
     super::super::install_pack_documents(
         &access,
-        OWNER,
+        owner,
         &PackIdentity {
             installation_doc_id: None,
             agent_bindings: BTreeMap::new(),
@@ -1191,7 +1192,7 @@ async fn an_upgrade_that_drops_a_documents_dependency_releases_it() {
             dependencies: vec![],
             explicit: true,
         },
-        &config(&[("alpha", "Alpha")]),
+        &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
     .await
@@ -1921,64 +1922,69 @@ fn documents_dependency_pair(
 
 async fn install_dependent_with_dependee(
     access: &ConfigAccess,
+    node: &Arc<defra_node::Node>,
+    runtime: &crate::KeyIdentity,
     dependee: &crate::pack::archive::PackArchive,
     dependent: &crate::pack::archive::PackArchive,
     plugin_home: Option<&std::path::Path>,
 ) {
-    try_install_dependent_with_dependee(access, dependee, dependent, plugin_home)
+    try_install_dependent_with_dependee(access, node, runtime, dependee, dependent, plugin_home)
         .await
         .unwrap();
 }
 
 async fn try_install_dependent_with_dependee(
     access: &ConfigAccess,
+    node: &Arc<defra_node::Node>,
+    runtime: &crate::KeyIdentity,
     dependee: &crate::pack::archive::PackArchive,
     dependent: &crate::pack::archive::PackArchive,
     plugin_home: Option<&std::path::Path>,
 ) -> Result<InstallReport> {
-    let authored = crate::pack::load_pack_config(
-        dependent.manifest(),
-        &crate::pack::PackInstallOptions {
-            node_did: OWNER.into(),
-        },
-        &|path| Ok(dependent.asset(path)?.to_vec()),
-        &|_| None,
-    )
-    .unwrap();
-    let requested = BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]);
-    let prepared = prepare_document_pack_install(
-        access,
-        OWNER,
-        dependent.manifest(),
-        &authored,
+    use crate::NodeIdentity as _;
+    let local = ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(access.actor_did().unwrap())?,
+    );
+    let node_access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+    let requested = BTreeMap::from([("worker".to_owned(), "profile".to_owned())]);
+    let prepared = super::super::prepare_document_pack_archive_with_runtime(
+        &local,
+        runtime.did(),
+        dependent,
         &requested,
         &[dependee],
-        crate::pack::InstalledVia::Operator,
         plugin_home,
-        None,
         &|_| None,
+        runtime,
     )
-    .await
-    .unwrap();
-    install_prepared_document_pack(
+    .await?;
+    super::super::apply_prepared_dependency_schemas(&node_access, &prepared).await?;
+    for path in super::super::document_pack_schema_paths(dependent.manifest())? {
+        let sdl = std::str::from_utf8(dependent.asset(path)?)?;
+        let plan = crate::store::config_client::preview_schema_install(&node_access, sdl).await?;
+        crate::store::config_client::apply_schema_install(&node_access, sdl, &plan.artifact_digest)
+            .await?;
+    }
+    let (report, _) = super::super::install_prepared_document_graph(
         access,
-        OWNER,
+        runtime.did(),
         dependent,
-        &[dependee],
         &prepared,
+        DriftPolicy::Refuse,
         plugin_home,
         false,
-        crate::pack::InstalledVia::Operator,
-        DriftPolicy::Refuse,
+        true,
     )
-    .await
+    .await?;
+    Ok(report)
 }
 
 #[tokio::test]
 async fn a_documents_dependency_installs_non_explicitly_before_its_dependent() {
-    let (_node, access) = dependency_fixture().await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
     let (_guards, dependee, dependent) = documents_dependency_pair(false, false);
-    install_dependent_with_dependee(&access, &dependee, &dependent, None).await;
+    install_dependent_with_dependee(&access, &node, &runtime, &dependee, &dependent, None).await;
 
     let rows = access
         .execute("{ PackInstallation { coordinate explicit required_by } }")
@@ -2001,12 +2007,19 @@ async fn a_documents_dependency_installs_non_explicitly_before_its_dependent() {
 
 #[tokio::test]
 async fn a_failing_dependent_does_not_publish_its_documents_dependency() {
-    let (_node, access) = dependency_fixture().await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
     let (_guards, dependee, dependent) = documents_dependency_pair(false, true);
     let home = tempfile::tempdir().unwrap();
-    try_install_dependent_with_dependee(&access, &dependee, &dependent, Some(home.path()))
-        .await
-        .unwrap_err();
+    try_install_dependent_with_dependee(
+        &access,
+        &node,
+        &runtime,
+        &dependee,
+        &dependent,
+        Some(home.path()),
+    )
+    .await
+    .unwrap_err();
 
     let rows = access
         .execute("{ PackInstallation { coordinate explicit } }")
@@ -2017,17 +2030,26 @@ async fn a_failing_dependent_does_not_publish_its_documents_dependency() {
 
 #[tokio::test]
 async fn a_documents_dependency_plugin_installs_before_the_dependent_documents() {
-    let (_node, access) = dependency_fixture().await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
     let (_guards, dependee, dependent) = documents_dependency_pair(true, false);
     let home = tempfile::tempdir().unwrap();
-    install_dependent_with_dependee(&access, &dependee, &dependent, Some(home.path())).await;
+    install_dependent_with_dependee(
+        &access,
+        &node,
+        &runtime,
+        &dependee,
+        &dependent,
+        Some(home.path()),
+    )
+    .await;
 
     let record = crate::plugin::store::read_record(home.path(), "fixture", "echo").unwrap();
     assert_eq!(
         record.owner_pack_coordinate.as_deref(),
         Some("fixture/dependee_fixture")
     );
-    let installed = read_installed_pack(&access, OWNER, "fixture/dependee_fixture")
+    let installed = read_installed_pack(&access, owner, "fixture/dependee_fixture")
         .await
         .unwrap();
     assert_eq!(installed.unwrap().digest, dependee.digest());
@@ -2035,21 +2057,29 @@ async fn a_documents_dependency_plugin_installs_before_the_dependent_documents()
 
 #[tokio::test]
 async fn a_failing_dependent_does_not_publish_dependency_plugin() {
-    let (_node, access) = dependency_fixture().await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
     let (_guards, dependee, dependent) = documents_dependency_pair(true, true);
     let home = tempfile::tempdir().unwrap();
-    try_install_dependent_with_dependee(&access, &dependee, &dependent, Some(home.path()))
-        .await
-        .unwrap_err();
+    try_install_dependent_with_dependee(
+        &access,
+        &node,
+        &runtime,
+        &dependee,
+        &dependent,
+        Some(home.path()),
+    )
+    .await
+    .unwrap_err();
 
     assert!(crate::plugin::store::read_record(home.path(), "fixture", "echo").is_err());
     assert!(
-        read_installed_pack(&access, OWNER, "fixture/dependee_fixture")
+        read_installed_pack(&access, owner, "fixture/dependee_fixture")
             .await
             .unwrap()
             .is_none()
     );
-    let dependent = read_installed_pack(&access, OWNER, "fixture/dependent_fixture")
+    let dependent = read_installed_pack(&access, owner, "fixture/dependent_fixture")
         .await
         .unwrap();
     assert!(dependent.is_none(), "the dependent installed nothing");
@@ -3393,7 +3423,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
 
 #[tokio::test]
 async fn dependency_schema_is_published_before_root_schema_rejection() {
-    let (node, access) = dependency_fixture().await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
     let (guards, _, _) = documents_dependency_pair(false, false);
     let dependency_root = guards[0].path().join("dependee_fixture");
     let root = guards[1].path().join("dependent_fixture");
@@ -3425,9 +3455,16 @@ async fn dependency_schema_is_published_before_root_schema_rejection() {
     };
     let dependency = archive(&dependency_root);
     let dependent = archive(&root);
-    let error = try_install_dependent_with_dependee(&access, &dependency, &dependent, None)
-        .await
-        .unwrap_err();
+    let error = try_install_dependent_with_dependee(
+        &access,
+        &node,
+        &runtime,
+        &dependency,
+        &dependent,
+        None,
+    )
+    .await
+    .unwrap_err();
     assert!(
         format!("{error:#}").contains("PackSchemaDependency"),
         "{error:#}"
@@ -3443,7 +3480,7 @@ async fn dependency_schema_is_published_before_root_schema_rejection() {
     )
     .unwrap();
     let corrected = archive(&root);
-    install_dependent_with_dependee(&access, &dependency, &corrected, None).await;
+    install_dependent_with_dependee(&access, &node, &runtime, &dependency, &corrected, None).await;
     let result = access
         .execute("{PackSchemaDependency {_docID} PackSchemaRoot {_docID}}")
         .await
