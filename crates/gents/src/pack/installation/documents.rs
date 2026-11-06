@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::documents::PackConfig;
 use crate::pack::archive::PackArchive;
@@ -166,6 +167,79 @@ pub struct PreparedDocumentPackInstall {
     pub dependencies: Vec<PreparedDependency>,
 }
 
+/// Public facts from the staged host, checked against the reviewed archives.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostedPackPreparation {
+    pub agent_bindings: BTreeMap<String, super::super::PackAgentBindings>,
+    pub plugin_digests: BTreeMap<String, String>,
+    pub operator_ux_digests: BTreeMap<String, String>,
+}
+
+impl PreparedDocumentPackInstall {
+    pub fn hosted_preparation(
+        &self,
+        root: &super::super::PackManifest,
+        home: &Path,
+    ) -> Result<HostedPackPreparation> {
+        let mut agent_bindings = BTreeMap::new();
+        agent_bindings.insert(
+            format!("{}/{}", root.metadata.namespace, root.name),
+            self.agent_bindings.clone(),
+        );
+        let mut operator_ux_digests = BTreeMap::new();
+        for dependency in &self.dependencies {
+            agent_bindings.insert(
+                dependency.coordinate.clone(),
+                dependency.agent_bindings.clone(),
+            );
+            if !dependency.manifest.metadata.ux.is_empty() {
+                let record = super::super::read_home_install(home, &dependency.coordinate)?
+                    .context("dependency with UX has no operator installation")?;
+                anyhow::ensure!(
+                    record.installed_via == Some(InstalledVia::Operator),
+                    "dependency UX was not installed by an operator"
+                );
+                operator_ux_digests.insert(dependency.coordinate.clone(), record.digest);
+            }
+        }
+        let shipped = std::iter::once(root)
+            .chain(self.dependencies.iter().map(|d| &d.manifest))
+            .flat_map(|manifest| {
+                manifest
+                    .metadata
+                    .plugins
+                    .iter()
+                    .map(|plugin| format!("{}/{}", manifest.metadata.namespace, plugin.name))
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut plugin_digests = BTreeMap::new();
+        for reference in std::iter::once(&self.config)
+            .chain(self.dependencies.iter().map(|d| &d.config))
+            .flat_map(|config| &config.tools)
+            .flat_map(|tools| {
+                tools
+                    .integrations
+                    .as_ref()
+                    .and_then(|i| i.plugins.as_ref())
+                    .into_iter()
+                    .flatten()
+            })
+        {
+            if !shipped.contains(&reference.plugin) {
+                let (namespace, name) = crate::plugin::store::parse_coordinate(&reference.plugin)?;
+                let record = crate::plugin::store::read_record(home, namespace, name)?;
+                plugin_digests.insert(reference.plugin.clone(), record.digest);
+            }
+        }
+        Ok(HostedPackPreparation {
+            agent_bindings,
+            plugin_digests,
+            operator_ux_digests,
+        })
+    }
+}
+
 pub(super) fn document_ux_install_allowed(
     has_ux: bool,
     has_home: bool,
@@ -225,6 +299,7 @@ pub async fn prepare_document_pack_install(
         plugin_home,
         root_archive,
         environment,
+        None,
     )
     .await
 }
@@ -272,6 +347,85 @@ pub(crate) async fn prepare_document_pack_archive_with_provisioner(
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
     provisioner: Option<&super::super::agent_bindings::AgentProvisioner<'_>>,
 ) -> Result<PreparedDocumentPackInstall> {
+    prepare_document_pack_archive_inputs(
+        access,
+        owner,
+        archive,
+        requested,
+        dependencies,
+        installed_via,
+        plugin_home,
+        environment,
+        provisioner,
+        None,
+    )
+    .await
+}
+
+/// Rebuild the installation from locally reviewed archive bytes and staged host facts.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "hosted preparation shares canonical install inputs"
+)]
+pub async fn prepare_hosted_document_pack_archive(
+    access: &ConfigAccess,
+    owner: &str,
+    archive: &PackArchive,
+    requested: &PackInferenceBindings,
+    dependencies: &[&PackArchive],
+    environment: &(dyn Fn(&str) -> Option<String> + Sync),
+    hosted: &HostedPackPreparation,
+) -> Result<PreparedDocumentPackInstall> {
+    let expected = std::iter::once(archive)
+        .chain(dependencies.iter().copied())
+        .map(|archive| {
+            format!(
+                "{}/{}",
+                archive.manifest().metadata.namespace,
+                archive.manifest().name
+            )
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    anyhow::ensure!(
+        hosted
+            .agent_bindings
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            == expected,
+        "hosted pack bindings do not match reviewed archives"
+    );
+    prepare_document_pack_archive_inputs(
+        access,
+        owner,
+        archive,
+        requested,
+        dependencies,
+        InstalledVia::Operator,
+        None,
+        environment,
+        None,
+        Some(hosted),
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "archive preparation shares canonical install inputs"
+)]
+async fn prepare_document_pack_archive_inputs(
+    access: &ConfigAccess,
+    owner: &str,
+    archive: &PackArchive,
+    requested: &PackInferenceBindings,
+    dependencies: &[&PackArchive],
+    installed_via: InstalledVia,
+    plugin_home: Option<&Path>,
+    environment: &(dyn Fn(&str) -> Option<String> + Sync),
+    provisioner: Option<&super::super::agent_bindings::AgentProvisioner<'_>>,
+    hosted: Option<&HostedPackPreparation>,
+) -> Result<PreparedDocumentPackInstall> {
     let declared = super::super::agent_bindings::declared_dependencies(archive.manifest());
     let options = PackInstallOptions {
         node_did: owner.to_owned(),
@@ -299,6 +453,7 @@ pub(crate) async fn prepare_document_pack_archive_with_provisioner(
             super::super::agent_bindings::PackBindingInputs {
                 available: &BTreeMap::new(),
                 provisioner,
+                hosted: hosted.and_then(|facts| facts.agent_bindings.get(&coordinate)),
             },
         )
         .await?;
@@ -320,6 +475,13 @@ pub(crate) async fn prepare_document_pack_archive_with_provisioner(
         super::super::agent_bindings::PackBindingInputs {
             available: &available,
             provisioner,
+            hosted: hosted.and_then(|facts| {
+                facts.agent_bindings.get(&format!(
+                    "{}/{}",
+                    archive.manifest().metadata.namespace,
+                    archive.manifest().name
+                ))
+            }),
         },
     )
     .await?;
@@ -339,6 +501,7 @@ pub(crate) async fn prepare_document_pack_archive_with_provisioner(
         plugin_home,
         Some(archive),
         environment,
+        hosted,
     )
     .await
 }
@@ -363,6 +526,7 @@ async fn prepare_document_pack_install_inner(
     plugin_home: Option<&Path>,
     root_archive: Option<&PackArchive>,
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
+    hosted: Option<&HostedPackPreparation>,
 ) -> Result<PreparedDocumentPackInstall> {
     if let Some(archive) = root_archive {
         anyhow::ensure!(
@@ -373,13 +537,29 @@ async fn prepare_document_pack_install_inner(
     anyhow::ensure!(
         document_ux_install_allowed(
             !manifest.metadata.ux.is_empty(),
-            plugin_home.is_some(),
+            plugin_home.is_some() || hosted.is_some(),
             installed_via
         ),
         "document packs with UX require an operator install with the node's local home"
     );
     for dependency in dependencies {
-        require_installed_dependency_ux(dependency.manifest(), dependency.digest(), plugin_home)?;
+        if let Some(hosted) = hosted {
+            if !dependency.manifest().metadata.ux.is_empty() {
+                let coordinate = format!(
+                    "{}/{}",
+                    dependency.manifest().metadata.namespace,
+                    dependency.manifest().name
+                );
+                anyhow::ensure!(hosted.operator_ux_digests.get(&coordinate).map(String::as_str) == Some(dependency.digest()),
+                    "dependency {coordinate} with UX must be operator installed at the reviewed digest");
+            }
+        } else {
+            require_installed_dependency_ux(
+                dependency.manifest(),
+                dependency.digest(),
+                plugin_home,
+            )?;
+        }
         let dependency = dependency.manifest();
         anyhow::ensure!(
             matches!(
@@ -579,7 +759,7 @@ async fn prepare_document_pack_install_inner(
             }
         }
     }
-    ensure_plugin_references_resolve(
+    ensure_plugin_references_resolve_with_inventory(
         &std::iter::once((manifest, &config))
             .chain(
                 prepared_dependencies
@@ -589,6 +769,7 @@ async fn prepare_document_pack_install_inner(
             .collect::<Vec<_>>(),
         plugin_home,
         &shipped_digests,
+        hosted.map(|facts| &facts.plugin_digests),
     )?;
     Ok(PreparedDocumentPackInstall {
         installation_doc_id,
@@ -611,6 +792,15 @@ pub(super) fn ensure_plugin_references_resolve(
     plugin_home: Option<&Path>,
     shipped_digests: &BTreeMap<String, String>,
 ) -> Result<()> {
+    ensure_plugin_references_resolve_with_inventory(packs, plugin_home, shipped_digests, None)
+}
+
+fn ensure_plugin_references_resolve_with_inventory(
+    packs: &[(&super::super::PackManifest, &PackConfig)],
+    plugin_home: Option<&Path>,
+    shipped_digests: &BTreeMap<String, String>,
+    inventory: Option<&BTreeMap<String, String>>,
+) -> Result<()> {
     let root = format!("{}/{}", packs[0].0.metadata.namespace, packs[0].0.name);
     let shipped = packs
         .iter()
@@ -630,10 +820,9 @@ pub(super) fn ensure_plugin_references_resolve(
                 .and_then(|integrations| integrations.plugins.as_deref())
                 .unwrap_or_default();
             for reference in references {
-                let home = plugin_home.with_context(|| format!(
-                    "pack {} Tools {:?} names plugin {}; remote GraphQL installation cannot verify plugin files on the node; run `gents pack install {} --home <node-home>` on that node without --graphql",
-                    manifest.name, tools.tools_id, reference.plugin, root
-                ))?;
+                if plugin_home.is_none() && inventory.is_none() {
+                    anyhow::bail!("pack {} Tools {:?} names plugin {}; remote GraphQL installation cannot verify plugin files on the node; run `gents pack install {} --home <node-home>` on that node without --graphql", manifest.name, tools.tools_id, reference.plugin, root);
+                }
                 if shipped.contains(&reference.plugin) {
                     if let Some(pin) = &reference.digest {
                         let actual = shipped_digests.get(&reference.plugin).with_context(|| {
@@ -646,6 +835,20 @@ pub(super) fn ensure_plugin_references_resolve(
                     continue;
                 }
                 let (namespace, name) = crate::plugin::store::parse_coordinate(&reference.plugin)?;
+                if let Some(inventory) = inventory {
+                    let digest = inventory.get(&reference.plugin).with_context(|| {
+                        format!("hosted plugin {} is unavailable", reference.plugin)
+                    })?;
+                    if let Some(pin) = &reference.digest {
+                        anyhow::ensure!(
+                            pin == digest,
+                            "hosted plugin {} does not match its pinned digest",
+                            reference.plugin
+                        );
+                    }
+                    continue;
+                }
+                let home = plugin_home.context("plugin home is unavailable")?;
                 match crate::plugin::store::read_record(home, namespace, name) {
                     Ok(record) => {
                         if let Some(pin) = &reference.digest {
@@ -671,7 +874,7 @@ pub(super) fn ensure_plugin_references_resolve(
             }
         }
     }
-    if plugin_home.is_none() {
+    if plugin_home.is_none() && inventory.is_none() {
         if let Some(plugin) = shipped.first() {
             anyhow::bail!(
                 "pack {root} ships plugin {plugin}; remote GraphQL installation cannot publish plugin files on the node; run `gents pack install {root} --home <node-home>` on that node without --graphql"
@@ -921,7 +1124,7 @@ pub async fn install_prepared_document_graph(
     Ok((report, plugins))
 }
 
-fn document_graph_stages(
+pub(super) fn document_graph_stages(
     archive: &PackArchive,
     prepared: &PreparedDocumentPackInstall,
     explicit: bool,
@@ -975,7 +1178,67 @@ pub(super) struct DocumentPackStage {
     pub(super) explicit: bool,
 }
 
-async fn stage_document_plugins(
+/// The same document graph reconstructed by the host and the client.
+#[derive(Clone)]
+pub struct HostedDocumentGraph {
+    identities: Vec<PackIdentity>,
+    documents: Vec<Vec<crate::store::config_client::DesiredStateApplyDocument>>,
+    node_binding: Option<crate::store::config_client::ConfigurationNodeBinding>,
+}
+
+pub fn hosted_document_graph(
+    archive: &PackArchive,
+    prepared: &PreparedDocumentPackInstall,
+    explicit: bool,
+) -> Result<HostedDocumentGraph> {
+    let stages = document_graph_stages(archive, prepared, explicit)?;
+    let mut identities = Vec::new();
+    let mut documents = Vec::new();
+    for stage in stages {
+        let mut plugins = Vec::new();
+        for plugin in &stage.manifest.metadata.plugins {
+            let bytes = stage
+                .assets
+                .get(&plugin.artifact)
+                .with_context(|| format!("missing reviewed plugin artifact {}", plugin.artifact))?;
+            plugins.push(InstalledPackPlugin {
+                name: plugin.name.clone(),
+                digest: format!("sha256:{}", crate::plugin::store::content_digest_hex(bytes)),
+            });
+        }
+        let mut identity = PackIdentity::new(&stage.manifest, &stage.digest, plugins);
+        identity.installation_doc_id = stage.installation_doc_id;
+        identity.agent_bindings = stage.agent_bindings;
+        identity.dependencies = stage.dependencies;
+        identity.explicit = stage.explicit;
+        identities.push(identity);
+        documents.push(super::installable_documents(&stage.config)?);
+    }
+    Ok(HostedDocumentGraph {
+        identities,
+        documents,
+        node_binding: prepared.node_binding.clone(),
+    })
+}
+
+pub async fn apply_hosted_document_graph(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    graph: &HostedDocumentGraph,
+    policy: DriftPolicy,
+) -> Result<Vec<InstallReport>> {
+    apply_document_graph_in_txn(
+        txn,
+        owner,
+        &graph.identities,
+        graph.documents.clone(),
+        policy,
+        graph.node_binding.as_ref(),
+    )
+    .await
+}
+
+pub(super) async fn stage_document_plugins(
     stages: &[DocumentPackStage],
     home: Option<&Path>,
     consent: bool,
@@ -1014,7 +1277,7 @@ async fn stage_document_plugins(
     ))
 }
 
-async fn apply_document_graph_in_txn(
+pub(super) async fn apply_document_graph_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     identities: &[PackIdentity],
@@ -1052,7 +1315,8 @@ pub(super) async fn install_document_graph(
             .iter()
             .map(|stage| super::installable_documents(&stage.config))
             .collect::<Result<Vec<_>>>()?;
-        let plugin_stage = stage_document_plugins(&stages, home.as_deref(), consent, &owner).await?;
+        let plugin_stage =
+            stage_document_plugins(&stages, home.as_deref(), consent, &owner).await?;
         #[cfg(test)]
         let pause = {
             let mut slot = INSTALLATION_PAUSE.lock().unwrap();

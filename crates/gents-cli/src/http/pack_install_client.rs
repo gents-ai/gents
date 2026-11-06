@@ -19,6 +19,7 @@ use tokio_tungstenite::{
 enum ServerMessage {
     Ready {
         scope: PackApprovalScope,
+        preparation: gents::pack::HostedPackPreparation,
     },
     ReadResult {
         id: u64,
@@ -55,6 +56,7 @@ pub(crate) struct PackInstallSession {
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
     actor: ClientSigningCapability,
     scope: PackApprovalScope,
+    preparation: gents::pack::HostedPackPreparation,
     pending: Option<ServerMessage>,
     next_id: u64,
 }
@@ -99,8 +101,8 @@ impl PackInstallSession {
             .await
             .context("connecting remote pack install")?;
         send(&mut socket, json!({"type": "start", "request": request})).await?;
-        let scope = match receive(&mut socket).await? {
-            ServerMessage::Ready { scope } => scope,
+        let (scope, preparation) = match receive(&mut socket).await? {
+            ServerMessage::Ready { scope, preparation } => (scope, preparation),
             ServerMessage::Failed { error, outcome } => {
                 bail!("remote pack install failed ({outcome}): {error}")
             }
@@ -116,9 +118,14 @@ impl PackInstallSession {
             socket,
             actor,
             scope,
+            preparation,
             pending: None,
             next_id: 1,
         })
+    }
+
+    pub(crate) fn preparation(&self) -> &gents::pack::HostedPackPreparation {
+        &self.preparation
     }
 
     pub(crate) async fn read(&mut self, document: &str, variables: &Value) -> Result<Value> {
@@ -416,7 +423,8 @@ mod tests {
             let _ = socket.next().await.context("missing start")??;
             socket.send(Message::Text(json!({
                 "type": "ready",
-                "scope": {"node_did": "did:key:node", "pack_digests": ["sha256:root"], "nonce": "test"}
+                "scope": {"node_did": "did:key:node", "pack_digests": ["sha256:root"], "nonce": "test"},
+                "preparation": {"agent_bindings": {}, "plugin_digests": {}, "operator_ux_digests": {}}
             }).to_string().into())).await?;
             socket.send(Message::Text(json!({
                 "type": "approve_graph", "id": 1,

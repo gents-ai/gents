@@ -19,6 +19,7 @@ pub(crate) struct AgentProvisioner<'a> {
 pub(super) struct PackBindingInputs<'a, 'b> {
     pub available: &'a BTreeMap<String, PackAgentBindings>,
     pub provisioner: Option<&'a AgentProvisioner<'b>>,
+    pub hosted: Option<&'a PackAgentBindings>,
 }
 
 pub type PackAgentBindings = BTreeMap<String, AgentIdentityBinding>;
@@ -247,6 +248,7 @@ pub(crate) async fn load_pack_install_config_with_provisioner(
         PackBindingInputs {
             available: &available,
             provisioner,
+            hosted: None,
         },
     )
     .await
@@ -264,6 +266,7 @@ pub(super) async fn load_pack_install_config_with_dependencies(
     let PackBindingInputs {
         available,
         provisioner,
+        hosted,
     } = bindings;
     super::validate_pack_manifest(manifest)?;
     let path = manifest
@@ -280,7 +283,12 @@ pub(super) async fn load_pack_install_config_with_dependencies(
         if recorded.contains_key(slot) {
             continue;
         }
-        let binding = if installed_via == InstalledVia::SelfConfig {
+        let binding = if let Some(hosted) = hosted {
+            hosted
+                .get(slot)
+                .with_context(|| format!("hosted pack is missing agent slot {slot:?}"))?
+                .clone()
+        } else if installed_via == InstalledVia::SelfConfig {
             let provisioner = provisioner.context(
                 "pack agent creation requires the selected Agent signer and runtime identity",
             )?;
@@ -323,6 +331,12 @@ pub(super) async fn load_pack_install_config_with_dependencies(
         provisioned.insert(slot.clone(), binding);
     }
     let plan = plan_agent_bindings(&recorded, &slots, &provisioned)?;
+    if let Some(hosted) = hosted {
+        anyhow::ensure!(
+            *hosted == plan.recorded,
+            "hosted agent bindings differ from the installation plan"
+        );
+    }
     let declared = declared_dependencies(manifest);
     validate_slot_references(&value, &slots, &declared, None)?;
     let mut references = plan.selected.clone();
