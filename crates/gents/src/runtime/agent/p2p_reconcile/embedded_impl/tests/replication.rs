@@ -83,11 +83,65 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             .with_context(|| format!("missing replica case {name}"))
     };
     let reader = identity::Did::new(admin.did())?;
-    let mutation = format!(
-        r#"mutation {{ create_NetworkEnrollmentRequest(input: {{request_id:"probe", candidate_did:"{}", admin_did:"{}", offer_token:"private-offer"}}) {{_docID}} }}"#,
-        escape_graphql_string(candidate.did()),
-        escape_graphql_string(admin.did())
+    let issuer = crate::runtime::agent::p2p_reconcile::EnrollmentOfferIssuer::new(
+        Arc::new(KeyIdentity::load_or_create(&admin_path, None)?),
+        crate::store::identity::node_p2p(admin_node).context("admin P2P unavailable")?,
+        "transport-test".into(),
+        admin.did().to_owned(),
+        "client".into(),
     );
+    let candidate_admin = EmbeddedRemoteP2pAdmin::new(candidate_node.clone());
+    let receiving_admin = EmbeddedRemoteP2pAdmin::new(admin_node.clone());
+    let _ = wait_for_peer_info(&candidate_admin).await;
+    let addresses = wait_for_peer_info(&receiving_admin).await;
+    let offer = issuer.mint().await?;
+    let candidate_p2p =
+        crate::store::identity::node_p2p(candidate_node).context("candidate P2P unavailable")?;
+    let candidate_peer = candidate_p2p
+        .local_peer_id()
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let candidate_ticket =
+        crate::runtime::agent::p2p_reconcile::enrollment_candidate::local_enrollment_ticket(
+            &candidate_p2p,
+            &candidate_peer,
+        )
+        .await?;
+    let request =
+        crate::runtime::agent::p2p_reconcile::enrollment_candidate::sign_enrollment_request(
+            &candidate,
+            &offer.offer,
+            &offer.token,
+            candidate_peer,
+            candidate_ticket,
+        )
+        .await?;
+    anyhow::ensure!(
+        candidate
+            .verify(
+                candidate.did(),
+                &request.signing_payload(),
+                &request.candidate_sig
+            )
+            .await?,
+        "candidate request signature must be valid"
+    );
+    anyhow::ensure!(
+        admin
+            .verify(
+                admin.did(),
+                &offer.offer.signing_payload(),
+                &offer.offer.admin_sig
+            )
+            .await?,
+        "admin offer signature must be valid"
+    );
+    let input =
+        crate::runtime::agent::p2p_reconcile::enrollment_candidate::enrollment_request_input(
+            &request,
+        );
+    let mutation =
+        format!("mutation {{ create_NetworkEnrollmentRequest(input: {input}) {{_docID}} }}");
     let doc = candidate_local
         .transact_write("test.enrollment_native.create", |txn| {
             let mutation = &mutation;
@@ -121,15 +175,12 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         count(&http(candidate_address, &admin)?.execute(&query).await?),
         1
     );
-    let candidate_admin = EmbeddedRemoteP2pAdmin::new(candidate_node.clone());
-    let receiving_admin = EmbeddedRemoteP2pAdmin::new(admin_node.clone());
-    let addresses = wait_for_peer_info(&receiving_admin).await;
     candidate_admin.connect(&addresses).await?;
     wait_for_active_peer(&candidate_admin).await;
     let mut arrivals = crate::subscribe_collections(admin_node, ["NetworkEnrollmentRequest"])?;
     let filters = [(
         "NetworkEnrollmentRequest".to_owned(),
-        equality_filter("request_id", "probe"),
+        equality_filter("request_id", &request.request_id),
     )]
     .into_iter()
     .collect();
@@ -255,7 +306,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     );
     assert_eq!(
         admin_local.execute(&query).await?["data"]["NetworkEnrollmentRequest"][0]["offer_token"],
-        "private-offer"
+        offer.token
     );
     {
         let txn = admin_node.database().new_txn(false).await?;
