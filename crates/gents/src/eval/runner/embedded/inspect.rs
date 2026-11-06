@@ -267,6 +267,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn retained_decoder_preserves_recorded_causal_and_runtime_lineage() {
+        let rows = decode_requests(serde_json::json!({"data": {"AgentRequest": [{
+            "_docID": "child-doc", "request_id": "child",
+            "caused_by_parent_request_id": "root",
+            "caused_by_parent_tool_call_id": "call",
+            "caused_by_source_doc_id": "source",
+            "runtime_source_request_id": "root",
+            "runtime_source_kind": "session_message"
+        }]}}))
+        .unwrap();
+        let child = &rows[0].request;
+        assert_eq!(child.caused_by_parent_request_id.as_deref(), Some("root"));
+        assert_eq!(child.caused_by_parent_tool_call_id.as_deref(), Some("call"));
+        assert_eq!(child.caused_by_source_doc_id.as_deref(), Some("source"));
+        assert_eq!(child.runtime_source_request_id.as_deref(), Some("root"));
+        assert_eq!(
+            child.runtime_source_kind.as_deref(),
+            Some("session_message")
+        );
+    }
+
     #[tokio::test]
     async fn retained_requests_refuse_missing_mismatched_and_held_homes() {
         let runs = tempfile::tempdir().unwrap();
