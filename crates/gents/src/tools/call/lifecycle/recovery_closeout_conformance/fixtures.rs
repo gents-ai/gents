@@ -2,71 +2,64 @@ use crate::tools::call::lifecycle::admission_fixture::PublishedAdmission;
 
 /// Fixture writes to a `@branchable` collection also advance its
 /// collection head, so two back-to-back writes can conflict; retry those,
-/// bounded.
-async fn execute_fixture_write(node: &crate::defra_node::Node, mutation: &str) {
+/// bounded. Writes go through the owning actor's access: ACP hides and
+/// refuses the Agent-owned rows for any other identity.
+async fn execute_fixture_write(access: &crate::ConfigAccess, operation: &'static str, mutation: &str) {
     let mut backoff = std::time::Duration::from_millis(5);
+    let mut last_error = None;
     for _ in 0..8 {
-        let result = node.execute(mutation).await;
-        let conflicted = result.errors.iter().any(|error| {
-            error
-                .extensions
-                .as_ref()
-                .is_some_and(|extensions| extensions.code == "TXN_CONFLICT")
-        });
-        if !conflicted {
-            assert!(!result.has_errors(), "{:?}", result.errors);
-            return;
+        match access.write(operation, mutation).await {
+            Ok(_) => return,
+            Err(error) => last_error = Some(error),
         }
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(std::time::Duration::from_millis(200));
     }
-    panic!("fixture write kept conflicting: {mutation}");
+    panic!("fixture write kept failing: {mutation}: {last_error:?}");
 }
 
-pub(super) async fn update(node: &crate::defra_node::Node, doc_id: &str, fields: &str) {
+pub(super) async fn update(access: &crate::ConfigAccess, doc_id: &str, fields: &str) {
     let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
-    execute_fixture_write(node, &format!(
+    execute_fixture_write(access, "fixture.tool_call.update", &format!(
         r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
     ))
     .await;
 }
 
-pub(super) async fn update_request(node: &crate::defra_node::Node, doc_id: &str, fields: &str) {
+pub(super) async fn update_request(access: &crate::ConfigAccess, doc_id: &str, fields: &str) {
     let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
-    execute_fixture_write(node, &format!(
+    execute_fixture_write(access, "fixture.request.update", &format!(
         r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
     ))
     .await;
 }
 
-pub(super) async fn remove_parent(node: &crate::defra_node::Node, doc_id: &str) {
+pub(super) async fn remove_parent(access: &crate::ConfigAccess, doc_id: &str) {
     let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
-    let result = node
-        .execute(&format!(
-            r#"mutation {{ delete_AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ _docID }} }}"#
-        ))
-        .await;
-    assert!(!result.has_errors(), "{:?}", result.errors);
+    execute_fixture_write(access, "fixture.request.remove_parent", &format!(
+        r#"mutation {{ delete_AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ _docID }} }}"#
+    ))
+    .await;
 }
 
 pub(super) async fn completion_obligations(
-    node: &crate::defra_node::Node,
+    access: &crate::ConfigAccess,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
 ) -> (Vec<String>, Vec<serde_json::Value>) {
     let session_id = crate::store::graphql::escape_graphql_string(session_id);
-    let response = node
+    let response = access
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID }} AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }}, execution_origin: {{ _eq: "scheduled" }} }}) {{ input }} }}"#
         ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let data = response.data.unwrap();
+        .await
+        .expect("read recovery completion obligations");
+    let data = &response["data"];
     let mut notifications = Vec::new();
     for row in data["AgentMessage"].as_array().unwrap() {
-        let (_, message) = crate::session::load_canonical_message_from_node(
-            node,
+        let (_, message) = crate::session::load_canonical_message(
+            access,
             row["_docID"].as_str().unwrap(),
             node_did,
             requester_did,

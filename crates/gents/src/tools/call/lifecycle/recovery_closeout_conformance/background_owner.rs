@@ -164,7 +164,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
 
         if session_stopped {
             update_request(
-                &node,
+                &tool.access().unwrap(),
                 tool.request_doc_id().unwrap(),
                 r#"lifecycle_state: "completed""#,
             )
@@ -276,7 +276,8 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             }
         );
         let (notifications, _) =
-            completion_obligations(&node, &session_id, &node_did, tool.requester_did()).await;
+            completion_obligations(&tool.access().unwrap(), &session_id, &node_did, tool.requester_did())
+                .await;
         let reason = deleted.notification_reason.as_deref().unwrap();
         assert_eq!(notifications.len(), 1);
         assert!(notifications[0].contains(&format!("<reason>{reason}</reason>")));
@@ -307,7 +308,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     let node_did = admission.node_did.clone();
     let mut tool = admission.tool;
     update_request(
-        &admission.node,
+        &tool.access().unwrap(),
         tool.request_doc_id().unwrap(),
         r#"lifecycle_state: "completed""#,
     )
@@ -366,12 +367,17 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     tool.cancel_during_run(crate::tools::call::lifecycle::CancelCause::UserCancelled)
         .await
         .unwrap();
-    let terminal_row = admission.node.execute(&format!(
-        r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state }} }}"#,
-        crate::store::graphql::escape_graphql_string(&tool_doc_id)
-    )).await;
+    let terminal_row = tool
+        .access()
+        .unwrap()
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state }} }}"#,
+            crate::store::graphql::escape_graphql_string(&tool_doc_id)
+        ))
+        .await
+        .unwrap();
     assert_eq!(
-        terminal_row.data.unwrap()["AgentToolCall"][0]["lifecycle_state"],
+        terminal_row["data"]["AgentToolCall"][0]["lifecycle_state"],
         "cancelled"
     );
     assert_eq!(

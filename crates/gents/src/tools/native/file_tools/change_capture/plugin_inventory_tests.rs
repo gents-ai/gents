@@ -40,7 +40,7 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
     tokio::fs::write(&path, "before\n").await.unwrap();
     let writer_tool = WriteFileTool::new(ToolContext::new(root_path.clone(), false).unwrap());
     let registry = LiveToolOutputRegistry::default();
-    let access = ConfigAccess::local(fixture.node.clone());
+    let access = parent.access().unwrap();
     let mut captures = Vec::new();
     let mut tools = Vec::new();
     for (ordinal, before, after) in [
@@ -107,7 +107,7 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
     parent.complete("both effects completed").await.unwrap();
     let admission = ConfigAccess::transact_local_readonly(
         &fixture.node,
-        None,
+        Some(parent.actor().clone()),
         "test.inventory.plugin_session",
         |txn| {
             let parent = &parent;

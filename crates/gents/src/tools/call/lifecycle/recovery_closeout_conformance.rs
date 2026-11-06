@@ -48,10 +48,11 @@ async fn generated_native_missing_parent_restart_cases_defer() {
         .await
         .expect("publish accepted restart call");
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
-        remove_parent(&admission.node, admission.tool.request_doc_id().unwrap()).await;
+        let access = admission.tool.access().unwrap();
+        remove_parent(&access, admission.tool.request_doc_id().unwrap()).await;
         if case.deadline_expired {
             update(
-                &admission.node,
+                &access,
                 &tool_doc_id,
                 r#"deadline_at: "2020-01-01T00:00:00Z""#,
             )
@@ -66,10 +67,9 @@ async fn generated_native_missing_parent_restart_cases_defer() {
         .unwrap();
         assert_eq!(report.tool_calls_recovered, 0, "{name}");
         let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
-        let response = admission.node.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#)).await;
-        assert!(!response.has_errors(), "{name}: {:?}", response.errors);
+        let response = access.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#)).await.unwrap();
         assert_eq!(
-            response.data.unwrap()["AgentToolCall"][0]["lifecycle_state"],
+            response["data"]["AgentToolCall"][0]["lifecycle_state"],
             "running",
             "{name}"
         );
@@ -167,13 +167,15 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
             assert_eq!(settled, case.measure_before - case.measure_after, "{name}");
             let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
             let response = admission
-                .node
+                .tool
+                .access()
+                .unwrap()
                 .execute(&format!(
                     r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state tool_failure_class }} }}"#
                 ))
-                .await;
-            assert!(!response.has_errors(), "{name}: {:?}", response.errors);
-            let row = &response.data.unwrap()["AgentToolCall"][0];
+                .await
+                .unwrap();
+            let row = &response["data"]["AgentToolCall"][0];
             assert_eq!(
                 row["lifecycle_state"],
                 case.terminal_state.as_str(),
@@ -181,7 +183,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
             );
             assert_eq!(row["tool_failure_class"], "external", "{name}");
             let (notifications, _) = completion_obligations(
-                &admission.node,
+                &admission.tool.access().unwrap(),
                 &session_id,
                 &admission.node_did,
                 admission.tool.requester_did(),
@@ -225,12 +227,16 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                     let doc_id = crate::store::graphql::escape_graphql_string(
                         &message.caused_request_doc_id,
                     );
-                    let response = admission.node.execute(&format!(
-                        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ session_id }} }}"#
-                    ))
-                    .await;
-                    assert!(!response.has_errors(), "{name}: {:?}", response.errors);
-                    response.data.unwrap()["AgentRequest"][0]["session_id"]
+                    let response = admission
+                        .tool
+                        .access()
+                        .unwrap()
+                        .execute(&format!(
+                            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ session_id }} }}"#
+                        ))
+                        .await
+                        .unwrap();
+                    response["data"]["AgentRequest"][0]["session_id"]
                         .as_str()
                         .expect("the caused request names its session")
                         .to_owned()
@@ -400,7 +406,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
         };
         if let Some(state) = caused_state {
             update_request(
-                &admission.node,
+                &admission.tool.access().unwrap(),
                 &message.caused_request_doc_id,
                 &format!(r#"lifecycle_state: "{state}""#),
             )
@@ -435,7 +441,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
         assert_eq!(row["status"], "completed", "{name}");
         let session_id = admission.tool.session_id().to_owned();
         let (notifications, _) = completion_obligations(
-            &admission.node,
+            &admission.tool.access().unwrap(),
             &session_id,
             &admission.node_did,
             admission.tool.requester_did(),
@@ -493,7 +499,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         let parent_doc_id = admission.tool.request_doc_id().unwrap().to_owned();
         if case.parent_terminal == Some(true) {
             update_request(
-                &admission.node,
+                &admission.tool.access().unwrap(),
                 &parent_doc_id,
                 r#"lifecycle_state: "completed""#,
             )
@@ -501,7 +507,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         }
         if case.parent_interrupted == Some(true) {
             update_request(
-                &admission.node,
+                &admission.tool.access().unwrap(),
                 &parent_doc_id,
                 r#"lifecycle_state: "interrupted""#,
             )
@@ -509,7 +515,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         }
         if case.deadline_expired == Some(true) {
             update(
-                &admission.node,
+                &admission.tool.access().unwrap(),
                 &tool_doc_id,
                 r#"deadline_at: "2020-01-01T00:00:00Z""#,
             )
@@ -588,7 +594,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         }
         let session_id = format!("session-{fixture_name}");
         let (notifications, wakes) = completion_obligations(
-            &admission.node,
+            &admission.tool.access().unwrap(),
             &session_id,
             &admission.node_did,
             admission.tool.requester_did(),
@@ -639,10 +645,10 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
         .await
         .expect("publish accepted native background call");
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
-        remove_parent(&admission.node, admission.tool.request_doc_id().unwrap()).await;
+        remove_parent(&admission.tool.access().unwrap(), admission.tool.request_doc_id().unwrap()).await;
         assert_eq!(case.deadline_expired, Some(true), "{name}");
         update(
-            &admission.node,
+            &admission.tool.access().unwrap(),
             &tool_doc_id,
             r#"deadline_at: "2020-01-01T00:00:00Z""#,
         )
@@ -676,12 +682,17 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
         .unwrap();
         assert_eq!(report.tool_calls_terminalized, 0, "{name}");
         let escaped = crate::store::graphql::escape_graphql_string(&tool_doc_id);
-        let response = admission.node.execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#
-        )).await;
-        assert!(!response.has_errors(), "{name}: {:?}", response.errors);
+        let response = admission
+            .tool
+            .access()
+            .unwrap()
+            .execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#
+            ))
+            .await
+            .unwrap();
         assert_eq!(
-            response.data.unwrap()["AgentToolCall"][0]["lifecycle_state"],
+            response["data"]["AgentToolCall"][0]["lifecycle_state"],
             "running",
             "{name}"
         );
@@ -738,7 +749,7 @@ async fn generated_background_completion_recovery_uses_accepted_native_call() {
     assert!(second.is_noop(), "{}", case.name);
     let session_id = format!("session-{fixture_name}");
     let (notifications, wakes) = completion_obligations(
-        &admission.node,
+        &admission.tool.access().unwrap(),
         &session_id,
         &admission.node_did,
         admission.tool.requester_did(),
