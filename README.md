@@ -33,7 +33,7 @@ first time (see Authority). The same agent runs from a terminal:
 
 ```sh
 gents config pack install gents/charts --inference-slot chart_maker=<profile>
-gents chat --agent-id chart-maker "Chart sales.csv: revenue by month, one line per region"
+gents -p "Chart sales.csv: revenue by month, one line per region" --agent chart-maker
 ```
 
 ## Use it as a model tool
