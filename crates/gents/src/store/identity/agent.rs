@@ -341,11 +341,10 @@ mod tests {
             ));
         }
         let binding = provision_agent_identity(&root).unwrap();
-        let mut config = defra_core::signing::get_identity(root.did()).unwrap();
-        config.private_key_bytes.clear();
-        defra_core::signing::store_identity(root.did(), config);
+        let registered =
+            super::super::RegisteredIdentity::from_registered_did(root.did(), None).unwrap();
         assert!(matches!(
-            resolve_agent_identity(&root, &binding),
+            resolve_agent_identity(&registered, &binding),
             Err(IdentityError::AgentDerivationUnavailable { .. })
         ));
     }

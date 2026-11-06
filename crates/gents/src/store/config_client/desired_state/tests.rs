@@ -203,6 +203,7 @@ async fn register_config_schemas_dropping_unique_indexes(
     node: &EmbeddedNode,
     duplicate_collections: &[Collection],
 ) -> Result<()> {
+    crate::test_support::acp_policies::install_identity_acp_policies(node).await?;
     for (name, schema) in gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()
         .zip(gents_protocol::schemas::RUNTIME_ALL)
@@ -238,10 +239,36 @@ async fn apply(access: &ConfigAccess, docs: Vec<DesiredStateApplyDocument>) -> R
     apply_with_counts(access, docs).await.map(|_| ())
 }
 
+/// Configuration writes require the owner's Node document. Publishes it for
+/// each owner the plan writes to that has none yet.
+async fn ensure_owner_nodes(
+    access: &ConfigAccess,
+    docs: &[DesiredStateApplyDocument],
+) -> Result<()> {
+    let owners: std::collections::BTreeSet<&str> = docs
+        .iter()
+        .filter(|document| !matches!(document.collection, Collection::Node))
+        .filter_map(|document| document.add["node_did"].as_str())
+        .collect();
+    for owner in owners {
+        let response = access
+            .execute(&format!(
+                "{{ Node(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
+                crate::store::graphql::escape_graphql_string(owner)
+            ))
+            .await?;
+        if response["data"]["Node"].as_array().is_some_and(Vec::is_empty) {
+            crate::test_support::bootstrap_signed_test_node(access, owner).await;
+        }
+    }
+    Ok(())
+}
+
 async fn apply_with_counts(
     access: &ConfigAccess,
     docs: Vec<DesiredStateApplyDocument>,
 ) -> Result<DesiredStateApplyCounts> {
+    ensure_owner_nodes(access, &docs).await?;
     let plan = DesiredStateApplyPlan::new(docs)?;
     access
         .transact_write("test.desired.apply", |txn| {
@@ -254,7 +281,7 @@ async fn apply_with_counts(
 #[tokio::test]
 async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_owner() -> Result<()>
 {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let capture = IgnoredWireWarningCapture::default();
@@ -283,7 +310,7 @@ async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_ow
 
 #[tokio::test]
 async fn unchanged_desired_state_replay_does_not_add_document_commit() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:desired-state-replay";
@@ -372,7 +399,7 @@ fn plans_reject_unknown_fields_sparse_updates_and_scope_changes() {
 
 #[tokio::test]
 async fn replacement_resets_defaults_and_preserves_backend_observations() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let mut initial = backend("did:key:owner", "local");
@@ -420,7 +447,7 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
 
 #[tokio::test]
 async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
     let access = ConfigAccess::local(node.clone());
     apply(
@@ -460,7 +487,7 @@ async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> R
 
 #[tokio::test]
 async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
@@ -494,7 +521,7 @@ async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()>
 
 #[tokio::test]
 async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
@@ -544,7 +571,7 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
 
 #[tokio::test]
 async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
@@ -594,7 +621,7 @@ fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
         ),
         config(
             Collection::Agent,
-            json!({"node_did":owner,"agent_did":"behavior","inference_profile_id":"profile","context_id":"context"}),
+            json!({"node_did":owner,"agent_did":"behavior","creation_nonce":"nonce","inference_profile_id":"profile","context_id":"context"}),
         ),
         config(
             Collection::AgentContext,
@@ -618,7 +645,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         .as_array()
         .expect("Lean default replacement cases");
     assert_eq!(cases.len(), 6);
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     for (index, case) in cases.iter().enumerate() {
@@ -702,7 +729,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
 
 #[tokio::test]
 async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
@@ -816,7 +843,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
 
 #[tokio::test]
 async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::AgentContext]).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
@@ -849,7 +876,7 @@ async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Resu
 
 #[tokio::test]
 async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
@@ -898,7 +925,7 @@ fn expectation(owner: &str, id: &str, digest: Option<String>) -> DesiredStateExp
 }
 
 async fn cas_node() -> Result<(ConfigAccess, &'static str)> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     Ok((ConfigAccess::local(node), "did:key:owner"))
 }
@@ -1191,7 +1218,7 @@ fn rule_documents(
 
 #[tokio::test]
 async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
@@ -1601,7 +1628,7 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
 }
 
 async fn event_source_node() -> Result<Arc<EmbeddedNode>> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     node.add_collection(
         "type EventProbeSource { batch: String required_batch: String! result: String flag: Boolean tags: [String] total: Int expected_total: Int! ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID }",
@@ -2284,7 +2311,7 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
         .actions
         .iter()
         .any(|action| matches!(action, LeanIdentityAction::Check { actor, .. } if actor == agent)));
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     let user_access = ConfigAccess::local_as(node.clone(), identity::Did::new(user)?);
     let runtime_did = identity::Did::new(runtime)?;
     let agent_access = ConfigAccess::local_as(node.clone(), identity::Did::new(agent)?);

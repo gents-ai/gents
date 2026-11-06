@@ -675,8 +675,10 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
             .unwrap();
         assert_eq!(cursor_update(&second_access, doc, value).await?, expected);
     }
-    user.add_collection("type Records { eligible: Boolean batch: String other_batch: String }")
-        .await?;
+    user.add_collection(
+        "type Records { eligible: Boolean batch: String other_batch: String handoff_id: String }",
+    )
+    .await?;
     user.add_collection("type Other { eligible: Boolean batch: String other_batch: String }")
         .await?;
     let initial = &contract.event_generation_cases[0]["observed"];

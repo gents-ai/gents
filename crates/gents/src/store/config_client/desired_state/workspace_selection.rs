@@ -203,7 +203,7 @@ mod tests {
         let node_doc = crate::store::graphql::created_doc_id(&node_response, "Node")?;
         let target_response = access.transact_write("test.workspace_selection.target", |txn| Box::pin(async {
             let response = txn.execute_client_signed_create("mutation($input: AgentMutationInputArg!) { create_Agent(input:$input) {_docID} }",
-                &json!({"input":{"node_did":runtime.did(),"agent_did":target_binding.agent_did,"creation_nonce":target_binding.creation_nonce,"enabled":true}}), gents_protocol::schemas::AGENT).await?;
+                &json!({"input":{"node_did":runtime.did(),"agent_did":target_binding.agent_did,"creation_nonce":target_binding.creation_nonce,"inference_profile_id":format!("{}:inference",target_binding.agent_did),"enabled":true}}), gents_protocol::schemas::AGENT).await?;
             let doc = crate::store::graphql::created_doc_id(&response, "Agent")?;
             txn.add_resource_relationship("Agent", &doc, "parent", "nodes", &node_doc).await?;
             Ok::<_, anyhow::Error>(response)

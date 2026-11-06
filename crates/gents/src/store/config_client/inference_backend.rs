@@ -473,6 +473,7 @@ mod tests {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node);
+        crate::test_support::bootstrap_signed_test_node(&access, did).await;
         let oauth = |account_ref: Option<&str>| BackendAuth::NodeOAuth {
             account_ref: account_ref.map(str::to_owned),
         };

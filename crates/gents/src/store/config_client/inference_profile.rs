@@ -136,6 +136,7 @@ mod tests {
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node);
         for owner in ["did:key:owner", "did:key:other"] {
+            crate::test_support::bootstrap_signed_test_node(&access, owner).await;
             let backend = json!({"node_did":owner,"backend_id":"local","name":"Local",
                 "provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1",
                 "auth":{"kind":"unauthenticated"}});
@@ -223,8 +224,8 @@ mod tests {
         let did = "did:key:z6MkTestProfileEvents";
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        crate::ensure_node(&node, did).await?;
         let access = ConfigAccess::local(node);
+        crate::test_support::bootstrap_signed_test_node(&access, did).await;
         let spec = crate::inference::backends::setup::connection_spec(
             crate::inference::backends::setup::InferenceProviderId::Anthropic,
             crate::inference::backends::setup::InferenceAuthMethod::ClaudeOauth,
@@ -372,8 +373,8 @@ mod tests {
         let did = "did:key:z6MkTestAgentAccounts";
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        crate::ensure_node(&node, did).await?;
         let access = ConfigAccess::local(node);
+        crate::test_support::bootstrap_signed_test_node(&access, did).await;
         let spec = crate::inference::backends::setup::connection_spec(
             crate::inference::backends::setup::InferenceProviderId::Anthropic,
             crate::inference::backends::setup::InferenceAuthMethod::ClaudeOauth,

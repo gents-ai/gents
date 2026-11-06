@@ -445,7 +445,12 @@ mod tests {
         )
         .unwrap();
         let did = crate::store::identity::NodeIdentity::did(&identity).to_string();
-        super::super::ConfigAccess::graphql_as(endpoint, &did)
+        let capability = identity.client_signing_capability().unwrap();
+        super::super::ConfigAccess::Graphql(
+            super::super::GraphqlEndpoint::as_principal(endpoint, &did)
+                .with_client_signing_capability(capability)
+                .unwrap(),
+        )
             .transact_write("test.per_request_bearer", |txn| {
                 Box::pin(async move {
                     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
