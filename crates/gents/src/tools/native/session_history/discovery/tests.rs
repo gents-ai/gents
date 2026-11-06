@@ -171,7 +171,7 @@ async fn output_pages_a_background_calls_stored_output_past_its_receipt() {
     let tool = SessionHistoryTool::new(
         fixture.node.clone(),
         fixture.node_did.clone(),
-        identity::Did::new((fixture.node_did.clone()).to_string()).unwrap(),
+        lifecycle.actor().clone(),
     );
     // While the call runs, its only delivery is the receipt: not output.
     let error = call_error(
@@ -221,7 +221,7 @@ async fn output_pages_the_full_stored_tool_output_behind_a_bounded_view() {
     let tool = SessionHistoryTool::new(
         fixture.node.clone(),
         fixture.node_did.clone(),
-        identity::Did::new((fixture.node_did.clone()).to_string()).unwrap(),
+        lifecycle.actor().clone(),
     );
 
     for key in ["spawn-provider-call", "spawn-native-tool"] {
