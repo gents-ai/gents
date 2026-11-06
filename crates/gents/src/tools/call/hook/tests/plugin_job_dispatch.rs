@@ -33,9 +33,11 @@ struct Options {
     hop: u32,
     /// Runs the driver's `tool_root` in a temporary working folder.
     cwd: bool,
-    /// Later steps of an adopted job end without effect and leave it running,
-    /// instead of failing on a refused scratch file.
-    idle: bool,
+    /// What every later step of an adopted job answers.
+    later: Later,
+    /// The adoption kicks its first later step; otherwise the driver admits
+    /// no wake and a test runs that step itself.
+    kicks: bool,
     /// The plugin declares the `run_script` host import and asks the host to
     /// run the call's `script` as its step.
     imports: bool,
@@ -66,7 +68,8 @@ impl Default for Options {
             data: false,
             hop: 0,
             cwd: false,
-            idle: false,
+            later: Later::RefusedScratch,
+            kicks: true,
             imports: false,
             caller_targets: true,
         }
@@ -87,12 +90,37 @@ struct Step0 {
     session_id: String,
     data: bool,
     via: InstalledVia,
-    idle: bool,
+    later: Later,
+}
+
+/// The answer of every later step of an adopted job.
+#[derive(Clone, Copy)]
+enum Later {
+    /// A scratch file whose name the driver refuses, so the step leaves the
+    /// row untouched.
+    RefusedScratch,
+    /// No effect: the job keeps running.
+    Idle,
+    /// One spawn of `t-worker` in slot `later`.
+    Spawn,
+}
+
+impl Later {
+    fn output(self) -> Value {
+        match self {
+            Self::RefusedScratch => {
+                json!({"result": "x", "scratch": [{"name": "a/b", "content": "c"}]})
+            }
+            Self::Idle => json!({"effects": {}}),
+            Self::Spawn => json!({"effects": {"spawn": [
+                {"slot": "later", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}
+            ]}}),
+        }
+    }
 }
 
 /// A guest that answers step 0 with `first` and every later step (its input
-/// carries a `"pin":{` key) with a scratch file whose name the driver refuses,
-/// so the step the adoption kicks leaves the row untouched.
+/// carries a `"pin":{` key) with `later`.
 fn branching_wat(first: &[u8], later: &[u8]) -> String {
     let escape = |bytes: &[u8]| {
         bytes
@@ -145,14 +173,10 @@ fn install_plugin(
     output: &Value,
     data: bool,
     via: InstalledVia,
-    idle: bool,
+    later: Later,
     imports: bool,
 ) {
-    let later = if idle {
-        json!({"effects": {}})
-    } else {
-        json!({"result": "x", "scratch": [{"name": "a/b", "content": "c"}]})
-    };
+    let later = later.output();
     let wat = if imports {
         crate::plugin::tests::IMPORTING_WAT.to_owned()
     } else {
@@ -266,7 +290,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         &output,
         options.data,
         options.via,
-        options.idle,
+        options.later,
         options.imports,
     );
     let cwd = options.cwd.then(|| tempfile::tempdir().unwrap());
@@ -334,7 +358,18 @@ async fn step0(output: Value, options: Options) -> Step0 {
         });
         let (_sender, receiver) = tokio::sync::watch::channel(snapshot);
         runtime.bind_snapshot(receiver).unwrap();
-        hook = hook.with_job_driver(JobDriver::new(runtime));
+        let admission = crate::runtime::service::RuntimeServiceAdmission::default();
+        if !options.kicks {
+            admission
+                .retire(
+                    gents_protocol::serve_lifecycle::replacement::RetirementAuthority {
+                        operator_authenticated: true,
+                        observed_build_matches: true,
+                    },
+                )
+                .unwrap();
+        }
+        hook = hook.with_job_driver(JobDriver::with_service_admission(runtime, admission));
     }
     bind_claimed_hook_request(&hook, lifecycle, Utc::now() + chrono::Duration::minutes(5)).await;
     hook.on_completion_call(&user_text_message("run the workflow"), &[])
@@ -353,7 +388,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         session_id,
         data: options.data,
         via: options.via,
-        idle: options.idle,
+        later: options.later,
     }
 }
 
@@ -559,7 +594,7 @@ impl Step0 {
             output,
             self.data,
             self.via,
-            self.idle,
+            self.later,
             false,
         );
     }
@@ -955,7 +990,7 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     let step = step0(
         adopting(),
         Options {
-            idle: true,
+            later: Later::Idle,
             ..Default::default()
         },
     )
@@ -1680,7 +1715,7 @@ async fn pinned_step0_with_a_write_outside_the_grant_completes_foreground_failed
 
 fn idle() -> Options {
     Options {
-        idle: true,
+        later: Later::Idle,
         ..Default::default()
     }
 }
@@ -1858,4 +1893,173 @@ async fn an_unauthorized_later_entry_kills_nothing() {
     assert_eq!(step.state_of("call-1").await, "running");
     assert!(!step.interrupted(&child).await);
     step.finish().await;
+}
+
+/// How the runtime Node shows its hop cap to a later step whose Agent cannot
+/// see that Node.
+#[derive(Clone, Copy, Debug)]
+enum NodeHopCap {
+    Hidden(Option<u32>),
+    Unreadable,
+}
+
+impl Step0 {
+    async fn observe_node_hop_cap(&self, cap: NodeHopCap) {
+        let node_did = self.db.node_identity.did();
+        let visible = self.access().execute("{ Node { _docID } }").await.unwrap();
+        assert_eq!(visible["data"]["Node"], json!([]), "{visible}");
+        match cap {
+            NodeHopCap::Hidden(None) => {}
+            NodeHopCap::Hidden(Some(cap)) => {
+                self.owner
+                    .transact_write("test.plugin_job_hop_cap", |txn| {
+                        Box::pin(async move {
+                            let (_, mut node) =
+                                crate::store::config_client::read_desired_state_record_in_txn(
+                                    txn,
+                                    crate::Collection::Node,
+                                    node_did,
+                                    node_did,
+                                )
+                                .await?
+                                .ok_or_else(|| anyhow::anyhow!("owned Node is unavailable"))?;
+                            node["max_request_hop"] = json!(cap);
+                            let plan =
+                                crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                                    crate::store::config_client::DesiredStateApplyDocument {
+                                        collection: crate::Collection::Node,
+                                        add: node.clone(),
+                                        update: node,
+                                    },
+                                ])?;
+                            crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+                        })
+                    })
+                    .await
+                    .unwrap();
+            }
+            NodeHopCap::Unreadable => {
+                crate::ConfigAccess::local_as(self.node.clone(), node_did.parse().unwrap())
+                    .grant_node_permission(
+                        &self.user.did().parse().unwrap(),
+                        crate::store::config_client::NodePermission::DacRelationDelete,
+                    )
+                    .await
+                    .unwrap();
+                let node = self.owner.execute("{ Node { _docID } }").await.unwrap();
+                self.owner
+                    .delete_actor_relationship(
+                        "Node",
+                        node["data"]["Node"][0]["_docID"].as_str().unwrap(),
+                        "runtime_reader",
+                        &node_did.parse().unwrap(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+
+    async fn run_later_step(
+        &self,
+        row: &str,
+    ) -> crate::tools::background::job::driver::StepOutcome {
+        let driver = self.hook.job_driver.as_ref().unwrap();
+        crate::tools::background::job::driver::run_step(
+            driver.runtime(),
+            row,
+            &self.caller.did().parse().unwrap(),
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn closed_output(&self, row: &str) -> Value {
+        let tool = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
+            self.node.clone(),
+            self.caller.did().parse().unwrap(),
+            row,
+            &self.hook.node_did,
+            &self.session_id,
+            self.hook.active_requester_did().await.as_deref(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        match crate::tools::background::status::observe_canonical_tool_output_with_access(
+            &self.access(),
+            row,
+            tool.request_doc_id().unwrap(),
+            tool.session_id(),
+            tool.node_did(),
+            tool.requester_did(),
+        )
+        .await
+        .unwrap()
+        {
+            crate::tools::background::status::CanonicalToolOutputObservation::Closed(output) => {
+                serde_json::from_str(&output).unwrap()
+            }
+            crate::tools::background::status::CanonicalToolOutputObservation::Open(output) => {
+                panic!("job row output is still open: {output}")
+            }
+        }
+    }
+}
+
+/// A later step reads the runtime Node's hop cap as the runtime: the Agent's
+/// own Node visibility is not an unset cap, and a Node the runtime cannot read
+/// bounds every spawn at hop 0.
+#[tokio::test]
+async fn later_step_hop_cap_ignores_agent_node_visibility_and_fails_closed() {
+    use crate::tools::background::job::admit::Refusal;
+    use crate::tools::background::job::driver::StepOutcome;
+
+    for (cap, later, refused) in [
+        (NodeHopCap::Hidden(None), Later::Spawn, false),
+        (NodeHopCap::Hidden(Some(0)), Later::Spawn, true),
+        (NodeHopCap::Unreadable, Later::Spawn, true),
+        (NodeHopCap::Unreadable, Later::Idle, false),
+    ] {
+        let step = step0(
+            adopting(),
+            Options {
+                later,
+                kicks: false,
+                ..Default::default()
+            },
+        )
+        .await;
+        let answer = step.call(ARGS).await;
+        assert_eq!(answer["status"], "running", "{cap:?}: {answer}");
+        let row = step.row().await;
+        let doc = row["_docID"].as_str().unwrap().to_owned();
+        step.observe_node_hop_cap(cap).await;
+        let outcome = step.run_later_step(&doc).await;
+        let row = step.row().await;
+        if refused {
+            assert_eq!(
+                outcome,
+                StepOutcome::Refused(Refusal::DepthExceeded),
+                "{cap:?}"
+            );
+            assert_eq!(row["lifecycle_state"], "failed", "{cap:?}: {row}");
+            assert_eq!(
+                step.closed_output(&doc).await["code"],
+                "plugin_job_depth_exceeded",
+                "{cap:?}"
+            );
+        } else {
+            assert!(
+                !matches!(outcome, StepOutcome::Refused(_)),
+                "{cap:?}: {outcome:?}"
+            );
+            assert_eq!(row["lifecycle_state"], "running", "{cap:?}: {row}");
+            if matches!(later, Later::Spawn) {
+                let child = step.child_request(&doc, "later").await;
+                assert_eq!(child["agent_did"], step.worker.did(), "{cap:?}");
+            }
+        }
+        step.finish().await;
+    }
 }
