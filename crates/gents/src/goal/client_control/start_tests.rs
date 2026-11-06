@@ -570,14 +570,20 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                         )
                         .await
                         .unwrap());
-                    access
-                        .write(
-                            "test.goal.delete_original_session",
-                            &format!(
-                                r#"mutation {{ delete_AgentSession(docID: "{}") {{ _docID }} }}"#,
-                                escape_graphql_string(&old_session),
-                            ),
+                    admin
+                        .grant_node_permission(
+                            &::identity::Did::new(user.did()).unwrap(),
+                            crate::store::config_client::NodePermission::DocumentDelete,
                         )
+                        .await
+                        .unwrap();
+                    access
+                        .transact_write("test.goal.delete_original_session", |txn| {
+                            let old_session = &old_session;
+                            Box::pin(async move {
+                                txn.delete_session_for_native_fixture(old_session).await
+                            })
+                        })
                         .await
                         .unwrap();
                     let deleted = access

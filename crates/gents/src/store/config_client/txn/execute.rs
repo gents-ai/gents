@@ -42,6 +42,35 @@ impl ConfigApplyTxn<'_> {
     ) -> Result<()> {
         let schema = super::super::client_signed_agent::trusted_delete_schema(collection)
             .ok_or(ConfigClientError::ClientConfigurationDeleteInvalid)?;
+        self.delete_document_with_schema(collection, doc_id, schema)
+            .await
+    }
+
+    /// External native deletion can invalidate physical session targets while
+    /// product session deletion remains deferred.
+    #[cfg(test)]
+    pub(crate) async fn delete_session_for_native_fixture(&self, doc_id: &str) -> Result<()> {
+        let TxnBackend::Http { endpoint, .. } = &self.backend else {
+            return Err(ConfigClientError::ClientConfigurationDeleteInvalid);
+        };
+        if !endpoint.client_signed_agent_creates || endpoint.pack_replay.is_some() {
+            return Err(ConfigClientError::ClientConfigurationDeleteInvalid);
+        }
+        endpoint.held_client_signing_capability()?;
+        self.delete_document_with_schema(
+            gents_protocol::schemas::AGENT_SESSION_NAME,
+            doc_id,
+            gents_protocol::schemas::AGENT_SESSION,
+        )
+        .await
+    }
+
+    async fn delete_document_with_schema(
+        &self,
+        collection: &str,
+        doc_id: &str,
+        schema: &'static str,
+    ) -> Result<()> {
         let mutation = format!(
             r#"mutation {{ delete_{collection}(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
             crate::store::graphql::escape_graphql_string(doc_id),
