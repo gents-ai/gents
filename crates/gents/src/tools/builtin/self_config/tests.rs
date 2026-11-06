@@ -87,6 +87,120 @@ pub(super) fn config(categories: &[&str]) -> SelfConfigToolConfig {
     }
 }
 
+pub(super) struct SelfConfigFixture {
+    db: crate::support::TestDb,
+    user_access: crate::ConfigAccess,
+    agent: Arc<dyn crate::NodeIdentity>,
+    agent_did: String,
+    node_binding: crate::store::config_client::ConfigurationNodeBinding,
+}
+
+impl SelfConfigFixture {
+    pub(super) async fn new(name: &str) -> Self {
+        let (db, _user, user_access, binding) = crate::test_support::signed_test_node(name).await;
+        let agent =
+            crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+                .expect("fixture Agent is derived from the held runtime");
+        let response = user_access.execute("{ Node { _docID } }").await.unwrap();
+        let node_binding = crate::store::config_client::ConfigurationNodeBinding {
+            node_did: identity::Did::new(db.node_identity.did()).unwrap(),
+            doc_id: response["data"]["Node"][0]["_docID"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            enabled: true,
+            default_agent_did: Some(binding.agent_did.clone()),
+        };
+        Self {
+            db,
+            user_access,
+            agent,
+            agent_did: binding.agent_did,
+            node_binding,
+        }
+    }
+
+    pub(super) async fn grant_selected_configuration(&self) {
+        self.user_access
+            .transact_write("test.self_config.grant_selected", |txn| {
+                let owner = self.db.node_identity.did();
+                let agent = &self.agent_did;
+                Box::pin(async move {
+                    crate::store::config_client::grant_selected_self_configuration(
+                        txn, owner, agent,
+                    )
+                    .await
+                })
+            })
+            .await
+            .expect("User grants selected configuration to the Agent");
+    }
+
+    pub(super) fn tools(&self, categories: &[&str]) -> Vec<Box<dyn ToolDyn>> {
+        let mut grants = config(categories);
+        grants.agent_did = self.agent_did.clone();
+        grants.preview = true;
+        build_self_config_tools_with_runtime(
+            Arc::default(),
+            self.db.node.clone(),
+            self.db.node_identity.did().to_owned(),
+            Some(self.agent.clone()),
+            Some(self.db.node_identity.clone()),
+            &grants,
+            test_plugins(),
+            Some(self.node_binding.clone()),
+        )
+    }
+}
+
+#[tokio::test]
+async fn selected_configuration_requires_and_observes_user_grant() {
+    let fixture = SelfConfigFixture::new("self-config-selected-grant").await;
+    let tools = fixture.tools(&["tools"]);
+    let update =
+        |name| json!({"argv": ["tools", "update"], "set": {"display_name": name}}).to_string();
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    assert!(tool.call(update("Denied before grant")).await.is_err());
+
+    fixture.grant_selected_configuration().await;
+    tool.call(update("Allowed"))
+        .await
+        .expect("User grant permits the selected Agent update");
+
+    let admin = crate::ConfigAccess::local_as(
+        fixture.db.node.clone(),
+        identity::Did::new(fixture.db.node_identity.did()).unwrap(),
+    );
+    let user = identity::Did::new(fixture.user_access.actor_did().unwrap()).unwrap();
+    admin
+        .grant_node_permission(
+            &user,
+            crate::store::config_client::NodePermission::DacRelationDelete,
+        )
+        .await
+        .unwrap();
+    let response = fixture
+        .user_access
+        .execute("{ Agent { _docID } }")
+        .await
+        .unwrap();
+    let doc_id = response["data"]["Agent"][0]["_docID"].as_str().unwrap();
+    fixture
+        .user_access
+        .delete_actor_relationship(
+            "Agent",
+            doc_id,
+            "config_writer",
+            &identity::Did::new(&fixture.agent_did).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(tool.call(update("Denied after revocation")).await.is_err());
+}
+
 #[test]
 fn every_tool_name_is_reserved_builtin() {
     for name in SELF_CONFIG_TOOL_NAMES {

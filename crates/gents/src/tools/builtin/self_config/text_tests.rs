@@ -1,4 +1,4 @@
-use super::tests::{build_agent_node, call_config_tool, config, node_identity};
+use super::tests::{build_agent_node, call_config_tool, config, node_identity, SelfConfigFixture};
 use super::*;
 
 type Tools = Vec<Box<dyn ToolDyn>>;
@@ -43,6 +43,13 @@ async fn setup(label: &str, categories: &[&str]) -> (Arc<EmbeddedNode>, String, 
         std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
     );
     (node, owner, tools)
+}
+
+async fn authenticated_setup(label: &str, categories: &[&str]) -> (SelfConfigFixture, Tools) {
+    let fixture = SelfConfigFixture::new(label).await;
+    fixture.grant_selected_configuration().await;
+    let tools = fixture.tools(categories);
+    (fixture, tools)
 }
 
 #[tokio::test]
@@ -138,7 +145,7 @@ async fn profile_receipts_name_the_default_target_and_preview_edit_means_preview
 
 #[tokio::test]
 async fn guessed_verbs_resolve_or_name_the_working_form() {
-    let (_node, _owner, tools) = setup("verbs", &["node", "tools", "automation"]).await;
+    let (_fixture, tools) = authenticated_setup("verbs", &["node", "tools", "automation"]).await;
     let task = |verb: &[&str]| {
         let mut argv = vec!["automation"];
         argv.extend_from_slice(verb);
@@ -184,7 +191,7 @@ async fn guessed_verbs_resolve_or_name_the_working_form() {
 
 #[tokio::test]
 async fn type_errors_name_the_field_path_and_shape() {
-    let (_node, _owner, tools) = setup("shapes", &["tools"]).await;
+    let (_fixture, tools) = authenticated_setup("shapes", &["tools"]).await;
     let error = refused(
         &tools,
         json!({"argv":["tools","preview"],"set":{"integrations":{"lsp":"gents-mailbox"}}}),
@@ -475,7 +482,7 @@ async fn automation_validation_refuses_what_every_fire_would_reject() {
 
 #[tokio::test]
 async fn execution_deadlines_are_bounded_where_a_claim_can_represent_them() {
-    let (_node, _owner, tools) = setup("deadline", &["profile"]).await;
+    let (_fixture, tools) = authenticated_setup("deadline", &["profile"]).await;
     let create = |deadline: i64| json!({"argv":["execution","preview","create"],"target_id":"long","set":{"deadline_duration_secs":deadline}});
     let error = refused(&tools, create(i64::MAX)).await;
     assert!(error.contains("at most 3153600000"), "{error}");
@@ -580,7 +587,7 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
 
 #[tokio::test]
 async fn results_put_the_answer_first_and_execution_metadata_last() {
-    let (_node, _owner, tools) = setup("key-order", &["node", "profile"]).await;
+    let (_fixture, tools) = authenticated_setup("key-order", &["node", "profile"]).await;
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -635,7 +642,7 @@ async fn results_put_the_answer_first_and_execution_metadata_last() {
 
 #[tokio::test]
 async fn lists_include_unselected_documents() {
-    let (_node, _owner, tools) = setup("lists", &["node", "tools", "automation"]).await;
+    let (_fixture, tools) = authenticated_setup("lists", &["node", "tools", "automation"]).await;
     ok(
         &tools,
         json!({"argv":["datastore","create","unselected"],"set":{"entries":[]}}),
@@ -688,7 +695,7 @@ async fn target_id_fills_a_positional_id() {
 
 #[tokio::test]
 async fn mailbox_help_states_the_identity_choice() {
-    let (_node, _owner, tools) = setup("mailbox-help", &["tools"]).await;
+    let (_fixture, tools) = authenticated_setup("mailbox-help", &["tools"]).await;
     let choice = "condition identity: one open item per stable finding, updated across requests; event identity: a new item for every request";
     for argv in [
         json!(["help", "datastore"]),
@@ -707,7 +714,7 @@ async fn mailbox_help_states_the_identity_choice() {
 
 #[tokio::test]
 async fn datastore_help_says_what_fill_means() {
-    let (_node, _owner, tools) = setup("fill-help", &["tools"]).await;
+    let (_fixture, tools) = authenticated_setup("fill-help", &["tools"]).await;
     let page = ok(&tools, json!({"argv":["help","datastore"]})).await;
     let page = page.as_str().unwrap();
     for line in [
@@ -863,7 +870,7 @@ async fn crud_documents_share_verbs_and_preserve_reference_and_identity_checks()
 
 #[tokio::test]
 async fn crud_batch_reports_partial_commits_and_stops_before_later_operations() {
-    let (_node, _owner, tools) = setup("crud-batch", &["profile"]).await;
+    let (_fixture, tools) = authenticated_setup("crud-batch", &["profile"]).await;
     let error = refused(
         &tools,
         json!({"argv":["batch"],"options":{"operations":[
@@ -1336,7 +1343,7 @@ async fn shared_option_rejects_other_values_and_other_resources() {
 
 #[tokio::test]
 async fn crud_backend_creation_preserves_auth_boundary() {
-    let (_node, _owner, tools) = setup("crud-backend", &["backend"]).await;
+    let (_fixture, tools) = authenticated_setup("crud-backend", &["backend"]).await;
     ok(
         &tools,
         json!({"argv":["backend","create","local"],"set":{"endpoint":"http://127.0.0.1:8000/v1"}}),
@@ -1355,7 +1362,7 @@ async fn crud_backend_creation_preserves_auth_boundary() {
 
 #[tokio::test]
 async fn job_block_help_topic_states_bounds_defaults_and_policy() {
-    let (_node, _owner, tools) = setup("job-help", &["tools"]).await;
+    let (_fixture, tools) = authenticated_setup("job-help", &["tools"]).await;
     let page = call_config_tool(&tools, vec!["help".into(), "tools".into()])
         .await
         .unwrap();
@@ -1384,8 +1391,8 @@ async fn job_block_help_topic_states_bounds_defaults_and_policy() {
 
 #[tokio::test]
 async fn crud_help_exposes_parameters_for_the_named_resource_and_verb() {
-    let (_node, _owner, tools) =
-        setup("crud-help", &["node", "tools", "profile", "automation"]).await;
+    let (_fixture, tools) =
+        authenticated_setup("crud-help", &["node", "tools", "profile", "automation"]).await;
     for (resource, field) in [
         ("context", "system_prompt"),
         ("sampling", "temperature"),
@@ -1679,7 +1686,7 @@ async fn config_error_recovery_is_executable_for_single_and_batch_calls() {
 
 #[tokio::test]
 async fn trigger_decode_errors_name_the_nested_field_and_offer_working_help() {
-    let (_node, _owner, tools) = setup("nested-guidance", &["node", "automation"]).await;
+    let (_fixture, tools) = authenticated_setup("nested-guidance", &["node", "automation"]).await;
     ok(&tools, json!({"argv":["task","create"],"target_id":"inspect","set":{"prompt_template":"Inspect the input"}})).await;
     let failure = structured_failure(&tools, json!({"argv":["trigger","create"],"target_id":"inspect-trigger","set":{"task_id":"inspect","source":{"event_source_id":"input"}}})).await;
     let error = failure["error"].as_str().unwrap();
@@ -1698,7 +1705,7 @@ async fn trigger_decode_errors_name_the_nested_field_and_offer_working_help() {
 
 #[tokio::test]
 async fn delete_recovery_previews_the_same_resource_before_committing() {
-    let (_node, _owner, tools) = setup("delete-recovery", &["node", "automation"]).await;
+    let (_fixture, tools) = authenticated_setup("delete-recovery", &["node", "automation"]).await;
     ok(&tools, json!({"argv":["task","create"],"target_id":"disposable","set":{"prompt_template":"Review the input"}})).await;
     let failure = structured_failure(
         &tools,
