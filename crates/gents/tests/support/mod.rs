@@ -128,14 +128,28 @@ pub struct ManagedAgentFixture {
     pub binding: gents_protocol::agent_identity::AgentIdentityBinding,
 }
 
+pub async fn managed_fixture_user(db: &TestDb) -> gents::KeyIdentity {
+    let path = db.data_path().join("fixture-user.key");
+    tokio::task::spawn_blocking(move || gents::KeyIdentity::load_or_create(path, None))
+        .await
+        .expect("join held test user setup")
+        .expect("create held test user")
+}
+
+pub async fn load_managed_fixture_user(db: &TestDb) -> gents::KeyIdentity {
+    let path = db.data_path().join("fixture-user.key");
+    tokio::task::spawn_blocking(move || gents::KeyIdentity::load_existing(path, None))
+        .await
+        .expect("join retained test user load")
+        .expect("load retained test user")
+}
+
 pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
     use gents::store::config_client::{
         apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
     };
 
-    let user = tokio::task::spawn_blocking(|| fixtures::test_identity("managed-agent-owner"))
-        .await
-        .expect("create held test user");
+    let user = managed_fixture_user(db).await;
     let user_did = identity::Did::new(user.did()).expect("valid user DID");
     let runtime = db.node_identity.as_ref();
     assert_ne!(user.did(), runtime.did());
@@ -169,6 +183,29 @@ pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
         })
         .await
         .expect("install test Node as user");
+    let (agent, binding) = install_managed_agent(db, &access, &user, "Test agent").await;
+    ManagedAgentFixture {
+        user,
+        access,
+        agent,
+        binding,
+    }
+}
+
+pub async fn install_managed_agent(
+    db: &TestDb,
+    access: &gents::ConfigAccess,
+    user: &gents::KeyIdentity,
+    display_name: &str,
+) -> (
+    Arc<dyn NodeIdentity>,
+    gents_protocol::agent_identity::AgentIdentityBinding,
+) {
+    use gents::store::config_client::{
+        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
+    let runtime = db.node_identity.as_ref();
+    let user_did = identity::Did::new(user.did()).expect("valid user DID");
     let binding =
         gents::store::identity::provision_agent_identity_authorized(&db.node, runtime, &user_did)
             .await
@@ -179,7 +216,7 @@ pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
         "node_did": runtime.did(),
         "agent_did": binding.agent_did,
         "creation_nonce": binding.creation_nonce,
-        "display_name": "Test agent",
+        "display_name": display_name,
         "inference_profile_id": format!("{}:inference", binding.agent_did),
         "enabled": true,
     });
@@ -221,12 +258,7 @@ pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
         })
         .await
         .expect("install managed test Agent as user");
-    ManagedAgentFixture {
-        user,
-        access,
-        agent,
-        binding,
-    }
+    (agent, binding)
 }
 
 pub async fn test_db(name: &str) -> TestDb {

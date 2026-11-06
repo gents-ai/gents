@@ -1,6 +1,6 @@
 use gents::{DocumentRuntimeOptions, Gents, NodeIdentity};
 
-use super::fixtures::{bind_agent_backend, bind_managed_agent_backend};
+use super::fixtures::{bind_agent_backend, bind_selected_managed_agent_backend};
 use super::interrupt::{wait_for_runtime_ready, BootedAgent};
 use super::streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse};
 
@@ -167,7 +167,6 @@ pub async fn prepare_managed_accepted_turn(
     mut spec: AcceptedTurnSpec<'_>,
 ) -> PreparedAcceptedTurn {
     assert_eq!(spec.parent_agent_did, fixture.binding.agent_did);
-    assert_eq!(spec.configured_agent_dids, &[spec.parent_agent_did]);
     let mut plans = vec![StreamPlan::current_authored_user(
         spec.prompt,
         vec![
@@ -182,7 +181,18 @@ pub async fn prepare_managed_accepted_turn(
     );
     let backend = MockStreamingBackend::start_with_plans(spec.model, plans)
         .expect("start accepted-turn backend");
-    bind_managed_agent_backend(db, fixture, spec.backend_id, backend.endpoint(), spec.model).await;
+    for agent_did in spec.configured_agent_dids {
+        bind_selected_managed_agent_backend(
+            db,
+            fixture,
+            agent_did,
+            *agent_did == spec.parent_agent_did,
+            spec.backend_id,
+            backend.endpoint(),
+            spec.model,
+        )
+        .await;
+    }
 
     let node_did = db.node_identity.did();
     let user_did = fixture.user.did();
@@ -397,6 +407,55 @@ pub async fn boot_accepted_turn_with_backend_capacity(
 ) -> AcceptedTurnRuntime {
     boot_accepted_turn_with_backend_capacity_inner(db, spec, runtime_options, max_concurrent, None)
         .await
+}
+
+pub async fn boot_managed_accepted_turn_with_backend_capacity(
+    db: &super::TestDb,
+    fixture: &super::ManagedAgentFixture,
+    spec: AcceptedTurnSpec<'_>,
+    runtime_options: DocumentRuntimeOptions,
+    max_concurrent: usize,
+) -> AcceptedTurnRuntime {
+    use gents::store::config_client::{
+        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+        DesiredStateApplyPlan,
+    };
+    assert!(max_concurrent > 0);
+    let backend_id = spec.backend_id.to_owned();
+    let prepared = prepare_managed_accepted_turn(db, fixture, spec).await;
+    let did = db.node_identity.did();
+    fixture
+        .access
+        .transact_write("test.accepted_turn_backend_capacity", |txn| {
+            let backend_id = &backend_id;
+            Box::pin(async move {
+                let (_, mut backend) = read_desired_state_record_in_txn(
+                    txn,
+                    gents::Collection::InferenceBackend,
+                    did,
+                    backend_id,
+                )
+                .await?
+                .expect("accepted-turn backend");
+                backend["max_concurrent"] = max_concurrent.into();
+                let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                    collection: gents::Collection::InferenceBackend,
+                    add: backend.clone(),
+                    update: backend,
+                }])?;
+                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+            })
+        })
+        .await
+        .expect("configure accepted-turn backend capacity");
+    let agent = Gents::from_default_agent_documents(
+        db.node.clone(),
+        db.node_identity.clone(),
+        runtime_options,
+    )
+    .await
+    .expect("build accepted-turn runtime");
+    boot_prepared_accepted_turn(db, prepared, agent).await
 }
 
 pub async fn boot_accepted_turn_with_backend_capacity_and_dynamic_followups(

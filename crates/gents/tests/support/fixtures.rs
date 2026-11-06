@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use gents::defra_node::Node as EmbeddedNode;
 use gents::{
-    ensure_node, AgentToolSurfaceConfig, BackendProviderKind, KeyIdentity, ResolvedAgent,
-    RuntimeNode,
+    ensure_node, AgentToolSurfaceConfig, BackendProviderKind, KeyIdentity, NodeIdentity,
+    ResolvedAgent, RuntimeNode,
 };
 
 pub fn fixture_pack_names() -> Vec<String> {
@@ -483,9 +483,57 @@ pub async fn bind_default_agent_backend(
     bind_agent_backend_chain(node, node_did, None, backend_id, endpoint, "default").await;
 }
 
+pub async fn held_fixture_history(
+    db: &super::TestDb,
+    fixture: &super::ManagedAgentFixture,
+    session_id: &str,
+) -> Vec<gents::inference::llm::message::Message> {
+    let session = gents::store::graphql::escape_graphql_string(session_id);
+    let response = fixture.access.execute(&format!(
+        r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session}" }} }}, order: {{ sequence: ASC }}) {{ _docID }} }}"#,
+    )).await.expect("read fixture message headers");
+    let mut messages = Vec::new();
+    for header in response["data"]["AgentMessage"]
+        .as_array()
+        .expect("message headers")
+    {
+        let (_, message) = gents::session::load_canonical_message(
+            &fixture.access,
+            header["_docID"].as_str().expect("message document ID"),
+            db.node_identity.did(),
+            Some(fixture.user.did()),
+        )
+        .await
+        .expect("read fixture canonical message");
+        messages.push(message);
+    }
+    messages
+}
+
 pub async fn bind_managed_agent_backend(
     db: &super::TestDb,
     fixture: &super::ManagedAgentFixture,
+    backend_id: &str,
+    endpoint: &str,
+    model_name: &str,
+) {
+    bind_selected_managed_agent_backend(
+        db,
+        fixture,
+        &fixture.binding.agent_did,
+        true,
+        backend_id,
+        endpoint,
+        model_name,
+    )
+    .await;
+}
+
+pub async fn bind_selected_managed_agent_backend(
+    db: &super::TestDb,
+    fixture: &super::ManagedAgentFixture,
+    agent_did: &str,
+    make_default: bool,
     backend_id: &str,
     endpoint: &str,
     model_name: &str,
@@ -497,7 +545,6 @@ pub async fn bind_managed_agent_backend(
     use gents::Collection;
 
     let owner = db.node_identity.did();
-    let agent_did = &fixture.binding.agent_did;
     fixture
         .access
         .transact_write("test.bind_managed_agent_backend", |txn| {
@@ -513,7 +560,9 @@ pub async fn bind_managed_agent_backend(
                 let profile_id = agent["inference_profile_id"]
                     .as_str()
                     .expect("managed Agent inference profile");
-                node["default_agent_did"] = agent_did.clone().into();
+                if make_default {
+                    node["default_agent_did"] = agent_did.into();
+                }
                 let profile = serde_json::json!({
                     "node_did": owner,
                     "profile_id": profile_id,
