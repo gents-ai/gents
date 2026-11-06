@@ -520,4 +520,71 @@ mod tests {
         server.await??;
         Ok(())
     }
+    #[tokio::test]
+    async fn read_can_pass_a_waiting_runtime_proposal() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let mut socket = accept_async(stream).await?;
+            let _ = socket.next().await.context("missing start")??;
+            socket.send(Message::Text(json!({
+                "type": "ready",
+                "scope": {"node_did": "did:key:node", "pack_digests": ["sha256:root"], "nonce": "test"},
+                "preparation": {"agent_bindings": {}, "plugin_digests": {}, "operator_ux_digests": {}}
+            }).to_string().into())).await?;
+            socket
+                .send(Message::Text(
+                    json!({"type": "timestamp", "id": 42, "kind": "document"})
+                        .to_string()
+                        .into(),
+                ))
+                .await?;
+            let request = socket.next().await.context("missing read")??;
+            let Message::Text(request) = request else {
+                anyhow::bail!("expected read");
+            };
+            let request: Value = serde_json::from_str(&request)?;
+            anyhow::ensure!(request["type"] == "read", "expected read");
+            socket
+                .send(Message::Text(
+                    json!({"type": "read_result", "id": request["id"], "result": {"data": {}}})
+                        .to_string()
+                        .into(),
+                ))
+                .await?;
+            let response = socket.next().await.context("missing timestamp")??;
+            let Message::Text(response) = response else {
+                anyhow::bail!("expected timestamp response");
+            };
+            let response: Value = serde_json::from_str(&response)?;
+            anyhow::ensure!(
+                response["type"] == "timestamp_value"
+                    && response["id"] == 42
+                    && response["value"].is_string(),
+                "invalid timestamp response"
+            );
+            Ok::<_, anyhow::Error>(())
+        });
+        let key = ClientSigningCapability::from_ed25519_key(&[8; 32])?;
+        let endpoint = GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"),
+            key.did().to_owned(),
+        )
+        .with_client_signing_capability(key)?;
+        let mut session = PackInstallSession::start(
+            &endpoint,
+            json!({}),
+            "did:key:node",
+            &["sha256:root".to_owned()],
+        )
+        .await?;
+        assert_eq!(
+            session.read("{ Node { _docID } }", &json!({})).await?,
+            json!({"data": {}})
+        );
+        let _ = session.timestamp("document").await?;
+        server.await??;
+        Ok(())
+    }
 }
