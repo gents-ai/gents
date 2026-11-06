@@ -1113,17 +1113,62 @@ async fn fork_rolls_back_at_every_mutation_position() {
 
 #[tokio::test]
 async fn compaction_save_fault_leaves_chain_and_generation_intact() {
-    const AGENT: &str = "did:test:compaction-rollback";
+    use crate::store::identity::NodeIdentity;
     const SESSION: &str = "compaction-rollback";
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    save_compaction_entry(
-        &node,
-        AGENT,
+    let (db, user, client, binding) =
+        crate::test_support::signed_test_node("compaction-rollback").await;
+    let node = &db.node;
+    let node_did = db.node_identity.did();
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    publish_signed_history(
+        &db,
+        &user,
+        &client,
+        &binding,
         SESSION,
-        AGENT,
-        "request-first",
-        "request-doc-first",
+        &["first".into(), "second".into()],
+    )
+    .await;
+    let mut docs = Vec::new();
+    for index in 0..2 {
+        let request = format!("{SESSION}-request-{index}");
+        let response = access.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{_eq: "{}"}}}}, limit: 2) {{ _docID }} }}"#,
+            escape_graphql_string(&request),
+        )).await.unwrap();
+        let [row] = response["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .as_slice()
+        else {
+            panic!("compaction source request must be unique");
+        };
+        docs.push(row["_docID"].as_str().unwrap().to_owned());
+    }
+    let state = load_prompt_compaction_state_with_access(
+        &access,
+        SESSION,
+        node_did,
+        Some(user.did()),
+        None,
+    )
+    .await
+    .unwrap();
+    compaction_entries::save_compaction_entry_with_access(
+        &access,
+        agent.did(),
+        SESSION,
+        node_did,
+        Some(user.did()),
+        "compaction-rollback-request-0",
+        &docs[0],
         "first summary",
         &["/tmp/a.rs".to_string()],
         &[],
@@ -1131,31 +1176,37 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
         10,
         100,
         20,
+        &state.generation,
     )
     .await
     .unwrap();
     let chain = || async {
-        let entries = load_compaction_entries(&crate::store::config_client::ConfigAccess::local(node.clone()), SESSION, AGENT, None)
+        let entries = load_compaction_entries(&access, SESSION, node_did, Some(user.did()))
             .await
             .unwrap();
-        let state = load_prompt_compaction_state(&node, AGENT, SESSION, AGENT, None, None)
-            .await
-            .unwrap();
+        let state = load_prompt_compaction_state_with_access(
+            &access,
+            SESSION,
+            node_did,
+            Some(user.did()),
+            None,
+        )
+        .await
+        .unwrap();
         (entries, state)
     };
     let (_, before) = chain().await;
     let files = ["/tmp/b.rs".to_string()];
-
     let (saved, _) = crate::store::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
         || {
-            save_compaction_entry_with_requester_did(
-                &node,
-                AGENT,
+            compaction_entries::save_compaction_entry_with_access(
+                &access,
+                agent.did(),
                 SESSION,
-                AGENT,
-                None,
-                "request-second",
-                "request-doc-second",
+                node_did,
+                Some(user.did()),
+                "compaction-rollback-request-1",
+                &docs[1],
                 "second summary",
                 &files,
                 &[],
