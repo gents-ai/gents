@@ -1288,22 +1288,55 @@ async fn an_agent_new_row_links_the_request_it_caused() {
     .await
     .unwrap();
     let node = message.admission.node.clone();
-    let access = message.admission.tool.access().unwrap();
+    let access = &message.admission.client;
     let caller_request_id = crate::request::binding::load_agent_request_by_doc_id_with_access(
-        &access,
+        access,
         message.admission.tool.request_doc_id().unwrap(),
     )
     .await
     .unwrap()
     .unwrap()
     .request_id;
+    let child = access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{_docID node_did requester_did agent_did session_doc_id}} }}"#,
+        crate::store::graphql::escape_graphql_string(&message.caused_request_doc_id),
+    )).await.unwrap();
+    let [child] = child["data"]["AgentRequest"].as_array().unwrap().as_slice() else {
+        panic!("the User owning the Node and Agent must observe the caused request: {child}");
+    };
+    let agent = message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .actor_did()
+        .unwrap();
+    assert_eq!(child["node_did"], message.admission.node_did);
+    assert_eq!(child["requester_did"], agent);
+    assert_eq!(child["agent_did"], agent);
+    let session_doc = child["session_doc_id"]
+        .as_str()
+        .expect("caused request session");
+    let session = access.execute(&format!(
+        r#"{{ AgentSession(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{_docID node_did requester_did agent_did}} }}"#,
+        crate::store::graphql::escape_graphql_string(session_doc),
+    )).await.unwrap();
+    let [session] = session["data"]["AgentSession"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("the User owning the Node and Agent must observe the caused session: {session}");
+    };
+    assert_eq!(session["_docID"], session_doc);
+    assert_eq!(session["node_did"], message.admission.node_did);
+    assert_eq!(session["requester_did"], agent);
+    assert_eq!(session["agent_did"], agent);
     let tool_call_id = message.admission.tool.tool_call_id().to_owned();
-    let rows = crate::observe::run_timeline_fetch::load_run_timeline_rows(
-        &access,
-        &caller_request_id,
-    )
-    .await
-    .unwrap();
+    let rows =
+        crate::observe::run_timeline_fetch::load_run_timeline_rows(access, &caller_request_id)
+            .await
+            .unwrap();
     let row = rows
         .tool_calls
         .iter()
