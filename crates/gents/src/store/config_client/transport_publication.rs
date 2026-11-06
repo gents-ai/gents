@@ -86,7 +86,7 @@ async fn change(
     relation: &str,
     target: Subject,
     delete: bool,
-) -> Result<()> {
+) -> Result<bool> {
     provider
         .change_node_admin_relationship(
             view.sibling(Namespace::Acpstore),
@@ -99,8 +99,7 @@ async fn change(
             delete,
         )
         .await
-        .map_err(failure)?;
-    Ok(())
+        .map_err(failure)
 }
 
 /// Stage the receiving runtime's document-scoped native grants in the accepted
@@ -111,12 +110,12 @@ pub(crate) async fn project_transport_document(
     runtime: &Did,
     collection_name: &str,
     doc_id: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let Some(resource) = transport_resource(collection_name) else {
-        return Ok(());
+        return Ok(false);
     };
     if doc_id.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     let system = view.sibling(Namespace::Systemstore);
     let Some(collection) =
@@ -124,7 +123,7 @@ pub(crate) async fn project_transport_document(
             .await
             .map_err(failure)?
     else {
-        return Ok(());
+        return Ok(false);
     };
     let schema = collection.schema();
     if !schema.is_branchable
@@ -142,7 +141,7 @@ pub(crate) async fn project_transport_document(
         .await
         .map_err(failure)?
     else {
-        return Ok(());
+        return Ok(false);
     };
     let acp_view = view.sibling(Namespace::Acpstore);
     let scoped = provider
@@ -156,6 +155,7 @@ pub(crate) async fn project_transport_document(
         return Err(failure("transport document has no verified native owner"));
     }
     let tuples = acp::zanzibar::store::TransactionZanzibarStore::new(acp_view);
+    let mut changed = false;
     let actor = Subject::entity(runtime.clone());
     let marked = tuples
         .has_relationship(
@@ -168,7 +168,7 @@ pub(crate) async fn project_transport_document(
         .await
         .map_err(failure)?;
     if !marked {
-        change(
+        changed |= change(
             view,
             provider,
             runtime,
@@ -180,7 +180,7 @@ pub(crate) async fn project_transport_document(
         )
         .await?;
         if collection_name == PEER_REGISTRY_NAME {
-            change(
+            changed |= change(
                 view,
                 provider,
                 runtime,
@@ -192,7 +192,7 @@ pub(crate) async fn project_transport_document(
             )
             .await?;
         }
-        change(
+        changed |= change(
             view,
             provider,
             runtime,
@@ -203,7 +203,7 @@ pub(crate) async fn project_transport_document(
             false,
         )
         .await?;
-        change(
+        changed |= change(
             view,
             provider,
             runtime,
@@ -226,12 +226,12 @@ pub(crate) async fn project_transport_document(
         .await
         .map_err(failure)?;
     if !pending {
-        return Ok(());
+        return Ok(changed);
     }
     let Some((node, owner)) = local_node(view, provider, runtime).await? else {
-        return Ok(());
+        return Ok(changed);
     };
-    change(
+    changed |= change(
         view,
         provider,
         runtime,
@@ -258,7 +258,7 @@ pub(crate) async fn project_transport_document(
             None
         };
         if let Some(writer) = writer {
-            change(
+            changed |= change(
                 view,
                 provider,
                 runtime,
@@ -271,7 +271,7 @@ pub(crate) async fn project_transport_document(
             .await?;
         }
     }
-    change(
+    changed |= change(
         view,
         provider,
         runtime,
@@ -282,7 +282,7 @@ pub(crate) async fn project_transport_document(
         false,
     )
     .await?;
-    change(
+    changed |= change(
         view,
         provider,
         runtime,
@@ -293,7 +293,7 @@ pub(crate) async fn project_transport_document(
         true,
     )
     .await?;
-    Ok(())
+    Ok(changed)
 }
 
 /// Called on startup and local Node publication to complete only outstanding
@@ -302,8 +302,9 @@ pub(crate) async fn reconcile_transport_documents(
     view: &DocumentMutationView,
     provider: &dyn DocumentACP,
     runtime: &Did,
-) -> Result<()> {
+) -> Result<Vec<(String, String)>> {
     let system = view.sibling(Namespace::Systemstore);
+    let mut changed = Vec::new();
     for name in gents_protocol::schemas::BRANCHABLE_AGENT_COLLECTION_NAMES {
         let Some(collection) =
             db::collection::loader::load_collection_from_systemstore(&system, name)
@@ -321,8 +322,10 @@ pub(crate) async fn reconcile_transport_documents(
                 .id()
                 .ok_or_else(|| failure("transport row has no document ID"))?
                 .to_string();
-            project_transport_document(view, provider, runtime, name, &doc).await?;
+            if project_transport_document(view, provider, runtime, name, &doc).await? {
+                changed.push(((*name).to_owned(), doc));
+            }
         }
     }
-    Ok(())
+    Ok(changed)
 }
