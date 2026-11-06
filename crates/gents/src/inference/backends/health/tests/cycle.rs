@@ -1,11 +1,116 @@
 use super::*;
+use crate::store::identity::NodeIdentity;
+
+struct CycleFixture {
+    db: crate::support::TestDb,
+    _user_identity: crate::KeyIdentity,
+    user: crate::ConfigAccess,
+    runtime: crate::ConfigAccess,
+}
+
+impl CycleFixture {
+    async fn new() -> Self {
+        let (db, user_identity, user, _binding) =
+            crate::test_support::signed_test_node("health-cycle").await;
+        let runtime = crate::inference::auth::credential::runtime_credential_access(
+            &db.node,
+            db.node_identity.did(),
+        )
+        .unwrap();
+        Self {
+            db,
+            _user_identity: user_identity,
+            user,
+            runtime,
+        }
+    }
+
+    fn backend(&self, id: &str, endpoint: String) -> InferenceBackend {
+        let mut backend = super::backend(id, endpoint);
+        backend.node_did = self.db.node_identity.did().to_owned();
+        backend
+    }
+
+    async fn write(&self, backend: &InferenceBackend) {
+        crate::store::config_client::write_inference_backend_document(&self.user, backend)
+            .await
+            .unwrap();
+    }
+
+    async fn seed(&self, backend: &InferenceBackend, status: &str) {
+        self.write(backend).await;
+        crate::inference::backends::registry::set_backend_probe_status_as(
+            &self.runtime,
+            &backend.node_did,
+            &backend.backend_id,
+            status,
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn observation(
+        &self,
+        backend: &InferenceBackend,
+    ) -> crate::documents::InferenceBackendObservation {
+        self.user
+            .transact_readonly("test.health.observation", |txn| {
+                Box::pin(async move {
+                    crate::inference::backends::registry::lookup_backend_observation_in_txn(
+                        txn,
+                        &backend.node_did,
+                        &backend.backend_id,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    async fn wait_for_promotion(&self, backend: &InferenceBackend) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let observation = self.observation(backend).await;
+                if observation.probe_status.as_deref() == Some("healthy")
+                    && observation.last_probe.is_some()
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the backend was not probed before the periodic interval");
+    }
+
+    async fn scheduled(
+        &self,
+        health: &BackendHealthMap,
+        schedule: &mut ProbeSchedule,
+        periodic: bool,
+    ) -> ProbeCycleOutcome {
+        run_scheduled_backend_probe_cycle(
+            self.db.node.clone(),
+            &reqwest::Client::new(),
+            health,
+            &probe_options(),
+            self.db.node_identity.did(),
+            Some((schedule, periodic)),
+            None,
+        )
+        .await
+    }
+}
 
 #[tokio::test]
 async fn spawned_prober_observes_a_new_backend_before_the_next_periodic_tick() {
-    let node = test_node().await;
+    let fixture = CycleFixture::new().await;
+    let node = fixture.db.node.clone();
     let listener = ModelsListener::start();
-    let initial = backend("initial", listener.endpoint());
-    seed_backend_observation(&node, &initial, "unknown").await;
+    let initial = fixture.backend("initial", listener.endpoint());
+    fixture.seed(&initial, "unknown").await;
     let health = BackendHealthMap::new();
     let cancel = CancellationToken::new();
     let _cancel_on_drop = cancel.clone().drop_guard();
@@ -21,13 +126,13 @@ async fn spawned_prober_observes_a_new_backend_before_the_next_periodic_tick() {
         cancel.clone(),
         initial.node_did.clone(),
     ));
-    wait_for_promotion(&node, &initial).await;
+    fixture.wait_for_promotion(&initial).await;
     let initial_health = health.get(&initial.backend_id).await.unwrap();
     assert_modeled_probe(None, &initial_health, "probeSuccess");
 
-    let added = backend("added", listener.endpoint());
-    upsert_backend_configuration(&node, &added).await;
-    wait_for_promotion(&node, &added).await;
+    let added = fixture.backend("added", listener.endpoint());
+    fixture.write(&added).await;
+    fixture.wait_for_promotion(&added).await;
     assert_modeled_probe(
         None,
         &health.get(&added.backend_id).await.unwrap(),
@@ -49,40 +154,41 @@ async fn spawned_prober_observes_a_new_backend_before_the_next_periodic_tick() {
 
 #[tokio::test]
 async fn scheduled_cycles_preserve_health_across_observations_and_unrelated_edits() {
-    let node = test_node().await;
+    let fixture = CycleFixture::new().await;
+    let node = fixture.db.node.clone();
     let listener = ModelsListener::start();
-    let mut reachable = backend("reachable", listener.endpoint());
-    let failing = backend("failing", format!("{}/missing", listener.endpoint()));
-    seed_backend_observation(&node, &reachable, "unknown").await;
-    seed_backend_observation(&node, &failing, "unknown").await;
+    let mut reachable = fixture.backend("reachable", listener.endpoint());
+    let failing = fixture.backend("failing", format!("{}/missing", listener.endpoint()));
+    fixture.seed(&reachable, "unknown").await;
+    fixture.seed(&failing, "unknown").await;
     let health = BackendHealthMap::new();
     let mut schedule = ProbeSchedule::default();
-    scheduled_cycle(&node, &health, &mut schedule, true).await;
+    fixture.scheduled(&health, &mut schedule, true).await;
     let reachable_before = health.get("reachable").await.unwrap();
     let failing_before = health.get("failing").await.unwrap();
     assert_modeled_probe(None, &reachable_before, "probeSuccess");
     assert_modeled_probe(None, &failing_before, "probeFail");
-    let observation = crate::inference::backends::registry::lookup_backend_observation(
-        &node,
-        &reachable.node_did,
-        &reachable.backend_id,
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let observation = fixture.observation(&reachable).await;
     assert_eq!(observation.probe_status.as_deref(), Some("healthy"));
     assert_eq!(observation.catalogs.len(), 1);
 
-    scheduled_cycle(&node, &health, &mut schedule, false).await;
-    crate::inference::backends::registry::record_model_catalog(
-        &node,
-        &reachable,
-        observation.catalogs[0].clone(),
-    )
-    .await
-    .unwrap();
-    crate::inference::backends::registry::set_backend_probe_status(
-        &node,
+    fixture.scheduled(&health, &mut schedule, false).await;
+    fixture
+        .runtime
+        .transact_write("test.health.catalog", |txn| {
+            let catalog = observation.catalogs[0].clone();
+            let reachable = &reachable;
+            Box::pin(async move {
+                crate::inference::backends::registry::record_model_catalog_in_txn(
+                    txn, reachable, catalog,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    crate::inference::backends::registry::set_backend_probe_status_as(
+        &fixture.runtime,
         &failing.node_did,
         &failing.backend_id,
         "healthy",
@@ -92,8 +198,8 @@ async fn scheduled_cycles_preserve_health_across_observations_and_unrelated_edit
     reachable.name = "Renamed".into();
     reachable.tags = vec!["tagged".into()];
     reachable.max_concurrent = Some(2);
-    seed_backend_observation(&node, &reachable, "healthy").await;
-    scheduled_cycle(&node, &health, &mut schedule, false).await;
+    fixture.seed(&reachable, "healthy").await;
+    fixture.scheduled(&health, &mut schedule, false).await;
     assert_eq!(listener.requests(), 1);
     assert_eq!(
         health.get("reachable").await.unwrap().last_probe_at,
@@ -105,14 +211,14 @@ async fn scheduled_cycles_preserve_health_across_observations_and_unrelated_edit
 
     let replacement = ModelsListener::start();
     reachable.endpoint = replacement.endpoint();
-    seed_backend_observation(&node, &reachable, "healthy").await;
-    scheduled_cycle(&node, &health, &mut schedule, false).await;
+    fixture.seed(&reachable, "healthy").await;
+    fixture.scheduled(&health, &mut schedule, false).await;
     assert_eq!(replacement.requests(), 1);
     assert_eq!(
         health.get("failing").await.unwrap().last_probe_at,
         failing_before.last_probe_at
     );
-    scheduled_cycle(&node, &health, &mut schedule, true).await;
+    fixture.scheduled(&health, &mut schedule, true).await;
     assert_eq!(replacement.requests(), 2);
     assert_modeled_probe(
         Some(&failing_before),
@@ -124,13 +230,14 @@ async fn scheduled_cycles_preserve_health_across_observations_and_unrelated_edit
 
 #[tokio::test]
 async fn disabled_and_removed_backends_are_probed_again_when_observed_enabled() {
-    let node = test_node().await;
+    let fixture = CycleFixture::new().await;
+    let node = fixture.db.node.clone();
     let listener = ModelsListener::start();
-    let mut value = backend("returning", format!("{}/missing", listener.endpoint()));
+    let mut value = fixture.backend("returning", format!("{}/missing", listener.endpoint()));
     let health = BackendHealthMap::new();
     let mut schedule = ProbeSchedule::default();
-    seed_backend_observation(&node, &value, "unknown").await;
-    scheduled_cycle(&node, &health, &mut schedule, true).await;
+    fixture.seed(&value, "unknown").await;
+    fixture.scheduled(&health, &mut schedule, true).await;
     assert_modeled_probe(
         None,
         &health.get(&value.backend_id).await.unwrap(),
@@ -138,13 +245,13 @@ async fn disabled_and_removed_backends_are_probed_again_when_observed_enabled() 
     );
 
     value.enabled = false;
-    seed_backend_observation(&node, &value, "unknown").await;
-    scheduled_cycle(&node, &health, &mut schedule, false).await;
+    fixture.seed(&value, "unknown").await;
+    fixture.scheduled(&health, &mut schedule, false).await;
     assert!(health.get(&value.backend_id).await.is_none());
     assert!(!schedule.known.contains_key(&value.backend_id));
     value.enabled = true;
-    seed_backend_observation(&node, &value, "unknown").await;
-    scheduled_cycle(&node, &health, &mut schedule, false).await;
+    fixture.seed(&value, "unknown").await;
+    fixture.scheduled(&health, &mut schedule, false).await;
     assert_modeled_probe(
         None,
         &health.get(&value.backend_id).await.unwrap(),
@@ -159,24 +266,21 @@ async fn disabled_and_removed_backends_are_probed_again_when_observed_enabled() 
             value.backend_id.clone(),
         )])
         .unwrap();
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "test.backend.remove",
-        |txn| {
+    fixture
+        .user
+        .transact_write("test.backend.remove", |txn| {
             let plan = &plan;
             Box::pin(async move {
                 crate::store::config_client::apply_desired_state_plan(txn, plan).await
             })
-        },
-    )
-    .await
-    .unwrap();
-    scheduled_cycle(&node, &health, &mut schedule, false).await;
+        })
+        .await
+        .unwrap();
+    fixture.scheduled(&health, &mut schedule, false).await;
     assert!(health.get(&value.backend_id).await.is_none());
     assert!(!schedule.known.contains_key(&value.backend_id));
-    seed_backend_observation(&node, &value, "unknown").await;
-    scheduled_cycle(&node, &health, &mut schedule, false).await;
+    fixture.seed(&value, "unknown").await;
+    fixture.scheduled(&health, &mut schedule, false).await;
     assert_modeled_probe(
         None,
         &health.get(&value.backend_id).await.unwrap(),
@@ -193,11 +297,13 @@ async fn cycle_reproduces_fleet_evidence_dead_backend_demotes_and_recovers() {
         .build()
         .unwrap();
     let health_map = BackendHealthMap::new();
-    let node = test_node().await;
+    let fixture = CycleFixture::new().await;
+    let node = fixture.db.node.clone();
 
     let listener = ModelsListener::start();
     let endpoint = listener.endpoint();
-    let backends = vec![backend("spark", endpoint.clone())];
+    let backends = vec![fixture.backend("spark", endpoint.clone())];
+    fixture.write(&backends[0]).await;
     let now = Utc::now();
     let outcome =
         probe_backends_cycle(&node, &client, &backends, now, &health_map, &options, None).await;
@@ -239,7 +345,8 @@ async fn cycle_reproduces_fleet_evidence_dead_backend_demotes_and_recovers() {
     }
 
     let recovered = ModelsListener::start();
-    let backends = vec![backend("spark", recovered.endpoint())];
+    let backends = vec![fixture.backend("spark", recovered.endpoint())];
+    fixture.write(&backends[0]).await;
     let outcome = probe_backends_cycle(
         &node,
         &client,
@@ -270,10 +377,11 @@ async fn cycle_probes_anthropic_key_backends_independently() {
         .build()
         .unwrap();
     let health_map = BackendHealthMap::new();
-    let node = test_node().await;
+    let fixture = CycleFixture::new().await;
+    let node = fixture.db.node.clone();
     let listener = ModelsListener::start();
     let key_backend = |backend_id: &str, endpoint: String| {
-        let mut backend = backend(backend_id, endpoint);
+        let mut backend = fixture.backend(backend_id, endpoint);
         backend.provider_kind =
             crate::inference::backends::provider::BackendProviderKind::AnthropicApiKey;
         backend.auth = crate::documents::BackendAuth::ApiKey {
@@ -285,6 +393,9 @@ async fn cycle_probes_anthropic_key_backends_independently() {
         key_backend("a", listener.endpoint()),
         key_backend("b", "http://127.0.0.1:1/v1".to_string()),
     ];
+    for backend in &backends {
+        fixture.write(backend).await;
+    }
 
     probe_backends_cycle(
         &node,
@@ -311,11 +422,12 @@ async fn cycle_marks_reachable_unknown_backends_promotable() {
     let options = probe_options();
     let client = reqwest::Client::new();
     let health_map = BackendHealthMap::new();
-    let node = test_node().await;
+    let fixture = CycleFixture::new().await;
+    let node = fixture.db.node.clone();
     let listener = ModelsListener::start();
 
-    let backends = vec![backend("late-arrival", listener.endpoint())];
-    seed_backend_observation(&node, &backends[0], "unknown").await;
+    let backends = vec![fixture.backend("late-arrival", listener.endpoint())];
+    fixture.seed(&backends[0], "unknown").await;
     let outcome = probe_backends_cycle(
         &node,
         &client,
@@ -328,8 +440,8 @@ async fn cycle_marks_reachable_unknown_backends_promotable() {
     .await;
     assert_eq!(outcome.promotable, vec!["late-arrival".to_string()]);
 
-    let backends = vec![backend("late-arrival", listener.endpoint())];
-    seed_backend_observation(&node, &backends[0], "healthy").await;
+    let backends = vec![fixture.backend("late-arrival", listener.endpoint())];
+    fixture.seed(&backends[0], "healthy").await;
     let outcome = probe_backends_cycle(
         &node,
         &client,
@@ -342,53 +454,50 @@ async fn cycle_marks_reachable_unknown_backends_promotable() {
     .await;
     assert!(outcome.promotable.is_empty());
 
-    seed_backend_observation(&node, &backends[0], "unknown").await;
+    fixture.seed(&backends[0], "unknown").await;
     let outcome = run_backend_probe_cycle(
         node.clone(),
         &client,
         &health_map,
         &options,
-        "did:key:backend-owner",
+        fixture.db.node_identity.did(),
     )
     .await;
     assert_eq!(outcome.promotable, vec!["late-arrival".to_string()]);
 
-    let document = node
-        .execute(
-            r#"{ InferenceBackend(filter: { backend_id: { _eq: "late-arrival" } }) { probe_status last_probe } }"#,
-        )
-        .await;
-    assert!(!document.has_errors(), "{:?}", document.errors);
-    let rows = document
-        .data
-        .as_ref()
-        .and_then(|data| data.get("InferenceBackend"))
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    assert_eq!(rows.len(), 1, "{rows:?}");
+    let observation = fixture.observation(&backends[0]).await;
     assert_eq!(
-        rows[0]["probe_status"], "healthy",
+        observation.probe_status.as_deref(),
+        Some("healthy"),
         "the probe owner must persist its promotion"
     );
     assert!(
-        !rows[0]["last_probe"]
-            .as_str()
-            .unwrap_or_default()
-            .is_empty(),
-        "promotion must stamp last_probe: {rows:?}"
+        observation.last_probe.is_some(),
+        "promotion must stamp last_probe: {observation:?}"
     );
 }
 
 #[tokio::test]
 async fn runtime_probe_cycle_scopes_same_named_backends_to_its_node() {
-    let node = test_node().await;
+    let fixture = CycleFixture::new().await;
+    let node = fixture.db.node.clone();
     let listener = ModelsListener::start();
-    let local = backend("same", listener.endpoint());
-    let mut foreign = backend("same", "http://127.0.0.1:1/v1".into());
-    foreign.node_did = "did:key:foreign-owner".into();
-    seed_backend_observation(&node, &local, "unknown").await;
-    seed_backend_observation(&node, &foreign, "unknown").await;
+    let local = fixture.backend("same", listener.endpoint());
+    let mut foreign = fixture.backend("same", "http://127.0.0.1:1/v1".into());
+    let foreign_db = crate::support::test_db("health-foreign-node").await;
+    foreign.node_did = foreign_db.node_identity.did().to_owned();
+    crate::test_support::bootstrap_signed_test_node(&fixture.user, &foreign.node_did).await;
+    fixture.seed(&local, "unknown").await;
+    fixture.write(&foreign).await;
+    let foreign_runtime = fixture.db.client_access(foreign_db.node_identity.as_ref());
+    crate::inference::backends::registry::set_backend_probe_status_as(
+        &foreign_runtime,
+        &foreign.node_did,
+        &foreign.backend_id,
+        "unknown",
+    )
+    .await
+    .unwrap();
     let health = BackendHealthMap::new();
     let outcome = run_backend_probe_cycle(
         node.clone(),
@@ -403,14 +512,7 @@ async fn runtime_probe_cycle_scopes_same_named_backends_to_its_node() {
         health.get("same").await.unwrap().state,
         BackendHealthState::Healthy
     );
-    let foreign_observation = crate::inference::backends::registry::lookup_backend_observation(
-        &node,
-        &foreign.node_did,
-        &foreign.backend_id,
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let foreign_observation = fixture.observation(&foreign).await;
     assert_eq!(foreign_observation.probe_status.as_deref(), Some("unknown"));
     assert!(foreign_observation.catalogs.is_empty());
 }
@@ -420,9 +522,10 @@ async fn cycle_never_probes_or_demotes_chatgpt_codex_backends() {
     let options = probe_options();
     let client = reqwest::Client::new();
     let health_map = BackendHealthMap::new();
-    let node = test_node().await;
+    let fixture = CycleFixture::new().await;
+    let node = fixture.db.node.clone();
 
-    let mut codex = backend("codex", "http://127.0.0.1:1/v1".to_string());
+    let mut codex = fixture.backend("codex", "http://127.0.0.1:1/v1".to_string());
     codex.provider_kind = crate::inference::backends::provider::BackendProviderKind::ChatGptCodex;
     codex.auth = crate::documents::BackendAuth::NodeOAuth { account_ref: None };
     let outcome = probe_backends_cycle(
@@ -449,9 +552,11 @@ async fn cycle_drops_entries_for_backends_no_longer_enabled() {
         .set_for_test("retired", BackendHealthState::Unhealthy, 5)
         .await;
 
-    let node = test_node().await;
+    let fixture = CycleFixture::new().await;
+    let node = fixture.db.node.clone();
     let listener = ModelsListener::start();
-    let backends = vec![backend("current", listener.endpoint())];
+    let backends = vec![fixture.backend("current", listener.endpoint())];
+    fixture.write(&backends[0]).await;
     probe_backends_cycle(
         &node,
         &client,
@@ -482,7 +587,8 @@ async fn probe_shutdown_cancels_pending_backend_without_pruning_or_failure() {
         seen.notify_one();
         std::future::pending::<()>().await;
     });
-    let node = test_node().await;
+    let fixture = CycleFixture::new().await;
+    let node = fixture.db.node.clone();
     let health = BackendHealthMap::new();
     health
         .set_for_test("pending", BackendHealthState::Degraded, 1)
@@ -493,9 +599,9 @@ async fn probe_shutdown_cancels_pending_backend_without_pruning_or_failure() {
     let before_pending = health.get("pending").await.unwrap();
     let before_unobserved = health.get("unobserved").await.unwrap();
     let cancel = CancellationToken::new();
-    let mut pending = backend("pending", endpoint);
+    let mut pending = fixture.backend("pending", endpoint);
     pending.discovery_timeout_secs = Some(60);
-    upsert_backend_configuration(&node, &pending).await;
+    fixture.write(&pending).await;
     let (events, mut received) = mpsc::channel(1);
     let handle = spawn_backend_prober(
         node.clone(),
@@ -539,7 +645,8 @@ async fn probe_shutdown_cancels_pending_backend_without_pruning_or_failure() {
 
 #[tokio::test]
 async fn probe_shutdown_prevents_new_backend_probes_and_pruning() {
-    let node = test_node().await;
+    let fixture = CycleFixture::new().await;
+    let node = fixture.db.node.clone();
     let health = BackendHealthMap::new();
     health
         .set_for_test("unobserved", BackendHealthState::Healthy, 0)
@@ -549,7 +656,7 @@ async fn probe_shutdown_prevents_new_backend_probes_and_pruning() {
     let outcome = probe_selected_backends(
         &node,
         &reqwest::Client::new(),
-        &[backend("pending", "http://127.0.0.1:1/v1".into())],
+        &[fixture.backend("pending", "http://127.0.0.1:1/v1".into())],
         ProbeEnv {
             now: Utc::now(),
             health_map: &health,
