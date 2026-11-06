@@ -88,8 +88,8 @@ async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership
         vec![1, 2, 3]
     );
     assert_eq!(
-        scans, 3,
-        "each unbound fork header resolves its own origin request"
+        scans, 0,
+        "fork headers resolve payloads from their destination-owned copies, not origin requests"
     );
     db.node.shutdown().await.expect("node shutdown");
 }
