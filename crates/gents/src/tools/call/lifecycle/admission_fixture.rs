@@ -919,14 +919,14 @@ mod lifecycle_tests {
     use super::*;
     use crate::tools::call::lifecycle::{CancelCause, FailureClass};
 
-    async fn row(node: &EmbeddedNode, session_id: &str) -> serde_json::Value {
+    /// Reads the admitted row through the owning Agent's access; ACP hides it from the node.
+    async fn row(access: &crate::ConfigAccess, session_id: &str) -> serde_json::Value {
         let session = crate::store::graphql::escape_graphql_string(session_id);
-        let response = node
+        let response = access
             .execute(&format!(r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ request_id request_doc_id lifecycle_state tool_failure_class cancel_cause deadline_at await_mode }} }}"#))
-            .await;
-        assert!(!response.has_errors(), "{:#?}", response.errors);
-        let data = response.data.unwrap();
-        let rows = data["AgentToolCall"].as_array().unwrap();
+            .await
+            .unwrap();
+        let rows = response["data"]["AgentToolCall"].as_array().unwrap();
         assert_eq!(rows.len(), 1, "exactly one admitted physical tool row");
         rows.first().cloned().expect("one admitted tool call")
     }
@@ -983,9 +983,10 @@ mod lifecycle_tests {
             mut tool,
             ..
         } = admission;
+        let access = tool.access().unwrap();
         let request_doc_id = tool.request_doc_id().unwrap().to_owned();
         tool.start_running().await.unwrap();
-        let running = row(&node, "session-native-complete").await;
+        let running = row(&access, "session-native-complete").await;
         assert_eq!(running["lifecycle_state"], "running");
         assert_eq!(running["request_doc_id"], request_doc_id);
         assert!(running["deadline_at"]
@@ -993,7 +994,7 @@ mod lifecycle_tests {
             .is_some_and(|value| !value.is_empty()));
         tool.complete("ok").await.unwrap();
         assert_eq!(
-            row(&node, "session-native-complete").await["lifecycle_state"],
+            row(&access, "session-native-complete").await["lifecycle_state"],
             "completed"
         );
         teardown(node, path).await;
@@ -1002,10 +1003,11 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn admitted_native_lifecycle_persists_failure_class() {
         let (node, path, mut tool) = published_spawn_parent("native-fail").await;
+        let access = tool.access().unwrap();
         tool.fail("error", FailureClass::ToolReturnedError)
             .await
             .unwrap();
-        let row = row(&node, "session-native-fail").await;
+        let row = row(&access, "session-native-fail").await;
         assert_eq!(row["lifecycle_state"], "failed");
         assert_eq!(row["tool_failure_class"], "toolReturnedError");
         teardown(node, path).await;
@@ -1023,10 +1025,11 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn admitted_native_rejects_duplicate_dispatch_without_duplicate_row() {
         let (node, path, mut tool) = published_spawn_parent("native-duplicate").await;
+        let access = tool.access().unwrap();
         let error = tool.start_running().await.unwrap_err();
         assert!(format!("{error:#}").contains("cannot re-dispatch"));
         assert_eq!(
-            row(&node, "session-native-duplicate").await["lifecycle_state"],
+            row(&access, "session-native-duplicate").await["lifecycle_state"],
             "running"
         );
         teardown(node, path).await;
@@ -1035,6 +1038,7 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn admitted_native_load_preserves_state_deadline_and_terminal_updates() {
         let (node, path, tool) = published_spawn_parent("native-load").await;
+        let access = tool.access().unwrap();
         let expected_deadline = tool.deadline_at;
         let mut loaded =
             ToolCallLifecycle::load(node.clone(), "session-native-load", "spawn-native-tool")
@@ -1042,7 +1046,7 @@ mod lifecycle_tests {
                 .unwrap()
                 .expect("admitted tool loads");
         loaded.timeout().await.unwrap();
-        let row = row(&node, "session-native-load").await;
+        let row = row(&access, "session-native-load").await;
         assert_eq!(row["lifecycle_state"], "timedOut");
         assert_eq!(row["cancel_cause"], "deadline");
         let observed = chrono::DateTime::parse_from_rfc3339(row["deadline_at"].as_str().unwrap())
@@ -1055,6 +1059,7 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn admitted_native_load_returns_persisted_failure() {
         let (node, path, mut tool) = published_spawn_parent("native-load-failure").await;
+        let access = tool.access().unwrap();
         tool.fail("oops", FailureClass::Transport).await.unwrap();
         drop(tool);
         let loaded = ToolCallLifecycle::load(
@@ -1066,7 +1071,7 @@ mod lifecycle_tests {
         .unwrap()
         .expect("terminal admitted tool loads");
         drop(loaded);
-        let row = row(&node, "session-native-load-failure").await;
+        let row = row(&access, "session-native-load-failure").await;
         assert_eq!(row["lifecycle_state"], "failed");
         assert_eq!(row["tool_failure_class"], "transport");
         teardown(node, path).await;
@@ -1075,16 +1080,18 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn admitted_native_cancel_during_run_and_after_load_persist_causes() {
         let (node, path, mut tool) = published_spawn_parent("native-cancel").await;
+        let access = tool.access().unwrap();
         tool.cancel_during_run(CancelCause::UserCancelled)
             .await
             .unwrap();
-        let persisted = row(&node, "session-native-cancel").await;
+        let persisted = row(&access, "session-native-cancel").await;
         assert_eq!(persisted["lifecycle_state"], "cancelled");
         assert_eq!(persisted["cancel_cause"], "userCancelled");
         teardown(node, path).await;
 
         let (node, path, tool) = published_spawn_parent("native-cancel-load").await;
-        assert!(row(&node, "session-native-cancel-load").await["cancel_cause"].is_null());
+        let access = tool.access().unwrap();
+        assert!(row(&access, "session-native-cancel-load").await["cancel_cause"].is_null());
         drop(tool);
         let mut loaded = ToolCallLifecycle::load(
             node.clone(),
@@ -1099,7 +1106,7 @@ mod lifecycle_tests {
             .await
             .unwrap();
         assert_eq!(
-            row(&node, "session-native-cancel-load").await["cancel_cause"],
+            row(&access, "session-native-cancel-load").await["cancel_cause"],
             "interrupted"
         );
         teardown(node, path).await;
@@ -1108,10 +1115,11 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn admitted_pending_native_cancel_persists_cause() {
         let (node, path, mut tool) = pending_spawn_parent("native-pending-cancel").await;
+        let access = tool.access().unwrap();
         tool.cancel_before_dispatch(CancelCause::Interrupted)
             .await
             .unwrap();
-        let row = row(&node, "session-native-pending-cancel").await;
+        let row = row(&access, "session-native-pending-cancel").await;
         assert_eq!(row["lifecycle_state"], "cancelled");
         assert_eq!(row["cancel_cause"], "interrupted");
         teardown(node, path).await;
@@ -1130,7 +1138,8 @@ mod lifecycle_tests {
         let path = admission.path;
         let node_did = admission.node_did;
         let mut tool = admission.tool;
-        let signer = tool.access().unwrap().managed_agent_signer().unwrap();
+        let tool_access = tool.access().unwrap();
+        let signer = tool_access.managed_agent_signer().unwrap();
         let identities: Vec<Arc<dyn NodeIdentity>> = vec![Arc::new(signer)];
         let request = crate::store::graphql::escape_graphql_string("request-timeout-cas");
         let response = node
@@ -1144,7 +1153,7 @@ mod lifecycle_tests {
                 .unwrap();
         assert_eq!(report.tool_calls_terminalized, 1);
         assert!(!tool.timeout().await.unwrap());
-        let row = row(&node, "session-timeout-cas").await;
+        let row = row(&tool_access, "session-timeout-cas").await;
         assert_eq!(row["lifecycle_state"], "cancelled");
         assert_eq!(row["cancel_cause"], "interrupted");
         assert!(row["tool_failure_class"].is_null());
