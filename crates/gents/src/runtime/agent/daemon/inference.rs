@@ -837,7 +837,7 @@ where
                                 Some(item) => item,
                                 None => break,
                             };
-                            let processed = match processor.process_item(item).await.map_err(processor_failure) {
+                            let processed = match Box::pin(processor.process_item(item)).await.map_err(processor_failure) {
                                 Ok(processed) => processed,
                                 Err(error) => {
                                     drop(stream);

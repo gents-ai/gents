@@ -296,7 +296,7 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
                 CREATE_AGENT_MESSAGE_MUTATION, &transcript_message_bound_variables(txn, &message).await?,
             ).await?;
             let message_doc_id = created_doc_id(&created, "AgentMessage")?;
-            let (_, reconstructed) = reader.load_created_message(&message_doc_id, &close_doc_id).await?;
+            let (_, reconstructed) = Box::pin(reader.load_created_message(&message_doc_id, &close_doc_id)).await?;
             anyhow::ensure!(
                 &reconstructed == expected.as_ref(),
                 "first publication native message changed"

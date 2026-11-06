@@ -403,15 +403,14 @@ where
                     return observation;
                 }
             }
-            let outcome = self
-                .observe_owned_work(
-                    &mut lifecycle,
-                    &stream_writer,
-                    &request,
-                    shutdown,
-                    interrupt_rx,
-                )
-                .await;
+            let outcome = Box::pin(self.observe_owned_work(
+                &mut lifecycle,
+                &stream_writer,
+                &request,
+                shutdown,
+                interrupt_rx,
+            ))
+            .await;
             let observation = outcome.observation();
             owned_work = Some(outcome);
             observation

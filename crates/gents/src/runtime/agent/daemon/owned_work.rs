@@ -79,9 +79,8 @@ where
     ) -> OwnedWorkOutcome {
         use crate::request::task_hooks::TaskAgentResult;
 
-        let result = self
-            .handle_request(lifecycle, stream_writer, shutdown, interrupt_rx)
-            .await;
+        let result =
+            Box::pin(self.handle_request(lifecycle, stream_writer, shutdown, interrupt_rx)).await;
 
         match result {
             Ok(HandleRequestOutcome::Completed) => {
