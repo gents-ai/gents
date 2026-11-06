@@ -397,9 +397,14 @@ async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
             .unwrap();
         handle.work_started().await.unwrap();
         let held = live.then_some(handle);
-        let report = recover_task_hook_records(&fixture.node, fixture.did(), &store)
-            .await
-            .unwrap();
+        let report = recover_task_hook_records(
+            &fixture.node,
+            fixture.did(),
+            &[fixture.agent_identity.clone()],
+            &store,
+        )
+        .await
+        .unwrap();
         store.wait_for_recoveries().await;
         let recorded = !store.list().is_empty();
         assert_eq!(
@@ -580,7 +585,10 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
     for (name, cwd, root_guard) in cases {
         if let Some(guard) = &root_guard {
             assert!(
-                guard.validate(fixture.node.as_ref()).await.is_err(),
+                guard
+                    .validate(&fixture.node, fixture.agent_identity.as_ref())
+                    .await
+                    .is_err(),
                 "{name}: the root owner must refuse this root"
             );
         }
@@ -608,9 +616,25 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
         )
         .await
         .unwrap();
-        let report = recover_task_hook_records(&fixture.node, fixture.did(), &store)
-            .await
-            .unwrap();
+        if name == "root-outside-ceiling" {
+            let unavailable = recover_task_hook_records(&fixture.node, fixture.did(), &[], &store)
+                .await
+                .unwrap();
+            assert_eq!(unavailable, 0);
+            assert_eq!(
+                store.list().len(),
+                1,
+                "missing identity must retain the guarded record"
+            );
+        }
+        let report = recover_task_hook_records(
+            &fixture.node,
+            fixture.did(),
+            &[fixture.agent_identity.clone()],
+            &store,
+        )
+        .await
+        .unwrap();
         assert_eq!(report, 1, "{name}");
         store.wait_for_recoveries().await;
         assert!(

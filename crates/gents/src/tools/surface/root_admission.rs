@@ -33,8 +33,29 @@ pub(crate) struct RootExecutionGuard {
 }
 
 impl RootExecutionGuard {
-    pub(crate) async fn validate(&self, node: &defra_node::Node) -> Result<()> {
-        let policy = load_workspace_root_policy(node, self.ceiling_root.as_deref()).await?;
+    pub(crate) async fn validate(
+        &self,
+        node: &std::sync::Arc<defra_node::Node>,
+        agent: &dyn crate::store::identity::NodeIdentity,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            agent.did() == self.agent_did,
+            "workspace root requires the selected Agent identity"
+        );
+        let access = crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(&self.agent_did)?,
+            agent,
+        )?;
+        let node_did = node.node_identity_did().unwrap_or_default();
+        let policy = access
+            .transact_readonly("workspace_root.execution", |txn| {
+                Box::pin(async move {
+                    load_workspace_root_policy_in_txn(txn, self.ceiling_root.as_deref(), node_did)
+                        .await
+                })
+            })
+            .await?;
         let Some(selected_root) = self.selected_root.as_deref() else {
             anyhow::ensure!(
                 !policy.configured,

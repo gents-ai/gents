@@ -531,7 +531,10 @@ mod tests {
             cases[0]["aborted_document"].as_bool().unwrap()
         );
         revoke_workspace_root_reader(&owner, &path, writer.did()).await?;
-        let writer_case = cases.iter().find(|case| case["actor"] == "writer" && case["permission"] == "read").context("missing modeled writer read")?;
+        let writer_case = cases
+            .iter()
+            .find(|case| case["actor"] == "writer" && case["permission"] == "read")
+            .context("missing modeled writer read")?;
         let guard = crate::tools::surface::RootExecutionGuard {
             agent_did: writer.did().to_owned(),
             selected_root: Some(std::path::PathBuf::from(&path)),
@@ -539,7 +542,9 @@ mod tests {
         };
         assert_eq!(
             guard.validate(&node, writer.as_ref()).await.is_ok(),
-            writer_case["writer_execution_after_revocation"].as_bool().unwrap()
+            writer_case["writer_execution_after_revocation"]
+                .as_bool()
+                .unwrap()
         );
         assert_eq!(
             set_workspace_root(&owner, runtime.did(), &path, None, true).await?,

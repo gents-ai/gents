@@ -334,7 +334,11 @@ impl ToolSurface {
 
     pub async fn build_tools(&self, runtime: &ToolRuntimeContext) -> Result<Vec<Box<dyn ToolDyn>>> {
         if let Some(guard) = &self.root_execution_guard {
-            guard.validate(&runtime.node).await?;
+            let agent = runtime
+                .agent_identity
+                .as_deref()
+                .context("workspace root requires a held Agent identity")?;
+            guard.validate(&runtime.node, agent).await?;
         }
         let writethrough = self.lsp.as_ref().map(|config| {
             crate::tools::native::lsp::LspWritethrough::new(

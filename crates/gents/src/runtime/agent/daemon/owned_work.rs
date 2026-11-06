@@ -50,7 +50,9 @@ where
     /// overlay while workspace integration remains an open design question.
     async fn task_hook_cwd(&self) -> Result<PathBuf> {
         if let Some(guard) = &self.root_execution_guard {
-            guard.validate(&self.node).await?;
+            guard
+                .validate(&self.node, self.agent_config.agent_identity.as_ref())
+                .await?;
             if let Some(root) = guard.selected_root.clone() {
                 return Ok(root);
             }

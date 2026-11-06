@@ -285,13 +285,14 @@ fn settle_session_message_rows<'a>(
 fn recover_task_hook_records<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
-    _identities: &'a [std::sync::Arc<dyn crate::store::identity::NodeIdentity>],
+    identities: &'a [std::sync::Arc<dyn crate::store::identity::NodeIdentity>],
     background_executions: &'a crate::tools::call::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         crate::request::task_hooks::recover_task_hook_records(
             node,
             node_did,
+            identities,
             background_executions.task_hook_records(),
         )
         .await

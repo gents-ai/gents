@@ -286,6 +286,7 @@ async fn recover_record(
     node: Arc<EmbeddedNode>,
     record: TaskHookRecord,
     handle: TaskHookRecordHandle,
+    agent_identity: Option<Arc<dyn crate::store::identity::NodeIdentity>>,
     shutdown: CancellationToken,
 ) {
     for attempt in record
@@ -309,7 +310,12 @@ async fn recover_record(
         return;
     }
     let admitted = match &record.root_guard {
-        Some(guard) => guard.validate(node.as_ref()).await,
+        Some(guard) => match agent_identity.as_deref() {
+            Some(identity) => guard.validate(&node, identity).await,
+            None => Err(anyhow::anyhow!(
+                "workspace root requires a held Agent identity"
+            )),
+        },
         None => Ok(()),
     };
     if let Err(error) = admitted {
@@ -348,6 +354,7 @@ async fn recover_record(
 pub(crate) async fn recover_task_hook_records(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
+    identities: &[Arc<dyn crate::store::identity::NodeIdentity>],
     store: &TaskHookRecordStore,
 ) -> Result<usize> {
     let mut started = 0;
@@ -367,6 +374,19 @@ pub(crate) async fn recover_task_hook_records(
         if record.node_did != node_did {
             continue;
         }
+        let agent_identity = match &record.root_guard {
+            Some(guard) => match identities
+                .iter()
+                .find(|identity| identity.did() == guard.agent_did)
+            {
+                Some(identity) => Some(identity.clone()),
+                None => {
+                    tracing::warn!(agent_did = %guard.agent_did, "task hook recovery requires the selected Agent identity");
+                    continue;
+                }
+            },
+            None => None,
+        };
         let Some(handle) = store.claim(record.clone()) else {
             continue;
         };
@@ -383,6 +403,7 @@ pub(crate) async fn recover_task_hook_records(
             node.clone(),
             record,
             handle,
+            agent_identity,
             store.shutdown.clone(),
         ));
         let mut recoveries = locked(&store.recoveries);

@@ -152,7 +152,7 @@ where
         let admitted = async {
             if let Some(guard) = &self.root_execution_guard {
                 guard
-                    .validate(&self.node)
+                    .validate(&self.node, self.agent_config.agent_identity.as_ref())
                     .await
                     .context("validating current WorkspaceRoot policy for fresh request")?;
             }
