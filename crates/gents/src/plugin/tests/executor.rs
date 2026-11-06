@@ -2005,6 +2005,7 @@ mod job_calls {
     use crate::plugin::job_calls::JobCaller;
     use crate::plugin::PluginVerdict;
     use crate::tools::background::job::driver::{settle_plugin_job, Settlement};
+    use crate::tools::background::job::input::tests::open;
     use crate::tools::background::job::keys::{job_session_id, job_spawn_key};
     use crate::tools::background::status::ProcessControlScope;
     use crate::tools::call::lifecycle::admission_fixture::{
