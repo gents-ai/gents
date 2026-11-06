@@ -422,72 +422,6 @@ pub(crate) async fn prepare_cli_goal_input(
     .await
 }
 
-/// Exact retries use the same immutable submission key and converge to the
-/// already-committed pair; conflicting retries fail without mutating either
-/// document.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the request and its Goal are written together from these fields"
-)]
-pub(crate) async fn create_goal_backed_agent_request(
-    graphql: &GraphqlEndpoint,
-    node_did: &str,
-    content: &str,
-    session_id: &str,
-    agent_id: Option<&str>,
-    objective: &str,
-    token_budget: Option<i64>,
-    input: RequestInput,
-) -> Result<SubmittedRequest> {
-    use sha2::{Digest, Sha256};
-
-    let objective = require_non_empty("goal-objective", objective)?.trim();
-    anyhow::ensure!(
-        token_budget.is_none_or(|budget| budget > 0),
-        "goal-token-budget must be positive"
-    );
-    let digest = Sha256::digest(
-        format!("{node_did}\0{session_id}\0{objective}\0{token_budget:?}\0{content}").as_bytes(),
-    );
-    let request_id = format!(
-        "goal-submit-{}",
-        digest[..16]
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    );
-    let retry_key = format!(
-        "goal-submit:{}",
-        gents::goal::deterministic_goal_creation_key(node_did, session_id)
-    );
-    let prepared = prepare_agent_request_with_input(
-        graphql,
-        node_did,
-        content,
-        Some(session_id),
-        agent_id,
-        Some(request_id),
-        RequestSubmitOptions {
-            retry_key: Some(retry_key.clone()),
-            input: Some(input),
-            ..Default::default()
-        },
-    )
-    .await?;
-
-    let access = gents::ConfigAccess::Graphql(graphql.clone());
-    gents::goal::submit_goal_backed_request(
-        &access,
-        node_did,
-        session_id,
-        objective,
-        token_budget,
-        &prepared.create,
-    )
-    .await?;
-    committed_submitted_request(graphql, &prepared.create).await
-}
-
 #[allow(clippy::too_many_arguments)]
 #[cfg(unix)]
 pub(crate) async fn create_goal_backed_agent_request_local(
@@ -995,7 +929,7 @@ where
 
 pub(crate) fn request_diagnostic_hint(request_id: &str) -> String {
     format!(
-        "Next:\n  1. Run `gents request show {request_id}`\n  2. Run `gents response show {request_id}`\n  3. Inspect the runtime with `gents status`"
+        "Next:\n  1. Run `gents utils debug request show {request_id}`\n  2. Run `gents utils debug response show {request_id}`\n  3. Inspect the runtime with `gents status`"
     )
 }
 

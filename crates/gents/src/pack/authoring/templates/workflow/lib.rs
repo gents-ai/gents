@@ -10,7 +10,7 @@ use wire::*;
 
 pub const NAME: &str = "__NAME__";
 const TITLE: &str = "__TITLE__";
-/// The AgentTarget the pack ships; `gents pack wire --targets-from` puts it in the job block.
+/// The AgentTarget the pack ships; `gents config pack wire --targets-from` puts it in the job block.
 const TARGET: &str = "__TARGET__";
 const SLOT: &str = "worker";
 const DEFAULT_BUDGET: u64 = 8;

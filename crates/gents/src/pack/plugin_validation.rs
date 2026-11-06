@@ -67,7 +67,7 @@ impl PackPlugin {
         let language = self.language.trim().to_ascii_lowercase();
         anyhow::ensure!(
             SUPPORTED_PLUGIN_LANGUAGES.contains(&language.as_str()),
-            "plugin {:?} declares language {:?}, which is not one gents pack build knows how to \
+            "plugin {:?} declares language {:?}, which is not one gents config pack build knows how to \
              compile; supported languages: {}",
             self.name,
             self.language,

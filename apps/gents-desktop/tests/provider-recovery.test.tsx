@@ -192,14 +192,14 @@ describe("provider account recovery", () => {
       plan({
         candidates: [],
         unavailableReason:
-          "no other Claude account offers claude-sonnet-5-5; add one with `gents claude-login --label <label>`",
+          "no other Claude account offers claude-sonnet-5-5; add one with `gents accounts login claude --label <label>`",
       }),
     );
     mount();
     expect(
       await screen.findByText("No other Claude account offers claude-sonnet-5-5."),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/gents claude-login/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/gents accounts login/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Refresh account state" })).toBeEnabled();
   });
 });

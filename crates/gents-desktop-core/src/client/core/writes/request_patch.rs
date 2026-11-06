@@ -66,7 +66,7 @@ fn strip_cli_operator_hints(message: &str) -> String {
         .lines()
         .filter(|line| {
             !line.contains("gents init")
-                && !line.contains("gents server")
+                && !line.contains("gents runtime server")
                 && !line.contains("--graphql")
         })
         .collect::<Vec<_>>()

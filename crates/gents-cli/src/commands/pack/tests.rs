@@ -192,7 +192,7 @@ async fn initialized_home() -> tempfile::TempDir {
         home.path().to_str().unwrap(),
     ])
     .unwrap();
-    let crate::cli::Command::Init(init_args) = cli.command else {
+    let Some(crate::cli::Command::Init(init_args)) = cli.command else {
         panic!("expected init")
     };
     crate::commands::init::init(init_args).await.unwrap();
@@ -483,7 +483,7 @@ fn expect_digest_mismatch_names_both_digests_and_pack_show() {
         "{:#}",
         check_expected_digest(Some("sha256:expected"), "sha256:actual").unwrap_err()
     );
-    for needle in ["sha256:expected", "sha256:actual", "gents pack show"] {
+    for needle in ["sha256:expected", "sha256:actual", "gents config pack show"] {
         assert!(error.contains(needle), "{needle} missing from {error}");
     }
 }

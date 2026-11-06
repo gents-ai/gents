@@ -131,7 +131,7 @@ pub(crate) fn parse_cli_tool_arg(value: &str) -> Result<gents::CliToolConfig> {
     ))
 }
 
-/// The host ceiling a `gents server` enforces for this mode and root. Serve
+/// The host ceiling a `gents runtime server` enforces for this mode and root. Serve
 /// resolves the readonly default root before calling; a readonly ceiling
 /// without one leaves file tools unrooted.
 pub(crate) fn host_tool_ceiling(

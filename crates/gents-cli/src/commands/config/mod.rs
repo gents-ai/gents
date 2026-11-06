@@ -44,6 +44,7 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             ToolsConfigCommand::Show(args) => crud::config_show(crud::TOOLS_SPEC, args).await,
             ToolsConfigCommand::Rm(args) => crud::config_rm(crud::TOOLS_SPEC, args).await,
             ToolsConfigCommand::AgentTargetEntry(args) => tools::agent_target_entry_command(args),
+            ToolsConfigCommand::Explain(command) => crate::commands::tools::dispatch(command).await,
         },
         ConfigCommand::Profile { command } => match command {
             InferenceProfileCommand::Set(args) => profile::inference_profile_set(args).await,
@@ -63,6 +64,7 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         ConfigCommand::Mcp { command } => match command {
             ConfigMcpCommand::List(args) => crud::config_list(crud::MCP_SPEC, args).await,
             ConfigMcpCommand::Show(args) => crud::config_show(crud::MCP_SPEC, args).await,
+            ConfigMcpCommand::Service(command) => crate::commands::mcp::dispatch(command).await,
         },
         ConfigCommand::Skill { command } => match command {
             SkillCommand::Add(args) => skill::skill_add(args).await,
@@ -80,6 +82,11 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             WorkspaceRootCommand::Show(args) => workspace_root::workspace_root_show(args).await,
             WorkspaceRootCommand::Rm(args) => workspace_root::workspace_root_rm(args).await,
         },
+        ConfigCommand::Client { command } => {
+            tokio::task::spawn_blocking(move || crate::client_settings::config_client(command))
+                .await?
+        }
         ConfigCommand::Export(args) => export::config_export(args).await,
+        ConfigCommand::Pack { command } => crate::commands::pack::dispatch(command).await,
     }
 }

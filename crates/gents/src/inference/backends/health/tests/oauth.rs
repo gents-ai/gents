@@ -574,7 +574,7 @@ async fn oauth_kinds_missing_credential_fails_with_login_hint() {
         .last_error
         .clone()
         .unwrap_or_default()
-        .contains("gents codex-login --node-did did:key:z6MkNobody"));
+        .contains("gents accounts login codex --node-did did:key:z6MkNobody"));
 }
 
 #[tokio::test]
@@ -730,7 +730,7 @@ async fn oauth_kinds_are_skipped_without_a_probe_context() {
     );
 }
 
-/// A Claude gateway signed in with `gents claude-gateway-login` carries node
+/// A Claude gateway signed in with `gents accounts login claude-gateway` carries node
 /// OAuth credentials, so the probe must select its stored account and map it to
 /// the gateway refresh kind and product rather than the subscription's.
 #[tokio::test]

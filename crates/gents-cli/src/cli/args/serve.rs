@@ -2,9 +2,9 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 use super::{
-    parse_env_var_name, P2pDiscoveryArg, P2pRelayModeArg, P2pTransportArg, ToolCeilingArg,
+    parse_agent_id, parse_env_var_name, P2pDiscoveryArg, P2pRelayModeArg, P2pTransportArg,
+    ToolCeilingArg,
 };
-use crate::cli::output_format::OutputFormat;
 
 #[derive(clap::Args)]
 pub(crate) struct PrepareRuntimeArgs {
@@ -34,7 +34,7 @@ pub(crate) struct ServeArgs {
     pub(crate) data_dir: Option<PathBuf>,
     #[arg(
         long,
-        help = "HTTP listen address. Defaults to the home's network.json (`gents service install --http-addr`), else 127.0.0.1"
+        help = "HTTP listen address. Defaults to the home's network.json (`gents runtime service install --http-addr`), else 127.0.0.1"
     )]
     pub(crate) http_addr: Option<IpAddr>,
     #[arg(
@@ -249,6 +249,13 @@ pub(crate) struct CodexArgs {
     pub(crate) remote_auth_token_env: Option<String>,
     #[arg(
         long,
+        value_name = "AGENT_ID",
+        value_parser = parse_agent_id,
+        help = "Agent to open instead of the node's default; requires a local ws:// endpoint"
+    )]
+    pub(crate) agent: Option<String>,
+    #[arg(
+        long,
         default_value_t = false,
         help = "Run inline, preserving terminal scrollback, instead of the alternate screen"
     )]
@@ -258,55 +265,7 @@ pub(crate) struct CodexArgs {
         help = "Optional prompt to start the session with"
     )]
     pub(crate) prompt: Option<String>,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct ChatArgs {
-    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    #[arg(long)]
-    pub(crate) node_did: Option<String>,
-    #[arg(long)]
-    pub(crate) node_name: Option<String>,
-    #[arg(
-        long,
-        help = "Continue an existing session instead of starting a fresh one"
-    )]
-    pub(crate) session_id: Option<String>,
-    #[arg(long, help = "Override the agent for this one-off turn or session")]
-    pub(crate) agent_id: Option<String>,
-    #[arg(
-        long,
-        value_name = "OBJECTIVE",
-        requires = "session_id",
-        help = "Atomically create this durable session goal before the first request; omit on later turns"
-    )]
-    pub(crate) goal_objective: Option<String>,
-    #[arg(
-        long,
-        value_name = "TOKENS",
-        requires = "goal_objective",
-        value_parser = clap::value_parser!(i64).range(1..),
-        help = "Optional positive token budget for --goal-objective"
-    )]
-    pub(crate) goal_token_budget: Option<i64>,
-    #[arg(long = "message-file", help = "Read the user message from a file")]
-    pub(crate) message_file: Option<PathBuf>,
-    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
-    pub(crate) output_format: OutputFormat,
-    #[arg(long = "output-file", help = "Write the final response to a file")]
-    pub(crate) output_file: Option<PathBuf>,
-    #[arg(long, default_value_t = crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS)]
-    pub(crate) timeout_secs: u64,
-    #[arg(long, default_value_t = 1)]
-    pub(crate) poll_secs: u64,
-    #[arg(
-        long,
-        help = "Print raw tool call arguments/results as JSON instead of the short summary line"
-    )]
-    pub(crate) verbose: bool,
-    #[arg(value_name = "MESSAGE")]
-    pub(crate) message: Vec<String>,
+    /// Set by `gents --continue`, never by a flag.
+    #[arg(skip)]
+    pub(crate) resume: Option<String>,
 }

@@ -554,7 +554,7 @@ Separately, **obligation models** (no Rust refinement tests yet):
   (success-ack backing, pending capacity, timeout frees the push
   semaphore). Does **not** prove multi-wave hub stability, Bitswap stall
   recovery, gossip send-loop health, or that the pinned `p2p` crate
-  implements these transitions. Operator knobs on `gents server`
+  implements these transitions. Operator knobs on `gents runtime server`
   expose the production bounds these models talk about.
 
 The proof boundary matters:

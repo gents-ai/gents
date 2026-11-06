@@ -30,7 +30,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-/// A home served by `gents server`, with the identity its job rows belong to.
+/// A home served by `gents runtime server`, with the identity its job rows belong to.
 pub(crate) struct ServedHome {
     _tempdir: tempfile::TempDir,
     pub(crate) home: PathBuf,
@@ -107,6 +107,7 @@ impl ServedHome {
             run_cli_json(
                 &home,
                 &[
+                    "config",
                     "pack",
                     "install",
                     pack_arg,
@@ -116,7 +117,14 @@ impl ServedHome {
             )?;
             run_cli_json(
                 &home,
-                &["pack", "wire", "fixture/job_fixture", "--agent", &agent_id],
+                &[
+                    "config",
+                    "pack",
+                    "wire",
+                    "fixture/job_fixture",
+                    "--agent",
+                    &agent_id,
+                ],
             )?;
         }
         let mut serve = spawn_server(&home, port)?;
@@ -137,17 +145,17 @@ impl ServedHome {
         ConfigAccess::Graphql(served_endpoint(&self.graphql))
     }
 
-    /// `gents job <args>` against this node: (exit code, stdout, stderr).
+    /// `gents automation job <args>` against this node: (exit code, stdout, stderr).
     pub(crate) fn job(&self, args: &[&str]) -> Result<(Option<i32>, String, String)> {
-        let mut full = vec!["job"];
+        let mut full = vec!["automation", "job"];
         full.extend_from_slice(args);
         full.extend(["--graphql", &self.graphql]);
         run_job(&self.home, &full)
     }
 
-    /// `gents goal <args>` against this node.
+    /// `gents automation goal <args>` against this node.
     pub(crate) fn goal(&self, args: &[&str]) -> Result<Value> {
-        let mut full = vec!["goal"];
+        let mut full = vec!["automation", "goal"];
         full.extend_from_slice(args);
         full.extend(["--graphql", &self.graphql]);
         run_cli_json(&self.home, &full)
@@ -544,7 +552,7 @@ async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
         "{stdout}"
     );
     assert!(
-        stdout.contains("gents job show job-s1:call-done"),
+        stdout.contains("gents automation job show job-s1:call-done"),
         "{stdout}"
     );
 
@@ -660,6 +668,7 @@ async fn local_access_refuses_watch_and_stops_a_running_job_on_an_offline_home()
     let (code, _, stderr) = run_job(
         tempdir.path(),
         &[
+            "automation",
             "job",
             "watch",
             "job-s1:call-running",
@@ -676,7 +685,14 @@ async fn local_access_refuses_watch_and_stops_a_running_job_on_an_offline_home()
 
     let (code, stdout, stderr) = run_job(
         tempdir.path(),
-        &["job", "stop", "job-s1:call-running", "--home", home],
+        &[
+            "automation",
+            "job",
+            "stop",
+            "job-s1:call-running",
+            "--home",
+            home,
+        ],
     )?;
     assert_eq!(code, Some(0), "{stderr}");
     assert!(stdout.starts_with("cancelled  stop applied"), "{stdout}");
@@ -919,6 +935,8 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
     run_cli_json(
         &served.home,
         &[
+            "utils",
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -964,6 +982,8 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
     let predecessor_receipt = run_cli_json(
         &served.home,
         &[
+            "utils",
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -1079,6 +1099,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
         let ended = run_cli_json(
             &watch_home,
             &[
+                "automation",
                 "job",
                 "watch",
                 &watch_target,
@@ -1137,6 +1158,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
                 run_cli_json(
                     &probe_home,
                     &[
+                        "automation",
                         "job",
                         "show",
                         &probe_address,

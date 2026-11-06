@@ -31,7 +31,7 @@ pub(crate) async fn dispatch(command: SessionCommand) -> Result<()> {
 async fn session_list(args: ConfigListArgs) -> Result<()> {
     let output = args
         .output
-        .ensure_supported("session list", &[OutputFormat::Table, OutputFormat::Json])?;
+        .ensure_supported("sessions list", &[OutputFormat::Table, OutputFormat::Json])?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
         .context("resolving access for session list")?;
@@ -62,7 +62,7 @@ async fn session_show(args: ConfigShowArgs) -> Result<()> {
     )?;
     let output = args
         .output
-        .ensure_supported("session show", &[OutputFormat::Json])?;
+        .ensure_supported("sessions show", &[OutputFormat::Json])?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
         .context("resolving access for session show")?;
@@ -133,7 +133,7 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
 async fn open_offline_fork_store(home: &Path, data_dir: &Path) -> Result<ConfigAccess> {
     anyhow::ensure!(
         crate::read_init_config(home)?.is_some(),
-        "gents home {} is not initialized; run `gents init --home {}` first",
+        "gents home {} is not initialized; run `gents --home {}` first",
         home.display(),
         home.display(),
     );

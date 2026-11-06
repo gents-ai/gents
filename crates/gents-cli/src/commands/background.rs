@@ -48,7 +48,7 @@ async fn background_list(args: BackgroundListArgs) -> Result<()> {
     };
 
     match args.output.ensure_supported(
-        "background list",
+        "utils debug background list",
         &[OutputFormat::Table, OutputFormat::Json],
     )? {
         OutputFormat::Json => print_json(&serde_json::to_value(output)?),

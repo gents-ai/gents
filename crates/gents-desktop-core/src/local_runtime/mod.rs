@@ -536,7 +536,7 @@ pub async fn init_standard_local_runtime(
         next_steps: vec![
             "Run `gents-desktop` and leave the desktop app open.".to_string(),
             "Wait for the status bar to show `replication subscriptions armed`.".to_string(),
-            "Then submit prompts from Chat, or run `gents chat` in another terminal.".to_string(),
+            "Then submit prompts from Chat, or run `gents` in another terminal.".to_string(),
         ],
     })
 }
@@ -548,7 +548,7 @@ pub(crate) async fn discover_standard_runtime(
     let runtime = read_json::<StoredRuntimeState>(&node_home.join(RUNTIME_STATE_FILE_NAME))
         .with_context(|| {
             format!(
-                "no running local Gents runtime found at {}; run `gents server` first",
+                "no running local Gents runtime found at {}; run `gents runtime server` first",
                 node_home.join(RUNTIME_STATE_FILE_NAME).display()
             )
         })?;
@@ -677,7 +677,7 @@ and replication bootstrap on launch.
 Next:
   1. Run `gents-desktop` and leave it open.
   2. Wait for the status bar to show `replication subscriptions armed`.
-  3. Then submit prompts from Chat, or run `gents chat` in another terminal.
+  3. Then submit prompts from Chat, or run `gents` in another terminal.
 ",
         discovery_line = discovery_line,
         graphql = summary.graphql,
@@ -838,7 +838,7 @@ fn url_host_is_loopback_or_unspecified(url: &reqwest::Url) -> bool {
 fn validate_runtime_identity(runtime: &StoredRuntimeState, init: &StoredInitConfig) -> Result<()> {
     if runtime.p2p_transport != "iroh" {
         anyhow::bail!(
-            "local runtime uses p2p_transport={}; desktop pairing requires iroh. Restart with `gents server` from a current build.",
+            "local runtime uses p2p_transport={}; desktop pairing requires iroh. Restart with `gents runtime server` from a current build.",
             if runtime.p2p_transport.is_empty() {
                 "<empty>"
             } else {

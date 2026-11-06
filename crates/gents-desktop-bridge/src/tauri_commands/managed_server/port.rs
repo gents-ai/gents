@@ -53,7 +53,7 @@ impl ForeignRuntime {
             None => (String::new(), "<its home>"),
         };
         format!(
-            "Port {port} is already served by a different Gents Node ({did}){located}, and the local Node needs that port. Stop the other Node with `gents service stop --home {home}` if it runs as a background service, or with Ctrl-C in the terminal running `gents server`. Or restart it on another port with `gents server --home {home} --http-port <port>`."
+            "Port {port} is already served by a different Gents Node ({did}){located}, and the local Node needs that port. Stop the other Node with `gents runtime service stop --home {home}` if it runs as a background service, or with Ctrl-C in the terminal running `gents runtime server`. Or restart it on another port with `gents runtime server --home {home} --http-port <port>`."
         )
     }
 }

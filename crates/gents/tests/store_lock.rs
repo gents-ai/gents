@@ -28,7 +28,10 @@ fn a_second_holder_cannot_lock_a_store() {
         error.contains(&format!("process {}", std::process::id())),
         "{error}"
     );
-    assert!(error.contains("gents service stop --home"), "{error}");
+    assert!(
+        error.contains("gents runtime service stop --home"),
+        "{error}"
+    );
 
     drop(held);
     lock_store(&home, &data).expect("the lock is released with its holder");

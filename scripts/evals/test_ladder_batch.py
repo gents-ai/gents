@@ -44,16 +44,16 @@ args = sys.argv[1:]
 log = pathlib.Path(os.environ["CALL_LOG"])
 with log.open("a") as stream:
     stream.write(json.dumps(args) + "\\n")
-if args[0] == "query":
+if args[:3] == ["utils", "data", "query"]:
     print(json.dumps({"results": [{"node_did": "did:test:node"}]}))
-elif args[:2] == ["eval", "batch"]:
+elif args[:3] == ["utils", "eval", "batch"]:
     plan = json.loads(pathlib.Path(args[args.index("--plan") + 1]).read_text())
     calls = [json.loads(line) for line in log.read_text().splitlines()]
     applied = [call[call.index("--root") + 1] for call in calls if call[:2] == ["config", "apply"]]
     assert len(applied) == 3, applied
     assert all(pathlib.Path(path).is_dir() for path in applied)
     assert len(plan["runs"]) == 4, plan
-    assert not any(call[:2] == ["eval", "run"] for call in calls)
+    assert not any(call[:3] == ["utils", "eval", "run"] for call in calls)
 elif args[:2] != ["config", "apply"]:
     raise SystemExit("unexpected command: " + repr(args))
 ''')
@@ -72,7 +72,7 @@ elif args[:2] != ["config", "apply"]:
         result = self.run_ladder("all", "--backend", "workstation-2", "--trials", "2", "--concurrency", "8")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        batches = [call for call in calls if call[:2] == ["eval", "batch"]]
+        batches = [call for call in calls if call[:3] == ["utils", "eval", "batch"]]
         self.assertEqual(len(batches), 1)
         batch = batches[0]
         self.assertEqual(batch[batch.index("--concurrency") + 1], "2")
@@ -154,7 +154,7 @@ elif args[:2] != ["config", "apply"]:
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("contain no runs", result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertFalse(any(call[:2] == ["eval", "batch"] for call in calls))
+        self.assertFalse(any(call[:3] == ["utils", "eval", "batch"] for call in calls))
 
 
 if __name__ == "__main__":

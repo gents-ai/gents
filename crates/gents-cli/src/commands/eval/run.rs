@@ -263,7 +263,7 @@ async fn finish(
     let outcome = result?;
     let stopped = (outcome.cancelled || outcome.abandoned > 0).then(|| {
         format!(
-            "run {run_id} stopped before it finished ({} completed, {} abandoned this pass); `gents eval resume {run_id}` continues it",
+            "run {run_id} stopped before it finished ({} completed, {} abandoned this pass); `gents utils eval resume {run_id}` continues it",
             outcome.completed, outcome.abandoned
         )
     });

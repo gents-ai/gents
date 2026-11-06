@@ -163,7 +163,7 @@ impl PackManifest {
                     .to_owned()
             };
             anyhow::bail!(
-                "graph packs are retired; run `gents pack remove {}/{}` and install the 2.x version",
+                "graph packs are retired; run `gents config pack remove {}/{}` and install the 2.x version",
                 text("namespace", crate::pack::archive::DEFAULT_NAMESPACE),
                 text("name", "<name>")
             );

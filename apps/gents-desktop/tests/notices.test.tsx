@@ -66,10 +66,10 @@ describe("words for what the runtime reports", () => {
   it("never offers a command to type", () => {
     expect(
       withoutCommandHints(
-        "no other Claude account offers claude-sonnet-5-5; add one with `gents claude-login --label <label>`",
+        "no other Claude account offers claude-sonnet-5-5; add one with `gents accounts login claude --label <label>`",
       ),
     ).toBe("no other Claude account offers claude-sonnet-5-5");
-    expect(reasonText("sign in with `gents claude-login`")).toBe("");
+    expect(reasonText("sign in with `gents accounts login claude`")).toBe("");
   });
 
   it("reads a coded reason by its code, and an unknown one by its message", () => {

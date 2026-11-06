@@ -310,6 +310,191 @@ async fn seed_canonical_tool_transcript(
     Ok(())
 }
 
+/// A real server with a mock model, for tests that open agents side by side.
+pub(super) struct AgentShim {
+    _tempdir: tempfile::TempDir,
+    _mock: MockChatEndpoint,
+    _serve: ServeProcess,
+    pub(super) home_dir: std::path::PathBuf,
+    pub(super) graphql: String,
+    pub(super) shim_port: u16,
+    pub(super) node_did: String,
+    pub(super) default_agent: String,
+    profile_id: String,
+}
+
+impl AgentShim {
+    /// `server_args` gets the default agent's id, which exists only after `init`.
+    pub(super) async fn start(
+        server_args: impl FnOnce(&str) -> Vec<String>,
+        envs: &[(&str, &str)],
+    ) -> Result<Self> {
+        let tempdir = tempfile::tempdir().context("creating tempdir")?;
+        let home_dir = tempdir.path().join("home");
+        fs::create_dir_all(&home_dir)?;
+        let model_name = format!("mock-codex-shim-model-{}", Uuid::new_v4().simple());
+        let mock = MockChatEndpoint::start(&model_name, "mock reply")?;
+        let node_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+        let init = run_init_json(
+            &home_dir,
+            &[
+                "--node-name",
+                &node_name,
+                "--model-name",
+                &model_name,
+                "--inference-url",
+                mock.endpoint(),
+            ],
+        )?;
+        let node_did = node_did_from_init(&init)?;
+        let default_agent = format!("{node_did}:default");
+        let profile_id = init["inference_profile_id"]
+            .as_str()
+            .context("init output missing inference_profile_id")?
+            .to_string();
+
+        let shim_port = allocate_port()?;
+        let mut args = vec![
+            "--codex-shim-port".to_string(),
+            shim_port.to_string(),
+            "--codex-shim-poll-ms".to_string(),
+            "100".to_string(),
+        ];
+        args.extend(server_args(&default_agent));
+        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        let (mut serve, server_port, _) =
+            spawn_server_with_ready_json_recovering(&home_dir, allocate_port()?, &args, envs)?;
+        let graphql = graphql_url(server_port);
+        wait_for_port(shim_port, &mut serve)?;
+        serve
+            .capturing(wait_for_runtime_ready(
+                &graphql,
+                &node_did,
+                Duration::from_secs(30),
+            ))
+            .await?;
+        Ok(Self {
+            _tempdir: tempdir,
+            _mock: mock,
+            _serve: serve,
+            home_dir,
+            graphql,
+            shim_port,
+            node_did,
+            default_agent,
+            profile_id,
+        })
+    }
+
+    pub(super) fn url(&self, route: &str) -> String {
+        format!("ws://127.0.0.1:{}{route}", self.shim_port)
+    }
+
+    pub(super) async fn runtime(&self, bearer: Option<&str>) -> Result<Value> {
+        let mut request =
+            reqwest::Client::new().get(format!("http://127.0.0.1:{}/runtime", self.shim_port));
+        if let Some(bearer) = bearer {
+            request = request.bearer_auth(bearer);
+        }
+        Ok(request.send().await?.error_for_status()?.json().await?)
+    }
+
+    pub(super) async fn wait_until_runnable(
+        &self,
+        agent: &str,
+        bearer: Option<&str>,
+    ) -> Result<()> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let runtime = self.runtime(bearer).await?;
+            if runtime["runnable_agents"]
+                .as_array()
+                .is_some_and(|agents| agents.iter().any(|listed| listed == agent))
+            {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                bail!("{agent} was never published; /runtime says {runtime}");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Clones the default agent with no restart, and returns once it is published.
+    pub(super) async fn add_agent(&self, display_name: &str) -> Result<String> {
+        let cloned = run_cli_json(
+            &self.home_dir,
+            &[
+                "config",
+                "agent",
+                "clone",
+                &self.default_agent,
+                "--graphql",
+                &self.graphql,
+                "--display-name",
+                display_name,
+                "--profile-id",
+                &self.profile_id,
+            ],
+        )?;
+        let agent = cloned["agent_id"]
+            .as_str()
+            .context("clone output missing agent_id")?
+            .to_string();
+        self.wait_until_runnable(&agent, None).await?;
+        Ok(agent)
+    }
+
+    /// A new connection on `route`, initialized as a client would.
+    pub(super) async fn connect(&self, route: &str) -> Result<ShimWebSocket> {
+        let (mut ws, _) = connect_async(self.url(route))
+            .await
+            .with_context(|| format!("connecting to {route}"))?;
+        initialize_config_and_thread(&mut ws, &self.home_dir).await?;
+        Ok(ws)
+    }
+}
+
+pub(super) async fn listed_thread_ids(ws: &mut ShimWebSocket) -> Result<Vec<String>> {
+    send_client_request(
+        ws,
+        codex::ClientRequest::ThreadList {
+            request_id: request_id(201),
+            params: codex::ThreadListParams {
+                cursor: None,
+                limit: None,
+                sort_key: None,
+                sort_direction: None,
+                model_providers: None,
+                source_kinds: None,
+                archived: None,
+                cwd: None,
+                use_state_db_only: true,
+                search_term: None,
+            },
+        },
+    )
+    .await?;
+    let listed: codex::ThreadListResponse = read_typed_response(ws, request_id(201)).await?;
+    Ok(listed.data.into_iter().map(|thread| thread.id).collect())
+}
+
+pub(super) async fn loaded_thread_ids(ws: &mut ShimWebSocket) -> Result<Vec<String>> {
+    send_client_request(
+        ws,
+        codex::ClientRequest::ThreadLoadedList {
+            request_id: request_id(202),
+            params: codex::ThreadLoadedListParams {
+                cursor: None,
+                limit: None,
+            },
+        },
+    )
+    .await?;
+    let loaded: codex::ThreadLoadedListResponse = read_typed_response(ws, request_id(202)).await?;
+    Ok(loaded.data)
+}
+
 pub(super) async fn initialize_config_and_thread(
     ws: &mut ShimWebSocket,
     _home_dir: &std::path::Path,

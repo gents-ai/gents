@@ -615,7 +615,7 @@ mod tests {
             XAI_OAUTH_PROVIDER,
             &OAuthAuthProblem::Missing,
         );
-        assert!(msg.contains("gents grok-login"), "{msg}");
+        assert!(msg.contains("gents accounts login grok"), "{msg}");
     }
 
     /// The capture seam must be installed below this wrapper so the row

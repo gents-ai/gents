@@ -20,6 +20,7 @@ async fn mcp_register_upserts_a_host_endpoint() -> Result<()> {
     let output = run_cli_text(
         tempdir.path(),
         &[
+            "config",
             "mcp",
             "register",
             "--home",
@@ -77,6 +78,7 @@ async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result
     let output = run_cli_json(
         tempdir.path(),
         &[
+            "config",
             "mcp",
             "probe",
             "--home",
@@ -116,7 +118,7 @@ async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result
 
     let table = run_cli_text(
         tempdir.path(),
-        &["mcp", "probe", "--home", node_home, &service_id],
+        &["config", "mcp", "probe", "--home", node_home, &service_id],
     )?;
     assert!(
         table.contains("SERVICE") && table.contains("HEALTH_STATE") && table.contains(&service_id),
@@ -147,6 +149,7 @@ async fn mcp_probe_all_json_lists_each_online_service() -> Result<()> {
     let output = run_cli_json(
         tempdir.path(),
         &[
+            "config",
             "mcp",
             "probe",
             "--home",
@@ -194,7 +197,14 @@ async fn mcp_probe_single_missing_service_fails() -> Result<()> {
     let node_home = node_home.to_str().context("node home utf8")?;
     let stderr = run_cli_failure_stderr(
         tempdir.path(),
-        &["mcp", "probe", "--home", node_home, "missing-service"],
+        &[
+            "config",
+            "mcp",
+            "probe",
+            "--home",
+            node_home,
+            "missing-service",
+        ],
     )?;
     assert!(
         stderr.contains("no online MCP service matched missing-service"),
@@ -207,8 +217,10 @@ async fn mcp_probe_single_missing_service_fails() -> Result<()> {
 #[test]
 fn mcp_probe_rejects_zero_timeout() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let stderr =
-        run_cli_failure_stderr(tempdir.path(), &["mcp", "probe", "--all", "--timeout", "0"])?;
+    let stderr = run_cli_failure_stderr(
+        tempdir.path(),
+        &["config", "mcp", "probe", "--all", "--timeout", "0"],
+    )?;
     assert!(
         stderr.contains("--timeout must be greater than zero"),
         "zero timeout failure should explain the constraint:\n{stderr}"
@@ -278,7 +290,15 @@ fn mcp_probe_rejects_service_and_all_together() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let stderr = run_cli_failure_stderr(
         tempdir.path(),
-        &["mcp", "probe", "--all", "some-service", "--timeout", "1s"],
+        &[
+            "config",
+            "mcp",
+            "probe",
+            "--all",
+            "some-service",
+            "--timeout",
+            "1s",
+        ],
     )?;
     assert!(
         stderr.contains("provide either <service> or --all, not both"),
@@ -290,7 +310,7 @@ fn mcp_probe_rejects_service_and_all_together() -> Result<()> {
 #[test]
 fn mcp_probe_rejects_missing_target() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let stderr = run_cli_failure_stderr(tempdir.path(), &["mcp", "probe"])?;
+    let stderr = run_cli_failure_stderr(tempdir.path(), &["config", "mcp", "probe"])?;
     assert!(
         stderr.contains("provide a service id or --all"),
         "missing-target failure should ask for a service id or --all:\n{stderr}"

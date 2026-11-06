@@ -38,6 +38,7 @@ async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Re
     let set = run_cli_json(
         &home_dir,
         &[
+            "automation",
             "goal",
             "set",
             "--graphql",
@@ -62,6 +63,7 @@ async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Re
     let paused = run_cli_json(
         &home_dir,
         &[
+            "automation",
             "goal",
             "set",
             "--graphql",
@@ -81,6 +83,7 @@ async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Re
     let rejected = run_cli_failure_stderr(
         &home_dir,
         &[
+            "automation",
             "goal",
             "set",
             "--graphql",
@@ -96,6 +99,7 @@ async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Re
     let shown = run_cli_json(
         &home_dir,
         &[
+            "automation",
             "goal",
             "show",
             "--graphql",
@@ -117,6 +121,7 @@ async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Re
     let unbudgeted = run_cli_json(
         &home_dir,
         &[
+            "automation",
             "goal",
             "set",
             "--graphql",
@@ -151,6 +156,7 @@ async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Re
     let cleared = run_cli_json(
         &home_dir,
         &[
+            "automation",
             "goal",
             "clear",
             "--graphql",
@@ -209,6 +215,8 @@ async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() 
     let submitted = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -236,6 +244,7 @@ async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() 
     let paused = run_cli_json(
         &home_dir,
         &[
+            "automation",
             "goal",
             "set",
             "--graphql",
@@ -252,6 +261,7 @@ async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() 
     )?;
     assert_eq!(paused.get("status").and_then(Value::as_str), Some("paused"));
     let resume_args = [
+        "automation",
         "goal",
         "resume-request",
         "--graphql",

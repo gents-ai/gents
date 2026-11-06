@@ -264,7 +264,7 @@ pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool>
             let file = request
                 .filesystem()
                 .context("the unscoped approval has no filesystem target")?;
-            anyhow::bail!("no chat or desktop on this server's home is listening to answer; allow it with `gents plugin dirs add {}`", file.folder.display());
+            anyhow::bail!("no chat or desktop on this server's home is listening to answer; allow it with `gents config pack plugin dirs add {}`", file.folder.display());
         }
         tokio::time::sleep(pause).await;
         pause = (pause * 2).min(Duration::from_millis(250));

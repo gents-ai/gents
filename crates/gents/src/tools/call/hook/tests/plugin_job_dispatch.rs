@@ -907,7 +907,10 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     assert_eq!(answer["status"], "running", "{answer}");
     assert_eq!(
         answer["next"],
-        format!("Next: `gents job show {}:call-2`", step.session_id),
+        format!(
+            "Next: `gents automation job show {}:call-2`",
+            step.session_id
+        ),
         "{answer}"
     );
     let next = step.row_of("call-2").await;
@@ -939,7 +942,7 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     );
     assert_eq!(
         again["next"],
-        format!("Next: `gents job show {address}`; the `{TOOL}` help says how a run is resumed"),
+        format!("Next: `gents automation job show {address}`; the `{TOOL}` help says how a run is resumed"),
         "{again}"
     );
     failed(&step.row_of("call-3").await, "policyDenied");
@@ -1120,7 +1123,7 @@ async fn resume_of_a_missing_row_names_the_cause_and_the_next_call() {
     assert_eq!(
         refused["next"],
         format!(
-            "Next: `gents job show <address>` with the address the run's receipt printed; the `{TOOL}` help says how a run is resumed"
+            "Next: `gents automation job show <address>` with the address the run's receipt printed; the `{TOOL}` help says how a run is resumed"
         ),
         "{refused}"
     );

@@ -41,6 +41,7 @@ pub(crate) mod response;
 pub(crate) mod schema;
 pub(crate) mod serve;
 pub(crate) mod session;
+pub(crate) mod start;
 pub(crate) mod status;
 pub(crate) mod task;
 pub(crate) mod tools;

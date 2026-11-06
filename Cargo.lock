@@ -4245,6 +4245,7 @@ dependencies = [
  "opentelemetry_sdk",
  "p2p",
  "plist",
+ "portable-pty",
  "query",
  "rapidhash",
  "reqwest 0.12.28",

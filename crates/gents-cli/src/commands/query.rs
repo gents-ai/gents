@@ -110,10 +110,12 @@ mod tests {
 
     #[test]
     fn query_search_cli_preserves_typed_search_options() {
-        use crate::cli::args::{Cli, Command};
+        use crate::cli::args::{Cli, Command, DataCommand, UtilsCommand};
         use clap::Parser;
         let cli = Cli::try_parse_from([
             "gents",
+            "utils",
+            "data",
             "query",
             "search",
             "--collection",
@@ -132,7 +134,13 @@ mod tests {
             "AdmiralReport",
         ])
         .unwrap();
-        let Command::Query(args) = cli.command else {
+        let Some(Command::Utils {
+            command:
+                UtilsCommand::Data {
+                    command: DataCommand::Query(args),
+                },
+        }) = cli.command
+        else {
             panic!("expected query")
         };
         let (params, scope) = command_from_args(args).unwrap();
@@ -148,10 +156,12 @@ mod tests {
 
     #[test]
     fn query_field_page_preserves_continuation_and_filter() {
-        use crate::cli::args::{Cli, Command};
+        use crate::cli::args::{Cli, Command, DataCommand, UtilsCommand};
         use clap::Parser;
         let cli = Cli::try_parse_from([
             "gents",
+            "utils",
+            "data",
             "query",
             "find",
             "--collection",
@@ -164,7 +174,13 @@ mod tests {
             r#"{"doc_id":"doc","field":"body","offset_bytes":2000,"expected_hash":"sha256:abc"}"#,
         ])
         .unwrap();
-        let Command::Query(args) = cli.command else {
+        let Some(Command::Utils {
+            command:
+                UtilsCommand::Data {
+                    command: DataCommand::Query(args),
+                },
+        }) = cli.command
+        else {
             panic!("expected query")
         };
         let (command, _) = command_from_args(args).unwrap();
@@ -218,7 +234,7 @@ mod tests {
             &scope,
         )
         .await
-        .expect_err("EvalVerdict must never be readable through `gents query`");
+        .expect_err("EvalVerdict must never be readable through `gents utils data query`");
         let message = format!("{error:#}");
         assert!(message.contains(EVAL_VERDICT_NAME), "{message}");
         assert!(message.contains("protected"), "{message}");

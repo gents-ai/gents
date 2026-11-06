@@ -6,7 +6,7 @@ This pack runs one operator-authored `ChangeUnitWork` through a native Gents wor
 
 ```sh
 GENTS_CHANGE_UNIT_ROOT=/absolute/path/to/repository \
-  gents pack install ./packs/gents/change_unit --home <home> \
+  gents config pack install ./packs/gents/change_unit --home <home> \
     --inference-slot writer=<profile-id> \
     --inference-slot reviewer=<profile-id> \
     --inference-slot integrator=<profile-id>
@@ -15,7 +15,7 @@ GENTS_CHANGE_UNIT_ROOT=/absolute/path/to/repository \
 The repository root is an operator-configured `RepositoryPlacement`; it must be a clean Git checkout. Create a work-unit document with the pinned repository ID and base commit, a unique work-unit ID beginning `change-unit:`, a unique branch, a concise title and instructions, and an `owned_files` JSON string containing the complete relative file-path array. The prefix isolates this pack's event subscriptions from other workspace receipts. `handoff_id` and `caused_by_correlation` must equal the work-unit ID. Supply the originating `reply_session_id` and a positive `attempt` so terminal outcomes retain supervision provenance. Retry bounds belong to the submitting supervisor; each retry needs a fresh unit/workspace identity. `caused_by_correlation` should equal the work-unit ID so later receipts and results correlate to the unit.
 
 ```sh
-gents document create ChangeUnitWork --home <home> --json \
+gents utils data document create ChangeUnitWork --home <home> --json \
   '{"work_unit_id":"change-unit:change-001","repository_id":"change-unit-repository","base_sha":"<commit-sha>","branch":"change-001","title":"...","instructions":"...","owned_files":"[\"packs/example/file.md\"]","caused_by_correlation":"change-unit:change-001","handoff_id":"change-unit:change-001","reply_session_id":"<supervisor-session>","attempt":1,"status":"ready"}'
 ```
 

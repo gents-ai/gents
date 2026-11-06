@@ -578,7 +578,7 @@ fn retired_graph_kind_is_refused_with_next_step() {
     let error = format!("{:#}", PackManifest::from_slice(&bytes).unwrap_err());
     assert!(
         error.contains(
-            "graph packs are retired; run `gents pack remove acme/code_review` and install the 2.x version"
+            "graph packs are retired; run `gents config pack remove acme/code_review` and install the 2.x version"
         ),
         "{error}"
     );

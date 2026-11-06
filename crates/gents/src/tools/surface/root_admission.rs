@@ -10,6 +10,30 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+/// Why a folder cannot be a tool root whoever asks: a root is a boundary only if it
+/// leaves something out, and these leave out nothing of the person's.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum TooBroadRoot {
+    #[error("The filesystem root is too broad. Choose your home directory or a folder inside it.")]
+    FilesystemRoot,
+    #[error("{} is broader than your home directory. Choose your home directory or a more specific folder.", .0.display())]
+    AboveUserHome(PathBuf),
+}
+
+/// Both paths must already be canonical.
+pub fn refuse_too_broad_root(
+    root: &Path,
+    user_home: Option<&Path>,
+) -> std::result::Result<(), TooBroadRoot> {
+    if root.parent().is_none() {
+        return Err(TooBroadRoot::FilesystemRoot);
+    }
+    if user_home.is_some_and(|home| home.starts_with(root) && home != root) {
+        return Err(TooBroadRoot::AboveUserHome(root.to_path_buf()));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct WorkspaceRootDocument {
     pub root_path: Option<String>,

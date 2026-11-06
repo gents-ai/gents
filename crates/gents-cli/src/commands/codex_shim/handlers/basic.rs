@@ -1,6 +1,9 @@
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use gents::inference::usage_observation::{usage_for_backend, UsageObservation};
 use gents::store::config_client::load_inference_backend_in_txn;
+use gents::tools::surface::{admit_authored_root, project_workspace_root_policy};
 use gents_codex_protocol as codex;
 use serde_json::json;
 
@@ -15,6 +18,17 @@ use super::models::{
 };
 use super::skills::load_skill_metadata;
 use crate::config_writes::ConfigAccess;
+
+/// Whether `config/read` reports `directory` as trusted, which keeps Codex from asking
+/// "Do you trust the contents of this directory?" on every open. That screen guards a
+/// project's local Codex config, hooks and exec policies; `gents codex` already launches
+/// Codex with approvals and sandbox off, and the tool preset is the permission boundary.
+/// Admission decides, so `..` or a symlink cannot widen this, and a shim with no tool root
+/// trusts nothing.
+fn trusts_directory(tool_root: Option<&Path>, directory: &str) -> bool {
+    let policy = project_workspace_root_policy(Vec::new(), tool_root);
+    tool_root.is_some() && matches!(admit_authored_root(&policy, directory, false), Ok(Some(_)))
+}
 
 pub(super) async fn handle_basic_request(
     outbound: &Outbound,
@@ -84,7 +98,9 @@ pub(super) async fn handle_basic_request(
             )
             .await
         }
-        codex::ClientRequest::ConfigRead { request_id, .. } => {
+        codex::ClientRequest::ConfigRead {
+            request_id, params, ..
+        } => {
             let model_id = load_bound_model_selection_id_for_state(
                 &state.node,
                 &state.node_did,
@@ -92,18 +108,28 @@ pub(super) async fn handle_basic_request(
             )
             .await
             .context("resolving current model selection for ConfigRead")?;
+            let mut config = json!({
+                "model": model_id,
+                "model_provider": "gents",
+                "approval_policy": "never",
+                "sandbox_mode": "danger-full-access"
+            });
+            if let Some(cwd) = params.cwd {
+                let root = state.fs_root.clone();
+                let directory = cwd.clone();
+                let trusted = tokio::task::spawn_blocking(move || {
+                    trusts_directory(root.as_deref(), &directory)
+                })
+                .await
+                .context("resolving the directory for ConfigRead")?;
+                if trusted {
+                    config["projects"] = json!({ cwd: { "trust_level": "trusted" } });
+                }
+            }
             send_typed_json_result::<codex::ConfigReadResponse>(
                 outbound,
                 request_id,
-                json!({
-                    "config": {
-                        "model": model_id,
-                        "model_provider": "gents",
-                        "approval_policy": "never",
-                        "sandbox_mode": "danger-full-access"
-                    },
-                    "origins": {}
-                }),
+                json!({ "config": config, "origins": {} }),
             )
             .await
         }
@@ -307,6 +333,39 @@ mod tests {
     use crate::config_writes::{write_agent_document, ConfigAccess};
 
     const DID: &str = "did:test:codex-shim-usage";
+
+    #[cfg(unix)]
+    #[test]
+    fn only_a_directory_inside_the_tool_root_is_trusted() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(temp.path()).unwrap();
+        let (root, outside, sibling) = (base.join("root"), base.join("out"), base.join("root2"));
+        for directory in [root.join("sub"), outside.join("sub"), sibling.clone()] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        std::os::unix::fs::symlink(&outside, root.join("escape")).unwrap();
+        std::os::unix::fs::symlink(root.join("sub"), base.join("alias")).unwrap();
+        let trusted =
+            |directory: &Path| trusts_directory(Some(root.as_path()), directory.to_str().unwrap());
+
+        assert!(trusted(&root));
+        assert!(trusted(&root.join("sub")));
+        assert!(trusted(&root.join("sub/../sub")));
+        assert!(trusted(&base.join("alias")), "resolves inside the root");
+
+        assert!(!trusted(&outside));
+        assert!(!trusted(&sibling), "shares only a name prefix");
+        assert!(!trusted(&root.join("../out")));
+        assert!(!trusted(&root.join("escape")));
+        assert!(!trusted(&root.join("escape/sub")));
+        assert!(
+            !trusted(&root.join("escape/..")),
+            "the symlink is resolved first"
+        );
+
+        assert!(!trusts_directory(Some(root.as_path()), "sub"), "relative");
+        assert!(!trusts_directory(None, root.to_str().unwrap()));
+    }
 
     fn state(node: Arc<EmbeddedNode>, tempdir: &tempfile::TempDir) -> ShimState {
         ShimState {

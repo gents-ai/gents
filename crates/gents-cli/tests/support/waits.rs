@@ -309,7 +309,7 @@ pub async fn wait_for_connected_peer(
     let deadline = Instant::now() + timeout;
     let mut last_error = "none".to_string();
     loop {
-        match run_cli_json(home_dir, &["p2p", "peers"]) {
+        match run_cli_json(home_dir, &["runtime", "p2p", "peers"]) {
             Ok(status) => {
                 last_error.clear();
                 if status

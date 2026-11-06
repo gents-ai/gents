@@ -9,7 +9,7 @@ const OWNER: &str = "did:key:zPackInstallOwner";
 fn edited_pack_error_identifies_the_operator_cli() {
     let error = edited_error("acme/demo", &["Tools/t1".to_owned()]).to_string();
     assert!(error.contains("Tools/t1"));
-    assert!(error.contains("operator CLI `gents pack install`"));
+    assert!(error.contains("operator CLI `gents config pack install`"));
     assert!(error.contains("--overwrite"));
     assert!(error.contains("--keep"));
     assert!(error.contains("agent pack command does not accept these flags"));
@@ -404,7 +404,7 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
         .await
         .unwrap_err();
     assert!(
-        format!("{refused:#}").contains("gents plugin remove"),
+        format!("{refused:#}").contains("gents config pack plugin remove"),
         "{refused:#}"
     );
 
@@ -1971,7 +1971,7 @@ async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) 
     format!("{error:#}")
 }
 
-const DEPENDENCY_NEXT_STEP: &str = "install it with `gents pack install` or `gents plugin install`, then remove it from `dependencies`";
+const DEPENDENCY_NEXT_STEP: &str = "install it with `gents config pack install` or `gents config pack plugin install`, then remove it from `dependencies`";
 
 #[tokio::test]
 async fn an_assets_dependency_is_refused_with_a_next_step() {
@@ -2006,7 +2006,9 @@ async fn a_documents_dependency_with_its_own_dependencies_is_refused() {
         "{error}"
     );
     assert!(
-        error.contains("install it with `gents pack install`, then remove it from `dependencies`"),
+        error.contains(
+            "install it with `gents config pack install`, then remove it from `dependencies`"
+        ),
         "{error}"
     );
 }
@@ -2073,7 +2075,7 @@ async fn an_install_naming_an_unresolved_plugin_is_refused_before_writing() {
     assert!(
         error.contains("acme/web_search")
             && error.contains("web_persona:tools")
-            && error.contains("gents pack install"),
+            && error.contains("gents config pack install"),
         "{error}"
     );
 }

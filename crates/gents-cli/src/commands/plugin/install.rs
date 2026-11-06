@@ -22,7 +22,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
     let manifest = pack.archive.manifest();
     anyhow::ensure!(
         !manifest.metadata.plugins.is_empty(),
-        "{namespace}/{name} carries no plugins; install the whole pack with gents pack install"
+        "{namespace}/{name} carries no plugins; install the whole pack with gents config pack install"
     );
     let notification_scope = crate::commands::pack::plugin_notification_scope(&home).await?;
     let notify_scope = notification_scope.clone();
@@ -141,7 +141,7 @@ mod tests {
             home.path().to_str().unwrap(),
         ])
         .unwrap();
-        let crate::cli::Command::Init(init_args) = cli.command else {
+        let Some(crate::cli::Command::Init(init_args)) = cli.command else {
             panic!("expected init")
         };
         crate::commands::init::init(init_args).await.unwrap();

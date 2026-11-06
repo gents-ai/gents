@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Subcommand, ValueEnum};
 
-use super::{ConfigListArgs, ConfigShowArgs};
+use super::{ConfigListArgs, ConfigShowArgs, McpCommand};
 
 #[derive(Subcommand)]
 pub(crate) enum ConfigTriggerCommand {
@@ -26,6 +26,8 @@ pub(crate) enum ConfigMcpCommand {
     List(ConfigListArgs),
     #[command(name = "show", about = "Show a ToolServiceRegistry document")]
     Show(ConfigShowArgs),
+    #[command(flatten)]
+    Service(McpCommand),
 }
 
 #[derive(Subcommand)]

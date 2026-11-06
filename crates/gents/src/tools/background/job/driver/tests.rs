@@ -1523,7 +1523,7 @@ async fn three_consecutive_step_failures_settle_step_failed_with_the_next_call()
     let output = step.output(&step.row).await;
     assert_eq!(output["code"], "plugin_job_step_failed");
     let next = output["next"].as_str().unwrap();
-    assert!(next.contains("gents job show"), "{next}");
+    assert!(next.contains("gents automation job show"), "{next}");
     let message = output["message"].as_str().unwrap();
     assert!(
         message.starts_with("three consecutive job steps failed; last: ")

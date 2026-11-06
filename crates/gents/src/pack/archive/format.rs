@@ -268,7 +268,7 @@ fn read_header(entry: &mut impl Read) -> Result<PackHeader> {
         .with_context(|| format!("{HEADER_ENTRY} is not valid JSON"))?;
     ensure!(
         probe.format.as_deref() == Some(FORMAT),
-        "{HEADER_ENTRY} does not describe a gents pack"
+        "{HEADER_ENTRY} does not describe a gents config pack"
     );
     let version = probe.format_version.unwrap_or_default();
     ensure!(

@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 mod init_config;
@@ -21,6 +22,20 @@ const INIT_CONFIG_FILE_NAME: &str = "init.json";
 pub enum HomeError {
     #[error("unable to resolve the user's home directory; set GENTS_HOME")]
     HomeDirUnresolved,
+    #[error("reading the remembered home file {}", path.display())]
+    RememberedHomeRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the remembered home file {} must hold one absolute path", path.display())]
+    RememberedHomeInvalid { path: PathBuf },
+    #[error("writing the remembered home file {}", path.display())]
+    RememberedHomeWrite {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error(transparent)]
     LockHeld(#[from] StoreLockHeld),
     #[error(transparent)]
@@ -217,21 +232,114 @@ pub fn store_lock_held<'a>(
 type Result<T, E = HomeError> = std::result::Result<T, E>;
 
 pub fn default_home_dir() -> Result<PathBuf> {
-    if let Some(home) = std::env::var_os("GENTS_HOME").filter(|value| !value.is_empty()) {
+    default_home_from(
+        std::env::var_os("GENTS_HOME"),
+        dirs::config_dir().as_deref(),
+        dirs::home_dir().as_deref(),
+    )
+}
+
+/// An unreadable remembered file is an error: falling back to `~/.gents` would
+/// open the wrong data.
+fn default_home_from(
+    env_home: Option<OsString>,
+    config_dir: Option<&Path>,
+    user_home: Option<&Path>,
+) -> Result<PathBuf> {
+    if let Some(home) = env_home.filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(home));
     }
-    Ok(dirs::home_dir()
+    if let Some(home) = config_dir.map(read_remembered_home).transpose()?.flatten() {
+        return Ok(home);
+    }
+    Ok(user_home
         .ok_or(HomeError::HomeDirUnresolved)?
         .join(".gents"))
+}
+
+/// Outside any home, so resetting a home cannot remove it.
+fn remembered_home_dir(config_dir: &Path) -> PathBuf {
+    config_dir.join("gents")
+}
+
+const REMEMBERED_HOME_FILE_NAME: &str = "home";
+
+/// Only the trailing newline is trimmed; other whitespace belongs to the path. A
+/// further line break means this is not the one line `remember_home` writes.
+fn read_remembered_home(config_dir: &Path) -> Result<Option<PathBuf>> {
+    let path = remembered_home_dir(config_dir).join(REMEMBERED_HOME_FILE_NAME);
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(HomeError::RememberedHomeRead { path, source }),
+    };
+    let home = contents.strip_suffix('\n').unwrap_or(&contents);
+    if home.contains(['\n', '\r']) || !Path::new(home).is_absolute() {
+        return Err(HomeError::RememberedHomeInvalid { path });
+    }
+    Ok(Some(PathBuf::from(home)))
+}
+
+/// Makes `chosen` the default home for later commands, or forgets any earlier
+/// choice when `chosen` is `~/.gents`. Only setup calls this: a one-off `--home`
+/// or `GENTS_HOME` never changes what is remembered.
+pub fn remember_home(chosen: &Path) -> Result<()> {
+    remember_home_in(
+        &dirs::config_dir().ok_or(HomeError::HomeDirUnresolved)?,
+        &dirs::home_dir().ok_or(HomeError::HomeDirUnresolved)?,
+        chosen,
+    )
+}
+
+fn remember_home_in(config_dir: &Path, user_home: &Path, chosen: &Path) -> Result<()> {
+    let dir = remembered_home_dir(config_dir);
+    let path = dir.join(REMEMBERED_HOME_FILE_NAME);
+    write_remembered_home(&dir, &path, user_home, chosen)
+        .map_err(|source| HomeError::RememberedHomeWrite { path, source })
+}
+
+fn write_remembered_home(
+    dir: &Path,
+    path: &Path,
+    user_home: &Path,
+    chosen: &Path,
+) -> std::io::Result<()> {
+    let chosen = std::path::absolute(chosen)?;
+    if chosen == user_home.join(".gents") {
+        return match std::fs::remove_file(path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        };
+    }
+    let chosen = chosen
+        .to_str()
+        .filter(|chosen| !chosen.contains(['\n', '\r']))
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "the home path must be UTF-8 with no line break",
+            )
+        })?;
+    std::fs::create_dir_all(dir)?;
+    let staged = tempfile::NamedTempFile::new_in(dir)?;
+    use std::io::Write as _;
+    writeln!(staged.as_file(), "{chosen}")?;
+    staged.as_file().sync_all()?;
+    staged.persist(path).map_err(|error| error.error)?;
+    #[cfg(unix)]
+    std::fs::File::open(dir)?.sync_all()?;
+    Ok(())
 }
 
 const DATA_DIR_NAME: &str = "data";
 const KEYS_DIR_NAME: &str = "keys";
 pub const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 pub const RUNTIME_STARTUP_LOCK_FILE_NAME: &str = "runtime-startup.lock";
-/// Host-local listen addresses for `gents server`; binding precedes opening
+/// Host-local listen addresses for `gents runtime server`; binding precedes opening
 /// the store, so they cannot live in a document.
 pub const NETWORK_CONFIG_FILE_NAME: &str = "network.json";
+/// The interface `gents` opens for this home; no file means Codex.
+pub const CLIENT_CONFIG_FILE_NAME: &str = "client.json";
 pub const P2P_SECRET_KEY_FILE_NAME: &str = "p2p-secret-key";
 pub const PACKS_DIR_NAME: &str = "packs";
 pub const ALLOWED_DIRS_FILE_NAME: &str = "allowed-dirs.json";
@@ -251,13 +359,19 @@ pub const PACK_INSTALLS_DIR_NAME: &str = "pack-installs";
 /// UX plugins dropped in by hand for development (`<id>/plugin.js`); the
 /// desktop's dev door. Installed packs keep theirs in the pack store.
 pub const UX_PLUGINS_DIR_NAME: &str = "ux-plugins";
+/// Present from when `init` records key custody until it publishes configuration. A home in
+/// that window has `init.json` but no default agent, and a service started on it exits at once
+/// and is restarted forever.
+pub const INIT_PENDING_FILE_NAME: &str = "init-pending";
 
 pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     DATA_DIR_NAME,
     INIT_CONFIG_FILE_NAME,
+    INIT_PENDING_FILE_NAME,
     KEYS_DIR_NAME,
     RUNTIME_STATE_FILE_NAME,
     NETWORK_CONFIG_FILE_NAME,
+    CLIENT_CONFIG_FILE_NAME,
     P2P_SECRET_KEY_FILE_NAME,
     PACKS_DIR_NAME,
     PLUGINS_DIR_NAME,

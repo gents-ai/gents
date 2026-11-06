@@ -32,7 +32,10 @@ type ActionRequest {
     )?;
 
     let schema_root = schema_dir.to_str().expect("schema dir is utf-8");
-    let first = run_cli_json(&home_dir, &["schema", "apply", schema_root])?;
+    let first = run_cli_json(
+        &home_dir,
+        &["utils", "data", "schema", "apply", schema_root],
+    )?;
     assert_eq!(
         first.get("status").and_then(Value::as_str),
         Some("schema_applied")
@@ -57,7 +60,10 @@ type ActionRequest {
         Some("status")
     );
 
-    let second = run_cli_json(&home_dir, &["schema", "apply", schema_root])?;
+    let second = run_cli_json(
+        &home_dir,
+        &["utils", "data", "schema", "apply", schema_root],
+    )?;
     assert_eq!(
         second
             .pointer("/schema_files/0/status")
@@ -130,6 +136,8 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
                 run_cli_json(
                     &home_dir,
                     &[
+                        "utils",
+                        "data",
                         "schema",
                         "apply",
                         old_path.to_str().context("schema path utf8")?,
@@ -143,7 +151,9 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
             let schema_arg = schema_dir.to_str().context("schema root utf8")?;
             let first = run_cli_json(
                 &home_dir,
-                &["schema", "apply", schema_arg, "--home", home_arg],
+                &[
+                    "utils", "data", "schema", "apply", schema_arg, "--home", home_arg,
+                ],
             )?;
             assert_eq!(
                 first
@@ -154,7 +164,9 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
             );
             let repeated = run_cli_json(
                 &home_dir,
-                &["schema", "apply", schema_arg, "--home", home_arg],
+                &[
+                    "utils", "data", "schema", "apply", schema_arg, "--home", home_arg,
+                ],
             )?;
             assert_eq!(
                 repeated
@@ -244,16 +256,35 @@ fn export_and_paged_query_preserve_long_values() -> Result<()> {
         schemas.join("record.graphql"),
         "type ExportRecord { body: String category: String }",
     )?;
-    run_cli_json(&home, &["schema", "apply", schemas.to_str().unwrap()])?;
+    run_cli_json(
+        &home,
+        &[
+            "utils",
+            "data",
+            "schema",
+            "apply",
+            schemas.to_str().unwrap(),
+        ],
+    )?;
     let original = format!("{}😀", "é".repeat(1500));
     let input = json!({"body":original,"category":"keep"}).to_string();
     run_cli_json(
         &home,
-        &["document", "create", "ExportRecord", "--json", &input],
+        &[
+            "utils",
+            "data",
+            "document",
+            "create",
+            "ExportRecord",
+            "--json",
+            &input,
+        ],
     )?;
     run_cli_json(
         &home,
         &[
+            "utils",
+            "data",
             "document",
             "create",
             "ExportRecord",
@@ -264,6 +295,8 @@ fn export_and_paged_query_preserve_long_values() -> Result<()> {
     let query = run_cli_json(
         &home,
         &[
+            "utils",
+            "data",
             "query",
             "find",
             "--collection",
@@ -288,6 +321,8 @@ fn export_and_paged_query_preserve_long_values() -> Result<()> {
         let response = run_cli_json(
             &home,
             &[
+                "utils",
+                "data",
                 "query",
                 "find",
                 "--collection",
@@ -310,6 +345,8 @@ fn export_and_paged_query_preserve_long_values() -> Result<()> {
     let response = run_cli_json(
         &home,
         &[
+            "utils",
+            "data",
             "export",
             "ExportRecord",
             "--jsonl",
@@ -335,6 +372,8 @@ fn export_and_paged_query_preserve_long_values() -> Result<()> {
     let all = run_cli_json(
         &home,
         &[
+            "utils",
+            "data",
             "export",
             "--all-app-collections",
             "--jsonl",
@@ -354,6 +393,8 @@ fn export_and_paged_query_preserve_long_values() -> Result<()> {
     run_cli_failure_stderr(
         &home,
         &[
+            "utils",
+            "data",
             "export",
             "MissingRecord",
             "--jsonl",

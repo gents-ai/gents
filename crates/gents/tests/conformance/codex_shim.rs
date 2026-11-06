@@ -292,3 +292,33 @@ pub(super) fn generated_codex_shim_binding_cases_pin_runnable_gated_binding() {
         );
     }
 }
+
+pub(super) fn generated_codex_shim_connection_admission_cases_pin_runnable_gate() {
+    use gents::codex_shim_binding::admits_connection;
+
+    let cases = lean_codex_shim_connection_admission_cases();
+    assert_eq!(
+        cases.len(),
+        3,
+        "the Lean admission contract must stay fully consumed"
+    );
+    assert!(
+        cases.iter().any(|case| case.admitted) && cases.iter().any(|case| !case.admitted),
+        "the Lean admission contract must exercise both outcomes"
+    );
+
+    for case in cases {
+        let agent = format!("agent-{}", case.agent);
+        let runnable: Vec<String> = case
+            .runnable
+            .iter()
+            .map(|id| format!("agent-{id}"))
+            .collect();
+        assert_eq!(
+            admits_connection(&agent, runnable.iter().map(String::as_str)),
+            case.admitted,
+            "{}: admission must follow the runnable set",
+            case.witness
+        );
+    }
+}

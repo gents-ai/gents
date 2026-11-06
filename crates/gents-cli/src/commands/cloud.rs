@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::time::Instant;
 
-use crate::cli::args::{CloudCommand, CloudLoginArgs};
+use crate::cli::args::CloudLoginArgs;
 use crate::config_writes::ConfigAccess;
 use crate::{print_json, resolve_config_access, resolve_node_did};
 
@@ -23,18 +23,12 @@ const MAX_LOGIN_WAIT_SECS: u64 = 15 * 60;
 /// Cloud error text is untrusted and is displayed in the terminal.
 const MAX_MESSAGE_CHARS: usize = 200;
 
-const DEFAULT_REFUSAL: &str = "this sign-in was refused; run `gents cloud login` again";
+const DEFAULT_REFUSAL: &str = "this sign-in was refused; run `gents accounts login cloud` again";
 
 const NO_EXPIRY_HORIZON_DAYS: i64 = 3650;
 
 /// Sentinel for credentials without a refresh grant. Never send it to a token endpoint.
 const NO_REFRESH_GRANT: &str = "gents-cloud:no-refresh-grant";
-
-pub(crate) async fn dispatch(command: CloudCommand) -> Result<()> {
-    match command {
-        CloudCommand::Login(args) => cloud_login(args).await,
-    }
-}
 
 pub(crate) struct CloudLoginOptions {
     pub(crate) cloud: String,
@@ -257,7 +251,7 @@ async fn wait_for_approval(polls: &impl DevicePolls, start: &DeviceStart) -> Res
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             anyhow::bail!(
-                "this sign-in was not approved within {wait_secs} seconds; run `gents cloud login` again"
+                "this sign-in was not approved within {wait_secs} seconds; run `gents accounts login cloud` again"
             );
         }
         tokio::time::sleep(interval.min(remaining)).await;
@@ -365,10 +359,10 @@ fn cloud_endpoint(base: &reqwest::Url, path: &str) -> String {
 fn cloud_said_no(action: &str, status: StatusCode, body: &str) -> anyhow::Error {
     match message_sentence(body) {
         Some(reason) => anyhow::anyhow!(
-            "the gents cloud could not {action} (HTTP {status}: {reason}); run `gents cloud login` again"
+            "the gents cloud could not {action} (HTTP {status}: {reason}); run `gents accounts login cloud` again"
         ),
         None => anyhow::anyhow!(
-            "the gents cloud could not {action} (HTTP {status}); run `gents cloud login` again"
+            "the gents cloud could not {action} (HTTP {status}); run `gents accounts login cloud` again"
         ),
     }
 }
@@ -512,7 +506,7 @@ mod tests {
             .expect_err("the code expires");
         assert_eq!(
             error.to_string(),
-            "this sign-in was not approved within 20 seconds; run `gents cloud login` again"
+            "this sign-in was not approved within 20 seconds; run `gents accounts login cloud` again"
         );
         assert_eq!(
             polls.asked_at_secs(),
@@ -530,7 +524,7 @@ mod tests {
         assert_eq!(
             error.to_string(),
             format!(
-                "this sign-in was not approved within {MAX_LOGIN_WAIT_SECS} seconds; run `gents cloud login` again"
+                "this sign-in was not approved within {MAX_LOGIN_WAIT_SECS} seconds; run `gents accounts login cloud` again"
             ),
             "the clamped wait is named in the message rather than applied silently"
         );
@@ -640,7 +634,7 @@ mod tests {
         let error = classify_poll(StatusCode::BAD_GATEWAY, "upstream is down").expect_err("502");
         assert_eq!(
             error.to_string(),
-            "the gents cloud could not complete this sign-in (HTTP 502 Bad Gateway: upstream is down); run `gents cloud login` again"
+            "the gents cloud could not complete this sign-in (HTTP 502 Bad Gateway: upstream is down); run `gents accounts login cloud` again"
         );
         assert_eq!(error.chain().count(), 1, "no cause chain to print");
     }
@@ -654,7 +648,7 @@ mod tests {
         .expect_err("503");
         assert_eq!(
             error.to_string(),
-            "the gents cloud could not start this sign-in (HTTP 503 Service Unavailable: too many sign-ins are in progress; try again in a minute); run `gents cloud login` again"
+            "the gents cloud could not start this sign-in (HTTP 503 Service Unavailable: too many sign-ins are in progress; try again in a minute); run `gents accounts login cloud` again"
         );
     }
 

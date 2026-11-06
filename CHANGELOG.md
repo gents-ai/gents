@@ -4,6 +4,83 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
+## Unreleased
+
+- The CLI has seven top-level commands: `accounts`, `automation`, `config`,
+  `runtime`, `sessions`, `status` and `utils`, and `gents --help` lists them
+  with a description each. The old names stop working; there are no
+  aliases, so update scripts that call them.
+
+  | Old | New |
+  | --- | --- |
+  | `chat MESSAGE` | `gents -p MESSAGE`; interactive `chat` is gone |
+  | `chat --session-id`, `--message-file`, `--output json` | `utils debug request submit --session-id`, `--content-file` |
+  | `codex-login`, `grok-login`, `claude-login`, `claude-gateway-login` | `accounts login codex`, `grok`, `claude`, `claude-gateway` |
+  | `cloud login` | `accounts login cloud` |
+  | `codex-auth-probe`, `grok-auth-probe` | `accounts probe codex`, `grok` |
+  | `accounts list`, `label`, `disable`, `remove` | unchanged |
+  | `session ...` | `sessions ...` |
+  | `goal`, `task`, `job`, `mailbox` | `automation goal`, `automation task`, `automation job`, `automation mailbox` |
+  | `tools explain` | `config tools explain` |
+  | `mcp register`, `mcp probe` | `config mcp register`, `config mcp probe` |
+  | `pack ...`, `plugin ...`, `ux ...` | `config pack ...`, `config pack plugin ...`, `config pack ux ...` |
+  | `server`, `service`, `provision`, `reset`, `diagnose`, `p2p`, `desktop`, `version` | `runtime server`, `runtime service`, and so on |
+  | `query`, `write`, `export`, `document`, `schema` | `utils data query`, and so on |
+  | `request`, `response`, `trace`, `background`, `fleet` | `utils debug request`, and so on |
+  | `eval`, `optimization` | `utils eval`, `utils optimization` |
+  | `codex` | hidden, still works; bare `gents` opens it |
+  | `init`, `prepare-runtime` | hidden, still work |
+
+  `gents server` and `gents service` also still work, hidden: installed service
+  definitions run `gents server`, and an updater of another version runs
+  `gents service update-check`.
+- `gents -p MESSAGE` sends one message to the home's default agent, or to
+  `--agent ID`, prints only the reply and exits, as `claude -p` does. It brings
+  up the runtime as bare `gents` does, needs no terminal on a home that is set
+  up, and denies any approval the turn asks for.
+- `gents PROMPT` opens the configured interface, Codex or Grok, with PROMPT as
+  its first message, as `claude "query"` does. A PROMPT that is only a former
+  command's name, such as `reset`, is refused with the command's new name rather
+  than sent. Codex and Grok get the prompt after `--`, so one that names their
+  own subcommand, such as `update`, is sent instead of run; this also covers
+  `gents codex PROMPT`.
+- `gents --continue SESSION_ID` picks a session back up with the agent it had:
+  in Codex through `codex resume`, or for one more turn with `-p MESSAGE`, which
+  waits for a turn still running in that session. Grok cannot open a session at
+  launch, so a home set to Grok refuses it and names `-p` or Codex instead.
+  When Codex or Grok closes, `gents` prints the `--continue` command for the
+  session that window last gave a turn to.
+- `gents --yolo` opens the yolo agent, and `gents --yolo -p MESSAGE` messages it:
+  a general-purpose agent with a copy of the default agent's tools, The
+  Engineer's on a home `gents` set up. The first use makes it, later uses reuse
+  it.
+- `gents` with no command sets up a home on first run, brings up its runtime
+  through the native service without enabling it at login, and opens the
+  configured interface. Setup seeds The Engineer with the desktop's default
+  authority (the `yolo` tool package; commands run as you and the tool root is
+  not a sandbox) and asks for a provider, then its connection method, from the
+  desktop's catalog. After sign-in it lists the provider's models and asks each
+  value the desktop offers for the chosen model, showing its default. Without a terminal it prints help and exits 2, as a missing
+  subcommand did. `gents` refuses a Codex endpoint that does not identify
+  itself as this home's, and the shim answers that question at `GET /runtime`.
+- `gents --agent ID` and `gents codex --agent ID` open any runnable agent side by
+  side with no restart, with no saved agent setting. For Codex this needs a local
+  runtime with no pinned agent, and `--agent` is refused for any other endpoint.
+- When `gents` opens Codex from a directory inside the tool root, the thread starts
+  there. From outside it, `gents` prints the directory the thread will use, before
+  Codex opens and again after it exits. Threads default to the tool root.
+- First-run setup asks which folder agents should work in.
+  It refuses the filesystem root and anything above the person's home, as the desktop
+  does, and asks for confirmation before using the whole home.
+- `gents config client set codex|grok` chooses the interface a home opens, and
+  `config client show` reads it. A home set to Grok serves the Grok socket. `gents`
+  opens the socket the runtime reports and refuses one its runtime does not hold.
+- `gents` remembers the home setup chose. This also moves the desktop's default home.
+- The shim answers `config/read` for a directory inside the tool root as trusted, so
+  Codex does not ask about it on every open. Outside the tool root Codex still asks.
+- The shim refuses a WebSocket handshake carrying `Origin`. With a loopback bind and no
+  public URL, `GET /runtime` answers only a loopback `Host`.
+
 ## 1.0.0-rc1 - 2026-11-03
 
 - P2P DAG fetches rank providers by measured health, rotate past a provider

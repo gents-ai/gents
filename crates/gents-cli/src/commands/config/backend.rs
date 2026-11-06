@@ -202,15 +202,15 @@ async fn load_oauth_credential_for_discovery(
     let (provider, _login) = match provider_kind {
         BackendProviderKind::ChatGptCodex => (
             gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
-            "gents codex-login",
+            "gents accounts login codex",
         ),
         BackendProviderKind::XaiGrokOAuth => (
             gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
-            "gents grok-login",
+            "gents accounts login grok",
         ),
         BackendProviderKind::ClaudeCliSubscription => (
             gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
-            "gents claude-login",
+            "gents accounts login claude",
         ),
         _ => anyhow::bail!("load_oauth_credential_for_discovery called for non-OAuth provider"),
     };

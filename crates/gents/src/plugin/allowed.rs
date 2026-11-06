@@ -307,7 +307,7 @@ pub fn bind(
             BoundDir::beside(&resolved.target, access).map_err(failed)
         }
         Err(error) if error.is::<super::bound::NotLinkable>() => Err(format!(
-            "{error:#}; allow its folder with `gents plugin dirs add {}`",
+            "{error:#}; allow its folder with `gents config pack plugin dirs add {}`",
             resolved.folder().display()
         )),
         other => other.map_err(failed),

@@ -290,6 +290,50 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_trusts_a_directory_only_inside_the_tool_root() -> Result<()> {
+    let outside = tempfile::tempdir().context("creating the outside directory")?;
+    let outside = fs::canonicalize(outside.path())?;
+    let shim = AgentShim::start(|_| vec![], &[]).await?;
+    let root = std::path::PathBuf::from(
+        shim.runtime(None).await?["tool_root"]
+            .as_str()
+            .context("the home has a tool root")?,
+    );
+    let inside = root.join("project");
+    fs::create_dir(&inside)?;
+    let (mut ws, _) = connect_async(shim.url("/")).await?;
+    initialize_config_and_thread(&mut ws, &shim.home_dir).await?;
+
+    let mut read_projects = async |id: i64, cwd: Option<String>| -> Result<Option<Value>> {
+        send_client_request(
+            &mut ws,
+            codex::ClientRequest::ConfigRead {
+                request_id: request_id(id),
+                params: codex::ConfigReadParams {
+                    include_layers: true,
+                    cwd,
+                },
+            },
+        )
+        .await?;
+        let read: codex::ConfigReadResponse = read_typed_response(&mut ws, request_id(id)).await?;
+        Ok(read.config.additional.get("projects").cloned())
+    };
+
+    let cwd = inside.to_string_lossy().into_owned();
+    assert_eq!(
+        read_projects(301, Some(cwd.clone())).await?,
+        Some(json!({ cwd: { "trust_level": "trusted" } }))
+    );
+    assert_eq!(
+        read_projects(302, Some(outside.to_string_lossy().into_owned())).await?,
+        None
+    );
+    assert_eq!(read_projects(303, None).await?, None);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_config_value_write_model_mutates_agent() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");

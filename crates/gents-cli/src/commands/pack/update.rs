@@ -114,7 +114,7 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
         let Some(latest) = pack["latest"].as_str() else {
             failed.push(json!({
                 "pack": coordinate,
-                "error": "the registry reported no latest version for this pack; run gents pack outdated and retry",
+                "error": "the registry reported no latest version for this pack; run gents config pack outdated and retry",
             }));
             continue;
         };
@@ -210,7 +210,7 @@ mod tests {
             home_path.to_str().unwrap(),
         ])
         .unwrap();
-        let crate::cli::Command::Init(init_args) = cli.command else {
+        let Some(crate::cli::Command::Init(init_args)) = cli.command else {
             panic!("expected init")
         };
         crate::commands::init::init(init_args)
@@ -291,7 +291,7 @@ mod tests {
             home.path().to_str().unwrap(),
         ])
         .unwrap();
-        let crate::cli::Command::Init(init_args) = cli.command else {
+        let Some(crate::cli::Command::Init(init_args)) = cli.command else {
             panic!("expected init")
         };
         crate::commands::init::init(init_args)

@@ -23,7 +23,7 @@ pub(crate) use recovery::recover_output;
 
 const CONFIG: &str = "pack_config.json";
 const README: &str = "README.md";
-const GENERATED_BY: &str = "gents eval init";
+const GENERATED_BY: &str = "gents utils eval init";
 
 pub(crate) struct PilotNote {
     pub(crate) run_ids: Vec<String>,
@@ -108,10 +108,10 @@ pub(crate) fn commit(
             std::fs::rename(existing, &old_pack)
                 .with_context(|| format!("moving {} aside", existing.display()))?;
             // Whatever is aside now is what would be deleted: it must still be
-            // a pack gents eval init wrote, with nothing else in it.
+            // a pack gents utils eval init wrote, with nothing else in it.
             let changed = if !is_generated_eval_pack(&old_pack) {
                 Some(anyhow::anyhow!(
-                    "refusing to replace --out {}: it stopped being a definition pack gents eval init wrote while replacing it",
+                    "refusing to replace --out {}: it stopped being a definition pack gents utils eval init wrote while replacing it",
                     out.display()
                 ))
             } else {
@@ -233,12 +233,12 @@ fn replaceable_out(
     );
     anyhow::ensure!(
         is_generated_eval_pack(&resolved),
-        "refusing to replace --out {}: it is not a definition pack gents eval init wrote; choose another --out or remove it yourself",
+        "refusing to replace --out {}: it is not a definition pack gents utils eval init wrote; choose another --out or remove it yourself",
         out.display()
     );
     if let Some(extra) = undeclared_entry(&resolved)? {
         anyhow::bail!(
-            "refusing to replace --out {}: {} is not part of the pack gents eval init wrote; move it out or remove --out yourself",
+            "refusing to replace --out {}: {} is not part of the pack gents utils eval init wrote; move it out or remove --out yourself",
             out.display(),
             extra.display()
         );
@@ -365,7 +365,7 @@ pub(crate) fn readme(
     );
     let _ = writeln!(
         text,
-        "Eval definition `{}` (comparability version {}), drafted by `gents eval init` on {} for agent `{}` of pack `{}` ({}), bound to inference slot {}.\n",
+        "Eval definition `{}` (comparability version {}), drafted by `gents utils eval init` on {} for agent `{}` of pack `{}` ({}), bound to inference slot {}.\n",
         definition.definition_id,
         definition.comparability_version,
         chrono::Utc::now().format("%Y-%m-%d"),
@@ -511,7 +511,7 @@ fn write_files(
         "name": pack_name,
         "version": "1.0.0",
         "description": format!(
-            "Eval definition {}, drafted by gents eval init.",
+            "Eval definition {}, drafted by gents utils eval init.",
             definition.definition_id
         ),
         "authors": [GENERATED_BY],

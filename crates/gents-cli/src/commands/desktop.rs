@@ -26,7 +26,7 @@ pub(crate) async fn run(command: DesktopCommand) -> Result<()> {
         desktop_executable,
     } = command;
     let mut ready = false;
-    let mut retry = "gents desktop reset".to_owned();
+    let mut retry = "gents runtime desktop reset".to_owned();
     let result = reset(
         home,
         desktop_home,
@@ -201,7 +201,7 @@ fn retry_command(home: &std::path::Path, desktop: &std::path::Path) -> Result<St
             .into_owned())
     };
     Ok(format!(
-        "gents desktop reset --home {} --desktop-home {}",
+        "gents runtime desktop reset --home {} --desktop-home {}",
         quote(home)?,
         quote(desktop)?
     ))
@@ -486,16 +486,19 @@ mod tests {
 
         let advertised = message.split('`').nth(1).expect("retry command");
         let argv = shlex::split(advertised).expect("shell words");
-        let crate::cli::Command::Desktop {
+        let Some(crate::cli::Command::Runtime {
             command:
-                DesktopCommand::Reset {
-                    home: retry_home,
-                    desktop_home,
-                    delete,
-                    confirm,
-                    ..
+                crate::cli::RuntimeCommand::Desktop {
+                    command:
+                        DesktopCommand::Reset {
+                            home: retry_home,
+                            desktop_home,
+                            delete,
+                            confirm,
+                            ..
+                        },
                 },
-        } = <crate::cli::Cli as clap::Parser>::try_parse_from(argv)
+        }) = <crate::cli::Cli as clap::Parser>::try_parse_from(argv)
             .unwrap()
             .command
         else {
@@ -528,9 +531,12 @@ mod tests {
         let selected = select_desktop(None, Some("rel/desktop".into()), &first).unwrap();
         assert_eq!(selected.root(), first.join("rel/desktop"));
         let retry = retry_command(&temp.path().join("home"), selected.root()).unwrap();
-        let crate::cli::Command::Desktop {
-            command: DesktopCommand::Reset { desktop_home, .. },
-        } = <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(&retry).unwrap())
+        let Some(crate::cli::Command::Runtime {
+            command:
+                crate::cli::RuntimeCommand::Desktop {
+                    command: DesktopCommand::Reset { desktop_home, .. },
+                },
+        }) = <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(&retry).unwrap())
             .unwrap()
             .command
         else {
@@ -551,6 +557,7 @@ mod tests {
             shlex::split(&command).unwrap(),
             [
                 "gents",
+                "runtime",
                 "desktop",
                 "reset",
                 "--home",

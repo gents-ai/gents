@@ -229,7 +229,7 @@ pub async fn load_job_view(
 }
 
 /// Which job rows [`list_jobs`] returns. Serves L3's Grok discovery
-/// (session, requester, `NotTerminalOrUndelivered`) and `gents job list`
+/// (session, requester, `NotTerminalOrUndelivered`) and `gents automation job list`
 /// (optional session, a `JobState` set, optional plugin). `None` does not filter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobFilter {

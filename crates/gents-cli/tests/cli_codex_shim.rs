@@ -157,6 +157,8 @@ mod host_runtime;
 mod live_backend;
 #[path = "cli_codex_shim/model_configuration.rs"]
 mod model_configuration;
+#[path = "cli_codex_shim/relay_end_to_end.rs"]
+mod relay_end_to_end;
 #[path = "cli_codex_shim/remote_client.rs"]
 mod remote_client;
 #[path = "cli_codex_shim/server_lifecycle.rs"]

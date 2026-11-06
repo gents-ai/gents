@@ -741,7 +741,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(error.contains("claude-login"), "{error}");
+        assert!(error.contains("accounts login claude"), "{error}");
         assert_eq!(stored_profiles(&access).await, b, "nothing written");
     }
 

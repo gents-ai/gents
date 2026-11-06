@@ -8,6 +8,8 @@ use gents::store::config_client::GraphqlEndpoint;
 use gents::store::identity::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity, KeyIdentity, NodeIdentity,
 };
+use gents::store::local::home::INIT_PENDING_FILE_NAME;
+use gents_protocol::error_chain::ErrorChain;
 
 use crate::shared::{StoredInitConfig, StoredRuntimeState};
 use crate::{DEFAULT_HTTP_PORT, RUNTIME_STATE_FILE_NAME};
@@ -18,13 +20,26 @@ pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
         .unwrap_or_else(default_home_dir)
 }
 
+/// Exits on any failure but an unresolved user home: `resolve_home_dir`'s many
+/// callers hold no `Result`, and falling back would open the wrong data.
 fn default_home_dir() -> PathBuf {
-    gents::store::local::home::default_home_dir().unwrap_or_else(|_| PathBuf::from(".gents"))
+    use gents::store::local::home::HomeError;
+    match gents::store::local::home::default_home_dir() {
+        Ok(home) => home,
+        Err(HomeError::HomeDirUnresolved) => PathBuf::from(".gents"),
+        Err(error) => {
+            eprintln!("Error: {}", ErrorChain(&error));
+            std::process::exit(1);
+        }
+    }
 }
 
+/// Never exits: a service started with `--home` must not depend on the
+/// remembered file.
 pub(crate) fn is_default_home(home_dir: &Path) -> bool {
     let canonical = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    canonical(home_dir) == canonical(&default_home_dir())
+    gents::store::local::home::default_home_dir()
+        .is_ok_and(|default| canonical(home_dir) == canonical(&default))
 }
 
 pub(crate) fn default_data_dir(home_dir: &Path) -> PathBuf {
@@ -53,9 +68,32 @@ pub(crate) fn read_init_config(home_dir: &Path) -> Result<Option<StoredInitConfi
     Ok(gents::store::local::home::read_init_config(home_dir)?)
 }
 
+pub(crate) fn mark_init_pending(home_dir: &Path) -> Result<()> {
+    let path = home_dir.join(INIT_PENDING_FILE_NAME);
+    fs::write(&path, b"").with_context(|| format!("writing {}", path.display()))
+}
+
+pub(crate) fn clear_init_pending(home_dir: &Path) -> Result<()> {
+    let path = home_dir.join(INIT_PENDING_FILE_NAME);
+    match fs::remove_file(&path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            Err(error).with_context(|| format!("removing {}", path.display()))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// `None` also for a home `init` has not finished, which `init` can resume.
+pub(crate) fn read_finished_init_config(home_dir: &Path) -> Result<Option<StoredInitConfig>> {
+    if home_dir.join(INIT_PENDING_FILE_NAME).exists() {
+        return Ok(None);
+    }
+    read_init_config(home_dir)
+}
+
 /// Load and register the signer recorded by an initialized home; every
 /// embedded-node entry point uses this same loader so opening the data
-/// directory outside `gents server` never silently produces unsigned commits.
+/// directory outside `gents runtime server` never silently produces unsigned commits.
 pub(crate) fn load_initialized_home_identity(
     home_dir: &Path,
     config: &StoredInitConfig,
@@ -188,7 +226,7 @@ pub(crate) fn resolve_graphql_endpoint(
 
     anyhow::ensure!(
         home.is_none(),
-        "home {} has no running server recorded; start `gents server --home {}` or pass --graphql explicitly",
+        "home {} has no running server recorded; start `gents runtime server --home {}` or pass --graphql explicitly",
         home_dir.display(),
         home_dir.display()
     );
@@ -259,7 +297,7 @@ pub(crate) fn resolve_node_did(home: Option<&Path>, explicit: Option<&str>) -> R
     }
 
     anyhow::bail!(
-        "node DID is required; run `gents init`, start `gents server`, then retry `gents status`, or pass --node-did explicitly"
+        "node DID is required; run `gents init`, start `gents runtime server`, then retry `gents status`, or pass --node-did explicitly"
     )
 }
 

@@ -114,7 +114,7 @@ pub(super) fn run_with_imports(
         .get(PRECOMPILED_WASM_MEMBER)
         .with_context(|| {
             format!(
-                "{} has no {PRECOMPILED_WASM_MEMBER}; run `gents pack build` to produce it",
+                "{} has no {PRECOMPILED_WASM_MEMBER}; run `gents config pack build` to produce it",
                 afb.qualified_name()
             )
         })?;

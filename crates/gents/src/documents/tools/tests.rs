@@ -185,7 +185,7 @@ mod wire {
         assert!(report.job.is_none());
         assert_eq!(
             report.next_call.as_deref(),
-            Some("gents pack wire acme/runner --agent <agent> --targets-from <pack>")
+            Some("gents config pack wire acme/runner --agent <agent> --targets-from <pack>")
         );
     }
 

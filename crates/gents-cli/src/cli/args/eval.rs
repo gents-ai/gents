@@ -178,7 +178,7 @@ pub(crate) fn parse_interval(raw: &str) -> Result<std::time::Duration, String> {
     Ok(interval)
 }
 
-const EVAL_RUN_AFTER_HELP: &str = "Exit status: 0 when the run finished; 1 when it stopped with slots still owed (Ctrl-C, a cancel marker, or abandoned slots; `gents eval resume` continues it) or the command was refused; 2 on a usage error.";
+const EVAL_RUN_AFTER_HELP: &str = "Exit status: 0 when the run finished; 1 when it stopped with slots still owed (Ctrl-C, a cancel marker, or abandoned slots; `gents utils eval resume` continues it) or the command was refused; 2 on a usage error.";
 
 const EVAL_WATCH_AFTER_HELP: &str = "Exit status: 0 when the run ends finished, or after the one render of --once; 1 when it ends stopped (slots still owed, as after a cancel, or the report unavailable) or the watch fails; 2 on a usage error.";
 
@@ -333,7 +333,7 @@ pub(crate) fn parse_run_purpose(raw: &str) -> Result<String, String> {
     let purpose = raw.trim();
     if purpose == gents::eval::scoring::PILOT_PURPOSE {
         return Err(format!(
-            "{purpose:?} is recorded only by `gents eval init --pilot`; a pilot run is left out of exposure"
+            "{purpose:?} is recorded only by `gents utils eval init --pilot`; a pilot run is left out of exposure"
         ));
     }
     Ok(raw.to_owned())
@@ -348,7 +348,7 @@ pub(crate) fn parse_split(raw: &str) -> Result<gents::documents::EvalSplit, Stri
 #[derive(clap::Args)]
 pub(crate) struct EvalBatchArgs {
     /// JSON object with `runs: [{args: ["definition-id", "--cell", ...]}]`.
-    /// Each entry takes `eval run` arguments and a unique explicit `--run-id`;
+    /// Each entry takes `utils eval run` arguments and a unique explicit `--run-id`;
     /// use the batch's scope and JSON flags, not per-entry overrides.
     #[arg(long)]
     pub(crate) plan: PathBuf,
@@ -366,7 +366,7 @@ pub(crate) struct EvalBatchArgs {
 pub(crate) struct EvalRunArgs {
     pub(crate) definition_id: String,
     /// `<id>=<pack>[:<agent>]`, once per cell. `<pack>` is a pack name,
-    /// resolved as `gents pack install` resolves one, or a pack directory
+    /// resolved as `gents config pack install` resolves one, or a pack directory
     /// written as a path (`./subject`, `/work/subject`).
     #[arg(long = "cell", value_parser = parse_cell, required = true)]
     pub(crate) cells: Vec<CellArg>,
@@ -383,7 +383,7 @@ pub(crate) struct EvalRunArgs {
     #[arg(long, default_value_t = 1)]
     pub(crate) concurrency: u32,
     /// Why the run exists: `eval` by default, or `optimization:<job_id>`.
-    /// `pilot` is refused; only `gents eval init --pilot` records a pilot.
+    /// `pilot` is refused; only `gents utils eval init --pilot` records a pilot.
     #[arg(long, default_value = "eval", value_parser = parse_run_purpose)]
     pub(crate) purpose: String,
     /// Defaults to `<definition_id>-<unix ms>-<4 random hex>`, fresh every
@@ -402,17 +402,17 @@ pub(crate) struct EvalRunArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
-const EVAL_INIT_AFTER_HELP: &str = "Needs a terminal (this command is an interview) and a served home: start `gents server` first, or the command refuses before reading anything. An existing --out refuses unless --force replaces it, and --force replaces only a definition pack gents eval init wrote; an --out that is, lies inside, or contains the subject's directory, a Gents home, the user home or the working directory always refuses. --validation-min (default 6) is the floor the author drafts the validation split against; lower it when the operator wants fewer validation cases. --pilot runs the written pack once against the subject, one trial per case and one run per populated split (train, validation, held-out), and asks to spend that before it does, unless --yes; a decline leaves the pack written at --out but the command still exits 1. The session id printed at the end continues with `gents chat --session-id <id> --agent-id <the author's agent>`. A documents capture filter's only variable is \"$trial\", replaced with the trial's DID wherever it appears in a string value. Exit status: 0 when the pack was written and validated (piloted too, with --pilot) or the operator ended the interview with nothing written; 1 when refused (an existing --out without --force, an --out overlapping the subject, a non-terminal stdin, an unserved home, a declined pilot, or another failure) or when three drafts did not validate; 2 on a usage error.";
+const EVAL_INIT_AFTER_HELP: &str = "Needs a terminal (this command is an interview) and a served home: start `gents runtime server` first, or the command refuses before reading anything. An existing --out refuses unless --force replaces it, and --force replaces only a definition pack gents utils eval init wrote; an --out that is, lies inside, or contains the subject's directory, a Gents home, the user home or the working directory always refuses. --validation-min (default 6) is the floor the author drafts the validation split against; lower it when the operator wants fewer validation cases. --pilot runs the written pack once against the subject, one trial per case and one run per populated split (train, validation, held-out), and asks to spend that before it does, unless --yes; a decline leaves the pack written at --out but the command still exits 1. The session id printed at the end continues with `gents utils debug request submit --session-id <id> --agent-id <the author's agent> --content MESSAGE`. A documents capture filter's only variable is \"$trial\", replaced with the trial's DID wherever it appears in a string value. Exit status: 0 when the pack was written and validated (piloted too, with --pilot) or the operator ended the interview with nothing written; 1 when refused (an existing --out without --force, an --out overlapping the subject, a non-terminal stdin, an unserved home, a declined pilot, or another failure) or when three drafts did not validate; 2 on a usage error.";
 
 #[derive(clap::Args)]
 pub(crate) struct EvalInitArgs {
-    /// A pack name, resolved as `gents pack install` resolves one, or a pack
+    /// A pack name, resolved as `gents config pack install` resolves one, or a pack
     /// directory written as a path (`./subject`, `/work/subject`).
     pub(crate) subject: String,
     /// The agent to draft cases for; implied when the pack has one.
     #[arg(long)]
     pub(crate) agent: Option<String>,
-    /// The pack that authors the draft, resolved like `gents pack install`
+    /// The pack that authors the draft, resolved like `gents config pack install`
     /// (or a directory path); it declares one inference slot with one
     /// agent.
     #[arg(long, default_value = "gents/eval_author")]
@@ -435,7 +435,7 @@ pub(crate) struct EvalInitArgs {
     /// Pilot without asking first.
     #[arg(long)]
     pub(crate) yes: bool,
-    /// Replace an existing --out that gents eval init wrote.
+    /// Replace an existing --out that gents utils eval init wrote.
     #[arg(long)]
     pub(crate) force: bool,
     /// The fewest validation cases a draft may have.

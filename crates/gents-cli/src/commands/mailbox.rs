@@ -21,7 +21,7 @@ pub(crate) async fn dispatch(command: MailboxCommand) -> Result<()> {
 async fn reply(args: MailboxReplyArgs) -> Result<()> {
     args.item
         .output
-        .ensure_supported("mailbox reply", &[OutputFormat::Json])?;
+        .ensure_supported("automation mailbox reply", &[OutputFormat::Json])?;
     let home = args.item.access.home.as_deref();
     let principal = resolve_node_did(home, None)?;
     let graphql = crate::resolve_graphql_endpoint(args.item.access.graphql.as_deref(), home)?;
@@ -77,7 +77,7 @@ async fn access_and_principal(
 
 async fn list(args: MailboxListArgs) -> Result<()> {
     args.output
-        .ensure_supported("mailbox list", &[OutputFormat::Json])?;
+        .ensure_supported("automation mailbox list", &[OutputFormat::Json])?;
     let (access, principal) = access_and_principal(&args.access).await?;
     let items = if let Some(node) = access.local_node() {
         gents::session::mailbox::list_mailbox_items(
@@ -106,7 +106,7 @@ async fn list(args: MailboxListArgs) -> Result<()> {
 
 async fn show(args: MailboxItemArgs) -> Result<()> {
     args.output
-        .ensure_supported("mailbox show", &[OutputFormat::Json])?;
+        .ensure_supported("automation mailbox show", &[OutputFormat::Json])?;
     let (access, principal) = access_and_principal(&args.access).await?;
     let item = load_item(&access, &args.doc_id)
         .await?
@@ -119,7 +119,7 @@ async fn show(args: MailboxItemArgs) -> Result<()> {
 
 async fn dismiss(args: MailboxItemArgs) -> Result<()> {
     args.output
-        .ensure_supported("mailbox dismiss", &[OutputFormat::Json])?;
+        .ensure_supported("automation mailbox dismiss", &[OutputFormat::Json])?;
     let (access, principal) = access_and_principal(&args.access).await?;
     let item = if let Some(node) = access.local_node() {
         gents::session::mailbox::dismiss_mailbox_item(node, &args.doc_id, &principal).await?

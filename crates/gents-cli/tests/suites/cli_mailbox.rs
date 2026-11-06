@@ -50,7 +50,10 @@ async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> 
     let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&created, "MailboxItem")
         .with_context(|| format!("created mailbox doc id: {created}"))?;
 
-    let listed = run_cli_json(&home_dir, &["mailbox", "list", "--graphql", &graphql])?;
+    let listed = run_cli_json(
+        &home_dir,
+        &["automation", "mailbox", "list", "--graphql", &graphql],
+    )?;
     let rows = listed.as_array().context("mailbox list array")?;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["title"], Value::String("CLI attention".into()));
@@ -58,10 +61,20 @@ async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> 
 
     let dismissed = run_cli_json(
         &home_dir,
-        &["mailbox", "dismiss", &doc_id, "--graphql", &graphql],
+        &[
+            "automation",
+            "mailbox",
+            "dismiss",
+            &doc_id,
+            "--graphql",
+            &graphql,
+        ],
     )?;
     assert_eq!(dismissed["status"], "dismissed");
-    let open = run_cli_json(&home_dir, &["mailbox", "list", "--graphql", &graphql])?;
+    let open = run_cli_json(
+        &home_dir,
+        &["automation", "mailbox", "list", "--graphql", &graphql],
+    )?;
     assert_eq!(open.as_array().map(Vec::len), Some(0));
 
     serve.child.kill().ok();

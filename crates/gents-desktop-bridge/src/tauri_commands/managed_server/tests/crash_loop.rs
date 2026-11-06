@@ -379,7 +379,7 @@ fn any_runtime_on_the_port_of_a_fresh_home_is_foreign_and_named() {
     assert!(message.contains("did:key:other"), "{message}");
     assert!(message.contains("/Users/test/other-home"), "{message}");
     assert!(
-        message.contains("gents service stop --home /Users/test/other-home"),
+        message.contains("gents runtime service stop --home /Users/test/other-home"),
         "{message}"
     );
     assert!(message.contains("--http-port"), "{message}");

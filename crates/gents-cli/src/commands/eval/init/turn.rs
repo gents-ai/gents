@@ -53,7 +53,6 @@ impl Turn for LiveTurn {
                 self.timeout_secs,
                 self.poll_secs,
                 false,
-                crate::commands::chat::ApprovalHandling::None,
                 true,
             )
             .await?
@@ -61,7 +60,7 @@ impl Turn for LiveTurn {
         let text = chat_turn_text_content(&response);
         anyhow::ensure!(
             !text.trim().is_empty(),
-            "the {} turn ended without a reply; `gents response show {}` shows why",
+            "the {} turn ended without a reply; `gents utils debug response show {}` shows why",
             self.agent_id,
             submitted.request_id
         );

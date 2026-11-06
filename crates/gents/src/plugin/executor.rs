@@ -62,7 +62,7 @@ fn not_allowed(
         ""
     };
     let allow = format!(
-        "allow it with `gents plugin dirs add {}{flag}`",
+        "allow it with `gents config pack plugin dirs add {}{flag}`",
         resolved.folder().display()
     );
     let fields = write_fields
@@ -274,7 +274,7 @@ impl PluginExecutor {
                 Ok((
                     None,
                     Some(format!(
-                        "plugin {coordinate} ran without a model: its slot {slot:?} is bound to profile {:?}, which cannot be used; bind it to another profile with `gents plugin bind`, or unbind it with `gents plugin unbind`",
+                        "plugin {coordinate} ran without a model: its slot {slot:?} is bound to profile {:?}, which cannot be used; bind it to another profile with `gents config pack plugin bind`, or unbind it with `gents config pack plugin unbind`",
                         binding.profile_id
                     )),
                 ))

@@ -84,7 +84,202 @@ async fn websocket_handshake_requires_configured_bearer_token() -> Result<()> {
     Ok(())
 }
 
-fn assert_http_status(
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_identity_names_node_and_home() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let model_name = format!("mock-identity-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--node-name",
+            "identified-shim",
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let node_did = node_did_from_init(&init)?;
+    let default_agent_id = init
+        .get("default_agent_id")
+        .and_then(Value::as_str)
+        .context("init reports a default agent")?;
+    let server_port = allocate_port()?;
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-agent-id",
+            default_agent_id,
+        ],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+
+    let identity = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{shim_port}/runtime"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<Value>()
+        .await?;
+    let tool_root = fs::canonicalize(&home_dir)?;
+
+    assert_eq!(
+        identity,
+        json!({
+            "node_did": node_did,
+            "home": home_dir.join(".gents").to_string_lossy(),
+            "bound_agent": default_agent_id,
+            "runnable_agents": null,
+            "tool_root": tool_root,
+            "default_thread_cwd": tool_root,
+            "grok_socket": null,
+        })
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_identity_names_only_a_grok_socket_it_holds() -> Result<()> {
+    // Under /tmp because a Unix socket path has a short length limit.
+    let dir = tempfile::Builder::new()
+        .prefix("gents-")
+        .tempdir_in("/tmp")
+        .context("creating socket dir")?;
+    let dir = fs::canonicalize(dir.path())?;
+    let socket = dir.join("grok.sock");
+    let socket_arg = socket.to_string_lossy().into_owned();
+    let grok_args = |socket: String| {
+        move |_: &str| {
+            vec![
+                "--grok-shim".to_string(),
+                "--grok-shim-socket-path".to_string(),
+                socket,
+            ]
+        }
+    };
+
+    let holder = AgentShim::start(grok_args(socket_arg.clone()), &[]).await?;
+    assert_eq!(
+        holder.runtime(None).await?["grok_socket"],
+        json!(socket_arg)
+    );
+
+    let loser = AgentShim::start(grok_args(socket_arg), &[]).await?;
+    assert_eq!(loser.runtime(None).await?["grok_socket"], json!(null));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_identity_requires_configured_bearer_token() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let model_name = format!("mock-identity-auth-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
+    run_init_json(
+        &home_dir,
+        &[
+            "--node-name",
+            "identified-authenticated-shim",
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let server_port = allocate_port()?;
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &[
+            "--codex-shim-port",
+            &shim_port_string,
+            "--codex-shim-auth-token-env",
+            "GENTS_SHIM_TEST_TOKEN",
+        ],
+        &[("GENTS_SHIM_TEST_TOKEN", "correct-secret")],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    let url = format!("http://127.0.0.1:{shim_port}/runtime");
+    let client = reqwest::Client::new();
+
+    let unauthenticated = client.get(&url).send().await?;
+    assert_eq!(unauthenticated.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    let authenticated = client
+        .get(&url)
+        .bearer_auth("correct-secret")
+        .send()
+        .await?;
+    assert_eq!(authenticated.status(), reqwest::StatusCode::OK);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_thread_starts_in_the_tool_root_when_the_runtime_runs_elsewhere() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let tool_root = fs::canonicalize(tempdir.path())?.join("tool-root");
+    fs::create_dir_all(&tool_root)?;
+    let model_name = format!("mock-thread-cwd-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
+    run_init_json(
+        &home_dir,
+        &[
+            "--node-name",
+            "thread-cwd-shim",
+            "--tool-root",
+            &tool_root.to_string_lossy(),
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let server_port = allocate_port()?;
+    let shim_port = allocate_port()?;
+    let shim_port_string = shim_port.to_string();
+    let mut serve = spawn_server_with_env(
+        &home_dir,
+        server_port,
+        &["--codex-shim-port", &shim_port_string],
+        &[],
+    )?;
+    wait_for_port(server_port, &mut serve)?;
+    wait_for_port(shim_port, &mut serve)?;
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/")).await?;
+    initialize_config_and_thread(&mut ws, &home_dir).await?;
+
+    send_client_request(
+        &mut ws,
+        codex::ClientRequest::ThreadStart {
+            request_id: request_id(1),
+            params: codex::ThreadStartParams::default(),
+        },
+    )
+    .await?;
+    let started: codex::ThreadStartResponse = read_typed_response(&mut ws, request_id(1)).await?;
+
+    assert_eq!(started.cwd.as_path(), tool_root.as_path());
+    Ok(())
+}
+
+pub(super) fn assert_http_status(
     error: tokio_tungstenite::tungstenite::Error,
     expected: StatusCode,
 ) -> Result<()> {

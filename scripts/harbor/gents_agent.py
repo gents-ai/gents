@@ -336,15 +336,15 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
         self._require_success(install_runner, result)
 
         version_result = await environment.exec(command=f"{self._REMOTE_BINARY} version")
-        self._require_success("gents version", version_result)
+        self._require_success("gents runtime version", version_result)
         detected_version = (version_result.stdout or "").strip()
         if detected_version:
             self.logger.debug("Installed %s", detected_version)
 
         help_result = await environment.exec(
-            command=f"{self._REMOTE_BINARY} trace project --help"
+            command=f"{self._REMOTE_BINARY} debug trace project --help"
         )
-        self._require_success("gents trace project --help", help_result)
+        self._require_success("gents utils debug trace project --help", help_result)
         help_text = f"{help_result.stdout or ''}\n{help_result.stderr or ''}"
         if "atif" not in help_text or "native-json" not in help_text:
             raise RuntimeError(
@@ -353,9 +353,9 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
             )
 
         request_help_result = await environment.exec(
-            command=f"{self._REMOTE_BINARY} request submit --help"
+            command=f"{self._REMOTE_BINARY} debug request submit --help"
         )
-        self._require_success("gents request submit --help", request_help_result)
+        self._require_success("gents utils debug request submit --help", request_help_result)
         request_help_text = (
             f"{request_help_result.stdout or ''}\n{request_help_result.stderr or ''}"
         )

@@ -66,7 +66,7 @@ where
 }
 
 pub(super) fn managed_selection_outdated_message() -> &'static str {
-    "The selected managed runtime predates this app. Update it with `gents service update --home <node-home>` using a compatible packaged build, or explicitly reinstall it through external administration. Its running service and executable will be preserved."
+    "The selected managed runtime predates this app. Update it with `gents runtime service update --home <node-home>` using a compatible packaged build, or explicitly reinstall it through external administration. Its running service and executable will be preserved."
 }
 
 pub(super) fn ensure_selected_restart_compatible(

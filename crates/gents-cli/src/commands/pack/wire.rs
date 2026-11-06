@@ -1,4 +1,4 @@
-//! `gents pack wire`: the one writer of an installed plugin's place in an
+//! `gents config pack wire`: the one writer of an installed plugin's place in an
 //! agent's Tools and Context. Consent is the install's alone (the recorded
 //! grant bounds every call), so wiring takes no authority flag.
 
@@ -76,7 +76,7 @@ async fn wire_in_owned(
 ) -> Result<Value> {
     if !request.preview && !request.remove {
         anyhow::ensure!(matches!(access, ConfigAccess::Local(_)),
-            "cannot publish a plugin pin through GraphQL because the commit outcome may be unknown; stop the runtime serving the owning node home, then run `gents pack wire {} --agent {} --home <node-home>` without --graphql",
+            "cannot publish a plugin pin through GraphQL because the commit outcome may be unknown; stop the runtime serving the owning node home, then run `gents config pack wire {} --agent {} --home <node-home>` without --graphql",
             request.plugin, request.agent);
     }
     let home_for_read = home.to_owned();
@@ -85,7 +85,7 @@ async fn wire_in_owned(
         let guard = gents::plugin::store::try_lock_store(&home_for_read)?;
         let (namespace, name) = split_namespace(&plugin_name);
         let plugin = read_record(&home_for_read, namespace, name).with_context(|| {
-            format!("{plugin_name} is not installed. Next: gents pack install <pack>")
+            format!("{plugin_name} is not installed. Next: gents config pack install <pack>")
         })?;
         Ok::<_, anyhow::Error>((guard, plugin))
     })
@@ -140,8 +140,9 @@ async fn wire_in_owned(
     let report = access
         .transact_write("cli.pack.wire", move |txn| {
             Box::pin(async move {
-                let missing =
-                    |link: &str| format!("{link}. Next: gents tools explain --agent {agent_id}");
+                let missing = |link: &str| {
+                    format!("{link}. Next: gents config tools explain --agent {agent_id}")
+                };
                 let (context, tools) = load_agent_context_and_tools_in_txn(txn, owner, agent_id)
                     .await
                     .with_context(|| missing(&format!("cannot read the Tools of {agent_id}")))?;

@@ -285,7 +285,7 @@ pub(super) fn launch_reset_helper_with_timeout(
     let launch = || -> anyhow::Result<()> {
         let mut command = Command::new(executable);
         command
-            .args(["desktop", "reset", "--home"])
+            .args(["runtime", "desktop", "reset", "--home"])
             .arg(home)
             .arg("--confirm")
             .arg(confirmation)
@@ -312,7 +312,7 @@ pub(super) fn launch_reset_helper_with_timeout(
         if receive.recv_timeout(timeout) != Ok(true) {
             let _ = child.kill();
             let _ = child.wait();
-            anyhow::bail!("The reset helper could not prepare; your local state has not been retired. Run gents desktop reset to review and retry.");
+            anyhow::bail!("The reset helper could not prepare; your local state has not been retired. Run gents runtime desktop reset to review and retry.");
         }
         Ok(())
     };

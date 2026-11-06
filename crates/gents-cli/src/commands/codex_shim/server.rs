@@ -1,4 +1,8 @@
 use super::*;
+use axum::extract::Path as RoutePath;
+use axum::http::header::{HOST, ORIGIN};
+use rapidhash::{HashMapExt, RapidHashMap};
+use std::sync::OnceLock;
 
 #[derive(Clone)]
 pub(crate) struct CodexShimBindArgs {
@@ -15,6 +19,42 @@ pub(crate) struct CodexShimBindArgs {
     pub(crate) port: u16,
     pub(crate) timeout_secs: u64,
     pub(crate) poll_ms: u64,
+    pub(crate) runnable: watch::Receiver<Vec<String>>,
+    pub(crate) agent_routes: bool,
+    pub(crate) has_public_url: bool,
+    /// Set once this runtime's Grok leader holds its socket.
+    pub(crate) grok_socket: Arc<OnceLock<PathBuf>>,
+}
+
+/// What `GET /runtime` answers: whose home this runtime serves, what it can run, where its
+/// threads may go and which Grok socket it holds. `gents` reads it because no endpoint can say
+/// whose it is by answering, and an interface cannot say why it failed to open.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct RuntimeIdentity {
+    pub(crate) node_did: String,
+    pub(crate) home: PathBuf,
+    /// The agent a client gets on `/`, which is the one plain `gents` opens.
+    pub(crate) bound_agent: String,
+    /// The published runnable set, or `None` when `/agents/{agent_id}` is not mounted.
+    pub(crate) runnable_agents: Option<Vec<String>>,
+    /// Admission refuses a placement outside this.
+    pub(crate) tool_root: Option<PathBuf>,
+    /// Where a thread starts when its client names no directory.
+    pub(crate) default_thread_cwd: PathBuf,
+    /// The Grok socket this runtime holds. A socket answering says nothing about
+    /// whose it is, because a stock Grok leader can hold it too.
+    pub(crate) grok_socket: Option<PathBuf>,
+}
+
+#[derive(Clone)]
+struct RuntimeRouteState {
+    identity: RuntimeIdentity,
+    shim: ShimState,
+    agent_routes: bool,
+    loopback_host_only: bool,
+    runnable: watch::Receiver<Vec<String>>,
+    grok_socket: Arc<OnceLock<PathBuf>>,
+    sidecars: Arc<Mutex<RapidHashMap<String, Arc<Mutex<CodexSidecar>>>>>,
 }
 
 pub(crate) struct BoundCodexShim {
@@ -116,13 +156,28 @@ pub(crate) async fn bind_codex_shim(
         .with_context(|| format!("validating Codex shim bound agent {bound_agent_id:?}"))
         .map_err(CodexShimBindError::DependencyMissing)?;
 
+    let thread_cwd = default_thread_cwd(
+        std::env::current_dir()
+            .context("resolving current working directory")
+            .map_err(CodexShimBindError::HostResource)?,
+        args.fs_root.as_deref(),
+    );
+    let identity = RuntimeIdentity {
+        node_did: args.node_did.clone(),
+        home: crate::absolutize(args.home.clone()).map_err(CodexShimBindError::HostResource)?,
+        bound_agent: bound_agent_id.clone(),
+        runnable_agents: None,
+        tool_root: args.fs_root.clone(),
+        default_thread_cwd: thread_cwd.clone(),
+        grok_socket: None,
+    };
+    let agent_routes = args.agent_routes && args.bind_addr.is_loopback();
+
     let state = ShimState {
         usage_cache: args.usage_cache,
         codex_home: codex_home.clone(),
         trace_path: trace_path.clone(),
-        cwd: std::env::current_dir()
-            .context("resolving current working directory")
-            .map_err(CodexShimBindError::HostResource)?,
+        cwd: thread_cwd,
         fs_root: args.fs_root,
         node: args.node,
         background_execution_registry: args.background_execution_registry,
@@ -139,9 +194,26 @@ pub(crate) async fn bind_codex_shim(
         auth_token: args.auth_token.map(Arc::from),
     };
 
+    let mut sidecars = RapidHashMap::new();
+    sidecars.insert(bound_agent_id.clone(), state.sidecar.clone());
+    let mut runtime_routes = Router::new().route("/runtime", get(runtime_identity));
+    if agent_routes {
+        runtime_routes = runtime_routes.route("/agents/{agent_id}", get(agent_ws_upgrade));
+    }
+    let runtime_routes = runtime_routes.with_state(RuntimeRouteState {
+        identity,
+        shim: state.clone(),
+        agent_routes,
+        loopback_host_only: args.bind_addr.is_loopback() && !args.has_public_url,
+        runnable: args.runnable,
+        grok_socket: args.grok_socket,
+        sidecars: Arc::new(Mutex::new(sidecars)),
+    });
+
     let app = Router::new()
         .route("/", get(ws_upgrade))
-        .with_state(state.clone());
+        .with_state(state)
+        .merge(runtime_routes);
     let addr = SocketAddr::new(args.bind_addr, args.port);
     let listener = TcpListener::bind(addr)
         .await
@@ -158,6 +230,17 @@ pub(crate) async fn bind_codex_shim(
         agent_id: bound_agent_id,
         auth_required,
     })
+}
+
+/// A service manager starts the runtime in `/`, and Codex with `--remote` leaves a
+/// thread's directory to this server, so the process directory says nothing about
+/// where work belongs. Admission refuses a placement outside the tool root, so a
+/// thread defaults to the root unless the process runs inside it.
+pub(super) fn default_thread_cwd(process_cwd: PathBuf, tool_root: Option<&Path>) -> PathBuf {
+    match tool_root {
+        Some(root) if !process_cwd.starts_with(root) => root.to_path_buf(),
+        _ => process_cwd,
+    }
 }
 
 pub(super) fn validate_bind_security(
@@ -177,11 +260,28 @@ pub(super) fn validate_bind_security(
     Ok(())
 }
 
+/// A web page can attempt a WebSocket handshake to loopback, because WebSockets are not
+/// bound by same-origin, and a default runtime on loopback asks for no token. Browsers send
+/// `Origin` on every handshake and no client of the shim does: real Codex 0.153.3 sends
+/// none, directly or through the agent relay, and the desktop does not connect here.
+fn browser_origin_refusal(headers: &HeaderMap) -> Option<Response> {
+    headers.contains_key(ORIGIN).then(|| {
+        tracing::warn!(
+            target: "gents_cli::commands::codex_shim",
+            "rejected app-server WebSocket handshake carrying an Origin header"
+        );
+        StatusCode::FORBIDDEN.into_response()
+    })
+}
+
 async fn ws_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<ShimState>,
     headers: HeaderMap,
 ) -> Response {
+    if let Some(refusal) = browser_origin_refusal(&headers) {
+        return refusal;
+    }
     if !request_is_authorized(&headers, state.auth_token.as_deref()) {
         tracing::warn!(
             target: "gents_cli::commands::codex_shim",
@@ -191,6 +291,79 @@ async fn ws_upgrade(
     }
     ws.on_upgrade(move |socket| handle_socket(socket, state))
         .into_response()
+}
+
+/// Each agent gets its own sidecar: listing walks a sidecar's threads with no
+/// agent filter, so a shared one would show one agent's threads to another.
+async fn agent_ws_upgrade(
+    ws: WebSocketUpgrade,
+    RoutePath(agent_id): RoutePath<String>,
+    State(routes): State<RuntimeRouteState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(refusal) = browser_origin_refusal(&headers) {
+        return refusal;
+    }
+    if !request_is_authorized(&headers, routes.shim.auth_token.as_deref()) {
+        tracing::warn!(
+            target: "gents_cli::commands::codex_shim",
+            "rejected unauthorized app-server WebSocket handshake on an agent route"
+        );
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !gents::codex_shim_binding::admits_connection(
+        &agent_id,
+        routes.runnable.borrow().iter().map(String::as_str),
+    ) {
+        tracing::warn!(
+            target: "gents_cli::commands::codex_shim",
+            "rejected app-server WebSocket handshake for an agent that cannot run"
+        );
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let sidecar = routes
+        .sidecars
+        .lock()
+        .await
+        .entry(agent_id.clone())
+        .or_default()
+        .clone();
+    let mut state = routes.shim;
+    state.agent_id = Arc::from(agent_id);
+    state.sidecar = sidecar;
+    ws.on_upgrade(move |socket| handle_socket(socket, state))
+        .into_response()
+}
+
+/// After DNS rebinding a page is same-origin with this server, and its GET carries no
+/// `Origin`, so only `Host` shows it came by another name. `/runtime` names the home path,
+/// DID and agents.
+fn host_is_loopback(headers: &HeaderMap) -> bool {
+    headers
+        .get(HOST)
+        .and_then(|host| host.to_str().ok())
+        .and_then(|host| url::Url::parse(&format!("http://{host}/")).ok())
+        .is_some_and(|url| {
+            url.host()
+                .is_some_and(|host| crate::commands::codex::is_loopback_host(&host))
+        })
+}
+
+async fn runtime_identity(State(state): State<RuntimeRouteState>, headers: HeaderMap) -> Response {
+    if state.loopback_host_only && !host_is_loopback(&headers) {
+        tracing::warn!(
+            target: "gents_cli::commands::codex_shim",
+            "rejected /runtime request whose Host is not a loopback name"
+        );
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if !request_is_authorized(&headers, state.shim.auth_token.as_deref()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let mut identity = state.identity;
+    identity.runnable_agents = state.agent_routes.then(|| state.runnable.borrow().clone());
+    identity.grok_socket = state.grok_socket.get().cloned();
+    Json(identity).into_response()
 }
 
 pub(super) fn request_is_authorized(headers: &HeaderMap, expected: Option<&str>) -> bool {

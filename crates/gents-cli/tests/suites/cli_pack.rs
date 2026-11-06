@@ -26,9 +26,24 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
             .output()?)
     };
     for args in [
-        &["pack", "new", "demo_tools"][..],
-        &["pack", "add", "plugin", "echo_tool", "--dir", "demo_tools"],
-        &["pack", "build", "demo_tools", "--out", "demo_tools.pack"],
+        &["config", "pack", "new", "demo_tools"][..],
+        &[
+            "config",
+            "pack",
+            "add",
+            "plugin",
+            "echo_tool",
+            "--dir",
+            "demo_tools",
+        ],
+        &[
+            "config",
+            "pack",
+            "build",
+            "demo_tools",
+            "--out",
+            "demo_tools.pack",
+        ],
     ] {
         let output = gents(args)?;
         anyhow::ensure!(
@@ -42,6 +57,7 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
     let install = run_cli_json(
         temp.path(),
         &[
+            "config",
             "pack",
             "install",
             temp.path()
@@ -63,6 +79,8 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
     let echoed = run_cli_json(
         temp.path(),
         &[
+            "config",
+            "pack",
             "plugin",
             "run",
             "gents/echo_tool",
@@ -76,7 +94,7 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
 
     let removed = run_cli_json(
         temp.path(),
-        &["pack", "remove", "demo_tools", "--home", home_arg],
+        &["config", "pack", "remove", "demo_tools", "--home", home_arg],
     )?;
     let sorted = |value: &Value| -> Result<Vec<String>> {
         let mut names: Vec<String> = serde_json::from_value(value.clone())?;
@@ -90,6 +108,8 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
     let gone = run_cli_failure_stderr(
         temp.path(),
         &[
+            "config",
+            "pack",
             "plugin",
             "run",
             "gents/echo_tool",
@@ -102,7 +122,7 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
     anyhow::ensure!(gone.contains("not installed"), "{gone}");
     let again = run_cli_failure_stderr(
         temp.path(),
-        &["pack", "remove", "demo_tools", "--home", home_arg],
+        &["config", "pack", "remove", "demo_tools", "--home", home_arg],
     )?;
     anyhow::ensure!(again.contains("is not installed"), "{again}");
     Ok(())
@@ -142,6 +162,7 @@ impl DependentHome {
         run_cli_json(
             tempdir.path(),
             &[
+                "config",
                 "pack",
                 "fetch",
                 dir_arg(dependee),
@@ -151,6 +172,7 @@ impl DependentHome {
             ],
         )?;
         let install_args = [
+            "config",
             "pack",
             "install",
             dir_arg(&fixture_pack_dir("dependent_fixture")),
@@ -195,6 +217,7 @@ fn offline_pack_install_with_a_documents_dependency_holds_one_store_claim() -> R
     let denial = run_cli_failure_stderr(
         setup.tempdir.path(),
         &[
+            "config",
             "pack",
             "remove",
             "fixture/dependee_fixture",
@@ -230,6 +253,7 @@ fn a_documents_dependency_is_released_with_its_dependent() -> Result<()> {
     let denial = run_cli_failure_stderr(
         setup.tempdir.path(),
         &[
+            "config",
             "pack",
             "remove",
             "fixture/dependee_fixture",
@@ -242,6 +266,7 @@ fn a_documents_dependency_is_released_with_its_dependent() -> Result<()> {
     let removed = run_cli_json(
         setup.tempdir.path(),
         &[
+            "config",
             "pack",
             "remove",
             "fixture/dependent_fixture",
@@ -256,6 +281,7 @@ fn a_documents_dependency_is_released_with_its_dependent() -> Result<()> {
     let denial = run_cli_failure_stderr(
         setup.tempdir.path(),
         &[
+            "config",
             "pack",
             "remove",
             "fixture/dependee_fixture",
@@ -280,6 +306,7 @@ fn an_explicitly_installed_documents_dependency_survives_its_dependent() -> Resu
     run_cli_json(
         setup.tempdir.path(),
         &[
+            "config",
             "pack",
             "install",
             dir_arg(&fixture_pack_dir("dependee_fixture")),
@@ -293,6 +320,7 @@ fn an_explicitly_installed_documents_dependency_survives_its_dependent() -> Resu
     run_cli_json(
         setup.tempdir.path(),
         &[
+            "config",
             "pack",
             "remove",
             "fixture/dependent_fixture",
@@ -303,6 +331,7 @@ fn an_explicitly_installed_documents_dependency_survives_its_dependent() -> Resu
     let removed = run_cli_json(
         setup.tempdir.path(),
         &[
+            "config",
             "pack",
             "remove",
             "fixture/dependee_fixture",
@@ -318,7 +347,7 @@ fn an_explicitly_installed_documents_dependency_survives_its_dependent() -> Resu
 }
 
 /// A documents pack whose Tools name a plugin that neither it nor the node
-/// provides is refused by `gents pack install` before any document is written.
+/// provides is refused by `gents config pack install` before any document is written.
 #[test]
 fn offline_pack_install_naming_an_unresolved_plugin_is_refused_before_writing() -> Result<()> {
     let scratch = tempfile::tempdir().context("creating pack tempdir")?;
@@ -340,6 +369,7 @@ fn offline_pack_install_naming_an_unresolved_plugin_is_refused_before_writing() 
     let refusal = run_cli_failure_stderr(
         scratch.path(),
         &[
+            "config",
             "pack",
             "install",
             dir_arg(&pack),
@@ -352,7 +382,7 @@ fn offline_pack_install_naming_an_unresolved_plugin_is_refused_before_writing() 
         ],
     )?;
     anyhow::ensure!(
-        refusal.contains("acme/missing") && refusal.contains("gents pack install"),
+        refusal.contains("acme/missing") && refusal.contains("gents config pack install"),
         "the unresolved plugin was not named: {refusal}"
     );
 
@@ -386,6 +416,7 @@ fn a_documents_dependency_plugin_is_released_with_its_dependent() -> Result<()> 
     run_cli_text(
         scratch.path(),
         &[
+            "config",
             "pack",
             "add",
             "plugin",
@@ -394,7 +425,10 @@ fn a_documents_dependency_plugin_is_released_with_its_dependent() -> Result<()> 
             dir_arg(&dependee),
         ],
     )?;
-    run_cli_text(scratch.path(), &["pack", "build", dir_arg(&dependee)])?;
+    run_cli_text(
+        scratch.path(),
+        &["config", "pack", "build", dir_arg(&dependee)],
+    )?;
 
     let setup = DependentHome::with_dependee("dep-plugin", &dependee)?;
     run_cli_json(setup.tempdir.path(), &setup.install_args())?;
@@ -407,6 +441,7 @@ fn a_documents_dependency_plugin_is_released_with_its_dependent() -> Result<()> 
     run_cli_json(
         setup.tempdir.path(),
         &[
+            "config",
             "pack",
             "remove",
             "fixture/dependent_fixture",
@@ -495,7 +530,7 @@ fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixt
         config["agent_targets"] = serde_json::json!([wire_target("wf-content")]);
     })?;
 
-    run_cli_text(scratch, &["pack", "build", dir_arg(&job_pack)])?;
+    run_cli_text(scratch, &["config", "pack", "build", dir_arg(&job_pack)])?;
     for (pack, slots) in [
         (&job_pack, Vec::new()),
         (
@@ -507,6 +542,7 @@ fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixt
         ),
     ] {
         let mut args = vec![
+            "config",
             "pack",
             "install",
             dir_arg(pack),
@@ -528,6 +564,7 @@ fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixt
 impl WireFixture {
     fn wire(&self, extra: &[&str]) -> Result<serde_json::Value> {
         let mut args = vec![
+            "config",
             "pack",
             "wire",
             "fixture/job_fixture",
@@ -670,7 +707,7 @@ fn diagnose_status_degrades_on_a_plugin_jobs_failure() -> Result<()> {
     let diagnose = || {
         run_cli_json(
             fixture.tempdir.path(),
-            &["diagnose", "--home", dir_arg(&fixture.home)],
+            &["runtime", "diagnose", "--home", dir_arg(&fixture.home)],
         )
     };
     let before = diagnose()?;
@@ -766,6 +803,7 @@ fn pack_wire_refuses_an_agent_without_a_tools_document() -> Result<()> {
     let refusal = run_cli_failure_stderr(
         fixture.tempdir.path(),
         &[
+            "config",
             "pack",
             "wire",
             "fixture/job_fixture",
@@ -776,7 +814,10 @@ fn pack_wire_refuses_an_agent_without_a_tools_document() -> Result<()> {
         ],
     )?;
     anyhow::ensure!(
-        refusal.contains(&format!("gents tools explain --agent {}", fixture.agent)),
+        refusal.contains(&format!(
+            "gents config tools explain --agent {}",
+            fixture.agent
+        )),
         "the refusal does not name the next call: {refusal}"
     );
     Ok(())
@@ -800,7 +841,7 @@ fn uninstalled_job_pack() -> Result<WireFixture> {
         .to_owned();
     let job_pack = scratch.join("job_plugin_fixture");
     copy_dir_all(&fixture_pack_dir("job_plugin_fixture"), &job_pack)?;
-    run_cli_text(scratch, &["pack", "build", dir_arg(&job_pack)])?;
+    run_cli_text(scratch, &["config", "pack", "build", dir_arg(&job_pack)])?;
     Ok(WireFixture {
         tempdir,
         home,
@@ -816,7 +857,7 @@ impl WireFixture {
     fn job_pack_digest(&self) -> Result<String> {
         let shown = run_cli_json(
             self.tempdir.path(),
-            &["pack", "show", dir_arg(&self.job_pack())],
+            &["config", "pack", "show", dir_arg(&self.job_pack())],
         )?;
         Ok(shown["digest"]
             .as_str()
@@ -826,6 +867,7 @@ impl WireFixture {
 
     fn install_job_pack_args(&self, extra: &[&str]) -> Vec<String> {
         let mut args = vec![
+            "config".to_owned(),
             "pack".to_owned(),
             "install".to_owned(),
             dir_arg(&self.job_pack()).to_owned(),
@@ -873,7 +915,7 @@ fn pack_install_expect_digest_mismatch_writes_nothing() -> Result<()> {
     let digest = fixture.job_pack_digest()?;
     let wrong = format!("sha256:{}", "0".repeat(64));
     let stderr = fixture.install_job_pack_failure(&["--expect-digest", &wrong])?;
-    for needle in [wrong.as_str(), digest.as_str(), "gents pack show"] {
+    for needle in [wrong.as_str(), digest.as_str(), "gents config pack show"] {
         anyhow::ensure!(stderr.contains(needle), "{needle} missing from: {stderr}");
     }
     anyhow::ensure!(

@@ -2541,6 +2541,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_codex_shim_binding_cases_pin_runnable_gated_binding",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::generated_codex_shim_connection_admission_cases_pin_runnable_gate",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_codex_shim_connection_admission_cases_pin_runnable_gate",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::generated_startup_readiness_cases_pin_bounded_barrier_release",
             package: "gents",
             source_path: "crates/gents/tests/conformance.rs",

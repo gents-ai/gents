@@ -2,7 +2,7 @@
 
 Run `CARGO_INCREMENTAL=0 cargo test -p gents-cli --test cli_enrollment -- --nocapture`.
 
-The runtime starts through `gents init` and `gents server`. The app starts
+The runtime starts through `gents init` and `gents runtime server`. The app starts
 through the same `ClientCore` used by desktop and iOS. Enrollment consumes the
 runtime's `/status` offer, creates a pending request, and uses operator approval.
 The test must not install replicators or pairing documents itself.

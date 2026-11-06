@@ -2153,6 +2153,11 @@ def caseCoverage : List CoverageEntry :=
       "CodexShimBindingCases"
       "conformance::generated_codex_shim_binding_cases_pin_runnable_gated_binding")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "codex_shim_connection_admission_cases"
+      "CodexShimConnectionAdmissionCases"
+      "conformance::generated_codex_shim_connection_admission_cases_pin_runnable_gate")
+      "codex-shim" [Surface.api, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "transcript_cases"
       "TranscriptConformanceCases"

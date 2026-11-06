@@ -46,7 +46,7 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
         }
         if manifest.metadata.kind != PackKind::Plugins {
             report.problems.push(format!(
-                "build the plugins ({}) with gents pack build before checking its configuration",
+                "build the plugins ({}) with gents config pack build before checking its configuration",
                 unbuilt.join(", ")
             ));
         }

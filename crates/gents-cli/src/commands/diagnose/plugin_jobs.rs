@@ -71,7 +71,7 @@ fn agent_rows(home: &Path, bundle: &ConfigExportBundle, agent: &Agent) -> Vec<Ro
             "tools_unreadable",
             "fail",
             error.to_string(),
-            format!("gents tools explain --agent {}", agent.agent_id),
+            format!("gents config tools explain --agent {}", agent.agent_id),
         )),
     }
     rows
@@ -95,13 +95,13 @@ fn plugin_rows(
                 "plugin_record_unreadable",
                 "fail",
                 format!("{plugin}: {error:#}"),
-                format!("gents plugin install {plugin}"),
+                format!("gents config pack plugin install {plugin}"),
             ));
             return;
         }
     };
     let owner = record.owner_pack_coordinate.as_deref();
-    let wire = format!("gents pack wire {plugin} --agent {}", agent.agent_id);
+    let wire = format!("gents config pack wire {plugin} --agent {}", agent.agent_id);
     let Some(block) = &entry.job else {
         if record.declaration.job.0 {
             rows.push(row(
@@ -169,7 +169,7 @@ fn plugin_rows(
             "engine_not_operator_installed",
             "fail",
             format!("{plugin}: {reason}"),
-            format!("gents pack install {engine} --grant-authority"),
+            format!("gents config pack install {engine} --grant-authority"),
         ));
     }
     for id in &block.policy.dynamic_targets {
@@ -210,7 +210,7 @@ fn plugin_rows(
                 "{plugin}: {} are also reachable by agent_new",
                 widened.join(", ")
             ),
-            format!("gents tools explain --agent {}", agent.agent_id),
+            format!("gents config tools explain --agent {}", agent.agent_id),
         ));
     }
 }
@@ -278,7 +278,7 @@ fn inference_rows(
                     backend.backend_id, block.max_live
                 ),
                 format!(
-                    "gents config backend set --backend-id {} --max-concurrent {}",
+                    "save the output of `gents config backend show {}` without its `_docID`, set `max_concurrent` to {}, and load it with `gents config backend set --file <backend.json>`",
                     backend.backend_id, block.max_live
                 ),
             ));
@@ -486,7 +486,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             next_call,
-            "gents pack wire acme/runner --agent caller --targets-from acme/engine"
+            "gents config pack wire acme/runner --agent caller --targets-from acme/engine"
         );
     }
 
@@ -519,7 +519,7 @@ mod tests {
             );
             assert_eq!(
                 check["next_call"],
-                "gents pack wire acme/runner --agent caller"
+                "gents config pack wire acme/runner --agent caller"
             );
         }
     }
@@ -559,7 +559,7 @@ mod tests {
         let check = &report["agents"][0]["checks"][0];
         assert_eq!(
             check["next_call"],
-            "gents pack install acme/engine --grant-authority"
+            "gents config pack install acme/engine --grant-authority"
         );
         assert_eq!(report["ok"], false);
     }
@@ -575,7 +575,7 @@ mod tests {
         let check = &report["agents"][0]["checks"][0];
         assert_eq!(
             check["next_call"],
-            "gents pack install acme/runner --grant-authority"
+            "gents config pack install acme/runner --grant-authority"
         );
         assert_eq!(report["ok"], false);
     }
@@ -587,7 +587,7 @@ mod tests {
         only(&rows, "plugin_record_unreadable", "fail");
         assert_eq!(
             report["agents"][0]["checks"][0]["next_call"],
-            "gents plugin install acme/runner"
+            "gents config pack plugin install acme/runner"
         );
         assert_eq!(report["ok"], false);
     }
@@ -620,7 +620,11 @@ mod tests {
         let next_call = report["agents"][0]["checks"][0]["next_call"]
             .as_str()
             .unwrap();
-        assert!(next_call.ends_with("--max-concurrent 2"), "{next_call}");
+        assert!(next_call.contains("`max_concurrent` to 2"), "{next_call}");
+        assert!(
+            next_call.contains("gents config backend set --file"),
+            "{next_call}"
+        );
     }
 
     #[test]

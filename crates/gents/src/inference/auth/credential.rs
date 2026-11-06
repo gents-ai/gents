@@ -66,14 +66,14 @@ pub struct OAuthProduct {
 pub const CHATGPT_OAUTH_PRODUCT: OAuthProduct = OAuthProduct {
     name: "ChatGPT",
     backend_label: "ChatGPT subscription backend",
-    login_command: "codex-login",
+    login_command: "accounts login codex",
     not_entitled_guidance: "Use an API-key backend, or check the ChatGPT plan's Codex eligibility.",
 };
 
 pub const XAI_OAUTH_PRODUCT: OAuthProduct = OAuthProduct {
     name: "Grok",
     backend_label: "Grok subscription backend",
-    login_command: "grok-login",
+    login_command: "accounts login grok",
     not_entitled_guidance: "Use an API key with an OpenAI-compatible backend against \
                             https://api.x.ai/v1, or check SuperGrok / X Premium+ eligibility.",
 };

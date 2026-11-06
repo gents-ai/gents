@@ -244,7 +244,7 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
             stderr_log.reopen().context("opening gents stderr log")?,
         ));
     support::process::configure_foreground_server_env(&mut command, &[]);
-    let mut child = command.spawn().context("spawning gents server")?;
+    let mut child = command.spawn().context("spawning gents runtime server")?;
     drop(child.stdout.take());
     let mut serve = ServeProcess {
         child,
@@ -566,8 +566,11 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
         .write("test.nac.signed", &mutation)
         .await
         .with_context(|| format!("{phase}: principal-signed HTTP write"))?;
-        let replicators = run_cli_json(&home_dir, &["p2p", "admin", "replicators", "list"])
-            .with_context(|| format!("{phase}: CLI P2P administration over HTTP"))?;
+        let replicators = run_cli_json(
+            &home_dir,
+            &["runtime", "p2p", "admin", "replicators", "list"],
+        )
+        .with_context(|| format!("{phase}: CLI P2P administration over HTTP"))?;
         assert_eq!(replicators["status"], "ok", "{phase}: {replicators}");
         let anonymous_rows = gents::store::config_client::ConfigAccess::graphql(graphql.clone())
             .execute(r#"{ CompactionEntry(filter: { node_did: { _eq: "did:test:nac" } }) { compaction_key } }"#)
@@ -1553,6 +1556,8 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
     let submitted = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -1709,7 +1714,10 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
         Some(expected_agent_queued)
     );
 
-    let cli_snapshot = run_cli_json(&home_dir, &["fleet", "slots", "--graphql", &graphql])?;
+    let cli_snapshot = run_cli_json(
+        &home_dir,
+        &["utils", "debug", "fleet", "slots", "--graphql", &graphql],
+    )?;
     assert_eq!(
         cli_snapshot.pointer("/totals/assigned"),
         snapshot.pointer("/totals/assigned")
@@ -1986,6 +1994,61 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
         readiness.get("p2p_listen_addresses")
     );
 
+    Ok(())
+}
+
+#[cfg(unix)]
+fn readiness_of_a_fresh_home(client: Option<&str>, runtime_dir: &std::path::Path) -> Result<Value> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    run_init_json(
+        &home_dir,
+        &[
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
+        ],
+    )?;
+    if let Some(client) = client {
+        run_cli_text(&home_dir, &["config", "client", "set", client])?;
+    }
+    let (_serve, readiness) = spawn_server_with_ready_json(
+        &home_dir,
+        allocate_port()?,
+        &["--p2p-transport", "none"],
+        &[(
+            "XDG_RUNTIME_DIR",
+            runtime_dir.to_str().context("runtime dir is not UTF-8")?,
+        )],
+    )?;
+    Ok(readiness)
+}
+
+#[cfg(unix)]
+#[test]
+fn only_a_home_set_to_grok_serves_the_grok_socket() -> Result<()> {
+    // Under /tmp because a Unix socket path has a short length limit.
+    let runtime_dir = tempfile::Builder::new()
+        .prefix("gents-")
+        .tempdir_in("/tmp")
+        .context("creating runtime dir")?;
+
+    let grok = readiness_of_a_fresh_home(Some("grok"), runtime_dir.path())?;
+    assert_eq!(
+        grok.pointer("/grok_shim/bound").and_then(Value::as_bool),
+        Some(true),
+        "{grok}"
+    );
+    assert_eq!(
+        grok.pointer("/grok_shim/socket").and_then(Value::as_str),
+        runtime_dir.path().join("gents/grok.sock").to_str(),
+        "{grok}"
+    );
+
+    let unset = readiness_of_a_fresh_home(None, runtime_dir.path())?;
+    assert_eq!(unset.get("grok_shim"), Some(&Value::Null), "{unset}");
     Ok(())
 }
 
@@ -2309,7 +2372,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
     let output = run_cli_text(
         &home_dir,
         &[
-            "chat",
+            "-p",
             "backend auth should flow through the configured env var",
         ],
     )?;
@@ -2486,6 +2549,8 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let request = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2513,6 +2578,8 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let tool_calls = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2615,6 +2682,8 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let messages = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2651,6 +2720,8 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let denied = run_cli_failure_stderr(
         &home_dir,
         &[
+            "utils",
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2668,6 +2739,8 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let diagnostic = run_cli_failure_stderr(
         &home_dir,
         &[
+            "utils",
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2690,6 +2763,8 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let inventory = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2749,7 +2824,7 @@ async fn trace_of_a_served_home_reads_only_as_its_home() -> Result<()> {
     .await
     .context("seeding the traced request")?;
 
-    let trace = ["trace", "timeline", "--graphql", &graphql];
+    let trace = ["utils", "debug", "trace", "timeline", "--graphql", &graphql];
     let request = ["--request-id", "home-trace-req"];
     let anonymous = run_cli_failure_stderr(&caller_dir, &[&trace[..], &request[..]].concat())?;
     assert!(anonymous.contains("probably denied"), "{anonymous}");
@@ -3119,7 +3194,16 @@ impl McpHome {
         let home_arg = home.to_str().context("home path is not UTF-8")?.to_owned();
         let init = run_init_json(
             tempdir.path(),
-            &["--node-name", label, "--home", home_arg.as_str()],
+            &[
+                "--node-name",
+                label,
+                "--home",
+                home_arg.as_str(),
+                "--inference-url",
+                "http://127.0.0.1:9/v1",
+                "--model-name",
+                "m",
+            ],
         )?;
         let owner_did = node_did_from_init(&init)?;
         let owner = identity_from_init(&init)?;
