@@ -466,13 +466,14 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
 
     let first_doc = admitted.tool.doc_id().expect("first bridge").to_owned();
     let second_doc = second.doc_id().expect("second bridge").to_owned();
-    let bridge = node
+    let bridge = admitted.client
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ node_did session_id requester_did request_doc_id }} }}"#,
             escape_graphql_string(&second_doc)
         ))
-        .await;
-    let bridge = &bridge.data.expect("bridge scope")["AgentToolCall"][0];
+        .await
+        .unwrap();
+    let bridge = &bridge["data"]["AgentToolCall"][0];
     let text = |field: &str| bridge[field].as_str().map(str::to_owned);
     let (node_did, session_id) = (text("node_did").unwrap(), text("session_id").unwrap());
     let requester_did = text("requester_did");
@@ -505,31 +506,53 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
             additional_params: None,
         }],
     };
-    let variables =
-        crate::session::canonical_rows::transcript_message_create_variables(&unresolvable).unwrap();
-    ConfigAccess::transact_local_write(&node, None, "test.unrelated_message", |txn| {
-        let variables = variables.clone();
-        Box::pin(async move {
-            txn.execute_with_variables(
-                crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
-                &variables,
-            )
-            .await
-            .map(|_| ())
+    let signer = owner.managed_agent_signer().expect("claimed Agent signer");
+    let agent_access = ConfigAccess::local_with_agent_signer(
+        node.clone(),
+        identity::Did::new(&owner.request().agent_did).unwrap(),
+        signer,
+    )
+    .unwrap();
+    agent_access
+        .transact_write("test.unrelated_message", |txn| {
+            let unresolvable = &unresolvable;
+            Box::pin(async move {
+                let variables = crate::session::canonical_rows::transcript_message_bound_variables(
+                    txn,
+                    unresolvable,
+                )
+                .await?;
+                let session_doc = variables["input"]["session_doc_id"].as_str().unwrap();
+                let response = txn
+                    .execute_with_variables(
+                        crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
+                        &variables,
+                    )
+                    .await?;
+                let doc = crate::store::graphql::created_doc_id(&response, "AgentMessage")?;
+                txn.add_resource_relationship(
+                    "AgentMessage",
+                    &doc,
+                    "parent",
+                    "sessions",
+                    session_doc,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
         })
-    })
-    .await
-    .expect("persist unrelated message");
+        .await
+        .expect("persist unrelated message");
 
-    let access = ConfigAccess::local(node.clone());
+    let access = &admitted.client;
     assert!(
-        load_session_tool_calls(&access, &node_did, &session_id, requester_did.as_deref())
+        load_session_tool_calls(access, &node_did, &session_id, requester_did.as_deref())
             .await
             .is_err(),
         "premise: the session-wide reader resolves every message in the session"
     );
     let accepted = load_accepted_tool_calls(
-        &access,
+        access,
         &node_did,
         &session_id,
         requester_did.as_deref(),
@@ -551,7 +574,7 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
         second_arguments
     );
     assert!(load_accepted_tool_arguments(
-        &access,
+        access,
         &node_did,
         "another-session",
         requester_did.as_deref(),
