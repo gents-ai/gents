@@ -104,6 +104,15 @@ async fn node() -> Arc<EmbeddedNode> {
     node
 }
 
+/// Schema tool acting as the node's runtime owner, the signed actor for the
+/// node-owned collections these fixtures create and migrate.
+fn runtime_owned_tool(node: &Arc<EmbeddedNode>) -> SchemaTool {
+    let runtime = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
+    SchemaTool {
+        access: ConfigAccess::local_as(node.clone(), runtime),
+    }
+}
+
 #[tokio::test]
 async fn schema_preview_and_publication_expose_ignored_native_directives() {
     use crate::store::config_client::NodePermission;
@@ -187,7 +196,7 @@ async fn schema_publication_matches_executable_lean_contract() {
             Vec::new(),
         )
         .unwrap()
-        .resolve(&node, "did:key:test", &Default::default())
+        .resolve(&node, node.node_identity_did().unwrap(), &Default::default())
         .await
         .unwrap();
         let mut intent = json!({"argv":["collection","preview","create"],"options":{"sdl":"type Probe { value: String }"}});
@@ -512,7 +521,7 @@ async fn schema_recovery_help_and_grant_are_independent_of_config() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, "did:key:test", &Default::default())
+    .resolve(&node, node.node_identity_did().unwrap(), &Default::default())
     .await
     .unwrap();
     assert!(!surface.tool_names().contains(&SCHEMA_TOOL_NAME.to_owned()));
@@ -528,16 +537,19 @@ async fn inline_lens_migration_transforms_existing_rows_through_native_owner() {
         "schema migration coverage requires the fixture lens build"
     );
     let node = node().await;
-    let tool = SchemaTool::new(node.clone());
-    let access = ConfigAccess::local(node.clone());
+    let tool = runtime_owned_tool(&node);
+    let access = ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(node.node_identity_did().unwrap()).unwrap(),
+    );
     apply(&tool,json!({"argv":["collection","create"],"options":{"sdl":"type FixtureDoc { name: String }"}})).await;
-    ConfigAccess::write_local(
-        &node,
-        "schema_test.lens_seed",
-        r#"mutation { create_FixtureDoc(input:{name:"alice"}) { _docID } }"#,
-    )
-    .await
-    .unwrap();
+    access
+        .write(
+            "schema_test.lens_seed",
+            r#"mutation { create_FixtureDoc(input:{name:"alice"}) { _docID } }"#,
+        )
+        .await
+        .unwrap();
     let source = access
         .collection_version("FixtureDoc")
         .await

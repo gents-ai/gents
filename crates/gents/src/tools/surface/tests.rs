@@ -1,16 +1,5 @@
 use super::*;
 
-fn agent_tool_runtime(node: std::sync::Arc<defra_node::Node>) -> ToolRuntimeContext {
-    let node_did = node.node_identity_did().unwrap().to_owned();
-    let identity =
-        crate::store::identity::RegisteredIdentity::from_registered_did(&node_did, None).unwrap();
-    let mut runtime = ToolRuntimeContext::oneshot_with_node_did(node, node_did);
-    let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
-    runtime.agent_identity =
-        Some(crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap());
-    runtime
-}
-
 async fn selected_surface_runtime() -> (std::sync::Arc<defra_node::Node>, ToolRuntimeContext) {
     use crate::store::identity::NodeIdentity as _;
     let home = tempfile::tempdir().unwrap();
@@ -1233,8 +1222,7 @@ async fn defra_query_tool_gated_by_selection() {
 
 #[tokio::test]
 async fn context_budget_tool_gated_by_selection() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (node, runtime) = selected_surface_runtime().await;
 
     let enabled = AgentToolSurfaceConfig::from_selection(
         "ops",
@@ -1276,7 +1264,6 @@ async fn context_budget_tool_gated_by_selection() {
         .tool_names()
         .contains(&"context_budget".to_string()));
 
-    let runtime = agent_tool_runtime(node);
     let built = disabled.build_tools(&runtime).await.unwrap();
     assert!(!built.iter().any(|tool| tool.name() == "context_budget"));
 }
@@ -1641,8 +1628,7 @@ fn default_surface_enables_session_reads_and_disables_goal_creation() {
 
 #[tokio::test]
 async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (node, runtime) = selected_surface_runtime().await;
     let surface = AgentToolSurfaceConfig::from_selection(
         "benchmark",
         ResolvedToolSelection {
@@ -1668,7 +1654,6 @@ async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
     assert!(!names.contains(&crate::goal::GET_GOAL_TOOL_NAME.to_string()));
     assert!(!names.contains(&crate::goal::UPDATE_GOAL_TOOL_NAME.to_string()));
 
-    let runtime = agent_tool_runtime(node);
     let built_names = surface
         .build_tools(&runtime)
         .await
@@ -1714,8 +1699,7 @@ async fn goal_tools_are_independent_from_generic_meta_tools() {
 
 #[tokio::test]
 async fn goal_creation_requires_its_separate_capability() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (node, runtime) = selected_surface_runtime().await;
 
     let without_create = AgentToolSurfaceConfig::from_selection(
         "durable",
@@ -1761,7 +1745,7 @@ async fn goal_creation_requires_its_separate_capability() {
         .tool_names()
         .contains(&crate::goal::CREATE_GOAL_TOOL_NAME.to_string()));
     let built_names = with_create
-        .build_tools(&agent_tool_runtime(node))
+        .build_tools(&runtime)
         .await
         .unwrap()
         .into_iter()
@@ -2128,7 +2112,7 @@ async fn tool_construction_rechecks_current_workspace_root_policy() {
     )
     .unwrap();
     let surface = config
-        .resolve(&node, "did:test:test", &Default::default())
+        .resolve(&node, &runtime.node_did, &Default::default())
         .await
         .unwrap();
     surface
@@ -2191,7 +2175,7 @@ async fn normal_load_rejects_active_blank_root_under_explicit_policy_without_cei
     )
     .unwrap();
     let surface = config
-        .resolve(&node, "did:test:test", &Default::default())
+        .resolve(&node, &runtime.node_did, &Default::default())
         .await
         .unwrap();
     let error = match surface.build_tools(&runtime).await {

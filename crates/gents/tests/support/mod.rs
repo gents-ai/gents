@@ -322,7 +322,37 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
     )
     .await
     .expect("p2p embedded home");
-    test_db_from_home(home)
+    let db = test_db_from_home(home);
+    install_runtime_node(&db).await;
+    db
+}
+
+/// Writes the runtime's Node document as the runtime owner. Publication and
+/// enrollment owners require exactly one visible local Node before they publish.
+async fn install_runtime_node(db: &TestDb) {
+    use gents::store::config_client::{
+        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
+
+    let runtime = db.node_identity.as_ref();
+    let admin = gents::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(runtime.did()).expect("valid runtime DID"),
+    );
+    let node = serde_json::json!({"node_did": runtime.did()});
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: gents::Collection::Node,
+        add: node.clone(),
+        update: node,
+    }])
+    .expect("render runtime Node");
+    admin
+        .transact_write("test.p2p.runtime_node", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .expect("install runtime Node");
 }
 
 pub fn test_p2p_config(admission: &TestP2pAdmission, data_path: &std::path::Path) -> P2PConfig {

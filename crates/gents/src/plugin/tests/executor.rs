@@ -1699,7 +1699,9 @@ mod tool_writes {
 
     use super::*;
     use crate::store::config_client::ConfigAccess;
-    use crate::tools::call::lifecycle::admission_fixture::published_spawn_parent;
+    use crate::tools::call::lifecycle::admission_fixture::{
+        published_admission, PublishedAdmissionOptions,
+    };
 
     const NODE: &str = "did:key:z6Mknode";
 
@@ -1779,7 +1781,18 @@ mod tool_writes {
         output: Value,
         transient_terminal: bool,
     ) -> Finished {
-        let (node, path, mut call) = published_spawn_parent(name).await;
+        let admission = published_admission(PublishedAdmissionOptions {
+            name: name.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .expect("publish canonical native tool admission");
+        let (node, path, mut call, runtime) = (
+            admission.node,
+            admission.path,
+            admission.tool,
+            admission.runtime,
+        );
         node.add_collection(
             "type Stamped { body: String job_row_doc_id: String } type Plain { body: String }",
         )
@@ -1793,12 +1806,9 @@ mod tool_writes {
         store::write_record(home.path(), &record).unwrap();
         let executor = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
         let node_did = node.node_identity_did().unwrap();
-        let root_identity =
-            crate::store::identity::RegisteredIdentity::from_registered_did(node_did, None)
-                .unwrap();
-        let binding = crate::store::identity::provision_agent_identity(&root_identity).unwrap();
+        let binding = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
         let agent_identity =
-            crate::store::identity::resolve_agent_identity(&root_identity, &binding).unwrap();
+            crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
         let tool = PluginTool::resolve(executor, &tool_ref(Some(&record.digest)), None)
             .unwrap()
             .with_agent_data(node.clone(), node_did, Some(agent_identity.did()))
