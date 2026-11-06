@@ -1035,6 +1035,62 @@ async fn modeled_node_owners_and_administrators_manage_only_their_selected_relat
                 .await?;
         }
     }
+    let admin_did = identity::Did::new(admin.did())?;
+    owner
+        .add_actor_relationship("Node", &node_doc, "administrator", &admin_did)
+        .await?;
+    creator_access
+        .transact_write("test.manager.revoke_source", |txn| {
+            let (config_doc, node_doc) = (&config_doc, &node_doc);
+            Box::pin(async move {
+                txn.delete_entity_set_relationship(
+                    "ManagerConfig",
+                    config_doc,
+                    "selection_manager",
+                    "nodes",
+                    node_doc,
+                    "administrator",
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await?;
+    creator_access
+        .write(
+            "test.manager.unrelated_update",
+            &format!(
+                "mutation {{ update_ManagerConfig(docID: \"{}\", input: {{label: \"updated\"}}) {{_docID}} }}",
+                crate::store::graphql::escape_graphql_string(&config_doc)
+            ),
+        )
+        .await?;
+    for (name, actor) in [("admin", &admin_access), ("user", &owner)] {
+        let result = actor
+            .transact_write("test.manager.after_source_revocation", |txn| {
+                let (config_doc, selected_doc) = (&config_doc, &selected_doc);
+                Box::pin(async move {
+                    txn.add_entity_set_relationship(
+                        "ManagerConfig",
+                        config_doc,
+                        "selected_by",
+                        "agents",
+                        selected_doc,
+                        "executor",
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await;
+        assert_eq!(
+            result.is_ok(),
+            model.configuration_node_manager_link_revocation_case[name]
+                .as_bool()
+                .expect("modeled manager link revocation"),
+            "manager {name} after unrelated update"
+        );
+    }
     node.shutdown().await?;
     Ok(())
 }

@@ -1004,6 +1004,14 @@ def nodeManagerCaseJson (name actor resource id relation : String) (revokeAdmin 
   Json.mkObj [("name", toJson name), ("actor", toJson actor), ("resource", toJson resource),
     ("relation", toJson relation), ("revoke_admin", toJson revokeAdmin),
     ("expected", toJson (mayManage state actor ⟨resource, id, relation, .actor "selected-agent"⟩))]
+
+def nodeManagerLinkRevocationCaseJson : Json :=
+  let state := apply nodeManagerFixture (.revoke
+    ⟨"configuration", "config", "selection_manager", .entitySet "nodes" "node" "administrator"⟩)
+  Json.mkObj [("admin", toJson (mayManage state "admin"
+      ⟨"configuration", "config", "selected_by", .entitySet "agents" "agent" "executor"⟩)),
+    ("user", toJson (mayManage state "user"
+      ⟨"configuration", "config", "selected_by", .entitySet "agents" "agent" "executor"⟩))]
 def packInstallationCaseJson (name installer : String) (commit revoke retryFresh direct : Bool) : Json :=
   let initial : State :=
     { objects := [⟨"nodes", "home", userDid⟩],
@@ -1688,6 +1696,7 @@ def json : Json := Json.mkObj
        nodeManagerCaseJson "root-admin" "admin" "workspace_roots" "root" "reader" false,
        nodeManagerCaseJson "root-other-admin" "other-admin" "workspace_roots" "root" "reader" false,
        nodeManagerCaseJson "root-revoked-admin" "admin" "workspace_roots" "root" "reader" true]),
+   ("configuration_node_manager_link_revocation_case", nodeManagerLinkRevocationCaseJson),
    ("mcp_service_use_cases", toJson
       ([(true, true, true, true, true, true),
         (false, true, true, true, true, true),
