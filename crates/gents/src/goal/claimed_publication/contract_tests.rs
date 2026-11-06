@@ -304,14 +304,35 @@ async fn run_generated_running_wait() {
     fixture.node.shutdown().await.expect("node shutdown");
 }
 
-async fn discharge_completion_obligation(node: &crate::defra_node::Node, doc_id: &str) {
-    let response = node
-        .execute(&format!(
-            r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ status: "completed" }}) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(doc_id)
-        ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+async fn discharge_completion_obligation(access: &crate::ConfigAccess, doc_id: &str) {
+    let doc = crate::store::graphql::escape_graphql_string(doc_id);
+    let before = access.execute(&format!(
+        r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{doc}" }} }}, limit: 2) {{ _docID lifecycle_state status }} }}"#,
+    )).await.unwrap();
+    let [row] = before["data"]["AgentToolCall"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("selected Agent must read the exact background tool: {before}");
+    };
+    assert_eq!(row["_docID"], doc_id);
+    assert_eq!(row["lifecycle_state"], "completed");
+    assert!(row["status"]
+        .as_str()
+        .unwrap()
+        .starts_with("completionPending"));
+    let response = access.write("test.goal.discharge_completion", &format!(
+        r#"mutation {{ update_AgentToolCall(docID: "{doc}", input: {{ status: "completed" }}) {{ _docID }} }}"#,
+    )).await.unwrap();
+    let [updated] = response["data"]["update_AgentToolCall"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("selected Agent must update the exact background tool: {response}");
+    };
+    assert_eq!(updated["_docID"], doc_id);
 }
 
 const ABANDONED_RESCAN: &str = "abandoned_wrapup_rescan_makes_no_write";
@@ -492,7 +513,11 @@ async fn run_generated_wait_observations() {
                 "terminal" => {
                     target.start_running().await.unwrap();
                     target.complete("finished").await.unwrap();
-                    discharge_completion_obligation(&fixture.node, target.doc_id().unwrap()).await;
+                    discharge_completion_obligation(
+                        &fixture.agent_access(),
+                        target.doc_id().unwrap(),
+                    )
+                    .await;
                 }
                 state => panic!("unmapped generated background state {state}"),
             }
