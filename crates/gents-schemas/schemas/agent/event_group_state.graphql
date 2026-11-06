@@ -1,5 +1,5 @@
 type EventGroupState
-    @policy(id: "b5fe07b04e54d17ee185045f776d6a8c203f272e2ff9f35691c67803a58e6aac", resource: "agent_children")
+    @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "agent_children")
     @index(fields: ["node_did", "group_key"], unique: true) {
     group_key: String @immutable
     node_did: String @index @immutable

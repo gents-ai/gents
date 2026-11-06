@@ -172,7 +172,7 @@ resources:
       - name: invoke
         expr: session_writer + executor + administrator + parent->delete
       - name: session_read
-        expr: reader + session_writer + administrator + parent->delete
+        expr: reader + administrator + parent->delete
       - name: session_admin
         expr: administrator + parent->delete
   - name: sessions
@@ -187,7 +187,7 @@ resources:
       - name: read
         expr: reader + working_agent + parent->session_read
       - name: update
-        expr: working_agent + parent->session_admin + parent->session_writer
+        expr: working_agent + parent->session_admin
       - name: delete
         expr: parent->session_admin
   - name: delivered_requests
