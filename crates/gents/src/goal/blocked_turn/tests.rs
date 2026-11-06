@@ -554,6 +554,13 @@ async fn embedded() -> (
 
     let (db, user, access, primary) = crate::test_support::signed_test_node("blocked-turn").await;
     let node_did = db.node_identity.did();
+    ConfigAccess::local_as(db.node.clone(), identity::Did::new(node_did).unwrap())
+        .grant_node_permission(
+            &identity::Did::new(user.did()).unwrap(),
+            crate::store::config_client::NodePermission::DacRelationDelete,
+        )
+        .await
+        .unwrap();
     let sibling = crate::store::identity::provision_agent_identity_authorized(
         &db.node,
         db.node_identity.as_ref(),

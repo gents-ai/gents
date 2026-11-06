@@ -59,6 +59,13 @@ impl Fixture {
             crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
         let admin =
             ConfigAccess::local_as(node.clone(), ::identity::Did::new(identity.did()).unwrap());
+        admin
+            .grant_node_permission(
+                &::identity::Did::new(user.did()).unwrap(),
+                crate::store::config_client::NodePermission::DacRelationDelete,
+            )
+            .await
+            .unwrap();
         let actor = ::identity::Did::new(agent.did()).unwrap();
         for permission in [
             crate::store::config_client::NodePermission::CollectionGet,
