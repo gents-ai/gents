@@ -252,6 +252,20 @@ permission relations. Tool document write access does not confer this role. -/
 def nativeToolGrantManager (state : ToolGrantProjection) (actor : String) : Bool :=
   state.owners.contains actor || state.admins.contains actor
 
+/-- A projection checks native source authority only for a relationship that
+would actually change. An origin without that authority cannot repair a
+missing or stale edge, including a dormant membership. -/
+def sourceChangeAllowed (present delete authorized : Bool) : Bool :=
+  (present != delete) || authorized
+
+theorem source_no_op_needs_no_authority (present : Bool) :
+    sourceChangeAllowed present (!present) false = true := by
+  cases present <;> decide
+
+theorem source_change_needs_authority (present : Bool) :
+    sourceChangeAllowed present present false = false := by
+  cases present <;> decide
+
 def configureToolGrantGroup (state : ToolGrantProjection) (household : State)
     (sources : List ToolGrantSource) (grantor : String) (enable committed : Bool) : ToolGrantProjection :=
   let writable := match sources.head? with
