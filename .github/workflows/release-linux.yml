@@ -168,7 +168,7 @@ jobs:
         run: |
           set -euo pipefail
           binary_path="target/release/gents"
-          version_output="$("${binary_path}" version)"
+          version_output="$("${binary_path}" runtime version)"
           printf '%s\n' "${version_output}"
           expected_prefix="gents ${RELEASE_VERSION} ("
           if [[ "${version_output}" != "${expected_prefix}"* ]]; then
@@ -249,7 +249,7 @@ jobs:
             exit 1
           fi
 
-          version_output="$("${packaged_binary}" version)"
+          version_output="$("${packaged_binary}" runtime version)"
           printf '%s\n' "${version_output}"
           expected_prefix="gents ${RELEASE_VERSION} ("
           if [[ "${version_output}" != "${expected_prefix}"* ]]; then

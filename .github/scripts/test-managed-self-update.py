@@ -84,13 +84,13 @@ def main():
     blocked_port = None
     candidate_digest = digest(candidate)
     assert candidate_digest != digest(binary), "fixture must exercise a different executable build"
-    update_args = ["service", "update", "--home", str(home), "--operation-id", operation,
+    update_args = ["runtime", "service", "update", "--home", str(home), "--operation-id", operation,
                    "--executable", str(candidate), "--sha256", candidate_digest]
 
     if args.scenario == "busy-timeout":
         update_args.extend(["--drain-timeout-secs", "1"])
     if args.scenario == "config-health-failure":
-        update_args = ["service", "update", "--home", str(home), "--operation-id", operation]
+        update_args = ["runtime", "service", "update", "--home", str(home), "--operation-id", operation]
     if args.scenario in ("health-failure", "config-health-failure"):
         blocked_port = socket.socket()
         blocked_port.bind(("127.0.0.1", 0))
@@ -114,7 +114,7 @@ def main():
             tools = body.get("tools") or []
             results = [message for message in body.get("messages", []) if message.get("role") == "tool"]
             if tools and not results:
-                argv = ["service", "stop", "--home", str(home)]
+                argv = ["runtime", "service", "stop", "--home", str(home)]
                 call_id = "unsafe-stop"
             elif tools and not any(operation in json.dumps(result) for result in results):
                 assert any("disrupt the runtime" in json.dumps(result) for result in results), results
@@ -201,7 +201,7 @@ def main():
         return json.loads((home / "service-updates" / operation / "receipt.json").read_text())
 
     def notice():
-        items = json.loads(cli("mailbox", "list", "--home", home, "--all").stdout)
+        items = json.loads(cli("automation", "mailbox", "list", "--home", home, "--all").stdout)
         matches = [item for item in items if item.get("source_kind") == "runtime" and item.get("source_id") == f"service-update:{operation}"]
         assert len(matches) <= 1, matches
         if not matches:
@@ -223,15 +223,15 @@ def main():
             "--model-name", model, "--inference-url", f"http://127.0.0.1:{provider.server_port}/v1").stdout)
         env_file = root / "environment.json"
         env_file.write_text(json.dumps({"GENTS_UPDATE_TEST": "retained"}))
-        cli("service", "install", "--home", home, "--executable", binary, "--http-addr", "127.0.0.1",
+        cli("runtime", "service", "install", "--home", home, "--executable", binary, "--http-addr", "127.0.0.1",
             "--http-port", port, "--p2p-bind-addr", "127.0.0.1", "--p2p-port", 0, "--environment-file", env_file)
         installed = True
-        cli("service", "start", "--home", home)
+        cli("runtime", "service", "start", "--home", home)
         eventually(ready)
         initial_pid = eventually(service_pid)
         init_before = (home / "init.json").read_bytes()
         network_before = (home / "network.json").read_bytes()
-        rejected_args = ["service", "update", "--home", str(home), "--operation-id", operation,
+        rejected_args = ["runtime", "service", "update", "--home", str(home), "--operation-id", operation,
                          "--executable", str(candidate), "--sha256", "0" * 64]
         rejected = cli(*rejected_args, check=False)
         assert rejected.returncode != 0 and "SHA-256 mismatch" in rejected.stderr
@@ -240,7 +240,7 @@ def main():
             denied = home / "data/unreadable-fixture"
             denied.write_bytes(b"force a real cold-copy failure before candidate startup")
             denied.chmod(0)
-        request = json.loads(cli("debug", "request", "submit", "--home", home, "--content", "Update your runtime and finish the turn.", "--no-wait").stdout)
+        request = json.loads(cli("utils", "debug", "request", "submit", "--home", home, "--content", "Update your runtime and finish the turn.", "--no-wait").stdout)
         assert tool_result_seen.wait(90), f"agent did not return acceptance: {captured[-1].get('messages') if captured else 'no provider requests'}"
         assert (home / "service-updates" / operation / "receipt.json").is_file(), captured[-1].get("messages")
         receipt = read_receipt()
@@ -325,28 +325,28 @@ def main():
         assert (directory / "backup/init.json").read_bytes() == init_before
         assert not (directory / "backup/service-updates").exists()
         assert final["node_did"] == init["node_did"]
-        status = json.loads(cli("service", "update-status", "--home", home, operation).stdout)
+        status = json.loads(cli("runtime", "service", "update-status", "--home", home, operation).stdout)
         assert status["phase"] == "healthy" and status["session_id"] == receipt["session_id"]
-        stored = json.loads(cli("debug", "request", "show", "--home", home, "--output", "json", request["request_id"]).stdout)
+        stored = json.loads(cli("utils", "debug", "request", "show", "--home", home, "--output", "json", request["request_id"]).stdout)
         assert stored["request"]["lifecycle_state"] == "completed", stored
         assert stored["request"]["session_id"] == receipt["session_id"], stored
         item = eventually(notice)
         # Equivalent durable state to a helper killed after recording startup
         # intent but before loading the native job. Recovery must start forward.
-        cli("service", "stop", "--home", home)
+        cli("runtime", "service", "stop", "--home", home)
         replay = read_receipt()
         replay["phase"] = "installed"
         (directory / "receipt.json").write_text(json.dumps(replay))
         from datetime import datetime, timedelta, timezone
         (directory / "health-deadline.json").write_text(json.dumps((datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()))
-        cli("service", "update-status", "--home", home, operation)
+        cli("runtime", "service", "update-status", "--home", home, operation)
         eventually(completed, 60)
         assert (directory / "health-resume-deadline.json").is_file()
         eventually(ready)
         eventually(lambda: service_pid(helper=True) is None, 20)
-        cli("mailbox", "dismiss", "--home", home, item["_docID"])
+        cli("automation", "mailbox", "dismiss", "--home", home, item["_docID"])
         (directory / "notice-published.json").unlink(missing_ok=True)
-        cli("service", "restart", "--home", home)
+        cli("runtime", "service", "restart", "--home", home)
         eventually(ready)
         eventually(lambda: (directory / "notice-published.json").is_file())
         assert notice()["status"] == "dismissed", "acknowledged outcome was published again"
@@ -366,7 +366,7 @@ def main():
             (config_dir / f"{helper_label}.service").unlink(missing_ok=True)
             run(["systemctl", "--user", "daemon-reload"], check=False)
         if installed:
-            cli("service", "uninstall", "--home", home, check=False)
+            cli("runtime", "service", "uninstall", "--home", home, check=False)
         provider.shutdown()
         if succeeded:
             shutil.rmtree(root)
