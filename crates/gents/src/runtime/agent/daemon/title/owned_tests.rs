@@ -1472,6 +1472,9 @@ impl TitleFixture {
             crate::request::lifecycle::ExecutionOrigin::Interactive,
             self.agent_config.backend_id.clone().unwrap_or_default(),
         );
+        lifecycle
+            .bind_managed_agent(self.agent_config.agent_identity.as_ref())
+            .unwrap();
         assert_eq!(
             lifecycle.claim_with_identity().await.unwrap(),
             crate::request::lifecycle::ClaimOutcome::Claimed
@@ -2559,8 +2562,8 @@ async fn owned_title_interrupt_drains_buffered_reasoning_before_terminal() {
         fixture.terminal_row().await.0,
         RequestLifecycleState::Processing
     );
-    crate::request::interrupt::interrupt_request_by_doc_id(
-        &fixture.node,
+    crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+        &fixture.agent_access(),
         &fixture.title.doc_id,
         &fixture.title.node_did,
         fixture.title.requester_did.as_deref(),
