@@ -130,8 +130,13 @@ mod tests {
         const WRONG: &str = "type AuthoredDocumentFixture { name: Int }";
         let (db, user, access, _) =
             crate::test_support::signed_test_node("authored-document").await;
-        let plan = super::super::preview_schema_install(&access, SDL).await?;
-        super::super::apply_schema_install(&access, SDL, &plan.artifact_digest).await?;
+        // Schema installation is node administration; the held User authors documents only.
+        let admin = ConfigAccess::local_as(
+            db.node.clone(),
+            identity::Did::new(db.node_identity.did()).unwrap(),
+        );
+        let plan = super::super::preview_schema_install(&admin, SDL).await?;
+        super::super::apply_schema_install(&admin, SDL, &plan.artifact_digest).await?;
         let doc = create_authored_document(
             &access,
             "AuthoredDocumentFixture",
