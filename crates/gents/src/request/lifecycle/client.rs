@@ -1244,6 +1244,10 @@ mod tests {
             &binding,
         )
         .await;
+        crate::store::identity::GrantSet::AgentBaseline
+            .grant(&runtime_access, &identity::Did::new(&binding.agent_did).unwrap())
+            .await
+            .unwrap();
         let agent =
             crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
         let mut lifecycle = crate::RequestLifecycle::materialize_pending_with_execution_binding(

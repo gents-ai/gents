@@ -81,6 +81,9 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     );
     let (session_doc, selected_agent_doc) =
         reserve_client_targets(&owner_access, &owner_create).await?;
+    owner_access
+        .add_actor_relationship("AgentSession", &session_doc, "reader", &user.did().parse()?)
+        .await?;
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "mailbox-delegated-request",
