@@ -581,6 +581,7 @@ async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
     let (core, tmp) = crate::tests::support::boot_core().await;
     let signer = gents::KeyIdentity::load_or_create(tmp.path().join("fleet.key"), None).unwrap();
     let node_did = signer.did().to_owned();
+    let creator = crate::tests::support::fixture_signer(7);
     let source = |session_id: &str| gents_protocol::session::SessionReference {
         node_did: "did:test:remote-node".into(),
         session_id: session_id.into(),
@@ -594,7 +595,7 @@ async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
     ] {
         crate::tests::support::create_started_session(
             &core,
-            &signer,
+            &creator,
             crate::tests::support::fixture_session(&node_did, child),
             &source(parent_session),
             parent,

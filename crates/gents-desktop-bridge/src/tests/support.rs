@@ -104,9 +104,9 @@ pub async fn create_started_session(
         SessionCreationCause, SessionCreationReceipt, SessionCreationStarter,
     };
     assert_eq!(
-        session.node_did,
-        signer.did(),
-        "the session's node signs its receipt"
+        session.requester_did.as_deref(),
+        Some(signer.did()),
+        "the creating Agent signs its receipt"
     );
     let mut provenance = session.provenance.take().unwrap_or_default();
     provenance.parent_request_doc_id = Some(parent.into());
@@ -306,7 +306,7 @@ pub async fn seed_provenance_fixture() -> (Arc<ClientCore>, TempDir, String) {
         )
         .await;
         if started {
-            let signer = fixture_signer(if node_did == OTHER { 9 } else { 7 });
+            let signer = fixture_signer(7);
             create_started_session(
                 &core,
                 &signer,
