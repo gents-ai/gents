@@ -67,7 +67,7 @@ pub(super) async fn insert_signed(db: &TestDb, mut request: AgentRequestCreate) 
     gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
-async fn enqueue_owned(
+pub(super) async fn enqueue_owned(
     db: &TestDb,
     fixture: &support::ManagedAgentFixture,
     session: &str,
@@ -221,7 +221,7 @@ pub(super) async fn row(db: &TestDb, doc: &str) -> serde_json::Value {
     rows[0].clone()
 }
 
-async fn row_as(fixture: &support::ManagedAgentFixture, doc: &str) -> serde_json::Value {
+pub(super) async fn row_as(fixture: &support::ManagedAgentFixture, doc: &str) -> serde_json::Value {
     let response = fixture.access.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id content input lifecycle_state failure_reason admission_signature superseded_by_request_doc_id terminal_output }} }}"#,
         escape_graphql_string(doc),
