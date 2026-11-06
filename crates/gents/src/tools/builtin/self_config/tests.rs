@@ -4516,26 +4516,83 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
 
 #[tokio::test]
 async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
-    let node = build_agent_node().await;
-    let identity = node_identity("self-config-secret");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "secret").await;
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "secret".into()).unwrap();
+    let fixture = SelfConfigFixture::new("self-config-secret").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_selected_backend_writer().await;
+    let core = fixture.core();
     let raw = vec![(
         "auth".into(),
         Some(json!({"kind":"api_key","key":"do-not-expose"})),
     )];
     assert!(core.preview(backend_request(raw.clone())).await.is_err());
     assert!(core.apply(backend_request(raw)).await.is_err());
-    let owner = escape_graphql_string(&owner);
-    let response=node.execute(&format!(r#"mutation {{update_InferenceBackend(filter:{{node_did:{{_eq:"{owner}"}},backend_id:{{_eq:"secret:backend"}}}},input:{{auth:{{kind:"api_key",key:"operator-secret"}}}}) {{_docID}}}}"#)).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    core.preview(backend_request(vec![(
-        "auth".into(),
-        Some(json!({"kind":"api_key","key":"operator-secret"})),
-    )]))
-    .await
+    let model = crate::lean_vocab_test::lean_self_config_cases()
+        .iter()
+        .find(|case| case.name == "backend_credential_to_raw_key_rejected")
+        .unwrap();
+    let stored: Value = serde_json::from_str(
+        &model
+            .doc
+            .iter()
+            .find(|field| field.field == "auth")
+            .unwrap()
+            .value,
+    )
     .unwrap();
+    let raw_key: Value = serde_json::from_str(
+        model
+            .patch
+            .iter()
+            .find(|field| field.field == "auth")
+            .unwrap()
+            .value
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    let backend: crate::InferenceBackend = serde_json::from_value(json!({
+        "node_did": fixture.node_did(), "backend_id": format!("{}:backend", fixture.agent_did()),
+        "name": "Test inference", "provider_kind": "OpenAiCompatible",
+        "endpoint": "http://127.0.0.1:1/v1", "auth": stored,
+    }))
+    .unwrap();
+    let secret = crate::inference::auth::credential::BackendCredential {
+        credential_id: stored["id"].as_str().unwrap().to_owned(),
+        node_did: fixture.node_did().to_owned(),
+        provider_kind: backend.provider_kind.as_str().to_owned(),
+        endpoint: backend.endpoint.clone(),
+        version: stored["version"].as_str().unwrap().to_owned(),
+        secret: crate::inference::auth::credential::BackendCredentialSecret::ApiKey {
+            key: raw_key["key"].as_str().unwrap().to_owned(),
+        },
+    };
+    fixture
+        .user_access()
+        .transact_write("test.raw_key.credential", |txn| {
+            let secret = &secret;
+            Box::pin(async move {
+                crate::inference::auth::credential::put_backend_credential_in_txn(txn, secret).await
+            })
+        })
+        .await
+        .unwrap();
+    crate::store::config_client::write_inference_backend_document(fixture.user_access(), &backend)
+        .await
+        .unwrap();
+    for result in [
+        core.preview(backend_request(vec![(
+            "auth".into(),
+            Some(raw_key.clone()),
+        )]))
+        .await,
+        core.apply(backend_request(vec![(
+            "auth".into(),
+            Some(raw_key.clone()),
+        )]))
+        .await,
+    ] {
+        assert_eq!(result.is_ok(), model.accepted);
+    }
     assert!(core
         .apply(backend_request(vec![(
             "auth".into(),
