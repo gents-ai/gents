@@ -214,6 +214,65 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
             .build()
             .await?,
     );
+    let contract: Value = gents_lean_contract::load_contract_snapshot()?;
+    let household = contract["identity_household_cases"]
+        .as_array()
+        .context("modeled household cases")?
+        .iter()
+        .find(|case| case["name"] == "user-node-agents-mixed-session-ownership-policy-followup")
+        .context("modeled household isolation")?;
+    let own_agent = household["relations"]
+        .as_array()
+        .context("modeled household relations")?
+        .iter()
+        .find(|relation| {
+            relation["resource"] == "sessions"
+                && relation["id"] == "general-session"
+                && relation["relation"] == "working_agent"
+        })
+        .and_then(|relation| relation["subject"]["actor"].as_str())
+        .context("modeled working Agent")?;
+    let modeled_own_update = household["actions"]
+        .as_array()
+        .context("modeled household actions")?
+        .iter()
+        .find(|action| {
+            action["action"] == "check"
+                && action["actor"] == own_agent
+                && action["resource"] == "sessions"
+                && action["id"] == "general-session"
+                && action["permission"] == "update"
+        })
+        .and_then(|action| action["expected"].as_bool())
+        .context("modeled own session update")?;
+    let modeled_foreign_update = household["invoke_session_actions"]
+        .as_array()
+        .context("modeled invoke actions")?
+        .iter()
+        .find(|action| {
+            action["action"] == "check"
+                && action["resource"] == "sessions"
+                && action["id"] == "sibling-session"
+                && action["permission"] == "update"
+        })
+        .and_then(|action| action["expected"].as_bool())
+        .context("modeled foreign session update")?;
+    let admin = ConfigAccess::local_as(node.clone(), node_did.parse()?);
+    let mut session_docs = Vec::new();
+    for (_, session_id) in &requests {
+        let result = admin
+            .execute(&format!(
+                "{{ AgentSession(filter: {{session_id: {{_eq: \"{}\"}}}}) {{_docID}} }}",
+                escape_graphql_string(session_id),
+            ))
+            .await?;
+        session_docs.push(
+            result["data"]["AgentSession"][0]["_docID"]
+                .as_str()
+                .context("native session document missing")?
+                .to_owned(),
+        );
+    }
     for (index, binding) in bindings.iter().enumerate() {
         let signer = gents::store::identity::resolve_agent_identity(&runtime_identity, binding)?;
         let actor = ConfigAccess::local_managed_agent(
@@ -221,6 +280,15 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
             binding.agent_did.parse()?,
             signer.as_ref(),
         )?;
+        assert!(
+            node.nac_manager()
+                .check_permission(
+                    &binding.agent_did.parse()?,
+                    gents::store::config_client::NodePermission::DocumentUpdate
+                )
+                .await?,
+            "Agent needs node-level update before the document ACP check"
+        );
         for (target, (request_id, session_id)) in requests.iter().enumerate() {
             let response = actor.execute(&format!(
                 "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ request_id }} AgentSession(filter: {{ session_id: {{ _eq: \"{}\" }} }}) {{ session_id }} }}",
@@ -236,6 +304,63 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                     usize::from(index == target),
                     "Agent {index} visibility for {collection} {target}: {response}"
                 );
+            }
+        }
+        for (target, doc_id) in session_docs.iter().enumerate() {
+            let expected = if index == target {
+                modeled_own_update
+            } else {
+                modeled_foreign_update
+            };
+            let principal =
+                gents::defra_node::AcpIdentity::Authenticated(binding.agent_did.parse()?);
+            let allowed = node
+                .document_acp()
+                .check_doc_access(
+                    &principal,
+                    gents::defra_node::DocumentPermission::Update,
+                    gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                    "sessions",
+                    doc_id,
+                )
+                .await?;
+            assert_eq!(
+                allowed, expected,
+                "native document ACP for Agent {index}, session {target}"
+            );
+            let before = admin
+                .execute(&format!(
+                    "{{ AgentSession(filter: {{_docID: {{_eq: \"{}\"}}}}) {{tags}} }}",
+                    escape_graphql_string(doc_id),
+                ))
+                .await?;
+            let tags = &before["data"]["AgentSession"][0]["tags"];
+            let label = format!("agent-{index}-target-{target}");
+            let mutation = format!(
+                "mutation {{ update_AgentSession(docID: \"{}\", input: {{tags:[\"{}\"]}}) {{_docID}} }}",
+                escape_graphql_string(doc_id), escape_graphql_string(&label),
+            );
+            let updated = actor
+                .write("test.live_cross_agent_session_update", &mutation)
+                .await;
+            let changed = updated.as_ref().is_ok_and(|response| {
+                gents_protocol::graphql::extract_mutation_doc_id(response, "AgentSession").is_ok()
+            });
+            assert_eq!(
+                changed, expected,
+                "Agent {index} update of session {target}: {updated:?}"
+            );
+            let after = admin
+                .execute(&format!(
+                    "{{ AgentSession(filter: {{_docID: {{_eq: \"{}\"}}}}) {{tags}} }}",
+                    escape_graphql_string(doc_id),
+                ))
+                .await?;
+            let actual = &after["data"]["AgentSession"][0]["tags"];
+            if index == target {
+                assert_eq!(actual, &serde_json::json!([label]));
+            } else {
+                assert_eq!(actual, tags, "foreign session changed despite denial");
             }
         }
     }
