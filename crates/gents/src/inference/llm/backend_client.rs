@@ -552,6 +552,21 @@ mod tests {
         agent
     }
 
+    pub(super) fn held_test_agent(
+        db: &crate::support::TestDb,
+        binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+        kind: BackendProviderKind,
+        wire_api: crate::OpenAiWireApi,
+    ) -> ResolvedAgent {
+        let mut agent = PendingAgent::new("backend-client-table")
+            .with_identity_binding_for_test(binding.clone())
+            .build_with_identity_arc_for_test(db.node_identity.clone());
+        agent.backend_provider_kind = kind;
+        agent.openai_wire_api = wire_api;
+        agent.backend_endpoint = "http://127.0.0.1:1/v1".to_owned();
+        agent
+    }
+
     #[tokio::test]
     async fn each_openai_shaped_provider_kind_yields_the_expected_client_variant() {
         let node = test_node().await;
@@ -750,10 +765,9 @@ mod tests {
 
     #[tokio::test]
     async fn backend_account_reference_builds_with_its_own_account() {
-        let node = test_node().await;
-        crate::store::schema::migration::ensure_all_runtime_migrations(node.clone())
-            .await
-            .unwrap();
+        let (db, _user, _access, binding) =
+            crate::test_support::signed_test_node("backend-client").await;
+        let node = db.node.clone();
         for (kind, wire, provider) in [
             (
                 BackendProviderKind::ChatGptCodex,
@@ -776,7 +790,7 @@ mod tests {
                 crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
             ),
         ] {
-            let mut agent = test_agent(kind, wire);
+            let mut agent = held_test_agent(&db, &binding, kind, wire);
             seed_oauth_account(&node, &agent, provider, None).await;
             seed_oauth_account(&node, &agent, provider, Some("acct-b")).await;
             agent.backend_auth = crate::documents::BackendAuth::NodeOAuth {
@@ -818,10 +832,9 @@ mod tests {
 
     #[tokio::test]
     async fn two_profiles_on_two_accounts_are_served_by_their_own() {
-        let node = test_node().await;
-        crate::store::schema::migration::ensure_all_runtime_migrations(node.clone())
-            .await
-            .unwrap();
+        let (db, _user, _access, binding) =
+            crate::test_support::signed_test_node("backend-client").await;
+        let node = db.node.clone();
         for (kind, wire, provider) in [
             (
                 BackendProviderKind::ChatGptCodex,
@@ -839,7 +852,7 @@ mod tests {
                 crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
             ),
         ] {
-            let on_a = test_agent(kind, wire);
+            let on_a = held_test_agent(&db, &binding, kind, wire);
             seed_oauth_account(&node, &on_a, provider, None).await;
             seed_oauth_account(&node, &on_a, provider, Some("acct-b")).await;
             let mut on_b = on_a.clone();
@@ -871,11 +884,12 @@ mod tests {
 
     #[tokio::test]
     async fn backend_account_reference_never_falls_back_to_the_original_account() {
-        let node = test_node().await;
-        crate::store::schema::migration::ensure_all_runtime_migrations(node.clone())
-            .await
-            .unwrap();
-        let mut codex = test_agent(
+        let (db, _user, _access, binding) =
+            crate::test_support::signed_test_node("backend-client").await;
+        let node = db.node.clone();
+        let mut codex = held_test_agent(
+            &db,
+            &binding,
             BackendProviderKind::ChatGptCodex,
             crate::OpenAiWireApi::Responses,
         );
@@ -908,12 +922,13 @@ mod tests {
 
     #[tokio::test]
     async fn each_oauth_provider_kind_yields_the_expected_client_variant() {
-        let node = test_node().await;
-        crate::store::schema::migration::ensure_all_runtime_migrations(node.clone())
-            .await
-            .unwrap();
+        let (db, _user, _access, binding) =
+            crate::test_support::signed_test_node("backend-client").await;
+        let node = db.node.clone();
 
-        let codex = test_agent(
+        let codex = held_test_agent(
+            &db,
+            &binding,
             BackendProviderKind::ChatGptCodex,
             crate::OpenAiWireApi::Responses,
         );
@@ -938,7 +953,9 @@ mod tests {
             BackendProviderKind::ChatGptCodex.as_str()
         );
 
-        let xai_chat = test_agent(
+        let xai_chat = held_test_agent(
+            &db,
+            &binding,
             BackendProviderKind::XaiGrokOAuth,
             crate::OpenAiWireApi::ChatCompletions,
         );
@@ -963,7 +980,9 @@ mod tests {
             BackendProviderKind::XaiGrokOAuth.as_str()
         );
 
-        let xai_responses = test_agent(
+        let xai_responses = held_test_agent(
+            &db,
+            &binding,
             BackendProviderKind::XaiGrokOAuth,
             crate::OpenAiWireApi::Responses,
         );
@@ -988,7 +1007,9 @@ mod tests {
             BackendProviderKind::XaiGrokOAuth.as_str()
         );
 
-        let claude = test_agent(
+        let claude = held_test_agent(
+            &db,
+            &binding,
             BackendProviderKind::ClaudeCliSubscription,
             crate::OpenAiWireApi::ChatCompletions,
         );
@@ -1024,11 +1045,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_signed_in_gateway_builds_from_its_stored_account() {
-        let node = test_node().await;
-        crate::store::schema::migration::ensure_all_runtime_migrations(node.clone())
-            .await
-            .unwrap();
-        let mut gateway = test_agent(
+        let (db, _user, _access, binding) =
+            crate::test_support::signed_test_node("backend-client").await;
+        let node = db.node.clone();
+        let mut gateway = held_test_agent(
+            &db,
+            &binding,
             BackendProviderKind::ClaudeGateway,
             crate::OpenAiWireApi::ChatCompletions,
         );
