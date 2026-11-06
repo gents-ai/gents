@@ -103,8 +103,11 @@ async fn native_subscription_uses_caller_and_observes_nonbranchable_deletion() {
     )
     .await
     .unwrap();
-    let reader_access =
-        ConfigAccess::Graphql(GraphqlEndpoint::as_principal(endpoint, reader.did()));
+    let reader_access = ConfigAccess::Graphql(
+        GraphqlEndpoint::as_principal(endpoint, reader.did())
+            .with_client_signing_capability(reader.client_signing_capability().unwrap())
+            .unwrap(),
+    );
     let mut subscription = reader_access
         .subscribe(
             "subscription { SubscriptionParcel(showDeleted: true) { _docID _deleted value } }",
