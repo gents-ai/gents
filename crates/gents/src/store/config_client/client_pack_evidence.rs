@@ -605,6 +605,16 @@ mod tests {
                 .grant_node_permission(&user_did, permission)
                 .await?;
         }
+        let other_did = identity::Did::new(other.did())?;
+        for permission in [
+            acp::nac::NodePermission::DocumentRead,
+            acp::nac::NodePermission::DocumentUpdate,
+            acp::nac::NodePermission::DacRelationAdd,
+        ] {
+            node_access
+                .grant_node_permission(&other_did, permission)
+                .await?;
+        }
         let scope = PackApprovalScope {
             node_did: runtime.did().into(),
             pack_digests: vec!["sha256:fixture".into()],
