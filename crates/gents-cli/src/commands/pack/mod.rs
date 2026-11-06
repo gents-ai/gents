@@ -10,6 +10,7 @@ mod install;
 mod local;
 pub(crate) mod registry;
 mod remove;
+mod review;
 pub(crate) use remove::{ensure_home_plugins_unreferenced, remove, remove_home_install_with_guard};
 mod scaffold;
 mod scenario;
