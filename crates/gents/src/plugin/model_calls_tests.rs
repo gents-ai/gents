@@ -831,16 +831,11 @@ async fn model_tool_without_data_grant_passes_its_selected_agent() -> Result<()>
             Box::pin(async move { Ok(self.fake.endpoint(1)) })
         }
     }
-    let dir = tempfile::tempdir()?;
-    let root = crate::KeyIdentity::load_or_create(dir.path().join("node"), None)?;
-    let selected = crate::KeyIdentity::load_or_create(dir.path().join("agent"), None)?;
-    let client = crate::KeyIdentity::load_or_create(dir.path().join("client"), None)?;
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(root.did())
-            .build()
-            .await?,
-    );
+    let (db, client, owner, binding) =
+        crate::test_support::signed_test_node("plugin-model-selected-agent").await;
+    let node = db.node.clone();
+    let root = db.node_identity.clone();
+    let selected = crate::store::identity::resolve_agent_identity(root.as_ref(), &binding)?;
     let fake = Arc::new(Fake::start(Reply::Text, Duration::ZERO).await);
     let seen = Arc::new(Mutex::new(Vec::new()));
     let (home, record) = installed(&asking(vec![request("a")]), false, true);
@@ -867,10 +862,7 @@ async fn model_tool_without_data_grant_passes_its_selected_agent() -> Result<()>
     tool.call("{}".to_owned())
         .await
         .map_err(|error| anyhow::anyhow!("{error}"))?;
-    let caller = crate::plugin::data::DataCaller::operator(
-        ConfigAccess::local_as(node.clone(), identity::Did::new(client.did())?),
-        root.did(),
-    )?;
+    let caller = crate::plugin::data::DataCaller::operator(owner, root.did())?;
     executor.call_with_data(&record, json!({}), caller).await?;
     assert_eq!(
         *seen.lock().unwrap(),
