@@ -117,6 +117,10 @@ def decideActiveSteer (intent : Intent) (observation : Observation)
     (commit : NativeCommit) : Decision :=
   decideClaim intent observation commit
 
+theorem active_steer_and_idle_use_same_claim (intent : Intent) (observation : Observation)
+    (commit : NativeCommit) :
+    decideActiveSteer intent observation commit = decideIdleClientClaim .steer intent observation commit := by rfl
+
 /-- A pending request changes only with the native commit. Rejection uses the
 existing failed lifecycle and no-message terminal selection, and never exposes
 which authorization fact was absent. Existing terminal work is unchanged. -/

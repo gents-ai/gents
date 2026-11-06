@@ -1447,3 +1447,255 @@ async fn generated_tool_control_receipts_require_selected_agent_and_exact_intent
         "a result cannot be changed after signing"
     );
 }
+
+#[tokio::test]
+async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
+    let modeled = crate::lean_vocab_test::lean_contract_snapshot();
+    let allowed = modeled
+        .cross_actor_authorization_cases
+        .iter()
+        .find(|case| case.name == "committed_claim")
+        .unwrap();
+    let denied = modeled
+        .cross_actor_authorization_cases
+        .iter()
+        .find(|case| case.name == "node_denied_at_check")
+        .unwrap();
+    assert_eq!(
+        allowed.decision,
+        crate::lean_vocab_test::LeanCrossActorDecision::Claimed
+    );
+    assert_eq!(
+        denied.decision,
+        crate::lean_vocab_test::LeanCrossActorDecision::Denied
+    );
+    let home = tempfile::tempdir().unwrap();
+    let runtime: Arc<dyn NodeIdentity> =
+        Arc::new(KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap());
+    let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
+    let collaborator =
+        KeyIdentity::load_or_create(home.path().join("collaborator.key"), None).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_enabled()
+            .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
+    let binding = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+    let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+    let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
+    for did in [user.did(), collaborator.did(), agent.did()] {
+        for permission in [
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::DacRelationAdd,
+        ] {
+            admin
+                .grant_node_permission(&did.parse().unwrap(), permission)
+                .await
+                .unwrap();
+        }
+    }
+    let owner = ConfigAccess::local_as(node.clone(), user.did().parse().unwrap());
+    seed_owned_agent(&owner, runtime.did(), &binding).await;
+    let agent_doc = owner.execute("{ Agent { _docID } }").await.unwrap()["data"]["Agent"][0]
+        ["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    owner
+        .add_actor_relationship(
+            "Agent",
+            &agent_doc,
+            "session_writer",
+            &collaborator.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+    let client = |identity: &KeyIdentity| {
+        ConfigAccess::Graphql(
+            crate::store::config_client::GraphqlEndpoint::as_principal(
+                format!("http://{address}/api/v0/graphql"),
+                identity.did(),
+            )
+            .with_client_signing_capability(identity.client_signing_capability().unwrap())
+            .unwrap(),
+        )
+    };
+    let user_access = client(&user);
+    let collaborator_access = client(&collaborator);
+    let mut head = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        "steer-head",
+        runtime.did(),
+        user.did(),
+        agent.did(),
+        "steer-session",
+        "head",
+        "interactive",
+        "2026-11-04T00:00:00Z",
+        AgentRequestAdmissionRecord::client(user.did()),
+    );
+    head.session_doc_id = Some(reserve_goal_session(&user_access, &head).await.unwrap());
+    head.agent_doc_id = Some(agent_doc);
+    crate::sign_agent_request_create(&user, &mut head)
+        .await
+        .unwrap();
+    submit_client_request(&user_access, &head).await.unwrap();
+    let agent_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let query = format!(
+        "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"steer-head\" }} }}) {{ {} }} }}",
+        crate::SIGNED_REQUEST_FIELDS
+    );
+    let response = agent_access.execute(&query).await.unwrap();
+    let row = serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    let request = AgentRequest::try_from(row).unwrap();
+    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = AgentRequestAdmissionVerifier::new(node.clone(), runtime.clone(), authority);
+    let (request, admission) = verifier
+        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
+        .await
+        .unwrap();
+    assert!(admission.is_some());
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        agent.did(),
+        runtime.did(),
+        request,
+        60,
+        ExecutionOrigin::Interactive,
+        String::new(),
+    );
+    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+    lifecycle.set_client_claim_admission(admission);
+    lifecycle.set_steering_admission(verifier.clone(), agent.clone());
+    assert!(matches!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    ));
+    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        node.clone(),
+        agent.as_ref(),
+        std::time::Duration::ZERO,
+    )
+    .unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let mut steer = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        "steer-input",
+        runtime.did(),
+        user.did(),
+        agent.did(),
+        "steer-session",
+        "new signed input",
+        "interactive",
+        "2026-11-04T00:00:01Z",
+        AgentRequestAdmissionRecord::client(collaborator.did()),
+    );
+    steer.session_doc_id = head.session_doc_id.clone();
+    steer.agent_doc_id = head.agent_doc_id.clone();
+    steer.input.queue = Some(gents_protocol::request_input::RequestQueue {
+        source: gents_protocol::request_input::QueueSource::User,
+        delivery: gents_protocol::request_input::QueueDelivery::Steer,
+        policy: gents_protocol::request_input::QueuePolicy::Append,
+        position: None,
+        key: None,
+        queued_after_request_id: None,
+        interrupted_request_id: None,
+        background_completion_wake_version: None,
+    });
+    crate::sign_agent_request_create(&collaborator, &mut steer)
+        .await
+        .unwrap();
+    submit_client_request(&collaborator_access, &steer)
+        .await
+        .unwrap();
+    let snapshot = crate::request::lifecycle::queue::steering_snapshot(
+        &node,
+        lifecycle.request(),
+        &verifier,
+        Some(agent.as_ref()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(snapshot.inputs.len(), 1);
+    let input = &snapshot.inputs[0];
+    let before = agent_access
+        .execute("{ AgentMessage { _docID } }")
+        .await
+        .unwrap();
+    admin
+        .revoke_node_permission(
+            &collaborator.did().parse().unwrap(),
+            NodePermission::DocumentUpdate,
+        )
+        .await
+        .unwrap();
+    assert!(writer
+        .publish_authored_message(&lifecycle, &input.key, &input.message)
+        .await
+        .is_err());
+    let after = agent_access
+        .execute("{ AgentMessage { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        before["data"]["AgentMessage"], after["data"]["AgentMessage"],
+        "denied consumption rolls back publication"
+    );
+    let pending = agent_access.execute("{ AgentRequest(filter: { request_id: { _eq: \"steer-input\" } }) { lifecycle_state } }").await.unwrap();
+    assert_eq!(
+        pending["data"]["AgentRequest"][0]["lifecycle_state"],
+        "pending"
+    );
+    admin
+        .grant_node_permission(
+            &collaborator.did().parse().unwrap(),
+            NodePermission::DocumentUpdate,
+        )
+        .await
+        .unwrap();
+    admin
+        .revoke_node_permission(&user.did().parse().unwrap(), NodePermission::DocumentUpdate)
+        .await
+        .unwrap();
+    writer
+        .publish_authored_message(&lifecycle, &input.key, &input.message)
+        .await
+        .unwrap();
+    let result = agent_access.execute("{ AgentRequest(filter: { request_id: { _eq: \"steer-input\" } }) { lifecycle_state superseded_by_request_doc_id } }").await.unwrap();
+    assert_eq!(
+        result["data"]["AgentRequest"][0]["lifecycle_state"],
+        "superseded"
+    );
+    assert_eq!(
+        result["data"]["AgentRequest"][0]["superseded_by_request_doc_id"],
+        lifecycle.request().doc_id
+    );
+    admin
+        .revoke_node_permission(
+            &collaborator.did().parse().unwrap(),
+            NodePermission::DocumentUpdate,
+        )
+        .await
+        .unwrap();
+    writer
+        .publish_authored_message(&lifecycle, &input.key, &input.message)
+        .await
+        .unwrap();
+    drop(lifecycle);
+    node.shutdown().await.unwrap();
+}
