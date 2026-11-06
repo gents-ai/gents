@@ -257,6 +257,20 @@ async fn disabled_and_removed_backends_are_probed_again_when_observed_enabled() 
         "probeFail",
     );
 
+    let admin = crate::ConfigAccess::local_as(
+        node.clone(),
+        fixture.db.node_identity.did().parse().unwrap(),
+    );
+    let user = fixture.user.actor_did().unwrap().parse().unwrap();
+    for permission in [
+        crate::store::config_client::NodePermission::DocumentDelete,
+        crate::store::config_client::NodePermission::DacRelationDelete,
+    ] {
+        admin
+            .grant_node_permission(&user, permission)
+            .await
+            .unwrap();
+    }
     let plan = crate::store::config_client::DesiredStateApplyPlan::new(Vec::new())
         .unwrap()
         .with_removals(vec![(
