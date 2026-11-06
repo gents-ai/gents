@@ -368,7 +368,9 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
 
 #[tokio::test]
 async fn held_agent_cursor_seed_uses_runtime_observed_node_binding() -> Result<()> {
-    let fixture = fixture(false).await?;
+    let fixture = fixture(false)
+        .await
+        .context("build the held-Agent cursor fixture")?;
     let agent = &fixture.agent;
     let hidden = agent.execute("{ Node { _docID } }").await?;
     assert!(hidden["data"]["Node"].as_array().unwrap().is_empty());
@@ -411,15 +413,21 @@ async fn held_agent_cursor_seed_uses_runtime_observed_node_binding() -> Result<(
                 .await
             })
         })
-        .await?;
+        .await
+        .context("seed a cursor using the held Node binding")?;
     assert!(!record.doc_id.is_empty());
     assert_eq!(record.cursor.source_collection, "WorkB");
     assert_eq!(cursor(agent, "WorkB").await?, record.cursor.after);
 
+    let mut new_source = source("WorkA");
+    new_source.add["event_source_id"] = json!("source-agent-created");
+    new_source.update["event_source_id"] = json!("source-agent-created");
     let mut new_trigger = trigger(false);
     new_trigger.add["trigger_id"] = json!("trigger-agent-created");
     new_trigger.update["trigger_id"] = json!("trigger-agent-created");
-    let plan = DesiredStateApplyPlan::new(vec![new_trigger])?;
+    new_trigger.add["source"]["event_source_id"] = json!("source-agent-created");
+    new_trigger.update["source"]["event_source_id"] = json!("source-agent-created");
+    let plan = DesiredStateApplyPlan::new(vec![new_source, new_trigger])?;
     agent
         .transact_write("test.cursor.agent_trigger", |txn| {
             let plan = &plan;
@@ -429,7 +437,8 @@ async fn held_agent_cursor_seed_uses_runtime_observed_node_binding() -> Result<(
                     .await
             })
         })
-        .await?;
+        .await
+        .context("create an Agent-owned source and Trigger with the bound Node")?;
     let consumer = EventConsumer::Trigger {
         trigger_id: "trigger-agent-created".into(),
     };
