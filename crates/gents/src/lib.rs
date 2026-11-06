@@ -252,7 +252,7 @@ pub(crate) mod test_support {
         signed_test_node_without_agent_from_db(db, name).await
     }
 
-    async fn signed_test_node_without_agent_from_db(
+    pub(crate) async fn signed_test_node_without_agent_from_db(
         db: crate::support::TestDb,
         name: &str,
     ) -> (
@@ -368,21 +368,30 @@ pub(crate) mod test_support {
         runtime_did: &str,
         agent_did: &str,
     ) {
-        let runtime = crate::store::graphql::escape_graphql_string(runtime_did);
-        let response = access
-            .execute(&format!(r#"{{ Node(filter: {{ node_did: {{ _eq: "{runtime}" }} }}, limit: 2) {{ _docID }} }}"#))
-            .await
-            .unwrap();
-        let [row] = response["data"]["Node"].as_array().unwrap().as_slice() else {
-            panic!("fixture user must own one Node for its runtime");
-        };
-        let doc = crate::store::graphql::escape_graphql_string(row["_docID"].as_str().unwrap());
-        let agent = crate::store::graphql::escape_graphql_string(agent_did);
+        let node = serde_json::json!({"node_did": runtime_did, "default_agent_did": agent_did});
+        let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+            crate::store::config_client::DesiredStateApplyDocument {
+                collection: crate::Collection::Node,
+                add: node.clone(),
+                update: node,
+            },
+        ])
+        .unwrap();
         access
-            .write(
-                "test.set_default_agent",
-                &format!(r#"mutation {{ update_Node(docID: "{doc}", input: {{ default_agent_did: "{agent}" }}) {{ _docID }} }}"#),
-            )
+            .transact_write("test.set_default_agent", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Node,
+                        runtime_did,
+                        runtime_did,
+                    )
+                    .await?
+                    .expect("fixture user must own one Node for its runtime");
+                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                })
+            })
             .await
             .unwrap();
     }
@@ -443,7 +452,7 @@ pub(crate) mod test_support {
     }
 
     pub(crate) async fn install_test_agent_binding_with_access(
-        node: &std::sync::Arc<defra_node::Node>,
+        _node: &std::sync::Arc<defra_node::Node>,
         owner: &str,
         display_name: &str,
         binding: &gents_protocol::agent_identity::AgentIdentityBinding,
@@ -474,8 +483,8 @@ pub(crate) mod test_support {
             })
             .await
             .unwrap();
-        crate::inference::backends::registry::set_backend_probe_status(
-            node, owner, &backend, "healthy",
+        crate::inference::backends::registry::set_backend_probe_status_as(
+            access, owner, &backend, "healthy",
         )
         .await
         .unwrap();
