@@ -139,15 +139,6 @@ async fn desktop_owned_session(
         )
         .await
         .unwrap();
-    session::ensure_session_with_agent_did_and_requester_did(
-        &db.node,
-        session_id,
-        db.node_did(),
-        db.agent_did(),
-        Some(desktop.did()),
-    )
-    .await
-    .unwrap();
     (desktop, create, parent, writer)
 }
 
