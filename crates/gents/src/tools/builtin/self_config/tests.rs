@@ -168,6 +168,19 @@ impl SelfConfigFixture {
             .unwrap();
     }
 
+    pub(super) async fn grant_agent_delete(&self) {
+        crate::ConfigAccess::local_as(
+            self.db.node.clone(),
+            identity::Did::new(self.db.node_identity.did()).unwrap(),
+        )
+        .grant_node_permission(
+            &identity::Did::new(&self.agent_did).unwrap(),
+            crate::store::config_client::NodePermission::DocumentDelete,
+        )
+        .await
+        .unwrap();
+    }
+
     pub(super) async fn grant_sibling_configuration(&self, sibling: &str) {
         let admin = crate::ConfigAccess::local_as(
             self.db.node.clone(),
@@ -254,6 +267,10 @@ impl SelfConfigFixture {
 
     pub(super) fn agent_did(&self) -> &str {
         &self.agent_did
+    }
+
+    pub(super) fn node_did(&self) -> &str {
+        self.db.node_identity.did()
     }
 
     fn core(&self) -> SelfConfigCore {

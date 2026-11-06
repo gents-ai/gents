@@ -707,7 +707,7 @@ async fn datastore_help_says_what_fill_means() {
 
 #[tokio::test]
 async fn crud_documents_share_verbs_and_preserve_reference_and_identity_checks() {
-    let (_node, owner, tools) = setup(
+    let (fixture, tools) = authenticated_setup(
         "crud",
         &[
             "node",
@@ -719,6 +719,8 @@ async fn crud_documents_share_verbs_and_preserve_reference_and_identity_checks()
         ],
     )
     .await;
+    fixture.grant_agent_delete().await;
+    let owner = fixture.node_did();
     for (resource, fields) in [
         ("sampling", json!({"temperature":0.8})),
         ("retry-policy", json!({"display_name":"Retry"})),
@@ -900,9 +902,12 @@ async fn crud_batch_reports_partial_commits_and_stops_before_later_operations() 
 
 #[tokio::test]
 async fn crud_automation_keeps_strict_creation_and_selected_task_owner() {
-    let (node, owner, tools) = setup("crud-routing", &["node", "automation"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) = authenticated_setup("crud-routing", &["node", "automation"]).await;
+    fixture.grant_agent_delete().await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     for (resource, id, fields) in [
         (
             "task",
@@ -947,13 +952,13 @@ async fn crud_automation_keeps_strict_creation_and_selected_task_owner() {
     }
     assert!(refused(
         &tools,
-        json!({"argv":["task","update","job"],"options":{"agent":"beh-test"},"set":{"prompt_template":"Wrong owner."}})
+        json!({"argv":["task","update","job"],"options":{"agent":current},"set":{"prompt_template":"Wrong owner."}})
     )
     .await
     .contains("belongs to agent"));
     let failure = structured_failure(
         &tools,
-        json!({"argv":["trigger","update","tick"],"options":{"agent":"beh-test"},"set":{"tags":["wrong"]}})
+        json!({"argv":["trigger","update","tick"],"options":{"agent":current},"set":{"tags":["wrong"]}})
     ).await;
     let message = failure["error"].as_str().unwrap();
     assert!(message.contains("selected agent"), "{failure}");
@@ -1703,7 +1708,8 @@ async fn trigger_decode_errors_name_the_nested_field_and_offer_working_help() {
 
 #[tokio::test]
 async fn delete_recovery_previews_the_same_resource_before_committing() {
-    let (_fixture, tools) = authenticated_setup("delete-recovery", &["node", "automation"]).await;
+    let (fixture, tools) = authenticated_setup("delete-recovery", &["node", "automation"]).await;
+    fixture.grant_agent_delete().await;
     ok(&tools, json!({"argv":["task","create"],"target_id":"disposable","set":{"prompt_template":"Review the input"}})).await;
     let failure = structured_failure(
         &tools,
@@ -1862,9 +1868,10 @@ async fn saved_config_audit_checks_selected_schema_fields_and_accepts_updates() 
 
 #[tokio::test]
 async fn receipts_summarize_long_text_by_length_and_sha256() {
-    let (node, owner, tools) = setup("long-prompt", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) = authenticated_setup("long-prompt", &["node", "tools", "agent"]).await;
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     let prompt = "Review the deployment notes before each change.\n".repeat(100);
     let receipt = ok(
