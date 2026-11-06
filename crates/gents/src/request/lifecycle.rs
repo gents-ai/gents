@@ -1,4 +1,6 @@
 mod client;
+#[cfg(test)]
+pub(crate) use client::stage_request_relationships_in_txn;
 pub(crate) use client::{
     bind_client_targets_in_txn, complete_client_request_relationships,
     recover_delegated_client_request_relationships_with_access, stage_client_request_in_txn,

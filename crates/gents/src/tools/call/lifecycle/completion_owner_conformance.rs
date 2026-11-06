@@ -2,42 +2,92 @@ use super::{
     admission_fixture::{published_admission, PublishedAdmission, PublishedAdmissionOptions},
     AwaitMode, ToolCallLifecycle,
 };
-use crate::goal::{load_canonical_goal, set_goal, GoalStatus};
+use crate::goal::{load_canonical_goal_in_txn, set_goal_from_access, GoalStatus};
 use crate::lean_vocab_test::{
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, LeanR6BackgroundingCase,
 };
+use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
 use anyhow::Context;
-use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
 use serde_json::{json, Value};
 
-async fn rows(node: &EmbeddedNode, query: &str, field: &str) -> Vec<Value> {
-    let response = node.execute(query).await;
-    assert!(!response.has_errors(), "{field}: {:?}", response.errors);
-    response.data.expect("query data")[field]
-        .as_array()
-        .expect("rows")
-        .clone()
+async fn rows(access: &ConfigAccess, query: &str, field: &str) -> Vec<Value> {
+    let response = access.execute(query).await.expect("read fixture rows");
+    response["data"][field].as_array().expect("rows").clone()
 }
 
-async fn update(node: &EmbeddedNode, collection: &str, doc_id: &str, fields: &str) {
-    let response = node.execute(&format!(
+async fn update(access: &ConfigAccess, collection: &str, doc_id: &str, fields: &str) {
+    let response = access.write("test.completion.update", &format!(
         r#"mutation {{ update_{collection}(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#,
         escape_graphql_string(doc_id),
-    )).await;
-    assert!(
-        !response.has_errors(),
-        "{collection}: {:?}",
-        response.errors
-    );
+    )).await.expect("update fixture row");
     assert_eq!(
-        response.data.unwrap()[&format!("update_{collection}")]
+        response["data"][&format!("update_{collection}")]
             .as_array()
             .unwrap()
             .len(),
         1
     );
+}
+
+async fn canonical_goal(
+    access: &ConfigAccess,
+    node_did: &str,
+    session: &str,
+) -> Option<crate::goal::GoalDocument> {
+    access
+        .transact_readonly("test.completion.goal", |txn| {
+            Box::pin(async move { load_canonical_goal_in_txn(txn, node_did, session).await })
+        })
+        .await
+        .expect("load modeled Goal under held actor")
+}
+
+async fn create_failed_wake(admission: &PublishedAdmission, mutation: &str) {
+    let access = admission.tool.access().unwrap();
+    let node_did = &admission.node_did;
+    let session_id = &admission.tool.session_id;
+    let agent_did = admission.tool.actor().as_str();
+    let requester_did = admission.requester_identity.did();
+    access
+        .transact_write("test.completion.failed_wake", |txn| {
+            Box::pin(async move {
+                let session = crate::session::load_agent_session_row_in_txn(
+                    txn,
+                    node_did,
+                    session_id,
+                    Some(requester_did),
+                )
+                .await?
+                .context("fixture session unavailable")?;
+                anyhow::ensure!(
+                    session.session.agent_did == agent_did,
+                    "fixture Agent mismatch"
+                );
+                let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Agent,
+                    node_did,
+                    agent_did,
+                )
+                .await?
+                .context("fixture Agent unavailable")?;
+                let response = txn.execute(mutation).await?;
+                let request_doc = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                crate::request::lifecycle::stage_request_relationships_in_txn(
+                    txn,
+                    &request_doc,
+                    &agent_doc,
+                    &session.doc_id,
+                    agent_did,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .expect("publish failed wake with Agent relationships");
 }
 
 fn goal_status(case: &LeanR6BackgroundingCase) -> Option<GoalStatus> {
@@ -72,7 +122,7 @@ async fn admitted_parent(case: &LeanR6BackgroundingCase, branch: &str) -> Publis
     .expect("publish accepted background invocation on claimed request");
     let parent_doc = admission.tool.request_doc_id().unwrap();
     update(
-        &admission.node,
+        &admission.tool.access().unwrap(),
         "AgentRequest",
         parent_doc,
         r#"lifecycle_state: "completed""#,
@@ -80,13 +130,14 @@ async fn admitted_parent(case: &LeanR6BackgroundingCase, branch: &str) -> Publis
     .await;
     let session = admission.tool.session_id.as_str();
     if let Some(status) = goal_status(case) {
-        set_goal(
-            &admission.node,
+        set_goal_from_access(
+            &admission.tool.access().unwrap(),
             &admission.node_did,
             session,
             Some("One continuation owner"),
             Some(status),
             Some(Some(10)),
+            None,
         )
         .await
         .expect("persist modeled Goal state");
@@ -144,11 +195,12 @@ fn recovery_identities(
 async fn drive_notification(case: &LeanR6BackgroundingCase) {
     let mut admission = admitted_parent(case, "notification").await;
     let node = &admission.node;
+    let access = admission.tool.access().unwrap();
     let did = admission.node_did.as_str();
     let session = admission.tool.session_id.clone();
     let parent_doc = admission.tool.request_doc_id().unwrap().to_owned();
     let parent_row = rows(
-        node,
+        &access,
         &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id }} }}"#,
             escape_graphql_string(&parent_doc)
@@ -159,13 +211,13 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
     assert_eq!(parent_row.len(), 1);
     let parent = parent_row[0]["request_id"].as_str().unwrap().to_owned();
     let tool_doc = admission.tool.doc_id().unwrap().to_owned();
-    let before = load_canonical_goal(node, did, &session).await.unwrap();
+    let before = canonical_goal(&access, did, &session).await;
     assert!(admission
         .tool
         .complete_owned("durable native output", None)
         .await
         .unwrap());
-    let pending = rows(node, &format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID status lifecycle_state request_doc_id }} }}"#,
+    let pending = rows(&access, &format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID status lifecycle_state request_doc_id }} }}"#,
         escape_graphql_string(&tool_doc)), "AgentToolCall").await;
     assert_eq!(pending.len(), 1, "{}", case.name);
     assert_eq!(pending[0]["status"], "completionPending", "{}", case.name);
@@ -207,7 +259,7 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
         "{}",
         case.name
     );
-    let requests = rows(node, &format!(r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state execution_origin input }} }}"#,
+    let requests = rows(&access, &format!(r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state execution_origin input }} }}"#,
         escape_graphql_string(&session)), "AgentRequest").await;
     assert_eq!(
         requests.len(),
@@ -245,7 +297,7 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
             case.name
         );
     }
-    let tool = rows(node, &format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID status lifecycle_state completion_notification_delivered_at }} }}"#,
+    let tool = rows(&access, &format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID status lifecycle_state completion_notification_delivered_at }} }}"#,
         escape_graphql_string(&tool_doc)), "AgentToolCall").await;
     assert_eq!(tool.len(), 1);
     assert_eq!(tool[0]["status"], "completed", "{}", case.name);
@@ -255,7 +307,7 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
         "{}",
         case.name
     );
-    let after = load_canonical_goal(node, did, &session).await.unwrap();
+    let after = canonical_goal(&access, did, &session).await;
     assert_eq!(
         json!(before),
         json!(after),
@@ -270,7 +322,7 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
-async fn seed_session_head(node: &EmbeddedNode, session: &str, request: &Value) {
+async fn seed_session_head(access: &ConfigAccess, session: &str, request: &Value) {
     let observation = gents_protocol::session::SessionObservation {
         reply_preview: None,
         last_activity_at: request["created_at"].as_str().unwrap().to_owned(),
@@ -284,20 +336,27 @@ async fn seed_session_head(node: &EmbeddedNode, session: &str, request: &Value) 
     let input =
         gents_protocol::graphql::graphql_input_literal(&json!({"observation": observation}))
             .unwrap();
-    let response = node.execute(&format!(r#"mutation {{ update_AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}, input: {input}) {{ _docID }} }}"#,
-        escape_graphql_string(session))).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    let response = access.write("test.completion.session_head", &format!(r#"mutation {{ update_AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}, input: {input}) {{ _docID }} }}"#,
+        escape_graphql_string(session))).await.expect("update session head");
+    assert_eq!(
+        response["data"]["update_AgentSession"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 async fn drive_redrive(case: &LeanR6BackgroundingCase) {
     let admission = admitted_parent(case, "redrive").await;
     let node = &admission.node;
+    let access = admission.tool.access().unwrap();
     let did = admission.node_did.as_str();
     let agent_did = escape_graphql_string(admission.tool.actor().as_str());
     let session = admission.tool.session_id.as_str();
     let parent_doc = admission.tool.request_doc_id().unwrap();
     let parent_row = rows(
-        node,
+        &access,
         &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id }} }}"#,
             escape_graphql_string(parent_doc)
@@ -320,7 +379,7 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         chrono::DateTime::from_timestamp(model.pre_execution_deadline.unwrap() as i64, 0)
             .unwrap()
             .to_rfc3339();
-    let before = load_canonical_goal(node, did, session).await.unwrap();
+    let before = canonical_goal(&access, did, session).await;
     let input = RequestInput {
         queue: Some(RequestQueue {
             delivery: Default::default(),
@@ -337,7 +396,8 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
     let input =
         gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
             .unwrap();
-    let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
+    let mutation = format!(
+        r#"mutation {{ create_AgentRequest(input: {{
         request_id: "{}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_did: "{agent_did}",
         session_id: "{}", content: "background input", input: {input},
         execution_origin: "scheduled", lifecycle_state: "failed",
@@ -347,15 +407,20 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         request_hop: {source_depth}, deadline: "{}",
         caused_by_parent_request_id: "{}", caused_by_parent_request_doc_id: "{}"
     }}) {{ _docID }} }}"#,
-        escape_graphql_string(&failed_wake), escape_graphql_string(did), escape_graphql_string(did),
-        escape_graphql_string(session), escape_graphql_string(&failed_wake),
-        escape_graphql_string(&source_deadline), escape_graphql_string(parent),
-        escape_graphql_string(parent_doc))).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let source = rows(node, &format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state created_at }} }}"#,
+        escape_graphql_string(&failed_wake),
+        escape_graphql_string(did),
+        escape_graphql_string(admission.requester_identity.did()),
+        escape_graphql_string(session),
+        escape_graphql_string(&failed_wake),
+        escape_graphql_string(&source_deadline),
+        escape_graphql_string(parent),
+        escape_graphql_string(parent_doc)
+    );
+    create_failed_wake(&admission, &mutation).await;
+    let source = rows(&access, &format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state created_at }} }}"#,
         escape_graphql_string(&failed_wake)), "AgentRequest").await;
     assert_eq!(source.len(), 1);
-    seed_session_head(node, session, &source[0]).await;
+    seed_session_head(&admission.client, session, &source[0]).await;
 
     let first = crate::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
         node,
@@ -380,7 +445,7 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
     .unwrap();
     assert_eq!(second.redriven, 0, "{}: replay added successor", case.name);
     let requests = rows(
-        node,
+        &access,
         &format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{
         _docID request_id retry_count retry_parent_request retry_parent_request_doc_id max_retries
@@ -432,7 +497,7 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         assert!(successor["backend_id"].is_null(), "{}", case.name);
         assert!(successor["deadline"].is_null(), "{}", case.name);
     }
-    let after = load_canonical_goal(node, did, session).await.unwrap();
+    let after = canonical_goal(&access, did, session).await;
     assert_eq!(
         json!(before),
         json!(after),
@@ -907,22 +972,30 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     let case = lean_r6_backgrounding_case("failed_background_wake_with_budget_redrives");
     let admission = admitted_parent(case, "over-bound-redrive").await;
     let node = &admission.node;
+    let access = admission.tool.access().unwrap();
     let did = admission.node_did.as_str();
     let agent_did = escape_graphql_string(admission.tool.actor().as_str());
-    crate::documents::upsert_node(
-        node,
-        did,
-        None,
-        Some(admission.tool.actor().as_str()),
-        true,
-        Some(8),
+    let node_row = rows(
+        &admission.client,
+        &format!(
+            r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(did)
+        ),
+        "Node",
     )
-    .await
-    .expect("set node hop cap");
+    .await;
+    assert_eq!(node_row.len(), 1);
+    update(
+        &admission.client,
+        "Node",
+        node_row[0]["_docID"].as_str().unwrap(),
+        "max_request_hop: 8",
+    )
+    .await;
     let session = admission.tool.session_id.as_str();
     let parent_doc = admission.tool.request_doc_id().unwrap();
     let parent = rows(
-        node,
+        &access,
         &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ request_id }} }}"#,
             escape_graphql_string(parent_doc)
@@ -960,7 +1033,8 @@ async fn a_retried_over_bound_wake_is_refused_again() {
         gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
             .unwrap();
     let deadline = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
-    let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
+    let mutation = format!(
+        r#"mutation {{ create_AgentRequest(input: {{
         request_id: "{refused_wake}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_did: "{agent_did}",
         session_id: "{}", content: "background input", input: {input},
         execution_origin: "scheduled", lifecycle_state: "failed",
@@ -970,12 +1044,17 @@ async fn a_retried_over_bound_wake_is_refused_again() {
         request_hop: {}, deadline: "{}",
         caused_by_parent_request_id: "{}", caused_by_parent_request_doc_id: "{}"
     }}) {{ _docID }} }}"#,
-        escape_graphql_string(did), escape_graphql_string(did), escape_graphql_string(session),
-        over_bound, escape_graphql_string(&deadline), escape_graphql_string(&parent),
-        escape_graphql_string(parent_doc))).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let source = rows(node, &format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{refused_wake}" }} }}) {{ _docID request_id lifecycle_state created_at }} }}"#), "AgentRequest").await;
-    seed_session_head(node, session, &source[0]).await;
+        escape_graphql_string(did),
+        escape_graphql_string(admission.requester_identity.did()),
+        escape_graphql_string(session),
+        over_bound,
+        escape_graphql_string(&deadline),
+        escape_graphql_string(&parent),
+        escape_graphql_string(parent_doc)
+    );
+    create_failed_wake(&admission, &mutation).await;
+    let source = rows(&access, &format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{refused_wake}" }} }}) {{ _docID request_id lifecycle_state created_at }} }}"#), "AgentRequest").await;
+    seed_session_head(&admission.client, session, &source[0]).await;
 
     let report = crate::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
         node,
@@ -986,7 +1065,7 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     .unwrap();
     assert_eq!(report.redriven, 1, "{report:?}");
     let successor = rows(
-        node,
+        &access,
         &format!(
             r#"{{ AgentRequest(filter: {{ retry_parent_request: {{ _eq: "{refused_wake}" }} }}) {{ request_hop }} }}"#
         ),
