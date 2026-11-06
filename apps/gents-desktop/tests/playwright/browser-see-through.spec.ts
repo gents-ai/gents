@@ -36,9 +36,12 @@ test.describe("the browser page seen through the app", () => {
       const main = document.querySelector('[data-testid="pane"] main') as HTMLElement;
       const place = document.createElement("div");
       place.dataset.testid = "browser-view";
-      place.style.cssText = "position:absolute;left:120px;top:40px;width:600px;height:500px";
+      place.style.cssText =
+        "position:absolute;left:120px;top:40px;width:600px;height:500px";
       main.appendChild(place);
-      const { seeThrough } = await import("/src/ui/screens/browser/seeThrough.ts");
+      const { seeThrough } = await import(
+        /* @vite-ignore */ `${"/src/ui/screens/browser/seeThrough.ts"}`
+      );
       Object.assign(window, { stopSeeThrough: seeThrough(place) });
     });
 
