@@ -7158,9 +7158,11 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
             .unwrap()
             .expect("selected Tools exists");
         let actor = identity::Did::new(fixture.agent_did()).unwrap();
-        let decisions = fixture
-            .user_access()
-            .transact_readonly("test.job_policy.native_update", |txn| {
+        let decisions = crate::ConfigAccess::local_as(
+            fixture.db.node.clone(),
+            identity::Did::new(&node_did).unwrap(),
+        )
+        .transact_readonly("test.job_policy.native_update", |txn| {
                 let actor = actor.clone();
                 let doc_id = doc_id.clone();
                 Box::pin(async move {
@@ -7218,6 +7220,7 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
                     .downcast_ref::<crate::store::config_client::ConfigClientError>()
                     .map(|error| {
                         error.is_permission_denied()
+                            || error.is_missing_or_denied_write()
                             || matches!(error, crate::store::config_client::ConfigClientError::ConfigurationMutationNotApplied { .. })
                     })
                     },

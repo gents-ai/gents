@@ -171,7 +171,7 @@ pub(super) async fn model_agent_mutate(
             .await?,
         );
     }
-    let result = agent_apply_access(
+    agent_apply_access(
         &ConfigAccess::local_managed_agent(core.node_handle(), actor, identity)?,
         core.node_did(),
         &args,
@@ -180,24 +180,7 @@ pub(super) async fn model_agent_mutate(
         Some(core.held_grants()),
         core.node_binding(),
     )
-    .await?;
-    if matches!(
-        args.operation.as_deref().unwrap_or(&args.action),
-        "create" | "clone"
-    ) {
-        let binding = args
-            .identity_binding
-            .as_ref()
-            .context("agent identity missing after creation")?;
-        crate::store::identity::grant_agent_node_capabilities(
-            &core.node_handle(),
-            core.runtime_identity()?,
-            binding,
-        )
-        .await
-        .context("agent configuration committed, but its node capability publication failed")?;
-    }
-    Ok(result)
+    .await
 }
 
 async fn agent_apply_access(

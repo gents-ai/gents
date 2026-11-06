@@ -9,15 +9,16 @@ use identity::{FullIdentity as _, Identity as _, RawIdentity};
 mod agent;
 mod error;
 mod file_key;
+mod grant_sets;
 pub(crate) mod macos;
 mod provision_client;
 mod registered;
 
-pub(crate) use agent::grant_agent_node_capabilities;
 pub use agent::{
     derive_agent_identity, provision_agent_identity, provision_agent_identity_authorized,
     provision_agent_identity_for_agent, resolve_agent_identity, AgentProvisionError,
 };
+pub use grant_sets::{GrantSet, GrantSetError};
 pub use error::{identity_key_unavailable, IdentityError, IdentityKeyUnavailable};
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};
 pub(crate) use file_key::{publish_private_key_file, read_private_key_file};

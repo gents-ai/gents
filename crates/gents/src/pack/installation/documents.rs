@@ -146,7 +146,6 @@ pub fn plugin_data_unique_keys<'a>(
 pub struct PreparedDependency {
     pub(crate) installation_doc_id: Option<String>,
     pub(crate) agent_bindings: super::super::PackAgentBindings,
-    pub(crate) provisioned: Vec<gents_protocol::agent_identity::AgentIdentityBinding>,
     pub(crate) coordinate: String,
     pub(crate) config: PackConfig,
     pub(crate) inference: PackInferenceBindingPreview,
@@ -159,7 +158,6 @@ pub struct PreparedDependency {
 pub struct PreparedDocumentPackInstall {
     pub installation_doc_id: Option<String>,
     pub agent_bindings: super::super::PackAgentBindings,
-    pub(crate) provisioned: Vec<gents_protocol::agent_identity::AgentIdentityBinding>,
     pub(crate) node_binding: Option<crate::store::config_client::ConfigurationNodeBinding>,
     pub config: PackConfig,
     pub inference: PackInferenceBindingPreview,
@@ -286,7 +284,6 @@ pub async fn prepare_document_pack_install(
     prepare_document_pack_install_inner(
         None,
         BTreeMap::new(),
-        Vec::new(),
         BTreeMap::new(),
         None,
         access,
@@ -541,7 +538,6 @@ async fn prepare_document_pack_archive_inputs(
     prepare_document_pack_install_inner(
         loaded.installation_doc_id,
         loaded.agent_bindings,
-        loaded.provisioned,
         preloaded,
         provisioner.and_then(|context| context.node_binding),
         access,
@@ -566,7 +562,6 @@ async fn prepare_document_pack_archive_inputs(
 async fn prepare_document_pack_install_inner(
     installation_doc_id: Option<String>,
     agent_bindings: super::super::PackAgentBindings,
-    provisioned: Vec<gents_protocol::agent_identity::AgentIdentityBinding>,
     mut preloaded: BTreeMap<String, super::super::BoundPackConfig>,
     node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
     access: &ConfigAccess,
@@ -718,7 +713,6 @@ async fn prepare_document_pack_install_inner(
             PreparedDependency {
                 installation_doc_id: authored.installation_doc_id,
                 agent_bindings: authored.agent_bindings,
-                provisioned: authored.provisioned,
                 coordinate: format!(
                     "{}/{}",
                     archive.manifest().metadata.namespace,
@@ -809,7 +803,6 @@ async fn prepare_document_pack_install_inner(
     Ok(PreparedDocumentPackInstall {
         installation_doc_id,
         agent_bindings,
-        provisioned,
         node_binding: node_binding.cloned(),
         config,
         inference,

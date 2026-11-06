@@ -173,22 +173,6 @@ impl PackInstaller {
             crate::pack::DriftPolicy::Refuse,
         )
         .await?;
-        for binding in prepared.provisioned.iter().chain(
-            prepared
-                .dependencies
-                .iter()
-                .flat_map(|d| d.provisioned.iter()),
-        ) {
-            crate::store::identity::grant_agent_node_capabilities(
-                &self.node,
-                self.core.runtime_identity()?,
-                binding,
-            )
-            .await
-            .context(
-                "pack configuration committed, but an Agent node capability publication failed",
-            )?;
-        }
         let effective = self
             .installation_status(distribution.manifest())
             .await?

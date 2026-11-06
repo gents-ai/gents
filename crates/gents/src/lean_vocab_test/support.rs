@@ -261,7 +261,10 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) inference_observation_cases: Vec<serde_json::Value>,
     pub(crate) inference_visibility_cases: Vec<serde_json::Value>,
     pub(crate) identity_publication_cases: Vec<serde_json::Value>,
-    pub(crate) identity_node_provisioning_cases: Vec<serde_json::Value>,
+    pub(crate) identity_grant_set_cases: Vec<LeanGrantSetCase>,
+    pub(crate) identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
+    pub(crate) identity_delegation_cases: Vec<LeanDelegationCase>,
+    pub(crate) identity_agent_baseline_cases: Vec<LeanAgentBaselineCase>,
     pub(crate) identity_agent_creator_cases: Vec<serde_json::Value>,
     pub(crate) identity_agent_creation_exposure_cases: Vec<serde_json::Value>,
     pub(crate) identity_created_agent_access_cases: Vec<serde_json::Value>,
@@ -780,6 +783,48 @@ pub(crate) struct LeanIdentityClientAgentCreationCase {
     pub(crate) grants: String,
     pub(crate) expected_route: String,
     pub(crate) expected_publication: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanGrantSetCase {
+    pub(crate) set: String,
+    pub(crate) permissions: Vec<String>,
+    pub(crate) native_admin: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanGrantRecipientCase {
+    pub(crate) recipient: String,
+    pub(crate) direct: Vec<String>,
+    pub(crate) projected: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDelegationCase {
+    pub(crate) name: String,
+    pub(crate) holder: String,
+    pub(crate) relation: String,
+    pub(crate) delete: bool,
+    pub(crate) expected: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanAgentBaselineCase {
+    pub(crate) name: String,
+    pub(crate) actor: String,
+    pub(crate) steps: Vec<LeanAgentBaselineStep>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanAgentBaselineStep {
+    pub(crate) action: String,
+    pub(crate) committed: bool,
+    pub(crate) installed: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -1,143 +1,58 @@
 use super::*;
-use crate::store::config_client::{ConfigAccess, NodePermission};
+use crate::store::config_client::ConfigAccess;
 
 #[tokio::test]
-async fn native_provisioning_follows_modeled_publication_and_revocation() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().identity_node_provisioning_cases;
-    let modeled = cases
+async fn authorized_provisioning_grants_no_direct_node_permission() {
+    let modeled = crate::lean_vocab_test::lean_contract_snapshot()
+        .identity_grant_recipient_cases
         .iter()
-        .find(|case| case["name"] == "revoked-after-publication")
-        .unwrap();
-    let home = tempfile::tempdir().unwrap();
-    let runtime =
-        super::super::KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
-    let owner =
-        super::super::KeyIdentity::load_or_create(home.path().join("owner.key"), None).unwrap();
-    let outsider =
-        super::super::KeyIdentity::load_or_create(home.path().join("outsider.key"), None).unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
-    for subject in [owner.did(), outsider.did()] {
-        let subject = identity::Did::new(subject).unwrap();
-        for permission in [
-            NodePermission::DocumentRead,
-            NodePermission::DocumentUpdate,
-            NodePermission::DacRelationAdd,
-        ] {
-            admin
-                .grant_node_permission(&subject, permission)
-                .await
-                .unwrap();
-        }
-    }
-    let owner_access =
-        ConfigAccess::local_as(node.clone(), identity::Did::new(owner.did()).unwrap());
-    let response = owner_access
-        .write(
-            "test.node_provisioning",
-            &format!(
-                r#"mutation {{ create_Node(input: {{ node_did: "{}" }}) {{ _docID }} }}"#,
-                runtime.did()
-            ),
-        )
-        .await
-        .unwrap();
-    let doc = crate::store::graphql::created_doc_id(&response, "Node").unwrap();
-    owner_access
-        .add_actor_relationship(
-            "Node",
-            &doc,
-            "runtime_reader",
-            &identity::Did::new(runtime.did()).unwrap(),
-        )
-        .await
-        .unwrap();
-    assert!(provision_agent_identity_authorized(
-        &node,
-        &runtime,
-        &identity::Did::new(outsider.did()).unwrap()
-    )
+        .find(|case| case.recipient == "agent")
+        .expect("modeled Agent recipient");
+    assert!(modeled.direct.is_empty());
+    let (db, owner, _) =
+        crate::test_support::signed_test_node_without_agent("provision-no-direct").await;
+    let node = db.node.clone();
+    let runtime = db.node_identity.clone();
+    let runtime = runtime.as_ref();
+    let outsider = tokio::task::spawn_blocking(|| {
+        crate::support::fixtures::test_identity("provision-outsider")
+    })
     .await
-    .is_err());
+    .unwrap();
+    let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
+    super::super::GrantSet::OperatorUser
+        .grant(&admin, &identity::Did::new(outsider.did()).unwrap())
+        .await
+        .unwrap();
+    assert!(matches!(
+        provision_agent_identity_authorized(
+            &node,
+            runtime,
+            &identity::Did::new(outsider.did()).unwrap()
+        )
+        .await,
+        Err(AgentProvisionError::Unauthorized)
+    ));
     let binding = provision_agent_identity_authorized(
         &node,
-        &runtime,
+        runtime,
         &identity::Did::new(owner.did()).unwrap(),
     )
     .await
     .unwrap();
-    let agent = ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(&binding.agent_did).unwrap(),
-    );
-    let readable = agent.execute("{ Node { _docID } }").await.unwrap();
-    assert_eq!(
-        readable["data"]["Node"],
-        serde_json::json!([]),
-        "node permission must not grant document access"
-    );
-    let published = modeled["steps"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|step| step["action"]["action"] == "finish")
-        .unwrap();
-    assert_eq!(published["after"]["revealed"], true);
-    for permission in ["read-document", "update-document", "add-dac-relation"] {
-        assert!(published["after"]["granted"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value == permission));
+    resolve_agent_identity(runtime, &binding).unwrap();
+    let agent = identity::Did::new(&binding.agent_did).unwrap();
+    for permission in super::super::GrantSet::AgentBaseline.permissions() {
+        assert!(
+            !node
+                .nac_manager()
+                .check_permission(&agent, *permission)
+                .await
+                .unwrap(),
+            "provisioning granted {} before publication",
+            permission.as_str()
+        );
     }
-    let own = agent
-        .write(
-            "test.agent_node",
-            &format!(
-                r#"mutation {{ create_Node(input: {{ node_did: "{}" }}) {{ _docID }} }}"#,
-                binding.agent_did
-            ),
-        )
-        .await
-        .unwrap();
-    let own_doc = crate::store::graphql::created_doc_id(&own, "Node").unwrap();
-    agent.write("test.agent_node_update", &format!(r#"mutation {{ update_Node(docID: "{own_doc}", input: {{ display_name: "Agent" }}) {{ _docID }} }}"#)).await.unwrap();
-    agent
-        .add_actor_relationship(
-            "Node",
-            &own_doc,
-            "runtime_reader",
-            &identity::Did::new(outsider.did()).unwrap(),
-        )
-        .await
-        .unwrap();
-    let context =
-        defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned()));
-    node.delete_nac_actor_relationship_as(&context, "read-document", &binding.agent_did)
-        .await
-        .unwrap();
-    resolve_agent_identity(&runtime, &binding).unwrap();
-    let response = agent.execute("{ Node { _docID } }").await.unwrap();
-    let last = modeled["steps"].as_array().unwrap().last().unwrap();
-    assert!(!last["after"]["granted"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value == "read-document"));
-    assert!(
-        response["data"].get("Node").is_none(),
-        "resolving an agent must not restore revoked node permission"
-    );
     node.shutdown().await.unwrap();
 }
 

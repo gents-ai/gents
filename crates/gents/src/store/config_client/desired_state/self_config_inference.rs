@@ -303,9 +303,11 @@ mod tests {
         crate::ensure_runtime_schemas(&node).await?;
         let binding = crate::store::identity::provision_agent_identity(&runtime)?;
         let signer = crate::store::identity::resolve_agent_identity(&runtime, &binding)?;
-        crate::store::identity::grant_agent_node_capabilities(&node, &runtime, &binding).await?;
         let actor = identity::Did::new(&binding.agent_did)?;
         let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+        crate::store::identity::GrantSet::AgentBaseline
+            .grant(&owner, &actor)
+            .await?;
         let agent =
             ConfigAccess::local_managed_agent(node.clone(), actor.clone(), signer.as_ref())?;
         let node_did = crate::store::graphql::escape_graphql_string(runtime.did());

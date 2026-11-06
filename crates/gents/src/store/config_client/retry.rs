@@ -77,16 +77,22 @@ where
     error.config_client_error()?.transaction_conflict()
 }
 
-/// The pinned DefraDB mutation adapter reports an inaccessible or missing
-/// document with this shared GraphQL message and no structured error code.
-/// Both cases are permanent for this attempted write, not storage failures.
+impl ConfigClientError {
+    /// The pinned DefraDB mutation adapter reports an inaccessible or missing
+    /// document with this shared GraphQL message and no structured error code.
+    /// Both cases are permanent for this attempted write, not storage failures,
+    /// and the adapter does not say which one occurred.
+    pub(crate) fn is_missing_or_denied_write(&self) -> bool {
+        matches!(self,
+            ConfigClientError::EmbeddedGraphqlErrors { errors }
+            if !errors.is_empty() && errors.iter().all(|item|
+                item.message == "document not found: document not found or not authorized to access"))
+    }
+}
+
 pub(super) fn transaction_storage_failure(error: ConfigClientError) -> ConfigClientError {
-    let missing_or_denied = matches!(&error,
-        ConfigClientError::EmbeddedGraphqlErrors { errors }
-        if !errors.is_empty() && errors.iter().all(|item|
-            item.message == "document not found: document not found or not authorized to access"));
     if error.transaction_conflict().is_some()
-        || missing_or_denied
+        || error.is_missing_or_denied_write()
         || matches!(
             error,
             ConfigClientError::ClientAgentSignerRequired | ConfigClientError::ClientSignerMismatch
