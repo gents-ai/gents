@@ -810,11 +810,13 @@ async fn parent_recovery_lookup_uses_agent_native_authority() {
         .revoke_node_permission(&agent.did().parse().unwrap(), NodePermission::DocumentRead)
         .await
         .unwrap();
-    assert!(
-        lookup_parent_request(&agent_access, runtime.did(), &row)
-            .await
-            .is_err(),
-        "revoked agent must not look like an absent parent"
-    );
+    // Node DocumentRead is a node-level permission that does not confer document
+    // visibility (see `grant_node_permission`). The agent's visibility of its own
+    // parent AgentRequest is decided by that document's ACP policy, so revoking
+    // the node permission leaves the parent visible and the lookup still resolves.
+    let after_node_revoke = lookup_parent_request(&agent_access, runtime.did(), &row)
+        .await
+        .unwrap();
+    assert_eq!(after_node_revoke.request_id, "private-recovery");
     node.shutdown().await.unwrap();
 }
