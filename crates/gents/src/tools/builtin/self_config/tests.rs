@@ -5247,13 +5247,18 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
 
 #[tokio::test]
 async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out() {
-    let node = build_agent_node().await;
-    let identity = node_identity("engineer-god-mode");
-    let owner = identity.did().to_string();
-    for agent in ["setup", "lead", "caller"] {
-        crate::test_support::install_test_agent(&node, &owner, agent).await;
-    }
-    let setup = SelfConfigCore::new(node.clone(), owner.clone(), "setup".into()).unwrap();
+    let fixture = SelfConfigFixture::new("engineer-god-mode").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    fixture.grant_agent_delete().await;
+    fixture.grant_agent_relation_delete().await;
+    let lead = fixture.install_sibling("lead").await;
+    let caller = fixture.install_sibling("caller").await;
+    fixture.grant_sibling_configuration(&lead).await;
+    fixture.grant_sibling_configuration(&caller).await;
+    let owner = fixture.node_did().to_owned();
+    let setup_did = fixture.agent_did().to_owned();
+    let setup = fixture.core();
     setup
         .apply(agent_request(
             &setup,
@@ -5280,17 +5285,10 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         .await
         .unwrap();
     let mut grants = config(&["node", "agent", "tools", "profile", "automation"]);
-    grants.agent_did = "setup".into();
+    grants.agent_did = setup_did.clone();
     grants.preview = true;
     grants.no_lockout = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&grants);
     let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
     let ok = |result: Result<String, String>| -> Value {
         serde_json::from_str(&result.unwrap_or_else(|error| panic!("{error}"))).unwrap()
@@ -5302,7 +5300,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         "--set",
         &format!("target_node_did={}", json!(owner)),
         "--set",
-        "agent_did=\"lead\"",
+        &format!("agent_did={}", json!(lead)),
     ];
     let preview = ok(call_config_tool(
         &tools,
@@ -5359,7 +5357,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     ] {
         let receipt = ok(call_config_tool(
             &tools,
-            command(&["tools", "edit", "--agent", "caller", "--set", selection]),
+            command(&["tools", "edit", "--agent", &caller, "--set", selection]),
         )
         .await);
         assert_eq!(receipt["committed"], true);
@@ -5368,7 +5366,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             .unwrap()
             .contains("Selected targets are inactive"));
         let stored =
-            ok(call_config_tool(&tools, command(&["tools", "get", "--agent", "caller"])).await);
+            ok(call_config_tool(&tools, command(&["tools", "get", "--agent", &caller])).await);
         assert_ne!(stored["document"]["agents"]["enabled"], true);
         assert_eq!(
             stored["document"]["agents"]["target_ids"],
@@ -5382,7 +5380,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "tools",
             "edit",
             "--agent",
-            "caller",
+            &caller,
             "--set",
             r#"agents={"enabled":true,"target_ids":["gatekeeper"]}"#,
         ]),
@@ -5393,7 +5391,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         .unwrap()
         .contains("Selected targets are inactive"));
     let recovered =
-        ok(call_config_tool(&tools, command(&["tools", "get", "--agent", "caller"])).await);
+        ok(call_config_tool(&tools, command(&["tools", "get", "--agent", &caller])).await);
     assert_eq!(recovered["document"]["agents"]["enabled"], true);
     assert_eq!(
         recovered["document"]["agents"]["target_ids"],
@@ -5406,7 +5404,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "tools",
             "edit",
             "--agent",
-            "caller",
+            &caller,
             "--set",
             r#"agents={"enabled":true}"#,
         ]),
@@ -5460,14 +5458,20 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     }
     let disable = call_config_tool(
         &tools,
-        command(&["agent", "edit", "setup", "--set", "enabled=false"]),
+        command(&["agent", "edit", &setup_did, "--set", "enabled=false"]),
     )
     .await
     .unwrap_err();
     assert!(disable.contains("no-lockout"), "{disable}");
     let untag = call_config_tool(
         &tools,
-        command(&["agent", "edit", "setup", "--set", "tags=[\"ui:engineer\"]"]),
+        command(&[
+            "agent",
+            "edit",
+            &setup_did,
+            "--set",
+            "tags=[\"ui:engineer\"]",
+        ]),
     )
     .await
     .unwrap_err();
@@ -5477,7 +5481,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         command(&[
             "agent",
             "edit",
-            "setup",
+            &setup_did,
             "--set",
             &format!(
                 "tags={}",
@@ -5489,9 +5493,10 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         ]),
     )
     .await);
-    let agent_disable = call_config_tool(&tools, command(&["agent", "disable", "--id", "setup"]))
-        .await
-        .unwrap_err();
+    let agent_disable =
+        call_config_tool(&tools, command(&["agent", "disable", "--id", &setup_did]))
+            .await
+            .unwrap_err();
     assert!(agent_disable.contains("no-lockout"), "{agent_disable}");
     for name in ["\"\"", "\"   \""] {
         let blank = call_config_tool(
@@ -5601,7 +5606,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "profile",
             "edit",
             "--agent",
-            "lead",
+            &lead,
             "--set",
             "execution_id=\"lead-execution\"",
         ]),
@@ -5614,7 +5619,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "edit",
             "execution",
             "--agent",
-            "lead",
+            &lead,
             "--set",
             "max_turns=12",
         ]),
@@ -5626,7 +5631,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     assert_eq!(execution["effective"]["max_turns"], 12);
     let bound = ok(call_config_tool(
         &tools,
-        command(&["profile", "get", "execution", "--agent", "lead"]),
+        command(&["profile", "get", "execution", "--agent", &lead]),
     )
     .await);
     assert_eq!(bound["effective"], execution["effective"]);
@@ -5639,7 +5644,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "task",
             "engineer-inbox",
             "--agent",
-            "setup",
+            &setup_did,
             "--set",
             "prompt_template=\"Review {{ doc.message }}\"",
         ]),
