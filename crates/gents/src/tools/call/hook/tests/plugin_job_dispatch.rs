@@ -222,6 +222,25 @@ async fn step0(output: Value, options: Options) -> Step0 {
     .await;
     let worker =
         crate::store::identity::resolve_agent_identity(identity.as_ref(), &worker_binding).unwrap();
+    let worker_did = crate::store::graphql::escape_graphql_string(worker.did());
+    let workers = owner
+        .execute(&format!(
+            r#"{{ Agent(filter: {{ agent_did: {{ _eq: "{worker_did}" }} }}) {{ _docID }} }}"#,
+        ))
+        .await
+        .unwrap();
+    let [worker_row] = workers["data"]["Agent"].as_array().unwrap().as_slice() else {
+        panic!("held User must see the configured worker: {workers}");
+    };
+    owner
+        .add_actor_relationship(
+            "Agent",
+            worker_row["_docID"].as_str().unwrap(),
+            "session_writer",
+            &caller.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
     let target = json!({"target_id": "t-worker", "node_did": identity.did(),
         "target_node_did": identity.did(), "agent_did": worker.did(), "name": "worker"});
     let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
