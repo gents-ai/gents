@@ -77,11 +77,11 @@ export const FLAGS = [
     id: "sharing",
     name: "Sharing",
     description:
-      "Invite people and your own devices to a node or one pack, and approve or remove who has access.",
+      "Approve or deny requests to join this node, and see and remove who has access.",
     default: false,
     owner: "david-on-github",
     removeBy: "2027-04-01",
-    removeWhen: "Invites and access decisions ship to everyone.",
+    removeWhen: "Access decisions ship to everyone.",
     restart: false,
   },
 ] as const satisfies readonly Flag[];
