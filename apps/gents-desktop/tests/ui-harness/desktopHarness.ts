@@ -1,3 +1,9 @@
+import type { SharingAdapter } from "../../src/hooks/sharing";
+import {
+  createHarnessSharing,
+  isSharingScenario,
+  type SharingScenario,
+} from "./sharingHarness";
 import type {
   ChatSendRequest,
   ChatSendResult,
@@ -537,7 +543,8 @@ export type DesktopUiHarnessScenario =
   | "automated-inputs"
   | "background"
   | "notices"
-  | "startup-port-in-use";
+  | "startup-port-in-use"
+  | SharingScenario;
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
@@ -620,6 +627,9 @@ type DesktopUiHarness = {
   scenario: DesktopUiHarnessScenario;
   performance: MobilePerformanceHarnessController | null;
   sessionSync: SessionSyncHarnessController;
+  /* the sharing scenarios' stand-in; absent elsewhere, so the app's own
+     default applies */
+  sharing?: SharingAdapter;
 };
 
 const LARGE_SENT_REQUEST_ID = "6f1c2a7e-large-request-sent";
@@ -4382,6 +4392,7 @@ export function createDesktopUiHarness(
     scenario,
     performance,
     sessionSync,
+    sharing: isSharingScenario(scenario) ? createHarnessSharing(scenario) : undefined,
   };
 }
 
@@ -4926,7 +4937,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "notices":
       return value;
     default:
-      return "default";
+      return isSharingScenario(value) ? value : "default";
   }
 }
 

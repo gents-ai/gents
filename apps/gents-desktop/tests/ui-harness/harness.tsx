@@ -117,6 +117,10 @@ const app = (
       api: harness.adapter,
       listenToUpdates: harness.listenerFactory,
       supportsManagedServer: params.get("scenario") === "startup-port-in-use",
+      sharing:
+        backend === "deterministic" && "sharing" in harness
+          ? harness.sharing
+          : undefined,
     }}
   />
 );
