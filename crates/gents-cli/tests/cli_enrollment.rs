@@ -4,6 +4,8 @@ mod live_plugin_denial;
 mod live_delegation;
 #[path = "cli_enrollment/live_two_agent.rs"]
 mod live_two_agent;
+#[path = "cli_enrollment/live_goal.rs"]
+mod live_goal;
 #[path = "cli_enrollment/contract.rs"]
 mod contract;
 #[path = "cli_enrollment/household.rs"]
