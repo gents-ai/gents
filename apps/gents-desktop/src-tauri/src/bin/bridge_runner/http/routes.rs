@@ -250,24 +250,24 @@ pub(super) async fn handle_request(
                 .as_ref()
                 .and_then(|client| client.deployments.first())
                 .ok_or_else(|| anyhow!("live bridge runner has no deployment"))?;
-            let server = fixture.remote_core();
-            let identity: Arc<dyn gents::NodeIdentity> = Arc::new(server.node_identity().clone());
+            let node = fixture.runtime_node()?;
+            let identity = Arc::clone(fixture.runtime_identity()?);
             let network = gents_desktop_bridge::enrollment::ensure_enrollment_network(
-                &server.node_arc(),
+                node,
                 identity.as_ref(),
                 fixture.deployment_label(),
             )
             .await?;
             let issuer = gents_desktop_bridge::enrollment::EnrollmentOfferIssuer::new(
                 identity,
-                Arc::clone(server.p2p()),
+                fixture.runtime_p2p()?,
                 network.network_id,
                 fixture.node_did().to_string(),
                 "client".to_string(),
             );
             let enrollment = issuer.mint().await?;
             let schema = gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(
-                server.node_arc(),
+                Arc::clone(node),
             )
             .await?;
             Ok(HttpResponse::json_ok(
@@ -389,8 +389,7 @@ pub(super) async fn handle_request(
                 .await?
                 .context("desktop has no shareable address for route drift")?;
             fixture
-                .remote_core()
-                .p2p()
+                .runtime_p2p()?
                 .add_replicator(
                     vec!["Network".to_string()],
                     Some(&desktop_address),
@@ -399,12 +398,12 @@ pub(super) async fn handle_request(
                     None,
                 )
                 .await?;
-            let replicators = fixture.remote_core().p2p().get_replicators().await?;
+            let replicators = fixture.runtime_p2p()?.get_replicators().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
         ("GET", "/desktop/test-fixture/remote-replicators") => {
             require_live_fixture()?;
-            let replicators = fixture.remote_core().p2p().get_replicators().await?;
+            let replicators = fixture.runtime_p2p()?.get_replicators().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
         ("POST", "/desktop/peer/status") => {
@@ -710,25 +709,25 @@ pub(super) async fn handle_request(
         // the same wire shapes as a deployed runtime's HTTP client.
         ("GET", "/p2p/info") => {
             require_live_fixture()?;
-            let addresses = fixture.remote_core().p2p().listen_addresses().await?;
+            let addresses = fixture.runtime_p2p()?.listen_addresses().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&addresses)?))
         }
         ("GET", "/p2p/active-peers") => {
             require_live_fixture()?;
-            let peers = fixture.remote_core().p2p().connected_peers().await?;
+            let peers = fixture.runtime_p2p()?.connected_peers().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&peers)?))
         }
         ("POST", "/p2p/connect") => {
             require_live_fixture()?;
             let addresses = decode::<Vec<String>>(&request.body, "decoding P2P connect")?;
             for address in addresses {
-                fixture.remote_core().p2p().connect_peer(&address).await?;
+                fixture.runtime_p2p()?.connect_peer(&address).await?;
             }
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("GET", "/p2p/replicators") => {
             require_live_fixture()?;
-            let replicators = fixture.remote_core().p2p().get_replicators().await?;
+            let replicators = fixture.runtime_p2p()?.get_replicators().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
         ("POST", "/p2p/replicators") => {
@@ -738,8 +737,7 @@ pub(super) async fn handle_request(
             let filters = serde_json::from_value(request.filters)
                 .context("decoding P2P replication filters")?;
             fixture
-                .remote_core()
-                .p2p()
+                .runtime_p2p()?
                 .add_replicator(
                     request.collections,
                     request.addresses.first().map(String::as_str),
@@ -757,26 +755,21 @@ pub(super) async fn handle_request(
                 "decoding P2P replicator teardown",
             )?;
             fixture
-                .remote_core()
-                .p2p()
+                .runtime_p2p()?
                 .remove_replicator(request.collections, Some(&request.id))
                 .await?;
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("GET", "/p2p/collections") => {
             require_live_fixture()?;
-            let collections = fixture.remote_core().p2p().get_collections().await?;
+            let collections = fixture.runtime_p2p()?.get_collections().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&collections)?))
         }
         ("POST", "/p2p/collections") => {
             require_live_fixture()?;
             let collections =
                 decode::<Vec<String>>(&request.body, "decoding P2P collection install")?;
-            fixture
-                .remote_core()
-                .p2p()
-                .add_collections(collections)
-                .await?;
+            fixture.runtime_p2p()?.add_collections(collections).await?;
             Ok(HttpResponse::json_ok("{}".to_string()))
         }
         ("DELETE", "/p2p/collections") => {
@@ -784,8 +777,7 @@ pub(super) async fn handle_request(
             let collections =
                 decode::<Vec<String>>(&request.body, "decoding P2P collection teardown")?;
             fixture
-                .remote_core()
-                .p2p()
+                .runtime_p2p()?
                 .remove_collections(collections)
                 .await?;
             Ok(HttpResponse::json_ok("{}".to_string()))
