@@ -33,6 +33,7 @@ pub mod store;
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    pub(crate) mod acp_policies;
     pub(crate) mod read_observation;
 
     /// A test's `#[tokio::test]` runtime is its entry point; constructors take
