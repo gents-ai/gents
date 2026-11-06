@@ -3501,32 +3501,61 @@ fn take_agent_tool(
 }
 
 #[tokio::test]
-async fn agent_default_commits_through_the_agent_owner() {
-    let node = build_agent_node().await;
-    let root = crate::store::identity::RegisteredIdentity::from_registered_did(
-        node.node_identity_did().unwrap(),
-        None,
-    )
-    .unwrap();
-    let node_did = root.did().to_owned();
-    let seed = crate::test_support::install_test_agent(&node, &node_did, "seed").await;
-    let working = crate::test_support::install_test_agent(&node, &node_did, "working").await;
-    let identity = crate::store::identity::resolve_agent_identity(&root, &seed).unwrap();
-    let core = SelfConfigCore::new(node.clone(), node_did.clone(), seed.agent_did.clone()).unwrap();
-    crate::documents::upsert_node(&node, &node_did, None, Some(&seed.agent_did), true, None)
-        .await
+async fn user_owned_node_default_rejects_agent_update_and_accepts_user() {
+    use crate::lean_vocab_test::{LeanIdentityAction, LeanIdentitySubject};
+    let model = crate::lean_vocab_test::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "user-node-agents-mixed-session-ownership-policy-followup")
         .unwrap();
-    let mut tool_config = config(&["node"]);
-    tool_config.agent_did = seed.agent_did.clone();
-    tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity.clone()),
-        &tool_config,
-        test_plugins(),
-    );
+    let user = &model
+        .objects
+        .iter()
+        .find(|object| object.resource == "nodes" && object.id == "home")
+        .unwrap()
+        .owner;
+    let agent = model
+        .relations
+        .iter()
+        .find_map(|relation| match &relation.subject {
+            LeanIdentitySubject::Actor { actor }
+                if relation.resource == "agents"
+                    && relation.id == "general"
+                    && relation.relation == "executor" =>
+            {
+                Some(actor)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let may_update_node = |actor: &str| {
+        model
+            .actions
+            .iter()
+            .find_map(|action| match action {
+                LeanIdentityAction::Check {
+                    actor: candidate,
+                    resource,
+                    id,
+                    permission,
+                    expected,
+                } if candidate == actor
+                    && resource == "nodes"
+                    && id == "home"
+                    && permission == "update" =>
+                {
+                    Some(*expected)
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let fixture = SelfConfigFixture::new("agent-default-authority").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let working = fixture.install_sibling("working").await;
+    let seed = fixture.agent_did();
+    let core = fixture.core();
+    let tools = fixture.tools(&["node"]);
     let preview: Value = serde_json::from_str(
         &call_config_tool(
             &tools,
@@ -3534,52 +3563,51 @@ async fn agent_default_commits_through_the_agent_owner() {
                 "agent".into(),
                 "preview".into(),
                 "default".into(),
-                working.agent_did.clone(),
+                working.clone(),
             ],
         )
         .await
         .unwrap(),
     )
     .unwrap();
-    assert_eq!(preview["admitted"], true);
+    assert_eq!(preview["committed"], false);
     assert_eq!(
         node_default_agent(&core).await.unwrap().as_deref(),
-        Some(seed.agent_did.as_str())
+        Some(seed)
     );
-    let output: Value = serde_json::from_str(
-        &call_config_tool(
-            &tools,
-            vec!["agent".into(), "default".into(), working.agent_did.clone()],
-        )
-        .await
-        .unwrap(),
+    let agent_update = call_config_tool(
+        &tools,
+        vec!["agent".into(), "default".into(), working.clone()],
     )
-    .unwrap();
-    assert_eq!(output["committed"], true);
-    assert_eq!(output["agent_did"], working.agent_did);
+    .await;
+    assert_eq!(agent_update.is_ok(), may_update_node(agent));
     assert_eq!(
         node_default_agent(&core).await.unwrap().as_deref(),
-        Some(working.agent_did.as_str())
+        Some(seed)
+    );
+    fixture
+        .update_signed_configuration(
+            crate::Collection::Node,
+            fixture.node_did(),
+            json!({"default_agent_did": working}),
+        )
+        .await;
+    assert!(may_update_node(user));
+    assert_eq!(
+        node_default_agent(&core).await.unwrap().as_deref(),
+        Some(working.as_str())
     );
 }
 
 #[tokio::test]
 async fn agent_create_commits_and_resolves_after_restart() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-create");
-    let node_did = identity.did().to_string();
-
-    crate::test_support::install_test_agent(&node, &node_did, "seed").await;
-    let profile_id = "seed:inference";
-
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity.clone()),
-        &config(&["node"]),
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("agent-create").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let node = fixture.db.node.clone();
+    let node_did = fixture.node_did().to_owned();
+    let profile_id = format!("{}:inference", fixture.agent_did());
+    let tools = fixture.tools(&["node"]);
     let rejected_preview = call_config_tool(
         &tools,
         vec![
@@ -3591,7 +3619,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
             "--preset".into(),
             "write".into(),
             "--profile".into(),
-            profile_id.into(),
+            profile_id.clone(),
         ],
     )
     .await
@@ -3618,8 +3646,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
             "--preset".into(),
             "write".into(),
             "--profile".into(),
-            profile_id.into(),
-            "--default".into(),
+            profile_id.clone(),
         ],
     )
     .await
@@ -3628,7 +3655,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
     assert_eq!(admitted_preview["committed"], false);
     assert_eq!(admitted_preview["admitted"], true);
     assert_eq!(admitted_preview["operation"], "create");
-    assert_eq!(admitted_preview["make_default"], true);
+    assert_eq!(admitted_preview["make_default"], false);
     assert_eq!(
         admitted_preview["agent"]["display_name"],
         "Research Assistant"
@@ -3639,7 +3666,10 @@ async fn agent_create_commits_and_resolves_after_restart() {
     );
     assert_eq!(
         admitted_preview["agent"]["context_id"],
-        format!("{node_did}:research-assistant:context")
+        format!(
+            "{}:context",
+            admitted_preview["agent_did"].as_str().unwrap()
+        )
     );
     assert_eq!(crate::list_agents(&node, &node_did).await.unwrap().len(), 1);
     let tool = take_agent_tool(tools);
@@ -3650,8 +3680,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
         "--description", "Researches a focused question",
         "--system-prompt", "Research the question and cite evidence.",
         "--preset", "write",
-        "--profile", profile_id,
-        "--default"
+        "--profile", profile_id
     ]})
     .to_string();
 
@@ -3661,7 +3690,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
         .expect("list agents");
     let created: Vec<_> = agents
         .iter()
-        .filter(|agent| agent.agent_did != "seed")
+        .filter(|agent| agent.agent_did != fixture.agent_did())
         .collect();
     assert_eq!(created.len(), 1, "exactly one new agent materialized");
     assert_eq!(
@@ -3674,46 +3703,23 @@ async fn agent_create_commits_and_resolves_after_restart() {
             .as_deref()
             .expect("created agent has context"),
     );
-    let response = node
-        .execute(&format!(
-            r#"{{ AgentContext(filter: {{ context_id: {{ _eq: "{context_id}" }} }}) {{ description system_prompt }} }}"#
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "query failed: {:?}",
-        response.errors
+    let response = fixture.user_access.execute(&format!(
+        r#"{{ AgentContext(filter: {{ context_id: {{ _eq: "{context_id}" }} }}) {{ description system_prompt }} }}"#,
+    )).await.unwrap();
+    let context = &response["data"]["AgentContext"][0];
+    assert_eq!(
+        context["system_prompt"],
+        "Research the question and cite evidence."
     );
-    let prompt = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentContext"))
-        .and_then(serde_json::Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("system_prompt"))
-        .and_then(serde_json::Value::as_str);
-    assert_eq!(prompt, Some("Research the question and cite evidence."));
-    let description = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentContext"))
-        .and_then(serde_json::Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("description"))
-        .and_then(serde_json::Value::as_str);
-    assert_eq!(description, Some("Researches a focused question"));
+    assert_eq!(context["description"], "Researches a focused question");
 
     let output: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(output["committed"], true);
     assert_eq!(output["agent_did"], created[0].agent_did);
     let effective: Value = serde_json::from_str(
-        &agent_inspect(
-            &SelfConfigCore::new(node.clone(), node_did.clone(), created[0].agent_did.clone())
-                .unwrap(),
-            &created[0].agent_did,
-        )
-        .await
-        .unwrap(),
+        &agent_inspect(&fixture.core(), &created[0].agent_did)
+            .await
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -3724,14 +3730,10 @@ async fn agent_create_commits_and_resolves_after_restart() {
         effective["effective_config"]["tool_grants"]["configured"],
         json!({"lsp": false, "network_mode": "inherit"})
     );
-    let grant_tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity.clone()),
-        &config(&["node", "tools"]),
-        test_plugins(),
-    );
+    fixture
+        .grant_sibling_configuration(&created[0].agent_did)
+        .await;
+    let grant_tools = fixture.tools(&["node", "tools"]);
     let selected = call_config_tool(
         &grant_tools,
         vec![
@@ -3765,10 +3767,17 @@ async fn agent_create_commits_and_resolves_after_restart() {
         "disabled"
     );
 
+    fixture
+        .update_signed_configuration(
+            crate::Collection::Node,
+            fixture.node_did(),
+            json!({"default_agent_did": created[0].agent_did}),
+        )
+        .await;
     let snapshot = crate::runtime::agent::resolve_document_runtime_snapshot(
         &node,
         &crate::runtime::agent::DocumentResolveContext::for_tests(
-            identity,
+            fixture.db.node_identity.clone(),
             crate::tools::surface::ToolCeiling::readonly(),
             Default::default(),
         ),
