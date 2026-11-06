@@ -142,7 +142,7 @@ mod tests {
         let asset = |path: &str| -> Result<Vec<u8>> { Ok(std::fs::read(root.join(path))?) };
         let report = preview_config(&manifest, &asset).unwrap();
         assert_eq!(
-            report["config"]["agents"][0]["agent_did"],
+            report["config"]["agents"][0]["agent_slot"],
             "review-toolkit-worker"
         );
         assert_eq!(report["scenario"], serde_json::Value::Null);

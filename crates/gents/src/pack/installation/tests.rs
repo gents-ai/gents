@@ -1454,7 +1454,7 @@ fn reinstall_with_changed_sdl_rewrites_both_maps() {
 #[test]
 fn stamped_key_outside_declared_collections_is_refused() {
     let (_home, installed) = install_fixture_plugins(NOTE_SDL, |plugin| {
-        plugin["data"]["stamped"] = json!({"missing_field": "node_did"});
+        plugin["data"]["stamped"] = json!({"missing_field": "caller_did"});
     });
     let message = refusal(installed);
     assert!(message.contains("missing_field"), "{message}");

@@ -150,7 +150,7 @@ fn unknown_stamp_values_are_refused() {
             }
         }))
     };
-    plugin("node_did").unwrap().validate().unwrap();
+    plugin("caller_did").unwrap().validate().unwrap();
     let error = plugin("host_secret").expect_err("an unknown stamp value must not parse");
     assert!(error.to_string().contains("host_secret"), "{error}");
 }
