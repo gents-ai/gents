@@ -32,19 +32,79 @@ async fn claimed(node: &Arc<EmbeddedNode>, request_id: &str, session_id: &str) -
 
 #[tokio::test]
 async fn authored_publication_replays_and_reconstructs_exact_message() {
-    let path = std::env::temp_dir().join(format!("canonical-authored-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        crate::test_support::node_builder()
-            .data_path(&path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::store::schema::ensure_runtime_schemas(&node)
+    use crate::store::identity::NodeIdentity;
+
+    let (db, user, owner, binding) =
+        crate::test_support::signed_test_node("canonical-authored").await;
+    let node = db.node.clone();
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let create = crate::request::lifecycle::build_signed_client_request(
+        &owner,
+        crate::request::lifecycle::RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            crate::request::lifecycle::RequestIdentity {
+                request_id: "request-authored".into(),
+                node_did: db.node_identity.did().into(),
+                requester_did: Some(user.did().into()),
+                agent_did: agent.did().into(),
+                session_id: "session-authored".into(),
+                content: "hello".into(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+        ),
+        crate::request::lifecycle::RequestSigner::Identity(&user),
+    )
+    .await
+    .unwrap();
+    crate::request::lifecycle::submit_client_request(&owner, &create)
         .await
         .unwrap();
-    let mut lifecycle = claimed(&node, "request-authored", "session-authored").await;
-    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(1));
+    let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let response = access
+        .execute(&format!(
+            "{{ AgentRequest {{ {} }} }}",
+            crate::SIGNED_REQUEST_FIELDS
+        ))
+        .await
+        .unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    let request = row.try_into().unwrap();
+    let (_authority_owner, authority) =
+        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        db.node_identity.clone(),
+        authority,
+    );
+    let (request, admission) = verifier
+        .verify_fresh_for_claim(&request, agent.did())
+        .await
+        .unwrap();
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
+        node.clone(),
+        agent.did(),
+        db.node_identity.did(),
+        request,
+        60,
+    );
+    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+    lifecycle.set_client_claim_admission(admission);
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let writer =
+        DefraStreamWriter::new_managed(node.clone(), agent.as_ref(), Duration::from_millis(1))
+            .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let message = gents_protocol::message::Message::user("continue ✓");
     let first = writer
@@ -57,16 +117,15 @@ async fn authored_publication_replays_and_reconstructs_exact_message() {
         .unwrap();
     assert_eq!(first, replay);
     let (_, reconstructed) = crate::session::load_canonical_message(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &access,
         &first,
-        "did:test:test",
-        None,
+        db.node_identity.did(),
+        Some(user.did()),
     )
     .await
     .unwrap();
     assert_eq!(reconstructed, message);
     node.shutdown().await.expect("shut down test node");
-    let _ = std::fs::remove_dir_all(path);
 }
 
 #[tokio::test]
