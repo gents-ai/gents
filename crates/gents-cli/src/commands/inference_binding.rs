@@ -52,6 +52,28 @@ pub(crate) async fn load_bound_profile(
     .await
 }
 
+/// The bound Agent document's identity binding, read as the node that owns it.
+pub(crate) async fn load_bound_agent_binding(
+    node: &Arc<EmbeddedNode>,
+    node_did: &str,
+    agent_did: &str,
+) -> Result<gents_protocol::agent_identity::AgentIdentityBinding> {
+    use gents::store::config_client::{read_desired_state_record_in_txn as read, ConfigAccess};
+    use gents::Collection;
+    ConfigAccess::transact_local_write(node, None, "codex.bound_agent", |txn| {
+        Box::pin(async move {
+            let agent: gents::documents::Agent = serde_json::from_value(
+                read(txn, Collection::Agent, node_did, agent_did)
+                    .await?
+                    .map(|(_, value)| value)
+                    .ok_or_else(|| anyhow!("agent {agent_did:?} missing for {node_did:?}"))?,
+            )?;
+            Ok(agent.identity_binding())
+        })
+    })
+    .await
+}
+
 pub(crate) async fn load_bound_context_window(
     node: &Arc<EmbeddedNode>,
     node_did: &str,

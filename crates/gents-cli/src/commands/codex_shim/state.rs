@@ -12,6 +12,7 @@ pub(super) struct ShimState {
     pub(super) graphql: gents::store::config_client::GraphqlEndpoint,
     pub(super) node_did: Arc<str>,
     pub(super) agent_did: Arc<str>,
+    pub(super) agent_signer: Option<gents::store::identity::ManagedAgentSigner>,
     pub(super) id_counter: Arc<AtomicU64>,
     pub(super) timeout: Duration,
     pub(super) poll_interval: Duration,

@@ -10,6 +10,7 @@ pub(crate) struct CodexShimBindArgs {
     pub(crate) graphql: String,
     pub(crate) node_did: String,
     pub(crate) agent_did: Option<String>,
+    pub(crate) runtime_identity: Arc<dyn gents::NodeIdentity>,
     pub(crate) auth_token: Option<String>,
     pub(crate) bind_addr: std::net::IpAddr,
     pub(crate) port: u16,
@@ -115,6 +116,24 @@ pub(crate) async fn bind_codex_shim(
         .await
         .with_context(|| format!("validating Codex shim bound agent {bound_agent_did:?}"))
         .map_err(CodexShimBindError::DependencyMissing)?;
+    let agent_signer = match bound_behavior::load_bound_agent_signer(
+        args.runtime_identity.as_ref(),
+        &args.node,
+        &args.node_did,
+        &bound_agent_did,
+    )
+    .await
+    {
+        Ok(signer) => Some(signer),
+        Err(error) => {
+            tracing::warn!(
+                agent_did = %bound_agent_did,
+                error = %error,
+                "Codex shim has no managed Agent signer; steering is refused"
+            );
+            None
+        }
+    };
 
     let state = ShimState {
         usage_cache: args.usage_cache,
@@ -129,6 +148,7 @@ pub(crate) async fn bind_codex_shim(
         graphql: gents::store::config_client::GraphqlEndpoint::anonymous(args.graphql.clone()),
         node_did: Arc::from(args.node_did.clone()),
         agent_did: Arc::from(bound_agent_did.clone()),
+        agent_signer,
         id_counter: Arc::new(AtomicU64::new(1)),
         timeout: Duration::from_secs(args.timeout_secs),
         poll_interval: Duration::from_millis(args.poll_ms.max(1)),
