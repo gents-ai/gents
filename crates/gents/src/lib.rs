@@ -368,28 +368,27 @@ pub(crate) mod test_support {
         runtime_did: &str,
         agent_did: &str,
     ) {
-        let node = serde_json::json!({"node_did": runtime_did, "default_agent_did": agent_did});
-        let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-            crate::store::config_client::DesiredStateApplyDocument {
-                collection: crate::Collection::Node,
-                add: node.clone(),
-                update: node,
-            },
-        ])
-        .unwrap();
         access
             .transact_write("test.set_default_agent", |txn| {
-                let plan = &plan;
                 Box::pin(async move {
-                    crate::store::config_client::read_desired_state_record_in_txn(
-                        txn,
-                        crate::Collection::Node,
-                        runtime_did,
-                        runtime_did,
-                    )
-                    .await?
-                    .expect("fixture user must own one Node for its runtime");
-                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                    let (_, mut node) =
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::Node,
+                            runtime_did,
+                            runtime_did,
+                        )
+                        .await?
+                        .expect("fixture user must own one Node for its runtime");
+                    node["default_agent_did"] = serde_json::json!(agent_did);
+                    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                        crate::store::config_client::DesiredStateApplyDocument {
+                            collection: crate::Collection::Node,
+                            add: node.clone(),
+                            update: node,
+                        },
+                    ])?;
+                    crate::store::config_client::apply_desired_state_plan(txn, &plan).await
                 })
             })
             .await
