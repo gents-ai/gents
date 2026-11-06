@@ -52,7 +52,7 @@ impl ConfigCommandTool {
                     rest.is_empty(),
                     "automation get accepts KIND, ID, and --agent AGENT_DID"
                 );
-                let core = self.target_core(agent_did.as_deref(), "automation").await?;
+                let core = self.read_target_core(agent_did.as_deref()).await?;
                 self.automation_read(&core, target, id).await
             }
             "preview" | "edit" => {

@@ -437,7 +437,7 @@ impl ConfigCommandTool {
                         next_call: json!({"argv":["agent","get"],"target_id":rest[0]}),
                     }.into());
                 }
-                let core = self.target_core(agent_did.as_deref(), "get").await?;
+                let core = self.read_target_core(agent_did.as_deref()).await?;
                 let value = core
                     .read_effective_config(&self.categories, self.no_lockout, self.preview)
                     .await?;
