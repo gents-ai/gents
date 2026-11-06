@@ -110,7 +110,7 @@ export function watchNotifications(
   let queued: NotifyEvent[] = [];
   let first = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let pending: (Offer & { at: number })[] = [];
+  const teller = createTeller(deps);
 
   const onScreen = (e: NotifyEvent) => {
     if (!e.session || !deps.visible()) return false;
@@ -123,24 +123,7 @@ export function watchNotifications(
     const events = queued;
     queued = [];
     if (deps.focused()) return;
-    for (const notice of noticesFor(events)) {
-      deps.platform
-        .show({
-          title: notice.title,
-          body: notice.body,
-          onClick: () => {
-            pending = [];
-            deps.open(notice.to);
-          },
-        })
-        .catch((error: unknown) => console.warn("notification not shown", error));
-      pending.push({
-        title: notice.title,
-        action: notice.many ? "Show" : "Open",
-        to: notice.to,
-        at: deps.now(),
-      });
-    }
+    for (const notice of noticesFor(events)) teller.tell(notice);
   };
 
   const unsubscribe = stores.fleet.subscribe((next) => {
@@ -161,17 +144,55 @@ export function watchNotifications(
     timer = setTimeout(flush, Math.max(0, Math.min(BURST_QUIET, left)));
   });
 
-  const followed = deps.onFocus(() => {
-    if (deps.platform.reportsClicks || !pending.length) return;
+  return () => {
+    unsubscribe();
+    teller.stop();
+    if (timer) clearTimeout(timer);
+  };
+}
+
+/** Hands notices to the system, and opens what one is about when it is
+    clicked. Where a click isn't reported, coming back to the window soon
+    after offers it instead. */
+export function createTeller(
+  deps: Pick<NotifyDeps, "platform" | "now" | "open" | "offer" | "onFocus">,
+) {
+  let pending: (Offer & { at: number })[] = [];
+  const stop = deps.onFocus(() => {
+    if (!pending.length) return;
     const recent = pending.filter((p) => deps.now() - p.at <= FOLLOW_WITHIN);
     pending = [];
     for (const { at: _at, ...offer } of recent)
       deps.offer(offer, () => deps.open(offer.to));
   });
-
-  return () => {
-    unsubscribe();
-    followed();
-    if (timer) clearTimeout(timer);
+  const tell = (notice: Notice & { to: Route; many?: boolean }) => {
+    const offer = {
+      title: notice.title,
+      action: notice.many ? ("Show" as const) : ("Open" as const),
+      to: notice.to,
+      at: deps.now(),
+    };
+    if (!deps.platform.reportsClicks) pending.push(offer);
+    deps.platform
+      .show({
+        title: notice.title,
+        body: notice.body,
+        onClick: () => {
+          pending = [];
+          deps.open(notice.to);
+        },
+      })
+      .then(
+        (shown) => {
+          if (deps.platform.reportsClicks && shown?.reportsClick === false)
+            pending.push(offer);
+        },
+        (error: unknown) => console.warn("notification not shown", error),
+      );
   };
+  return { tell, stop };
 }
+
+/** The app's own platform, clock, window and navigation, for another
+    notification owner's teller. */
+export const defaultTellerDeps = defaults;

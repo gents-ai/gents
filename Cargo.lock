@@ -4432,6 +4432,7 @@ dependencies = [
  "gents-fs-runner",
  "gents-lean-contract",
  "gents-protocol",
+ "mac-notification-sys",
  "mimalloc",
  "objc2",
  "objc2-app-kit",

@@ -9,7 +9,7 @@
 import { createElement } from "react";
 import { toast } from "sonner";
 
-import type { UxContext, UxHost } from "./plugin";
+import type { UxContext, UxHost, UxNotificationKind } from "./plugin";
 import { uxHost } from "./plugin";
 import { onUxEvent } from "./events";
 import { patchUxPlugin, type UxDeclaredContributions } from "./plugins-store";
@@ -17,6 +17,7 @@ import { unloadUxPlugin } from "./activate";
 import { frameNonce, loadRuntimeAssets, sandboxDocument } from "./frame-document";
 import { placeFrame, stageElement } from "./frame-stage";
 import { FrameViewport } from "./react/frame-viewport";
+import { parseNotificationKinds } from "./notification-kinds";
 import { DirectiveChip, HeaderActionButton } from "./react/shell-widgets";
 import { pluginIcon } from "./icons";
 import type { NavItem } from "@/app/navRegistry";
@@ -236,6 +237,7 @@ export class SandboxHost {
     { node: string; cancelled: boolean; stop?: () => void }
   >();
   private loadedMeta: LoadedPlugin | null = null;
+  private kinds: UxNotificationKind[] = [];
   private waiting: {
     loaded?: { resolve: (p: LoadedPlugin) => void; reject: (e: Error) => void };
     registered?: { resolve: () => void; reject: (e: Error) => void };
@@ -310,6 +312,13 @@ export class SandboxHost {
             );
             return;
           }
+          const declared = parseNotificationKinds(meta.notifications);
+          if ("error" in declared) {
+            this.dispose();
+            reject(new Error(`${this.options.key}: ${declared.error}`));
+            return;
+          }
+          this.kinds = declared.kinds;
           this.loadedMeta = meta;
           resolve(meta);
         },
@@ -378,6 +387,7 @@ export class SandboxHost {
     this.transport = null;
     this.ctx = null;
     this.loadedMeta = null;
+    this.kinds = [];
     liveHosts.delete(this);
     if (transport?.element) placeFrame(this.options.key, null, null);
     transport?.destroy();
@@ -389,6 +399,11 @@ export class SandboxHost {
 
   get meta(): LoadedPlugin | null {
     return this.loadedMeta;
+  }
+
+  /** the notification kinds the loaded module declared, as checked */
+  get notificationKinds(): readonly UxNotificationKind[] {
+    return this.kinds;
   }
 
   /* ---- messages from the frame ---- */
@@ -597,6 +612,9 @@ export class SandboxHost {
           return reply(await ctx.plugin(String(args[0]), args[1]));
         case "send":
           await ctx.send(String(args[0]));
+          return reply(undefined);
+        case "notify":
+          await ctx.notify(args[0] as Parameters<UxContext["notify"]>[0]);
           return reply(undefined);
         case "navigate":
           ctx.shell.navigate(args[0] as Parameters<UxContext["shell"]["navigate"]>[0]);

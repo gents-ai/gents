@@ -1,5 +1,7 @@
 #[cfg(desktop)]
 mod links;
+#[cfg(target_os = "macos")]
+mod notifications;
 #[cfg(desktop)]
 mod plugin_window;
 mod product_telemetry;
@@ -120,6 +122,7 @@ pub fn run() {
         swipe::swipe_scroll_edges,
         links::desktop_take_links,
         plugin_window::desktop_open_plugin_window,
+        notifications::desktop_post_notification,
         product_telemetry::product_telemetry_app_opened,
         product_telemetry::product_telemetry_status,
         product_telemetry::product_telemetry_set_enabled

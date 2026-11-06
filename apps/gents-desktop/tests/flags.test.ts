@@ -93,6 +93,7 @@ describe("flags read back from storage", () => {
     hiddenNodes: [],
     hiddenAgents: [],
     notify: { finished: true, failed: true, question: true, mailbox: true },
+    pluginNotify: [],
   };
 
   it("takes the defaults from preferences saved before there were flags", () => {

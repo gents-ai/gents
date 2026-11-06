@@ -426,6 +426,7 @@ export function createSandboxRuntime(
       },
       plugin: (name, input) => rpc("plugin", name, input),
       send: (content) => rpc("send", content).then(() => undefined),
+      notify: (request) => rpc("notify", request).then(() => undefined),
       shell: {
         route: () => shell.route as Route,
         navigate: (route) => void rpc("navigate", route),
@@ -530,6 +531,7 @@ export function createSandboxRuntime(
               name: candidate.name,
               description: candidate.description,
               defaultEnabled: candidate.defaultEnabled,
+              notifications: candidate.notifications,
             },
           });
         } catch (error) {
