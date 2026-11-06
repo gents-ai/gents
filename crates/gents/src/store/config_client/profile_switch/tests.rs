@@ -57,8 +57,8 @@ impl Fixture {
     async fn build(did: &str, accounts: &[&'static str]) -> Self {
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        crate::ensure_node(&node, did).await.unwrap();
         let access = ConfigAccess::local(node.clone());
+        crate::test_support::bootstrap_signed_test_node(&access, did).await;
         for (provider, name) in [
             (CLAUDE_OAUTH_PROVIDER, "Claude"),
             (XAI_OAUTH_PROVIDER, "Grok"),
@@ -590,7 +590,7 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
     let did = "did:key:z6MkTestSwitchSlot";
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::ensure_node(&node, did).await.unwrap();
+    crate::test_support::bootstrap_signed_test_node(&ConfigAccess::local(node.clone()), did).await;
     let fixture = Fixture {
         cache: Default::default(),
         node: node.clone(),

@@ -60,6 +60,7 @@ mod tests {
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node.clone());
         for owner in ["did:key:owner", "did:key:other"] {
+            crate::test_support::bootstrap_signed_test_node(&access, owner).await;
             let backend = json!({"node_did":owner,"backend_id":"local","name":"Local",
                 "provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1",
                 "auth":{"kind":"unauthenticated"}});
