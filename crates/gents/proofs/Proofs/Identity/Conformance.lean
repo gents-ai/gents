@@ -11,6 +11,7 @@ import Proofs.Identity.Operations
 import Proofs.Configuration.Affected
 import Proofs.Conformance.ContractCases
 import Proofs.ToolPolicy.Cases
+import Proofs.SelfConfig.Auth
 
 namespace Identity.Conformance
 open Lean
@@ -1527,6 +1528,25 @@ def runtimeDefaultAccountCases : List Json := Id.run do
     runtimeDefaultAccountCase "other-snapshot" { allowed with sameSnapshot := false } (some "named"),
     runtimeDefaultAccountCase "read-failed" { allowed with nativeRead := false } (some "named")]
 
+def runtimeDefaultChoiceCase (name currentKind nextKind : String)
+    (currentRef nextRef visibleDefault : Option String) : Json :=
+  let current := some (currentKind, _root_.Configuration.BackendAuth.nodeOAuth currentRef)
+  let next := (nextKind, _root_.Configuration.BackendAuth.nodeOAuth nextRef)
+  Json.mkObj [("name", toJson name), ("current_kind", toJson currentKind),
+    ("current_ref", toJson currentRef), ("next_kind", toJson nextKind),
+    ("next_ref", toJson nextRef), ("visible_default", toJson visibleDefault),
+    ("accepted", toJson (SelfConfig.backendChoiceAllowed (fun _ => visibleDefault) current next))]
+
+def runtimeDefaultChoiceCases : List Json :=
+  [runtimeDefaultChoiceCase "cross-named-default" "ChatGptCodex" "XaiGrokOAuth"
+      (some "a1") (some "g2") (some "g2"),
+   runtimeDefaultChoiceCase "cross-wrong-default" "ChatGptCodex" "XaiGrokOAuth"
+      (some "a1") none (some "g2"),
+   runtimeDefaultChoiceCase "cross-empty-default" "ChatGptCodex" "XaiGrokOAuth"
+      (some "a1") none none,
+   runtimeDefaultChoiceCase "same-provider-cannot-switch" "XaiGrokOAuth" "XaiGrokOAuth"
+      (some "g2") none none]
+
 def backendCredentialNativeCase (revoked : Bool) : Json :=
   let initial := Configuration.backendCredentialFixture
   let state := if revoked then Household.apply initial
@@ -1577,6 +1597,7 @@ def json : Json := Json.mkObj
   [("name", toJson "configuration-explicit-grants"),
    ("backend_credential_cases", toJson backendCredentialCases),
    ("runtime_default_account_cases", toJson runtimeDefaultAccountCases),
+   ("runtime_default_choice_cases", toJson runtimeDefaultChoiceCases),
    ("configuration_plugin_backend_cases", toJson [
       pluginBackendCase "selected" (some "agent") "",
       pluginBackendCase "sibling" (some "sibling") "",
