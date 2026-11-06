@@ -655,6 +655,39 @@ async fn background_completion_transaction_attempt(
                 .await?;
             let response = txn.execute(&request_mutation).await?;
             let doc_id = transaction_created_doc_id(&response, "AgentRequest")?;
+            anyhow::ensure!(
+                txn.actor_did() == Some(parent.agent_did.as_str())
+                    && signer.is_some_and(|signer| signer.did() == parent.agent_did),
+                "background wake publication differs from its managed Agent actor"
+            );
+            let session = crate::session::load_agent_session_row_in_txn(
+                txn,
+                &parent.node_did,
+                &parent.session_id,
+                parent.requester_did.as_deref(),
+            )
+            .await?
+            .context("background wake session is unavailable")?;
+            anyhow::ensure!(
+                session.session.agent_did == parent.agent_did,
+                "background wake session selects a different Agent"
+            );
+            let (agent, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                txn,
+                crate::Collection::Agent,
+                &parent.node_did,
+                &parent.agent_did,
+            )
+            .await?
+            .context("background wake Agent is unavailable")?;
+            super::super::client::stage_request_relationships_in_txn(
+                txn,
+                &doc_id,
+                &agent,
+                &session.doc_id,
+                &parent.agent_did,
+            )
+            .await?;
             if let Some(lower) = &lower {
                 let lower_doc_id = lower
                     .doc_id

@@ -82,6 +82,27 @@ pub fn client_request_input(create: &AgentRequestCreate) -> anyhow::Result<serde
     Ok(input)
 }
 
+pub(crate) async fn stage_request_relationships_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    request: &str,
+    agent: &str,
+    session: &str,
+    agent_did: &str,
+) -> anyhow::Result<()> {
+    txn.add_resource_relationship("AgentRequest", request, "parent", "agents", agent)
+        .await?;
+    txn.add_resource_relationship("AgentRequest", request, "session", "sessions", session)
+        .await?;
+    txn.add_actor_relationship(
+        "AgentRequest",
+        request,
+        "working_agent",
+        &identity::Did::new(agent_did)?,
+    )
+    .await?;
+    Ok(())
+}
+
 /// Create and link a client or local-self request within the transaction that
 /// verifies its physical session and selected Agent. Legacy pending publications
 /// retain their separate authenticated recovery path.
@@ -126,17 +147,7 @@ pub(crate) async fn stage_client_request_in_txn(
         gents_protocol::schemas::AGENT_REQUEST,
     ).await?;
     let request = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
-    txn.add_resource_relationship("AgentRequest", &request, "parent", "agents", agent)
-        .await?;
-    txn.add_resource_relationship("AgentRequest", &request, "session", "sessions", session)
-        .await?;
-    txn.add_actor_relationship(
-        "AgentRequest",
-        &request,
-        "working_agent",
-        &identity::Did::new(&create.agent_did)?,
-    )
-    .await?;
+    stage_request_relationships_in_txn(txn, &request, agent, session, &create.agent_did).await?;
     Ok(request)
 }
 
@@ -410,9 +421,7 @@ async fn publish_request_relationships(
                 anyhow::ensure!(changed["data"]["update_AgentRequest"].as_array().is_some_and(|rows|
                     rows.len() == 1 && rows[0]["_docID"].as_str() == Some(request_doc)),
                     "request relationship completion was not recorded");
-                txn.add_resource_relationship("AgentRequest", request_doc, "parent", "agents", agent).await?;
-                txn.add_resource_relationship("AgentRequest", request_doc, "session", "sessions", session).await?;
-                txn.add_actor_relationship("AgentRequest", request_doc, "working_agent", worker).await?;
+                stage_request_relationships_in_txn(txn, request_doc, agent, session, worker.as_str()).await?;
                 Ok(())
             })
         })

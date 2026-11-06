@@ -471,6 +471,156 @@ async fn generated_r6_completion_owner_cases_use_accepted_native_output() {
     }
 }
 
+#[tokio::test]
+async fn background_wake_is_visible_to_the_owning_user_and_selected_agent() {
+    use crate::store::config_client::{ConfigAccess, NodePermission};
+    use crate::store::identity::NodeIdentity;
+
+    let cases = lean_r6_backgrounding_cases();
+    let case = cases
+        .iter()
+        .find(|case| {
+            case.group == "completion_continuation_owner" && case.wake_created == Some(true)
+        })
+        .expect("modeled completion with a fresh wake");
+    let mut admission = admitted_parent(case, "user-visible-wake").await;
+    assert!(admission
+        .tool
+        .complete_owned("durable native output", None)
+        .await
+        .unwrap());
+    let recovered = ToolCallLifecycle::reconcile_background_completion_side_effects(
+        &admission.node,
+        &admission.node_did,
+        &recovery_identities(&admission),
+    )
+    .await
+    .unwrap();
+    assert_eq!(recovered.side_effects_converged, 1);
+    let replay = ToolCallLifecycle::reconcile_background_completion_side_effects(
+        &admission.node,
+        &admission.node_did,
+        &recovery_identities(&admission),
+    )
+    .await
+    .unwrap();
+    assert!(replay.is_noop());
+
+    let notifications = notification_texts(&admission).await;
+    assert_eq!(notifications.len(), 1);
+    let wake_doc = notifications[0].0["request_doc_id"].as_str().unwrap();
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID agent_did session_id }} }}"#,
+        escape_graphql_string(wake_doc)
+    );
+    let worker_access = admission.tool.access().unwrap();
+    for reader in [&admission.client, &worker_access] {
+        let rows = reader.execute(&query).await.unwrap();
+        let rows = rows["data"]["AgentRequest"].as_array().unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "the owning User and working Agent see the wake"
+        );
+        assert_eq!(rows[0]["_docID"], wake_doc);
+        assert_eq!(rows[0]["agent_did"], admission.tool.actor.as_str());
+        assert_eq!(rows[0]["session_id"], admission.tool.session_id);
+    }
+
+    let stranger = tokio::task::spawn_blocking(|| {
+        crate::support::fixtures::test_identity("unrelated-wake-user")
+    })
+    .await
+    .unwrap();
+    let sibling = crate::test_support::install_test_agent_as(
+        &admission.node,
+        admission.runtime.as_ref(),
+        admission.requester_identity.as_ref(),
+        "Unrelated agent",
+    )
+    .await;
+    let sibling =
+        crate::store::identity::resolve_agent_identity(admission.runtime.as_ref(), &sibling)
+            .unwrap();
+    let admin = ConfigAccess::local_as(
+        admission.node.clone(),
+        identity::Did::new(&admission.node_did).unwrap(),
+    );
+    for did in [stranger.did(), sibling.did()] {
+        let did = identity::Did::new(did).unwrap();
+        for permission in [NodePermission::DocumentRead, NodePermission::CollectionGet] {
+            admin.grant_node_permission(&did, permission).await.unwrap();
+        }
+    }
+    let stranger_access = ConfigAccess::local_as(
+        admission.node.clone(),
+        identity::Did::new(stranger.did()).unwrap(),
+    );
+    let sibling_access = ConfigAccess::local_managed_agent(
+        admission.node.clone(),
+        identity::Did::new(sibling.did()).unwrap(),
+        sibling.as_ref(),
+    )
+    .unwrap();
+    for reader in [&stranger_access, &sibling_access] {
+        let rows = reader.execute(&query).await.unwrap();
+        assert!(rows["data"]["AgentRequest"].as_array().unwrap().is_empty());
+    }
+    let agent_did = admission.tool.actor.as_str();
+    let session_id = admission.tool.session_id.as_str();
+    let targets = admission
+        .client
+        .execute(&format!(
+            r#"{{
+        Agent(filter: {{agent_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}}
+        AgentSession(filter: {{session_id: {{_eq: "{}"}}}}, limit: 2) {{_docID}}
+    }}"#,
+            escape_graphql_string(agent_did),
+            escape_graphql_string(session_id)
+        ))
+        .await
+        .unwrap();
+    let agent_doc = targets["data"]["Agent"][0]["_docID"].as_str().unwrap();
+    let session_doc = targets["data"]["AgentSession"][0]["_docID"]
+        .as_str()
+        .unwrap();
+    admin
+        .grant_node_permission(
+            &identity::Did::new(agent_did).unwrap(),
+            NodePermission::DacRelationDelete,
+        )
+        .await
+        .unwrap();
+    worker_access
+        .delete_resource_relationship("AgentRequest", wake_doc, "parent", "agents", agent_doc)
+        .await
+        .unwrap();
+    worker_access
+        .delete_resource_relationship("AgentRequest", wake_doc, "session", "sessions", session_doc)
+        .await
+        .unwrap();
+    let hidden = admission.client.execute(&query).await.unwrap();
+    assert!(hidden["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let replay = ToolCallLifecycle::reconcile_background_completion_side_effects(
+        &admission.node,
+        &admission.node_did,
+        &recovery_identities(&admission),
+    )
+    .await
+    .unwrap();
+    assert!(replay.is_noop());
+    let hidden_after_replay = admission.client.execute(&query).await.unwrap();
+    assert!(hidden_after_replay["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    admission.node.shutdown().await.unwrap();
+    std::fs::remove_dir_all(admission.path).unwrap();
+}
+
 pub(crate) struct SelectedBackgroundWake {
     pub admission: PublishedAdmission,
     pub wake: crate::request::watcher::AgentRequest,
