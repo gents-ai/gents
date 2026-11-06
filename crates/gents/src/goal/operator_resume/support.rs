@@ -590,6 +590,19 @@ impl Fixture {
                 Ok::<_, anyhow::Error>(())
             })
         }).await.unwrap();
+        let call_id = escape_graphql_string(&format!("call-{request_id}"));
+        let observed = self.user_access.execute(&format!(
+            r#"{{ InferenceCall(filter: {{call_id: {{_eq: "{call_id}"}}}}, limit: 2) {{request_doc_id failure_reason}} }}"#,
+        )).await.unwrap();
+        let [call] = observed["data"]["InferenceCall"]
+            .as_array()
+            .unwrap()
+            .as_slice()
+        else {
+            panic!("session User must observe the failed inference call");
+        };
+        assert_eq!(call["request_doc_id"], request_doc);
+        assert_eq!(call["failure_reason"], failure);
     }
 
     pub async fn observe(&self) -> Value {
