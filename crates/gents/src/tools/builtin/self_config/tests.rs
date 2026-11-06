@@ -312,7 +312,7 @@ impl SelfConfigFixture {
             .unwrap();
     }
 
-    fn core(&self) -> SelfConfigCore {
+    pub(super) fn core(&self) -> SelfConfigCore {
         SelfConfigCore::new(
             self.db.node.clone(),
             self.db.node_identity.did().to_owned(),
@@ -1792,10 +1792,10 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
     let source = root.path().join("synthetic-codex");
     std::fs::create_dir_all(&source).unwrap();
     let marker = root.path().join("SHOULD_NEVER_RUN");
-    let fixture =
+    let source_config =
         include_str!("../../../../tests/fixtures/configuration_discovery/codex-user/config.toml")
             .replace("SHOULD_NEVER_RUN", &marker.to_string_lossy());
-    std::fs::write(source.join("config.toml"), fixture).unwrap();
+    std::fs::write(source.join("config.toml"), source_config).unwrap();
 
     let mut grants = config(&["tools"]);
     grants.agent_did = fixture.agent_did().to_owned();
@@ -6143,7 +6143,7 @@ async fn seed_account_view(
     upsert_oauth_credential(node, &account(Some("acct-l2"), "Work", false))
         .await
         .unwrap();
-    let access = &fixture.user_access;
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     for (backend_id, kind, auth, endpoint) in [
         (
             "backend-usage-claude",
