@@ -3813,39 +3813,32 @@ async fn agent_create_commits_and_resolves_after_restart() {
 
 #[tokio::test]
 async fn agent_clone_accepts_sibling_agent_did() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-clone");
-    let node_did = identity.did().to_string();
-    let qualified_sibling_id = "sibling-agent".to_owned();
-    crate::test_support::install_test_agent(&node, &node_did, &qualified_sibling_id).await;
-    let profile_id = "sibling-agent:inference";
-
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity.clone()),
-        &config(&["node"]),
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("agent-clone").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let node = &fixture.db.node;
+    let node_did = fixture.node_did();
+    let qualified_sibling_id = fixture.install_sibling("sibling-agent").await;
+    let profile_id = format!("{qualified_sibling_id}:inference");
+    let tools = fixture.tools(&["node"]);
     let tool = take_agent_tool(tools);
     let args = json!({"argv": [
         "agent", "clone",
         "--display-name", "Cloned Agent",
-        "--from", "sibling-agent",
+        "--from", qualified_sibling_id,
         "--profile", profile_id
     ]})
     .to_string();
     let output: Value =
         serde_json::from_str(&tool.call(args).await.expect("clone commits")).unwrap();
     assert_eq!(output["committed"], true);
-    let source = crate::list_agents(&node, &node_did)
+    let source = crate::list_agents(node, node_did)
         .await
         .unwrap()
         .into_iter()
         .find(|a| a.agent_did == qualified_sibling_id)
         .unwrap();
-    let cloned = crate::list_agents(&node, &node_did)
+    let cloned = crate::list_agents(node, node_did)
         .await
         .unwrap()
         .into_iter()
@@ -3857,21 +3850,18 @@ async fn agent_clone_accepts_sibling_agent_did() {
 
 #[tokio::test]
 async fn agent_clone_cannot_copy_unheld_grants() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-clone-grants");
-    let node_did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &node_did, "granted").await;
-    operator_grant_pack_install(&node, &node_did, "granted:tools").await;
+    let fixture = SelfConfigFixture::new("agent-clone-grants").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let node = &fixture.db.node;
+    let node_did = fixture.node_did();
+    let granted = fixture.install_sibling("granted").await;
+    fixture.grant_pack_install_to(&granted).await;
+    let profile = format!("{granted}:inference");
     let mut tool_config = config(&["node"]);
+    tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity.clone()),
-        &tool_config,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&tool_config);
     let tool = take_agent_tool(tools);
     for argv in [
         json!([
@@ -3880,9 +3870,9 @@ async fn agent_clone_cannot_copy_unheld_grants() {
             "--display-name",
             "Granted Copy",
             "--from",
-            "granted",
+            granted,
             "--profile",
-            "granted:inference"
+            profile
         ]),
         json!([
             "agent",
@@ -3891,9 +3881,9 @@ async fn agent_clone_cannot_copy_unheld_grants() {
             "--display-name",
             "Granted Copy",
             "--from",
-            "granted",
+            granted,
             "--profile",
-            "granted:inference"
+            profile
         ]),
     ] {
         let refused = if argv[1] == "preview" {
@@ -3911,9 +3901,9 @@ async fn agent_clone_cannot_copy_unheld_grants() {
             )
         };
         assert!(
-            refused.contains(
-                "clone source \"granted\" carries an operator grant this agent does not hold"
-            ),
+            refused.contains(&format!(
+                "clone source {granted:?} carries an operator grant this agent does not hold"
+            )),
             "{argv}: {refused}"
         );
         assert!(
@@ -3922,7 +3912,7 @@ async fn agent_clone_cannot_copy_unheld_grants() {
         );
     }
     assert!(
-        crate::list_agents(&node, &node_did)
+        crate::list_agents(node, node_did)
             .await
             .unwrap()
             .iter()
@@ -3933,38 +3923,36 @@ async fn agent_clone_cannot_copy_unheld_grants() {
 
 #[tokio::test]
 async fn agent_clone_by_holder_copies_granted_source() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-clone-holder");
-    let node_did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &node_did, "granted").await;
-    operator_grant_pack_install(&node, &node_did, "granted:tools").await;
+    let fixture = SelfConfigFixture::new("agent-clone-holder").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let node = &fixture.db.node;
+    let node_did = fixture.node_did();
+    let granted = fixture.install_sibling("granted").await;
+    fixture.grant_pack_install_to(&granted).await;
+    let profile = format!("{granted}:inference");
+    fixture.grant_pack_install().await;
     let mut tool_config = config(&["node"]);
-    tool_config.enable_pack_install = true;
+    tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    tool_config.enable_pack_install = true;
+    let tools = fixture.tools_with_config(&tool_config);
     let tool = take_agent_tool(tools);
     tool.call(
         json!({"argv": ["agent", "preview", "clone", "--display-name", "Granted Copy",
-                        "--from", "granted", "--profile", "granted:inference"]})
+                        "--from", granted, "--profile", profile]})
         .to_string(),
     )
     .await
     .expect("a holder may preview copying a granted source");
     let args = json!({"argv": ["agent", "clone", "--display-name", "Granted Copy",
-                               "--from", "granted", "--profile", "granted:inference"]})
+                               "--from", granted, "--profile", profile]})
     .to_string();
     let output: Value =
         serde_json::from_str(&tool.call(args).await.expect("a holder's clone commits")).unwrap();
     assert_eq!(output["committed"], true);
     assert!(
-        crate::list_agents(&node, &node_did)
+        crate::list_agents(node, node_did)
             .await
             .unwrap()
             .iter()
