@@ -417,6 +417,22 @@ async fn goal_and_claim_publication_links_match_lean() {
     use crate::store::identity::{KeyIdentity, NodeIdentity};
     use serde_json::json;
 
+    async fn reader_sees(access: &ConfigAccess, query: &str, collection: &str) -> bool {
+        let response = access.execute(query).await.unwrap();
+        if let Some(errors) = response.get("errors") {
+            assert!(
+                errors.is_null() || errors.as_array().is_some_and(Vec::is_empty),
+                "reader {collection} query failed: {response}"
+            );
+        }
+        !response["data"][collection]
+            .as_array()
+            .unwrap_or_else(|| {
+                panic!("reader {collection} query returned no rows array: {response}")
+            })
+            .is_empty()
+    }
+
     for case in &crate::lean_vocab_test::lean_contract_snapshot().goal_link_cases {
         let (db, user, user_access, binding) =
             crate::test_support::signed_test_node("goal-links").await;
@@ -447,6 +463,12 @@ async fn goal_and_claim_publication_links_match_lean() {
             )
             .await
             .unwrap();
+        for permission in [NodePermission::CollectionGet, NodePermission::DocumentRead] {
+            admin
+                .grant_node_permission(&identity::Did::new(reader.did()).unwrap(), permission)
+                .await
+                .unwrap();
+        }
         let agent_access = ConfigAccess::local_managed_agent(
             node.clone(),
             identity::Did::new(agent.did()).unwrap(),
@@ -516,6 +538,14 @@ async fn goal_and_claim_publication_links_match_lean() {
             )
             .await
             .unwrap();
+        let session_query = format!(
+            r#"{{ AgentSession(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+            escape_graphql_string(&session_doc)
+        );
+        assert!(
+            reader_sees(&reader_access, &session_query, "AgentSession").await,
+            "modeled reader must be able to query its granted session"
+        );
         let (actor, access) = match case.actor.as_str() {
             "user" => (user.did(), &user_access),
             "agent" => (agent.did(), &agent_access),
@@ -615,12 +645,7 @@ async fn goal_and_claim_publication_links_match_lean() {
                 .as_array()
                 .unwrap()
                 .is_empty());
-            assert!(
-                reader_access.execute(&query).await.unwrap()["data"][&case.collection]
-                    .as_array()
-                    .unwrap()
-                    .is_empty()
-            );
+            assert!(!reader_sees(&reader_access, &query, &case.collection).await);
             assert!(case.steps.is_empty());
             node.shutdown().await.expect("node shutdown");
             continue;
@@ -640,12 +665,7 @@ async fn goal_and_claim_publication_links_match_lean() {
                 current["data"][&case.collection][0]["parent_linked"],
                 case.initial.linked
             );
-            assert!(
-                reader_access.execute(&query).await.unwrap()["data"][&case.collection]
-                    .as_array()
-                    .unwrap()
-                    .is_empty()
-            );
+            assert!(!reader_sees(&reader_access, &query, &case.collection).await);
             node.shutdown().await.expect("node shutdown");
             continue;
         }
@@ -669,11 +689,7 @@ async fn goal_and_claim_publication_links_match_lean() {
             rows["data"][&case.collection][0]["parent_linked"],
             case.initial.linked
         );
-        let initial_reader = !reader_access.execute(&query).await.unwrap()["data"]
-            [&case.collection]
-            .as_array()
-            .unwrap()
-            .is_empty();
+        let initial_reader = reader_sees(&reader_access, &query, &case.collection).await;
         assert_eq!(initial_reader, case.initial.parent);
         if case.actor == "user" {
             let initial_agent = !agent_access.execute(&query).await.unwrap()["data"]
@@ -734,11 +750,7 @@ async fn goal_and_claim_publication_links_match_lean() {
                 current["data"][&case.collection][0]["parent_linked"],
                 step.after.linked
             );
-            let reader_visible = !reader_access.execute(&query).await.unwrap()["data"]
-                [&case.collection]
-                .as_array()
-                .unwrap()
-                .is_empty();
+            let reader_visible = reader_sees(&reader_access, &query, &case.collection).await;
             assert_eq!(reader_visible, step.after.parent);
             if case.actor == "user" {
                 let agent_visible = !agent_access.execute(&query).await.unwrap()["data"]
@@ -762,11 +774,7 @@ async fn goal_and_claim_publication_links_match_lean() {
         crate::goal::creation::finish_goal_relationships(access, runtime.did(), "links-session")
             .await
             .unwrap();
-        let reader_visible = !reader_access.execute(&query).await.unwrap()["data"]
-            [&case.collection]
-            .as_array()
-            .unwrap()
-            .is_empty();
+        let reader_visible = reader_sees(&reader_access, &query, &case.collection).await;
         assert_eq!(reader_visible, case.after_revocation.parent);
         let current = access.execute(&query).await.unwrap();
         assert_eq!(
