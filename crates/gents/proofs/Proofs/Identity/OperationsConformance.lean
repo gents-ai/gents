@@ -323,9 +323,13 @@ def replicaGrantCasesJson : String :=
     ("pending", toJson (state.relations.contains ⟨"enrollment_records", "remote", "pending_parent", .actor "runtime"⟩))])).compress
 
 def discoveryPolicyCasesJson : String :=
-  let cases := [("outsider-read", "outsider", "read"), ("outsider-write", "outsider", "update")]
-  (toJson (cases.map fun (name, actor, permission) => Json.mkObj [("name", toJson name),
-    ("allowed", toJson (allowed 5 publicDiscoveryFixture actor "discovery" "directory" permission))])).compress
+  let cases : List (String × State × String × String × String) :=
+    [("outsider-read", publicDiscoveryFixture, "outsider", "directory", "read"),
+     ("outsider-write", publicDiscoveryFixture, "outsider", "directory", "update"),
+     ("local-user-write", localRegistryWriterFixture, "user", "self", "update"),
+     ("revoked-user-write", localRegistryWriterRevoked, "user", "self", "update")]
+  (toJson (cases.map fun (name, state, actor, id, permission) => Json.mkObj [("name", toJson name),
+    ("allowed", toJson (allowed 5 state actor "discovery" id permission))])).compress
 
 def localRegistryWriterCasesJson : String :=
   let cases := [("runtime-owner", "runtime", true), ("user-owner", "user", true),

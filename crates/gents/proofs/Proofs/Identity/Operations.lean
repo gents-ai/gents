@@ -313,6 +313,22 @@ theorem enrollment_grant_does_not_authorize_application_documents :
      allowed 5 published "candidate" "children" "application" "read") = (true, false) := by
   native_decide
 
+def localRegistryWriterFixture : State :=
+  { objects := [⟨"nodes", "local-node", "user"⟩, ⟨"discovery", "self", "runtime"⟩],
+    relations := [⟨"discovery", "self", "local_publication", .actor "runtime"⟩,
+      ⟨"discovery", "self", "parent", .object "nodes" "local-node"⟩,
+      ⟨"discovery", "self", "writer", .actor "user"⟩], enrolled := [] }
+
+def localRegistryWriterRevoked : State :=
+  apply localRegistryWriterFixture (.revokeAs "runtime"
+    ⟨"discovery", "self", "writer", .actor "user"⟩)
+
+theorem local_registry_writer_revocation_is_not_republished :
+    let after := replicaGrant localRegistryWriterRevoked "discovery" "self" "runtime"
+      "local-node" "user" true true true true true
+    (allowed 5 localRegistryWriterFixture "user" "discovery" "self" "update",
+     allowed 5 after "user" "discovery" "self" "update") = (true, false) := by native_decide
+
 /-- A user-created secret configuration and both native relationships share
 the transaction. Failure to resolve its Node or stage either grant aborts the
 creation; a later update does not reinstall relationships. -/
