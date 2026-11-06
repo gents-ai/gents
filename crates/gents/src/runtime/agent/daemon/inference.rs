@@ -170,9 +170,10 @@ where
 // Construct a branch's potentially large future outside the live stream poll
 // frame. The call must remain separate even in optimized builds.
 #[inline(never)]
-fn box_stream_branch<F, T>(branch: F) -> std::pin::Pin<Box<impl std::future::Future<Output = T>>>
+fn box_stream_branch<F, Fut>(branch: F) -> std::pin::Pin<Box<Fut>>
 where
-    F: AsyncFnOnce() -> T,
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future,
 {
     Box::pin(branch())
 }
@@ -693,7 +694,10 @@ where
                                 biased;
                                 _ = shutdown.changed() => {
                                     drop(stream);
-                                    return box_stream_branch(async || {
+                                    let processor = &mut processor;
+                                    let request_id = &request_id;
+                                    let session_id = &session_id;
+                                    return box_stream_branch(move || async move {
                                         match tokio::time::timeout(
                                             crate::store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
                                             async {
@@ -735,7 +739,11 @@ where
                                     request_token.cancel();
                                     inference_token.cancel();
                                     drop(stream);
-                                    return box_stream_branch(async || {
+                                    let processor = &mut processor;
+                                    let persistence_hook = &persistence_hook;
+                                    let request_id = &request_id;
+                                    let session_id = &session_id;
+                                    return box_stream_branch(move || async move {
                                         let output_result = processor
                                             .persist_received_partial_turn("persist interrupted assistant turn")
                                             .await.map_err(processor_failure);
@@ -780,7 +788,13 @@ where
                                         None => std::future::pending::<()>().await,
                                     }
                                 } => {
-                                    let (flushed, item) = box_stream_branch(async || {
+                                    let processor = &mut processor;
+                                    let stream = &mut stream;
+                                    let request_token = &request_token;
+                                    let session_id = &session_id;
+                                    let trigger_correlation = &trigger_correlation;
+                                    let trigger_context = &trigger_context;
+                                    let (flushed, item) = box_stream_branch(move || async move {
                                         let progress = async {
                                             crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
                                                 request_deadline,
@@ -830,7 +844,11 @@ where
                                                 error.to_string(),
                                             );
                                             drop(stream);
-                                            return box_stream_branch(async || {
+                                            let processor = &mut processor;
+                                            let persistence_hook = &persistence_hook;
+                                            let request_id = &request_id;
+                                            let session_id = &session_id;
+                                            return box_stream_branch(move || async move {
                                                 let output_result = processor
                                                     .persist_received_partial_turn(
                                                         "persist deadline-expired assistant turn",
