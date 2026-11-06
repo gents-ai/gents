@@ -1292,17 +1292,6 @@ pub(super) mod tests {
         }
     }
 
-    fn test_agent() -> Arc<ResolvedAgent> {
-        let identity: Arc<dyn NodeIdentity> = Arc::new(
-            KeyIdentity::load_or_create(
-                std::env::temp_dir().join(format!("daemon-lineage-{}.key", uuid::Uuid::new_v4())),
-                None,
-            )
-            .expect("test identity"),
-        );
-        test_agent_with_identity(identity)
-    }
-
     fn test_agent_with_identity(identity: Arc<dyn NodeIdentity>) -> Arc<ResolvedAgent> {
         let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
         test_agent_with_binding(identity, binding)
@@ -1442,18 +1431,13 @@ pub(super) mod tests {
     }
 
     async fn create_enrollment_daemon_request(
-        node: &std::sync::Arc<defra_node::Node>,
+        db: &crate::support::TestDb,
+        member_access: &crate::ConfigAccess,
         agent_config: &ResolvedAgent,
         member: &dyn NodeIdentity,
         fence: &crate::runtime::agent::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence,
         suffix: &str,
     ) -> AgentRequest {
-        crate::test_support::install_test_agent(
-            node,
-            agent_config.node_did(),
-            &agent_config.agent_did,
-        )
-        .await;
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             format!("request-{suffix}"),
@@ -1476,29 +1460,32 @@ pub(super) mod tests {
         crate::sign_agent_request_create(member, &mut create)
             .await
             .unwrap();
-        let response = node.execute(&create.graphql_mutation().unwrap()).await;
-        assert!(
-            !response.has_errors(),
-            "create enrollment request: {:?}",
-            response.errors
-        );
-        let query = format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(&create.request_id)
-        );
-        let response = node.execute(&query).await;
-        let doc_id = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .and_then(|rows| rows.as_array())
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("_docID"))
-            .and_then(|value| value.as_str())
-            .expect("enrollment request doc id");
-        crate::request::admission::load_request_for_admission_test(node, doc_id)
+        let input = crate::request::lifecycle::client_request_input(&create).unwrap();
+        let agent_did = identity::Did::new(&agent_config.agent_did).unwrap();
+        let doc_id = member_access
+            .transact_write("test.enrollment_request", |txn| {
+                let input = &input;
+                let agent_did = &agent_did;
+                Box::pin(async move {
+                    let response = txn.execute_client_signed_create(
+                        "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                        &serde_json::json!({"input":input}),
+                        gents_protocol::schemas::AGENT_REQUEST,
+                    ).await?;
+                    let doc_id = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                    txn.add_actor_relationship("AgentRequest", &doc_id, "working_agent", agent_did).await?;
+                    Ok::<_, anyhow::Error>(doc_id)
+                })
+            })
             .await
-            .unwrap()
+            .unwrap();
+        crate::request::admission::load_request_for_admission_test_as(
+            &db.node,
+            &doc_id,
+            &agent_config.agent_did,
+        )
+        .await
+        .unwrap()
     }
 
     #[test]
@@ -2229,28 +2216,14 @@ pub(super) mod tests {
 
     #[tokio::test]
     async fn daemon_final_claim_rechecks_revocation_and_accepts_exact_replacement() {
-        let data_path = std::env::temp_dir().join(format!(
-            "daemon-enrollment-final-claim-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let node = Arc::new(
-            crate::test_support::node_builder()
-                .data_path(&data_path)
-                .build()
-                .await
-                .expect("embedded node"),
-        );
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let agent_config = test_agent();
-        let member_dir = tempfile::tempdir().unwrap();
-        let member: Arc<dyn NodeIdentity> = Arc::new(
-            KeyIdentity::load_or_create(member_dir.path().join("member.key"), None).unwrap(),
-        );
+        let (db, member, member_access, agent_config) =
+            held_daemon_fixture("daemon-enrollment-final-claim").await;
+        let node = db.node.clone();
         let fence = |sequence: u64, request_id: &str| {
             crate::runtime::agent::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence {
                 network_id: "network-1".into(),
                 request_id: request_id.into(),
-                admin_did: "did:key:admin".into(),
+                admin_did: agent_config.node_did().to_string(),
                 member_did: member.did().to_string(),
                 member_peer: "peer-member".into(),
                 member_ticket: "ticket-member".into(),
@@ -2263,9 +2236,10 @@ pub(super) mod tests {
         };
         let generation_one = fence(1, "enrollment-1");
         let revoked = create_enrollment_daemon_request(
-            &node,
+            &db,
+            &member_access,
             &agent_config,
-            member.as_ref(),
+            &member,
             &generation_one,
             "revoked",
         )
@@ -2326,24 +2300,19 @@ pub(super) mod tests {
             0,
             "revoked work reached provider"
         );
-        let rejected = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state claimed_at }} }}"#,
-            crate::store::graphql::escape_graphql_string(&revoked.doc_id))).await;
-        let row = rejected
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .and_then(|rows| rows.as_array())
-            .and_then(|rows| rows.first())
-            .unwrap();
+        let rejected = member_access.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state claimed_at }} }}"#,
+            crate::store::graphql::escape_graphql_string(&revoked.doc_id))).await.unwrap();
+        let row = &rejected["data"]["AgentRequest"][0];
         assert_eq!(row["lifecycle_state"], "failed");
         assert!(row["claimed_at"].is_null());
 
         let generation_two = fence(2, "enrollment-2");
         authority.replace(Some(generation_two.clone())).await;
         let replacement = create_enrollment_daemon_request(
-            &node,
+            &db,
+            &member_access,
             &agent_config,
-            member.as_ref(),
+            &member,
             &generation_two,
             "replacement",
         )
@@ -2358,7 +2327,6 @@ pub(super) mod tests {
         );
 
         node.shutdown().await.expect("node shutdown");
-        let _ = std::fs::remove_dir_all(data_path);
     }
     include!("pre_inference_interrupt_tests.rs");
     include!("execution_lease_regression_tests.rs");
