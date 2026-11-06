@@ -737,22 +737,39 @@ async fn duplicate_notification_key_recovers_its_original_wake_binding() {
 #[tokio::test]
 async fn many_concurrent_notifications_publish_one_wake_identity() {
     let db = test_db("atomic-background-many-race").await;
-    let parent = root_parent(&db, "atomic-background-many-race-session").await;
-    let enqueued = futures::future::join_all((0..16).map(|index| {
-        let node = db.node.clone();
-        let parent = parent.clone();
+    let mut fixture =
+        canonical_background_fixture(&db, "atomic-background-many-race-session").await;
+    let parent = fixture.parent.clone();
+    let mut tools = Vec::new();
+    for index in 0..16 {
+        tools.push(
+            fixture
+                .prepare_notification(&format!("concurrent notification {index}"))
+                .await
+                .unwrap(),
+        );
+    }
+    let selection = fixture.writer.terminal_output(&parent.doc_id).await;
+    fixture
+        .lifecycle
+        .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
+        .await
+        .unwrap();
+    let enqueued = futures::future::join_all(tools.iter().enumerate().map(|(index, tool)| {
+        let fixture = &fixture;
+        let parent = &parent;
         async move {
-            persist_background_completion_with_message(
-                &node,
-                &parent,
-                &format!("concurrent notification {index}"),
-                &format!("background-completion-notification:many-race-{index}:tool"),
-                "review notifications",
-                background_hints(&parent),
-                None,
-            )
-            .await
-            .unwrap()
+            fixture
+                .publish_prepared_notification(
+                    &format!("concurrent notification {index}"),
+                    &format!("background-completion-notification:many-race-{index}:tool"),
+                    "review notifications",
+                    background_hints(parent),
+                    None,
+                    tool,
+                )
+                .await
+                .unwrap()
         }
     }))
     .await;
