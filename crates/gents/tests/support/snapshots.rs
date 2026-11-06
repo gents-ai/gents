@@ -240,40 +240,27 @@ pub async fn fetch_session_snapshot(
         .map(|row| serde_json::from_value(row.clone()).expect("canonical AgentSession"))
 }
 
-pub async fn fetch_runtime_snapshot(
-    node: &EmbeddedNode,
-    node_did: &str,
-) -> Option<RuntimeSnapshot> {
+fn runtime_snapshot_query(node_did: &str) -> String {
     let node_did = escape_graphql_string(node_did);
-    let query = format!(
+    format!(
         r#"{{
-            NodeReadiness(
-                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
-                limit: 1
-            ) {{
-                node_did
-                snapshot_json
-                updated_at
+            NodeReadiness(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, limit: 1) {{
+                node_did snapshot_json updated_at
             }}
-            NodeRuntime(
-                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
-                limit: 1
-            ) {{
-                reconcile_phase
-                last_reconcile_result
-                last_reconcile_error
+            NodeRuntime(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, limit: 1) {{
+                reconcile_phase last_reconcile_result last_reconcile_error
             }}
         }}"#
-    );
-    let resp = node.execute(&query).await;
-    let diagnostic = first_optional_row::<RuntimeDiagnosticSnapshot>(&resp, "NodeRuntime")?;
-    let readiness_row = first_optional_row::<gents_protocol::node_readiness::NodeReadinessRow>(
-        &resp,
-        "NodeReadiness",
-    )?;
+    )
+}
+
+fn decode_runtime_snapshot(data: &serde_json::Value, node_did: &str) -> Option<RuntimeSnapshot> {
+    let diagnostic: RuntimeDiagnosticSnapshot =
+        serde_json::from_value(data.pointer("/NodeRuntime/0")?.clone()).ok()?;
+    let row: gents_protocol::node_readiness::NodeReadinessRow =
+        serde_json::from_value(data.pointer("/NodeReadiness/0")?.clone()).ok()?;
     let readiness =
-        gents_protocol::node_readiness::decode_node_readiness_snapshot(&readiness_row, &node_did)
-            .ok()?;
+        gents_protocol::node_readiness::decode_node_readiness_snapshot(&row, node_did).ok()?;
     Some(RuntimeSnapshot {
         process_state: readiness.process_state.as_str().to_string(),
         reconcile_phase: diagnostic.reconcile_phase,
@@ -283,6 +270,30 @@ pub async fn fetch_runtime_snapshot(
         last_reconcile_result: diagnostic.last_reconcile_result,
         last_reconcile_error: diagnostic.last_reconcile_error,
     })
+}
+
+pub async fn fetch_runtime_snapshot(
+    node: &EmbeddedNode,
+    node_did: &str,
+) -> Option<RuntimeSnapshot> {
+    let response = node.execute(&runtime_snapshot_query(node_did)).await;
+    assert!(
+        !response.has_errors(),
+        "query failed: {:?}",
+        response.errors
+    );
+    decode_runtime_snapshot(response.data.as_ref()?, node_did)
+}
+
+pub async fn fetch_runtime_snapshot_as(
+    access: &gents::ConfigAccess,
+    node_did: &str,
+) -> Option<RuntimeSnapshot> {
+    let response = access
+        .execute(&runtime_snapshot_query(node_did))
+        .await
+        .expect("read runtime snapshot as held user");
+    decode_runtime_snapshot(response.get("data")?, node_did)
 }
 
 pub async fn fetch_node_readiness_snapshot(
