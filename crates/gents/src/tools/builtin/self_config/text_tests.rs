@@ -53,74 +53,39 @@ async fn authenticated_setup(label: &str, categories: &[&str]) -> (SelfConfigFix
 }
 
 #[tokio::test]
-async fn agent_dids_resolve_from_their_node_local_slug() {
-    let (node, owner, tools) = setup("slug", &["node", "tools", "profile"]).await;
-    let worker = format!("{owner}:worker-a");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+async fn agent_selection_requires_exact_did_and_suggests_display_name() {
+    let (fixture, tools) =
+        authenticated_setup("agent-selection", &["node", "tools", "profile"]).await;
+    let worker = fixture.install_sibling("worker-a").await;
+    fixture.grant_node_reader().await;
 
-    let read = ok(
-        &tools,
-        json!({"argv":["tools","get"],"options":{"agent":"worker-a"}}),
-    )
-    .await;
-    assert_eq!(read["document"]["tools_id"], format!("{worker}:tools"));
-    let read = ok(&tools, json!({"argv":["agent","get","worker-a"]})).await;
-    assert!(read.to_string().contains(&worker), "{read}");
-
-    let receipt = ok(
-        &tools,
-        json!({"argv":["profile","preview"],"options":{"agent":"worker-a"},"set":{"display_name":"Worker"}}),
-    )
-    .await;
-    assert_eq!(receipt["agent_did"], worker);
-    assert_eq!(receipt["target_id"], format!("{worker}:inference"));
-
-    let error = refused(
-        &tools,
-        json!({"argv":["profile","preview"],"set":{"display_name":"Mine"}}),
-    )
-    .await;
+    let missing = refused(&tools, json!({"argv": ["agent", "get", "worker-a"]})).await;
     assert!(
-        error.contains("needs options.agent") && error.contains(&worker),
-        "{error}"
+        missing.contains(&worker),
+        "display-name lookup suggests the exact DID: {missing}"
     );
-
-    ok(
+    let read = ok(&tools, json!({"argv": ["agent", "get", worker]})).await;
+    assert_eq!(read["agent_did"], worker);
+    let tools_read = ok(
         &tools,
-        json!({"argv":["agent-target","create"],"target_id":"worker","set":{"name":"worker","target_node_did":owner,"agent_did":"worker-a"}}),
+        json!({"argv": ["tools", "get"], "options": {"agent": worker}}),
     )
     .await;
-    let target = ok(
-        &tools,
-        json!({"argv":["agent-target","get"],"target_id":"worker"}),
-    )
-    .await;
-    assert_eq!(target["document"]["agent_did"], worker);
-
-    crate::test_support::install_test_agent(&node, &owner, "worker-b").await;
-    crate::test_support::install_test_agent(&node, &owner, &format!("{owner}:worker-b")).await;
-    let read = ok(
-        &tools,
-        json!({"argv":["tools","get"],"options":{"agent":"worker-b"}}),
-    )
-    .await;
-    assert_eq!(read["document"]["tools_id"], "worker-b:tools");
-
-    let error = refused(
-        &tools,
-        json!({"argv":["tools","get"],"options":{"agent":"nope"}}),
-    )
-    .await;
-    assert!(
-        error.contains("[\\\"agent\\\",\\\"list\\\"]") && error.contains("next_call"),
-        "{error}"
+    assert_eq!(
+        tools_read["document"]["tools_id"],
+        format!("{worker}:tools")
     );
+    let preview = ok(&tools, json!({"argv": ["profile", "preview"], "options": {"agent": worker}, "set": {"display_name": "Worker"}})).await;
+    assert_eq!(preview["agent_did"], worker);
+    assert_eq!(preview["target_id"], format!("{worker}:inference"));
 
-    let error = refused(
+    let missing = refused(
         &tools,
-        json!({"argv":["agent","create"],"options":{"id":"x","display-name":"X","system-prompt":"p","preset":"readonly","profile":"beh-test:inference"}}),
+        json!({"argv": ["tools", "get"], "options": {"agent": "nope"}}),
     )
     .await;
+    assert!(missing.contains("next_call"), "{missing}");
+    let error = refused(&tools, json!({"argv": ["agent", "create"], "options": {"id": "x", "display-name": "X", "system-prompt": "p", "preset": "readonly", "profile": format!("{}:inference", fixture.agent_did())}})).await;
     assert!(error.contains("takes no id"), "{error}");
 }
 

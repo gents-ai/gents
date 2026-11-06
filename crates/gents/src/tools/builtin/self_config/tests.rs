@@ -136,7 +136,7 @@ impl SelfConfigFixture {
             .expect("User grants selected configuration to the Agent");
     }
 
-    async fn install_sibling(&self, display_name: &str) -> String {
+    pub(super) async fn install_sibling(&self, display_name: &str) -> String {
         let user = identity::Did::new(self.user_access.actor_did().unwrap()).unwrap();
         let binding = crate::store::identity::provision_agent_identity_authorized(
             &self.db.node,
@@ -156,7 +156,7 @@ impl SelfConfigFixture {
         binding.agent_did
     }
 
-    async fn grant_node_reader(&self) {
+    pub(super) async fn grant_node_reader(&self) {
         self.user_access
             .add_actor_relationship(
                 "Node",
