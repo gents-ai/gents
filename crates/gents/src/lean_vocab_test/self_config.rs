@@ -166,6 +166,9 @@ pub(crate) struct LeanJobGuardCase {
     pub(crate) name: String,
     pub(crate) writer: String,
     pub(crate) selected_before: bool,
+    pub(crate) native_authorized: bool,
+    pub(crate) native_source_authorized: bool,
+    pub(crate) add_schema_tool: bool,
     #[serde(deserialize_with = "super::required_nullable")]
     pub(crate) stored_integrations: Option<serde_json::Value>,
     pub(crate) candidate_integrations: serde_json::Value,

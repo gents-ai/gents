@@ -397,6 +397,7 @@ impl SelfConfigFixture {
             crate::Collection::AgentContext => gents_protocol::schemas::AGENT_CONTEXT,
             crate::Collection::InferenceProfile => gents_protocol::schemas::INFERENCE_PROFILE,
             crate::Collection::Node => gents_protocol::schemas::NODE,
+            crate::Collection::Tools => gents_protocol::schemas::TOOLS,
             _ => panic!("no fixture schema for {}", collection.graphql_type()),
         };
         self.user_access
@@ -7110,151 +7111,163 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
     assert_eq!(after["data"]["AgentContext"], expected_contexts);
 }
 
-fn job_tools(plugin: &str, job: Option<Value>) -> serde_json::Map<String, Value> {
-    let mut entry = json!({"plugin": plugin});
-    if let Some(job) = job {
-        entry["job"] = job;
-    }
-    json!({"integrations": {"plugins": [entry]}})
-        .as_object()
-        .unwrap()
-        .clone()
-}
-
-fn job_block(overrides: Value) -> Value {
-    let mut block = json!({
-        "agent_targets": ["a", "b"],
-        "max_live": 8,
-        "max_spawns": 100,
-        "max_messages_per_slot": 4,
-        "result_bytes": 65536,
-        "max_wall_secs": 7200,
-        "policy": {"dynamic": "check", "dynamic_targets": ["a"], "trusted_packs": []}
-    });
-    for (key, value) in overrides.as_object().unwrap() {
-        block[key] = value.clone();
-    }
-    block
-}
-
-fn job_guard(stored: Option<Value>, candidate: Option<Value>) -> Result<(), String> {
-    let stored = job_tools("ns/runner", stored);
-    let candidate = job_tools("ns/runner", candidate);
-    ops::guard_tools_keep_grants(&ops::OperatorGrants::default(), Some(&stored), &candidate)
-        .map_err(|error| format!("{error:#}"))
-}
-
-#[test]
-fn self_config_may_narrow_job_fields() {
-    let narrowed = job_block(json!({
-        "agent_targets": ["a"],
-        "max_live": 4,
-        "max_spawns": 10,
-        "max_messages_per_slot": 0,
-        "result_bytes": 1024,
-        "max_wall_secs": 60,
+#[tokio::test]
+async fn modeled_job_policy_updates_follow_native_tools_authorization() {
+    let cases = &crate::lean_vocab_test::lean_self_config_selection_cases().job_guard_cases;
+    let native_cases: Vec<_> = cases
+        .iter()
+        .filter(|case| case.name.starts_with("native_agent_update_"))
+        .collect();
+    assert!(native_cases
+        .iter()
+        .any(|case| case.native_authorized && case.native_source_authorized));
+    assert!(native_cases.iter().any(|case| !case.native_authorized));
+    assert!(native_cases.iter().any(|case| {
+        case.native_authorized && !case.native_source_authorized && case.add_schema_tool
     }));
-    job_guard(Some(job_block(json!({}))), Some(narrowed)).expect("narrowing every field");
-    job_guard(Some(job_block(json!({}))), Some(job_block(json!({}))))
-        .expect("an unchanged block is not a widening");
-}
-
-#[test]
-fn self_config_may_not_widen_a_job_number() {
-    for (field, value) in [
-        ("max_live", 9),
-        ("max_spawns", 101),
-        ("max_messages_per_slot", 5),
-        ("result_bytes", 65537),
-        ("max_wall_secs", 7201),
-    ] {
-        let refused = job_guard(
-            Some(job_block(json!({}))),
-            Some(job_block(json!({field: value}))),
-        )
-        .expect_err(field);
-        assert!(refused.contains(&format!("job.{field}")), "{refused}");
-        assert!(refused.contains("only the operator"), "{refused}");
+    for case in native_cases {
+        let fixture = SelfConfigFixture::new(&case.name).await;
+        let tools_id = format!("{}:tools", fixture.agent_did());
+        let node_did = fixture.node_did().to_owned();
+        fixture
+            .update_signed_configuration(
+                crate::Collection::Tools,
+                &tools_id,
+                json!({"integrations": case.stored_integrations}),
+            )
+            .await;
+        if case.native_authorized {
+            fixture.grant_selected_configuration().await;
+        }
+        let (doc_id, before) = fixture
+            .user_access()
+            .transact_readonly("test.job_policy.tools_before", |txn| {
+                let tools_id = &tools_id;
+                let node_did = &node_did;
+                Box::pin(async move {
+                    crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Tools,
+                        node_did,
+                        tools_id,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap()
+            .expect("selected Tools exists");
+        let actor = identity::Did::new(fixture.agent_did()).unwrap();
+        let decisions = fixture
+            .user_access()
+            .transact_readonly("test.job_policy.native_update", |txn| {
+                let actor = actor.clone();
+                let doc_id = doc_id.clone();
+                Box::pin(async move {
+                    txn.observe_document_access(
+                        &actor,
+                        "Tools",
+                        &[doc_id],
+                        defra_node::DocumentAccessMode::Named {
+                            permission: "update".into(),
+                            node_permission:
+                                crate::store::config_client::NodePermission::DocumentUpdate,
+                        },
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            decisions == [defra_node::DocumentAccessDecision::Allowed],
+            case.native_authorized,
+            "{}: native Tools update",
+            case.name
+        );
+        assert!(!fixture
+            .db
+            .node
+            .nac_manager()
+            .is_admin(&actor)
+            .await
+            .unwrap());
+        let mut patch = vec![(
+            "integrations".into(),
+            Some(case.candidate_integrations.clone()),
+        )];
+        if case.add_schema_tool {
+            let mut built_ins = before
+                .get("built_ins")
+                .filter(|value| value.is_object())
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            assert_ne!(built_ins["enable_schema_tool"], true);
+            built_ins["enable_schema_tool"] = json!(true);
+            patch.push(("built_ins".into(), Some(built_ins)));
+        }
+        let core = fixture.core();
+        let result = core.apply(tools_request(&core, patch)).await;
+        assert_eq!(result.is_ok(), case.accepted, "{}: {result:?}", case.name);
+        if let Err(error) = result {
+            if !case.native_authorized {
+                let denied = gents_protocol::error_chain::find_map_source(
+                    error.as_ref(),
+                    |cause| {
+                        cause
+                    .downcast_ref::<crate::store::config_client::ConfigClientError>()
+                    .map(|error| {
+                        error.is_permission_denied()
+                            || matches!(error, crate::store::config_client::ConfigClientError::ConfigurationMutationNotApplied { .. })
+                    })
+                    },
+                );
+                assert_eq!(denied, Some(true), "{}: {error:#}", case.name);
+            }
+        }
+        let (_, after) = fixture
+            .user_access()
+            .transact_readonly("test.job_policy.tools_after", |txn| {
+                let tools_id = &tools_id;
+                let node_did = &node_did;
+                Box::pin(async move {
+                    crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Tools,
+                        node_did,
+                        tools_id,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap()
+            .expect("selected Tools remains visible");
+        let expected = if case.accepted {
+            &case.candidate_integrations["plugins"][0]["job"]["policy"]["dynamic"]
+        } else {
+            &before["integrations"]["plugins"][0]["job"]["policy"]["dynamic"]
+        };
+        assert_eq!(
+            &after["integrations"]["plugins"][0]["job"]["policy"]["dynamic"], expected,
+            "{}",
+            case.name
+        );
+        if case.add_schema_tool {
+            assert_eq!(after["built_ins"], before["built_ins"], "{}", case.name);
+            assert!(!fixture
+                .db
+                .node
+                .nac_manager()
+                .check_permission(
+                    &actor,
+                    crate::store::config_client::NodePermission::CollectionPatch,
+                )
+                .await
+                .unwrap());
+        }
+        fixture.db.node.shutdown().await.unwrap();
     }
-}
-
-#[test]
-fn self_config_may_not_add_a_job_target() {
-    let refused = job_guard(
-        Some(job_block(json!({}))),
-        Some(job_block(json!({"agent_targets": ["a", "c"]}))),
-    )
-    .expect_err("a target outside the stored ceiling");
-    assert!(refused.contains("job.agent_targets"), "{refused}");
-    assert!(refused.contains("only the operator"), "{refused}");
-}
-
-#[test]
-fn self_config_may_not_edit_job_policy() {
-    let stored = job_block(json!({}));
-    for policy in [
-        json!({"dynamic": "off", "dynamic_targets": ["a"], "trusted_packs": []}),
-        json!({"dynamic": "check", "dynamic_targets": [], "trusted_packs": []}),
-        json!({"dynamic": "check", "dynamic_targets": ["a"], "trusted_packs": ["x/y"]}),
-    ] {
-        let refused = job_guard(
-            Some(stored.clone()),
-            Some(job_block(json!({"policy": policy}))),
-        )
-        .expect_err("policy is operator-only");
-        assert!(refused.contains("job.policy"), "{refused}");
-        assert!(refused.contains("only the operator"), "{refused}");
-    }
-}
-
-#[test]
-fn self_config_may_not_add_a_job_block() {
-    let refused =
-        job_guard(None, Some(job_block(json!({})))).expect_err("absent is the empty ceiling");
-    assert!(refused.contains("ns/runner"), "{refused}");
-    assert!(refused.contains("only the operator"), "{refused}");
-    let other = job_tools("ns/other", Some(job_block(json!({}))));
-    let stored = job_tools("ns/runner", Some(job_block(json!({}))));
-    ops::guard_tools_keep_grants(&ops::OperatorGrants::default(), Some(&stored), &other)
-        .expect_err("a block for another plugin is an added block");
-    ops::guard_tools_keep_grants(&ops::OperatorGrants::default(), None, &stored)
-        .expect_err("no stored Tools carries no job block");
-    ops::guard_tools_keep_grants(
-        &ops::OperatorGrants {
-            pack_install: true,
-            ..Default::default()
-        },
-        None,
-        &stored,
-    )
-    .expect_err("holding pack installation does not hold a job grant");
-}
-
-#[test]
-fn self_config_may_remove_a_job_block() {
-    job_guard(Some(job_block(json!({}))), None).expect("removing the block narrows it");
-    let stored = job_tools("ns/runner", Some(job_block(json!({}))));
-    ops::guard_tools_keep_grants(
-        &ops::OperatorGrants::default(),
-        Some(&stored),
-        &serde_json::Map::new(),
-    )
-    .expect("dropping integrations narrows every block");
-}
-
-#[test]
-fn reselection_keeps_job_grants() {
-    let held = ops::OperatorGrants::default();
-    let stored = job_tools("ns/runner", Some(job_block(json!({}))));
-    let narrower = job_tools("ns/runner", Some(job_block(json!({"max_live": 1}))));
-    let wider = job_tools("ns/runner", Some(job_block(json!({"max_live": 9}))));
-    ops::reselection_keeps_grants(&held, Some(&stored), Some(&narrower)).expect("narrower");
-    ops::reselection_keeps_grants(&held, Some(&stored), Some(&wider)).expect_err("wider");
-    ops::reselection_keeps_grants(&held, None, Some(&stored))
-        .expect_err("a reselection from no Tools acquires no job block");
-    ops::reselection_keeps_grants(&held, Some(&stored), None).expect("selecting no Tools");
-    let plain = job_tools("ns/runner", None);
-    ops::reselection_keeps_grants(&held, None, Some(&plain)).expect("no block, no grant");
 }
 
 #[tokio::test]
@@ -7292,10 +7305,7 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         assert!(format!("{:#}", result.unwrap_err()).contains("cannot be self-granted"));
     }
     fixture.grant_pack_install().await;
-    let holder = core.with_held_grants(ops::OperatorGrants {
-        pack_install: true,
-        ..Default::default()
-    });
+    let holder = core.with_held_grants(ops::OperatorGrants { pack_install: true });
     holder
         .apply(protect_working_agent(
             agent_request(&holder, vec![("context_id".into(), Some(json!(context)))]),

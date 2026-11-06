@@ -115,7 +115,6 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
         if (case.guarded || grant_guarded) && case.admissible && case.validates {
             let held = OperatorGrants {
                 pack_install: case.held_grants.pack_install,
-                ..Default::default()
             };
             let typed = || typed_merge(target, case, &patch);
             let grants = match target {
@@ -475,8 +474,8 @@ fn generated_self_config_selection_cases_drive_production_tools_selection() {
     }
 }
 
-/// Lean `JobGuardRow.accepted`: a model write of Tools `integrations` is
-/// judged by the native grant guards, an operator write bypasses them.
+/// Check the self-config grant slice for native-authorized model rows. The
+/// native authorization outcome is exercised by the signed database test.
 #[test]
 fn generated_self_config_job_guard_cases_drive_native_guard() {
     let cases = lean_self_config_selection_cases();
@@ -493,6 +492,9 @@ fn generated_self_config_job_guard_cases_drive_native_guard() {
         tools
     };
     for case in &cases.job_guard_cases {
+        if !case.native_authorized || !case.native_source_authorized {
+            continue;
+        }
         let held = OperatorGrants::default();
         let candidate = tools(Some(&case.candidate_integrations));
         let accepted = match case.writer.as_str() {

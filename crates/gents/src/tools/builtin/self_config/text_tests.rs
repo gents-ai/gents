@@ -1381,7 +1381,7 @@ async fn job_block_help_topic_states_bounds_defaults_and_policy() {
         "dynamic: off|check|run; default check",
         "dynamic_targets",
         "trusted_packs",
-        "operator-only",
+        "Tools updates require native document authorization",
     ] {
         assert!(shapes.contains(detail), "missing {detail:?}: {shapes}");
     }
