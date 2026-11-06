@@ -207,7 +207,6 @@ const MACHINE_RULES: &[CollectionRule] = &[CollectionRule {
 
 pub const AGENT_TARGET_CALLER_TEMPLATE: &str = "agent-target-caller";
 pub const AGENT_TARGET_HOST_TEMPLATE: &str = "agent-target-host";
-pub const APP_COLLECTIONS_TEMPLATE: &str = "app-collections";
 pub const MACHINE_TEMPLATE: &str = "machine";
 pub const CLIENT_INDEX_TEMPLATE: &str = "client-index";
 pub const CLIENT_TEMPLATE: &str = "client";
@@ -339,13 +338,9 @@ mod tests {
             )
             .await
             .unwrap();
-            node.add_dac_policy_with_counter_as(
-                &context,
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
-                0,
-            )
-            .await
-            .unwrap();
+            crate::test_support::acp_policies::install_identity_acp_policies(&node)
+                .await
+                .unwrap();
             for sdl in schemas {
                 node.add_collection(sdl).await.unwrap();
             }

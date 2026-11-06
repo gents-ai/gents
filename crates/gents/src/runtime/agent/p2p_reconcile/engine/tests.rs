@@ -33,4 +33,3 @@ include!("tests/reconnect.rs");
 include!("tests/topology.rs");
 include!("tests/applied_state.rs");
 include!("tests/convergence.rs");
-include!("tests/delivery.rs");

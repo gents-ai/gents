@@ -40,7 +40,8 @@ fn document_explanation_resolves_target_owner_separately_from_destination() {
 
 #[tokio::test]
 async fn measured_explanation_uses_scoped_endpoint_health_not_registry_presence() {
-    let node = Arc::new(defra_node::Node::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    crate::test_support::acp_policies::install_identity_acp_policies(&node).await.unwrap();
     node.add_collection(gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE)
         .await
         .unwrap();

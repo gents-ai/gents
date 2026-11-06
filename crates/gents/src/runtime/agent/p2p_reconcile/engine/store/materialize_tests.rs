@@ -35,7 +35,7 @@ async fn fixture() -> Arc<defra_node::Node> {
     // Deliberately omit the unique index: merge-parked twins remain scan-visible
     // even though local creation through the production index would reject them.
     node.add_collection(
-        r#"type PeerPairingDesired @policy(id: "4bb3e26819f6b2d971472ad58838fe45b7f105c55d3d2763a7cb8fa21751e2d5", resource: "pairing_observations") {
+        r#"type PeerPairingDesired @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "pairing_observations") {
         peer_id: String node_did: String actor_did: String @immutable source: String template: String
         collections: [String!] replicator_addresses: [String!] profiles: [String!]
         enrollment_request_digest: String enrollment_authorization_sequence: Int
