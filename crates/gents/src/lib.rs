@@ -404,7 +404,7 @@ pub(crate) mod test_support {
         install_test_agent_binding_with_access(node, owner, display_name, binding, &access).await;
     }
 
-    async fn install_test_agent_binding_with_access(
+    pub(crate) async fn install_test_agent_binding_with_access(
         node: &std::sync::Arc<defra_node::Node>,
         owner: &str,
         display_name: &str,
