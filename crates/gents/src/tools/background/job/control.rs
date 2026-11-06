@@ -804,9 +804,14 @@ mod tests {
         .unwrap()
     }
 
+    /// Whether `doc_id` carries an interrupt latch, read as the job's Agent
+    /// that owns its children.
     async fn interrupted(admission: &PublishedAdmission, doc_id: &str) -> bool {
-        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(&admission.node, doc_id)
-            .await
+        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+            &access(admission),
+            doc_id,
+        )
+        .await
             .unwrap()
             .is_some()
     }
@@ -1202,16 +1207,9 @@ mod tests {
         .await
         .unwrap();
         let load = || async {
-            ToolCallLifecycle::load_by_doc_id(
-                admission.node.clone(),
-                &doc_id,
-                admission.tool.node_did(),
-                admission.tool.session_id(),
-                admission.tool.requester_did(),
-            )
-            .await
-            .unwrap()
-            .unwrap()
+            crate::tools::background::job::driver::load_lifecycle(&access(&admission), &doc_id)
+                .await
+                .unwrap()
         };
         let mut loaded = load().await;
         kill(&access(&admission), &mut loaded, KillCause::Deadline)

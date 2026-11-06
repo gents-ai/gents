@@ -1928,7 +1928,7 @@ pub(crate) mod tests {
         }
 
         pub(crate) async fn write_guest_state(&self, row: &str, guest: &serde_json::Value) {
-            ConfigAccess::transact_local_write(&self.node, None, "test.input.guest_state", |txn| {
+            self.access.transact_write("test.input.guest_state", |txn| {
                 Box::pin(async move {
                     write_step_state_in_txn(txn, row, &evidence(), None, Some(guest)).await
                 })

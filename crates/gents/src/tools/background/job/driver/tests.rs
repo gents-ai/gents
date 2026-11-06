@@ -1793,8 +1793,11 @@ async fn step_failures_without_a_remembered_row_read_it_and_settle_on_the_third(
         "plugin_job_step_failed"
     );
     assert!(
-        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(&step.job.node, &child)
-            .await
+        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+            &step.job.access,
+            &child
+        )
+        .await
             .unwrap()
             .is_some(),
         "the live child is interrupted"
