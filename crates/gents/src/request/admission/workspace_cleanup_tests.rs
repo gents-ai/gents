@@ -51,15 +51,13 @@ impl Fixture {
         let agent = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
         let agent_did: identity::Did = agent.did().parse().unwrap();
         let admin = ConfigAccess::local_as(node.clone(), identity.did().parse().unwrap());
-        for permission in [
-            crate::store::config_client::NodePermission::DocumentDelete,
-            crate::store::config_client::NodePermission::DacRelationAdd,
-        ] {
-            admin
-                .grant_node_permission(&agent_did, permission)
-                .await
-                .unwrap();
-        }
+        admin
+            .grant_node_permission(
+                &agent_did,
+                crate::store::config_client::NodePermission::DocumentDelete,
+            )
+            .await
+            .unwrap();
         let access =
             ConfigAccess::local_managed_agent(node.clone(), agent_did, agent.as_ref()).unwrap();
         let mut create = AgentRequestCreate::base(
