@@ -1,7 +1,7 @@
 use super::evidence::home_usage;
 use super::install::{install, read_pack};
 use super::*;
-use crate::eval::runner::executor::InferenceBinding;
+use crate::eval::runner::executor::{InferenceBinding, StageSpec};
 use crate::eval::OutcomeKind;
 use crate::pack::digest_declared_assets;
 use crate::store::graphql::escape_graphql_string;
