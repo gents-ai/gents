@@ -67,6 +67,52 @@ pub(super) async fn insert_signed(db: &TestDb, mut request: AgentRequestCreate) 
     gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
+pub(super) async fn insert_signed_as(
+    fixture: &support::ManagedAgentFixture,
+    mut request: AgentRequestCreate,
+) -> String {
+    request.session_doc_id = Some(
+        gents::request::lifecycle::reserve_goal_session(&fixture.access, &request)
+            .await
+            .unwrap(),
+    );
+    request.agent_doc_id = Some(
+        fixture
+            .access
+            .transact_readonly("test.queue.selected_agent", |txn| {
+                Box::pin(async {
+                    Ok::<_, anyhow::Error>(
+                        gents::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            gents::Collection::Agent,
+                            &request.node_did,
+                            &request.agent_did,
+                        )
+                        .await?
+                        .expect("selected Agent")
+                        .0,
+                    )
+                })
+            })
+            .await
+            .unwrap(),
+    );
+    gents::sign_agent_request_create(&fixture.user, &mut request)
+        .await
+        .unwrap();
+    gents::request::lifecycle::submit_client_request(&fixture.access, &request)
+        .await
+        .unwrap();
+    let response = fixture.access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
+        escape_graphql_string(&request.request_id),
+    )).await.unwrap();
+    response["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .into()
+}
+
 pub(super) async fn enqueue_owned(
     db: &TestDb,
     fixture: &support::ManagedAgentFixture,

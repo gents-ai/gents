@@ -17,7 +17,9 @@ use gents_protocol::request_input::{
 };
 use tokio::sync::Notify;
 
-use crate::queue_management::{enqueue, enqueue_owned, insert_signed, row, row_as};
+use crate::queue_management::{
+    enqueue, enqueue_owned, insert_signed, insert_signed_as, row, row_as,
+};
 use crate::support::fixtures::{bind_agent_backend, bind_managed_agent_backend};
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::wait_for_request_terminal;
@@ -376,7 +378,10 @@ async fn explicitly_promoted_queue_input_continues_the_same_request_after_termin
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn signed_request_cannot_forge_another_requests_queue_slot() {
     let db = test_db("forged-queue-slot").await;
+    let fixture = crate::support::managed_agent_fixture(&db).await;
     let did = db.node_identity.did();
+    let user_did = fixture.user.did();
+    let agent_did = fixture.binding.agent_did.as_str();
     let session_id = "forged-slot-session";
     let backend = MockStreamingBackend::start_with_plans(
         MODEL,
@@ -389,35 +394,45 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
         )],
     )
     .unwrap();
-    bind_agent_backend(&db.node, did, AGENT, BACKEND, backend.endpoint(), MODEL).await;
-    let mut session = session_document(session_id, AGENT, &chrono::Utc::now().to_rfc3339());
-    session.node_did = did.into();
-    session.requester_did = Some(did.into());
-    session.title = Some(gents_protocol::session::SessionTitle {
-        text: "Slot test".into(),
-        source: gents_protocol::session::SessionTitleSource::Generated,
-    });
-    create_session_document(db.node.as_ref(), &session).await;
-    let legitimate = enqueue(
+    bind_managed_agent_backend(&db, &fixture, BACKEND, backend.endpoint(), MODEL).await;
+    let legitimate = enqueue_owned(
         &db,
-        AGENT,
+        &fixture,
         session_id,
         "legitimate-slot",
         "legitimate slot owner",
         QueueDelivery::Queue,
     )
     .await;
+    fixture
+        .access
+        .transact_write("test.forged_slot.title", |txn| {
+            Box::pin(async move {
+                gents::session::apply_title_in_txn(
+                    txn,
+                    did,
+                    Some(user_did),
+                    session_id,
+                    Some("Slot test"),
+                    gents_protocol::session::SessionTitleSource::Generated,
+                    &chrono::Utc::now().to_rfc3339(),
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
     let mut forged = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "forged-slot",
         did,
-        did,
-        AGENT,
+        user_did,
+        agent_did,
         session_id,
         "forged content must not execute",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::client(did),
+        AgentRequestAdmissionRecord::client(user_did),
     );
     forged.input.queue = Some(RequestQueue {
         source: QueueSource::User,
@@ -432,7 +447,7 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
         interrupted_request_id: None,
         background_completion_wake_version: None,
     });
-    let forged_id = insert_signed(&db, forged).await;
+    let forged_id = insert_signed_as(&fixture, forged).await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let agent = Gents::from_default_agent_documents(
         db.node.clone(),
@@ -445,15 +460,20 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
     let handle = tokio::spawn(agent.run(shutdown_rx));
     let runtime = BootedAgent::new(shutdown, handle, did.into());
     assert_eq!(
-        wait_for_request_terminal(db.node.as_ref(), "legitimate-slot", Duration::from_secs(60))
-            .await,
+        wait_for_signed_request_terminal(
+            &fixture.access,
+            "legitimate-slot",
+            Duration::from_secs(60)
+        )
+        .await,
         "completed"
     );
     assert_eq!(
-        wait_for_request_terminal(db.node.as_ref(), "forged-slot", Duration::from_secs(60)).await,
+        wait_for_signed_request_terminal(&fixture.access, "forged-slot", Duration::from_secs(60))
+            .await,
         "failed"
     );
-    let forged = row(&db, &forged_id).await;
+    let forged = row_as(&fixture, &forged_id).await;
     assert_eq!(forged["content"], "forged content must not execute");
     assert!(
         forged["failure_reason"]
@@ -467,22 +487,19 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
             .is_some_and(|signature| !signature.is_empty()),
         "this is signed but unauthorized slot ownership, not a missing signature fixture"
     );
-    assert_eq!(row(&db, &legitimate).await["lifecycle_state"], "completed");
+    assert_eq!(
+        row_as(&fixture, &legitimate).await["lifecycle_state"],
+        "completed"
+    );
     assert_eq!(backend.observed_completion_requests(), 1);
     assert!(backend
         .observed_completion_bodies()
         .iter()
         .all(|body| !body.to_string().contains("forged content must not execute")));
-    let captures = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    )
-    .execute(&format!(
+    let captures = fixture.access.execute(&format!(
         r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#,
-        escape_graphql_string("forged-slot")
-    ))
-    .await
-    .unwrap();
+        escape_graphql_string("forged-slot"),
+    )).await.unwrap();
     assert!(captures["data"]["RenderedRequest"]
         .as_array()
         .unwrap()
