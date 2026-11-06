@@ -1281,15 +1281,13 @@ impl NativeCanonicalExecution {
             .context("native request disappeared")?;
         if let Some((_, parent_doc_id)) = &self.title_parent {
             let parent = crate::store::graphql::escape_graphql_string(parent_doc_id);
-            let response = crate::store::graphql::graphql_with_transaction_retry(
-                &self.node,
+            let response = self.query(
                 &format!(r#"{{
                     AgentRequest(filter: {{ _docID: {{ _eq: "{parent}" }} }}, limit: 1) {{ {} }}
                     AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{parent}" }} }}) {{ _docID }}
                     AgentMessage(filter: {{ request_doc_id: {{ _eq: "{parent}" }} }}) {{ _docID }}
                 }}"#, crate::request::admission::SIGNED_REQUEST_FIELDS),
-                "test.native_execution.title_parent",
-            ).await?;
+            ).await;
             let parent: AgentRequestRow =
                 crate::store::graphql::first_row(&response, "AgentRequest")?
                     .context("title parent disappeared")?;
@@ -2910,7 +2908,11 @@ impl NativeCanonicalExecution {
             .collect::<Result<Vec<_>>>()?;
         Ok(gents_protocol::output::OutputSegment {
             node_did: self.node_did.clone(),
-            requester_did: Some(self.request_requester_did.clone()),
+            requester_did: Some(if record.coordinate.request == self.request_id {
+                self.request_requester_did.clone()
+            } else {
+                self.requester_did.clone()
+            }),
             session_id: self.session_id.clone(),
             request_doc_id: request_doc_id.clone(),
             source: gents_protocol::output::OutputSource::ProviderTurn {
