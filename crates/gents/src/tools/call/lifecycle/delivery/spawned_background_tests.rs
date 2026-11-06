@@ -298,8 +298,9 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
         append_tool_output(&binding, "stdout-before-terminal\n")
             .await
             .unwrap();
-        let mut replay = ToolCallLifecycle::load_by_doc_id(
+        let mut replay = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            tool.actor().clone(),
             &tool_doc_id,
             &tool.node_did,
             &tool.session_id,
@@ -312,8 +313,9 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
             None
         } else {
             Some(
-                ToolCallLifecycle::load_by_doc_id(
+                ToolCallLifecycle::load_by_doc_id_as(
                     node.clone(),
+                    tool.actor().clone(),
                     &tool_doc_id,
                     &tool.node_did,
                     &tool.session_id,
@@ -554,8 +556,9 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
             configure_bash_output_budget(&node, &tool.node_did, 5).await;
         }
         if reload {
-            tool = ToolCallLifecycle::load_by_doc_id(
+            tool = ToolCallLifecycle::load_by_doc_id_as(
                 node.clone(),
+                tool.actor().clone(),
                 tool.doc_id().unwrap(),
                 &tool.node_did,
                 &tool.session_id,
@@ -565,8 +568,9 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
             .unwrap()
             .expect("reloaded running tool");
         }
-        let mut replay = ToolCallLifecycle::load_by_doc_id(
+        let mut replay = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            tool.actor().clone(),
             tool.doc_id().unwrap(),
             &tool.node_did,
             &tool.session_id,
@@ -701,8 +705,9 @@ async fn spawned_background_replays_parent_provenance_and_never_authors_a_child_
             .is_err(),
         "a replay cannot change the child deadline"
     );
-    let mut replay_parent = ToolCallLifecycle::load_by_doc_id(
+    let mut replay_parent = ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
+        parent.actor().clone(),
         &parent_doc_id,
         "did:test:test",
         &parent.session_id,
@@ -853,8 +858,9 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
     let final_bytes = "child terminal bytes";
 
     assert!(bridge.publish_background_receipt("started").await.unwrap());
-    let mut reloaded = ToolCallLifecycle::load_by_doc_id(
+    let mut reloaded = ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
+        bridge.actor().clone(),
         &tool_doc_id,
         &bridge.node_did,
         &bridge.session_id,
@@ -990,8 +996,9 @@ async fn concurrent_background_bridge_completion_replays_one_exact_closure() {
     let tool_doc_id = bridge.doc_id().unwrap().to_owned();
     assert!(bridge.publish_background_receipt("started").await.unwrap());
     let load = || {
-        ToolCallLifecycle::load_by_doc_id(
+        ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            bridge.actor().clone(),
             &tool_doc_id,
             &bridge.node_did,
             &bridge.session_id,

@@ -76,8 +76,9 @@ async fn cancelled_worker_keeps_running_row_when_process_exit_is_unverified() {
     tokio::time::advance(crate::tools::exec::ownership::KILL_GRACE).await;
     finishing.await.unwrap();
     tokio::time::resume();
-    let row = ToolCallLifecycle::load_by_doc_id(
+    let row = ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
+        tool.actor().clone(),
         &doc_id,
         &admission.node_did,
         &session,
@@ -145,8 +146,9 @@ async fn later_stop_preserves_first_timeout_or_failure_and_projects_completion()
         )
         .await;
         assert!(registry.contains(&call, &doc).await);
-        let lifecycle = ToolCallLifecycle::load_by_doc_id(
+        let lifecycle = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            tool.actor().clone(),
             &doc,
             &admission.node_did,
             &session,
@@ -166,8 +168,9 @@ async fn later_stop_preserves_first_timeout_or_failure_and_projects_completion()
         assert!(
             matches!(response, crate::tools::call::control::CancelBackgroundToolCallOutcome::AlreadyTerminal { ref state } if state == expected)
         );
-        let row = ToolCallLifecycle::load_by_doc_id(
+        let row = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            tool.actor().clone(),
             &doc,
             &admission.node_did,
             &session,
@@ -238,8 +241,9 @@ async fn confirmed_background_stop_survives_terminal_write_failure() {
         .await;
     assert_eq!(count, 1);
     assert!(registry.contains(&call, &doc).await);
-    let before_retry = ToolCallLifecycle::load_by_doc_id(
+    let before_retry = ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
+        tool.actor().clone(),
         &doc,
         &admission.node_did,
         &session,
@@ -279,8 +283,9 @@ async fn confirmed_background_stop_survives_terminal_write_failure() {
         *entry.completion_tx.borrow(),
         model.retired_completion_notified
     );
-    let row = ToolCallLifecycle::load_by_doc_id(
+    let row = ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
+        tool.actor().clone(),
         &doc,
         &admission.node_did,
         &session,
@@ -432,8 +437,9 @@ async fn native_failure_decision_precedes_cancel_during_cleanup() {
     )
     .await
     .unwrap();
-    let row = ToolCallLifecycle::load_by_doc_id(
+    let row = ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
+        lifecycle.actor().clone(),
         &doc,
         &admission.node_did,
         &session,
