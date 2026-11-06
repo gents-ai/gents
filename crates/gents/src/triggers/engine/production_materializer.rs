@@ -15,6 +15,14 @@ use crate::runtime::snapshot::{ActiveRuntimeSnapshot, ResolvedTask};
 use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use crate::triggers::engine::{MaterializerHandle, TriggerKind};
 
+type ResolvedAgent = (
+    String,
+    String,
+    u64,
+    String,
+    Arc<dyn crate::store::identity::NodeIdentity>,
+);
+
 pub(crate) struct ProductionMaterializer {
     node: Arc<EmbeddedNode>,
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
@@ -47,16 +55,7 @@ impl ProductionMaterializer {
         ::identity::Did::new(agent.agent_did().to_owned()).context("trigger agent DID is invalid")
     }
 
-    fn resolve_agent(
-        &self,
-        task: &ResolvedTask,
-    ) -> Result<(
-        String,
-        String,
-        u64,
-        String,
-        Arc<dyn crate::store::identity::NodeIdentity>,
-    )> {
+    fn resolve_agent(&self, task: &ResolvedTask) -> Result<ResolvedAgent> {
         let snapshot = self.snapshot_rx.borrow().clone();
         let agent = snapshot.agent(&task.agent_did).ok_or_else(|| {
             let reason = snapshot

@@ -563,7 +563,7 @@ pub(crate) async fn execute_claimed(
                     };
                     ToolControlReceiptOutcome::Job(
                         crate::tools::background::job::control::control_lifecycle(
-                            &access, &scope, lifecycle, action,
+                            access, &scope, lifecycle, action,
                         )
                         .await?,
                     )

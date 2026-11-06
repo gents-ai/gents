@@ -46,8 +46,7 @@ pub(in crate::request::streaming) async fn close_provider_attempt_with_signer(
 ) -> Result<Option<String>> {
     close_provider_attempt_with_time(
         node,
-        actor,
-        signer,
+        (actor, signer),
         generation,
         prepared,
         close,
@@ -70,15 +69,23 @@ pub(crate) async fn close_provider_attempt_at(
     now: DateTime<Utc>,
 ) -> Result<Option<String>> {
     close_provider_attempt_with_time(
-        node, actor, None, generation, prepared, close, candidate, now,
+        node,
+        (actor, None),
+        generation,
+        prepared,
+        close,
+        candidate,
+        now,
     )
     .await
 }
 
 async fn close_provider_attempt_with_time(
     node: &std::sync::Arc<EmbeddedNode>,
-    actor: identity::Did,
-    signer: Option<crate::store::identity::ManagedAgentSigner>,
+    (actor, signer): (
+        identity::Did,
+        Option<crate::store::identity::ManagedAgentSigner>,
+    ),
     generation: &str,
     prepared: &OutputSegment,
     close: ProviderAttemptClose,

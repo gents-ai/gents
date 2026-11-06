@@ -22,7 +22,7 @@ use super::documents::{
     create_callback_result_mutation, update_invocation_mutation, CallbackInvocationDoc,
     CallbackResultDoc,
 };
-use super::run::{deny, encode_journal, persist_journal};
+use super::run::{deny, encode_journal, persist_journal, CallbackAccess};
 use super::{LIFECYCLE_FAILED, LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED};
 use crate::documents::{PortCardinality, PortSpec};
 use crate::plugin::data::{DataCaller, PluginData, StampContext};
@@ -167,8 +167,7 @@ fn take_writes(output: &mut Value) -> Result<Vec<DataWrite>, String> {
 }
 
 pub(super) async fn execute(
-    node: &std::sync::Arc<EmbeddedNode>,
-    access: &crate::ConfigAccess,
+    context: CallbackAccess<'_>,
     invocation: &mut CallbackInvocationDoc,
     handler: PluginHandler<'_>,
     source: &Value,
@@ -176,6 +175,7 @@ pub(super) async fn execute(
     journal: Vec<ActionJournalEntry>,
     data_node: Option<&Arc<EmbeddedNode>>,
 ) -> Result<()> {
+    let CallbackAccess { node, access } = context;
     if let Some(journal) = crate::tools::workspace::recover_running(&journal) {
         return persist_journal(
             node,

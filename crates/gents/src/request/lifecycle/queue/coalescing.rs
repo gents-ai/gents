@@ -50,14 +50,19 @@ pub(super) async fn reconcile_coalesced_pending_request_for(
 ) -> Result<Option<EnqueuedAgentRequest>> {
     let access = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(agent_did)?);
     reconcile_coalesced_pending_request_for_with_access(
-        node, &access, agent_did, session_id, node_did, source, key, anchor_doc,
+        (node, &access),
+        agent_did,
+        session_id,
+        node_did,
+        source,
+        key,
+        anchor_doc,
     )
     .await
 }
 
 pub async fn reconcile_coalesced_pending_request_for_with_access(
-    node: &std::sync::Arc<EmbeddedNode>,
-    access: &crate::ConfigAccess,
+    (node, access): (&std::sync::Arc<EmbeddedNode>, &crate::ConfigAccess),
     agent_did: &str,
     session_id: &str,
     node_did: &str,

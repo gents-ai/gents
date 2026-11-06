@@ -4122,9 +4122,11 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
             &node,
             fixture_actor.clone(),
             identity.as_ref(),
-            &owner,
-            &created.agent_did,
-            &format!("descendant-root-{label}"),
+            crate::request::lifecycle::ManualRequestTarget {
+                node_did: &owner,
+                agent_did: &created.agent_did,
+                task_id: &format!("descendant-root-{label}"),
+            },
             "Read the requested workspace path.",
             json!({}),
         )

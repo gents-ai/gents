@@ -497,8 +497,7 @@ pub async fn run_owned_invocation(
 
     let source = claimed.input.clone();
     execute_running_invocation(
-        node,
-        access,
+        CallbackAccess { node, access },
         &mut claimed,
         callback,
         &source,
@@ -545,9 +544,13 @@ async fn persist_claimed_to_running(
     }
 }
 
+pub(super) struct CallbackAccess<'a> {
+    pub node: &'a std::sync::Arc<EmbeddedNode>,
+    pub access: &'a crate::ConfigAccess,
+}
+
 async fn execute_running_invocation(
-    node: &std::sync::Arc<EmbeddedNode>,
-    access: &crate::ConfigAccess,
+    context: CallbackAccess<'_>,
     invocation: &mut CallbackInvocationDoc,
     callback: &crate::documents::Callback,
     source: &Value,
@@ -555,6 +558,7 @@ async fn execute_running_invocation(
     plugins: &PluginExecutor,
     data_node: Option<&std::sync::Arc<EmbeddedNode>>,
 ) -> Result<()> {
+    let CallbackAccess { node, access } = context;
     if callback.node_did != invocation.owner_node_did
         || callback.callback_id != invocation.callback_id
         || !callback.enabled
@@ -587,7 +591,13 @@ async fn execute_running_invocation(
             outputs,
         };
         return super::plugin::execute(
-            node, access, invocation, handler, source, plugins, journal, data_node,
+            CallbackAccess { node, access },
+            invocation,
+            handler,
+            source,
+            plugins,
+            journal,
+            data_node,
         )
         .await;
     }
@@ -646,7 +656,7 @@ async fn execute_running_invocation(
         .ok_or_else(|| anyhow!("ActionPlan has no actions"))?
         .clone()
     {
-        HostAction::CreateWorkspace(action) => action,
+        HostAction::CreateWorkspace(action) => *action,
         HostAction::FreezeWorkspaceBase(_) => {
             return deny(
                 node,

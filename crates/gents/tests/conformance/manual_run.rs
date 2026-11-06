@@ -65,9 +65,11 @@ async fn manual_run_materializes_agent_request_with_lineage() {
         &db.node,
         actor(agent.did()),
         agent.as_ref(),
-        db.node_identity.did(),
-        agent.did(),
-        "task-manual-lineage",
+        gents::request::lifecycle::ManualRequestTarget {
+            node_did: db.node_identity.did(),
+            agent_did: agent.did(),
+            task_id: "task-manual-lineage",
+        },
         "manual body",
         serde_json::json!({}),
     )
@@ -113,9 +115,11 @@ async fn manual_run_renders_args_scope() {
         &db.node,
         actor(agent.did()),
         agent.as_ref(),
-        db.node_identity.did(),
-        agent.did(),
-        "task-args",
+        gents::request::lifecycle::ManualRequestTarget {
+            node_did: db.node_identity.did(),
+            agent_did: agent.did(),
+            task_id: "task-args",
+        },
         "hi {{ args.name }}",
         serde_json::json!({"name": "Amy"}),
     )
@@ -139,9 +143,11 @@ async fn manual_submissions_materialize_distinct_requests() {
         &db.node,
         actor(agent.did()),
         agent.as_ref(),
-        db.node_identity.did(),
-        agent.did(),
-        "task-parallel",
+        gents::request::lifecycle::ManualRequestTarget {
+            node_did: db.node_identity.did(),
+            agent_did: agent.did(),
+            task_id: "task-parallel",
+        },
         "one",
         serde_json::json!({}),
     )
@@ -157,9 +163,11 @@ async fn manual_submissions_materialize_distinct_requests() {
         &db.node,
         actor(agent.did()),
         agent.as_ref(),
-        db.node_identity.did(),
-        agent.did(),
-        "task-parallel",
+        gents::request::lifecycle::ManualRequestTarget {
+            node_did: db.node_identity.did(),
+            agent_did: agent.did(),
+            task_id: "task-parallel",
+        },
         "two",
         serde_json::json!({}),
     )
@@ -198,9 +206,11 @@ async fn manual_run_exposes_manual_event_and_node_scope() {
         &db.node,
         actor(agent.did()),
         agent.as_ref(),
-        db.node_identity.did(),
-        agent.did(),
-        "task-event-scope",
+        gents::request::lifecycle::ManualRequestTarget {
+            node_did: db.node_identity.did(),
+            agent_did: agent.did(),
+            task_id: "task-event-scope",
+        },
         "kind={{ event.trigger_kind }} id={{ event.trigger_id }} fired={{ event.fired_at }} node={{ node.node_did }}",
         serde_json::json!({}),
     )
@@ -232,9 +242,11 @@ async fn manual_run_render_failure_materializes_no_request() {
         &db.node,
         actor(agent.did()),
         agent.as_ref(),
-        db.node_identity.did(),
-        agent.did(),
-        "task-render-err",
+        gents::request::lifecycle::ManualRequestTarget {
+            node_did: db.node_identity.did(),
+            agent_did: agent.did(),
+            task_id: "task-render-err",
+        },
         "oops {{ args.missing_field }}",
         serde_json::json!({}),
     )
@@ -255,9 +267,11 @@ async fn manual_run_render_failure_materializes_no_request() {
         &db.node,
         actor(agent.did()),
         agent.as_ref(),
-        db.node_identity.did(),
-        agent.did(),
-        "task-render-err",
+        gents::request::lifecycle::ManualRequestTarget {
+            node_did: db.node_identity.did(),
+            agent_did: agent.did(),
+            task_id: "task-render-err",
+        },
         "recovered {{ args.field }}",
         serde_json::json!({"field": "value"}),
     )

@@ -774,7 +774,7 @@ pub(crate) async fn recover_delegated_client_request_relationships_with_access(
         };
         let caller = crate::session::origin::SessionScope::from(source);
         match crate::session::origin::verified_agent_new_creation_for_opening(
-            &access,
+            access,
             &target,
             &caller,
             request_doc,
@@ -788,7 +788,7 @@ pub(crate) async fn recover_delegated_client_request_relationships_with_access(
                 continue;
             }
         }
-        match complete_client_request_relationships(&access, request_doc).await {
+        match complete_client_request_relationships(access, request_doc).await {
             Ok(()) => recovered += 1,
             Err(error) => {
                 failure.get_or_insert(error);

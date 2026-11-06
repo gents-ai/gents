@@ -24,7 +24,7 @@ pub struct ActionPlan {
 #[serde(tag = "type")]
 pub enum HostAction {
     #[serde(rename = "create_workspace")]
-    CreateWorkspace(CreateWorkspaceAction),
+    CreateWorkspace(Box<CreateWorkspaceAction>),
     #[serde(rename = "freeze_workspace_base")]
     FreezeWorkspaceBase(FreezeWorkspaceBaseAction),
     #[serde(rename = "seal_workspace")]
@@ -167,7 +167,7 @@ pub struct CleanupWorkspaceAction {
 pub fn emit_create_workspace_plan(action: CreateWorkspaceAction) -> ActionPlan {
     ActionPlan {
         abi: ACTION_PLAN_ABI,
-        actions: vec![HostAction::CreateWorkspace(action)],
+        actions: vec![HostAction::CreateWorkspace(Box::new(action))],
     }
 }
 

@@ -1172,9 +1172,7 @@ impl EventSource {
         #[cfg(test)]
         self.group_membership_queries
             .fetch_add(1, Ordering::Relaxed);
-        let Some(agent) = snapshot.agent(&trigger.task.agent_did) else {
-            return None;
-        };
+        let agent = snapshot.agent(&trigger.task.agent_did)?;
         let access = match crate::ConfigAccess::local_managed_agent(
             self.node.clone(),
             identity::Did::new(&trigger.task.agent_did).ok()?,

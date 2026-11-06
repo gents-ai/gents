@@ -645,7 +645,6 @@ async fn stamp_notification_with_source(
             })
         })
         .await
-        .map_err(anyhow::Error::from)
         .and_then(|value| {
             serde_json::from_value::<defra_node::QueryResponse>(value).map_err(anyhow::Error::from)
         });

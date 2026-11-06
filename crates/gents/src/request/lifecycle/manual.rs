@@ -12,9 +12,7 @@ pub async fn write_manual_agent_request(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
     identity: &dyn crate::store::identity::NodeIdentity,
-    node_did: &str,
-    agent_did: &str,
-    task_id: &str,
+    target: ManualRequestTarget<'_>,
     prompt_template: &str,
     args: Value,
 ) -> Result<String> {
@@ -22,11 +20,7 @@ pub async fn write_manual_agent_request(
         node,
         actor,
         identity,
-        ManualRequestTarget {
-            node_did,
-            agent_did,
-            task_id,
-        },
+        target,
         prompt_template,
         args,
         None,
@@ -152,9 +146,11 @@ mod tests {
             &node,
             actor,
             agent.as_ref(),
-            &node_did,
-            agent.did(),
-            "task-1",
+            ManualRequestTarget {
+                node_did: &node_did,
+                agent_did: agent.did(),
+                task_id: "task-1",
+            },
             "hello {{ args.name }}",
             serde_json::json!({"name": "Amy"}),
         )
@@ -212,9 +208,11 @@ mod tests {
             &node,
             actor,
             agent.as_ref(),
-            &node_did,
-            agent.did(),
-            "task-1",
+            ManualRequestTarget {
+                node_did: &node_did,
+                agent_did: agent.did(),
+                task_id: "task-1",
+            },
             "tick {{ ctx.now }} on {{ node.node_did }} / {{ node.agent_did }}",
             serde_json::json!({}),
         )
@@ -261,9 +259,11 @@ mod tests {
             &node,
             actor,
             agent.as_ref(),
-            &node_did,
-            agent.did(),
-            "task-1",
+            ManualRequestTarget {
+                node_did: &node_did,
+                agent_did: agent.did(),
+                task_id: "task-1",
+            },
             "/vuln-scan\nReview /work",
             serde_json::json!({}),
         )
@@ -386,9 +386,11 @@ mod tests {
             &node,
             actor,
             agent.as_ref(),
-            &node_did,
-            agent.did(),
-            "task-err",
+            ManualRequestTarget {
+                node_did: &node_did,
+                agent_did: agent.did(),
+                task_id: "task-err",
+            },
             "hello {{ args.missing }}",
             serde_json::json!({}),
         )

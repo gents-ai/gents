@@ -572,9 +572,11 @@ async fn manual_run_materializes_pending_request() {
         &db.node,
         ::identity::Did::new(agent.did()).expect("fixture creator DID"),
         agent.as_ref(),
-        db.node_identity.did(),
-        agent.did(),
-        "task-manual-pending",
+        gents::request::lifecycle::ManualRequestTarget {
+            node_did: db.node_identity.did(),
+            agent_did: agent.did(),
+            task_id: "task-manual-pending",
+        },
         "manual prompt body",
         serde_json::json!({}),
     )
@@ -620,9 +622,11 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
         &db.node,
         ::identity::Did::new(agent.did()).expect("fixture creator DID"),
         agent.as_ref(),
-        db.node_identity.did(),
-        agent.did(),
-        "task-manual-claim",
+        gents::request::lifecycle::ManualRequestTarget {
+            node_did: db.node_identity.did(),
+            agent_did: agent.did(),
+            task_id: "task-manual-claim",
+        },
         "manual prompt body",
         serde_json::json!({}),
     )

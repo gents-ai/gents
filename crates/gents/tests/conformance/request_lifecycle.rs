@@ -896,7 +896,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 }
                 "coalesce_pending" => {
                     let _ = gents::__test_internals::reconcile_coalesced_pending_request_for_with_access(
-                        &db.node, &access, agent.did(), &session_id, db.node_identity.did(),
+                        (&db.node, &access), agent.did(), &session_id, db.node_identity.did(),
                         gents::__test_internals::QueueSource::User, "conformance-key", None,
                     )
                     .await;

@@ -206,8 +206,7 @@ async fn persist_background_completion_with_message_canonical_inner(
         let created_request_doc_id = created.doc_id.clone();
         let active_request =
             super::coalescing::reconcile_coalesced_pending_request_for_with_access(
-                node,
-                access,
+                (node, access),
                 &parent.agent_did,
                 &parent.session_id,
                 &parent.node_did,
