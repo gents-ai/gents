@@ -38,15 +38,75 @@ pub(super) fn at(seconds: i64) -> DateTime<Utc> {
 }
 
 pub(super) async fn connect_accounts_at(f: &Fixture, seconds: i64) {
-    execute(
-        &f.user_access(),
-        &format!(
-            r#"mutation {{ update_OAuthCredential(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ connected_at: "{}" }}) {{ _docID }} }}"#,
-            escape_graphql_string(f.identity.did()),
-            at(seconds).to_rfc3339()
-        ),
-    )
-    .await;
+    let did = escape_graphql_string(f.identity.did());
+    let connected_at = at(seconds).to_rfc3339();
+    f.user_access()
+        .transact_write("test.reset.connected_accounts", |txn| {
+            let did = &did;
+            let connected_at = &connected_at;
+            Box::pin(async move {
+                let response = txn
+                    .execute(&format!(
+                        r#"{{ OAuthCredential(filter: {{ node_did: {{ _eq: "{did}" }} }}) {{ _docID }} }}"#
+                    ))
+                    .await?;
+                let rows = response["data"]["OAuthCredential"]
+                    .as_array()
+                    .context("credential query omitted rows")?;
+                assert_eq!(rows.len(), 2, "the reset fixture has two signed-in accounts");
+                for row in rows {
+                    let doc = row["_docID"].as_str().context("credential has no document ID")?;
+                    let mutation = format!(
+                        r#"mutation($input: OAuthCredentialMutationInputArg!) {{ update_OAuthCredential(filter: {{ _docID: {{ _eq: "{}" }} }}, input: $input) {{ _docID }} }}"#,
+                        escape_graphql_string(doc)
+                    );
+                    let updated = txn
+                        .execute_client_signed_update(
+                            &mutation,
+                            &json!({"input": {"connected_at": connected_at}}),
+                            gents_protocol::schemas::OAUTH_CREDENTIAL,
+                        )
+                        .await?;
+                    anyhow::ensure!(
+                        gents_protocol::graphql::extract_mutation_doc_id(&updated, "OAuthCredential")? == doc,
+                        "credential update affected a different document"
+                    );
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
+}
+
+pub(super) async fn disable_backend(f: &Fixture, backend: &str) {
+    let access = f.user_access();
+    let did = f.identity.did();
+    access
+        .transact_write("test.disable_resume_backend", |txn| {
+            Box::pin(async move {
+                let (_, mut value) = crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::InferenceBackend,
+                    did,
+                    backend,
+                )
+                .await?
+                .expect("selected backend");
+                value["enabled"] = false.into();
+                let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                    crate::store::config_client::DesiredStateApplyDocument {
+                        collection: crate::Collection::InferenceBackend,
+                        add: value.clone(),
+                        update: value,
+                    },
+                ])?;
+                crate::store::config_client::apply_desired_state_plan(txn, &plan).await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
 }
 
 pub(super) fn usage_limit(reset_at: Option<i64>) -> String {
@@ -155,34 +215,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
             .unwrap();
         }
         if !facts.backend_enabled {
-            let access = f.user_access();
-            access
-                .transact_write("test.disable_resume_backend", |txn| {
-                    let backend = &accounts.a;
-                    Box::pin(async move {
-                        let (_, mut value) =
-                            crate::store::config_client::read_desired_state_record_in_txn(
-                                txn,
-                                crate::Collection::InferenceBackend,
-                                did,
-                                backend,
-                            )
-                            .await?
-                            .expect("selected backend");
-                        value["enabled"] = false.into();
-                        let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-                            crate::store::config_client::DesiredStateApplyDocument {
-                                collection: crate::Collection::InferenceBackend,
-                                add: value.clone(),
-                                update: value,
-                            },
-                        ])?;
-                        crate::store::config_client::apply_desired_state_plan(txn, &plan).await?;
-                        Ok::<_, anyhow::Error>(())
-                    })
-                })
-                .await
-                .unwrap();
+            disable_backend(&f, &accounts.a).await;
         }
         assert_eq!(f.observe().await, case.before, "{} initial", case.name);
 

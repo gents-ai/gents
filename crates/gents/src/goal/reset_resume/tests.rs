@@ -1,4 +1,4 @@
-use super::contract_tests::{at, connect_accounts_at, usage_limit};
+use super::contract_tests::{at, connect_accounts_at, disable_backend, usage_limit};
 use super::support::*;
 use super::*;
 use crate::request::lifecycle::queue::goal_continuation_identity;
@@ -228,15 +228,7 @@ async fn waits_after_the_account_was_removed() {
 #[tokio::test]
 async fn waits_after_the_backend_was_disabled() {
     let reset = Reset::new("inference", Some(T)).await;
-    execute(
-        &reset.f.user_access(),
-        &format!(
-            r#"mutation {{ update_InferenceBackend(filter: {{ node_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#,
-            escape_graphql_string(reset.f.identity.did()),
-            escape_graphql_string(&reset.accounts.a)
-        ),
-    )
-    .await;
+    disable_backend(&reset.f, &reset.accounts.a).await;
 
     assert!(reset.resume(T).await.is_none());
     assert_eq!(reset.f.goal_status().await, "usage_limited");
