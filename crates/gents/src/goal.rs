@@ -89,9 +89,7 @@ pub(crate) use request_head::{
 };
 pub use reset_resume::resume_at_reset;
 mod question_wait;
-pub(crate) use backed_request::fingerprint::{
-    GoalBackedRequestFingerprint, GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS,
-};
+pub(crate) use backed_request::fingerprint::GoalBackedRequestFingerprint;
 pub(crate) use backed_request::{
     stage_goal_backed_request_in_txn, stage_goal_backed_request_with_identity_in_txn,
     submit_goal_backed_request_with_identity,

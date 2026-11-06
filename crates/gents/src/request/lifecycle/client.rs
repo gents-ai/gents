@@ -240,7 +240,7 @@ pub(crate) async fn stage_pending_child_request_in_txn(
                 .map_err(anyhow::Error::msg)?,
         )
         .await?;
-    crate::store::graphql::created_doc_id(&response, "AgentRequest")
+    Ok(crate::store::graphql::created_doc_id(&response, "AgentRequest")?)
 }
 
 pub(crate) async fn ensure_request_session_in_txn(
