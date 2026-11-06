@@ -2,6 +2,7 @@ use super::*;
 use crate::eval::runner::embedded::executor::install::install_schema;
 use crate::eval::runner::embedded::executor::tests::seed_trigger;
 use crate::eval::runner::embedded::executor::{close, EventSourcesReady};
+use crate::eval::runner::executor::FixtureDocument;
 use crate::RuntimeSnapshotObserver;
 use serde_json::json;
 
@@ -19,17 +20,19 @@ async fn a_seed_wait_resolves_as_soon_as_reconciliation_reports_an_error() {
         session_agent_owned: false,
         expired_client_request: false,
     };
+    let stage = StageSpec {
+        stage_id: "stage".into(),
+        prompt: String::new(),
+        seed: Some(seed),
+        deadline_secs: Some(2),
+        settle: false,
+        continuation: None,
+        review_previous: false,
+        captures: Vec::new(),
+    };
     let error = {
-        let waiting = seed_and_await_fire(
-            &home,
-            "did:test:unselected",
-            &ready,
-            &seed,
-            None,
-            Some(Duration::from_secs(2)),
-            "trial",
-            "stage",
-        );
+        let waiting =
+            seed_and_await_fire(&home, "did:test:unselected", &ready, &stage, None, "trial");
         tokio::pin!(waiting);
         assert!(futures::poll!(waiting.as_mut()).is_pending());
         observer.on_event_sources_reconciled(1, "fixture", Err("missing seed collection"));

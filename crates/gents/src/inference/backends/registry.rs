@@ -557,7 +557,7 @@ async fn write_probe_observation(
                 let doc_id = rows[0]["_docID"].as_str().context("backend observation has no physical identity")?;
                 let mutation = format!(
                     r#"mutation($input: InferenceBackendObservationMutationInputArg!) {{ update_InferenceBackendObservation(docID: "{}", input: $input) {{ _docID }} }}"#,
-                    escape_graphql_string(&doc_id)
+                    escape_graphql_string(doc_id)
                 );
                 txn.execute_client_signed_update(&mutation, &serde_json::json!({"input": input}), gents_protocol::schemas::INFERENCE_BACKEND_OBSERVATION).await?;
                 Ok(())

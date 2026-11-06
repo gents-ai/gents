@@ -9,7 +9,7 @@ use super::outcome::trigger_failure;
 use super::settle::remaining_of;
 use super::{Reconciled, POLL};
 use crate::eval::runner::embedded::home::{EmbeddedHome, RUNTIME_READY_TIMEOUT};
-use crate::eval::runner::executor::{FixtureDocument, StageSpec, TrialLocator};
+use crate::eval::runner::executor::{StageSpec, TrialLocator};
 use crate::eval::OutcomeKind;
 use crate::request::lifecycle::{
     build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
@@ -71,12 +71,12 @@ pub(super) async fn seed_and_await_fire(
     home: &EmbeddedHome,
     evaluator_did: &str,
     ready: &watch::Receiver<Reconciled>,
-    seed: &FixtureDocument,
+    stage: &StageSpec,
     trusted_schema: Option<&str>,
-    deadline: Option<Duration>,
     trial_id: &str,
-    stage_id: &str,
 ) -> Result<StageSubmission> {
+    let seed = stage.seed.as_ref().context("stage has no seed document")?;
+    let deadline = stage.deadline_secs.map(Duration::from_secs);
     anyhow::ensure!(
         !seed.expired_client_request,
         "expired client requests are trial fixtures, not event seeds"
@@ -117,7 +117,7 @@ pub(super) async fn seed_and_await_fire(
             &since,
             Some(&doc_id),
             trial_id,
-            stage_id,
+            &stage.stage_id,
         )
         .await
         {

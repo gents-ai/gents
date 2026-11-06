@@ -589,7 +589,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
             PeerPairingDesired { peer_id }
             DataPlanePairingDesired { peer_id }
         }"#;
-        let response = self.runtime_query(&query).await?;
+        let response = self.runtime_query(query).await?;
         let mut ids = BTreeSet::new();
         for row in rows::<PeerIdRow>(&response, "PeerPairingDesired")? {
             if !row.peer_id.trim().is_empty() {

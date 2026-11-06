@@ -234,11 +234,9 @@ async fn submit_and_observe(
                     home,
                     &spec.evaluator_did,
                     ready,
-                    seed,
+                    stage,
                     Some(&schema),
-                    deadline,
                     &spec.trial_id,
-                    &stage.stage_id,
                 )
                 .await
             }

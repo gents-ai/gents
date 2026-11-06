@@ -471,7 +471,7 @@ where
                 RequestLifecycle::recover_all_with_identities(
                     &node,
                     agent.node_did(),
-                    &[agent.agent_identity.clone()],
+                    std::slice::from_ref(&agent.agent_identity),
                 )
                 .await?;
                 crate::triggers::engine::durable::recover_outcomes_with_access(

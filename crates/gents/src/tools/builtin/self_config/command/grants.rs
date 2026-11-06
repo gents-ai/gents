@@ -2,9 +2,7 @@ use super::*;
 
 pub(super) fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<&'static str> {
     let mut resources = Vec::new();
-    if categories.contains("node") {
-        resources.push("agent");
-    } else if categories.contains("agent") {
+    if agent_command_exposed(categories) {
         resources.push("agent");
     }
     for (category, resource) in [

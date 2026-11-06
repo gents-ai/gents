@@ -188,11 +188,10 @@ async fn authority_rejection(
         let observed = txn
             .observe_document_access(&subject, collection, &docs, named(permission))
             .await?;
-        if observed.len() != docs.len() || observed.iter().any(|decision| *decision == Unavailable)
-        {
+        if observed.len() != docs.len() || observed.contains(&Unavailable) {
             anyhow::bail!("edit authority observation unavailable");
         }
-        if observed.iter().any(|decision| *decision == Denied) {
+        if observed.contains(&Denied) {
             return Ok(Some("edit is not authorized".into()));
         }
         anyhow::ensure!(
@@ -348,7 +347,7 @@ pub(crate) async fn process_command(
                 return Ok(None);
             }
             let intrinsic = intrinsic_rejection(identity.as_ref(), &command).await;
-            let owners = txn.document_owners("AgentSessionInputEdit", &[row.doc_id.clone()]).await?;
+            let owners = txn.document_owners("AgentSessionInputEdit", std::slice::from_ref(&row.doc_id)).await?;
             let owner = owners.first().and_then(|entry| entry.owner.as_ref())
                 .context("edit command owner unavailable")?;
             anyhow::ensure!(owners.len() == 1 && owners[0].visible && owners[0].doc_id == row.doc_id,
