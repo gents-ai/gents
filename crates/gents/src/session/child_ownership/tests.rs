@@ -1,6 +1,7 @@
 use super::*;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::json;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn publication_matches_atomic_session_child_model() {

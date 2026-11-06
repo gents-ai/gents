@@ -382,68 +382,6 @@ pub(crate) async fn save_exact_compaction_entry(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-pub(crate) async fn save_compaction_entry(
-    node: &std::sync::Arc<EmbeddedNode>,
-    agent_did: &str,
-    session_id: &str,
-    node_did: &str,
-    request_id: &str,
-    request_doc_id: &str,
-    summary: &str,
-    files_read: &[String],
-    files_modified: &[String],
-    messages_compacted: u32,
-    compacted_through_sequence: u32,
-    original_tokens: usize,
-    compacted_tokens: usize,
-) -> Result<CompactionEntry> {
-    let state =
-        load_prompt_compaction_state(node, agent_did, session_id, node_did, None, None).await?;
-    save_compaction_entry_with_requester_did(
-        node,
-        agent_did,
-        session_id,
-        node_did,
-        None,
-        request_id,
-        request_doc_id,
-        summary,
-        files_read,
-        files_modified,
-        messages_compacted,
-        compacted_through_sequence,
-        original_tokens,
-        compacted_tokens,
-        &state.generation,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-pub(crate) async fn save_compaction_entry_with_requester_did(
-    node: &std::sync::Arc<EmbeddedNode>,
-    agent_did: &str,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    request_id: &str,
-    request_doc_id: &str,
-    summary: &str,
-    files_read: &[String],
-    files_modified: &[String],
-    messages_compacted: u32,
-    compacted_through_sequence: u32,
-    original_tokens: usize,
-    compacted_tokens: usize,
-    expected_generation: &str,
-) -> Result<CompactionEntry> {
-    let access = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(agent_did)?);
-    save_compaction_entry_with_access(&access, agent_did, session_id, node_did, requester_did, request_id, request_doc_id, summary, files_read, files_modified, messages_compacted, compacted_through_sequence, original_tokens, compacted_tokens, expected_generation).await
-}
-
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn save_compaction_entry_with_access(
     access: &crate::ConfigAccess,
     agent_did: &str,
