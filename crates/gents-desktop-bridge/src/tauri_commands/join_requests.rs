@@ -13,7 +13,6 @@ use crate::types::{
 const NOT_CO_HOSTED: &str =
     "Join requests can only be read and decided for the node this desktop runs.";
 const NOT_PENDING: &str = "That request was already decided or has expired.";
-const RUNTIME_TOO_OLD: &str = "This node's runtime is too old to say who has access.";
 
 #[tauri::command]
 pub async fn desktop_join_requests_list(
@@ -108,12 +107,8 @@ fn not_co_hosted() -> BridgeError {
     BridgeError::new(BridgeErrorCode::Unsupported, NOT_CO_HOSTED)
 }
 
-fn query_error(error: gents_server::server_host::EnrollmentQueryError) -> BridgeError {
-    if error.query_is_unknown_to_runtime() {
-        BridgeError::new(BridgeErrorCode::Unsupported, RUNTIME_TOO_OLD)
-    } else {
-        BridgeError::untyped(format!("{error:#}"))
-    }
+fn query_error(error: anyhow::Error) -> BridgeError {
+    BridgeError::untyped(format!("{error:#}"))
 }
 
 fn decision_error(error: anyhow::Error) -> BridgeError {
@@ -132,9 +127,9 @@ mod tests {
         EnrollmentDecisionRefusalCode, MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
     };
     use gents_server::server_host::{
-        EnrollmentDecisionRejected, EnrollmentQueryError, EnrollmentQueryRejected,
-        ManagedEnrollmentDecision, ManagedEnrollmentHistory, ManagedEnrollmentHistoryEntry,
-        ManagedEnrollmentHistoryState, ManagedEnrollmentMember, ManagedPendingEnrollment,
+        EnrollmentDecisionRejected, ManagedEnrollmentDecision, ManagedEnrollmentHistory,
+        ManagedEnrollmentHistoryEntry, ManagedEnrollmentHistoryState, ManagedEnrollmentMember,
+        ManagedPendingEnrollment,
     };
 
     fn remote_only_state() -> (tempfile::TempDir, DesktopAppState) {
@@ -302,35 +297,6 @@ mod tests {
                 "conflictsOmitted": false,
             })
         );
-    }
-
-    #[test]
-    fn only_a_query_the_runtime_lacks_reads_as_unsupported() {
-        let refused = |status, message: &str| {
-            EnrollmentQueryError::from(EnrollmentQueryRejected {
-                status,
-                message: message.into(),
-            })
-        };
-        let older = query_error(refused(
-            reqwest::StatusCode::UNPROCESSABLE_ENTITY,
-            "query: unknown variant `members`, expected `pending`",
-        ));
-        assert_eq!(older.code, BridgeErrorCode::Unsupported);
-        assert_eq!(older.message, RUNTIME_TOO_OLD);
-        for failed in [
-            refused(reqwest::StatusCode::BAD_REQUEST, "nonce was used"),
-            refused(
-                reqwest::StatusCode::SERVICE_UNAVAILABLE,
-                "enrollment authority is not ready",
-            ),
-            EnrollmentQueryError::from(anyhow::anyhow!(
-                "error sending request: connection refused"
-            )),
-        ] {
-            let error = query_error(failed);
-            assert_eq!(error.code, BridgeErrorCode::Unknown);
-        }
     }
 
     #[test]
