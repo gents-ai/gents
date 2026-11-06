@@ -697,26 +697,19 @@ async fn build_registers_gated_family() {
 
 #[tokio::test]
 async fn pack_install_uses_current_node_and_inference_chain() {
-    let node = build_agent_node().await;
-    let identity = node_identity("pack-install");
-    let node_did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
-    for role in ["coordinator", "worker", "verifier"] {
-        crate::test_support::install_test_agent(&node, &node_did, role).await;
-    }
-
     let (home, plugins) = crate::test_support::home_with_fixture_pack("plugin_documents_fixture");
-    let mut tool_config = config(&[]);
-    tool_config.agent_did = "setup".to_string();
-    tool_config.enable_pack_install = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity),
-        &tool_config,
-        plugins,
-    );
+    let (fixture, tools) = signed_pack_tool("pack-install", plugins).await;
+    let node_did = fixture.node_did();
+    let coordinator = fixture.install_sibling("coordinator").await;
+    let worker = fixture.install_sibling("worker").await;
+    let verifier = fixture.install_sibling("verifier").await;
+    fixture.grant_node_reader().await;
+    let coordinator_profile = format!("{coordinator}:inference");
+    let worker_profile = format!("{worker}:inference");
+    let verifier_profile = format!("{verifier}:inference");
+    let coordinator_slot = format!("coordinator={coordinator_profile}");
+    let worker_slot = format!("worker={worker_profile}");
+    let verifier_slot = format!("verifier={verifier_profile}");
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -746,11 +739,11 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     );
     let slot_argv = [
         "--inference-slot",
-        "coordinator=coordinator:inference",
+        coordinator_slot.as_str(),
         "--inference-slot",
-        "worker=worker:inference",
+        worker_slot.as_str(),
         "--inference-slot",
-        "verifier=verifier:inference",
+        verifier_slot.as_str(),
     ];
     let mut preview_argv = vec![
         "pack",
@@ -796,9 +789,9 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     assert_eq!(
         output["inference"]["bindings"],
         json!({
-            "coordinator": "coordinator:inference",
-            "worker": "worker:inference",
-            "verifier": "verifier:inference",
+            "coordinator": coordinator_profile,
+            "worker": worker_profile,
+            "verifier": verifier_profile,
         })
     );
     let inspected: Value = serde_json::from_str(
@@ -862,9 +855,9 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         .call(
             json!({"argv": [
                 "pack", "update", "fixture/plugin_documents_fixture@1.0.0", "--digest", bad_digest,
-                "--inference-slot", "coordinator=coordinator:inference",
-                "--inference-slot", "worker=worker:inference",
-                "--inference-slot", "verifier=verifier:inference"
+                "--inference-slot", coordinator_slot.as_str(),
+                "--inference-slot", worker_slot.as_str(),
+                "--inference-slot", verifier_slot.as_str()
             ]})
             .to_string(),
         )
@@ -872,21 +865,33 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         .expect_err("a digest not returned by preview is rejected");
     assert!(rejected.to_string().contains("preview again"));
 
-    let owner = crate::store::graphql::escape_graphql_string(&node_did);
-    let tagged = node
-        .execute(&format!(
-            r#"mutation {{ update_Agent(filter: {{node_did: {{_eq: "{owner}"}}, agent_did: {{_eq: "fixture-worker"}}}}, input: {{tags: ["gents:pack:plugin_documents_fixture", "user:favorite"]}}) {{_docID}} }}"#
-        ))
-        .await;
-    assert!(!tagged.has_errors(), "{:?}", tagged.errors);
+    let rows = fixture
+        .user_access
+        .execute(
+            r#"{ Agent(filter: {display_name: {_eq: "Fixture worker"}}) { _docID agent_did } }"#,
+        )
+        .await
+        .unwrap();
+    let pack_worker = rows["data"]["Agent"][0]["_docID"].as_str().unwrap();
+    let doc = crate::store::graphql::escape_graphql_string(pack_worker);
+    fixture.user_access.transact_write("test.pack.tag_worker", |txn| {
+        let doc = &doc;
+        Box::pin(async move {
+            txn.execute_client_signed_update(
+                &format!(r#"mutation($input: AgentMutationInputArg!) {{ update_Agent(docID: "{doc}", input: $input) {{ _docID }} }}"#),
+                &json!({"input": {"tags": ["gents:pack:plugin_documents_fixture", "user:favorite"]}}),
+                gents_protocol::schemas::AGENT,
+            ).await
+        })
+    }).await.unwrap();
     let update_preview: Value = serde_json::from_str(
         &tool
             .call(
                 json!({"argv": [
                     "pack", "preview", "update", "fixture/plugin_documents_fixture@1.0.0",
-                    "--inference-slot", "coordinator=coordinator:inference",
-                    "--inference-slot", "worker=worker:inference",
-                    "--inference-slot", "verifier=verifier:inference"
+                    "--inference-slot", coordinator_slot.as_str(),
+                    "--inference-slot", worker_slot.as_str(),
+                    "--inference-slot", verifier_slot.as_str()
                 ]})
                 .to_string(),
             )
@@ -901,9 +906,9 @@ async fn pack_install_uses_current_node_and_inference_chain() {
             .call(
                 json!({"argv": [
                     "pack", "update", "fixture/plugin_documents_fixture@1.0.0", "--digest", update_digest,
-                    "--inference-slot", "coordinator=coordinator:inference",
-                    "--inference-slot", "worker=worker:inference",
-                    "--inference-slot", "verifier=verifier:inference"
+                    "--inference-slot", coordinator_slot.as_str(),
+                    "--inference-slot", worker_slot.as_str(),
+                    "--inference-slot", verifier_slot.as_str()
                 ]})
                 .to_string(),
             )
@@ -915,14 +920,16 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         updated["effective"]["digest"],
         output["effective"]["digest"]
     );
-    let tags = node
+    let tags = fixture
+        .user_access
         .execute(&format!(
-            r#"{{ Agent(filter: {{node_did: {{_eq: "{owner}"}}, agent_did: {{_eq: "fixture-worker"}}}}) {{tags}} }}"#
+            r#"{{ Agent(docID: "{}") {{ tags }} }}"#,
+            crate::store::graphql::escape_graphql_string(pack_worker),
         ))
-        .await;
-    assert!(!tags.has_errors(), "{:?}", tags.errors);
+        .await
+        .unwrap();
     assert_eq!(
-        tags.data.unwrap()["Agent"][0]["tags"],
+        tags["data"]["Agent"][0]["tags"],
         json!(["gents:pack:plugin_documents_fixture", "user:favorite"])
     );
     let store = crate::pack::store::PackStore::new(home.path());
@@ -959,15 +966,18 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     let removed: Value = serde_json::from_str(&removed).unwrap();
     assert_eq!(removed["pack"], "fixture/plugin_documents_fixture");
 
-    let response = node
+    let response = fixture
+        .user_access
         .execute(&format!(
-            "{{ PackInstallation(filter: {{node_did: {{_eq: \"{}\"}}}}) {{_docID}} }}",
-            crate::store::graphql::escape_graphql_string(&node_did)
+            r#"{{ PackInstallation(filter: {{node_did: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+            crate::store::graphql::escape_graphql_string(node_did),
         ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let data = response.data.unwrap();
-    assert!(data["PackInstallation"].as_array().unwrap().is_empty());
+        .await
+        .unwrap();
+    assert!(response["data"]["PackInstallation"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 
     let again = tool
         .call(json!({"argv": ["pack", "remove", "fixture/plugin_documents_fixture"]}).to_string())
