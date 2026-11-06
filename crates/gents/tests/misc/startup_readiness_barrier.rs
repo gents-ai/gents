@@ -5,19 +5,16 @@ use events::EventName;
 use gents::defra_node::Node as EmbeddedNode;
 use gents::runtime::startup_readiness::StartupReadinessOptions;
 use gents::store::graphql::escape_graphql_string;
-use gents::{
-    ensure_runtime_schemas, DocumentRuntimeOptions, Gents, NodeIdentity, ProcessLifecycleState,
-    ToolCeiling,
-};
+use gents::{DocumentRuntimeOptions, Gents, ProcessLifecycleState, ToolCeiling};
 use gents_protocol::row::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessSnapshot,
 };
 use tokio::sync::watch;
 
-use crate::support::fixtures::bind_default_agent_backend;
-use crate::support::fixtures::test_identity;
+use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::waits::RecordingProcessObserver;
+use crate::support::{managed_agent_fixture, test_db};
 
 const STARTUP_DEADLOCK_GUARD: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -95,6 +92,7 @@ impl gents::runtime::startup_readiness::StartupBuildFailureObserver
 
 async fn wait_for_node_readiness(
     node: &EmbeddedNode,
+    access: &gents::ConfigAccess,
     node_did: &str,
     agent_did: &str,
     state: AgentReadinessState,
@@ -113,11 +111,9 @@ async fn wait_for_node_readiness(
     );
     let mut updates = node.subscribe(&[EventName::Update]);
     loop {
-        let response = node.execute(&query).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
+        let response = access.execute(&query).await.expect("read node readiness");
         if let Some(snapshot) = response
-            .data
-            .as_ref()
+            .get("data")
             .and_then(|data| data.get("NodeReadiness"))
             .and_then(serde_json::Value::as_array)
             .and_then(|rows| rows.first())
@@ -142,20 +138,17 @@ async fn wait_for_node_readiness(
 
 #[tokio::test]
 async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<()> {
-    let identity = Arc::new(test_identity("startup-readiness-559"));
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await?,
-    );
-    ensure_runtime_schemas(node.as_ref()).await?;
+    let db = test_db("startup-readiness-559").await;
+    let fixture = managed_agent_fixture(&db).await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let mock_endpoint = MockModelEndpoint::start("default")?;
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    bind_managed_agent_backend(
+        &db,
+        &fixture,
         "backend-559",
         mock_endpoint.endpoint(),
+        "default",
     )
     .await;
 
@@ -171,8 +164,17 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    let response = fixture
+        .access
+        .write("test.startup_readiness.backend_auth", &mutation)
+        .await?;
+    assert_eq!(
+        response["data"]["update_InferenceBackend"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     assert!(
         std::env::var_os("GENTS_TEST_559_UNSET_KEY").is_none(),
         "the poison env var must not be set for this test to be honest"
@@ -201,6 +203,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     )
     .await?;
     let default_agent_did = agent.default_agent_did().to_string();
+    assert_eq!(default_agent_did, fixture.agent.did());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let run_task = tokio::spawn(agent.run(shutdown_rx));
 
@@ -231,6 +234,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
 
     let readiness = wait_for_node_readiness(
         node.as_ref(),
+        &fixture.access,
         identity.did(),
         &default_agent_did,
         AgentReadinessState::Unavailable,
@@ -277,33 +281,40 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
         std::env::remove_var(VAR);
     }
 
-    let identity = Arc::new(test_identity("startup-readiness-559-transient"));
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await?,
-    );
-    ensure_runtime_schemas(node.as_ref()).await?;
+    let db = test_db("startup-readiness-559-transient").await;
+    let fixture = managed_agent_fixture(&db).await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let mock_endpoint = MockModelEndpoint::start("default")?;
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    bind_managed_agent_backend(
+        &db,
+        &fixture,
         "backend-559-late",
         mock_endpoint.endpoint(),
+        "default",
     )
     .await;
     let escaped_backend_id = escape_graphql_string("backend-559-late");
+    let escaped_variable = escape_graphql_string(VAR);
     let mutation = format!(
         r#"mutation {{
             update_InferenceBackend(
                 filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                input: {{ auth: {{ kind: "environment", variable: "{VAR}" }} }}
+                input: {{ auth: {{ kind: "environment", variable: "{escaped_variable}" }} }}
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    let response = fixture
+        .access
+        .write("test.startup_readiness.backend_auth", &mutation)
+        .await?;
+    assert_eq!(
+        response["data"]["update_InferenceBackend"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 
     let observer = Arc::new(RecordingProcessObserver::default());
     let build_failure_observer = Arc::new(RecordingBuildFailureObserver::default());
@@ -328,6 +339,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
     )
     .await?;
     let default_agent_did = agent.default_agent_did().to_string();
+    assert_eq!(default_agent_did, fixture.agent.did());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let run_task = tokio::spawn(agent.run(shutdown_rx));
 
@@ -351,6 +363,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
 
     let readiness = wait_for_node_readiness(
         node.as_ref(),
+        &fixture.access,
         identity.did(),
         &default_agent_did,
         AgentReadinessState::Ready,
