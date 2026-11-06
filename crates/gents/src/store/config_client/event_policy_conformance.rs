@@ -128,6 +128,17 @@ async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::
             revoked = true;
         }
         if observation["rebound"] == true && !rebound {
+            // Lean `rebindEventConfiguration`: the Trigger's exclusive reader moves
+            // from the old Agent to the new one; the shared source only gains the
+            // new reader and keeps the old one's grant unless revoked above.
+            owner
+                .delete_actor_relationship(
+                    "Trigger",
+                    &trigger,
+                    "reader",
+                    &identity::Did::new(agent.did())?,
+                )
+                .await?;
             for (collection, doc) in [("Trigger", &trigger), ("EventSource", &source)] {
                 owner
                     .add_actor_relationship(
