@@ -205,6 +205,21 @@ theorem public_discovery_does_not_publish_enrollment :
      allowed 5 publicDiscoveryFixture "outsider" "enrollment_records" "request" "read") =
       (true, false, false) := by native_decide
 
+/-- PeerRegistry has two actual local writers: the held runtime's heartbeat and
+the Node-owning User's registration. Only a row naming that runtime whose
+registered creator is one of those two may grant the other writer. A foreign
+creator or a row naming another Node cannot grant a local writer. -/
+def localRegistryWriter (creator runtime user : DID) (namesRuntime : Bool) : Option DID :=
+  if !namesRuntime then none else if creator == runtime then some user
+  else if creator == user then some runtime else none
+
+theorem local_registry_writer_is_bound_to_creator_and_node :
+    [localRegistryWriter "runtime" "runtime" "user" true,
+     localRegistryWriter "user" "runtime" "user" true,
+     localRegistryWriter "foreign" "runtime" "user" true,
+     localRegistryWriter "user" "runtime" "user" false] =
+      [some "user", some "runtime", none, none] := by decide
+
 /-- Native node-administrator publication is local to the receiving store. Its
 actor is the configured Node, and native NAC bypass plus relation-add authority,
 the bound schema and a verified registered document must all hold in the same

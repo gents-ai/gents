@@ -66,10 +66,10 @@ def policy : List ResourceDefinition :=
         permission "update" [] [], permission "delete" [] []] }
   , { name := "discovery"
       relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
-        ⟨"reader_manager", ["actor"], ["reader"]⟩,
+        ⟨"reader_manager", ["actor"], ["reader"]⟩, ⟨"writer", ["actor"], []⟩,
         ⟨"local_publication", ["actor"], []⟩, ⟨"pending_parent", ["actor"], []⟩]
-      permissions := [permission "read" ["reader"] [("parent", "read")],
-        permission "update" [] [], permission "delete" [] []] }
+      permissions := [permission "read" ["reader", "writer"] [("parent", "read")],
+        permission "update" ["writer"] [], permission "delete" [] []] }
   , { name := "scoped_discovery"
       relations := [⟨"parent", ["nodes"], []⟩, ⟨"reader", ["actor"], []⟩,
         ⟨"reader_manager", ["actor"], ["reader"]⟩,
