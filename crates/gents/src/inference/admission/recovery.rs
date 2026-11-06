@@ -60,8 +60,17 @@ impl InferenceCall {
             };
             let rows = load_stale_inference_calls(&access, node_did, identity.did()).await?;
             for row in rows {
-                let Some(parent) = lookup_parent_request(&access, node_did, &row).await? else {
-                    continue;
+                let parent = match lookup_parent_request(&access, node_did, &row).await {
+                    Ok(parent) => parent,
+                    Err(error) => {
+                        tracing::warn!(
+                            call_id = %row.call_id,
+                            request_id = %row.request_id,
+                            error = %gents_protocol::error_chain::ErrorChain(error.as_ref()),
+                            "skipped stale inference call without a visible parent request"
+                        );
+                        continue;
+                    }
                 };
                 let Some(outcome) = recovery_outcome(&row, &parent) else {
                     continue;
@@ -130,7 +139,7 @@ async fn lookup_parent_request(
     access: &crate::ConfigAccess,
     node_did: &str,
     row: &StaleInferenceCallRow,
-) -> Result<Option<AgentRequestRow>> {
+) -> Result<AgentRequestRow> {
     let escaped_node_did = escape_graphql_string(node_did);
     let request_id = &row.request_id;
     let escaped_request_id = escape_graphql_string(request_id);
@@ -168,7 +177,16 @@ async fn lookup_parent_request(
         })?;
 
     let rows: Vec<AgentRequestRow> = crate::store::graphql::required_rows(&resp, "AgentRequest")?;
-    Ok(rows.into_iter().next())
+    // A call row the agent can read names its parent. Authorization filters
+    // rows silently, so an empty result means the parent is not visible to
+    // this agent (or is gone), never that recovery has nothing to do.
+    rows.into_iter().next().ok_or_else(|| {
+        anyhow::anyhow!(
+            "parent AgentRequest {} for call {} is not visible to inference recovery",
+            row.request_doc_id,
+            row.call_id
+        )
+    })
 }
 
 fn recovery_outcome(

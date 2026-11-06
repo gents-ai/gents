@@ -627,6 +627,22 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     )
     .await
     .unwrap();
+    // A client request is claimable only with the native claim admission its
+    // verifier issues for this Agent; without it the claim is withheld as Queued.
+    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        identity.clone(),
+        authority,
+    );
+    let (parent, claim_admission) = verifier
+        .verify_fresh_for_claim_with_identity(&parent, agent.as_ref())
+        .await
+        .unwrap();
+    assert!(
+        claim_admission.is_some(),
+        "fixture client request lacks native claim admission"
+    );
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
         node.clone(),
         agent.did(),
@@ -637,6 +653,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
         "recovery-cas-backend",
     );
     lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+    lifecycle.set_client_claim_admission(claim_admission);
     lifecycle.set_configured_max_total_tokens(Some(100));
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),
@@ -776,7 +793,7 @@ async fn parent_recovery_lookup_uses_agent_native_authority() {
     let found = lookup_parent_request(&agent_access, runtime.did(), &row)
         .await
         .unwrap_or_else(|error| panic!("authorized parent lookup failed: {error:#}"));
-    let parent = found.unwrap();
+    let parent = found;
     assert_eq!(parent.request_id, "private-recovery");
     assert!(recovery_outcome(&row, &parent).is_none());
     agent_access.write("test.inference_recovery.terminal", &format!(
@@ -784,7 +801,6 @@ async fn parent_recovery_lookup_uses_agent_native_authority() {
         row.request_doc_id, RequestLifecycleState::Failed.as_str())).await.unwrap();
     let terminal = lookup_parent_request(&agent_access, runtime.did(), &row)
         .await
-        .unwrap()
         .unwrap();
     assert!(matches!(
         recovery_outcome(&row, &terminal),
