@@ -1286,11 +1286,6 @@ pub(super) mod tests {
         }
     }
 
-    fn test_agent_with_identity(identity: Arc<dyn NodeIdentity>) -> Arc<ResolvedAgent> {
-        let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
-        test_agent_with_binding(identity, binding)
-    }
-
     fn test_agent_with_binding(
         identity: Arc<dyn NodeIdentity>,
         binding: gents_protocol::agent_identity::AgentIdentityBinding,
@@ -1838,10 +1833,16 @@ pub(super) mod tests {
             .unwrap()
             .managed_agent_signer()
             .unwrap();
-        let mut agent_config = test_agent_with_identity(identity);
-        let resolved = Arc::get_mut(&mut agent_config).unwrap();
-        resolved.agent_did = signer.did().to_owned();
-        resolved.agent_identity = Arc::new(signer.clone());
+        let escaped_agent = crate::store::graphql::escape_graphql_string(signer.did());
+        let agent_row = admission.client.execute(&format!(
+            r#"{{ Agent(filter: {{ agent_did: {{ _eq: "{escaped_agent}" }} }}, limit: 2) {{ agent_did creation_nonce }} }}"#,
+        )).await.unwrap();
+        let [row] = agent_row["data"]["Agent"].as_array().unwrap().as_slice() else {
+            panic!("the selected Agent binding must be unique");
+        };
+        let binding = serde_json::from_value(row.clone()).unwrap();
+        let agent_config = test_agent_with_binding(identity, binding);
+        assert_eq!(agent_config.agent_identity.did(), signer.did());
         assert_eq!(agent_config.node_did(), admission.node_did);
         assert_eq!(wake.node_did, admission.node_did);
         assert_eq!(
