@@ -181,6 +181,19 @@ impl SelfConfigFixture {
         .unwrap();
     }
 
+    async fn grant_agent_relation_delete(&self) {
+        crate::ConfigAccess::local_as(
+            self.db.node.clone(),
+            identity::Did::new(self.db.node_identity.did()).unwrap(),
+        )
+        .grant_node_permission(
+            &identity::Did::new(&self.agent_did).unwrap(),
+            crate::store::config_client::NodePermission::DacRelationDelete,
+        )
+        .await
+        .unwrap();
+    }
+
     pub(super) async fn grant_agent_schema(&self) {
         let admin = crate::ConfigAccess::local_as(
             self.db.node.clone(),
@@ -311,6 +324,7 @@ impl SelfConfigFixture {
         let schema = match collection {
             crate::Collection::AgentContext => gents_protocol::schemas::AGENT_CONTEXT,
             crate::Collection::InferenceProfile => gents_protocol::schemas::INFERENCE_PROFILE,
+            crate::Collection::Node => gents_protocol::schemas::NODE,
             _ => panic!("no fixture schema for {}", collection.graphql_type()),
         };
         self.user_access
@@ -6408,30 +6422,26 @@ async fn agent_management_clears_optional_fields_and_refuses_ignored_tool_modifi
 
 #[tokio::test]
 async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
-    let node = build_agent_node().await;
-    let identity = node_identity("disable-preview-parity");
-    let owner = identity.did().to_owned();
-    for id in ["current", "default"] {
-        crate::test_support::install_test_agent(&node, &owner, id).await;
-    }
-    crate::documents::upsert_node(&node, &owner, None, Some("default"), true, None)
-        .await
-        .unwrap();
+    let fixture = SelfConfigFixture::new("disable-preview-parity").await;
+    fixture.grant_selected_configuration().await;
+    let default = fixture.install_sibling("default").await;
+    fixture.grant_node_reader().await;
+    fixture
+        .update_signed_configuration(
+            crate::Collection::Node,
+            fixture.node_did(),
+            json!({"default_agent_did": default}),
+        )
+        .await;
+    let current = fixture.agent_did();
     let mut grants = config(&["node"]);
-    grants.agent_did = "current".into();
+    grants.agent_did = current.to_owned();
     grants.no_lockout = true;
     grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&grants);
     for argv in [
-        vec!["agent", "preview", "disable", "--id", "current"],
-        vec!["agent", "disable", "--id", "current"],
+        vec!["agent", "preview", "disable", "--id", current],
+        vec!["agent", "disable", "--id", current],
     ] {
         let error = call_config_tool(&tools, argv.into_iter().map(str::to_owned).collect())
             .await
@@ -6441,41 +6451,33 @@ async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
             "{error}"
         );
     }
-    let current = crate::list_agents(&node, &owner)
+    let current = crate::list_agents(&fixture.db.node, fixture.node_did())
         .await
         .unwrap()
         .into_iter()
-        .find(|agent| agent.agent_did == "current")
+        .find(|agent| agent.agent_did == current)
         .unwrap();
     assert!(current.enabled);
 }
 
 #[tokio::test]
 async fn agent_only_edits_preserve_an_optional_absent_context() {
-    let node = build_agent_node().await;
-    let identity = node_identity("contextless-agent-edit");
-    let owner = identity.did().to_owned();
-    for id in ["current", "other"] {
-        crate::test_support::install_test_agent(&node, &owner, id).await;
-    }
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "current".into()).unwrap();
+    let fixture = SelfConfigFixture::new("contextless-agent-edit").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_agent_relation_delete().await;
+    let other = fixture.install_sibling("other").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&other).await;
+    let current = fixture.agent_did();
+    let other_profile = format!("{other}:inference");
+    let core = fixture.core();
     core.apply(agent_request(&core, vec![("context_id".into(), None)]))
         .await
         .unwrap();
-    let mut grants = config(&["agent"]);
-    grants.agent_did = "current".into();
-    grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let tools = fixture.tools(&["agent"]);
     for (prefix, committed) in [
-        (vec!["agent", "preview", "edit", "current"], false),
-        (vec!["agent", "edit", "current"], true),
+        (vec!["agent", "preview", "edit", current], false),
+        (vec!["agent", "edit", current], true),
     ] {
         let mut argv: Vec<String> = prefix.into_iter().map(str::to_owned).collect();
         argv.extend(
@@ -6483,7 +6485,10 @@ async fn agent_only_edits_preserve_an_optional_absent_context() {
                 "--set",
                 r#"display_name="Contextless""#,
                 "--set",
-                r#"inference_profile_id="other:inference""#,
+                &format!(
+                    "inference_profile_id={}",
+                    serde_json::to_string(&other_profile).unwrap()
+                ),
             ]
             .into_iter()
             .map(str::to_owned),
@@ -6492,14 +6497,14 @@ async fn agent_only_edits_preserve_an_optional_absent_context() {
             serde_json::from_str(&call_config_tool(&tools, argv).await.unwrap()).unwrap();
         assert_eq!(result["committed"], committed);
     }
-    let current = crate::list_agents(&node, &owner)
+    let current = crate::list_agents(&fixture.db.node, fixture.node_did())
         .await
         .unwrap()
         .into_iter()
-        .find(|agent| agent.agent_did == "current")
+        .find(|agent| agent.agent_did == current)
         .unwrap();
     assert_eq!(current.display_name.as_deref(), Some("Contextless"));
-    assert_eq!(current.inference_profile_id, "other:inference");
+    assert_eq!(current.inference_profile_id, other_profile);
     assert_eq!(current.context_id, None);
 }
 
