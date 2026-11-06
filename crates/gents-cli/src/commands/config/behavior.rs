@@ -13,7 +13,7 @@ use crate::request_helpers::resolve_dual_id;
 use crate::{graphql_rows, print_json, read_init_config, resolve_config_access, resolve_home_dir};
 
 pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
-    let endpoint = client_endpoint(&args.graphql).await?;
+    let endpoint = crate::resolve_graphql_endpoint(Some(&args.graphql), None)?;
     let access = ConfigAccess::Graphql(endpoint.clone());
     let binding = match args.agent_did.as_deref() {
         Some(agent_did) => {
@@ -62,18 +62,6 @@ pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
     Ok(())
 }
 
-async fn client_endpoint(graphql: &str) -> Result<gents::store::config_client::GraphqlEndpoint> {
-    let identity = crate::load_client_identity().await?;
-    let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
-        identity.private_key_bytes(),
-    )?;
-    Ok(
-        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, identity.did())
-            .with_client_signing_capability(capability)?
-            .with_client_signed_agent_creates(),
-    )
-}
-
 fn local_node_did(home: Option<&std::path::Path>) -> Result<String> {
     read_init_config(&resolve_home_dir(home))?
         .map(|config| config.node_did)
@@ -86,7 +74,7 @@ async fn submit_agent(
     owner: &str,
     mut params: ConfigureAgentParams,
 ) -> Result<()> {
-    let endpoint = client_endpoint(graphql).await?;
+    let endpoint = crate::resolve_graphql_endpoint(Some(graphql), None)?;
     if matches!(params.action.as_str(), "create" | "clone") {
         params.identity_binding =
             Some(gents_desktop_core::agent_identity::provision(&endpoint, owner).await?);
@@ -106,7 +94,7 @@ pub(super) async fn agent_self_config_permission(
 ) -> Result<()> {
     use gents::store::config_client::AgentSelfConfigPermission;
 
-    let access = ConfigAccess::Graphql(client_endpoint(&args.graphql).await?);
+    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let permission = if grant {
         AgentSelfConfigPermission::Grant
     } else {
