@@ -321,31 +321,6 @@ pub(crate) mod test_support {
         (db, user, access, binding)
     }
 
-    pub(crate) async fn install_test_agent_as(
-        node: &std::sync::Arc<defra_node::Node>,
-        runtime: &dyn crate::store::identity::NodeIdentity,
-        user: &dyn crate::store::identity::NodeIdentity,
-        display_name: &str,
-    ) -> gents_protocol::agent_identity::AgentIdentityBinding {
-        use crate::store::config_client::ConfigAccess;
-
-        let user_did = identity::Did::new(user.did()).unwrap();
-        let binding =
-            crate::store::identity::provision_agent_identity_authorized(node, runtime, &user_did)
-                .await
-                .unwrap();
-        let access = ConfigAccess::local_as(node.clone(), user_did);
-        install_test_agent_binding_with_access(
-            node,
-            runtime.did(),
-            display_name,
-            &binding,
-            &access,
-        )
-        .await;
-        binding
-    }
-
     pub(crate) async fn set_test_default_agent_as(
         access: &crate::store::config_client::ConfigAccess,
         runtime_did: &str,
