@@ -1140,6 +1140,26 @@ def affectedCases : List Json :=
    affectedCaseJson "visible-reference" (docs ++ [_root_.Configuration.Affected.schedule]) ["trigger"],
    affectedCaseJson "shared-surface-collision" [collision, surfaceA, surfaceB] ["surface-a"],
    affectedCaseJson "disabled-default" [defaultNode, disabledAgent, profile] ["disabled-agent"]]
+def pluginDeleteCase (name : String) (installed selected managed pinnedSame : Bool) : Json :=
+  let root : Configuration.PluginDeleteRoot := ⟨"team/worker", "digest-a"⟩
+  let selection : Configuration.PluginDeleteSelection :=
+    ⟨"tools-doc", "context-doc", "team/worker",
+      (if pinnedSame then some "digest-a" else some "digest-b"),
+      agentDid, (if managed then agentDid else userDid), selected⟩
+  let state : Configuration.PluginDeleteProjection :=
+    { roots := (if installed then [root] else []), selections := [selection] }
+  Json.mkObj [("name", toJson name), ("installed", toJson installed),
+    ("selected", toJson selected), ("managed", toJson managed),
+    ("pinned_same", toJson pinnedSame),
+    ("source_count", toJson (Configuration.pluginDeleteSources state).length)]
+
+def pluginDeleteCases : List Json :=
+  [pluginDeleteCase "selected-installed" true true true true,
+   pluginDeleteCase "uninstalled" false true true true,
+   pluginDeleteCase "disabled" true false true true,
+   pluginDeleteCase "foreign-actor" true true false true,
+   pluginDeleteCase "replaced-digest" true true true false]
+
 def toolSource : Configuration.ToolGrantSource := ⟨"tools-doc", agentDid, "schema", "patch-collection"⟩
 def otherToolSource : Configuration.ToolGrantSource := ⟨"other-tools-doc", agentDid, "schema", "patch-collection"⟩
 def otherAgentSource : Configuration.ToolGrantSource := ⟨"tools-doc", siblingDid, "schema", "patch-collection"⟩
@@ -1666,6 +1686,7 @@ def json : Json := Json.mkObj
      backendCredentialPublicationCase "new" "new" true false]),
    ("backend_credential_native_cases", toJson ([backendCredentialNativeCase false,
       backendCredentialNativeCase true])),
+   ("plugin_delete_cases", toJson pluginDeleteCases),
    ("tool_grant_projection_cases", toJson toolGrantCases),
    ("tool_grant_group_cases", toJson toolGrantGroupCases),
    ("tool_grant_hierarchy_cases", toJson toolHierarchyCases),
