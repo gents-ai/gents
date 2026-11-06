@@ -425,6 +425,8 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             session_doc_id: case.expected_session_document.as_deref().map(|document| {
                 if document == "session-document" {
                     session_before.as_ref().unwrap().doc_id.clone()
+                } else if document == "old-header" {
+                    session_before.as_ref().unwrap().doc_id.clone()
                 } else {
                     document.into()
                 }
@@ -480,6 +482,121 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                 );
             } else {
                 let doc_id = persist_command(&access, &command).await;
+                if case.name == "recreated_session" {
+                    let old_session = session_before.as_ref().unwrap().doc_id.clone();
+                    assert_eq!(
+                        command.session_doc_id.as_deref(),
+                        Some(old_session.as_str())
+                    );
+                    let initial = command.initial_request.as_deref().unwrap();
+                    assert_eq!(
+                        initial.session_doc_id.as_deref(),
+                        Some(old_session.as_str())
+                    );
+                    let signed_session = &session_before.as_ref().unwrap().session;
+                    assert_eq!(initial.node_did, signed_session.node_did);
+                    assert_eq!(initial.session_id, signed_session.session_id);
+                    assert_eq!(initial.agent_did, signed_session.agent_did);
+                    assert_eq!(
+                        Some(initial.requester_did.as_str()),
+                        signed_session.requester_did.as_deref()
+                    );
+                    assert!(user
+                        .verify(
+                            user.did(),
+                            &initial.signing_payload(),
+                            &initial.admission.signature
+                        )
+                        .await
+                        .unwrap());
+                    assert!(user
+                        .verify(
+                            user.did(),
+                            &command.signing_payload().unwrap(),
+                            &command.signature,
+                        )
+                        .await
+                        .unwrap());
+                    access
+                        .write(
+                            "test.goal.delete_original_session",
+                            &format!(
+                                r#"mutation {{ delete_AgentSession(docID: "{}") {{ _docID }} }}"#,
+                                escape_graphql_string(&old_session),
+                            ),
+                        )
+                        .await
+                        .unwrap();
+                    let recreated = access
+                        .transact_write("test.goal.recreate_session", |txn| {
+                            Box::pin(async {
+                                crate::session::ensure_session_in_txn(
+                                    txn,
+                                    SESSION,
+                                    identity.did(),
+                                    &command.agent_did,
+                                    Some(user.did()),
+                                    None,
+                                    None,
+                                    &time(3),
+                                )
+                                .await?;
+                                crate::session::load_agent_session_owner_in_txn(
+                                    txn,
+                                    identity.did(),
+                                    SESSION,
+                                )
+                                .await?
+                                .context("recreated session is missing")
+                            })
+                        })
+                        .await
+                        .unwrap();
+                    assert_ne!(recreated.session.created_at, signed_session.created_at);
+                    assert_ne!(recreated.doc_id, old_session);
+                    crate::session::grant_created_session_relationships(
+                        &access,
+                        &recreated.doc_id,
+                        &command.agent_doc_id,
+                        &command.agent_did,
+                    )
+                    .await
+                    .unwrap();
+                    let agent_access = ConfigAccess::local_managed_agent(
+                        node.clone(),
+                        ::identity::Did::new(&command.agent_did).unwrap(),
+                        selected_identity,
+                    )
+                    .unwrap();
+                    let before = agent_access
+                        .execute("{ Goal { _docID } AgentRequest { _docID } GoalCreationClaim { _docID } }")
+                        .await
+                        .unwrap();
+                    process_command(&node, &identity, &doc_id, selected_identity)
+                        .await
+                        .unwrap();
+                    assert!(receipt(&access, &doc_id).await.is_none());
+                    assert_eq!(
+                        agent_access.execute("{ Goal { _docID } AgentRequest { _docID } GoalCreationClaim { _docID } }").await.unwrap(),
+                        before,
+                        "stale target must not publish any goal or request"
+                    );
+                    let after = access
+                        .transact_readonly("test.goal.recreated_session_after", |txn| {
+                            Box::pin(crate::session::load_agent_session_owner_in_txn(
+                                txn,
+                                identity.did(),
+                                SESSION,
+                            ))
+                        })
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(after.doc_id, recreated.doc_id);
+                    assert_eq!(after.session, recreated.session);
+                    node.shutdown().await.expect("node shutdown");
+                    continue;
+                }
                 process_command(&node, &identity, &doc_id, selected_identity)
                     .await
                     .unwrap();
