@@ -220,6 +220,8 @@ theorem admission_regressions :
       , (some "plugin_job_resume_unknown", none, 0)
       , (some "plugin_job_resume_not_head", none, 0)
       , (none, some (.running, 1, 1), 0)
+      , (some "plugin_job_policy_denied", none, 0)
+      , (some "plugin_job_policy_denied", none, 0)
       , (some "plugin_job_pin_mismatch", none, 0)
       , (some "plugin_job_pin_mismatch", none, 0)
       , (none, some (.running, 1, 1), 0) ] := by native_decide
