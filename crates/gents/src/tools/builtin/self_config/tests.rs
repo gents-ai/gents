@@ -5162,12 +5162,14 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
 
 #[tokio::test]
 async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
-    let node = build_agent_node().await;
-    let identity = node_identity("profile-context-window");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "setup").await;
+    let fixture = SelfConfigFixture::new("profile-context-window").await;
+    fixture.grant_selected_configuration().await;
+    let owner = fixture.node_did();
+    let agent = fixture.agent_did();
+    let node = &fixture.db.node;
+    let backend_id = format!("{agent}:backend");
     let backend: crate::documents::InferenceBackend = serde_json::from_value(json!({
-        "node_did": owner, "backend_id": "setup:backend", "name": "Test inference",
+        "node_did": owner, "backend_id": backend_id, "name": "Test inference",
         "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
         "auth": {"kind": "unauthenticated"},
     }))
@@ -5184,23 +5186,13 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
     )
     .await
     .unwrap();
-    let mut tool_config = config(&["profile"]);
-    tool_config.agent_did = "setup".into();
-    tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let tools = fixture.tools(&["profile"]);
     let edit = |verb: &str, window: u64| -> Vec<String> {
         vec![
             "profile".into(),
             verb.into(),
             "--agent".into(),
-            "setup".into(),
+            agent.into(),
             "--set".into(),
             format!("context_window={window}"),
         ]
@@ -5224,7 +5216,7 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
             "profile".into(),
             "get".into(),
             "--agent".into(),
-            "setup".into(),
+            agent.into(),
         ],
     )
     .await
@@ -5685,11 +5677,12 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
 #[tokio::test]
 async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_calls() {
     const SECRET: &str = "operator-api-key-never-exposed";
-    let node = build_agent_node().await;
-    let identity = node_identity("backend-catalog-read");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "setup").await;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let fixture = SelfConfigFixture::new("backend-catalog-read").await;
+    fixture.grant_node_reader().await;
+    let owner = fixture.node_did();
+    let access = fixture.user_access();
+    let runtime_access =
+        crate::ConfigAccess::local_as(fixture.db.node.clone(), identity::Did::new(owner).unwrap());
     let backend = |id: &str, kind: &str, auth: Value| -> crate::documents::InferenceBackend {
         serde_json::from_value(json!({
             "node_did": owner, "backend_id": id, "name": id, "provider_kind": kind,
@@ -5714,14 +5707,14 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
     }]))
     .unwrap();
     for document in [&claude, &keyed] {
-        crate::store::config_client::write_inference_backend_document(&access, document)
+        crate::store::config_client::write_inference_backend_document(access, document)
             .await
             .unwrap();
     }
     assert_eq!(
         crate::inference::backends::registry::record_connection_catalog_on(
-            &access,
-            &owner,
+            &runtime_access,
+            owner,
             claude.provider_kind,
             &claude.endpoint,
             &claude.auth,
@@ -5731,21 +5724,15 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
         .unwrap(),
         1
     );
-    crate::inference::backends::registry::record_discovered_catalog_on(&access, &keyed, models)
-        .await
-        .unwrap();
+    crate::inference::backends::registry::record_discovered_catalog_on(
+        &runtime_access,
+        &keyed,
+        models,
+    )
+    .await
+    .unwrap();
 
-    let mut tool_config = config(&["backend"]);
-    tool_config.agent_did = "setup".into();
-    tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let tools = fixture.tools(&["backend"]);
     let call = |argv: &[&str]| {
         let argv = std::iter::once("backend")
             .chain(argv.iter().copied())
