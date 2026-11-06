@@ -65,6 +65,7 @@ pub(super) async fn grant_test_agent(
 #[derive(Clone)]
 struct TestRegistry {
     registry: AdmissionRegistry,
+    node: Arc<EmbeddedNode>,
     agent_did: String,
     signer: crate::store::identity::ManagedAgentSigner,
 }
@@ -74,7 +75,8 @@ impl TestRegistry {
         Self {
             agent_did: signer.did().to_owned(),
             signer,
-            registry: AdmissionRegistry::new(node),
+            registry: AdmissionRegistry::new(node.clone()),
+            node,
         }
     }
 }
@@ -102,14 +104,82 @@ impl std::ops::Deref for TestRegistry {
     }
 }
 
-fn test_context(
+pub(super) async fn seeded_request(
+    node: &Arc<EmbeddedNode>,
+    signer: &crate::store::identity::ManagedAgentSigner,
+    request_id: &str,
+) -> AgentRequest {
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+
+    let actor: identity::Did = signer.did().parse().unwrap();
+    let access =
+        crate::ConfigAccess::local_with_agent_signer(node.clone(), actor.clone(), signer.clone())
+            .unwrap();
+    let session_id = format!("session-{request_id}");
+    let mut create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        request_id,
+        signer.node_did(),
+        signer.did(),
+        signer.did(),
+        &session_id,
+        "hello",
+        "interactive",
+        "2026-04-15T00:00:00Z",
+        AgentRequestAdmissionRecord::local_self(signer.did()),
+    );
+    crate::sign_agent_request_create(signer, &mut create)
+        .await
+        .unwrap();
+    let mutation = create.graphql_mutation().unwrap();
+    let doc_id = access.transact_write("test.inference.seed_request", |txn| {
+        let mutation = &mutation;
+        let session_id = &session_id;
+        let actor = &actor;
+        Box::pin(async move {
+            let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                txn, crate::Collection::Agent, signer.node_did(), signer.did(),
+            ).await?.expect("selected Agent must be visible to its signer");
+            let response = txn.execute_with_variables(
+                "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                &serde_json::json!({"input": {"node_did": signer.node_did(), "agent_did": signer.did(),
+                    "requester_did": signer.did(), "session_id": session_id, "created_at": "2026-04-15T00:00:00Z"}}),
+            ).await?;
+            let session_doc = crate::store::graphql::created_doc_id(&response, "AgentSession")?;
+            crate::session::stage_session_relationships_in_txn(txn, &session_doc, &agent_doc, actor).await?;
+            let response = txn.execute(mutation).await?;
+            let request_doc = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+            crate::request::lifecycle::stage_request_relationships_in_txn(
+                txn, &request_doc, &agent_doc, &session_doc, signer.did(),
+            ).await?;
+            Ok::<_, anyhow::Error>(request_doc)
+        })
+    }).await.expect("publish signed Agent session and request");
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
+        crate::store::graphql::escape_graphql_string(&doc_id),
+        crate::request::watcher::AGENT_REQUEST_FIELDS,
+    );
+    let response = access.execute(&query).await.unwrap();
+    let [row] = response["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("selected Agent must see the seeded request");
+    };
+    let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone()).unwrap();
+    row.try_into().unwrap()
+}
+
+async fn test_context(
     registry: &TestRegistry,
     request_id: &str,
     backend_id: &str,
 ) -> AdmissionCallContext {
-    let mut request = request(request_id);
-    request.agent_did.clone_from(&registry.agent_did);
-    request.node_did = registry.signer.node_did().to_owned();
+    let request = seeded_request(&registry.node, &registry.signer, request_id).await;
     AdmissionCallContext::for_request(&request, &registry.agent_did, backend_id)
 }
 
@@ -628,8 +698,8 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
         &RapidHashMap::from_iter([(backend_id.clone(), config(&backend_id, 1, 1))]),
     );
 
-    let running_context = test_context(&registry, "req-fleet-running", &backend_id);
-    let queued_context = test_context(&registry, "req-fleet-waiting", &backend_id);
+    let running_context = test_context(&registry, "req-fleet-running", &backend_id).await;
+    let queued_context = test_context(&registry, "req-fleet-waiting", &backend_id).await;
 
     scope_request(running_context, async {
         let mut running_permit = registry.acquire_current_call_for_test().await.unwrap();
@@ -690,7 +760,7 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
     );
 
     let completed_context =
-        test_context(&bounded_registry, "req-fleet-bound-completed", &backend_id);
+        test_context(&bounded_registry, "req-fleet-bound-completed", &backend_id).await;
     scope_request(completed_context, async {
         let mut permit = bounded_registry
             .acquire_current_call_for_test()
@@ -701,9 +771,12 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
     })
     .await;
 
-    let first_context = test_context(&bounded_registry, "req-fleet-bound-running-1", &backend_id);
-    let second_context = test_context(&bounded_registry, "req-fleet-bound-running-2", &backend_id);
-    let queued_context = test_context(&bounded_registry, "req-fleet-bound-queued", &backend_id);
+    let first_context =
+        test_context(&bounded_registry, "req-fleet-bound-running-1", &backend_id).await;
+    let second_context =
+        test_context(&bounded_registry, "req-fleet-bound-running-2", &backend_id).await;
+    let queued_context =
+        test_context(&bounded_registry, "req-fleet-bound-queued", &backend_id).await;
 
     let mut first = scope_request(first_context, async {
         bounded_registry
@@ -772,7 +845,8 @@ async fn missing_backend_persists_backend_gone_cancelled_terminal() {
     let (db, signer) = test_node().await;
     let node = db.node.clone();
     let registry = TestRegistry::new(node.clone(), signer);
-    let context = test_context(&registry, "req-backend-gone", "missing");
+    let context = test_context(&registry, "req-backend-gone", "missing").await;
+    let request_doc_id = context.request_doc_id.clone();
 
     scope_request(context, async {
         let error = match registry.acquire_current_call_for_test().await {
@@ -790,7 +864,7 @@ async fn missing_backend_persists_backend_gone_cancelled_terminal() {
     assert_eq!(rows[0]["call_state"], "cancelled");
     assert_eq!(rows[0]["failure_reason"], "BackendGone");
     assert_eq!(rows[0]["node_did"], registry.signer.node_did());
-    assert_eq!(rows[0]["request_doc_id"], "doc-req-backend-gone");
+    assert_eq!(rows[0]["request_doc_id"], request_doc_id);
     assert_reconstructed_slot_count(&rows, "missing", 0);
 }
 
@@ -803,7 +877,7 @@ async fn max_queue_depth_zero_allows_immediate_permit_and_rejects_saturated_back
         1,
         &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 0))]),
     );
-    let context = test_context(&registry, "req-zero", "backend-a");
+    let context = test_context(&registry, "req-zero", "backend-a").await;
 
     scope_request(context, async {
         let mut first = registry.acquire_current_call_for_test().await.unwrap();
@@ -852,7 +926,7 @@ async fn reconstructed_running_rows_never_exceed_max_concurrent_under_contention
     let mut handles = Vec::new();
 
     for idx in 0..TASKS {
-        let context = test_context(&registry, &format!("req-contention-{idx}"), "backend-a");
+        let context = test_context(&registry, &format!("req-contention-{idx}"), "backend-a").await;
         let task_registry = registry.clone();
         let task_acquired_tx = acquired_tx.clone();
         let (release_tx, release_rx) = oneshot::channel::<()>();
@@ -929,7 +1003,7 @@ async fn queued_calls_start_in_tokio_registration_order_after_permit_release() {
         1,
         &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 2))]),
     );
-    let first_context = test_context(&registry, "req-ordered", "backend-a");
+    let first_context = test_context(&registry, "req-ordered", "backend-a").await;
     let second_context = first_context.clone();
 
     scope_request(first_context, async {
@@ -982,8 +1056,8 @@ async fn cancelling_queued_call_terminalizes_without_holding_slot() {
         1,
         &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
-    let running_context = test_context(&registry, "req-running-holder", "backend-a");
-    let queued_context = test_context(&registry, "req-queued-cancel", "backend-a");
+    let running_context = test_context(&registry, "req-running-holder", "backend-a").await;
+    let queued_context = test_context(&registry, "req-queued-cancel", "backend-a").await;
 
     scope_request(running_context, async {
         let mut first = registry.acquire_current_call_for_test().await.unwrap();
@@ -1031,7 +1105,7 @@ async fn explicit_failure_releases_reconstructed_slot() {
         1,
         &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
-    let context = test_context(&registry, "req-explicit-failure", "backend-a");
+    let context = test_context(&registry, "req-explicit-failure", "backend-a").await;
 
     scope_request(context, async {
         let mut permit = registry.acquire_current_call_for_test().await.unwrap();
@@ -1058,7 +1132,7 @@ async fn repeated_inference_scope_calls_persist_per_attempt_rows() {
         1,
         &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
-    let context = test_context(&registry, "req-retry-rows", "backend-a");
+    let context = test_context(&registry, "req-retry-rows", "backend-a").await;
 
     scope_request(context, async {
         scope_call(CallKind::Inference, 1, async {
@@ -1111,7 +1185,7 @@ async fn scoped_scheduled_calls_are_persisted_with_scheduled_kind() {
         1,
         &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
-    let context = test_context(&registry, "req-scheduled", "backend-a");
+    let context = test_context(&registry, "req-scheduled", "backend-a").await;
 
     scope_request(context, async {
         scope_call(CallKind::Scheduled, 1, async {
@@ -1139,7 +1213,7 @@ async fn compaction_calls_share_backend_capacity_with_inference_calls() {
         1,
         &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
-    let inference_context = test_context(&registry, "req-compaction", "backend-a");
+    let inference_context = test_context(&registry, "req-compaction", "backend-a").await;
     let compaction_context = inference_context.clone();
 
     scope_request(inference_context, async {
@@ -1192,7 +1266,7 @@ async fn scoped_oneoff_calls_are_persisted_with_oneoff_kind() {
         1,
         &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
-    let context = test_context(&registry, "req-oneoff", "backend-a");
+    let context = test_context(&registry, "req-oneoff", "backend-a").await;
 
     scope_request(context, async {
         scope_call(CallKind::OneOff, 1, async {
@@ -1220,7 +1294,7 @@ async fn dropped_permit_with_cancelled_token_persists_cancelled_terminal() {
         1,
         &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
-    let context = test_context(&registry, "req-cancel-drop", "backend-a");
+    let context = test_context(&registry, "req-cancel-drop", "backend-a").await;
 
     let token = CancellationToken::new();
     token.cancel();
@@ -1253,7 +1327,7 @@ async fn dropped_permit_with_terminal_failure_reason_persists_failed_reason() {
         1,
         &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
-    let context = test_context(&registry, "req-timeout-drop", "backend-a");
+    let context = test_context(&registry, "req-timeout-drop", "backend-a").await;
 
     let token = CancellationToken::new();
     let observer = terminal_failure_reason_observer();
@@ -1301,7 +1375,7 @@ async fn dropped_permit_without_cancelled_token_persists_failed_terminal() {
         1,
         &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
-    let context = test_context(&registry, "req-default-drop", "backend-a");
+    let context = test_context(&registry, "req-default-drop", "backend-a").await;
 
     scope_request(context, async {
         let permit = registry.acquire_current_call_for_test().await.unwrap();
@@ -1433,7 +1507,7 @@ async fn acquire_on(
     backend_id: &str,
 ) -> Result<super::permit::AdmissionPermit, super::AdmissionError> {
     scope_request(
-        test_context(registry, request_id, backend_id),
+        test_context(registry, request_id, backend_id).await,
         registry.acquire_current_call_for_test(),
     )
     .await
@@ -1965,7 +2039,7 @@ async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
     );
     old_model.agent_signer = Some(registry.signer.clone());
     let old_call = tokio::spawn(scope_request(
-        test_context(&registry, "req-connection-old", backend),
+        test_context(&registry, "req-connection-old", backend).await,
         async move { old_model.completion(ping()).await.map(|_| ()) },
     ));
     wait_for_request_call_state(&node, &registry.signer, "req-connection-old", "queued").await;
@@ -1984,7 +2058,7 @@ async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
     );
     new_model.agent_signer = Some(registry.signer.clone());
     let new_call = tokio::spawn(scope_request(
-        test_context(&registry, "req-connection-new", backend),
+        test_context(&registry, "req-connection-new", backend).await,
         async move { new_model.completion(ping()).await.map(|_| ()) },
     ));
     wait_for_request_call_state(&node, &registry.signer, "req-connection-new", "queued").await;
@@ -2261,7 +2335,7 @@ async fn invalid_provider_usage_still_publishes_the_modeled_terminal_observation
                 continue;
             }
             let request_id = format!("invalid-usage-{exercised}");
-            let context = test_context(&registry, &request_id, "usage-backend");
+            let context = test_context(&registry, &request_id, "usage-backend").await;
             let usage = serde_json::from_value(observation.clone()).unwrap();
             scope_request(context, async {
                 let mut permit = registry.acquire_current_call_for_test().await.unwrap();
