@@ -2130,27 +2130,20 @@ async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) 
         manifest["dependencies"] = json!(["fixture/dependee_fixture"]);
     });
     let (dependee, dependent) = (archive(&dependee_dir), archive(&dependent_dir));
-    let authored = crate::pack::load_pack_config(
-        dependent.manifest(),
-        &crate::pack::PackInstallOptions {
-            node_did: OWNER.into(),
-        },
-        &|path| Ok(dependent.asset(path)?.to_vec()),
-        &|_| None,
-    )
-    .unwrap();
-    let (_node, access) = dependency_fixture().await;
-    let error = prepare_document_pack_install(
-        &access,
-        OWNER,
-        dependent.manifest(),
-        &authored,
-        &BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]),
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let local = ConfigAccess::local_as(
+        node,
+        identity::Did::new(access.actor_did().unwrap()).unwrap(),
+    );
+    let error = super::super::prepare_document_pack_archive_with_runtime(
+        &local,
+        crate::NodeIdentity::did(&runtime),
+        &dependent,
+        &BTreeMap::from([("worker".to_owned(), "profile".to_owned())]),
         &[&dependee],
-        crate::pack::InstalledVia::Operator,
-        None,
         None,
         &|_| None,
+        &runtime,
     )
     .await
     .err()
