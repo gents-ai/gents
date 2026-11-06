@@ -3926,15 +3926,36 @@ async fn agent_clone_by_holder_copies_granted_source() {
 
 #[tokio::test]
 async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_lockout() {
-    let node = build_agent_node().await;
-    let identity = node_identity("canonical-self-config");
-    let other = node_identity("other-self-config");
-    let owner = identity.did().to_string();
-    let foreign = other.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "same").await;
-    crate::test_support::install_test_agent(&node, &foreign, "same").await;
-    crate::test_support::install_test_agent(&node, &owner, "unconfigured").await;
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "same".into()).unwrap();
+    let fixture = SelfConfigFixture::new("canonical-self-config").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let sibling = fixture.install_sibling("unconfigured").await;
+    let other = tokio::task::spawn_blocking(|| node_identity("other-self-config"))
+        .await
+        .unwrap();
+    let foreign = other.did().to_owned();
+    crate::test_support::bootstrap_signed_test_node(fixture.user_access(), &foreign).await;
+    let tools_id = format!("{}:tools", fixture.agent_did());
+    let document = json!({"node_did": foreign, "tools_id": tools_id});
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::Tools,
+            add: document.clone(),
+            update: document,
+        },
+    ])
+    .unwrap();
+    fixture
+        .user_access()
+        .transact_write("test.foreign_tools", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .unwrap();
+    let core = fixture.core();
     let patch = vec![(
         "self_config".into(),
         Some(json!({"enable_self_config":true})),
@@ -3958,7 +3979,10 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
     assert!(guarded
         .preview(agent_request(
             &guarded,
-            vec![("context_id".into(), Some(json!("unconfigured:context")))]
+            vec![(
+                "context_id".into(),
+                Some(json!(format!("{sibling}:context")))
+            )]
         ))
         .await
         .is_err());
@@ -3981,17 +4005,19 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
         .read_effective_config(&BTreeSet::new(), true, true)
         .await
         .unwrap();
-    assert_eq!(own["context"]["tools_id"], "same:tools");
+    assert_eq!(own["context"]["tools_id"], tools_id);
     assert_eq!(
         own["documents"]["Tools"]["self_config"]["enable_self_config"],
         true
     );
-    let foreign_core = SelfConfigCore::new(node.clone(), foreign, "same".into()).unwrap();
-    let foreign_read = foreign_core
-        .read_effective_config(&BTreeSet::new(), false, false)
+    let foreign_read = fixture.user_access()
+        .execute(&format!(r#"{{ Tools(filter: {{node_did: {{_eq: "{}"}}, tools_id: {{_eq: "{}"}}}}) {{ self_config }} }}"#,
+            escape_graphql_string(&foreign), escape_graphql_string(&tools_id)))
         .await
         .unwrap();
-    assert!(foreign_read["documents"]["Tools"]["self_config"].is_null());
+    let foreign_tools = foreign_read["data"]["Tools"].as_array().unwrap();
+    assert_eq!(foreign_tools.len(), 1);
+    assert!(foreign_tools[0]["self_config"].is_null());
 }
 
 #[tokio::test]
