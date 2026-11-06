@@ -414,7 +414,7 @@ canonical physical Goal binding and current native authorization all remain
 necessary at the claim transaction. -/
 def clientGoalClaimAllowed (input : RequestInput) (signatureValid sessionAgentBound
     nativeAuthorAllowed goalVisible goalMatches rootBound ancestryVerified : Bool) : Bool :=
-  clientClaimQueueCandidate input false && signatureValid && sessionAgentBound &&
+  input.goalContinuation.isSome && clientClaimQueueCandidate input false && signatureValid && sessionAgentBound &&
     nativeAuthorAllowed && clientGoalClaimBinding goalVisible goalMatches rootBound &&
     ancestryVerified
 
