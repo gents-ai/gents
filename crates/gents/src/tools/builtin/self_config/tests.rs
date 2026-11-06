@@ -168,6 +168,26 @@ impl SelfConfigFixture {
             .unwrap();
     }
 
+    async fn grant_selected_backend_writer(&self) {
+        let backend_id = format!("{}:backend", self.agent_did());
+        let response = self.user_access.execute(&format!(
+            r#"{{ InferenceBackendMetadata(filter: {{backend_id: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+            escape_graphql_string(&backend_id),
+        )).await.unwrap();
+        let doc_id = response["data"]["InferenceBackendMetadata"][0]["_docID"]
+            .as_str()
+            .expect("selected backend metadata exists");
+        self.user_access
+            .add_actor_relationship(
+                "InferenceBackendMetadata",
+                doc_id,
+                "writer",
+                &identity::Did::new(&self.agent_did).unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+
     pub(super) async fn grant_agent_delete(&self) {
         crate::ConfigAccess::local_as(
             self.db.node.clone(),
@@ -4409,11 +4429,10 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
 async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
     const VARIABLE: &str = "GENTS_TEST_UNRELATED_PATCH_ENV_REFERENCE";
     const SENTINEL: &str = "sentinel-env-secret-never-stored";
-    let node = build_agent_node().await;
-    let identity = node_identity("self-config-env-reference");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "envref").await;
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "envref".into()).unwrap();
+    let fixture = SelfConfigFixture::new("self-config-env-reference").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_selected_backend_writer().await;
+    let core = fixture.core();
     let reference = json!({"kind":"environment","variable":VARIABLE});
     core.apply(backend_request(vec![(
         "auth".into(),
@@ -4422,20 +4441,6 @@ async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
     .await
     .unwrap();
     let _variable = crate::test_support::EnvVarGuard::set(VARIABLE, SENTINEL);
-
-    let stored_backend = || {
-        let node = node.clone();
-        let owner = escape_graphql_string(&owner);
-        async move {
-            let response = node
-                .execute(&format!(
-                    r#"{{ InferenceBackend(filter: {{node_did: {{_eq: "{owner}"}}, backend_id: {{_eq: "envref:backend"}}}}) {{ name connect_timeout_secs auth }} }}"#
-                ))
-                .await;
-            assert!(!response.has_errors(), "{:?}", response.errors);
-            response.data.expect("backend data")["InferenceBackend"][0].clone()
-        }
-    };
 
     for patch in [
         vec![("name".into(), Some(json!("Renamed inference")))],
@@ -4453,14 +4458,15 @@ async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
         }
     }
 
-    let stored = stored_backend().await;
+    let backend_id = escape_graphql_string(&format!("{}:backend", fixture.agent_did()));
+    let response = fixture.user_access().execute(&format!(
+        r#"{{ InferenceBackendMetadata(filter: {{backend_id: {{_eq: "{backend_id}"}}}}) {{ name connect_timeout_secs auth_kind environment_variable }} }}"#
+    )).await.unwrap();
+    let stored = &response["data"]["InferenceBackendMetadata"][0];
     assert_eq!(stored["name"], "Renamed inference");
     assert_eq!(stored["connect_timeout_secs"], 17);
-    let auth = match &stored["auth"] {
-        Value::String(encoded) => serde_json::from_str::<Value>(encoded).unwrap(),
-        other => other.clone(),
-    };
-    assert_eq!(auth, reference, "stored auth must remain the reference");
+    assert_eq!(stored["auth_kind"], "environment");
+    assert_eq!(stored["environment_variable"], VARIABLE);
     assert!(!stored.to_string().contains(SENTINEL));
     let read = core
         .read_effective_config(&BTreeSet::new(), false, true)
