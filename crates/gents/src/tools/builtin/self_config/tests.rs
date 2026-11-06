@@ -5733,8 +5733,10 @@ async fn pack_documents_install_and_release_documents_dependencies() {
     crate::pack::store::PackStore::new(home.path())
         .import(&bytes[..], None)
         .unwrap();
-    let (node, did, tools) = pack_tool("documents-dependencies", plugins).await;
-    let slots = ["--inference-slot", "worker=setup:inference"];
+    let (fixture, tools) = signed_pack_tool("documents-dependencies", plugins).await;
+    let did = fixture.db.node_identity.did();
+    let slot = format!("worker={}:inference", fixture.agent_did());
+    let slots = ["--inference-slot", slot.as_str()];
     let mut args = vec!["pack", "preview", "install", "fixture/dependent_fixture"];
     args.extend(slots);
     let preview: Value = serde_json::from_str(&config_call(&tools, &args).await.unwrap()).unwrap();
@@ -5753,7 +5755,7 @@ async fn pack_documents_install_and_release_documents_dependencies() {
     ];
     args.extend(slots);
     config_call(&tools, &args).await.unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node);
+    let access = &fixture.user_access;
     let rows = access
         .execute(
             r#"{ PackInstallation(filter: {coordinate: {_eq: "fixture/dependee_fixture"}}) { explicit required_by } }"#,
@@ -5819,8 +5821,9 @@ async fn pack_install_blocks_a_dependency_plugin_without_operator_authority() {
     crate::pack::store::PackStore::new(home.path())
         .import(&bytes[..], None)
         .unwrap();
-    let (_node, _did, tools) = pack_tool("dependency-plugin-authority", plugins).await;
-    let slots = ["--inference-slot", "worker=setup:inference"];
+    let (fixture, tools) = signed_pack_tool("dependency-plugin-authority", plugins).await;
+    let slot = format!("worker={}:inference", fixture.agent_did());
+    let slots = ["--inference-slot", slot.as_str()];
     let mut preview_argv = vec!["pack", "preview", "install", "fixture/dependent_fixture"];
     preview_argv.extend(slots);
     let preview: Value =
@@ -5859,7 +5862,9 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     manifest.as_object_mut().unwrap().remove("schemas");
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let (_home, plugins) = crate::test_support::home_with_pack_dir(&directory);
-    let (node, did, tools) = pack_tool("inspect-documents-pack", plugins).await;
+    let (fixture, tools) = signed_pack_tool("inspect-documents-pack", plugins).await;
+    let did = fixture.db.node_identity.did();
+    let slot = format!("worker={}:inference", fixture.agent_did());
     let result: Value = serde_json::from_str(
         &config_call(&tools, &["pack", "get", "fixture/documents_fixture"])
             .await
@@ -5887,7 +5892,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
                 "install",
                 "fixture/documents_fixture",
                 "--inference-slot",
-                "worker=setup:inference",
+                &slot,
             ],
         )
         .await
@@ -5896,7 +5901,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     .unwrap();
     assert_eq!(preview["ready"], true, "{preview}");
     let digest = preview["artifact_digest"].as_str().unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let access = &fixture.user_access;
     assert!(
         crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
             .await
@@ -5913,7 +5918,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
             "--digest",
             "sha256:wrong",
             "--inference-slot",
-            "worker=setup:inference",
+            &slot,
         ],
     )
     .await
@@ -5935,7 +5940,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
                 "--digest",
                 digest,
                 "--inference-slot",
-                "worker=setup:inference",
+                &slot,
             ],
         )
         .await
@@ -5944,7 +5949,12 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     .unwrap();
     assert_eq!(installed["effective"]["digest"], digest);
     assert!(
-        node.get_collection("FixtureJob").unwrap().is_some(),
+        fixture
+            .db
+            .node
+            .get_collection("FixtureJob")
+            .unwrap()
+            .is_some(),
         "custom schema asset must be published"
     );
 
@@ -5964,7 +5974,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
                 "--digest",
                 digest,
                 "--inference-slot",
-                "worker=setup:inference",
+                &slot,
             ],
         )
         .await
@@ -6031,7 +6041,7 @@ async fn seed_account_view(
     upsert_oauth_credential(node, &account(Some("acct-l2"), "Work", false))
         .await
         .unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let access = &fixture.user_access;
     for (backend_id, kind, auth, endpoint) in [
         (
             "backend-usage-claude",
