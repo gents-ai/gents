@@ -297,20 +297,26 @@ mod tests {
 
     #[tokio::test]
     async fn last_tool_reads_canonical_delivery_and_keeps_running_calls_visible() {
-        let (node, path, mut tool) =
-            crate::tools::call::lifecycle::admission_fixture::published_spawn_parent(
-                "eval-last-tool",
-            )
-            .await;
-        let running = last_tool_call(&ConfigAccess::local(node.clone()))
-            .await
-            .expect("running tool");
+        let fixture = crate::tools::call::lifecycle::admission_fixture::published_admission(
+            crate::tools::call::lifecycle::admission_fixture::PublishedAdmissionOptions {
+                name: "eval-last-tool".to_owned(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let crate::tools::call::lifecycle::admission_fixture::PublishedAdmission {
+            node,
+            path,
+            mut tool,
+            client,
+            ..
+        } = fixture;
+        let running = last_tool_call(&client).await.expect("running tool");
         assert_eq!(running.state.as_deref(), Some("running"));
         assert_eq!(running.result, None);
         tool.complete("saved\n  the record").await.unwrap();
-        let finished = last_tool_call(&ConfigAccess::local(node.clone()))
-            .await
-            .expect("completed tool");
+        let finished = last_tool_call(&client).await.expect("completed tool");
         assert_eq!(finished.state.as_deref(), Some("completed"));
         assert_eq!(finished.result.as_deref(), Some("saved the record"));
         node.shutdown().await.expect("shutdown node");
