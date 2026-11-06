@@ -836,3 +836,205 @@ async fn embedded_relationship_grants_and_revocations_follow_transaction_finalit
         .is_empty());
     node.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn modeled_node_owners_and_administrators_manage_only_their_selected_relations(
+) -> anyhow::Result<()> {
+    use crate::store::identity::NodeIdentity;
+    let model = crate::lean_vocab_test::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .expect("configuration policy model");
+    let directory = tempfile::tempdir()?;
+    let user = crate::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
+    let admin = crate::KeyIdentity::load_or_create(directory.path().join("admin"), None)?;
+    let other = crate::KeyIdentity::load_or_create(directory.path().join("other"), None)?;
+    let runtime = crate::KeyIdentity::load_or_create(directory.path().join("runtime"), None)?;
+    let creator_binding = crate::store::identity::provision_agent_identity(&runtime)?;
+    let selected_binding = crate::store::identity::provision_agent_identity(&runtime)?;
+    let creator = crate::store::identity::resolve_agent_identity(&runtime, &creator_binding)?;
+    let selected = crate::store::identity::resolve_agent_identity(&runtime, &selected_binding)?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .enable_signing()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_owner(user.did().to_owned())
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await?,
+    );
+    let owner_context =
+        defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
+    let policy = node
+        .add_dac_policy_with_counter_as(&owner_context, &model.policy_yaml, 0)
+        .await?;
+    for actor in [admin.did(), other.did(), creator.did(), selected.did()] {
+        for permission in [
+            acp::nac::NodePermission::CollectionGet,
+            acp::nac::NodePermission::DocumentRead,
+            acp::nac::NodePermission::DocumentUpdate,
+            acp::nac::NodePermission::DacRelationAdd,
+            acp::nac::NodePermission::DacRelationDelete,
+        ] {
+            node.add_nac_actor_relationship_as(&owner_context, permission.as_str(), actor)
+                .await?;
+        }
+    }
+    node.add_collection_as(&owner_context, gents_protocol::schemas::NODE)
+        .await?;
+    node.add_collection_as(&owner_context, &format!(
+        "type ManagerConfig @policy(id: \"{policy}\", resource: \"configuration\") {{ label: String }}\ntype ManagerRoot @policy(id: \"{policy}\", resource: \"workspace_roots\") {{ label: String }}\ntype ManagerAgent @policy(id: \"{policy}\", resource: \"agents\") {{ label: String }}"
+    )).await?;
+    let client = |key: &dyn NodeIdentity| -> anyhow::Result<ConfigAccess> {
+        Ok(ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(&endpoint, key.did())
+                .with_client_signing_capability(key.client_signing_capability()?)?
+                .with_client_signed_agent_creates(),
+        ))
+    };
+    let owner = client(&user)?;
+    let admin_access = client(&admin)?;
+    let other_access = client(&other)?;
+    let creator_access =
+        ConfigAccess::local_managed_agent(node.clone(), creator.did().parse()?, creator.as_ref())?;
+    let node_doc = owner
+        .transact_write("test.manager.node", |txn| {
+            Box::pin(async {
+                let response = txn.execute_client_signed_create(
+            "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+            &json!({"input":{"node_did":runtime.did()}}), gents_protocol::schemas::NODE,
+        ).await?;
+                let doc = crate::store::graphql::created_doc_id(&response, "Node")?;
+                txn.add_actor_relationship(
+                    "Node",
+                    &doc,
+                    "administrator",
+                    &identity::Did::new(admin.did())?,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await?;
+    let other_node = owner
+        .transact_write("test.manager.other_node", |txn| {
+            Box::pin(async {
+                let response = txn.execute_client_signed_create(
+            "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+            &json!({"input":{"node_did":other.did()}}), gents_protocol::schemas::NODE,
+        ).await?;
+                let doc = crate::store::graphql::created_doc_id(&response, "Node")?;
+                txn.add_actor_relationship(
+                    "Node",
+                    &doc,
+                    "administrator",
+                    &identity::Did::new(other.did())?,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await?;
+    assert_ne!(node_doc, other_node);
+    let (config_doc, root_doc, selected_doc) = creator_access.transact_write("test.manager.children", |txn| {
+        let node_doc = &node_doc;
+        let selected = &selected;
+        Box::pin(async move {
+            let mut docs = Vec::new();
+            for (collection, manager) in [("ManagerConfig", "selection_manager"), ("ManagerRoot", "reader_manager"), ("ManagerAgent", "")] {
+                let response = txn.execute(&format!("mutation {{ create_{collection}(input: {{label: \"one\"}}) {{_docID}} }}")).await?;
+                let doc = crate::store::graphql::created_doc_id(&response, collection)?;
+                txn.add_resource_relationship(collection, &doc, "parent", "nodes", node_doc).await?;
+                if !manager.is_empty() {
+                    crate::store::config_client::publish_node_managers_in_txn(txn, collection, &doc, manager, node_doc).await?;
+                }
+                docs.push(doc);
+            }
+            txn.add_actor_relationship("ManagerAgent", &docs[2], "executor", &identity::Did::new(selected.did())?).await?;
+            Ok::<_, anyhow::Error>((docs.remove(0), docs.remove(0), docs.remove(0)))
+        })
+    }).await?;
+    assert!(!model.configuration_node_manager_cases.is_empty());
+    for case in &model.configuration_node_manager_cases {
+        let actor = match case["actor"].as_str().unwrap() {
+            "user" => &owner,
+            "admin" => &admin_access,
+            "other-admin" => &other_access,
+            "creator-agent" => &creator_access,
+            other => panic!("unknown modeled manager {other}"),
+        };
+        let admin_did = identity::Did::new(admin.did())?;
+        if case["revoke_admin"] == true {
+            owner
+                .delete_actor_relationship("Node", &node_doc, "administrator", &admin_did)
+                .await?;
+        } else {
+            owner
+                .add_actor_relationship("Node", &node_doc, "administrator", &admin_did)
+                .await?;
+        }
+        let expected = case["expected"].as_bool().unwrap();
+        let collection = case["resource"].as_str().unwrap();
+        let relation = case["relation"].as_str().unwrap();
+        let is_config = collection == "configuration";
+        let (name, doc) = if is_config {
+            ("ManagerConfig", &config_doc)
+        } else {
+            ("ManagerRoot", &root_doc)
+        };
+        let selected_did = identity::Did::new(selected.did())?;
+        let result = actor
+            .transact_write("test.manager.add", |txn| {
+                let selected_doc = &selected_doc;
+                let selected_did = &selected_did;
+                Box::pin(async move {
+                    if relation == "selected_by" {
+                        txn.add_entity_set_relationship(
+                            name,
+                            doc,
+                            relation,
+                            "agents",
+                            selected_doc,
+                            "executor",
+                        )
+                        .await?;
+                    } else {
+                        txn.add_actor_relationship(name, doc, relation, selected_did)
+                            .await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await;
+        assert_eq!(result.is_ok(), expected, "modeled {}", case["name"]);
+        if expected {
+            actor
+                .transact_write("test.manager.remove", |txn| {
+                    let selected_doc = &selected_doc;
+                    let selected_did = &selected_did;
+                    Box::pin(async move {
+                        if relation == "selected_by" {
+                            txn.delete_entity_set_relationship(
+                                name,
+                                doc,
+                                relation,
+                                "agents",
+                                selected_doc,
+                                "executor",
+                            )
+                            .await?;
+                        } else {
+                            txn.delete_actor_relationship(name, doc, relation, selected_did)
+                                .await?;
+                        }
+                        Ok::<_, anyhow::Error>(())
+                    })
+                })
+                .await?;
+        }
+    }
+    node.shutdown().await?;
+    Ok(())
+}

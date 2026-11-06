@@ -361,6 +361,14 @@ async fn write_record_in_txn(
             crate::store::config_client::configuration_node_doc(txn, owner, node_binding).await?;
         txn.add_resource_relationship(RECORD, &doc_id, "parent", "nodes", &node_doc)
             .await?;
+        crate::store::config_client::publish_node_managers_in_txn(
+            txn,
+            RECORD,
+            &doc_id,
+            "selection_manager",
+            &node_doc,
+        )
+        .await?;
     }
     Ok(())
 }

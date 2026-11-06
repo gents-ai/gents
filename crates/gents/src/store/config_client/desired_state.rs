@@ -1,5 +1,4 @@
 mod event_grants;
-mod workspace_selection;
 pub(super) mod plan;
 pub(super) mod projection;
 pub(super) mod read;
@@ -7,6 +6,7 @@ pub(super) mod schema_fields;
 pub(super) mod selection;
 pub(super) mod task_selection;
 pub(super) mod validate;
+mod workspace_selection;
 
 use super::{mint_recreate_identity, ConfigApplyTxn, ConfigRelationshipGrant};
 use crate::store::graphql::escape_graphql_string;
@@ -317,6 +317,14 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
         let node_doc = configuration_node_doc(txn, &node_did, binding).await?;
         txn.add_resource_relationship(collection, &doc_id, "parent", "nodes", &node_doc)
             .await?;
+        super::publish_node_managers_in_txn(
+            txn,
+            collection,
+            &doc_id,
+            "selection_manager",
+            &node_doc,
+        )
+        .await?;
     }
     for (node_did, binding_doc, binding) in created_callback_bindings {
         let agent = identity::Did::new(&binding.agent_did)?;

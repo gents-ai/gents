@@ -3,6 +3,28 @@ use anyhow::{Context, Result};
 use super::ConfigApplyTxn;
 use crate::Collection;
 
+/// Publish exact Node manager usersets only while creating their document.
+pub(crate) async fn publish_node_managers_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    collection: &str,
+    doc_id: &str,
+    manager_relation: &str,
+    node_doc_id: &str,
+) -> Result<()> {
+    for relation in ["owner", "administrator"] {
+        txn.add_entity_set_relationship(
+            collection,
+            doc_id,
+            manager_relation,
+            "nodes",
+            node_doc_id,
+            relation,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn publish_secret_configuration_in_txn(
     txn: &ConfigApplyTxn<'_>,
     collection: &str,
@@ -44,5 +66,8 @@ pub(crate) async fn publish_node_child_in_txn(
     );
     txn.add_resource_relationship(collection, doc_id, "parent", "nodes", &parent)
         .await?;
+    if gents_protocol::schemas::identity_policy_resource(collection) == Some("configuration") {
+        publish_node_managers_in_txn(txn, collection, doc_id, "selection_manager", &parent).await?;
+    }
     Ok(())
 }

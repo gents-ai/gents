@@ -118,7 +118,7 @@ pub use inference_profile::{
 pub(crate) use node_deferred_operation::recover_deferred_node_operations;
 pub use node_deferred_operation::{maybe_link_deferred_operation_in_txn, DeferredOperationError};
 pub(crate) use node_document_publication::{
-    publish_node_child_in_txn, publish_secret_configuration_in_txn,
+    publish_node_child_in_txn, publish_node_managers_in_txn, publish_secret_configuration_in_txn,
 };
 pub use pairing_reader::{PairingObservation, PairingReadReason};
 pub use profile_switch::{

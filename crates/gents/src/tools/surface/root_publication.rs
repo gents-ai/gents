@@ -140,6 +140,9 @@ pub async fn set_workspace_root_with_readers(
                 gents_protocol::schemas::WORKSPACE_ROOT).await?;
             let doc = created_doc_id(&result, "WorkspaceRoot")?;
             txn.add_resource_relationship("WorkspaceRoot", &doc, "parent", "nodes", &node_doc).await?;
+            crate::store::config_client::publish_node_managers_in_txn(
+                txn, "WorkspaceRoot", &doc, "reader_manager", &node_doc,
+            ).await?;
             doc
         };
         for reader in readers {
