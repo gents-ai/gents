@@ -1324,20 +1324,37 @@ async fn append_sequence_excludes_foreign_session_messages_and_reservations() {
 #[tokio::test]
 async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
     let db = test_db("wake-hop-raise").await;
-    let parent = root_parent(&db, "wake-hop-raise-session").await;
-    let native = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "native process done",
-        "background-completion-notification:native:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
-    )
-    .await
-    .unwrap();
+    let mut fixture = canonical_background_fixture(&db, "wake-hop-raise-session").await;
+    let parent = fixture.parent.clone();
+    let native_tool = fixture
+        .prepare_notification("native process done")
+        .await
+        .unwrap();
+    let raised_tool = fixture.prepare_notification("agent result").await.unwrap();
+    let later_tool = fixture
+        .prepare_notification("another native process done")
+        .await
+        .unwrap();
+    let selection = fixture.writer.terminal_output(&parent.doc_id).await;
+    fixture
+        .lifecycle
+        .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
+        .await
+        .unwrap();
+    let native = fixture
+        .publish_prepared_notification(
+            "native process done",
+            "background-completion-notification:native:tool",
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &native_tool,
+        )
+        .await
+        .unwrap();
     let native_wake = native.request.expect("native wake").doc_id;
-    let raised = persist_background_completion_with_message_waking(
+    let raised = persist_background_completion_with_message_canonical_with_access(
+        &db.agent_access,
         &db.node,
         &parent,
         "agent result",
@@ -1345,6 +1362,7 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
         "review notifications",
         background_hints(&parent),
         None,
+        &raised_tool,
         crate::request::lifecycle::RequestHopCause::CrossSession { cause_hop: 1 },
     )
     .await
@@ -1352,32 +1370,28 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
     assert!(raised.created_request);
     let raised_wake = raised.request.expect("raised wake").doc_id;
     assert_ne!(raised_wake, native_wake);
-    let later = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "another native process done",
-        "background-completion-notification:native-2:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
-    )
-    .await
-    .unwrap();
+    let later = fixture
+        .publish_prepared_notification(
+            "another native process done",
+            "background-completion-notification:native-2:tool",
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &later_tool,
+        )
+        .await
+        .unwrap();
     assert!(!later.created_request);
     assert_eq!(later.request.expect("joined wake").doc_id, raised_wake);
 
     let response = db
-        .node
+        .agent_access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }}, execution_origin: {{ _eq: "scheduled" }} }}) {{ _docID lifecycle_state request_hop superseded_by_request_doc_id }} }}"#,
             escape_graphql_string(&parent.session_id)
         ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let rows = response.data.unwrap()["AgentRequest"]
-        .as_array()
-        .unwrap()
-        .clone();
+        .await.unwrap();
+    let rows = response["data"]["AgentRequest"].as_array().unwrap().clone();
     let pending = rows
         .iter()
         .filter(|row| row["lifecycle_state"] == "pending")
