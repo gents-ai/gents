@@ -741,6 +741,15 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
         fixture.agent.as_ref(),
     )
     .unwrap();
+    create_user_agent_session(
+        &fixture.user_access,
+        identity.did(),
+        Some(fixture.agent.did()),
+        "session-unavailable-runtime",
+        fixture.agent.did(),
+        Some(fixture.agent.did()),
+    )
+    .await;
     let request_doc_id = create_held_agent_request(
         &node,
         identity.did(),
@@ -1309,6 +1318,15 @@ async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
         broken_identity.as_ref(),
     )
     .unwrap();
+    create_user_agent_session(
+        &fixture.user_access,
+        &node_did,
+        Some(broken),
+        "session-missing-plugin",
+        broken,
+        Some(broken),
+    )
+    .await;
     let request_doc_id = create_held_agent_request(
         &node,
         &node_did,
