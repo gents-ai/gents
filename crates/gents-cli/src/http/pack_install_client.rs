@@ -100,7 +100,10 @@ impl PackInstallSession {
         let (mut socket, _) = connect_async(upgrade)
             .await
             .context("connecting remote pack install")?;
-        send(&mut socket, json!({"type": "start", "request": request})).await?;
+        let mut start = serde_json::Map::new();
+        start.insert("type".into(), "start".into());
+        start.insert("request".into(), request);
+        send(&mut socket, Value::Object(start)).await?;
         let (scope, preparation) = match receive(&mut socket).await? {
             ServerMessage::Ready { scope, preparation } => (scope, preparation),
             ServerMessage::Failed { error, outcome } => {
