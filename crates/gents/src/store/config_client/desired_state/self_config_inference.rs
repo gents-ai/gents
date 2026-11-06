@@ -23,6 +23,20 @@ pub(super) async fn grant_selected_inference(
         profile_id,
     )
     .await?;
+    if let Some(id) = reference(&profile, "backend_id") {
+        let (backend_doc, _) = read_record(txn, Collection::InferenceBackend, node_did, id)
+            .await?
+            .context("selected InferenceBackendMetadata is unavailable")?;
+        txn.add_entity_set_relationship(
+            Collection::InferenceBackend.graphql_type(),
+            &backend_doc,
+            "selection_manager",
+            "agents",
+            agent_doc,
+            "config_writer",
+        )
+        .await?;
+    }
     if let Some(id) = reference(&profile, "sampling_id") {
         grant(txn, node_did, agent_doc, Collection::InferenceSampling, id).await?;
     }
@@ -193,6 +207,61 @@ mod tests {
             })
             .await?;
         assert_eq!(link().await.is_ok(), expected("granted"));
+        let node_rows = owner.execute("{ Node {_docID node_did} }").await?;
+        let node_doc = node_rows["data"]["Node"]
+            .as_array()
+            .context("Node rows")?
+            .iter()
+            .find(|row| row["node_did"] == runtime)
+            .and_then(|row| row["_docID"].as_str())
+            .context("User-owned Node missing")?;
+        let node_binding = super::super::ConfigurationNodeBinding {
+            node_did: identity::Did::new(&runtime)?,
+            doc_id: node_doc.to_owned(),
+            enabled: true,
+            default_agent_did: Some(binding.agent_did.clone()),
+        };
+        let value = serde_json::json!({"node_did":runtime,"profile_id":"fresh-profile",
+            "backend_id":backend_id,"model_name":"test-model"});
+        let plan = super::super::plan::DesiredStateApplyPlan::new(vec![
+            super::super::plan::DesiredStateApplyDocument {
+                collection: Collection::InferenceProfile,
+                add: value.clone(),
+                update: value,
+            },
+        ])?;
+        agent
+            .transact_write("test.backend.create_profile", |txn| {
+                let (plan, node_binding) = (&plan, &node_binding);
+                Box::pin(async move {
+                    super::super::apply_desired_state_plan_with_node_binding(
+                        txn,
+                        plan,
+                        Some(node_binding),
+                    )
+                    .await
+                })
+            })
+            .await?;
+        let created = agent
+            .execute(
+                r#"{ InferenceProfile(filter: {profile_id: {_eq: "fresh-profile"}}) {_docID} }"#,
+            )
+            .await?;
+        let created_doc = created["data"]["InferenceProfile"][0]["_docID"]
+            .as_str()
+            .context("Agent-created profile missing")?
+            .to_owned();
+        let created_owners = agent
+            .transact_readonly("test.backend.profile_owner", |txn| {
+                let created_doc = &created_doc;
+                Box::pin(async move {
+                    txn.document_owners("InferenceProfile", std::slice::from_ref(created_doc))
+                        .await
+                })
+            })
+            .await?;
+        assert_eq!(created_owners[0].owner.as_ref(), Some(&actor));
         let mutation = format!(
             r#"mutation {{ update_InferenceBackendMetadata(docID:"{}",input:{{name:"forged"}}) {{_docID}} }}"#,
             crate::store::graphql::escape_graphql_string(&backend)
