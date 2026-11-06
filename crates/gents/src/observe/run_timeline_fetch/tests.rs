@@ -48,53 +48,39 @@ async fn timeline_canonical_messages_share_one_request_payload_scan() {
 
 #[tokio::test]
 async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let owner = "did:test:timeline-fork";
-    crate::test_support::install_test_agent(&node, owner, "timeline-fork").await;
-    crate::session::create_session_with_agent_did(
-        &node,
+    use crate::store::identity::NodeIdentity;
+    let (db, user, access, binding) = crate::test_support::signed_test_node("timeline-fork").await;
+    let node_did = db.node_identity.did();
+    let messages = (1..=3)
+        .map(|sequence| format!("message {sequence}"))
+        .collect::<Vec<_>>();
+    crate::session::publish_signed_history(
+        &db,
+        &user,
+        &access,
+        &binding,
         "timeline-fork-source",
-        owner,
-        "timeline-fork",
+        &messages,
     )
-    .await
-    .unwrap();
-    for sequence in 1..=3u32 {
-        crate::session::import_history_observation(
-            &node,
-            "doc-timeline-fork-shared",
-            "timeline-fork-source",
-            owner,
-            None,
-            &format!("message {sequence}"),
-            &format!("timeline-fork:{sequence}"),
-            sequence,
-            None,
-        )
-        .await;
-    }
-    let outcome = crate::session::fork(
-        &node,
-        &identity::Did::new(owner).unwrap(),
+    .await;
+    let outcome = crate::session::fork_on(
+        &access,
         crate::session::ForkParams {
             source_session_id: "timeline-fork-source",
             boundary: crate::session::ForkBoundary::UserTurn(3),
-            caller_node_did: owner,
-            caller_requester_did: None,
+            caller_node_did: node_did,
+            caller_requester_did: Some(user.did()),
             target_agent_did: None,
         },
     )
     .await
     .unwrap();
-
-    let access = ConfigAccess::local(node.clone());
     let (messages, scans) = crate::session::count_request_output_scans(
         super::event_loaders::resolve_timeline_messages_for_session(
             &access,
-            owner,
+            node_did,
             &outcome.session_id,
-            None,
+            Some(user.did()),
         ),
     )
     .await;
@@ -109,7 +95,7 @@ async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership
         scans, 3,
         "each unbound fork header resolves its own origin request"
     );
-    node.shutdown().await.expect("node shutdown");
+    db.node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]

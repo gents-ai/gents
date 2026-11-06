@@ -1498,7 +1498,7 @@ async fn reserve_signed_session(
     .unwrap();
 }
 
-async fn publish_signed_history(
+pub(crate) async fn publish_signed_history(
     db: &crate::support::TestDb,
     user: &dyn crate::store::identity::NodeIdentity,
     client: &crate::ConfigAccess,
