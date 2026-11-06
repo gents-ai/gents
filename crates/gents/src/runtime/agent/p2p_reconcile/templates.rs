@@ -1,7 +1,8 @@
+pub use gents_protocol::peer_schema::admit_app_collections;
 use gents_protocol::peer_schema::{
     compare_replicated_schema, ReplicatedCollectionIdentity, ReplicatedSchema, ReplicatedSchemaSkew,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
@@ -536,17 +537,6 @@ pub fn builtin_templates() -> &'static [ScopeTemplate] {
     BUILTIN_TEMPLATES
 }
 
-/// Prevent app routes from bypassing protocol schema compatibility checks.
-pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<String>> {
-    let overlaps_protocol_catalog = requested.iter().any(|requested| {
-        gents_protocol::schemas::ALL_COLLECTION_NAMES
-            .iter()
-            .chain(gents_protocol::schemas::RUNTIME_COLLECTION_NAMES.iter())
-            .any(|protocol| requested == protocol)
-    });
-    (!requested.is_empty() && !overlaps_protocol_catalog).then_some(requested)
-}
-
 pub async fn read_client_replicated_schema(
     node: std::sync::Arc<defra_node::EmbeddedNode>,
 ) -> anyhow::Result<ReplicatedSchema> {
@@ -639,6 +629,7 @@ pub fn scope_filter(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     #[tokio::test]
     async fn pre_reasoning_audit_runtime_schema_is_refused_as_skew() {

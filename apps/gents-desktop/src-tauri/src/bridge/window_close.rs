@@ -13,7 +13,7 @@ pub(super) fn close_action(
     main_hidden: bool,
 ) -> CloseAction {
     if !mac {
-        return if runtime_active {
+        return if main && runtime_active {
             CloseAction::Hide
         } else {
             CloseAction::Close
@@ -25,5 +25,42 @@ pub(super) fn close_action(
         CloseAction::CloseWithHiddenMain
     } else {
         CloseAction::Close
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn off_macos_only_the_main_view_hides_for_a_running_runtime() {
+        assert_eq!(
+            close_action(false, true, true, true, false),
+            CloseAction::Hide
+        );
+        assert_eq!(
+            close_action(false, true, false, true, false),
+            CloseAction::Close
+        );
+        assert_eq!(
+            close_action(false, false, true, false, false),
+            CloseAction::Close
+        );
+    }
+
+    #[test]
+    fn on_macos_main_hides_while_other_views_need_it() {
+        assert_eq!(
+            close_action(true, true, false, true, false),
+            CloseAction::Hide
+        );
+        assert_eq!(
+            close_action(true, false, false, false, true),
+            CloseAction::CloseWithHiddenMain
+        );
+        assert_eq!(
+            close_action(true, false, true, false, true),
+            CloseAction::Close
+        );
     }
 }

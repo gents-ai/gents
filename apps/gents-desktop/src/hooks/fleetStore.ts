@@ -39,6 +39,12 @@ export type FleetStore = StoreApi<FleetState>;
 export const nodeOf = (fleet: FleetState, nodeDid: string | null | undefined) =>
   nodeDid ? (fleet.nodes[nodeKeyOf({ nodeDid })] ?? null) : null;
 
+/** A node a link or route names that isn't among the listed ones. It isn't
+    selected: the app stays on a node it can work with. Before anything is
+    listed, nothing can be said about it yet. */
+export const nodeIsUnknown = (fleet: FleetState, nodeDid: string | null | undefined) =>
+  !!nodeDid && fleet.nodeKeys.length > 0 && !nodeOf(fleet, nodeDid);
+
 export const firstNode = (fleet: FleetState) => {
   const first = fleet.nodeKeys[0];
   return first ? (fleet.nodes[first] ?? null) : null;

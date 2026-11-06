@@ -9,7 +9,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@gents/ui/components/alert-dialog";
-import { nodeOf } from "../../hooks/fleetStore";
+import { nodeIsUnknown, nodeOf } from "../../hooks/fleetStore";
 import { sessionDestination } from "../../hooks/selectionActions";
 import { bindNavigationGuard, type Route } from "../lib/router";
 import { useApp } from "./AppContext";
@@ -43,6 +43,7 @@ export function NodeNavigationGuard() {
               ? sessionDestination(fleet, selection, route.sessionId)
               : selection.nodeDid;
         if (!selection.nodeDid || !to || to === selection.nodeDid) return true;
+        if (nodeIsUnknown(fleet, to)) return true;
         const key = app.project().draftKey;
         const drafts = app.drafts.getState();
         if (!drafts.drafts[key]?.trim() && !drafts.attachments[key]?.length)
