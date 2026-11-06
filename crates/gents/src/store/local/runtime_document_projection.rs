@@ -89,6 +89,11 @@ impl RuntimeDocumentProjector {
 
 #[async_trait::async_trait]
 impl db::DocumentMutationProjector for RuntimeDocumentProjector {
+    async fn source_changed(&self, ctx: &db::DocumentMutationContext<'_>) -> Result<()> {
+        self.require_node(ctx)?;
+        self.tools.update(ctx.view).await
+    }
+
     async fn reconcile(&self, ctx: &db::DocumentMutationContext<'_>) -> Result<()> {
         self.reconcile_runtime(ctx).await
     }
