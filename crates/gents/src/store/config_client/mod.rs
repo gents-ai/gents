@@ -27,13 +27,13 @@ pub(crate) use client_signed_agent::{
 };
 #[cfg(test)]
 mod client_signed_agent_conformance;
-#[cfg(test)]
-mod event_policy_conformance;
 mod common;
 mod desired_state;
 #[cfg(test)]
 mod dormant_file_request_conformance;
 mod error;
+#[cfg(test)]
+mod event_policy_conformance;
 pub(crate) mod event_source_cursor;
 mod graphql;
 mod inference_backend;
@@ -52,6 +52,7 @@ mod schema_install;
 mod schema_management;
 mod self_config_permission;
 mod subscription;
+pub(crate) mod transport_publication;
 mod txn;
 pub use acp::nac::NodePermission;
 pub use subscription::GraphqlSubscription;
