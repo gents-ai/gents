@@ -264,7 +264,7 @@ async fn ensure_migrations_registers_baseline_and_is_idempotent() {
         "re-run should be cheap/idempotent: {report2:?}"
     );
 
-    for entry in gents_migration::DEFAULT_BASELINE {
+    for entry in gents_migration::DEFAULT_BASELINE.iter() {
         let cv = node
             .get_collection(entry.name)
             .expect("get_collection")
@@ -400,7 +400,7 @@ async fn goal_creation_claim_baseline_enforces_uniqueness() {
 #[tokio::test]
 async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
     let node = fresh_node().await;
-    for entry in gents_migration::DEFAULT_BASELINE {
+    for entry in gents_migration::DEFAULT_BASELINE.iter() {
         if entry.name == gents_protocol::schemas::RENDERED_REQUEST_NAME {
             continue;
         }

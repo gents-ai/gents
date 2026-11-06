@@ -67,6 +67,18 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
         .preflight(&key, Some(&did))
         .await?;
     let (node, admission) = protected.start_node(&key, None, None).await?;
+    crate::ensure_runtime_schemas(&node).await?;
+    for entry in gents_migration::DEFAULT_BASELINE.iter() {
+        let collection = node
+            .get_collection(entry.name)?
+            .with_context(|| format!("missing fresh baseline collection {}", entry.name))?;
+        assert_eq!(
+            Some(collection.version_id.as_str()),
+            entry.expected_version,
+            "fresh protected baseline lineage for {}",
+            entry.name
+        );
+    }
     assert_eq!(
         admission.validate(&node).await.is_ok(),
         allowed(true, true, true)
