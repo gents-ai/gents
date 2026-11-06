@@ -1750,6 +1750,21 @@ async fn signed_claimed_authored_request(
     request_id: &str,
     session_id: &str,
 ) -> crate::request::lifecycle::RequestLifecycle {
+    signed_claimed_authored_request_with_retry(
+        db, user, client, binding, request_id, session_id, None,
+    )
+    .await
+}
+
+async fn signed_claimed_authored_request_with_retry(
+    db: &crate::support::TestDb,
+    user: &dyn crate::store::identity::NodeIdentity,
+    client: &crate::ConfigAccess,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    request_id: &str,
+    session_id: &str,
+    retry: Option<crate::request::lifecycle::RetryLink>,
+) -> crate::request::lifecycle::RequestLifecycle {
     use crate::request::lifecycle::{
         ClaimOutcome, RequestIdentity, RequestLifecycle, RequestSigner, RequestSpec,
     };
@@ -1761,22 +1776,24 @@ async fn signed_claimed_authored_request(
         agent.as_ref(),
     )
     .unwrap();
+    let mut spec = RequestSpec::new(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        RequestIdentity {
+            request_id: request_id.into(),
+            node_did: db.node_identity.did().into(),
+            requester_did: Some(user.did().into()),
+            agent_did: binding.agent_did.clone(),
+            session_id: session_id.into(),
+            content: "race".into(),
+            execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        },
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+    );
+    spec.retry = retry;
     let create = crate::request::lifecycle::build_signed_client_request(
         client,
-        RequestSpec::new(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            RequestIdentity {
-                request_id: request_id.into(),
-                node_did: db.node_identity.did().into(),
-                requester_did: Some(user.did().into()),
-                agent_did: binding.agent_did.clone(),
-                session_id: session_id.into(),
-                content: "race".into(),
-                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
-                created_at: chrono::Utc::now().to_rfc3339(),
-            },
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
-        ),
+        spec,
         RequestSigner::Identity(user),
     )
     .await
@@ -2018,111 +2035,119 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
 
 #[tokio::test]
 async fn retry_frontier_matches_lean_admission() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    async fn write_doc(
-        node: &std::sync::Arc<defra_node::Node>,
-        mutation: &str,
-        field: &str,
-    ) -> String {
-        let response = crate::store::config_client::ConfigAccess::local(node.clone())
-            .write("test.retry_frontier", mutation)
-            .await
-            .unwrap();
-        let response: defra_node::QueryResponse = serde_json::from_value(response).unwrap();
-        crate::store::graphql::single_mutation_document(&response, field)
-            .unwrap()
-            .unwrap()["_docID"]
-            .as_str()
-            .unwrap()
-            .to_owned()
-    }
+    use crate::store::identity::NodeIdentity;
+    use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+    use crate::tools::call::lifecycle::AwaitMode;
+    let (db, user, client, binding) = crate::test_support::signed_test_node("retry-frontier").await;
+    let node = &db.node;
+    let node_did = db.node_identity.did();
+    let other = tokio::task::spawn_blocking(|| {
+        crate::support::fixtures::test_identity("retry-foreign-user")
+    })
+    .await
+    .unwrap();
     for (index, case) in crate::lean_vocab_test::lean_contract_snapshot()
         .retry_frontier_cases
         .iter()
         .enumerate()
     {
         let session_id = format!("retry-frontier-{index}");
-        let session = escape_graphql_string(&session_id);
-        let state = if case["scoped_terminal"].as_bool().unwrap() {
-            "dead"
-        } else {
-            "processing"
-        };
-        let parent = write_doc(&node, &format!(r#"mutation {{ create_AgentRequest(input: {{
-            request_id: "retry-frontier-parent-{index}", purpose: "normal", node_did: "did:test:test",
-            agent_did: "general", session_id: "{session}", content: "Do the work",
-            lifecycle_state: "{state}", failure_reason:"Stale", execution_origin: "interactive", created_at: "2026-10-07T00:00:00Z"
-        }}) {{ _docID }} }}"#), "create_AgentRequest").await;
-        let mut request = crate::request::watcher::AgentRequest::try_from(
-            serde_json::from_value::<gents_protocol::row::AgentRequestRow>(serde_json::json!({
-                "_docID":"successor", "request_id":"successor", "purpose":"normal",
-                "node_did":"did:test:test", "session_id":session_id, "agent_did":"general",
-                "content":"Do the work", "created_at":"2026-10-07T00:00:01Z",
-                "retry_parent_request_doc_id":parent
-            }))
-            .unwrap(),
+        let parent_request_id = format!("retry-frontier-parent-{index}");
+        let mut parent = signed_claimed_authored_request(
+            &db,
+            &user,
+            &client,
+            &binding,
+            &parent_request_id,
+            &session_id,
+        )
+        .await;
+        let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+            node.clone(),
+            &parent,
+            std::time::Duration::ZERO,
         )
         .unwrap();
+        if case["running"].as_bool().unwrap() {
+            let mode = if case["background"].as_bool().unwrap() {
+                AwaitMode::Background
+            } else {
+                AwaitMode::Foreground
+            };
+            let _tool = publish_accepted_on_claimed_request(
+                node.clone(),
+                &mut parent,
+                node_did,
+                0,
+                "fixture",
+                &format!("retry-tool-{index}"),
+                serde_json::json!({}),
+                mode,
+                true,
+            )
+            .await
+            .unwrap();
+        } else {
+            parent.begin_owned_execution(&writer).await.unwrap();
+        }
+        if case["published"].as_bool().unwrap() {
+            writer
+                .publish_authored_message(&parent, "prompt", &Message::user("Do the work"))
+                .await
+                .unwrap();
+        }
+        let parent_doc = parent.request().doc_id.clone();
+        let mut request = parent.request().clone();
+        request.doc_id = "successor".into();
+        request.request_id = "successor".into();
+        request.retry_parent_request_doc_id = Some(parent_doc.clone());
         if !case["same_requester"].as_bool().unwrap() {
-            request.requester_did = Some("did:test:other".into());
+            request.requester_did = Some(other.did().into());
         }
         if !case["same_session"].as_bool().unwrap() {
             request.session_id = format!("fresh-session-{index}");
         }
-        if case["published"].as_bool().unwrap() {
-            import_history_observation(
-                &node,
-                &parent,
-                &session_id,
-                "did:test:test",
-                None,
-                "Do the work",
-                &canonical_rows::authored_message_key(&parent, "prompt"),
-                1,
-                None,
-            )
-            .await;
+        if case["scoped_terminal"].as_bool().unwrap() {
+            parent
+                .terminalize_owned(
+                    crate::request::lifecycle::RequestTerminalOutcome::Dead,
+                    gents_protocol::output::TerminalOutput::NoMessage,
+                    Some("Stale"),
+                )
+                .await
+                .unwrap();
         }
-        let parent_gql = escape_graphql_string(&parent);
-        if case["running"].as_bool().unwrap() {
-            let mode = if case["background"].as_bool().unwrap() {
-                "background"
-            } else {
-                "foreground"
-            };
-            write_doc(
-                &node,
-                &format!(
-                    r#"mutation {{ create_AgentToolCall(input: {{
-                tool_call_key:"retry-frontier-tool-{index}", request_doc_id:"{parent_gql}",
-                lifecycle_state:"running", await_mode:"{mode}"
-            }}) {{_docID}} }}"#
-                ),
-                "create_AgentToolCall",
-            )
-            .await;
-        }
-        let actual = history::retry_has_published_input(&node, &request).await;
+        let actual = history::retry_has_published_input(node, &request).await;
         assert_eq!(actual.ok(), case["expected"].as_bool(), "{case}");
         if case["name"] == "ready" {
-            request.retry_parent_request_doc_id = Some(
-                write_doc(
-                    &node,
-                    &format!(
-                        r#"mutation {{
-                create_AgentRequest(input: {{ request_id:"retry-frontier-second", purpose:"normal",
-                    node_did:"did:test:test", agent_did:"general", session_id:"{session}",
-                    content:"Do the work", lifecycle_state:"failed", execution_origin:"interactive",
-                    created_at:"2026-10-07T00:00:02Z", retry_parent_request_doc_id:"{parent_gql}"
-                }}) {{_docID}} }}"#
-                    ),
-                    "create_AgentRequest",
+            let retry = crate::request::lifecycle::RetryLink {
+                parent_request_id: Some(parent_request_id.clone()),
+                parent_request_doc_id: Some(parent_doc.clone()),
+                root_request_id: parent_request_id.clone(),
+                retry_count: 1,
+                max_retries: 3,
+            };
+            let mut second = signed_claimed_authored_request_with_retry(
+                &db,
+                &user,
+                &client,
+                &binding,
+                "retry-frontier-second",
+                &session_id,
+                Some(retry),
+            )
+            .await;
+            second
+                .terminalize_owned(
+                    crate::request::lifecycle::RequestTerminalOutcome::Failed,
+                    gents_protocol::output::TerminalOutput::NoMessage,
+                    None,
                 )
-                .await,
-            );
+                .await
+                .unwrap();
+            request.retry_parent_request_doc_id = Some(second.request().doc_id.clone());
             assert_eq!(
-                history::retry_has_published_input(&node, &request)
+                history::retry_has_published_input(node, &request)
                     .await
                     .ok(),
                 case["expected"].as_bool(),
