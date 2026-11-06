@@ -400,7 +400,7 @@ pub struct DataCaller {
 #[derive(Clone)]
 enum DataAccess {
     Node(Arc<crate::defra_node::Node>, ::identity::Did),
-    Operator(crate::store::config_client::ConfigAccess),
+    Operator(Box<crate::store::config_client::ConfigAccess>),
 }
 
 impl DataCaller {
@@ -451,7 +451,7 @@ impl DataCaller {
             "client plugin work requires the user's identity"
         );
         Ok(Self {
-            access: DataAccess::Operator(access),
+            access: DataAccess::Operator(Box::new(access)),
             caller_did,
         })
     }

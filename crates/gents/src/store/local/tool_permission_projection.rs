@@ -261,7 +261,7 @@ fn decode_source(object_id: &str) -> Option<String> {
         return None;
     }
     let mut bytes = Vec::with_capacity(hex.len() / 2);
-    for pair in hex.chunks_exact(2) {
+    for pair in hex.as_chunks::<2>().0 {
         let high = (pair[0] as char).to_digit(16)?;
         let low = (pair[1] as char).to_digit(16)?;
         bytes.push(((high << 4) | low) as u8);

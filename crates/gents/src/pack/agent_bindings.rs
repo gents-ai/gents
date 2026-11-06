@@ -16,6 +16,11 @@ pub(crate) struct AgentProvisioner<'a> {
     pub node_binding: Option<&'a crate::store::config_client::ConfigurationNodeBinding>,
 }
 
+pub(super) struct PackBindingInputs<'a, 'b> {
+    pub available: &'a BTreeMap<String, PackAgentBindings>,
+    pub provisioner: Option<&'a AgentProvisioner<'b>>,
+}
+
 pub type PackAgentBindings = BTreeMap<String, AgentIdentityBinding>;
 pub const AGENT_SLOT_REFERENCE_PREFIX: &str = "gents:agent-slot:";
 
@@ -214,10 +219,6 @@ pub async fn load_pack_install_config(
     .await
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "runtime derivation capability is explicit for local provisioning"
-)]
 pub(crate) async fn load_pack_install_config_with_provisioner(
     access: &ConfigAccess,
     manifest: &PackManifest,
@@ -243,8 +244,10 @@ pub(crate) async fn load_pack_install_config_with_provisioner(
         read_asset,
         environment,
         installed_via,
-        &available,
-        provisioner,
+        PackBindingInputs {
+            available: &available,
+            provisioner,
+        },
     )
     .await
 }
@@ -256,9 +259,12 @@ pub(super) async fn load_pack_install_config_with_dependencies(
     read_asset: &(dyn Fn(&str) -> Result<Vec<u8>> + Sync),
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
     installed_via: InstalledVia,
-    available: &BTreeMap<String, PackAgentBindings>,
-    provisioner: Option<&AgentProvisioner<'_>>,
+    bindings: PackBindingInputs<'_, '_>,
 ) -> Result<BoundPackConfig> {
+    let PackBindingInputs {
+        available,
+        provisioner,
+    } = bindings;
     super::validate_pack_manifest(manifest)?;
     let path = manifest
         .config

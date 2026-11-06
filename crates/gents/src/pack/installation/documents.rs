@@ -296,8 +296,10 @@ pub(crate) async fn prepare_document_pack_archive_with_provisioner(
             &|path| dependency.asset(path).map(<[u8]>::to_vec),
             environment,
             installed_via,
-            &BTreeMap::new(),
-            provisioner,
+            super::super::agent_bindings::PackBindingInputs {
+                available: &BTreeMap::new(),
+                provisioner,
+            },
         )
         .await?;
         available.insert(coordinate.clone(), loaded.agent_bindings.clone());
@@ -315,8 +317,10 @@ pub(crate) async fn prepare_document_pack_archive_with_provisioner(
         &|path| archive.asset(path).map(<[u8]>::to_vec),
         environment,
         installed_via,
-        &available,
-        provisioner,
+        super::super::agent_bindings::PackBindingInputs {
+            available: &available,
+            provisioner,
+        },
     )
     .await?;
     prepare_document_pack_install_inner(
