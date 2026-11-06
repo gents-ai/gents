@@ -14,17 +14,32 @@ fn agent_access(
     .unwrap()
 }
 
+async fn agent_query(
+    node: &std::sync::Arc<EmbeddedNode>,
+    signer: &crate::store::identity::ManagedAgentSigner,
+    document: &str,
+) -> query::QueryResponse {
+    let access = agent_access(node, signer);
+    let value = if document.trim_start().starts_with("mutation") {
+        access.write("test.inference_recovery", document).await
+    } else {
+        access.execute(document).await
+    }
+    .unwrap();
+    serde_json::from_value(value).unwrap()
+}
+
 async fn fixture(
     initial_state: &str,
 ) -> (
-    std::sync::Arc<EmbeddedNode>,
+    crate::support::TestDb,
     crate::store::identity::ManagedAgentSigner,
     StaleInferenceCallRow,
 ) {
-    let node = super::super::tests::test_node().await;
-    let signer = super::super::tests::managed_signer(&node);
+    let (db, signer) = super::super::tests::test_node().await;
+    let node = db.node.clone();
     let snapshot = seed_call(&node, &signer, initial_state, "recovery-cas-request-doc").await;
-    (node, signer, snapshot)
+    (db, signer, snapshot)
 }
 
 async fn seed_call(
@@ -62,10 +77,14 @@ async fn seed_call(
     snapshots.remove(0)
 }
 
-async fn stored_call(node: &EmbeddedNode) -> Value {
-    let response = node.execute(
+async fn stored_call(
+    node: &std::sync::Arc<EmbeddedNode>,
+    signer: &crate::store::identity::ManagedAgentSigner,
+) -> Value {
+    let value = agent_access(node, signer).execute(
         r#"{ InferenceCall { call_state failure_reason ended_at prompt_tokens completion_tokens } }"#,
-    ).await;
+    ).await.unwrap();
+    let response: query::QueryResponse = serde_json::from_value(value).unwrap();
     crate::store::graphql::rows::<Value>(&response, "InferenceCall")
         .unwrap()
         .remove(0)
@@ -75,19 +94,23 @@ async fn stored_call(node: &EmbeddedNode) -> Value {
 /// that observed running before the owner completed must preserve that outcome.
 #[tokio::test]
 async fn stale_recovery_preserves_concurrent_completion_and_usage() {
-    let (node, signer, snapshot) = fixture("running").await;
+    let (db, signer, snapshot) = fixture("running").await;
+    let node = db.node.clone();
     let doc_id = escape_graphql_string(&snapshot.doc_id);
-    let response = node
-        .execute(&format!(
+    let response = agent_query(
+        &node,
+        &signer,
+        &format!(
             r#"mutation {{ update_InferenceCall(
             filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
             input: {{ call_state: "completed", ended_at: "2026-09-02T00:00:00Z",
                 prompt_tokens: 17, completion_tokens: 9 }}
         ) {{ _docID }} }}"#
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let completed = stored_call(&node).await;
+    let completed = stored_call(&node, &signer).await;
     assert!(!recover_inference_call_row(
         &agent_access(&node, &signer),
         &snapshot,
@@ -95,12 +118,13 @@ async fn stale_recovery_preserves_concurrent_completion_and_usage() {
     )
     .await
     .unwrap());
-    assert_eq!(stored_call(&node).await, completed);
+    assert_eq!(stored_call(&node, &signer).await, completed);
 }
 
 #[tokio::test]
 async fn competing_recovery_counts_only_the_winner_and_preserves_terminal_stamp() {
-    let (node, signer, snapshot) = fixture("running").await;
+    let (db, signer, snapshot) = fixture("running").await;
+    let node = db.node.clone();
     let winner = recover_inference_call_row(
         &agent_access(&node, &signer),
         &snapshot,
@@ -109,7 +133,7 @@ async fn competing_recovery_counts_only_the_winner_and_preserves_terminal_stamp(
     .await
     .unwrap();
     assert!(winner);
-    let terminal = stored_call(&node).await;
+    let terminal = stored_call(&node, &signer).await;
     assert_eq!(terminal["call_state"], "failed");
     let loser = recover_inference_call_row(
         &agent_access(&node, &signer),
@@ -120,23 +144,27 @@ async fn competing_recovery_counts_only_the_winner_and_preserves_terminal_stamp(
     .unwrap();
     assert!(!loser);
     assert_eq!(usize::from(winner) + usize::from(loser), 1);
-    assert_eq!(stored_call(&node).await, terminal);
+    assert_eq!(stored_call(&node, &signer).await, terminal);
 }
 
 #[tokio::test]
 async fn stale_queued_recovery_cannot_cancel_a_running_call() {
-    let (node, signer, snapshot) = fixture("queued").await;
+    let (db, signer, snapshot) = fixture("queued").await;
+    let node = db.node.clone();
     let doc_id = escape_graphql_string(&snapshot.doc_id);
-    let response = node
-        .execute(&format!(
+    let response = agent_query(
+        &node,
+        &signer,
+        &format!(
             r#"mutation {{ update_InferenceCall(
             filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
             input: {{ call_state: "running" }}
         ) {{ _docID }} }}"#
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let running = stored_call(&node).await;
+    let running = stored_call(&node, &signer).await;
     assert!(!recover_inference_call_row(
         &agent_access(&node, &signer),
         &snapshot,
@@ -144,7 +172,7 @@ async fn stale_queued_recovery_cannot_cancel_a_running_call() {
     )
     .await
     .unwrap());
-    assert_eq!(stored_call(&node).await, running);
+    assert_eq!(stored_call(&node, &signer).await, running);
 }
 
 fn pending_call(
@@ -174,7 +202,8 @@ fn pending_call(
 /// Lean: InferenceCall.Persistence.recovery_winner_cannot_be_reopened.
 #[tokio::test]
 async fn recovery_winner_rejects_late_running_persistence() {
-    let (node, signer, snapshot) = fixture("queued").await;
+    let (db, signer, snapshot) = fixture("queued").await;
+    let node = db.node.clone();
     assert!(recover_inference_call_row(
         &agent_access(&node, &signer),
         &snapshot,
@@ -182,7 +211,7 @@ async fn recovery_winner_rejects_late_running_persistence() {
     )
     .await
     .unwrap());
-    let terminal = stored_call(&node).await;
+    let terminal = stored_call(&node, &signer).await;
     let call = super::super::controller::InferenceCallRecord::without_controller(pending_call(
         "recovery-cas-call",
         &signer,
@@ -194,7 +223,7 @@ async fn recovery_winner_rejects_late_running_persistence() {
     )
     .await
     .is_err());
-    assert_eq!(stored_call(&node).await, terminal);
+    assert_eq!(stored_call(&node, &signer).await, terminal);
 }
 
 #[tokio::test]
@@ -205,7 +234,8 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
     };
     use gents_loop::rig_compat::CachedInputTokensObservation;
 
-    let (node, signer, snapshot) = fixture("queued").await;
+    let (db, signer, snapshot) = fixture("queued").await;
+    let node = db.node.clone();
     let call = InferenceCallRecord::without_controller(pending_call("recovery-cas-call", &signer));
     let other = InferenceCallRecord::without_controller(pending_call("other-call", &signer));
     let other_doc = persist_call_queued(node.clone(), &other).await.unwrap();
@@ -256,7 +286,7 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
             .await
             .is_err()
     );
-    let response = crate::store::config_client::ConfigAccess::local(node)
+    let response = agent_access(&node, &signer)
         .execute("{ InferenceCall { call_id call_state } }")
         .await
         .unwrap();
@@ -279,7 +309,8 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
 #[tokio::test]
 async fn recovered_queued_call_cannot_acquire_provider_permit() {
     use super::super::controller::BackendAdmissionController;
-    let node = super::super::tests::test_node().await;
+    let (db, signer) = super::super::tests::test_node().await;
+    let node = db.node.clone();
     let controller = BackendAdmissionController::new(
         1,
         super::super::BackendAdmissionConfig {
@@ -293,7 +324,6 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
         },
         super::super::controller::CapacityPool::open(1),
     );
-    let signer = super::super::tests::managed_signer(&node);
     let mut holder = controller
         .clone()
         .acquire(
@@ -363,9 +393,12 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
         (0, 0),
         "losing admission must release controller bookkeeping"
     );
-    let response = node
-        .execute(r#"{ InferenceCall(filter: {call_id: {_eq: "waiting-call"}}) {call_state} }"#)
-        .await;
+    let response = agent_query(
+        &node,
+        &signer,
+        r#"{ InferenceCall(filter: {call_id: {_eq: "waiting-call"}}) {call_state} }"#,
+    )
+    .await;
     let rows = crate::store::graphql::rows::<Value>(&response, "InferenceCall").unwrap();
     assert_eq!(rows[0]["call_state"], "cancelled");
 }
@@ -412,7 +445,8 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
     use super::super::controller::BackendAdmissionController;
     use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 
-    let node = super::super::tests::test_node().await;
+    let (db, signer) = super::super::tests::test_node().await;
+    let node = db.node.clone();
     let controller = BackendAdmissionController::new(
         1,
         super::super::BackendAdmissionConfig {
@@ -426,7 +460,6 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
         },
         super::super::controller::CapacityPool::open(1),
     );
-    let signer = super::super::tests::managed_signer(&node);
     let permit = controller
         .clone()
         .acquire(
@@ -504,8 +537,7 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
 
     let rows = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            let response = node
-                .execute(
+            let response = agent_query(&node, &signer,
                     r#"{ InferenceCall(filter: {call_id: {_eq: "aborted-finalizer-call"}}) {call_state} }"#,
                 )
                 .await;
@@ -601,7 +633,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     )
     .await
     .unwrap());
-    let terminal = stored_call(&node).await;
+    let terminal = stored_call(&node, &signer).await;
     let mut metadata = pending_call("recovery-cas-call", &signer);
     metadata.request_doc_id = request.doc_id.clone();
     metadata.node_did = request.node_did.clone();
@@ -624,7 +656,7 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     )
     .await
     .unwrap();
-    let stored = stored_call(&node).await;
+    let stored = stored_call(&node, &signer).await;
     for field in ["call_state", "failure_reason", "ended_at"] {
         assert_eq!(
             stored[field], terminal[field],
@@ -633,11 +665,13 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     }
     assert_eq!(stored["prompt_tokens"], 17);
     assert_eq!(stored["completion_tokens"], 9);
-    let budget =
-        crate::turn::completion_factory::aggregate_token_budget_for_request(&crate::store::config_client::ConfigAccess::local(node.clone()), &request)
-            .await
-            .unwrap()
-            .unwrap();
+    let budget = crate::turn::completion_factory::aggregate_token_budget_for_request(
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &request,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(
         budget.snapshot().unwrap().remaining(),
         74,
@@ -654,12 +688,14 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     )
     .await
     .unwrap();
-    assert_eq!(stored_call(&node).await, stored);
-    let budget =
-        crate::turn::completion_factory::aggregate_token_budget_for_request(&crate::store::config_client::ConfigAccess::local(node.clone()), &request)
-            .await
-            .unwrap()
-            .unwrap();
+    assert_eq!(stored_call(&node, &signer).await, stored);
+    let budget = crate::turn::completion_factory::aggregate_token_budget_for_request(
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &request,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(budget.snapshot().unwrap().remaining(), 74);
 }
 

@@ -208,13 +208,16 @@ impl Harness {
     }
 }
 
-async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
+async fn run_case(
+    node: Arc<EmbeddedNode>,
+    signer: crate::store::identity::ManagedAgentSigner,
+    case: &Case,
+) -> Result<()> {
     ensure!(
         case.actions.len() == case.expected.len(),
         "missing step expectations"
     );
     let backend_id = format!("registry-{}", case.name);
-    let signer = super::super::tests::managed_signer(&node);
     let mut harness = Harness {
         registry: AdmissionRegistry::new(node),
         signer,
@@ -274,10 +277,11 @@ async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
 async fn generated_inference_registry_cases_drive_real_permits() {
     let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
     assert_eq!(snapshot.inference_registry_cases.len(), 11);
-    let node = super::super::tests::test_node().await;
+    let (db, signer) = super::super::tests::test_node().await;
+    let node = db.node.clone();
     let mut failures = Vec::new();
     for case in &snapshot.inference_registry_cases {
-        if let Err(error) = run_case(node.clone(), case).await {
+        if let Err(error) = run_case(node.clone(), signer.clone(), case).await {
             failures.push(format!("{}: {error:#}", case.name));
         }
     }
@@ -286,8 +290,8 @@ async fn generated_inference_registry_cases_drive_real_permits() {
 
 #[tokio::test]
 async fn rollback_reuses_epoch_with_distinct_controller_on_shared_pool() {
-    let node = super::super::tests::test_node().await;
-    let signer = super::super::tests::managed_signer(&node);
+    let (db, signer) = super::super::tests::test_node().await;
+    let node = db.node.clone();
     let registry = AdmissionRegistry::new(node);
     let backend_id = "registry-rollback-epoch";
     let config = |generation, capacity| {
