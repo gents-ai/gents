@@ -1,69 +1,90 @@
-use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::Node as EmbeddedNode;
 use gents::store::graphql::escape_graphql_string;
-use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
+use gents::{ConfigAccess, DocumentRuntimeOptions, Gents, ToolCeiling};
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::support::fixtures::{bind_default_agent_backend, test_identity};
+use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::snapshots::{fetch_runtime_snapshot, is_routed_ready_after, RuntimeSnapshot};
-use crate::support::test_db;
+use crate::support::snapshots::{
+    fetch_runtime_snapshot_as, is_routed_ready_after, RuntimeSnapshot,
+};
+use crate::support::{managed_agent_fixture, test_db};
 
 const TRIGGER_ID: &str = "trigger-e2e-signup";
 const TASK_ID: &str = "task-e2e-signup";
 const EXTERNAL_ID: &str = "wh-1";
 const PROMPT_TEMPLATE: &str = "fired for {{ doc.external_id }}";
 
-async fn register_webhook_event_schema(node: &EmbeddedNode) {
-    let sdl = r#"
-        type WebhookEvent {
-            external_id: String
-            payload: String
-            kind: String @index
-        }
-    "#;
-    node.add_collection(sdl)
+const WEBHOOK_EVENT_SDL: &str = r#"
+    type WebhookEvent {
+        external_id: String
+        payload: String
+        kind: String @index
+    }
+"#;
+
+async fn register_webhook_event_schema(access: &ConfigAccess) {
+    let plan = gents::store::config_client::preview_schema_install(access, WEBHOOK_EVENT_SDL)
         .await
-        .expect("add_collection for WebhookEvent");
+        .expect("preview WebhookEvent schema");
+    gents::store::config_client::apply_schema_install(
+        access,
+        WEBHOOK_EVENT_SDL,
+        &plan.artifact_digest,
+    )
+    .await
+    .expect("install WebhookEvent schema");
+}
+
+async fn apply_documents(access: &ConfigAccess, documents: Vec<(gents::Collection, Value)>) {
+    use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    let plan = DesiredStateApplyPlan::new(
+        documents
+            .into_iter()
+            .map(|(collection, value)| DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect(),
+    )
+    .unwrap();
+    access
+        .transact_write("test.event_trigger_configuration", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .expect("install event trigger configuration as held user");
 }
 
 async fn create_task(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     owner: &str,
     task_id: &str,
     agent_did: &str,
     prompt_template: &str,
 ) {
-    let escaped_owner = escape_graphql_string(owner);
-    let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_prompt_template = escape_graphql_string(prompt_template);
-    let mutation = format!(
-        r#"mutation {{
-            create_Task(input: {{
-                node_did: "{escaped_owner}",
-                task_id: "{escaped_task_id}",
-                display_name: "{escaped_task_id}",
-                agent_did: "{escaped_agent_did}",
-                prompt_template: "{escaped_prompt_template}",
-                enabled: true
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create Task failed: {:?}",
-        response.errors
-    );
+    apply_documents(
+        access,
+        vec![(
+            gents::Collection::Task,
+            serde_json::json!({
+                "node_did": owner, "task_id": task_id, "display_name": task_id,
+                "agent_did": agent_did, "prompt_template": prompt_template, "enabled": true,
+            }),
+        )],
+    )
+    .await;
 }
 
 async fn create_event_trigger_with_filter(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     owner: &str,
     trigger_id: &str,
     task_id: &str,
@@ -71,42 +92,21 @@ async fn create_event_trigger_with_filter(
     event_kind: &str,
     filter: &str,
 ) {
-    let escaped_owner = escape_graphql_string(owner);
-    let escaped_trigger_id = escape_graphql_string(trigger_id);
-    let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_source_collection = escape_graphql_string(source_collection);
-    let escaped_event_kind = escape_graphql_string(event_kind);
-    let escaped_filter = escape_graphql_string(filter);
-    let mutation = format!(
-        r#"mutation {{
-            create_EventSource(input: {{
-                event_source_id: "{escaped_trigger_id}",
-                node_did: "{escaped_owner}",
-                source_collection: "{escaped_source_collection}",
-                event_kind: "{escaped_event_kind}",
-                filter: "{escaped_filter}"
-            }}) {{ _docID }}
-            create_Trigger(input: {{
-                trigger_id: "{escaped_trigger_id}",
-                node_did: "{escaped_owner}",
-                task_id: "{escaped_task_id}",
-                source: {{ kind: "event", event_source_id: "{escaped_trigger_id}" }},
-                enabled: true,
-                concurrency: "serial",
-                fire_count: 0
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create Trigger failed: {:?}",
-        response.errors
-    );
+    apply_documents(access, vec![
+        (gents::Collection::EventSource, serde_json::json!({
+            "event_source_id": trigger_id, "node_did": owner,
+            "source_collection": source_collection, "event_kind": event_kind, "filter": filter,
+        })),
+        (gents::Collection::Trigger, serde_json::json!({
+            "trigger_id": trigger_id, "node_did": owner, "task_id": task_id,
+            "source": {"kind": "event", "event_source_id": trigger_id},
+            "enabled": true, "concurrency": "serial", "fire_count": 0,
+        })),
+    ]).await;
 }
 
 async fn wait_for_runtime_snapshot<F>(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     node_did: &str,
     predicate: F,
 ) -> RuntimeSnapshot
@@ -116,7 +116,7 @@ where
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let mut last = None;
     loop {
-        if let Some(snapshot) = fetch_runtime_snapshot(node, node_did).await {
+        if let Some(snapshot) = fetch_runtime_snapshot_as(access, node_did).await {
             if predicate(&snapshot) {
                 return snapshot;
             }
@@ -131,7 +131,7 @@ where
 }
 
 async fn query_agent_requests_for_trigger(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     trigger_id: &str,
 ) -> Vec<AgentRequestRow> {
     let escaped_trigger_id = escape_graphql_string(trigger_id);
@@ -149,15 +149,12 @@ async fn query_agent_requests_for_trigger(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "AgentRequest query failed: {:?}",
-        response.errors
-    );
+    let response = access
+        .execute(&query)
+        .await
+        .expect("read triggered AgentRequest");
     let rows = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("AgentRequest"))
         .and_then(Value::as_array)
         .cloned()
@@ -180,7 +177,7 @@ struct EventTriggerRow {
     concurrency: Option<String>,
 }
 
-async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTriggerRow {
+async fn fetch_event_trigger(access: &ConfigAccess, trigger_id: &str) -> EventTriggerRow {
     let escaped_trigger_id = escape_graphql_string(trigger_id);
     let query = format!(
         r#"{{
@@ -202,15 +199,9 @@ async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTrig
             ) {{ source_collection event_kind }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "Trigger query failed: {:?}",
-        response.errors
-    );
+    let response = access.execute(&query).await.expect("read event Trigger");
     let row = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("Trigger"))
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
@@ -218,8 +209,7 @@ async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTrig
         .expect("Trigger row missing");
     let mut row: EventTriggerRow = serde_json::from_value(row).expect("decode Trigger row");
     let source = response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("EventSource"))
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
@@ -235,45 +225,19 @@ async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTrig
     row
 }
 
-async fn write_webhook_event(node: &EmbeddedNode, external_id: &str, kind: &str) -> String {
-    let escaped_external_id = escape_graphql_string(external_id);
-    let escaped_kind = escape_graphql_string(kind);
-    let mutation = format!(
-        r#"mutation {{
-            add_WebhookEvent(input: {{
-                external_id: "{escaped_external_id}",
-                payload: "{{}}",
-                kind: "{escaped_kind}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "add_WebhookEvent failed: {:?}",
-        response.errors
-    );
-    let data = response
-        .data
-        .as_ref()
-        .expect("add_WebhookEvent response missing data");
-    let field = data
-        .get("add_WebhookEvent")
-        .or_else(|| data.get("create_WebhookEvent"))
-        .unwrap_or_else(|| panic!("add_/create_WebhookEvent key missing; data={data:?}"));
-    field
-        .get("_docID")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            field
-                .as_array()
-                .and_then(|rows| rows.first())
-                .and_then(|row| row.get("_docID"))
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
+async fn write_webhook_event(access: &ConfigAccess, external_id: &str, kind: &str) -> String {
+    let variables =
+        serde_json::json!({"input": {"external_id": external_id, "payload": "{}", "kind": kind}});
+    access.transact_write("test.webhook_event", |txn| {
+        let variables = &variables;
+        Box::pin(async move {
+            let response = txn.execute_client_signed_create(
+                "mutation($input: WebhookEventMutationInputArg!) { create_WebhookEvent(input: $input) { _docID } }",
+                variables, WEBHOOK_EVENT_SDL,
+            ).await?;
+            gents::store::graphql::created_doc_id(&response, "WebhookEvent")
         })
-        .unwrap_or_else(|| panic!("WebhookEvent mutation returned no _docID: {field}"))
+    }).await.expect("write User-signed WebhookEvent")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -281,15 +245,17 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
     let db = test_db("event-trigger-e2e").await;
 
-    register_webhook_event_schema(db.node.as_ref()).await;
+    let fixture = managed_agent_fixture(&db).await;
+    register_webhook_event_schema(&fixture.access).await;
 
-    let identity = Arc::new(test_identity("event-trigger-e2e"));
+    let identity = db.node_identity.clone();
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &db.node,
-        identity.did(),
+    bind_managed_agent_backend(
+        &db,
+        &fixture,
         "backend-event-trigger-e2e",
         mock_endpoint.endpoint(),
+        "default",
     )
     .await;
 
@@ -309,7 +275,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
+    let startup = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, 0) && snapshot.default_agent_did == default_agent_did
     })
     .await;
@@ -321,7 +287,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     );
 
     create_task(
-        db.node.as_ref(),
+        &fixture.access,
         &node_did,
         TASK_ID,
         &default_agent_did,
@@ -329,7 +295,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     )
     .await;
     create_event_trigger_with_filter(
-        db.node.as_ref(),
+        &fixture.access,
         &node_did,
         TRIGGER_ID,
         TASK_ID,
@@ -339,7 +305,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     )
     .await;
 
-    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
+    let reconciled = wait_for_runtime_snapshot(&fixture.access, &node_did, |snapshot| {
         is_routed_ready_after(snapshot, initial_generation)
             && snapshot.default_agent_did == default_agent_did
     })
@@ -356,16 +322,13 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
-        let response = gents::store::graphql::graphql_with_transaction_retry(
-            db.node.as_ref(),
-            &cursor_query,
-            "test event trigger readiness",
-        )
-        .await
-        .unwrap();
+        let response = fixture
+            .access
+            .execute(&cursor_query)
+            .await
+            .expect("read trigger cursor");
         if response
-            .data
-            .as_ref()
+            .get("data")
             .and_then(|data| data["EventSourceCursor"].as_array())
             .is_some_and(|rows| {
                 rows.iter()
@@ -382,11 +345,11 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    let source_doc_id = write_webhook_event(db.node.as_ref(), EXTERNAL_ID, "signup").await;
+    let source_doc_id = write_webhook_event(&fixture.access, EXTERNAL_ID, "signup").await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let requests = loop {
-        let rows = query_agent_requests_for_trigger(db.node.as_ref(), TRIGGER_ID).await;
+        let rows = query_agent_requests_for_trigger(&fixture.access, TRIGGER_ID).await;
         if !rows.is_empty() {
             break rows;
         }
@@ -436,7 +399,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let fired = loop {
-        let row = fetch_event_trigger(db.node.as_ref(), TRIGGER_ID).await;
+        let row = fetch_event_trigger(&fixture.access, TRIGGER_ID).await;
         if row.last_status.as_deref() == Some("fired") {
             break row;
         }
