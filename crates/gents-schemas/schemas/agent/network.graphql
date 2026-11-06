@@ -8,6 +8,4 @@ type Network @branchable {
     default_template: String
     created_at: String
     admin_sig: String
-    node_doc_id: String
-    parent_linked: Boolean
 }

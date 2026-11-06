@@ -407,8 +407,7 @@ pub async fn ensure_enrollment_network(
                         display_name: "{display_name}",
                         default_template: "{default_template}",
                         created_at: "{created_at}",
-                        admin_sig: "{admin_sig}",
-                        parent_linked: false
+                        admin_sig: "{admin_sig}"
                     }}) {{ _docID }}
                 }}"#
             );
@@ -416,25 +415,12 @@ pub async fn ensure_enrollment_network(
                 node.node_identity_did() == Some(identity.did()),
                 "enrollment Network author must be the local runtime Node"
             );
-            let runtime = identity::Did::new(identity.did())?;
-            let access =
-                gents::store::config_client::ConfigAccess::local_as(node.clone(), runtime.clone());
-            access
-                .transact_write("cli.enrollment.create_agent_network", |txn| {
-                    let mutation = &mutation;
-                    let runtime = &runtime;
-                    Box::pin(async move {
-                        let response = txn.execute(mutation).await?;
-                        let doc =
-                            gents_protocol::graphql::extract_mutation_doc_id(&response, "Network")?;
-                        gents::store::config_client::maybe_link_deferred_operation_in_txn(
-                            txn, "Network", &doc, runtime,
-                        )
-                        .await?;
-                        Ok::<_, anyhow::Error>(())
-                    })
-                })
-                .await?;
+            gents::store::config_client::ConfigAccess::write_local(
+                node,
+                "cli.enrollment.create_agent_network",
+                &mutation,
+            )
+            .await?;
             Ok(record)
         }
         rows => anyhow::bail!("expected one enrollment Network, found {}", rows.len()),
