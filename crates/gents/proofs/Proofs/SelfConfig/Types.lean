@@ -24,6 +24,10 @@ subject to native authorization for the invoking actor. -/
 def resourceReadExposed (categories : List String) (target : Target) : Bool :=
   categories.contains target.category
 
+/-- An enabled config tool exposes its own effective read; native document
+authorization still determines which selected documents are visible. -/
+def effectiveReadExposed (_categories : List String) : Bool := true
+
 theorem backend_read_does_not_require_agent_catalog :
     resourceReadExposed ["backend"] .inferenceBackend = true := by decide
 

@@ -30,11 +30,17 @@ def selfConfigResourceReadExposureCasesJson : String :=
      ("backend", .inferenceBackend, ["node"]),
      ("backend", .inferenceBackend, ["agent"]),
      ("tools", .tools, ["tools"]),
-     ("profile", .inferenceProfile, ["profile"])]
+     ("profile", .inferenceProfile, ["profile"]),
+     ("automation", .task, ["automation"]),
+     ("automation", .task, ["backend"]),
+     ("effective", .agent, ["backend"]),
+     ("effective", .agent, ["automation"]),
+     ("effective", .agent, ["tools"])]
   jsonArray (cases.map fun (resource, target, enabled) =>
     "{\"resource\":" ++ jsonString resource ++
     ",\"categories\":" ++ jsonStringArray enabled ++
-    ",\"exposed\":" ++ scBool (resourceReadExposed enabled target) ++ "}")
+    ",\"exposed\":" ++ scBool (if resource == "effective" then effectiveReadExposed enabled
+      else resourceReadExposed enabled target) ++ "}")
 
 def fieldValuePairJson (entry : FieldKey × FieldValue) : String :=
   "{"
