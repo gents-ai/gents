@@ -130,6 +130,13 @@ mod tests {
                 .unwrap()
         };
         let provider = "default-account-test";
+        let metadata_query = crate::inference::auth::credential::runtime_default_account_query(
+            runtime.did(),
+            provider,
+        );
+        for secret_field in ["access_token", "refresh_token", "id_token"] {
+            assert!(!metadata_query.contains(secret_field));
+        }
         let credential = crate::inference::auth::credential::OAuthCredential {
             doc_id: None,
             credential_id: "test-default-account".into(),
