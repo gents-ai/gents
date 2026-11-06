@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use gents::defra_node::{Node as EmbeddedNode, QueryResponse};
 use gents::{
-    ActiveRuntimeSnapshot, AgentRequest, ConcurrencyMode, DefraWatcher, EventSource,
+    ActiveRuntimeSnapshot, AgentRequest, ConcurrencyMode, DefraWatcher, EventSource, NodeIdentity,
     ResolvedEventTrigger, ResolvedTask, TriggerSource, Watcher,
 };
 use tokio::sync::{mpsc, watch};
