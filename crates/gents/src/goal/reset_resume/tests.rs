@@ -211,6 +211,17 @@ async fn waits_after_the_account_was_disabled() {
 #[tokio::test]
 async fn waits_after_the_account_was_removed() {
     let reset = Reset::new("inference", Some(T)).await;
+    let admin = ConfigAccess::local_as(
+        reset.f.node.clone(),
+        ::identity::Did::new(reset.f.identity.did()).unwrap(),
+    );
+    admin
+        .grant_node_permission(
+            &::identity::Did::new(reset.f.user.did()).unwrap(),
+            crate::store::config_client::NodePermission::DocumentDelete,
+        )
+        .await
+        .unwrap();
     let (did, credential) = (reset.f.identity.did(), reset.accounts.a_credential.as_str());
     reset
         .accounts
