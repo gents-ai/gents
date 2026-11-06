@@ -439,21 +439,6 @@ impl RequestLifecycle {
     }
 
     #[cfg(test)]
-    pub(crate) async fn begin_owned_execution_durable_with_clock<F>(
-        node: &Arc<EmbeddedNode>,
-        actor: identity::Did,
-        request_doc_id: &str,
-        generation: &str,
-        now: F,
-    ) -> Result<()>
-    where
-        F: Fn() -> chrono::DateTime<chrono::Utc> + Sync,
-    {
-        let access = crate::ConfigAccess::local_as(node.clone(), actor);
-        Self::begin_owned_execution_with_access(&access, request_doc_id, generation, now).await
-    }
-
-    #[cfg(test)]
     pub(crate) async fn begin_owned_execution_at_with_access<F>(
         access: &crate::ConfigAccess,
         request_doc_id: &str,
@@ -963,18 +948,39 @@ mod tests {
     const TEST_BACKEND_ID: &str = "backend-order";
 
     async fn test_node() -> Arc<EmbeddedNode> {
-        // The node must run under the fixture root so that the managed Agent
-        // signer bound by `test_lifecycle` names this node.
-        let root = test_node_did();
+        // The node runs under the fixture root with native ACP enabled, so
+        // request rows are authorized by their creator and working Agent, as in
+        // production. The managed Agent signer bound by `test_lifecycle` names
+        // this node.
         let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(root.as_str())
+            crate::triggers::callback::test_node_builder()
                 .build()
                 .await
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        crate::triggers::callback::seed_test_agent(&node, &test_node_did()).await;
         node
+    }
+
+    /// The runtime root's access: it creates request rows and grants their
+    /// working Agent, as the creating owner does in production.
+    fn root_access(node: &Arc<EmbeddedNode>) -> crate::ConfigAccess {
+        crate::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(test_node_did()).unwrap(),
+        )
+    }
+
+    /// The fixture Agent's managed access, used for every lifecycle write a
+    /// request performs (claim, begin, goal and requeue writes).
+    fn agent_access(node: &Arc<EmbeddedNode>) -> crate::ConfigAccess {
+        crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(test_agent_did()).unwrap(),
+            crate::triggers::callback::test_agent_identity().as_ref(),
+        )
+        .unwrap()
     }
 
     fn test_lifecycle(
@@ -1157,37 +1163,45 @@ mod tests {
             max_retries = DEFAULT_REQUEST_MAX_RETRIES,
             fields = crate::request::watcher::AGENT_REQUEST_FIELDS,
         );
-        let response = crate::store::config_client::ConfigAccess::write_local_response(
-            node,
-            "test.insert_pending_request",
-            &mutation,
-        )
-        .await
-        .unwrap();
-        crate::request::watcher::agent_request_from_mutation_response(
-            &response,
-            "create_AgentRequest",
-        )
-        .expect("decode created request")
-        .expect("created request receipt")
+        let agent = identity::Did::new(test_agent_did()).unwrap();
+        root_access(node)
+            .transact_write("test.insert_pending_request", |txn| {
+                let mutation = &mutation;
+                let agent = &agent;
+                Box::pin(async move {
+                    let response = txn.execute_local_response(mutation).await?;
+                    let request = crate::request::watcher::agent_request_from_mutation_response(
+                        &response,
+                        "create_AgentRequest",
+                    )?
+                    .ok_or_else(|| anyhow::anyhow!("created request receipt missing"))?;
+                    txn.add_actor_relationship(
+                        "AgentRequest",
+                        &request.doc_id,
+                        "working_agent",
+                        agent,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(request)
+                })
+            })
+            .await
+            .unwrap()
     }
 
     async fn durable_request_row(
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         doc_id: &str,
     ) -> gents_protocol::row::AgentRequestRow {
         let doc_id = escape_graphql_string(doc_id);
-        let response = node.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        )).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        crate::store::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
-            &response,
-            "AgentRequest",
-        )
-        .unwrap()
-        .unwrap()
+        let response = agent_access(node)
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
+                crate::request::watcher::AGENT_REQUEST_FIELDS,
+            ))
+            .await
+            .unwrap();
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap()
     }
 
     #[tokio::test]
@@ -1243,28 +1257,17 @@ mod tests {
             claimed.execution_lease_expires_at.as_deref(),
             Some("2023-11-14T22:13:30+00:00")
         );
-        RequestLifecycle::begin_owned_execution_durable_with_clock(
-            &node,
-            identity::Did::new(
-                node.node_identity_did()
-                    .expect("fixture node identity")
-                    .to_owned(),
-            )
-            .unwrap(),
+        let agent = agent_access(&node);
+        RequestLifecycle::begin_owned_execution_at_with_access(
+            &agent,
             &doc_id,
             "lean-generation-7",
             || now,
         )
         .await
         .unwrap();
-        RequestLifecycle::begin_owned_execution_durable_with_clock(
-            &node,
-            identity::Did::new(
-                node.node_identity_did()
-                    .expect("fixture node identity")
-                    .to_owned(),
-            )
-            .unwrap(),
+        RequestLifecycle::begin_owned_execution_at_with_access(
+            &agent,
             &doc_id,
             "lean-generation-7",
             || now + chrono::Duration::seconds(1),
@@ -1276,14 +1279,8 @@ mod tests {
             Some(RequestLifecycleState::Processing)
         );
         assert!(
-            RequestLifecycle::begin_owned_execution_durable_with_clock(
-                &node,
-                identity::Did::new(
-                    node.node_identity_did()
-                        .expect("fixture node identity")
-                        .to_owned()
-                )
-                .unwrap(),
+            RequestLifecycle::begin_owned_execution_at_with_access(
+                &agent,
                 &doc_id,
                 "lean-generation-7",
                 || now + chrono::Duration::seconds(6),
@@ -1337,18 +1334,14 @@ mod tests {
             .await;
         }
         for (request, expected) in [(&first, true), (&second, false)] {
-            let allowed = crate::store::config_client::ConfigAccess::transact_local_write(
-                &node,
-                None,
-                "test.claim_queue_arrival_order",
-                |txn| {
+            let allowed = agent_access(&node)
+                .transact_write("test.claim_queue_arrival_order", |txn| {
                     Box::pin(
                         async move { super::super::query::claim_queue_allows(txn, request).await },
                     )
-                },
-            )
-            .await
-            .unwrap();
+                })
+                .await
+                .unwrap();
             assert_eq!(allowed, expected);
         }
     }
@@ -1459,18 +1452,14 @@ mod tests {
                 .unwrap()["can_claim"]
                 .as_bool()
                 .unwrap();
-            let allowed = crate::store::config_client::ConfigAccess::transact_local_write(
-                &node,
-                None,
-                "test.serial_claim_trigger_cohort",
-                |txn| {
+            let allowed = agent_access(&node)
+                .transact_write("test.serial_claim_trigger_cohort", |txn| {
                     Box::pin(
                         async move { super::super::query::claim_queue_allows(txn, request).await },
                     )
-                },
-            )
-            .await
-            .unwrap();
+                })
+                .await
+                .unwrap();
             assert_eq!(allowed, expected, "{name}");
         }
     }
@@ -1490,13 +1479,14 @@ mod tests {
                 )
                 .await
                 .unwrap();
-                let original = crate::goal::set_goal(
-                    &node,
+                let original = crate::goal::set_goal_from_access(
+                    &agent_access(&node),
                     &test_node_did(),
                     session,
                     Some("finish original work"),
                     Some(crate::goal::GoalStatus::Active),
                     Some(Some(100)),
+                    None,
                 )
                 .await
                 .unwrap();
@@ -1586,27 +1576,24 @@ mod tests {
                     escape_graphql_string(&first_doc_id),
                     test_node_did(),
                 );
-                crate::store::config_client::ConfigAccess::transact_local_write(
-                    &node,
-                    None,
-                    "test.finish_prior_assignment",
-                    |txn| {
+                agent_access(&node)
+                    .transact_write("test.finish_prior_assignment", |txn| {
                         let finish = &finish;
                         Box::pin(async move {
                             txn.execute(finish).await?;
                             Ok::<_, anyhow::Error>(())
                         })
-                    },
-                )
-                .await
-                .unwrap();
+                    })
+                    .await
+                    .unwrap();
                 if stopped {
-                    crate::goal::set_goal(
-                        &node,
+                    crate::goal::set_goal_from_access(
+                        &agent_access(&node),
                         &test_node_did(),
                         session,
                         None,
                         Some(crate::goal::GoalStatus::Complete),
+                        None,
                         None,
                     )
                     .await
@@ -1649,9 +1636,8 @@ mod tests {
                     .unwrap(),
                     if stopped { 0 } else { 100 }
                 );
-                assert!(!crate::goal::update_goal_fields_if_status(
-                    &node,
-                    &identity::Did::new(test_agent_did()).unwrap(),
+                assert!(!crate::goal::update_goal_fields_if_status_from_access(
+                    &agent_access(&node),
                     &original,
                     crate::goal::GoalStatus::Active,
                     "objective: \"stale controller\""
@@ -1862,7 +1848,8 @@ mod tests {
             AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
         };
         use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestQueue};
-        let access = crate::ConfigAccess::local(node.clone());
+        let access = root_access(node);
+        let agent = agent_access(node);
         crate::session::ensure_session_with_agent_did_and_requester_did(
             node,
             session,
@@ -1887,15 +1874,12 @@ mod tests {
         crate::sign_agent_request_create(identity, &mut parent)
             .await
             .unwrap();
-        let response = access
-            .write(
-                "test.snapshot_signed_parent",
-                &parent.graphql_mutation().unwrap(),
-            )
-            .await
-            .unwrap();
-        let parent_doc = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
-        access.write("test.snapshot_finished_parent", &format!("mutation {{update_AgentRequest(docID: \"{}\", input: {{lifecycle_state: \"completed\"}}) {{_docID}}}}",escape_graphql_string(&parent_doc))).await.unwrap();
+        let parent_doc = create_fixture_request(
+            &access,
+            &parent.graphql_mutation().unwrap(),
+        )
+        .await;
+        agent.write("test.snapshot_finished_parent", &format!("mutation {{update_AgentRequest(docID: \"{}\", input: {{lifecycle_state: \"completed\"}}) {{_docID}}}}",escape_graphql_string(&parent_doc))).await.unwrap();
         let mut wake = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "snapshot-wake",
@@ -1923,15 +1907,8 @@ mod tests {
         crate::sign_agent_request_create(identity, &mut wake)
             .await
             .unwrap();
-        let response = access
-            .write(
-                "test.snapshot_signed_wake",
-                &wake.graphql_mutation().unwrap(),
-            )
-            .await
-            .unwrap();
-        let doc = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
-        let response = access
+        let doc = create_fixture_request(&access, &wake.graphql_mutation().unwrap()).await;
+        let response = agent
             .execute(&format!(
                 "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
                 escape_graphql_string(&doc),
@@ -1943,6 +1920,29 @@ mod tests {
             serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
         crate::verify_request_receipt_signature(&row).unwrap();
         (row.try_into().unwrap(), parent_doc)
+    }
+
+    /// Creates a signed request as its runtime owner and grants the request's
+    /// working Agent, the relationship every request row carries in production.
+    async fn create_fixture_request(access: &crate::ConfigAccess, mutation: &str) -> String {
+        access
+            .transact_write("test.fixture_signed_request", |txn| {
+                let mutation = mutation;
+                Box::pin(async move {
+                    let response = txn.execute(mutation).await?;
+                    let doc = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                    txn.add_actor_relationship(
+                        "AgentRequest",
+                        &doc,
+                        "working_agent",
+                        &identity::Did::new(test_agent_did())?,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(doc)
+                })
+            })
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -2207,13 +2207,16 @@ mod tests {
                 r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "pending"{budget_patch} }}) {{ _docID }} }}"#,
                 escape_graphql_string(&resumed_request.doc_id)
             );
-            crate::store::config_client::ConfigAccess::write_local_response(
-                &node,
-                "test.requeue_budget",
-                &mutation,
-            )
-            .await
-            .unwrap();
+            agent_access(&node)
+                .transact_write("test.requeue_budget", |txn| {
+                    let mutation = &mutation;
+                    Box::pin(async move {
+                        txn.execute_local_response(mutation).await?;
+                        Ok::<_, anyhow::Error>(())
+                    })
+                })
+                .await
+                .unwrap();
             resumed_request.max_total_tokens = expected;
             let mut resumed = test_lifecycle(
                 node.clone(),
