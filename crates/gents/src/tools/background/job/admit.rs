@@ -1053,6 +1053,7 @@ mod tests {
             target: (String, String),
             expected_resolved: Option<(String, String)>,
             expected_permitted: bool,
+            expected_guest_targets: Vec<String>,
         }
         #[derive(serde::Deserialize)]
         struct Contracts {
@@ -1061,6 +1062,15 @@ mod tests {
         let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
         assert!(!contracts.plugin_target_resolution_cases.is_empty());
         for case in contracts.plugin_target_resolution_cases {
+            let available: Vec<_> = case
+                .bindings
+                .iter()
+                .map(|binding| binding.wire.clone())
+                .collect();
+            assert_eq!(
+                super::super::input::guest_target_ids(&case.ids, &available),
+                case.expected_guest_targets
+            );
             let mut context = base_context();
             context.target_ids = case
                 .bindings

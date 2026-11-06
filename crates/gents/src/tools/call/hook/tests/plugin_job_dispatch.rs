@@ -1212,9 +1212,25 @@ async fn an_unconfigured_job_target_names_the_caller_scope_and_next_help() {
         },
     )
     .await;
-    let answer = step
-        .call_as("call-1", r#"{"args":{},"agent_budget":2}"#)
-        .await;
+    let args = r#"{"args":{},"agent_budget":2}"#;
+    accept_hook_tool_call(&step.hook, "call-1", TOOL, args, None).await;
+    let row = step.row_of("call-1").await;
+    let (input, _) = crate::tools::background::job::input::build_step_input(
+        &step.hook.actor_access().unwrap(),
+        step.hook.job_driver.as_ref().unwrap().runtime(),
+        row["_docID"].as_str().unwrap(),
+        crate::tools::background::job::input::StepKind::Step0 {
+            binding: step.hook.job_tools.get(TOOL).unwrap(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(input.ceiling.targets.is_empty());
+    let action = step.hook.on_tool_call(TOOL, None, "call-1", args).await;
+    let ToolCallHookAction::Skip { reason } = action else {
+        panic!("job call must return its admission result: {action:?}");
+    };
+    let answer: Value = serde_json::from_str(&reason).unwrap();
     let case = crate::lean_vocab_test::lean_plugin_job_admission_cases()
         .iter()
         .find(|case| case.name == "caller_target_unconfigured_refused")

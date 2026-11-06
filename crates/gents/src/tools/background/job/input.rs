@@ -517,13 +517,30 @@ pub(super) async fn live_job_settings(
     let (_, tools, _) = load_request_context(&runtime.node, &caller.node_did, &caller.agent_did)
         .await
         .context("reading the caller's tools")?;
-    Ok(tools
+    Ok(job_settings_for_tools(tools, coordinate))
+}
+
+fn job_settings_for_tools(
+    tools: Option<crate::documents::Tools>,
+    coordinate: &str,
+) -> Option<PluginJobSettings> {
+    tools
         .and_then(|tools| tools.integrations)
         .and_then(|integrations| integrations.plugins)
         .into_iter()
         .flatten()
         .find(|plugin| plugin.plugin == coordinate)
-        .and_then(|plugin| plugin.job))
+        .and_then(|plugin| plugin.job)
+}
+
+/// Lean `TargetResolution.guestTargets`: resolved caller routes only, in the
+/// order of the already intersected live and pinned job ceilings.
+pub(super) fn guest_target_ids(ceiling: &[String], available: &[String]) -> Vec<String> {
+    ceiling
+        .iter()
+        .filter(|id| available.contains(id))
+        .cloned()
+        .collect()
 }
 
 /// `row_doc_id` and the rows its pin resumes, oldest first.
@@ -634,13 +651,17 @@ pub async fn build_step_input(
         access.actor_did().as_deref() == Some(caller.agent_did.as_str()),
         "job input actor differs from its selected agent"
     );
+    let (_, tools, routes) =
+        load_request_context(&runtime.node, &caller.node_did, &caller.agent_did)
+            .await
+            .context("reading the caller's configured job targets")?;
     let (pin, settings) = match step {
         StepKind::Step0 { binding } => (None, binding.settings.clone()),
         StepKind::Later => {
             let pin = read_pin(access, row_doc_id)
                 .await?
                 .with_context(|| format!("job row {row_doc_id} has no job_pin"))?;
-            let settings = live_job_settings(runtime, &caller, &pin.plugin_ref).await?;
+            let settings = job_settings_for_tools(tools, &pin.plugin_ref);
             (Some(pin), settings)
         }
     };
@@ -664,7 +685,13 @@ pub async fn build_step_input(
     });
     let dynamic = policy.cloned().unwrap_or_default();
     let ceiling = JobCeilingView {
-        targets: effective.targets,
+        targets: guest_target_ids(
+            &effective.targets,
+            &routes
+                .into_iter()
+                .map(|target| target.target_id)
+                .collect::<Vec<_>>(),
+        ),
         max_live: effective.max_live,
         remaining_spawns: spawn_cap
             .saturating_sub(progress.as_ref().map_or(0, |progress| progress.spawned)),
@@ -1920,6 +1947,14 @@ pub(crate) mod tests {
             result_bytes: 4096,
             max_wall_secs: 600,
         };
+        assert_eq!(
+            super::super::admit::meet(
+                &super::super::settings::effective_ceiling(Some(&live)),
+                &pin.ceiling_at_pin
+            )
+            .targets,
+            ["b"]
+        );
         job.write_pin(&row, &pin).await;
         job.write_progress(&row, JobState::Running, 2).await;
         let (input, revision) = job.later(&row).await.unwrap();
@@ -1927,7 +1962,7 @@ pub(crate) mod tests {
         assert_eq!(
             input.ceiling,
             JobCeilingView {
-                targets: vec!["b".into()],
+                targets: Vec::new(),
                 max_live: 3,
                 remaining_spawns: 2,
                 max_messages_per_slot: 2,
