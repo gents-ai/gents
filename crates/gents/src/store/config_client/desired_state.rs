@@ -202,7 +202,8 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
                     &metadata,
                     credential.as_ref(),
                 )
-                .await?;
+                .await
+                .context("applying InferenceBackend metadata")?;
             }
             counts.increment(document.collection);
             continue;
@@ -264,7 +265,13 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
                     document.collection,
                     created,
                 )
-                .await?;
+                .await
+                .with_context(|| {
+                    format!(
+                        "{} {name} desired state",
+                        if created { "creating" } else { "updating" }
+                    )
+                })?;
             if !created
                 && response["data"][format!("update_{name}")]
                     .as_array()
