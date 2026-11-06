@@ -17,7 +17,7 @@ existing profile (replace `PROFILE_ID` below):
 ```sh
 gents config pack build ./packs/gents/web --out gents.web.pack
 gents config pack install ./gents.web.pack --grant-authority --inference-slot web_researcher=PROFILE_ID
-gents chat --agent-id web-researcher "Find the current official guidance on ..."
+gents -p "Find the current official guidance on ..." --agent web-researcher
 ```
 
 Use a Gents build with plugin HTTP rounds and native pack services. To install a prebuilt artifact, skip the build command. After

@@ -137,15 +137,18 @@ def main():
         prompt_file.write_text(prompt)
         cmd = [
             gents,
-            "chat",
+            "utils",
+            "debug",
+            "request",
+            "submit",
             "--home",
             str(home),
             "--graphql",
             graphql,
-            "--message-file",
+            "--content-file",
             str(prompt_file),
-            "--output",
-            "json",
+            "--valid-until",
+            "none",
             "--timeout-secs",
             str(args.timeout_secs),
         ]

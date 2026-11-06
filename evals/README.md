@@ -123,5 +123,5 @@ The plan records the base archive hash and live-runner comparability version,
 which is separate from the native definition version.
 Trials are not automatically rerun; any runtime/provider retries remain in the logs.
 The concurrency setting counts active trial processes; each trial issues sequential model requests and browser calls, so
-inference requests in flight vary. This runner uses `gents chat`; it does not
+inference requests in flight vary. This runner uses `gents utils debug request submit`; it does not
 implement the native eval provisioning bridge described above.
