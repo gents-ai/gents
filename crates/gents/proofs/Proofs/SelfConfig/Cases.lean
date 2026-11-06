@@ -116,6 +116,7 @@ def decodeAuthText : String → Option Configuration.BackendAuth
   | "{\"kind\":\"node_oauth_pool\",\"allow_overage\":true}" => some (.nodeOAuthPool true)
   | "{\"kind\":\"credential\",\"id\":\"c1\",\"version\":\"v1\"}" => some (.credential "c1" "v1")
   | "{\"kind\":\"credential\",\"id\":\"c2\",\"version\":\"v2\"}" => some (.credential "c2" "v2")
+  | "{\"kind\":\"api_key\",\"key\":\"operator-secret\"}" => some (.apiKey "operator-secret")
   | text =>
     if text = awsAuthText then some (.awsCredentials "AKIDEXAMPLE" "secret" none)
     else if text = googleAuthText then some (.googleCredentials "{}")
@@ -377,6 +378,10 @@ def scenarios : List CaseRow := examplesToRows ++
     , target := .inferenceBackend, guarded := true, validates := true
     , doc := [("auth", "{\"kind\":\"credential\",\"id\":\"c1\",\"version\":\"v1\"}")]
     , patch := [("auth", some "{\"kind\":\"credential\",\"id\":\"c2\",\"version\":\"v2\"}")] }
+  , { name := "backend_credential_to_raw_key_rejected"
+    , target := .inferenceBackend, guarded := true, validates := true
+    , doc := [("auth", "{\"kind\":\"credential\",\"id\":\"c1\",\"version\":\"v1\"}")]
+    , patch := [("auth", some "{\"kind\":\"api_key\",\"key\":\"operator-secret\"}")] }
   , { name := "backend_aws_credentials_kept_endpoint_edit_accepted"
     , target := .inferenceBackend, guarded := true, validates := true
     , doc := [("auth", "{\"kind\":\"aws_credentials\",\"access_key_id\":\"AKIDEXAMPLE\",\"secret_access_key\":\"secret\"}")]
