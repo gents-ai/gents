@@ -197,3 +197,89 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("client");
+    std::fs::create_dir_all(&home)?;
+    let endpoint = MockModelEndpoint::start("plugin-session")?;
+    let init_home = home.clone();
+    let inference_url = endpoint.endpoint().to_owned();
+    let init = tokio::task::spawn_blocking(move || {
+        run_init_json(
+            &init_home,
+            &[
+                "--node-name",
+                "plugin-session",
+                "--model-name",
+                "plugin-session",
+                "--inference-url",
+                &inference_url,
+            ],
+        )
+    })
+    .await??;
+    let owner = node_did_from_init(&init)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut server = spawn_server_with_env(&home, port, &[], &[])?;
+    wait_for_port(port, &mut server)?;
+    wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
+
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../gents/tests/fixtures/packs/job_plugin_fixture");
+    let plugin_pack = temp.path().join("plugin-only");
+    let fixture_copy = fixture.clone();
+    let plugin_copy = plugin_pack.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        copy_dir_all(&fixture_copy, &plugin_copy)?;
+        let manifest_path = plugin_copy.join("manifest.json");
+        let mut manifest: Value = serde_json::from_slice(&std::fs::read(&manifest_path)?)?;
+        manifest["kind"] = "plugins".into();
+        manifest.as_object_mut().unwrap().remove("config");
+        manifest["schemas"] = json!([]);
+        manifest["plugins"][0]["data"]["ops"] = json!(["query", "insert", "delete"]);
+        std::fs::write(manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+        Ok(())
+    })
+    .await??;
+    let pack_arg = plugin_pack.to_string_lossy().into_owned();
+    let node_home = home.join(".gents").to_string_lossy().into_owned();
+    let client_home = home.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        run_cli_json(
+            &client_home,
+            &["pack", "install", &pack_arg, "--home", &node_home],
+        )
+    })
+    .await?;
+    let snapshot: Value = gents_lean_contract::load_contract_snapshot()?;
+    let expected = snapshot["hosted_plugin_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["reviewed"] == true && case["plan"] == true && case["native"] == true)
+        .unwrap()["allowed"]
+        .as_bool()
+        .unwrap();
+    assert_eq!(outcome.is_ok(), expected);
+    let outcome = outcome?;
+    assert_eq!(outcome["apply"]["plugins"][0]["name"], "job_fixture");
+    let installed =
+        gents::plugin::store::read_record(&home.join(".gents"), "fixture", "job_fixture")?;
+    assert!(installed
+        .declaration
+        .data
+        .unwrap()
+        .ops
+        .iter()
+        .any(|op| op == "delete"));
+    let graph = graphql_query(
+        &graphql,
+        "{ PackInstallation { coordinate plugins plugin_store } }",
+    )
+    .await?;
+    assert!(graph.to_string().contains("fixture/job_plugin_fixture"));
+    Ok(())
+}
