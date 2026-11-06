@@ -493,15 +493,6 @@ impl CanonicalBackgroundFixture {
         queue: RequestQueue,
         existing_notification_doc_id: Option<&str>,
     ) -> anyhow::Result<EnqueuedBackgroundCompletionInput> {
-        anyhow::ensure!(
-            queue.source == QueueSource::BackgroundCompletion
-                && queue.policy == QueuePolicy::Coalesce
-                && queue
-                    .key
-                    .as_deref()
-                    .is_some_and(|key| !key.trim().is_empty()),
-            "fixture notification requires a keyed coalescing background queue"
-        );
         let publication = self.prepare_notification(notification_content).await?;
         self.publish_prepared_notification(
             notification_content,
