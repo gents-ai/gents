@@ -90,6 +90,7 @@ async fn shutdown_wins_over_a_late_startup_barrier_release() {
         .node_identity_did()
         .expect("fixture node has an identity")
         .to_owned();
+    crate::test_support::ensure_test_node(&node, &node_did).await;
     let status = RuntimeStatusHandle::new(node.clone(), node_did);
     status.initialize_startup("general").await.unwrap();
     let gate = super::super::router::RuntimeAdmissionGate::closed();

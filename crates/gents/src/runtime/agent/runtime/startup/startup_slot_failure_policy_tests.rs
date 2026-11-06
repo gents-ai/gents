@@ -35,6 +35,7 @@ async fn aborted_staged_generation_does_not_release_active_startup_obligation() 
         .node_identity_did()
         .expect("fixture node has an identity")
         .to_owned();
+    crate::test_support::ensure_test_node(&node, &node_did).await;
     let (status_owner, runtime_status) = RuntimeStatusHandle::start(node.clone(), node_did);
     runtime_status.initialize_startup("general").await.unwrap();
     let barrier = Arc::new(StartupBarrier::ready_for_test());
