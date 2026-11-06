@@ -1,7 +1,7 @@
 use crate::store::identity::NodeIdentity;
 use crate::tools::call::lifecycle::admission_fixture::{
-    complete_child_managed, published_session_message, published_session_message_with_owner,
-    PublishedAdmissionOptions,
+    complete_child_managed_verified, published_session_message,
+    published_session_message_with_owner, PublishedAdmissionOptions,
 };
 use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
 use std::sync::Arc;
@@ -64,12 +64,13 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
         completion_obligations(node, &session_id, &did, admission.tool.requester_did()).await;
     assert!(notifications.is_empty(), "{notifications:?}");
 
-    complete_child_managed(
+    complete_child_managed_verified(
         node,
         &message.caused_request_id,
         &did,
         "late caused result",
         &signer,
+        message.admission.runtime.clone(),
     )
     .await;
     assert_eq!(
@@ -202,12 +203,13 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         }
     };
 
-    complete_child_managed(
+    complete_child_managed_verified(
         &node,
         &message.caused_request_id,
         &did,
         "result at the bound",
         &signer,
+        message.admission.runtime.clone(),
     )
     .await;
     assert_eq!(
@@ -302,12 +304,13 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
         .expect("paired client requester");
     assert_ne!(client, did);
 
-    complete_child_managed(
+    complete_child_managed_verified(
         &node,
         &message.caused_request_id,
         &did,
         "gatekeeper answer",
         &signer,
+        message.admission.runtime.clone(),
     )
     .await;
     assert_eq!(

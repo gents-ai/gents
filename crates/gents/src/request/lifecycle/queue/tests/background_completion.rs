@@ -974,7 +974,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
 #[tokio::test]
 async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     use crate::request::watcher::{DefraWatcher, Watcher};
-    use crate::tools::call::lifecycle::admission_fixture::complete_child_managed;
+    use crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified;
     let (selected, successor_child) = crate::tools::call::lifecycle::completion_owner_conformance::selected_background_wake_with_successor(true).await;
     let admission = selected.admission;
     let node = admission.node.clone();
@@ -1021,12 +1021,13 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         )
         .await
         .unwrap();
-    complete_child_managed(
+    complete_child_managed_verified(
         &node,
         &successor_child.unwrap(),
         &did,
         "second notification",
         &agent_signer,
+        admission.runtime.clone(),
     )
     .await;
     assert_eq!(

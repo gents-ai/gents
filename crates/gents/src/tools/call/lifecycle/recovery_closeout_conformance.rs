@@ -1,5 +1,5 @@
 use crate::tools::call::lifecycle::admission_fixture::{
-    complete_child_managed, published_admission, published_session_message,
+    complete_child_managed_verified, published_admission, published_session_message,
     PublishedAdmissionOptions,
 };
 use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
@@ -376,7 +376,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                     }
                     other => panic!("{other}: unhandled completed session-message case"),
                 }
-                complete_child_managed(
+                complete_child_managed_verified(
                     &admission.node,
                     &message.caused_request_id,
                     &admission.node_did,
@@ -387,6 +387,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                         .unwrap()
                         .managed_agent_signer()
                         .unwrap(),
+                    admission.runtime.clone(),
                 )
                 .await;
                 None

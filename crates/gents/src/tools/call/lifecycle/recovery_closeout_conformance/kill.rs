@@ -1,6 +1,6 @@
 use crate::tools::call::lifecycle::admission_fixture::{
-    complete_child_managed, published_admission, published_session_message, PublishedAdmission,
-    PublishedAdmissionOptions,
+    complete_child_managed_verified, published_admission, published_session_message,
+    PublishedAdmission, PublishedAdmissionOptions,
 };
 use crate::tools::call::lifecycle::AwaitMode;
 
@@ -38,7 +38,7 @@ async fn kill_fixture(observation: &str) -> (PublishedAdmission, Option<String>)
         "causedLiveLocal" | "causedTerminal" => {
             let message = published_session_message(options(false)).await.unwrap();
             if observation == "causedTerminal" {
-                complete_child_managed(
+                complete_child_managed_verified(
                     &message.admission.node,
                     &message.caused_request_id,
                     &message.admission.node_did,
@@ -50,6 +50,7 @@ async fn kill_fixture(observation: &str) -> (PublishedAdmission, Option<String>)
                         .unwrap()
                         .managed_agent_signer()
                         .unwrap(),
+                    message.admission.runtime.clone(),
                 )
                 .await;
             }

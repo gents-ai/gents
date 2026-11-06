@@ -723,7 +723,7 @@ mod turn_assignment_tests {
                 .await
                 .is_empty()
         );
-        crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
+        crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
             node,
             &head_id,
             did,
@@ -734,6 +734,7 @@ mod turn_assignment_tests {
                 .unwrap()
                 .managed_agent_signer()
                 .unwrap(),
+            admission.runtime.clone(),
         )
         .await;
         assert_eq!(
@@ -893,7 +894,7 @@ mod turn_assignment_tests {
             &caused_request_doc_id,
         )
         .await;
-        crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
+        crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
             node,
             &caused_request_id,
             did,
@@ -904,6 +905,7 @@ mod turn_assignment_tests {
                 .unwrap()
                 .managed_agent_signer()
                 .unwrap(),
+            admission.runtime.clone(),
         )
         .await;
 
@@ -974,7 +976,7 @@ mod turn_assignment_tests {
         let did = &admission.node_did;
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
         crate::test_support::install_test_agent(node, did, "general").await;
-        crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
+        crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
             node,
             &caused_request_id,
             did,
@@ -985,6 +987,7 @@ mod turn_assignment_tests {
                 .unwrap()
                 .managed_agent_signer()
                 .unwrap(),
+            admission.runtime.clone(),
         )
         .await;
 
@@ -1056,7 +1059,7 @@ mod turn_assignment_tests {
             &caused_request_doc_id,
         )
         .await;
-        crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
+        crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
             node,
             &caused_request_id,
             did,
@@ -1067,6 +1070,7 @@ mod turn_assignment_tests {
                 .unwrap()
                 .managed_agent_signer()
                 .unwrap(),
+            admission.runtime.clone(),
         )
         .await;
 
@@ -1143,7 +1147,7 @@ mod turn_assignment_tests {
             &caused_request_doc_id,
         )
         .await;
-        crate::tools::call::lifecycle::admission_fixture::complete_child_managed(
+        crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
             node,
             &caused_request_id,
             did,
@@ -1154,6 +1158,7 @@ mod turn_assignment_tests {
                 .unwrap()
                 .managed_agent_signer()
                 .unwrap(),
+            admission.runtime.clone(),
         )
         .await;
 

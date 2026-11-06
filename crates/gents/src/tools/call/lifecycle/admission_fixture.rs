@@ -168,6 +168,7 @@ pub struct PublishedAdmission {
     pub path: PathBuf,
     pub tool: ToolCallLifecycle,
     pub node_did: String,
+    pub runtime: Arc<dyn NodeIdentity>,
 }
 
 pub(crate) async fn complete_child_managed(
@@ -678,7 +679,7 @@ pub async fn published_admission_with_owner(
     let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
     let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
-        runtime,
+        runtime.clone(),
         authority,
     );
     let (request, admission) = verifier
@@ -778,6 +779,7 @@ pub async fn published_admission_with_owner(
             path,
             tool,
             node_did,
+            runtime,
         },
         request,
     ))

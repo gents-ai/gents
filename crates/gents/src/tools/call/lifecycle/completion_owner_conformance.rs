@@ -487,7 +487,7 @@ pub(crate) async fn selected_background_wake_with_successor(
     prepare_successor: bool,
 ) -> (SelectedBackgroundWake, Option<String>) {
     use super::admission_fixture::{
-        complete_child_managed, publish_accepted_on_claimed_request,
+        complete_child_managed_verified, publish_accepted_on_claimed_request,
         published_session_message_with_owner,
     };
     use crate::request::lifecycle::{RequestTerminalOutcome, TerminalizeResult};
@@ -564,7 +564,7 @@ pub(crate) async fn selected_background_wake_with_successor(
         None
     };
     let wait_header = wait.accepted_header_doc_id().unwrap().to_owned();
-    complete_child_managed(
+    complete_child_managed_verified(
         node,
         &message.caused_request_id,
         did,
@@ -575,6 +575,7 @@ pub(crate) async fn selected_background_wake_with_successor(
             .unwrap()
             .managed_agent_signer()
             .unwrap(),
+        admission.runtime.clone(),
     )
     .await;
     let settled =
