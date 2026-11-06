@@ -263,12 +263,14 @@ mod tests {
             r#"mutation {{ update_InferenceBackendMetadata(docID:"{}",input:{{name:"forged"}}) {{_docID}} }}"#,
             crate::store::graphql::escape_graphql_string(&backend)
         );
-        let response = agent.write("test.backend.write_denied", &mutation).await?;
-        assert!(!updated(
-            &response,
-            "update_InferenceBackendMetadata",
-            &backend
-        )?);
+        match agent.write("test.backend.write_denied", &mutation).await {
+            Ok(response) => assert!(!updated(
+                &response,
+                "update_InferenceBackendMetadata",
+                &backend
+            )?),
+            Err(error) => assert!(error.is_graphql_rejection(), "{error}"),
+        }
         assert_eq!(owner.execute(&backend_query).await?, before);
         owner
             .set_agent_self_config_permission(

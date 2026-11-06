@@ -182,9 +182,6 @@ async fn signed_compaction_selection_and_revocation_follow_native_usersets() -> 
         "mutation {{update_CompactionConfig(docID:\"{}\", input:{{threshold:0.25}}) {{_docID}}}}",
         crate::store::graphql::escape_graphql_string(&a)
     );
-    let denied = selected_access
-        .write("test.compaction.denied", &update)
-        .await?;
     let initial_selected = cases
         .iter()
         .find(|case| {
@@ -193,9 +190,16 @@ async fn signed_compaction_selection_and_revocation_follow_native_usersets() -> 
                 && case["document"] == "compaction-a"
         })
         .context("modeled initial compaction")?;
-    let updated_by_selected = denied["data"]["update_CompactionConfig"]
-        .as_array()
-        .is_some_and(|rows| !rows.is_empty());
+    let updated_by_selected = match selected_access
+        .write("test.compaction.denied", &update)
+        .await
+    {
+        Ok(denied) => denied["data"]["update_CompactionConfig"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()),
+        Err(error) if error.is_graphql_rejection() => false,
+        Err(error) => return Err(error.into()),
+    };
     assert_eq!(
         updated_by_selected,
         initial_selected["update_expected"]

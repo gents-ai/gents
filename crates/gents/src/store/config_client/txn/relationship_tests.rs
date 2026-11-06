@@ -613,12 +613,15 @@ async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Resu
             "modeled reader {}",
             item["name"]
         );
-        let update = profile_access.write("test.userset.delegate_update", &format!(
+        let changed = match profile_access.write("test.userset.delegate_update", &format!(
             "mutation {{ update_SetSampling(docID: \"{}\", input: {{label:\"changed\"}}) {{_docID}} }}",
-            crate::store::graphql::escape_graphql_string(&sampling_doc))).await?;
-        let changed = update["data"]["update_SetSampling"]
-            .as_array()
-            .is_some_and(|rows| !rows.is_empty());
+            crate::store::graphql::escape_graphql_string(&sampling_doc))).await {
+            Ok(update) => update["data"]["update_SetSampling"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty()),
+            Err(error) if error.is_graphql_rejection() => false,
+            Err(error) => return Err(error.into()),
+        };
         assert_eq!(
             changed,
             item["update"].as_bool().unwrap(),

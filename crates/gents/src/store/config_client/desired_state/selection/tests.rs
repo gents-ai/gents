@@ -217,10 +217,12 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
     );
     let update = format!("mutation {{ update_Skill(docID: \"{}\", input: {{description:\"agent edit\"}}) {{_docID}} }}",
         crate::store::graphql::escape_graphql_string(&skill_doc));
-    let denied = agent_access.write("test.skill.denied", &update).await?;
-    assert!(denied["data"]["update_Skill"]
-        .as_array()
-        .is_some_and(Vec::is_empty));
+    match agent_access.write("test.skill.denied", &update).await {
+        Ok(denied) => assert!(denied["data"]["update_Skill"]
+            .as_array()
+            .is_some_and(Vec::is_empty)),
+        Err(error) => assert!(error.is_graphql_rejection(), "{error}"),
+    }
     assert_eq!(
         access.execute(query).await?["data"]["Skill"][0]["description"],
         "test"
@@ -237,12 +239,15 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
         .delete_actor_relationship("Skill", &skill_doc, "writer", &agent_did)
         .await?;
     let revoked_update = update.replace("agent edit", "revoked edit");
-    let denied = agent_access
+    match agent_access
         .write("test.skill.writer_revoked", &revoked_update)
-        .await?;
-    assert!(denied["data"]["update_Skill"]
-        .as_array()
-        .is_some_and(Vec::is_empty));
+        .await
+    {
+        Ok(denied) => assert!(denied["data"]["update_Skill"]
+            .as_array()
+            .is_some_and(Vec::is_empty)),
+        Err(error) => assert!(error.is_graphql_rejection(), "{error}"),
+    }
     assert_eq!(
         access.execute(query).await?["data"]["Skill"][0]["description"],
         "agent edit"
