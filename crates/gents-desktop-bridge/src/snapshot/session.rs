@@ -318,10 +318,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     let mut arrival_order = None;
     let pending_queue = match node_did {
         Some(node_did)
-            if include_live_tail
-                && core
-                    .session_unreadable_reason(session_id, node_did)
-                    .is_none() =>
+            if include_live_tail && core.session_unreadable_reason(node_did).is_none() =>
         {
             match core
                 .pending_user_queue_projection(node_did, session_id, &observed_queue_ids)

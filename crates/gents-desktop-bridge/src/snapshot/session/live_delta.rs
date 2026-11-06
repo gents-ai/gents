@@ -176,7 +176,7 @@ pub async fn build_session_live_delta(
     let (observed, revision) = core.store().snapshot_with_revision();
     let mut live_store = ClientStore::default();
     if let Some(node_did) = node_did {
-        if let Some(reason) = core.session_unreadable_reason(session_id, node_did) {
+        if let Some(reason) = core.session_unreadable_reason(node_did) {
             anyhow::bail!(reason);
         }
         {

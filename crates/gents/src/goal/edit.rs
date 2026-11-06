@@ -50,7 +50,6 @@ pub(crate) async fn edit_active_goal(
         crate::session::load_session_agent_did(node, &observed.node_did, &observed.session_id)
             .await?;
     edit_active_goal_from_access(
-        node,
         &crate::ConfigAccess::local_as(node.clone(), actor),
         observed,
         fields,
@@ -59,7 +58,6 @@ pub(crate) async fn edit_active_goal(
 }
 
 pub(crate) async fn edit_active_goal_from_access(
-    _node: &std::sync::Arc<EmbeddedNode>,
     access: &crate::ConfigAccess,
     observed: &GoalDocument,
     fields: &GoalEdit,

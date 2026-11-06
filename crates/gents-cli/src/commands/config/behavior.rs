@@ -80,12 +80,7 @@ fn local_node_did(home: Option<&std::path::Path>) -> Result<String> {
         .context("No runtime configured; pass the target runtime home.")
 }
 
-async fn submit_agent(
-    graphql: &str,
-    _home: Option<&std::path::Path>,
-    owner: &str,
-    mut params: ConfigureAgentParams,
-) -> Result<()> {
+async fn submit_agent(graphql: &str, owner: &str, mut params: ConfigureAgentParams) -> Result<()> {
     let endpoint = client_endpoint(graphql).await?;
     if matches!(params.action.as_str(), "create" | "clone") {
         params.identity_binding =
@@ -131,7 +126,6 @@ pub(super) async fn agent_create(args: AgentCreateArgs) -> Result<()> {
     };
     submit_agent(
         &args.graphql,
-        args.home.as_deref(),
         &args.node_did,
         ConfigureAgentParams {
             action: action.into(),
@@ -152,7 +146,6 @@ pub(super) async fn agent_clone(args: AgentCloneArgs) -> Result<()> {
     let owner = local_node_did(args.home.as_deref())?;
     submit_agent(
         &args.graphql,
-        args.home.as_deref(),
         &owner,
         ConfigureAgentParams {
             action: "clone".into(),
@@ -172,7 +165,6 @@ pub(super) async fn agent_disable(args: AgentDisableArgs) -> Result<()> {
     let owner = local_node_did(args.home.as_deref())?;
     submit_agent(
         &args.graphql,
-        args.home.as_deref(),
         &owner,
         ConfigureAgentParams {
             action: "disable".into(),

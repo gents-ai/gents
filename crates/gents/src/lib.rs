@@ -269,7 +269,6 @@ pub(crate) mod test_support {
         .await
         .unwrap();
         install_test_agent_binding_with_access(
-            &db.node,
             runtime.did(),
             "Default fixture agent",
             &binding,
@@ -364,11 +363,10 @@ pub(crate) mod test_support {
             node.clone(),
             identity::Did::new(actor).unwrap(),
         );
-        install_test_agent_binding_with_access(node, owner, display_name, binding, &access).await;
+        install_test_agent_binding_with_access(owner, display_name, binding, &access).await;
     }
 
     pub(crate) async fn install_test_agent_binding_with_access(
-        _node: &std::sync::Arc<defra_node::Node>,
         owner: &str,
         display_name: &str,
         binding: &gents_protocol::agent_identity::AgentIdentityBinding,

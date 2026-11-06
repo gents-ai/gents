@@ -857,7 +857,6 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
     .await
     .unwrap();
     crate::test_support::install_test_agent_binding_with_access(
-        &node,
         fixture.runtime.did(),
         "Other Agent",
         &other_binding,

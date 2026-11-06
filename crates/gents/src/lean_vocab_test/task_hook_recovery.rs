@@ -65,7 +65,6 @@ impl Fixture {
         .await
         .unwrap();
         crate::test_support::install_test_agent_binding_with_access(
-            &self.node,
             self.did(),
             "other hook agent",
             &binding,

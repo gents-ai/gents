@@ -266,7 +266,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             );
             for summary in &mut sessions {
                 summary.unreadable_reason = core
-                    .session_unreadable_reason(&summary.session_id, &summary.node_did)
+                    .session_unreadable_reason(&summary.node_did)
                     .map(str::to_owned);
                 summary.unsendable_reason = summary.unreadable_reason.clone();
             }

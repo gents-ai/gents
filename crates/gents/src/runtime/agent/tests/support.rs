@@ -30,7 +30,6 @@ pub(super) async fn install_agent(
     .await
     .unwrap();
     crate::test_support::install_test_agent_binding_with_access(
-        node,
         identity.did(),
         name,
         &binding,

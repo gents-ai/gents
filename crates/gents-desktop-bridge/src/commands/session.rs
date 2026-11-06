@@ -307,7 +307,7 @@ pub async fn message_attachments(
     node_did: &str,
     message_key: &str,
 ) -> Result<Vec<gents_protocol::request_input::RequestAttachment>, BridgeError> {
-    if let Some(reason) = core.session_unreadable_reason(session_id, node_did) {
+    if let Some(reason) = core.session_unreadable_reason(node_did) {
         return Err(BridgeError::untyped(reason));
     }
     let scope = transcript_read_scope(core, session_id, node_did)?;
@@ -375,7 +375,7 @@ pub async fn session_rows(
         unreadable,
         query_count: 0,
     };
-    if let Some(reason) = core.session_unreadable_reason(&session_id, &node_did) {
+    if let Some(reason) = core.session_unreadable_reason(&node_did) {
         return Ok(empty(Some(reason.to_string())));
     }
     let TranscriptReadScope {
@@ -513,10 +513,7 @@ pub async fn session_context_details(
     core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
     request: crate::types::SessionContextDetailsRequest,
 ) -> Result<Option<gents::tools::native::SessionContextDetails>, BridgeError> {
-    if core
-        .session_unreadable_reason(&request.session_id, &request.node_did)
-        .is_some()
-    {
+    if core.session_unreadable_reason(&request.node_did).is_some() {
         return Ok(None);
     }
     let scope = transcript_read_scope(core, &request.session_id, &request.node_did)?;

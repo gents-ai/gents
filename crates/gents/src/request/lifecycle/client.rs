@@ -1027,7 +1027,6 @@ mod tests {
         .await
         .unwrap();
         crate::test_support::install_test_agent_binding_with_access(
-            &node,
             runtime.did(),
             "target",
             &target,

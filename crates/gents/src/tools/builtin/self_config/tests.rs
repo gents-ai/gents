@@ -147,7 +147,6 @@ impl SelfConfigFixture {
         .await
         .unwrap();
         crate::test_support::install_test_agent_binding_with_access(
-            &self.db.node,
             self.db.node_identity.did(),
             display_name,
             &binding,

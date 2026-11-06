@@ -793,7 +793,6 @@ async fn create_session_with_agent_did_rejects_mismatched_existing_binding() {
     .await
     .unwrap();
     crate::test_support::install_test_agent_binding_with_access(
-        &db.node,
         node_did,
         "Other fixture agent",
         &other,

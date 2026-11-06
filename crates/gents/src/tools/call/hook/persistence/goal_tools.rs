@@ -374,8 +374,7 @@ impl DefraSessionHook {
                 } else if let Err(error) = fields.validate() {
                     json!({"accepted": false, "error": error.to_string()})
                 } else if let Some(updated) =
-                    edit_active_goal_from_access(&self.node, &lifecycle.access()?, &goal, &fields)
-                        .await?
+                    edit_active_goal_from_access(&lifecycle.access()?, &goal, &fields).await?
                 {
                     json!({"accepted": true, "goal": crate::goal::snapshot(&updated, Utc::now())})
                 } else {

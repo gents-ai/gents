@@ -1262,7 +1262,6 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
     .await
     .unwrap();
     crate::test_support::install_test_agent_binding_with_access(
-        &node,
         db.node_identity.did(),
         "Other calibration agent",
         &other_binding,

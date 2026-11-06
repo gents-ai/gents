@@ -122,7 +122,6 @@ async fn paired_managed_runtime_with_skewed_schema_projects_incompatible_sync() 
     start_managed_runtime_pairing(
         &state,
         Arc::clone(&core),
-        temp.path().join("agent"),
         ManagedPairingTarget {
             node_name: "Managed".to_string(),
             node_did: node_did.to_string(),
@@ -191,7 +190,6 @@ async fn drain_cancels_schema_observation_while_it_waits_for_the_runtime_status(
     start_managed_runtime_pairing(
         &state,
         Arc::clone(&core),
-        temp.path().join("agent"),
         ManagedPairingTarget {
             node_name: "Starting".to_string(),
             node_did: node_did.to_string(),
@@ -455,7 +453,6 @@ async fn generated_fresh_startup_preserves_enrollment_authority() {
     start_managed_runtime_pairing(
         &state,
         Arc::clone(&core),
-        temp.path().join("agent"),
         ManagedPairingTarget {
             node_name: "Fresh".into(),
             node_did: "did:key:runtime".into(),

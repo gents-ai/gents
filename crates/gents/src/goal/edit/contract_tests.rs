@@ -144,7 +144,7 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
         let before = durable_rows(&access).await;
         let edit = match case.origin {
             GoalEditOrigin::Agent => {
-                edit_active_goal_from_access(&node, &agent_access, &observed, &case.fields).await
+                edit_active_goal_from_access(&agent_access, &observed, &case.fields).await
             }
             GoalEditOrigin::Client => {
                 let observed = &observed;
@@ -261,7 +261,7 @@ async fn edited_fields_match_operator_updates_without_changing_goal_identity() {
         objective: Some("  verify \"release\"  ".into()),
         budget: Some(200),
     };
-    let edited = edit_active_goal_from_access(&node, &access, &initial, &fields)
+    let edited = edit_active_goal_from_access(&access, &initial, &fields)
         .await
         .unwrap()
         .unwrap();
@@ -291,20 +291,16 @@ async fn edited_fields_match_operator_updates_without_changing_goal_identity() {
     assert_eq!(edited.goal_id, initial.goal_id);
     let mut foreign = initial.clone();
     foreign.doc_id = "other-document".into();
-    assert!(
-        edit_active_goal_from_access(&node, &access, &foreign, &fields)
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(edit_active_goal_from_access(&access, &foreign, &fields)
+        .await
+        .unwrap()
+        .is_none());
     let mut foreign = initial;
     foreign.goal_id = "other-goal".into();
-    assert!(
-        edit_active_goal_from_access(&node, &access, &foreign, &fields)
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(edit_active_goal_from_access(&access, &foreign, &fields)
+        .await
+        .unwrap()
+        .is_none());
     assert_eq!(edited.objective, "verify \"release\"");
     assert!(
         set_goal_from_access(&access, owner, "operator", Some("  "), None, None, None)
