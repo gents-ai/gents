@@ -2486,30 +2486,44 @@ async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
             case["accepted"].as_bool().unwrap(),
             "{case}: {result:?}"
         );
-        let (_node, access) = dependency_fixture().await;
+        let (_directory, runtime, _node, access) =
+            super::super::agent_bindings::tests::fixture().await;
+        let owner = crate::NodeIdentity::did(&runtime);
         let references = references
             .iter()
             .flat_map(|group| group.as_array().unwrap())
             .collect::<Vec<_>>();
+        let bindings = references
+            .iter()
+            .map(|_| crate::store::identity::provision_agent_identity(&runtime).unwrap())
+            .collect::<Vec<_>>();
         let config: PackConfig = serde_json::from_value(json!({
-            "node": {"node_did": OWNER},
-            "agents": references.iter().enumerate().map(|(index, _)| json!({
-                "agent_did": format!("reference-{index}"), "node_did": OWNER,
-                "context_id": format!("context-{index}"), "inference_profile_id": "glm:inference"
+            "node": {"node_did": owner},
+            "agents": bindings.iter().enumerate().map(|(index, binding)| json!({
+                "agent_did": binding.agent_did, "creation_nonce": binding.creation_nonce, "node_did": owner,
+                "context_id": format!("context-{index}"), "inference_profile_id": "profile"
             })).collect::<Vec<_>>(),
             "contexts": references.iter().enumerate().map(|(index, _)| json!({
-                "context_id": format!("context-{index}"), "node_did": OWNER,
+                "context_id": format!("context-{index}"), "node_did": owner,
                 "tools_id": format!("tools-{index}")
             })).collect::<Vec<_>>(),
             "tools": references.iter().enumerate().map(|(index, plugin)| json!({
-                "tools_id": format!("tools-{index}"), "node_did": OWNER,
+                "tools_id": format!("tools-{index}"), "node_did": owner,
                 "integrations": {"plugins": [{"plugin": plugin}]}
             })).collect::<Vec<_>>(),
         }))
         .unwrap();
-        install(&access, "1", &config, DriftPolicy::Refuse)
-            .await
-            .unwrap();
+        let mut pack_identity = identity("1");
+        pack_identity.plugins.clear();
+        super::super::install_pack_documents(
+            &access,
+            owner,
+            &pack_identity,
+            &config,
+            DriftPolicy::Refuse,
+        )
+        .await
+        .unwrap();
         let removed = case["root_ships"]
             .as_array()
             .unwrap()
@@ -2517,7 +2531,7 @@ async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
             .chain(case["dependency_ships"].as_array().unwrap())
             .map(|value| value.as_str().unwrap().to_owned())
             .collect();
-        let removal = super::ensure_plugins_unreferenced(&access, OWNER, &removed).await;
+        let removal = super::ensure_plugins_unreferenced(&access, owner, &removed).await;
         assert_eq!(
             removal.is_ok(),
             case["removal_accepted"].as_bool().unwrap(),
