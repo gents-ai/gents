@@ -263,22 +263,16 @@ async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config()
     let node = fixture.db.node.clone();
     let identity = fixture.db.node_identity.clone();
     let default_agent_did = fixture.agent.did().to_owned();
-    let context_id = escape_graphql_string(&format!("{default_agent_did}:context"));
-    let observed = fixture
-        .user_access
-        .execute(&format!(
-            r#"{{ AgentContext(filter: {{context_id: {{_eq: "{context_id}"}}}}) {{_docID}} }}"#
-        ))
-        .await
-        .unwrap();
-    let rows = observed["data"]["AgentContext"].as_array().unwrap();
-    let [row] = rows.as_slice() else {
-        panic!("fixture context must be unique")
-    };
-    let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
-    fixture.user_access.write("test.invalid_context", &format!(
-        r#"mutation {{ update_AgentContext(docID: "{doc}", input: {{tools_id: "missing-tools"}}) {{_docID}} }}"#
-    )).await.unwrap();
+    let context_id = format!("{default_agent_did}:context");
+    merge_fixture_document(
+        &fixture.user_access,
+        "test.invalid_context",
+        crate::Collection::AgentContext,
+        identity.did(),
+        &context_id,
+        serde_json::json!({"tools_id": "missing-tools"}),
+    )
+    .await;
 
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),

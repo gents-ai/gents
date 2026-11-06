@@ -62,18 +62,12 @@ fn routed_snapshot(
 #[tokio::test]
 async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_router() {
     use crate::store::identity::NodeIdentity as _;
-    let dir = tempfile::tempdir().unwrap();
-    let root = crate::KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
-    let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
-    let agent = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(root.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let (db, _user, _access, binding) =
+        crate::test_support::signed_test_node("invalid-origin-route").await;
+    let node = db.node.clone();
+    let root = db.node_identity.clone();
+    let agent = crate::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
+    grant_held_agent_operations(&node, root.as_ref(), agent.as_ref()).await;
     let node_did = root.did();
     let agent_did = agent.did();
     let response = node
@@ -252,11 +246,20 @@ async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
 
 #[tokio::test]
 async fn snapshot_change_reroutes_request_blocked_on_old_executor_queue() {
-    let (db, _user, _user_access, binding) =
+    let (db, _user, user_access, binding) =
         crate::test_support::signed_test_node("runtime-router").await;
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let agent_did = binding.agent_did;
+    create_user_agent_session(
+        &user_access,
+        &node_did,
+        None,
+        "blocked-dispatch",
+        &agent_did,
+        Some(&agent_did),
+    )
+    .await;
     let (old_dispatcher, mut old_rx) = mpsc::channel(1);
     old_dispatcher
         .send(request(Some(&agent_did), "already-queued"))

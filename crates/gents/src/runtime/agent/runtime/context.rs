@@ -319,16 +319,17 @@ mod startup_barrier_tests {
 
     #[tokio::test]
     async fn release_before_and_after_wait_both_complete() {
-        let barrier = Arc::new(StartupBarrier::new(&[agent_config("a"), agent_config("b")]));
+        let (a, b) = (agent_config("a"), agent_config("b"));
+        let barrier = Arc::new(StartupBarrier::new(&[a.clone(), b.clone()]));
 
-        barrier.mark_agent_ready("a", 1).await;
+        barrier.mark_agent_ready(&a.agent_did, 1).await;
 
         let waiter = {
             let barrier = barrier.clone();
             tokio::spawn(async move { barrier.wait_ready().await })
         };
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        barrier.mark_agent_ready("b", 1).await;
+        barrier.mark_agent_ready(&b.agent_did, 1).await;
 
         tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
             .await
@@ -338,17 +339,22 @@ mod startup_barrier_tests {
 
     #[tokio::test]
     async fn demotion_and_supersession_release_without_readiness() {
-        let barrier = Arc::new(StartupBarrier::new(&[
+        let (healthy, unbuildable, retired) = (
             agent_config("healthy"),
             agent_config("unbuildable"),
             agent_config("retired"),
+        );
+        let barrier = Arc::new(StartupBarrier::new(&[
+            healthy.clone(),
+            unbuildable.clone(),
+            retired.clone(),
         ]));
 
-        barrier.mark_agent_ready("healthy", 1).await;
-        barrier.mark_agent_demoted("unbuildable", 1).await;
-        assert!(barrier.is_pending("retired", 1).await);
-        barrier.mark_agent_superseded("retired", 1).await;
-        assert!(!barrier.is_pending("retired", 1).await);
+        barrier.mark_agent_ready(&healthy.agent_did, 1).await;
+        barrier.mark_agent_demoted(&unbuildable.agent_did, 1).await;
+        assert!(barrier.is_pending(&retired.agent_did, 1).await);
+        barrier.mark_agent_superseded(&retired.agent_did, 1).await;
+        assert!(!barrier.is_pending(&retired.agent_did, 1).await);
 
         tokio::time::timeout(std::time::Duration::from_secs(1), barrier.wait_ready())
             .await

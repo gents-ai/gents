@@ -24,11 +24,18 @@ pub(super) fn test_identity(name: &str) -> KeyIdentity {
 }
 
 pub(super) struct PluginRuntimeFixture {
+    pub db: crate::support::TestDb,
     pub node: Arc<defra_node::Node>,
-    pub runtime: Arc<KeyIdentity>,
+    pub runtime: Arc<dyn NodeIdentity>,
     pub user_access: crate::store::config_client::ConfigAccess,
     pub agent_access: crate::store::config_client::ConfigAccess,
     pub node_binding: crate::store::config_client::ConfigurationNodeBinding,
+}
+
+impl PluginRuntimeFixture {
+    pub fn admission(&self) -> crate::store::local::backend_protection::BackendAdmission {
+        self.db.home.backend_admission()
+    }
 }
 
 pub(super) async fn plugin_runtime_fixture(
@@ -37,39 +44,20 @@ pub(super) async fn plugin_runtime_fixture(
     endpoint: &str,
 ) -> anyhow::Result<PluginRuntimeFixture> {
     use crate::store::config_client::{
-        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, GraphqlEndpoint,
-        NodePermission,
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
+    use crate::store::identity::GrantSet;
     use crate::Collection;
     use serde_json::json;
 
-    let runtime = Arc::new(test_identity(&format!("{name}-runtime")));
+    let db = crate::support::test_db(name).await;
+    let node = db.node.clone();
+    let runtime = db.node_identity.clone();
     let user = test_identity(&format!("{name}-user"));
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let address = listener.local_addr()?;
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .with_http(defra_node::HttpConfig::with_listener(listener)?)
-            .build()
-            .await?,
-    );
-    crate::ensure_runtime_schemas(&node).await?;
-    let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     let user_did = identity::Did::new(user.did())?;
-    for permission in [
-        NodePermission::DocumentRead,
-        NodePermission::DocumentUpdate,
-        NodePermission::DacRelationAdd,
-    ] {
-        admin.grant_node_permission(&user_did, permission).await?;
-    }
-    let user_access = ConfigAccess::Graphql(
-        GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), user.did())
-            .with_client_signing_capability(user.client_signing_capability()?)?
-            .with_client_signed_agent_creates(),
-    );
+    let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+    GrantSet::OperatorUser.grant(&admin, &user_did).await?;
+    let user_access = db.client_access(&user);
     let node_value = json!({"node_did":runtime.did(), "enabled":true});
     let node_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: Collection::Node,
@@ -145,12 +133,111 @@ pub(super) async fn plugin_runtime_fixture(
         default_agent_did: Some(agent_did),
     };
     Ok(PluginRuntimeFixture {
+        db,
         node,
         runtime,
         user_access,
         agent_access,
         node_binding,
     })
+}
+
+/// Applies `fields` over the stored document named by `id`, through the
+/// user's own signed desired-state transaction. Ordinary GraphQL mutations
+/// are refused for a client-signed endpoint.
+pub(super) async fn merge_fixture_document(
+    access: &crate::ConfigAccess,
+    operation: &'static str,
+    collection: crate::Collection,
+    node_did: &str,
+    id: &str,
+    fields: Value,
+) {
+    let node_did = node_did.to_owned();
+    let id = id.to_owned();
+    access
+        .transact_write(operation, |txn| {
+            let node_did = node_did.clone();
+            let id = id.clone();
+            let fields = fields.clone();
+            Box::pin(async move {
+                let (_, mut document) =
+                    crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        collection,
+                        &node_did,
+                        &id,
+                    )
+                    .await?
+                    .expect("fixture document must exist before its update");
+                if let (Some(target), Some(source)) = (document.as_object_mut(), fields.as_object()) {
+                    for (key, value) in source {
+                        target.insert(key.clone(), value.clone());
+                    }
+                }
+                let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+                    crate::store::config_client::DesiredStateApplyDocument {
+                        collection,
+                        add: document.clone(),
+                        update: document,
+                    },
+                ])?;
+                crate::store::config_client::apply_desired_state_plan(txn, &plan).await
+            })
+        })
+        .await
+        .unwrap();
+}
+
+/// Creates an AgentSession through the requesting User's signed transaction.
+/// `working_agent` receives the working relationship that lets that Agent read
+/// the session under ACP.
+pub(super) async fn create_user_agent_session(
+    access: &crate::ConfigAccess,
+    node_did: &str,
+    requester_did: Option<&str>,
+    session_id: &str,
+    agent_did: &str,
+    working_agent: Option<&str>,
+) {
+    let node_did = node_did.to_owned();
+    let requester_did = requester_did.map(str::to_owned);
+    let session_id = session_id.to_owned();
+    let agent_did = agent_did.to_owned();
+    let working_agent = working_agent.map(str::to_owned);
+    access
+        .transact_write("test.runtime.agent_session", |txn| {
+            let node_did = node_did.clone();
+            let requester_did = requester_did.clone();
+            let session_id = session_id.clone();
+            let agent_did = agent_did.clone();
+            let working_agent = working_agent.clone();
+            Box::pin(async move {
+                let response = txn
+                    .execute_client_signed_create(
+                        "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                        &serde_json::json!({"input": {
+                            "session_id": session_id,
+                            "node_did": node_did,
+                            "requester_did": requester_did,
+                            "agent_did": agent_did,
+                            "relationships_pending": false,
+                            "created_at": "2026-11-04T00:00:00Z"
+                        }}),
+                        gents_protocol::schemas::AGENT_SESSION,
+                    )
+                    .await?;
+                let doc = crate::store::graphql::created_doc_id(&response, "AgentSession")?;
+                if let Some(working_agent) = working_agent {
+                    let working_agent = identity::Did::new(&working_agent)?;
+                    txn.add_actor_relationship("AgentSession", &doc, "working_agent", &working_agent)
+                        .await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
 }
 
 pub(super) struct HeldRuntimeFixture {

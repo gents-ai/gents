@@ -71,6 +71,7 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
         node.clone(),
         identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             plugin_home: Some(plugin_home.path().to_path_buf()),
             retry_policy: crate::runtime::agent::retry::RetryPolicy {
