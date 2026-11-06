@@ -1429,6 +1429,85 @@ async fn insert_ready_workspace(
     );
 }
 
+async fn publish_workspace_for_agent(
+    access: &crate::ConfigAccess,
+    workspace_id: &str,
+    owner: &str,
+    agent_did: &str,
+) {
+    let workspace = crate::tools::workspace::IsolatedWorkspaceDoc {
+        path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(vec![])
+            .unwrap(),
+        workspace_id: workspace_id.into(),
+        work_unit_id: "unit-1".into(),
+        repository_id: "repo-1".into(),
+        base_sha: "abc".into(),
+        branch: "topic".into(),
+        creation_policy: "git_worktree_diff".into(),
+        adapter: "git_worktree".into(),
+        owner_node_did: owner.into(),
+        writer_principal: agent_did.into(),
+        integrator_principal: agent_did.into(),
+        instruction_manifest: "{}".into(),
+        seal_hash: None,
+        lifecycle_state: "ready".into(),
+        caused_by_invocation_id: "inv-1".into(),
+        caused_by_correlation: "corr-1".into(),
+    };
+    access
+        .transact_write("test.agent_workspace", |txn| {
+            let workspace = &workspace;
+            Box::pin(async move {
+                let agent = txn
+                    .execute(&format!(
+                        r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
+                        escape_graphql_string(agent_did),
+                    ))
+                    .await?;
+                let agents = agent["data"]["Agent"].as_array().unwrap();
+                assert_eq!(agents.len(), 1, "held Agent has one physical document");
+                let agent_doc = agents[0]["_docID"].as_str().unwrap();
+                let result = txn
+                    .execute(
+                        &crate::tools::workspace::isolated_workspace_upsert_mutation(workspace),
+                    )
+                    .await?;
+                let rows = result["data"]["upsert_IsolatedWorkspace"]
+                    .as_array()
+                    .unwrap();
+                assert_eq!(rows.len(), 1);
+                let doc = rows[0]["_docID"].as_str().unwrap();
+                txn.add_resource_relationship(
+                    "IsolatedWorkspace",
+                    doc,
+                    "parent",
+                    "agents",
+                    agent_doc,
+                )
+                .await?;
+                let actor = identity::Did::new(agent_did)?;
+                txn.add_actor_relationship("IsolatedWorkspace", doc, "writer", &actor)
+                    .await?;
+                txn.add_actor_relationship("IsolatedWorkspace", doc, "integrator", &actor)
+                    .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .expect("publish Agent-owned workspace with native parent and roles");
+}
+
+async fn workspace_requests_for_agent(
+    access: &crate::ConfigAccess,
+    workspace_id: &str,
+) -> Vec<serde_json::Value> {
+    let result = access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{workspace_id: {{_eq: "{}"}}}}) {{request_id node_did lifecycle_state workspace_id workspace_seal_hash workspace_owner_node_did workspace_authority}} }}"#,
+        escape_graphql_string(workspace_id),
+    )).await.expect("read the held Agent's workspace requests");
+    result["data"]["AgentRequest"].as_array().unwrap().clone()
+}
+
 async fn workspace_requests(node: &defra_node::Node, workspace_id: &str) -> Vec<serde_json::Value> {
     let query = format!(
         r#"{{
@@ -1461,18 +1540,28 @@ async fn workspace_requests(node: &defra_node::Node, workspace_id: &str) -> Vec<
 
 #[tokio::test]
 async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    let behavior = integration_test_agent("general");
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("workspace-inferred-owner").await;
+    let node = db.node.clone();
     let owner = behavior.node_did().to_string();
-    insert_ready_workspace(&node, "ws-incomplete", &owner, &owner).await;
+    let agent_did = behavior.agent_did.clone();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        behavior.agent_identity.as_ref(),
+    )
+    .unwrap();
+    publish_workspace_for_agent(&access, "ws-incomplete", &owner, &agent_did).await;
     let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let context=serde_json::json!({"version":1,"source_fields":{"workspace_id":"ws-incomplete","workspace_authority":"readWrite"}}).to_string();
     let request_id = materializer
         .materialize(
-            &workspace_writer_task(),
+            &ResolvedTask {
+                agent_did: agent_did.clone(),
+                ..workspace_writer_task()
+            },
             Some("trigger-incomplete"),
             TriggerKind::Event,
             Some("trigger-incomplete-doc"),
@@ -1487,7 +1576,7 @@ async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace(
         )
         .await
         .expect("canonical workspace resolves the missing owner");
-    let rows = workspace_requests(&node, "ws-incomplete").await;
+    let rows = workspace_requests_for_agent(&access, "ws-incomplete").await;
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0]["request_id"].as_str(), Some(request_id.as_str()));
     assert_eq!(
@@ -1591,34 +1680,25 @@ async fn materializer_preserves_explicit_workspace_owner_distinct_from_executor(
 
 #[tokio::test]
 async fn goal_task_workspace_activation_retry_is_idempotent() {
-    let behavior = integration_test_agent("general");
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("workspace-goal-retry").await;
+    let (foreign_db, _foreign_user, _foreign_client_access, _foreign_behavior) =
+        signed_materializer_agent("workspace-goal-foreign-owner").await;
+    let workspace_owner = foreign_db.node_identity.did().to_owned();
     let agent_did = behavior.agent_did.clone();
     let agent_identity = behavior.agent_identity.clone();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(behavior.node_did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node = db.node.clone();
     let access = crate::ConfigAccess::local_managed_agent(
         node.clone(),
         agent_did.parse().unwrap(),
         agent_identity.as_ref(),
     )
     .unwrap();
-    insert_ready_workspace(
-        node.as_ref(),
-        "ws-goal-retry",
-        "did:key:z-workspace-owner",
-        behavior.node_did(),
-    )
-    .await;
+    publish_workspace_for_agent(&access, "ws-goal-retry", &workspace_owner, &agent_did).await;
     let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
-    let context = writer_context("ws-goal-retry", "did:key:z-workspace-owner");
+    let context = writer_context("ws-goal-retry", &workspace_owner);
     let mut task = workspace_writer_task();
     task.agent_did = agent_did.clone();
     task.goal_objective_template = Some("finish workspace change".to_string());
@@ -1666,7 +1746,7 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
     assert_eq!(rows.len(), 1, "retry must reuse the staged request");
     assert_eq!(
         rows[0]["workspace_owner_node_did"].as_str(),
-        Some("did:key:z-workspace-owner")
+        Some(workspace_owner.as_str())
     );
     assert_eq!(rows[0]["lifecycle_state"].as_str(), Some("pending"));
     let session = escape_graphql_string(rows[0]["session_id"].as_str().unwrap());
