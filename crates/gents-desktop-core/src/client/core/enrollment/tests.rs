@@ -2449,12 +2449,21 @@ async fn thin_client_publishes_signed_enrollment_without_a_node_document() -> Re
             )
             .await?
     );
+    let candidate_ticket = local_enrollment_ticket(&core.p2p, core.local_peer_id()).await?;
+    let request = sign_enrollment_request(
+        core.node_identity(),
+        &authority.offer,
+        &authority.offer_token,
+        core.local_peer_id().to_owned(),
+        candidate_ticket,
+    )
+    .await?;
     assert!(
         core.node_identity()
             .verify(
                 core.node_identity().did(),
-                &authority.request.signing_payload(),
-                &authority.request.candidate_sig
+                &request.signing_payload(),
+                &request.candidate_sig,
             )
             .await?
     );
@@ -2462,7 +2471,7 @@ async fn thin_client_publishes_signed_enrollment_without_a_node_document() -> Re
     let local = ConfigAccess::local_as(core.node_arc(), runtime.clone());
     let nodes = local.execute("{ Node { _docID } }").await?;
     assert!(gents_protocol::graphql::graphql_rows_from_response(&nodes, "Node").is_empty());
-    let doc = write_enrollment_request(&core.node, &authority.request).await?;
+    let doc = write_enrollment_request(&core.node, &request).await?;
     let snapshot: Value = gents_lean_contract::load_contract_snapshot()?;
     let cases = snapshot["identity_enrollment_policy_cases"]
         .as_array()
