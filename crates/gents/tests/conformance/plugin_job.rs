@@ -1123,6 +1123,27 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
                     "{name}: valid"
                 );
             }
+            LeanPluginJobAuthorityCase::PublishedRead {
+                name,
+                publication_in_progress,
+                expected,
+            } => {
+                *kinds.entry("published_read").or_default() += 1;
+                let home = tempfile::tempdir().expect("plugin home");
+                let _stage = publication_in_progress.then(|| {
+                    gents::plugin::store::try_lock_store(home.path()).expect("stage lock")
+                });
+                let result =
+                    gents::plugin::store::read_published_record(home.path(), "fixture", "absent");
+                assert_eq!(
+                    matches!(
+                        result,
+                        Err(gents::plugin::store::PublishedPluginReadError::Busy)
+                    ),
+                    expected.deferred,
+                    "{name}: defer staged read"
+                );
+            }
             LeanPluginJobAuthorityCase::WireTargetsFrom {
                 name,
                 pack,
@@ -1159,6 +1180,7 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
             ("pack_job_block", 5),
             ("policy_valid", 4),
             ("provenance", 12),
+            ("published_read", 2),
             ("wire_targets_from", 2),
         ]),
         "Lean pins these authority rows in `authority_regressions`"

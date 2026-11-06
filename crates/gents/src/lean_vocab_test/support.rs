@@ -1371,6 +1371,11 @@ pub(crate) enum LeanPluginJobAuthorityCase {
         policy: Box<LeanPluginJobPolicy>,
         expected: Box<LeanPluginJobValidExpected>,
     },
+    PublishedRead {
+        name: String,
+        publication_in_progress: bool,
+        expected: LeanPluginJobPublishedReadExpected,
+    },
     WireTargetsFrom {
         name: String,
         pack: String,
@@ -1390,9 +1395,16 @@ impl LeanPluginJobAuthorityCase {
             | Self::Origin { name, .. }
             | Self::PackJobBlock { name, .. }
             | Self::PolicyValid { name, .. }
-            | Self::WireTargetsFrom { name, .. } => name,
+            | Self::WireTargetsFrom { name, .. }
+            | Self::PublishedRead { name, .. } => name,
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginJobPublishedReadExpected {
+    pub(crate) deferred: bool,
 }
 
 /// `kind` is `absent`, `legacy` or `written`; only `written` carries `via`.
