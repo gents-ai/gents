@@ -218,11 +218,11 @@ async fn process_command_with_clock(
                     Ok(mut prepared) => {
                         if matches!(command.operation, gents_protocol::goal_control::GoalOperation::Create { .. }) {
                             match crate::goal::attach_client_goal_graphs(txn, &command, &mut prepared).await? {
-                                Ok(()) => crate::goal::stage_goal_control(txn, identity.as_ref(), prepared).await?,
+                                Ok(()) => crate::goal::stage_goal_control(txn, agent_identity, prepared).await?,
                                 Err(reason) => GoalControlOutcome::Rejected { reason },
                             }
                         } else {
-                            crate::goal::stage_goal_control(txn, identity.as_ref(), prepared).await?
+                            crate::goal::stage_goal_control(txn, agent_identity, prepared).await?
                         }
                     },
                 }
