@@ -318,7 +318,13 @@ def replicaGrantCasesJson : String :=
     ("user_read", toJson (allowed 5 state "user" "enrollment_records" "remote" "read")),
     ("user_write", toJson (allowed 5 state "user" "enrollment_records" "remote" "update")),
     ("agent_read", toJson (allowed 5 state "agent" "enrollment_records" "remote" "read")),
+    ("outsider_read", toJson (allowed 5 state "outsider" "enrollment_records" "remote" "read")),
     ("app_read", toJson (allowed 5 state "runtime" "children" "application" "read")),
     ("pending", toJson (state.relations.contains ⟨"enrollment_records", "remote", "pending_parent", .actor "runtime"⟩))])).compress
+
+def discoveryPolicyCasesJson : String :=
+  let cases := [("outsider-read", "outsider", "read"), ("outsider-write", "outsider", "update")]
+  (toJson (cases.map fun (name, actor, permission) => Json.mkObj [("name", toJson name),
+    ("allowed", toJson (allowed 5 publicDiscoveryFixture actor "discovery" "directory" permission))])).compress
 
 end Identity.OperationsConformance
