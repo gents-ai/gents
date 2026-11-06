@@ -820,7 +820,7 @@ async fn recovery_receipt_fixture(
 #[tokio::test]
 async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mutations() {
     use crate::request::lifecycle::{
-        recover_expired_generation_with_access_and_facts, RecoveryResult,
+        recover_expired_generation_with_access_for_test, RecoveryResult,
     };
     use crate::store::config_client::ConfigApplyTxn;
 
@@ -846,7 +846,7 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
     let generation = observed.execution_generation.as_deref().unwrap();
     let now = chrono::Utc::now();
     let recover = || {
-        recover_expired_generation_with_access_and_facts(
+        recover_expired_generation_with_access_for_test(
             &fixture_access(&node, &lifecycle),
             &observed,
             generation,
@@ -882,7 +882,7 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
 #[tokio::test]
 async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selection() {
     use crate::request::lifecycle::{
-        recover_expired_generation_with_access_and_facts, RecoveryResult,
+        recover_expired_generation_with_access_for_test, RecoveryResult,
     };
     use crate::store::config_client::ConfigApplyTxn;
     use gents_protocol::output::{MessagePublication, TerminalOutput};
@@ -918,7 +918,7 @@ async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selecti
     let original = &original_segments[0];
     assert!(original["close"].is_null());
     let recover = || {
-        recover_expired_generation_with_access_and_facts(
+        recover_expired_generation_with_access_for_test(
             &fixture_access(&node, &lifecycle),
             &observed,
             old_generation,

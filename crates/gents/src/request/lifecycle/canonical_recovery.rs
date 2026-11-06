@@ -197,6 +197,34 @@ pub(super) async fn recover_expired_generation(
     .await
 }
 
+#[cfg(test)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the conformance adapter supplies deterministic recovery facts"
+)]
+pub(crate) async fn recover_expired_generation_with_access_for_test(
+    access: &ConfigAccess,
+    observed: &AgentRequestRow,
+    expected_generation: &str,
+    expected_expiry: &str,
+    fresh_generation: String,
+    observed_now: DateTime<Utc>,
+    selection_choice: Option<RecoverySelectionChoice>,
+    expected_outcome: Option<RequestLifecycleState>,
+) -> Result<RecoveryResult> {
+    recover_expired_generation_with_access_and_facts(
+        access,
+        observed,
+        expected_generation,
+        expected_expiry,
+        fresh_generation,
+        observed_now,
+        selection_choice,
+        expected_outcome,
+    )
+    .await
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "called from the lean_vocab_test native adapter with this shape"
@@ -236,7 +264,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
     clippy::too_many_arguments,
     reason = "recovery facts are supplied by the conformance adapter"
 )]
-pub(crate) async fn recover_expired_generation_with_access_and_facts(
+async fn recover_expired_generation_with_access_and_facts(
     access: &ConfigAccess,
     observed: &AgentRequestRow,
     expected_generation: &str,

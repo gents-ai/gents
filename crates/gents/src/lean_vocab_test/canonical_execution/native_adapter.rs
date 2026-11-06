@@ -297,7 +297,7 @@ async fn claim_fixture_request(
     if processing {
         let access =
             crate::ConfigAccess::local_managed_agent(node.clone(), agent.did().parse()?, agent)?;
-        crate::request::lifecycle::RequestLifecycle::begin_owned_execution_with_access(
+        crate::request::lifecycle::RequestLifecycle::begin_owned_execution_at_with_access(
             &access,
             &request_doc_id,
             &generation,
@@ -684,7 +684,7 @@ impl NativeCanonicalExecution {
                 crate::request::lifecycle::RecoverySelectionChoice::MessageKey(key)
             }
         };
-        let result = crate::request::lifecycle::recover_expired_generation_with_access_and_facts(
+        let result = crate::request::lifecycle::recover_expired_generation_with_access_for_test(
             &self.access,
             &observed,
             &symbolic_generation(expected_generation),
@@ -3368,7 +3368,7 @@ async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
     assert_eq!(renewed, RenewalAttemptOutcome::Committed);
     assert_eq!(native.observe(true).await.unwrap(), *expected_after_renewal);
     holder.commit().await.unwrap();
-    let recovered = crate::request::lifecycle::recover_expired_generation_with_access_and_facts(
+    let recovered = crate::request::lifecycle::recover_expired_generation_with_access_for_test(
         &native.access,
         &stale,
         &physical_generation,

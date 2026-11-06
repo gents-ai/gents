@@ -446,7 +446,20 @@ impl RequestLifecycle {
         Self::begin_owned_execution_with_access(&access, request_doc_id, generation, now).await
     }
 
-    pub(crate) async fn begin_owned_execution_with_access<F>(
+    #[cfg(test)]
+    pub(crate) async fn begin_owned_execution_at_with_access<F>(
+        access: &crate::ConfigAccess,
+        request_doc_id: &str,
+        generation: &str,
+        now: F,
+    ) -> Result<()>
+    where
+        F: Fn() -> chrono::DateTime<chrono::Utc> + Sync,
+    {
+        Self::begin_owned_execution_with_access(access, request_doc_id, generation, now).await
+    }
+
+    async fn begin_owned_execution_with_access<F>(
         access: &crate::ConfigAccess,
         request_doc_id: &str,
         generation: &str,
