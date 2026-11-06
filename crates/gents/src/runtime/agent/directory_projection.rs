@@ -439,6 +439,27 @@ mod tests {
         assert_eq!(canonicalize_last_seen(""), "");
     }
 
+    /// ACP-enabled fixture node signed by its own identity key. The directory
+    /// schema binds `AGENT_OWNERSHIP_POLICY_ID`, which only an ACP-enabled node
+    /// registers, so the plain `node_builder` fixture cannot host it.
+    async fn acp_node(dir: &std::path::Path) -> Result<Arc<EmbeddedNode>> {
+        use crate::NodeIdentity;
+        let key_path = dir.join("node.key");
+        let identity = crate::store::identity::KeyIdentity::load_or_create(key_path.clone(), None)?;
+        let signing_key =
+            crate::store::identity::load_file_identity(&key_path)?.private_key_bytes();
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .with_signing_key(defra_node::SigningKey::Ed25519(signing_key))
+                .with_node_acp_enabled()
+                .build()
+                .await?,
+        );
+        crate::test_support::acp_policies::install_identity_acp_policies(&node).await?;
+        Ok(node)
+    }
+
     #[tokio::test]
     async fn directory_retracts_own_publications_and_preserves_foreign_sources() -> Result<()> {
         let cases =
@@ -446,8 +467,8 @@ mod tests {
         let mut checked = 0;
         for case in cases.iter().filter(|case| case["name"] != "failed-delete") {
             checked += 1;
-            let node = Arc::new(crate::test_support::node_builder().build().await?);
-            crate::test_support::acp_policies::install_identity_acp_policies(&node).await?;
+            let dir = tempfile::tempdir()?;
+            let node = acp_node(dir.path()).await?;
             node.add_collection(gents_protocol::schemas::NODE_DIRECTORY_ENTRY)
                 .await?;
             let store = GraphqlDirectoryStore::new(node.clone());
