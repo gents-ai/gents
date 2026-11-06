@@ -773,7 +773,7 @@ mod tests {
             .collect::<Vec<_>>();
         let registry = gents_migration::Registry {
             baseline: &baseline,
-            ..gents_migration::DEFAULT_REGISTRY
+            ..*gents_migration::DEFAULT_REGISTRY
         };
         gents_migration::ensure_migrations_with_registry(&plain, &registry)
             .await

@@ -13,6 +13,7 @@ use super::reconcile::{
 use super::rows::{EnrollmentRevisionRow, EnrollmentRouteReceiptRow, STATUS_ENROLLMENT_QUERY};
 use super::*;
 use crate::client::peer_directory::RemovalCause;
+use crate::client::DesktopPaths;
 use defra_p2p_adapter::P2pDocumentRequest;
 use defra_p2p_adapter::TransportPeerId;
 use gents::runtime::agent::p2p_reconcile::enrollment_candidate::enrollment_request_input;
@@ -25,6 +26,7 @@ use p2p::iroh::parse_public_peer_addr;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
