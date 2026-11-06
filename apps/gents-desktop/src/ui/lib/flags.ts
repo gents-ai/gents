@@ -73,6 +73,17 @@ export const FLAGS = [
     removeWhen: "The Packs page ships to everyone.",
     restart: false,
   },
+  {
+    id: "sharing",
+    name: "Sharing",
+    description:
+      "Approve or deny requests to join this node, and see and remove who has access.",
+    default: false,
+    owner: "david-on-github",
+    removeBy: "2027-04-01",
+    removeWhen: "Access decisions ship to everyone.",
+    restart: false,
+  },
 ] as const satisfies readonly Flag[];
 
 export type FlagId = (typeof FLAGS)[number]["id"];

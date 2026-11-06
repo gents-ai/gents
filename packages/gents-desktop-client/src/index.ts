@@ -29,6 +29,11 @@ export type {
   ManagedServerStatus,
   ManagedServerResetResult,
   HomeResetDisposition,
+  JoinHistoryView,
+  JoinMemberView,
+  JoinRequestDecideRequest,
+  JoinRequestDecisionView,
+  JoinRequestView,
 } from "./api/types.js";
 export type { MailboxItemObservation } from "./generated/MailboxItemObservation.js";
 export type { QuestionReplyView } from "./generated/QuestionReplyView.js";

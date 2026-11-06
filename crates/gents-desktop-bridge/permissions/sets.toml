@@ -179,7 +179,7 @@ permissions = [
 
 [[set]]
 identifier = "runtime-admin"
-description = "Local runtime provisioning and managed server lifecycle"
+description = "Local runtime provisioning, managed server lifecycle and its join requests"
 permissions = [
   "allow-desktop-init-local-standard",
   "allow-desktop-managed-server-status",
@@ -190,6 +190,10 @@ permissions = [
   "allow-desktop-managed-server-reset",
   "allow-desktop-managed-server-validate-root",
   "allow-desktop-managed-server-open-login-items",
+  "allow-desktop-join-requests-list",
+  "allow-desktop-join-request-decide",
+  "allow-desktop-join-members-list",
+  "allow-desktop-join-history-read",
   "allow-desktop-open-db-explorer",
 ]
 

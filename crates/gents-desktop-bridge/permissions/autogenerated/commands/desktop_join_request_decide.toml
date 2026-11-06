@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-join-request-decide"
+description = "Enables the desktop_join_request_decide command without any pre-configured scope."
+commands.allow = ["desktop_join_request_decide"]
+
+[[permission]]
+identifier = "deny-desktop-join-request-decide"
+description = "Denies the desktop_join_request_decide command without any pre-configured scope."
+commands.deny = ["desktop_join_request_decide"]

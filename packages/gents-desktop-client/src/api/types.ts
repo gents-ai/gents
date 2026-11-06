@@ -31,6 +31,11 @@ import type { EventSourceSaveRequest } from "../generated/EventSourceSaveRequest
 import type { EventSourceDeleteRequest } from "../generated/EventSourceDeleteRequest.js";
 import type { BackendHealth } from "../types/backendHealth.js";
 import type { ManagedServerStatus } from "../generated/ManagedServerStatus.js";
+import type { JoinHistoryView } from "../generated/JoinHistoryView.js";
+import type { JoinMemberView } from "../generated/JoinMemberView.js";
+import type { JoinRequestDecideRequest } from "../generated/JoinRequestDecideRequest.js";
+import type { JoinRequestDecisionView } from "../generated/JoinRequestDecisionView.js";
+import type { JoinRequestView } from "../generated/JoinRequestView.js";
 import type { ManagedServerResetResult } from "../generated/ManagedServerResetResult.js";
 import type { HomeResetDisposition } from "../generated/HomeResetDisposition.js";
 import type { ManagedServerToolCeiling } from "../generated/ManagedServerToolCeiling.js";
@@ -199,6 +204,17 @@ export type DesktopApiAdapter = {
     disableAutoStart: boolean,
   ) => Promise<ManagedServerStatus>;
   openDbExplorer?: () => Promise<string>;
+  /** requests to join the node this desktop runs; the bridge refuses any
+   *  other node with `unsupported` */
+  listJoinRequests?: (nodeDid: string) => Promise<JoinRequestView[]>;
+  decideJoinRequest?: (
+    request: JoinRequestDecideRequest,
+  ) => Promise<JoinRequestDecisionView>;
+  /** who has access to the node this desktop runs, and what was decided; the
+   *  bridge answers `unsupported` for any other node, and for a runtime too
+   *  old to answer */
+  listJoinMembers?: (nodeDid: string) => Promise<JoinMemberView[]>;
+  readJoinHistory?: (nodeDid: string) => Promise<JoinHistoryView>;
   /** Opens a URL in the person's browser. The bridge strips the packaged
    *  build's own libraries and display backend from the environment the
    *  browser inherits, which the OS opener cannot. */
@@ -537,6 +553,12 @@ export type PackCommand =
   | "signInToPackRegistry"
   | "signOutOfPackRegistry";
 
+export type JoinRequestCommand =
+  | "listJoinRequests"
+  | "decideJoinRequest"
+  | "listJoinMembers"
+  | "readJoinHistory";
+
 export type HostAccessCommand =
   | "listAllowedFolders"
   | "addAllowedFolder"
@@ -555,6 +577,11 @@ export type UxPluginCommand =
 
 export type {
   HomeResetDisposition,
+  JoinHistoryView,
+  JoinMemberView,
+  JoinRequestDecideRequest,
+  JoinRequestDecisionView,
+  JoinRequestView,
   ManagedServerResetResult,
   ManagedServerStatus,
 };

@@ -21,6 +21,8 @@ import {
   type ProvenanceStore,
 } from "./provenance";
 import { createShellActions } from "./shellActions";
+import type { SharingAdapter } from "./sharing";
+import { sharingFor } from "./joinRequestSharing";
 import { createDraftStore } from "./draftStore";
 import type { ShellStores } from "./shellProjection";
 import { createShellView, type ShellViewStore } from "./shellView";
@@ -36,6 +38,7 @@ export type DesktopBridge = {
   listenToUpdates: DesktopClientUpdatedListenerFactory;
   supportsManagedServer?: boolean;
   reportFailure?: (message: string) => void;
+  sharing?: SharingAdapter;
 };
 
 export type DesktopAppParams = Omit<DesktopBridge, "listenToUpdates">;
@@ -44,6 +47,7 @@ export function createDesktopApp({
   api,
   supportsManagedServer = false,
   reportFailure,
+  sharing: given,
 }: DesktopAppParams) {
   const stores: ShellStores & {
     providers: ProviderStore;
@@ -103,8 +107,24 @@ export function createDesktopApp({
   const drafts = createDraftStore();
   reconcileSelection(stores, actions.selectNode, drafts);
   keepSeen(stores);
+  const sharing =
+    given ??
+    sharingFor(
+      api,
+      () => stores.client.getState().snapshot?.bootstrap.initNodeDid ?? null,
+    );
   watchNotifications(stores);
-  return { api, stores, view, drafts, project, trackedRequestId, lifecycle, actions };
+  return {
+    api,
+    stores,
+    view,
+    drafts,
+    project,
+    trackedRequestId,
+    lifecycle,
+    actions,
+    sharing,
+  };
 }
 
 export type DesktopApp = ReturnType<typeof createDesktopApp>;

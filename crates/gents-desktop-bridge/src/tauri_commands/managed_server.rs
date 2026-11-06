@@ -484,6 +484,31 @@ where
     write_preference().await
 }
 
+/// The node this desktop co-hosts and the home whose operator identity
+/// administers it; `None` unless that runtime is ready, serves `node_did`
+/// and matches the home's identity.
+pub(in crate::tauri_commands) async fn co_hosted_runtime(
+    state: &DesktopAppState,
+    node_did: &str,
+) -> Result<
+    Option<(
+        std::path::PathBuf,
+        crate::local_pairing::ManagedPairingTarget,
+    )>,
+    BridgeError,
+> {
+    let Some(node_home) = state.policy.node_home.clone() else {
+        return Ok(None);
+    };
+    let target = matching_external_server(&node_home, OperatorIdentityInteraction::Prevent)
+        .await?
+        .as_ref()
+        .and_then(pairing::pairing_target);
+    Ok(target
+        .filter(|target| target.node_did == node_did.trim())
+        .map(|target| (node_home, target)))
+}
+
 fn ensure_allowed(state: &DesktopAppState) -> Result<(), BridgeError> {
     if state.policy.managed_server != ManagedServerPolicy::Allowed {
         return Err(BridgeError::new(

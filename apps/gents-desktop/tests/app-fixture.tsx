@@ -9,6 +9,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 import { createDesktopApp, type DesktopApp } from "../src/hooks/desktopApp";
+import type { SharingAdapter } from "../src/hooks/sharing";
 import { applyFleetSnapshot } from "../src/hooks/fleetStore";
 import type { SelectionState } from "../src/hooks/selectionStore";
 import { writeSession } from "../src/hooks/sessionStore";
@@ -42,8 +43,10 @@ export function testApp({
   selection,
   reportFailure,
   supportsManagedServer,
+  sharing,
 }: {
   api?: object;
+  sharing?: SharingAdapter;
   supportsManagedServer?: boolean;
   snapshot?: unknown;
   reportFailure?: (message: string) => void;
@@ -55,6 +58,7 @@ export function testApp({
     api: api as DesktopApiAdapter,
     reportFailure,
     supportsManagedServer,
+    sharing,
   });
   if (snapshot) publishSnapshot(app, snapshot as DesktopClientSnapshot);
   if (deployments) publish(app, deployments);
