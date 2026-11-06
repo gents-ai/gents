@@ -29,7 +29,7 @@ pub(crate) struct Fixture {
 impl Fixture {
     pub(crate) async fn new() -> Self {
         let db = crate::support::test_signed_db("workspace-rejection").await;
-        let (home, _user, _user_access, binding) =
+        let (home, user, user_access, binding) =
             crate::test_support::signed_test_node_from_db(db, "workspace-rejection-user").await;
         let node = home.node.clone();
         let identity = home.node_identity.clone();
@@ -50,32 +50,30 @@ impl Fixture {
             RequestPurpose::Normal,
             "workspace-rejected-request",
             identity.did(),
-            identity.did(),
+            user.did(),
             agent.did(),
             "session",
             "work",
             "interactive",
             "2026-09-01T00:00:00Z",
-            AgentRequestAdmissionRecord::local_self(identity.did()),
+            AgentRequestAdmissionRecord::client(user.did()),
         );
         create.workspace_id = Some("cleanup-workspace".to_string());
         create.workspace_owner_node_did = Some(identity.did().to_string());
         create.workspace_authority = Some("readWrite".to_string());
-        crate::sign_agent_request_create(identity.as_ref(), &mut create)
-            .await
-            .unwrap();
-        let response = access
-            .write(
-                "test.workspace_rejection_request",
-                &create.graphql_mutation().unwrap(),
+        let lifecycle =
+            crate::tools::call::lifecycle::admission_fixture::pending_client_fixture_request(
+                &node,
+                &user_access,
+                identity.clone(),
+                &user,
+                agent.as_ref(),
+                create,
             )
             .await
-            .unwrap();
-        let doc_id = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
-        let row = super::load_signed_request_as(&node, &doc_id, agent.did())
-            .await
-            .unwrap();
-        let request = super::row_into_agent_request(row, &doc_id).unwrap();
+            .expect("publish an authorized User request before workspace rejection");
+        let request = lifecycle.request().clone();
+        let doc_id = request.doc_id.clone();
         let workspace_doc = access
             .transact_write("test.workspace_rejection_workspace", |txn| {
                 let agent_did = agent.did();
@@ -95,7 +93,7 @@ impl Fixture {
         let binding = WorkspaceBindingDoc {
             workspace_doc_id: Some(workspace_doc),
             binding_id: "exact-binding".to_string(),
-            workspace_id: create.workspace_id.unwrap(),
+            workspace_id: "cleanup-workspace".to_owned(),
             request_id: request.request_id.clone(),
             request_doc_id: doc_id,
             authority: "readWrite".to_string(),
