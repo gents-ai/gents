@@ -117,21 +117,15 @@ fn test_tool_runtime(
 }
 
 async fn update_node_enabled(access: &crate::ConfigAccess, node_did: &str, enabled: bool) {
-    let escaped_node_did = escape_graphql_string(node_did);
-    let response = access
-        .execute(&format!(
-            r#"{{ Node(filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }}) {{ _docID }} }}"#
-        ))
-        .await
-        .unwrap();
-    let rows = response["data"]["Node"].as_array().unwrap();
-    let [row] = rows.as_slice() else {
-        panic!("fixture Node must be unique")
-    };
-    let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
-    access.write("test.node.enabled", &format!(
-        r#"mutation {{ update_Node(docID: "{doc}", input: {{ enabled: {enabled} }}) {{ _docID }} }}"#
-    )).await.unwrap();
+    merge_fixture_document(
+        access,
+        "test.node.enabled",
+        crate::Collection::Node,
+        node_did,
+        node_did,
+        serde_json::json!({"enabled": enabled}),
+    )
+    .await;
 }
 
 async fn write_documents(
@@ -957,6 +951,7 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             plugin_home: Some(plugin_home.path().to_path_buf()),
             ..Default::default()
@@ -1064,6 +1059,7 @@ async fn control_watcher_keeps_an_agent_whose_tools_fail_to_build_demoted() {
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             plugin_home: Some(plugin_home.path().to_path_buf()),
             ..Default::default()
