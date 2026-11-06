@@ -136,8 +136,7 @@ impl DefraStreamWriter {
         key: &str,
         message: &gents_protocol::message::Message,
     ) -> Result<String> {
-        self.publish_authored_message_with_time(lifecycle, key, message, None)
-            .await
+        Box::pin(self.publish_authored_message_with_time(lifecycle, key, message, None)).await
     }
 
     pub(crate) async fn publish_authored_message_with_time(
@@ -188,9 +187,10 @@ impl DefraStreamWriter {
             (consumes_folded.as_mut(), lifecycle.steering_admission())
         {
             consumption.require_verification();
-            if let Ok((candidate, admission)) = verifier
-                .verify_folded_for_claim(&consumption.folded_request_doc_id, agent)
-                .await
+            if let Ok((candidate, admission)) = Box::pin(
+                verifier.verify_folded_for_claim(&consumption.folded_request_doc_id, agent),
+            )
+            .await
             {
                 consumption.mark_verified();
                 if let Some(admission) = admission {
@@ -210,14 +210,14 @@ impl DefraStreamWriter {
             background_calls: Vec::new(),
             consumes_folded,
         };
-        let published = canonical::publish_provider_turn_with_time(
+        let published = Box::pin(canonical::publish_provider_turn_with_time(
             &self.node,
             identity::Did::new(self.actor_did.clone())?,
             self.agent_signer.clone(),
             lifecycle.execution_generation()?,
             plan,
             fixture_now,
-        )
+        ))
         .await?;
         Ok(published.message_doc_id)
     }
