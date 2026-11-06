@@ -152,6 +152,13 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
       if (!stop) return unavailable("Stop Node");
       return operate("stop", () => stop(false)).then(settled);
     },
+    /** Publishes a folder for an agent and retargets its host root. Run before
+        restartLocalServer: the restarted runtime admits only published roots. */
+    selectAgentWorkspaceRoot(nodeDid: string, agentDid: string, path: string) {
+      const select = api.selectAgentWorkspaceRoot;
+      if (!select) return unavailable("Choose workspace folder");
+      return select(nodeDid, agentDid, path);
+    },
     restartLocalServer(nodeName: string, authority: ManagedServerAuthorityInput) {
       const restart = api.restartManagedServer;
       if (!restart) return unavailable("Restart Node");

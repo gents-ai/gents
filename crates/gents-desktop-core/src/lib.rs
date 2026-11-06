@@ -7,6 +7,7 @@ mod inference_activity;
 pub mod local_runtime;
 pub mod preference;
 pub mod remote_admin;
+pub mod workspace_root;
 
 #[cfg(test)]
 pub(crate) mod test_support {
