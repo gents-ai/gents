@@ -49,7 +49,7 @@ const defaults = (): PluginNotifyDeps => {
       }),
     open: base.open,
     offer: (caller, { kind, label }) =>
-      void toast(`${oneLine(caller.name)} wants to notify you about “${label}”`, {
+      void toast(`${sender(caller)} wants to notify you about “${label}”`, {
         id: `notify-offer:${caller.key}:${kind}`,
         description: "These are off until you turn them on.",
         action: {
@@ -68,6 +68,8 @@ const oneLine = (value: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
+const sender = (caller: UxNotifyCaller) => oneLine(caller.pack ?? caller.name);
+
 /** The owner of what plugins may tell the person. A plugin asks for one of
     the kinds its module declared; it is told only while both experimental
     features are on, in the main window, for a kind the person turned on for
@@ -75,10 +77,13 @@ const oneLine = (value: string) =>
     plugin's own page, or a place within it, through the route a `gents:`
     link to it takes; no other target can be named.
 
-    What a notification may carry once it leaves the app is not decided
-    yet: it can show on a locked screen and stays in Notification Center,
-    beyond the app's own access checks. Until it is, a notice carries the plugin's name, a one-line title and an optional
-    one-line body, each length-limited, and nothing else of the plugin's. */
+    A notice can show on a locked screen and stays in Notification Center,
+    beyond the app's own access checks, so it carries only its sender, a
+    one-line title and an optional one-line body, each length-limited, and
+    nothing else of the plugin's. The sender is the pack the plugin shipped
+    in, the unit the person installed and can remove; a plugin outside a pack
+    is named by its own name. While the window is in front, the same notice
+    shows in the app instead. */
 export function createPluginNotifier(deps: PluginNotifyDeps = defaults()) {
   const sent = new Map<string, number[]>();
   /* a kind that's off is offered once while the app runs, not on every try */
@@ -138,7 +143,7 @@ export function createPluginNotifier(deps: PluginNotifyDeps = defaults()) {
       ...(typeof target === "string" ? { path: target } : {}),
     });
     const notice = {
-      title: `${oneLine(caller.name)}: ${line}`,
+      title: `${sender(caller)}: ${line}`,
       ...(detail ? { body: detail } : {}),
     };
     if (deps.focused()) deps.show(notice, () => deps.open(to));
