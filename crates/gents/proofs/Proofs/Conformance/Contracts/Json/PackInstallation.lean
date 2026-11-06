@@ -16,6 +16,13 @@ def homeCasesJson : String := jsonArray (Configuration.hostedPackHomeCases.map f
   "{\"home_written\":" ++ toString written ++ ",\"reported_success\":" ++
     toString (Configuration.hostedPackReportedSuccess true true written) ++ "}")
 
+def hostedPluginCasesJson : String := jsonArray (
+  [false, true].flatMap fun reviewed => [false, true].flatMap fun plan =>
+    [false, true].map fun native =>
+      "{\"reviewed\":" ++ toString reviewed ++
+      ",\"plan\":" ++ toString plan ++ ",\"native\":" ++ toString native ++
+      ",\"allowed\":" ++ toString (Configuration.hostedPluginInstallAllowed reviewed plan native) ++ "}")
+
 def evidenceCasesJson : String := jsonArray (Configuration.hostedPackEffectCases.map fun
     (actor, graph, plan) =>
   "{\"actor_matches\":" ++ toString actor ++
