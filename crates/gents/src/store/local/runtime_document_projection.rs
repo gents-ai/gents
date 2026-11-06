@@ -33,9 +33,9 @@ impl RuntimeDocumentProjector {
     async fn reconcile_runtime(&self, ctx: &db::DocumentMutationContext<'_>) -> Result<()> {
         self.require_node(ctx)?;
         if let Some(installed) = &self.startup_plugins {
-            self.tools.reconcile_installed(ctx.view, installed).await?;
+            self.tools.reconcile_installed(ctx, installed).await?;
         }
-        self.tools.update(ctx.view).await?;
+        self.tools.update(ctx).await?;
         self.reconcile_transport(ctx).await
     }
 
@@ -50,7 +50,7 @@ impl RuntimeDocumentProjector {
             collection,
             "Agent" | "AgentContext" | "Tools" | "DatastoreToolSurface" | "PackInstallation"
         ) {
-            self.tools.update(ctx.view).await?;
+            self.tools.update(ctx).await?;
         }
         if collection == gents_protocol::schemas::NODE_NAME {
             self.reconcile_transport(ctx).await?;
@@ -91,7 +91,7 @@ impl RuntimeDocumentProjector {
 impl db::DocumentMutationProjector for RuntimeDocumentProjector {
     async fn source_changed(&self, ctx: &db::DocumentMutationContext<'_>) -> Result<()> {
         self.require_node(ctx)?;
-        self.tools.update(ctx.view).await
+        self.tools.update(ctx).await
     }
 
     async fn reconcile(&self, ctx: &db::DocumentMutationContext<'_>) -> Result<()> {

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use acp::{NodeACP, NodePermission, Subject, ZanzibarStore};
+use acp::{NodePermission, Subject, ZanzibarStore};
 use sha2::{Digest, Sha256};
 use storage::corekv::{Error, Result};
 use storage::namespace::Namespace;
@@ -18,6 +18,56 @@ const PERMISSIONS: &[NodePermission] = &[
     NodePermission::DacRelationAdd,
     NodePermission::DacRelationDelete,
 ];
+
+struct SourceChange<'a> {
+    permission: NodePermission,
+    parent: Option<&'a str>,
+    subject_kind: &'a str,
+    subject: &'a str,
+    delete: bool,
+}
+
+async fn apply_source_change(
+    ctx: &db::DocumentMutationContext<'_>,
+    store: &acp::zanzibar::store::TransactionZanzibarStore,
+    change: SourceChange<'_>,
+) -> Result<()> {
+    let object = change
+        .parent
+        .map(super::plugin_delete_source::object)
+        .unwrap_or_else(|| acp::NODE_OBJECT_ID.to_owned());
+    let subject = match change.subject_kind {
+        "source" => Subject::entity_set(
+            acp::NODE_RESOURCE_NAME,
+            super::plugin_delete_source::object(change.subject),
+            change.permission.as_str(),
+        ),
+        "actor" => Subject::Entity(identity::Did::new(change.subject).map_err(external)?),
+        _ => return Err(Error::Other("invalid permission source subject".into())),
+    };
+    let present = store
+        .get_relation_subjects(
+            acp::NODE_POLICY_ID,
+            acp::NODE_RESOURCE_NAME,
+            &object,
+            change.permission.as_str(),
+        )
+        .await
+        .map_err(external)?
+        .contains(&subject);
+    if present != change.delete {
+        return Ok(());
+    }
+    ctx.change_source_permission(
+        change.permission,
+        change.parent,
+        change.subject_kind,
+        change.subject,
+        change.delete,
+    )
+    .await?;
+    Ok(())
+}
 
 pub(super) struct ToolPermissionProjection {
     node: identity::Did,
@@ -67,14 +117,12 @@ impl ToolPermissionProjection {
 
     pub(super) async fn reconcile_installed(
         &self,
-        view: &db::DocumentMutationView,
+        ctx: &db::DocumentMutationContext<'_>,
         installed: &[crate::plugin::store::InstalledPlugin],
     ) -> Result<()> {
         let store = Arc::new(acp::zanzibar::store::TransactionZanzibarStore::new(
-            view.sibling(Namespace::Acpstore),
+            ctx.view.sibling(Namespace::Acpstore),
         ));
-        let nac = NodeACP::new(Arc::clone(&store));
-        nac.load().await.map_err(external)?;
         let permission = NodePermission::DocumentDelete;
         let node = self.node.as_str();
         let index = super::plugin_delete_source::index(node);
@@ -116,35 +164,54 @@ impl ToolPermissionProjection {
                         root.starts_with(&super::plugin_delete_source::root_prefix(node))
                     }) {
                         if !wanted.contains(&root) {
-                            nac.change_source_permission(
-                                &self.node, permission, None, "source", &root, true,
+                            apply_source_change(
+                                ctx,
+                                &store,
+                                SourceChange {
+                                    permission,
+                                    parent: None,
+                                    subject_kind: "source",
+                                    subject: &root,
+                                    delete: true,
+                                },
                             )
-                            .await
-                            .map_err(external)?;
+                            .await?;
                         }
                     }
                 }
             }
         }
         for root in wanted {
-            nac.change_source_permission(
-                &self.node,
-                permission,
-                Some(&index),
-                "source",
-                &root,
-                false,
+            apply_source_change(
+                ctx,
+                &store,
+                SourceChange {
+                    permission,
+                    parent: Some(&index),
+                    subject_kind: "source",
+                    subject: &root,
+                    delete: false,
+                },
             )
-            .await
-            .map_err(external)?;
-            nac.change_source_permission(&self.node, permission, None, "source", &root, false)
-                .await
-                .map_err(external)?;
+            .await?;
+            apply_source_change(
+                ctx,
+                &store,
+                SourceChange {
+                    permission,
+                    parent: None,
+                    subject_kind: "source",
+                    subject: &root,
+                    delete: false,
+                },
+            )
+            .await?;
         }
         Ok(())
     }
 
-    pub(super) async fn update(&self, view: &db::DocumentMutationView) -> Result<()> {
+    pub(super) async fn update(&self, ctx: &db::DocumentMutationContext<'_>) -> Result<()> {
+        let view = ctx.view;
         let agents = documents(view, "Agent").await?;
         let contexts = documents(view, "AgentContext").await?;
         let tools = documents(view, "Tools").await?;
@@ -261,8 +328,6 @@ impl ToolPermissionProjection {
         let store = Arc::new(acp::zanzibar::store::TransactionZanzibarStore::new(
             view.sibling(Namespace::Acpstore),
         ));
-        let nac = NodeACP::new(Arc::clone(&store));
-        nac.load().await.map_err(external)?;
         let prefix = self.prefix();
         for permission in PERMISSIONS {
             let wanted = desired.remove(permission.as_str()).unwrap_or_default();
@@ -293,40 +358,53 @@ impl ToolPermissionProjection {
                 }
             }
             for source in installed.difference(&wanted.keys().cloned().collect()) {
-                nac.change_source_permission(&self.node, *permission, None, "source", source, true)
-                    .await
-                    .map_err(external)?;
+                apply_source_change(
+                    ctx,
+                    &store,
+                    SourceChange {
+                        permission: *permission,
+                        parent: None,
+                        subject_kind: "source",
+                        subject: source,
+                        delete: true,
+                    },
+                )
+                .await?;
             }
             for (source, agent) in wanted {
-                nac.change_source_permission(
-                    &self.node,
-                    *permission,
-                    Some(&source),
-                    "actor",
-                    &agent,
-                    false,
+                apply_source_change(
+                    ctx,
+                    &store,
+                    SourceChange {
+                        permission: *permission,
+                        parent: Some(&source),
+                        subject_kind: "actor",
+                        subject: &agent,
+                        delete: false,
+                    },
                 )
-                .await
-                .map_err(external)?;
-                nac.change_source_permission(
-                    &self.node,
-                    *permission,
-                    None,
-                    "source",
-                    &source,
-                    false,
+                .await?;
+                apply_source_change(
+                    ctx,
+                    &store,
+                    SourceChange {
+                        permission: *permission,
+                        parent: None,
+                        subject_kind: "source",
+                        subject: &source,
+                        delete: false,
+                    },
                 )
-                .await
-                .map_err(external)?;
+                .await?;
             }
         }
-        self.update_plugins(&nac, &store, plugin_desired).await?;
+        self.update_plugins(ctx, &store, plugin_desired).await?;
         Ok(())
     }
 
     async fn update_plugins(
         &self,
-        nac: &NodeACP<acp::zanzibar::store::TransactionZanzibarStore>,
+        ctx: &db::DocumentMutationContext<'_>,
         store: &acp::zanzibar::store::TransactionZanzibarStore,
         mut desired: BTreeMap<String, BTreeMap<String, String>>,
     ) -> Result<()> {
@@ -414,51 +492,59 @@ impl ToolPermissionProjection {
                         .map_err(external)?;
                     for actor in actors {
                         if let Subject::Entity(actor) = actor {
-                            nac.change_source_permission(
-                                &self.node,
-                                permission,
-                                Some(&member),
-                                "actor",
-                                actor.as_str(),
-                                true,
+                            apply_source_change(
+                                ctx,
+                                store,
+                                SourceChange {
+                                    permission,
+                                    parent: Some(&member),
+                                    subject_kind: "actor",
+                                    subject: actor.as_str(),
+                                    delete: true,
+                                },
                             )
-                            .await
-                            .map_err(external)?;
+                            .await?;
                         }
                     }
-                    nac.change_source_permission(
-                        &self.node,
-                        permission,
-                        Some(&root),
-                        "source",
-                        &member,
-                        true,
+                    apply_source_change(
+                        ctx,
+                        store,
+                        SourceChange {
+                            permission,
+                            parent: Some(&root),
+                            subject_kind: "source",
+                            subject: &member,
+                            delete: true,
+                        },
                     )
-                    .await
-                    .map_err(external)?;
+                    .await?;
                 }
             }
             for (member, agent) in wanted {
-                nac.change_source_permission(
-                    &self.node,
-                    permission,
-                    Some(&member),
-                    "actor",
-                    &agent,
-                    false,
+                apply_source_change(
+                    ctx,
+                    store,
+                    SourceChange {
+                        permission,
+                        parent: Some(&member),
+                        subject_kind: "actor",
+                        subject: &agent,
+                        delete: false,
+                    },
                 )
-                .await
-                .map_err(external)?;
-                nac.change_source_permission(
-                    &self.node,
-                    permission,
-                    Some(&root),
-                    "source",
-                    &member,
-                    false,
+                .await?;
+                apply_source_change(
+                    ctx,
+                    store,
+                    SourceChange {
+                        permission,
+                        parent: Some(&root),
+                        subject_kind: "source",
+                        subject: &member,
+                        delete: false,
+                    },
                 )
-                .await
-                .map_err(external)?;
+                .await?;
             }
         }
         Ok(())
@@ -1272,6 +1358,151 @@ mod tests {
                 .check_permission(&agent, NodePermission::CollectionPatch)
                 .await?,
             !expected_grants.is_empty()
+        );
+
+        let expected_change = |name: &str| {
+            model
+                .tool_source_change_cases
+                .iter()
+                .find(|case| case["name"] == name)
+                .expect("modeled source change")["allowed"]
+                .as_bool()
+                .expect("modeled decision")
+        };
+        owner.write("test.projection.owner_schema", &format!(
+            r#"mutation {{ update_Tools(docID:"{}", input:{{built_ins:{{enable_schema_tool:true}}}}) {{_docID}} }}"#,
+            escape_graphql_string(&tools_doc)
+        )).await?;
+        assert!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::CollectionPatch)
+                .await?
+        );
+        let unchanged = writer
+            .transact_write("test.projection.writer_noop", |txn| {
+                let mutation = &mutation;
+                let elevated = &elevated;
+                Box::pin(async move {
+                    txn.execute_client_signed_update(
+                        mutation,
+                        elevated,
+                        gents_protocol::schemas::TOOLS,
+                    )
+                    .await
+                })
+            })
+            .await;
+        assert_eq!(unchanged.is_ok(), expected_change("present-noop"));
+        let disable = writer
+            .transact_write("test.projection.writer_disable", |txn| {
+                let mutation = &mutation;
+                let harmless = &harmless;
+                Box::pin(async move {
+                    txn.execute_client_signed_update(
+                        mutation,
+                        harmless,
+                        gents_protocol::schemas::TOOLS,
+                    )
+                    .await
+                })
+            })
+            .await;
+        assert_eq!(disable.is_ok(), expected_change("delete-denied"));
+        assert!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::CollectionPatch)
+                .await?
+        );
+        owner.write("test.projection.owner_disable", &format!(
+            r#"mutation {{ update_Tools(docID:"{}", input:{{built_ins:{{enable_schema_tool:false}}}}) {{_docID}} }}"#,
+            escape_graphql_string(&tools_doc)
+        )).await?;
+        assert!(
+            !node
+                .nac_manager()
+                .check_permission(&agent, NodePermission::CollectionPatch)
+                .await?
+        );
+        let dormant = writer
+            .transact_write("test.projection.writer_dormant", |txn| {
+                let mutation = &mutation;
+                let elevated = &elevated;
+                Box::pin(async move {
+                    txn.execute_client_signed_update(
+                        mutation,
+                        elevated,
+                        gents_protocol::schemas::TOOLS,
+                    )
+                    .await
+                })
+            })
+            .await;
+        assert_eq!(dormant.is_ok(), expected_change("add-denied"));
+        assert!(
+            !node
+                .nac_manager()
+                .check_permission(&agent, NodePermission::CollectionPatch)
+                .await?
+        );
+        owner.write("test.projection.owner_restore", &format!(
+            r#"mutation {{ update_Tools(docID:"{}", input:{{built_ins:{{enable_schema_tool:true}}}}) {{_docID}} }}"#,
+            escape_graphql_string(&tools_doc)
+        )).await?;
+        node.database().reconcile_document_projector().await?;
+        let txn = node.database().new_txn(false).await?;
+        let store = Arc::new(acp::zanzibar::store::TransactionZanzibarStore::new(
+            txn.datastore()?.sibling(Namespace::Acpstore),
+        ));
+        let roots = store
+            .get_relation_subjects(
+                acp::NODE_POLICY_ID,
+                acp::NODE_RESOURCE_NAME,
+                acp::NODE_OBJECT_ID,
+                NodePermission::CollectionPatch.as_str(),
+            )
+            .await?;
+        let source = roots
+            .into_iter()
+            .filter_map(|subject| match subject {
+                Subject::EntitySet {
+                    resource,
+                    object_id,
+                    relation,
+                } if resource == acp::NODE_RESOURCE_NAME
+                    && relation == NodePermission::CollectionPatch.as_str() =>
+                {
+                    decode_source(&object_id).filter(|source| source.starts_with("gents-tool-v1:"))
+                }
+                _ => None,
+            })
+            .next()
+            .expect("schema source root");
+        let nac = acp::NodeACP::new(store.clone());
+        nac.load().await?;
+        nac.change_source_permission(
+            &identity::Did::new(runtime.did())?,
+            NodePermission::CollectionPatch,
+            None,
+            "source",
+            &source,
+            true,
+        )
+        .await?;
+        drop(nac);
+        drop(store);
+        txn.commit().await?;
+        assert!(
+            node.database()
+                .reconcile_document_projector()
+                .await
+                .is_err(),
+            "actorless reconciliation must not restore a missing source"
+        );
+        assert!(
+            !node
+                .nac_manager()
+                .check_permission(&agent, NodePermission::CollectionPatch)
+                .await?
         );
         node.shutdown().await?;
         Ok(())
