@@ -95,15 +95,14 @@ fn config_from_case(backend_id: &str, desired: &Desired) -> Result<BackendAdmiss
 }
 
 async fn acquire_with_signer(
+    node: &Arc<EmbeddedNode>,
     registry: &AdmissionRegistry,
     request_id: &str,
     backend_id: &str,
     signer: &crate::store::identity::ManagedAgentSigner,
     connection: &str,
 ) -> Result<AdmissionPermit, AdmissionError> {
-    let mut request = super::super::tests::request(request_id);
-    request.node_did = signer.node_did().to_owned();
-    request.agent_did = signer.did().to_owned();
+    let request = super::super::tests::seeded_request(node, signer, request_id).await;
     let context = AdmissionCallContext::for_request(&request, signer.did(), backend_id);
     scope_request(
         context,
@@ -114,6 +113,7 @@ async fn acquire_with_signer(
 
 struct Harness {
     registry: AdmissionRegistry,
+    node: Arc<EmbeddedNode>,
     signer: crate::store::identity::ManagedAgentSigner,
     backend_id: String,
     calls: Vec<JoinHandle<Result<AdmissionPermit, AdmissionError>>>,
@@ -127,12 +127,21 @@ impl Harness {
     fn acquire(&mut self, slot: u64, connection: String) {
         self.slots.insert(connection.clone(), slot);
         let registry = self.registry.clone();
+        let node = self.node.clone();
         let backend_id = self.backend_id.clone();
         let signer = self.signer.clone();
         let request_id = format!("{}-{}", self.backend_id, self.started);
         self.started += 1;
         self.calls.push(tokio::spawn(async move {
-            acquire_with_signer(&registry, &request_id, &backend_id, &signer, &connection).await
+            acquire_with_signer(
+                &node,
+                &registry,
+                &request_id,
+                &backend_id,
+                &signer,
+                &connection,
+            )
+            .await
         }));
     }
 
@@ -219,7 +228,8 @@ async fn run_case(
     );
     let backend_id = format!("registry-{}", case.name);
     let mut harness = Harness {
-        registry: AdmissionRegistry::new(node),
+        registry: AdmissionRegistry::new(node.clone()),
+        node,
         signer,
         backend_id: backend_id.clone(),
         calls: Vec::new(),
@@ -292,7 +302,7 @@ async fn generated_inference_registry_cases_drive_real_permits() {
 async fn rollback_reuses_epoch_with_distinct_controller_on_shared_pool() {
     let (db, signer) = super::super::tests::test_node().await;
     let node = db.node.clone();
-    let registry = AdmissionRegistry::new(node);
+    let registry = AdmissionRegistry::new(node.clone());
     let backend_id = "registry-rollback-epoch";
     let config = |generation, capacity| {
         config_from_case(
@@ -311,6 +321,7 @@ async fn rollback_reuses_epoch_with_distinct_controller_on_shared_pool() {
     };
     let acquire = |request_id: &'static str| {
         acquire_with_signer(
+            &node,
             &registry,
             request_id,
             backend_id,
