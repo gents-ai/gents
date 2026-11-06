@@ -162,6 +162,12 @@ def admissionCases : List AdmissionCase :=
   -- A dynamic call's step-0 pin must name its script (`pinMismatch`).
   , ⟨"dynamic_pin_names_its_script_admitted", scriptContext, scriptStepZero,
       effects [spawn "1:a" targetA] (some scriptPin)⟩
+  , ⟨"dynamic_check_spawn_refused",
+      { scriptContext with policy := { scriptContext.policy with mode := .check } },
+      scriptStepZero, effects [spawn "1:a" targetA] (some scriptPin)⟩
+  , ⟨"caller_target_unconfigured_refused",
+      { context with bindings := [], callerTargets := scope [] }, stepZero,
+      effects [spawn "1:a" targetA] (some guestPin)⟩
   , ⟨"dynamic_pin_wrong_script_id_refused", scriptContext, scriptStepZero,
       effects [spawn "1:a" targetA] (some { scriptPin with scriptId := "sha-other" })⟩
   , ⟨"dynamic_pin_wrong_source_digest_refused", scriptContext, scriptStepZero,
