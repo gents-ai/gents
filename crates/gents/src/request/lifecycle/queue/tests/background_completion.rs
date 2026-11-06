@@ -1440,10 +1440,16 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
 #[tokio::test]
 async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() {
     let db = test_db("wake-hop-refusal").await;
-    crate::store::config_client::ConfigAccess::write_local(&db.node, "test.max_request_hop", &format!(
-        r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: 8 }}) {{ _docID }} }}"#,
-        escape_graphql_string(db.node_did()),
-    )).await.unwrap();
+    db.user_access
+        .write(
+            "test.max_request_hop",
+            &format!(
+                r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: 8 }}) {{ _docID }} }}"#,
+                escape_graphql_string(db.node_did()),
+            ),
+        )
+        .await
+        .unwrap();
     let mut fixture = canonical_background_fixture(&db, "wake-hop-refusal-session").await;
     let parent = fixture.parent.clone();
     let native_tool = fixture.prepare_notification("sleep done").await.unwrap();
