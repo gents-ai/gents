@@ -4,9 +4,8 @@ use std::time::Duration;
 
 use gents::defra_node::{HttpConfig, Node as EmbeddedNode};
 use gents::goal::{
-    claim_continuation, load_canonical_goal, session_token_usage, set_goal, set_goal_from_access,
-    update_goal_fields_if_status, CreateGoalForSessionError, CreateGoalForSessionOutcome,
-    GoalStatus,
+    claim_continuation, session_token_usage, set_goal_from_access, update_goal_fields_if_status,
+    CreateGoalForSessionError, CreateGoalForSessionOutcome, GoalStatus,
 };
 use gents::store::graphql::escape_graphql_string;
 use gents::{
@@ -18,7 +17,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::support::mock_subscription::MockUpdateSubscriptionSource;
-use crate::support::{set_request_lifecycle_state, test_db, TestDb};
+use crate::support::{test_db, TestDb};
 
 const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);
@@ -233,179 +232,12 @@ async fn load_goal_as(access: &ConfigAccess, node_did: &str) -> Option<gents::go
         .unwrap()
 }
 
-async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, content: &str) {
-    use gents::defra_node::QueryRequest;
-    use gents::session::canonical_rows::{
-        output_segment_create_variables, transcript_message_create_variables,
-        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-    };
-    use gents_protocol::output::{
-        MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
-        OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
-        StreamDeclaration, StreamPayload, TerminalOutput, TranscriptMessage,
-    };
-    use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
-
-    let escaped = gents::store::graphql::escape_graphql_string(request_doc_id);
-    let response = db.node.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ node_did requester_did session_id execution_generation }} }}"#
-    )).await;
-    let row = response
-        .data
-        .as_ref()
-        .and_then(|data| data["AgentRequest"].as_array())
-        .and_then(|rows| rows.first())
-        .expect("canonical request row");
-    let node_did = row["node_did"].as_str().expect("request agent");
-    let requester_did = row["requester_did"].as_str();
-    let session_id = row["session_id"].as_str().expect("request session");
-    let generation = match row["execution_generation"].as_str() {
-        Some(generation) => generation.to_owned(),
-        None => {
-            let generation = format!("goal-observation-{request_doc_id}");
-            let escaped_generation = gents::store::graphql::escape_graphql_string(&generation);
-            let response = db.node.execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, input: {{ execution_generation: "{escaped_generation}" }}) {{ _docID }} }}"#)).await;
-            assert!(
-                !response.has_errors(),
-                "seed goal observation generation: {:?}",
-                response.errors
-            );
-            generation
-        }
-    };
-    let sequence_response = db.node.execute(&format!(
-        r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}, order: {{ sequence: DESC }}, limit: 1) {{ sequence }} }}"#,
-        gents::store::graphql::escape_graphql_string(session_id), gents::store::graphql::escape_graphql_string(node_did)
-    )).await;
-    let sequence = sequence_response
-        .data
-        .as_ref()
-        .and_then(|data| data["AgentMessage"].as_array())
-        .and_then(|rows| rows.first())
-        .and_then(|row| row["sequence"].as_u64())
-        .unwrap_or(0) as u32
-        + 1;
-    let source = OutputSource::ProviderTurn {
-        scope: CaptureScope {
-            kind: CaptureScopeKind::Inference,
-            seq: u64::from(sequence),
-        },
-        turn_index: 0,
-        attempt: 0,
-    };
-    let segment = OutputSegment {
-        node_did: node_did.into(),
-        requester_did: requester_did.map(Into::into),
-        session_id: session_id.into(),
-        request_doc_id: request_doc_id.into(),
-        source,
-        writer: OutputWriter::RequestExecution {
-            execution_generation: generation.clone(),
-        },
-        ordinal: Some(0),
-        runs: vec![SegmentRun {
-            stream: 0,
-            bytes: content.len().try_into().unwrap(),
-            declaration: Some(StreamDeclaration {
-                block_index: 0,
-                part_index: 0,
-                payload: StreamPayload::Text,
-            }),
-        }],
-        payload: content.into(),
-        close: Some(SourceClose::Closed {
-            outcome: OutputOutcome::Complete,
-            segments: 1,
-            stream_bytes: vec![content.len() as u64],
-        }),
-        created_at: chrono::Utc::now().to_rfc3339(),
-    };
-    let created = db
-        .node
-        .execute_request(
-            QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
-                .with_variables(output_segment_create_variables(&segment).unwrap()),
-        )
-        .await;
-    assert!(
-        !created.has_errors(),
-        "publish goal output: {:?}",
-        created.errors
-    );
-    let close_doc_id =
-        gents::store::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
-            .unwrap()
-            .unwrap()["_docID"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-    let message = TranscriptMessage {
-        native_request_id: None,
-        message_key: gents::session::sequence_message_key(
-            node_did,
-            session_id,
-            requester_did,
-            sequence,
-        ),
-        session_id: session_id.into(),
-        node_did: node_did.into(),
-        requester_did: requester_did.map(Into::into),
-        request_doc_id: Some(request_doc_id.into()),
-        publication: MessagePublication::RequestExecution {
-            execution_generation: generation,
-        },
-        outcome: OutputOutcome::Complete,
-        sequence,
-        role: MessageRole::Assistant,
-        native_id: Some(format!("goal-terminal-{sequence}")),
-        blocks: vec![MessageBlock::Text {
-            text: PresentedPayload {
-                output: PayloadRef {
-                    close_doc_id,
-                    stream: 0,
-                },
-                presentation: PayloadPresentation::Full,
-            },
-        }],
-        created_at: chrono::Utc::now().to_rfc3339(),
-    };
-    let created = db
-        .node
-        .execute_request(
-            QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
-                .with_variables(transcript_message_create_variables(&message).unwrap()),
-        )
-        .await;
-    assert!(
-        !created.has_errors(),
-        "publish goal message: {:?}",
-        created.errors
-    );
-    let message_doc_id =
-        gents::store::graphql::single_mutation_document(&created, "create_AgentMessage")
-            .unwrap()
-            .unwrap()["_docID"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-    let terminal = gents_protocol::graphql::graphql_input_literal(
-        &serde_json::to_value(TerminalOutput::Message { message_doc_id }).unwrap(),
-    )
-    .unwrap();
-    let response = db.node.execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, input: {{ terminal_output: {terminal} }}) {{ _docID }} }}"#)).await;
-    assert!(
-        !response.has_errors(),
-        "select goal terminal output: {:?}",
-        response.errors
-    );
-}
-
-fn snapshot(local_did: &str) -> Arc<ActiveRuntimeSnapshot> {
+fn snapshot(local_did: &str, agent_did: &str) -> Arc<ActiveRuntimeSnapshot> {
     Arc::new(ActiveRuntimeSnapshot {
         generation: 1,
         node: None,
         local_did: local_did.to_string(),
-        default_agent_did: crate::support::AGENT_NAME.to_string(),
+        default_agent_did: agent_did.to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -516,7 +348,7 @@ fn agent_snapshot(
         crate::support::fixtures::test_node_for(db.node_identity.clone(), agent_identity.did());
     let agent =
         crate::support::fixtures::test_agent_with_identity(node.clone(), agent_identity.clone());
-    let mut current = (*snapshot(db.node_identity.did())).clone();
+    let mut current = (*snapshot(db.node_identity.did(), agent_identity.did())).clone();
     current.node = Some(node);
     current.default_agent_did = agent_identity.did().to_owned();
     current
@@ -542,40 +374,6 @@ fn unready_source_for_agent(
         .with_rescan_interval(RESCAN),
         tx,
     )
-}
-
-async fn create_goal_session_for_agent(db: &TestDb, agent_identity: &Arc<dyn NodeIdentity>) {
-    let access = ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(db.node_identity.did()).unwrap(),
-    );
-    let mut session = crate::support::session_document_in_scope(
-        db.node_identity.did(),
-        SESSION,
-        agent_identity.did(),
-        "2026-07-15T00:00:00Z",
-    );
-    session.requester_did = Some(db.node_identity.did().to_owned());
-    let input =
-        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
-            .unwrap();
-    let response = access
-        .write(
-            "test.goal_session",
-            &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
-        )
-        .await
-        .expect("create goal session");
-    let doc = gents::store::graphql::created_doc_id(&response, "AgentSession").unwrap();
-    access
-        .add_actor_relationship(
-            "AgentSession",
-            &doc,
-            "working_agent",
-            &identity::Did::new(agent_identity.did()).unwrap(),
-        )
-        .await
-        .expect("grant goal session to selected Agent");
 }
 
 struct GoalBackgroundHandoff {
@@ -1037,97 +835,42 @@ struct ChildRow {
     workspace_seal_hash: Option<String>,
 }
 
-async fn goal_children(db: &TestDb) -> Vec<ChildRow> {
-    let response = db
-        .node
-        .execute(
-            r#"{
-                AgentRequest(filter: { caused_by_trigger_kind: { _eq: "goal" } }) {
-                    _docID request_id node_did requester_did session_id agent_did caused_by_parent_request_id caused_by_parent_request_doc_id
-                    caused_by_trigger_id caused_by_trigger_kind input lifecycle_state
-                    retry_key request_hop workspace_id workspace_authority
-                    workspace_owner_node_did workspace_seal_hash
-                }
-            }"#,
-        )
-        .await;
-    assert!(
-        !response.has_errors(),
-        "query children: {:?}",
-        response.errors
-    );
-    serde_json::from_value(
-        response
-            .data
-            .and_then(|data| data.get("AgentRequest").cloned())
-            .unwrap_or_default(),
-    )
-    .expect("decode goal children")
-}
-
 #[tokio::test]
 async fn goal_continuation_preserves_nested_workspace_lineage() {
     let db = test_db("goal-nested-workspace-lineage").await;
-    let agent_identity = crate::support::managed_agent(&db).await;
-    create_goal_session_for_agent(&db, &agent_identity).await;
+    let (user, agent_identity) = goal_creation_actors(&db).await;
+    let access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent_identity.did().parse().unwrap(),
+        agent_identity.as_ref(),
+    )
+    .unwrap();
     let did = db.node_identity.did();
-    let admission = gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did);
-    let mut parent = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
+    let (parent_doc_id, _source_doc) = seed_lineage_parent(
+        &db,
+        &user,
+        &agent_identity,
+        &access,
         "parent-nested-workspace",
-        did,
-        did,
-        agent_identity.did(),
-        SESSION,
-        "nested durable work",
-        "interactive",
-        "2026-07-15T00:00:00Z",
-        admission,
-    );
-    parent.request_hop = 2;
-    parent.caused_by_parent_request_id = Some("grandparent-request".to_string());
-    parent.caused_by_parent_request_doc_id = Some("grandparent-request-doc".to_string());
-    parent.caused_by_parent_tool_call_id = Some("grandparent-tool-call".to_string());
-    parent.caused_by_parent_tool_call_doc_id = Some("grandparent-tool-call-doc".to_string());
-    parent.workspace_id = Some("workspace-goal".to_string());
-    parent.workspace_authority = Some("readOnly".to_string());
-    parent.workspace_owner_node_did = Some(did.to_string());
-    parent.workspace_seal_hash = Some("seal-hash".to_string());
-    gents::sign_agent_request_create(db.node_identity.as_ref(), &mut parent)
-        .await
-        .expect("sign nested parent");
-    let response = db
-        .node
-        .execute(&parent.graphql_mutation().expect("parent mutation"))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "create nested parent: {:?}",
-        response.errors
-    );
-    let lookup = db
-        .node
-        .execute(
-            r#"{ AgentRequest(filter: { request_id: { _eq: "parent-nested-workspace" } }) { _docID } }"#,
-        )
-        .await;
-    assert!(
-        !lookup.has_errors(),
-        "lookup nested parent: {:?}",
-        lookup.errors
-    );
-    let parent_doc_id = lookup.data.as_ref().unwrap()["AgentRequest"][0]["_docID"]
-        .as_str()
-        .expect("parent doc id")
-        .to_string();
-    set_request_lifecycle_state(db.node.as_ref(), &parent_doc_id, "completed").await;
-    publish_canonical_terminal_activity(&db, &parent_doc_id, "durable progress").await;
-    set_goal(
-        &db.node,
+        "completed",
+        "workspace-goal",
+        "seal-hash",
+    )
+    .await;
+    publish_owned_terminal_activity(
+        &access,
+        agent_identity.as_ref(),
+        &parent_doc_id,
+        "durable progress",
+    )
+    .await;
+    set_goal_from_access(
+        &access,
         did,
         SESSION,
         Some("Preserve nested workspace scope"),
         Some(GoalStatus::Active),
+        None,
         None,
     )
     .await
@@ -1138,9 +881,12 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
         .await
         .expect("lineage continuation timed out")
         .expect("lineage continuation intent");
-    let children = goal_children(&db).await;
+    let children = goal_children_from_access(&access).await;
     assert_eq!(children.len(), 1);
     let child = &children[0];
+    let visible = goal_children_from_access(&db.client_access(&user)).await;
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].doc_id, child.doc_id);
     assert_eq!(child.request_hop, Some(2));
     assert_eq!(child.workspace_id.as_deref(), Some("workspace-goal"));
     assert_eq!(child.workspace_authority.as_deref(), Some("readOnly"));
@@ -1151,9 +897,8 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
         child.request_id.clone(),
         child.retry_key.clone(),
     );
-    let continuation_sequence = load_canonical_goal(db.node.as_ref(), did, SESSION)
+    let continuation_sequence = load_goal_as(&access, did)
         .await
-        .unwrap()
         .unwrap()
         .continuation_sequence;
     drop(source);
@@ -1173,7 +918,7 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
                 .is_err(),
             "repeated maintenance and source reconciliation must not emit another continuation"
         );
-        let children = goal_children(&db).await;
+        let children = goal_children_from_access(&access).await;
         assert_eq!(children.len(), 1);
         let child = &children[0];
         assert_eq!(
@@ -1190,9 +935,8 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
         assert_eq!(child.workspace_owner_node_did.as_deref(), Some(did));
         assert_eq!(child.workspace_seal_hash.as_deref(), Some("seal-hash"));
         assert_eq!(
-            load_canonical_goal(db.node.as_ref(), did, SESSION)
+            load_goal_as(&access, did)
                 .await
-                .unwrap()
                 .unwrap()
                 .continuation_sequence,
             continuation_sequence
@@ -3872,108 +3616,56 @@ async fn stale_usage_refresh_preserves_completed_goal_time_accounting() {
     );
 }
 
-async fn seed_operator_resume_parent(db: &TestDb, request_id: &str) -> String {
-    let did = db.node_identity.did();
-    let mut parent = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        request_id,
-        did,
-        did,
-        crate::support::AGENT_NAME,
-        SESSION,
-        "Continue the original graph work",
-        "interactive",
-        "2026-07-15T00:00:00Z",
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did),
-    );
-    parent.caused_by_trigger_id = Some("original-graph-trigger".into());
-    parent.caused_by_trigger_kind = Some("event".into());
-    parent.caused_by_correlation = Some("original-graph-correlation".into());
-    parent.caused_by_source_doc_id = Some("original-event-document".into());
-    parent.caused_by_trigger_context = Some(r#"{"source_fields":{"artifact":"original"}}"#.into());
-    parent.request_hop = 2;
-    parent.caused_by_parent_request_id = Some("upstream-request".into());
-    parent.caused_by_parent_request_doc_id = Some("upstream-document".into());
-    parent.caused_by_parent_tool_call_id = Some("upstream-tool-call".into());
-    parent.caused_by_parent_tool_call_doc_id = Some("upstream-tool-document".into());
-    parent.workspace_id = Some("resume-workspace".into());
-    parent.workspace_authority = Some("readOnly".into());
-    parent.workspace_owner_node_did = Some(did.to_string());
-    parent.workspace_seal_hash = Some("resume-seal".into());
-    gents::sign_agent_request_create(db.node_identity.as_ref(), &mut parent)
-        .await
-        .unwrap();
-    let response = db.node.execute(&parent.graphql_mutation().unwrap()).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-        gents::store::graphql::escape_graphql_string(request_id),
-    );
-    let response = db.node.execute(&query).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let doc_id = response.data.unwrap()["AgentRequest"][0]["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    set_request_lifecycle_state(db.node.as_ref(), &doc_id, "interrupted").await;
-    doc_id
-}
-
-async fn operator_resume_child_row(db: &TestDb, doc_id: &str) -> serde_json::Value {
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
-        _docID request_id node_did requester_did session_id agent_did lifecycle_state
-        content created_at execution_origin retry_key input admission_kind admission_signer_did
-        admission_signature runtime_issuer_did runtime_source_request_id runtime_source_kind
-        caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind
-        caused_by_correlation caused_by_source_doc_id caused_by_trigger_context
-        caused_by_parent_request_id caused_by_parent_request_doc_id
-        caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id
-        request_hop workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash
-    }} }}"#,
-        gents::store::graphql::escape_graphql_string(doc_id)
-    );
-    let response = db.node.execute(&query).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    response.data.unwrap()["AgentRequest"][0].clone()
-}
-
 #[tokio::test]
 async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     let db = test_db("operator-resume-lineage").await;
     let did = db.node_identity.did();
-    let parent_doc = seed_operator_resume_parent(&db, "resume-parent").await;
-    let stale_active = set_goal(
-        &db.node,
+    let (user, agent) = goal_creation_actors(&db).await;
+    let client = db.client_access(&user);
+    let access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let (parent_doc, source_doc) = seed_lineage_parent(
+        &db,
+        &user,
+        &agent,
+        &access,
+        "resume-parent",
+        "interrupted",
+        "resume-workspace",
+        "resume-seal",
+    )
+    .await;
+    let stale_active = set_goal_from_access(
+        &client,
         did,
         SESSION,
         Some("Complete graph work"),
         Some(GoalStatus::Active),
         Some(Some(1000)),
+        None,
     )
     .await
     .unwrap();
-    set_goal(&db.node, did, SESSION, None, Some(GoalStatus::Paused), None)
-        .await
-        .unwrap();
-    let access = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    );
-    let receipt = gents::goal::resume_goal_request(
-        &access,
-        db.node_identity.as_ref(),
+    set_goal_from_access(
+        &client,
         did,
         SESSION,
-        "resume-parent",
+        None,
+        Some(GoalStatus::Paused),
+        None,
+        None,
     )
     .await
     .unwrap();
-    assert!(receipt.created);
-    let goal = load_canonical_goal(db.node.as_ref(), did, SESSION)
+    let receipt = gents::goal::resume_goal_request(&client, &user, did, SESSION, "resume-parent")
         .await
-        .unwrap()
         .unwrap();
+    assert!(receipt.created);
+    let goal = load_goal_as(&client, did).await.unwrap();
     assert_eq!(receipt.goal_id, goal.goal_id);
     assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
     assert_eq!(goal.continuation_sequence(), 1);
@@ -3982,22 +3674,19 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
         Some("resume-parent")
     );
     assert_eq!(goal.token_budget, Some(1000));
-    assert_eq!(goal_children(&db).await.len(), 1);
-    let child = operator_resume_child_row(&db, &receipt.doc_id).await;
+    assert_eq!(goal_children_from_access(&client).await.len(), 1);
+    let child = operator_resume_child_row_from_access(&client, &receipt.doc_id).await;
     assert_eq!(child["request_id"], receipt.request_id);
-    for field in [
-        "node_did",
-        "requester_did",
-        "admission_signer_did",
-        "runtime_issuer_did",
-    ] {
-        assert_eq!(child[field], did, "{field}");
-    }
+    assert_eq!(child["node_did"], did);
+    assert_eq!(child["requester_did"], user.did());
+    assert_eq!(child["admission_signer_did"], user.did());
+    assert_eq!(child["admission_kind"], "client");
+    assert!(child["runtime_issuer_did"].is_null());
     assert_eq!(child["session_id"], SESSION);
-    assert_eq!(child["agent_did"], crate::support::AGENT_NAME);
+    assert_eq!(child["agent_did"], agent.did());
     assert_eq!(child["lifecycle_state"], "pending");
     assert_eq!(child["execution_origin"], "scheduled");
-    assert_eq!(child["runtime_source_request_id"], "resume-parent");
+    assert!(child["runtime_source_request_id"].is_null());
     assert!(child["admission_signature"]
         .as_str()
         .is_some_and(|v| !v.is_empty()));
@@ -4005,7 +3694,7 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     assert_eq!(child["caused_by_trigger_kind"], "goal");
     assert!(child["caused_by_trigger_doc_id"].is_null());
     assert_eq!(child["caused_by_correlation"], "original-graph-correlation");
-    assert_eq!(child["caused_by_source_doc_id"], "original-event-document");
+    assert_eq!(child["caused_by_source_doc_id"], source_doc);
     assert_eq!(
         child["caused_by_trigger_context"],
         r#"{"source_fields":{"artifact":"original"}}"#
@@ -4022,7 +3711,7 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     assert!(
         !update_goal_fields_if_status(
             &db.node,
-            &identity::Did::new(db.node_identity.did()).unwrap(),
+            &agent.did().parse().unwrap(),
             &stale_active,
             GoalStatus::Active,
             r#"status: "paused""#
@@ -4032,11 +3721,7 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
         "pre-resume Active snapshot must lose ABA"
     );
     assert_eq!(
-        load_canonical_goal(db.node.as_ref(), did, SESSION)
-            .await
-            .unwrap()
-            .unwrap()
-            .parsed_status(),
+        load_goal_as(&client, did).await.unwrap().parsed_status(),
         Some(GoalStatus::Active)
     );
 }
@@ -5709,4 +5394,149 @@ async fn fail_request_with_usage(
             Ok::<_, anyhow::Error>(())
         })
     }).await.unwrap();
+}
+
+async fn seed_lineage_tool(
+    access: &ConfigAccess,
+    agent: &Arc<dyn NodeIdentity>,
+    user: &gents::KeyIdentity,
+    node_did: &str,
+    request_id: &str,
+    request_doc: &str,
+    tool_id: &str,
+) -> String {
+    let response = access
+        .execute(&format!(
+            r#"{{AgentRequest(docID: "{}") {{session_doc_id}}}}"#,
+            escape_graphql_string(request_doc)
+        ))
+        .await
+        .unwrap();
+    let session_doc = response["data"]["AgentRequest"][0]["session_doc_id"]
+        .as_str()
+        .unwrap();
+    access.transact_write("test.goal_lineage_tool", |txn| {
+        Box::pin(async move {
+            let input = serde_json::json!({"tool_call_key":tool_id, "tool_call_id":tool_id,
+                "node_did":node_did,"requester_did":user.did(),"session_id":SESSION,"session_doc_id":session_doc,
+                "agent_did":agent.did(),"creator_did":agent.did(),"parent_linked":true,
+                "request_id":request_id,"request_doc_id":request_doc,"tool_name":"agent_message",
+                "status":"completed","lifecycle_state":"completed"});
+            let result = txn.execute_with_variables("mutation($input: AgentToolCallMutationInputArg!) {create_AgentToolCall(input:$input) {_docID}}", &serde_json::json!({"input":input})).await?;
+            let doc = gents::store::graphql::created_doc_id(&result, "AgentToolCall")?;
+            txn.add_resource_relationship("AgentToolCall", &doc, "parent", "sessions", session_doc).await?;
+            txn.add_actor_relationship("AgentToolCall", &doc, "working_agent", &agent.did().parse()?).await?;
+            Ok::<_, anyhow::Error>(doc)
+        })
+    }).await.unwrap()
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "fixture binds workspace lineage to physical requests and tool calls"
+)]
+async fn seed_lineage_parent(
+    db: &TestDb,
+    user: &gents::KeyIdentity,
+    agent: &Arc<dyn NodeIdentity>,
+    access: &ConfigAccess,
+    request_id: &str,
+    terminal: &str,
+    workspace_id: &str,
+    seal_hash: &str,
+) -> (String, String) {
+    use gents::request::lifecycle::{
+        build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
+        RequestSigner, RequestSpec,
+    };
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    let client = db.client_access(user);
+    let root_id = "upstream-root";
+    let root = goal_fixture_request_with_state_at(
+        db,
+        user,
+        agent,
+        root_id,
+        "completed",
+        "2026-07-14T23:59:58Z",
+    )
+    .await;
+    let mut predecessor_id = root_id.to_owned();
+    let mut predecessor_doc = root.clone();
+    for (id, created_at, hop, tool_id) in [
+        (
+            "upstream-middle",
+            "2026-07-14T23:59:59Z",
+            1,
+            "upstream-root-call",
+        ),
+        (
+            request_id,
+            "2026-07-15T00:00:00Z",
+            2,
+            "upstream-middle-call",
+        ),
+    ] {
+        let tool_doc = seed_lineage_tool(
+            access,
+            agent,
+            user,
+            db.node_identity.did(),
+            &predecessor_id,
+            &predecessor_doc,
+            tool_id,
+        )
+        .await;
+        let spec = RequestSpec::new(
+            RequestPurpose::Normal,
+            RequestIdentity {
+                requester_did: Some(user.did().into()),
+                request_id: id.into(),
+                node_did: db.node_identity.did().into(),
+                agent_did: agent.did().into(),
+                session_id: SESSION.into(),
+                content: "Continue the original graph work".into(),
+                execution_origin: ExecutionOrigin::Interactive,
+                created_at: created_at.into(),
+            },
+            AgentRequestAdmissionRecord::client(user.did()),
+        );
+        let mut request = build_signed_client_request(&client, spec, RequestSigner::Identity(user))
+            .await
+            .unwrap();
+        request.request_hop = hop;
+        request.caused_by_parent_request_id = Some(predecessor_id.clone());
+        request.caused_by_parent_request_doc_id = Some(predecessor_doc.clone());
+        request.caused_by_parent_tool_call_id = Some(tool_id.to_owned());
+        request.caused_by_parent_tool_call_doc_id = Some(tool_doc);
+        if hop == 2 {
+            request.caused_by_trigger_id = Some("original-graph-trigger".into());
+            request.caused_by_trigger_kind = Some("event".into());
+            request.caused_by_correlation = Some("original-graph-correlation".into());
+            request.caused_by_source_doc_id = Some(root.clone());
+            request.caused_by_trigger_context =
+                Some(r#"{"source_fields":{"artifact":"original"}}"#.into());
+            request.workspace_id = Some(workspace_id.into());
+            request.workspace_authority = Some("readOnly".into());
+            request.workspace_owner_node_did = Some(db.node_identity.did().into());
+            request.workspace_seal_hash = Some(seal_hash.into());
+        }
+        gents::sign_agent_request_create(user, &mut request)
+            .await
+            .unwrap();
+        submit_client_request(&client, &request).await.unwrap();
+        let id_escaped = escape_graphql_string(id);
+        let response = client.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{id_escaped}"}}}}, limit: 2) {{_docID}}}}"#)).await.unwrap();
+        let rows = response["data"]["AgentRequest"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        predecessor_doc = rows[0]["_docID"].as_str().unwrap().to_owned();
+        set_request_state_as(
+            access,
+            &predecessor_doc,
+            if hop == 2 { terminal } else { "completed" },
+        )
+        .await;
+        predecessor_id = id.to_owned();
+    }
+    (predecessor_doc, root)
 }
