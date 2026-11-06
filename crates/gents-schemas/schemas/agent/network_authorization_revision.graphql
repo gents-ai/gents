@@ -1,7 +1,7 @@
 # Append-only admin authority for enrollment membership; the unique maximal
 # sequence is authoritative and equal-sequence conflicts fail closed.
 # Revocation is a tombstone; history is never deleted.
-type NetworkAuthorizationRevision @policy(id: "c5c32a000066af90f6ad561eb349b22652db223c9f69aef9920186793b7a5360", resource: "enrollment_records") @branchable {
+type NetworkAuthorizationRevision @policy(id: "b5fe07b04e54d17ee185045f776d6a8c203f272e2ff9f35691c67803a58e6aac", resource: "enrollment_records") @branchable {
     protocol_version: Int @immutable
     revision_id: String @index(unique: true) @immutable
     request_id: String @index @immutable

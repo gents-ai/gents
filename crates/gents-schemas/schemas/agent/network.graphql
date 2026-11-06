@@ -1,7 +1,7 @@
 # Signed root of one authenticated enrollment authority, owned by `admin_did`;
 # `admin_sig` is the admin's signature over the defining fields.
 # `@branchable` is required for exact enrollment-document delivery.
-type Network @policy(id: "c5c32a000066af90f6ad561eb349b22652db223c9f69aef9920186793b7a5360", resource: "enrollment_records") @branchable {
+type Network @policy(id: "b5fe07b04e54d17ee185045f776d6a8c203f272e2ff9f35691c67803a58e6aac", resource: "enrollment_records") @branchable {
     network_id: String @index(unique: true)
     admin_did: String @index
     display_name: String

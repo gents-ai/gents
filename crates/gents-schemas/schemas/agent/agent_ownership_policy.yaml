@@ -105,10 +105,10 @@ resources:
       - name: selected_by
         types: [agents->executor, configuration->selected_by]
       - name: selection_manager
-        types: [actor]
+        types: [actor, nodes->owner, nodes->administrator, agents->config_writer]
         manages: [selected_by]
       - name: writer
-        types: [actor]
+        types: [actor, agents->config_writer]
     permissions:
       - name: read
         expr: reader + writer + selected_by + parent->read
@@ -122,6 +122,9 @@ resources:
         types: [nodes]
       - name: reader
         types: [actor]
+      - name: reader_manager
+        types: [nodes->owner, nodes->administrator]
+        manages: [reader]
     permissions:
       - name: read
         expr: reader + parent->read
@@ -153,7 +156,7 @@ resources:
       - name: session_writer
         types: [actor]
       - name: administrator
-        types: [actor]
+        types: [actor, nodes->owner, nodes->administrator]
         manages: [parent, reader, session_writer, administrator, executor, config_writer]
       - name: executor
         types: [actor]

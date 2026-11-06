@@ -1,4 +1,4 @@
-type Agent @policy(id: "c5c32a000066af90f6ad561eb349b22652db223c9f69aef9920186793b7a5360", resource: "agents") {
+type Agent @policy(id: "b5fe07b04e54d17ee185045f776d6a8c203f272e2ff9f35691c67803a58e6aac", resource: "agents") {
     agent_did: String @index(unique: true) @immutable
     creation_nonce: String @immutable
     node_did: String @index @immutable

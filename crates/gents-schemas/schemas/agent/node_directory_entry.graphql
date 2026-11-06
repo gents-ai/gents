@@ -4,7 +4,7 @@
 # rebuildable from Node x Agent x NodeReadiness; a row grants nothing —
 # discovery is not a privilege boundary. `@branchable` is required: the
 # machine template replicates this collection to attached clients.
-type NodeDirectoryEntry @policy(id: "c5c32a000066af90f6ad561eb349b22652db223c9f69aef9920186793b7a5360", resource: "scoped_discovery") @branchable {
+type NodeDirectoryEntry @policy(id: "b5fe07b04e54d17ee185045f776d6a8c203f272e2ff9f35691c67803a58e6aac", resource: "scoped_discovery") @branchable {
     # Deterministic hash of (source_did, node_did); DefraDB unique indexes are
     # per-field, so this is the persisted source-partitioned identity.
     directory_key: String @index(unique: true) @immutable

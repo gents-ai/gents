@@ -1,6 +1,6 @@
 # A pack-carried eval definition (#1515). Holds acceptance checks and held-out
 # case bodies, so it is local-audit: never bulk-synced, never on a P2P list.
-type EvalDefinition @policy(id: "c5c32a000066af90f6ad561eb349b22652db223c9f69aef9920186793b7a5360", resource: "configuration") @index(fields: ["node_did", "definition_id"], unique: true) {
+type EvalDefinition @policy(id: "b5fe07b04e54d17ee185045f776d6a8c203f272e2ff9f35691c67803a58e6aac", resource: "configuration") @index(fields: ["node_did", "definition_id"], unique: true) {
     definition_id: String @immutable
     node_did: String @index @immutable
     comparability_version: Int
