@@ -1090,7 +1090,13 @@ mod tests {
                     unknown.pending.create.admission.signature,
                     pending.create.admission.signature
                 );
-                assert!(gents::store::graphql::is_storage_full(error.as_ref()));
+                assert!(gents::store::graphql::is_storage_full(
+                    unknown
+                        .cause
+                        .as_ref()
+                        .expect("storage failure cause")
+                        .as_ref()
+                ));
                 assert_eq!(
                     server.received_requests().await.unwrap().len(),
                     1,
