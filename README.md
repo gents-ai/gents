@@ -39,7 +39,7 @@ From a terminal:
 
 ```sh
 gents config pack install gents/data_tables --inference-slot data_analyst=<profile>
-gents chat --agent-id data-analyst "Which region sold the most in reports/sales.csv?"
+gents -p "Which region sold the most in reports/sales.csv?" --agent data-analyst
 ```
 
 ## Use it as a model tool
