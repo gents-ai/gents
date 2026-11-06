@@ -211,6 +211,7 @@ async fn fixture(name: &str) -> Fixture {
         ExecutionOrigin::Interactive,
         String::new(),
     );
+    owner.bind_managed_agent(parent_identity.as_ref()).unwrap();
     owner.set_client_claim_admission(admission);
     assert!(matches!(
         owner.claim_with_identity().await.unwrap(),
@@ -497,4 +498,256 @@ async fn cancelled_after_child_commit_recovers_relationships_in_the_actor_watche
         ClaimOutcome::Claimed
     ));
     fixture.node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn existing_child_message_uses_calling_agent_native_claim() {
+    let modeled = crate::lean_vocab_test::lean_contract_snapshot();
+    let allowed = modeled
+        .cross_actor_authorization_cases
+        .iter()
+        .find(|case| case.name == "committed_claim")
+        .unwrap();
+    let denied = modeled
+        .cross_actor_authorization_cases
+        .iter()
+        .find(|case| case.name == "node_denied_at_check")
+        .unwrap();
+    assert_eq!(
+        allowed.decision,
+        crate::lean_vocab_test::LeanCrossActorDecision::Claimed
+    );
+    assert_eq!(
+        denied.decision,
+        crate::lean_vocab_test::LeanCrossActorDecision::Denied
+    );
+    for (active, deny) in [(false, false), (false, true), (true, true)] {
+        let mut fixture = fixture(if active {
+            "existing-active"
+        } else if deny {
+            "existing-idle-denied"
+        } else {
+            "existing-idle-allowed"
+        })
+        .await;
+        let first = crate::session::message::commit(
+            &fixture.node,
+            &fixture.cause,
+            &mut fixture.tool,
+            fixture.plan.take().unwrap(),
+            false,
+        )
+        .await
+        .unwrap();
+        let child_access = ConfigAccess::local_managed_agent(
+            fixture.node.clone(),
+            fixture.child.did().parse().unwrap(),
+            fixture.child.as_ref(),
+        )
+        .unwrap();
+        let query = format!(
+            "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
+            crate::store::graphql::escape_graphql_string(&first.request_doc_id),
+            crate::SIGNED_REQUEST_FIELDS
+        );
+        let response = child_access.execute(&query).await.unwrap();
+        let row: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+        let opening = AgentRequest::try_from(row).unwrap();
+        let (_owner, authority) =
+            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+        let verifier = AgentRequestAdmissionVerifier::new(
+            fixture.node.clone(),
+            fixture.runtime.clone(),
+            authority,
+        );
+        let (opening, admission) = verifier
+            .verify_fresh_for_claim_with_identity(&opening, fixture.child.as_ref())
+            .await
+            .unwrap();
+        assert!(admission.is_some());
+        let mut child = RequestLifecycle::new_with_execution_binding(
+            fixture.node.clone(),
+            fixture.child.did(),
+            fixture.runtime.did(),
+            opening,
+            60,
+            ExecutionOrigin::Interactive,
+            String::new(),
+        );
+        child.bind_managed_agent(fixture.child.as_ref()).unwrap();
+        child.set_client_claim_admission(admission);
+        child.set_steering_admission(verifier.clone(), fixture.child.clone());
+        assert!(matches!(
+            child.claim_with_identity().await.unwrap(),
+            ClaimOutcome::Claimed
+        ));
+        let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+            fixture.node.clone(),
+            fixture.child.as_ref(),
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
+        child.begin_owned_execution(&writer).await.unwrap();
+        if !active {
+            child
+                .terminalize_owned(
+                    crate::request::lifecycle::RequestTerminalOutcome::Failed,
+                    gents_protocol::output::TerminalOutput::NoMessage,
+                    Some("fixture completed its first turn"),
+                )
+                .await
+                .unwrap();
+        }
+        let mut tool =
+            crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+                fixture.node.clone(),
+                &mut fixture._owner,
+                fixture.runtime.did(),
+                1,
+                crate::tools::native::AGENT_MESSAGE_TOOL_NAME,
+                "followup-tool",
+                json!({"session_id":first.session_id,"message":"follow up"}),
+                AwaitMode::Background,
+                false,
+            )
+            .await
+            .unwrap();
+        let mut cause = fixture.cause.clone();
+        cause.tool_call_id = tool.tool_call_id().to_owned();
+        cause.tool_call_doc_id = tool.doc_id().unwrap().to_owned();
+        let target = SessionMessageTarget {
+            node_did: fixture.runtime.did().into(),
+            agent_did: fixture.child.did().into(),
+            session_id: first.session_id.clone(),
+        };
+        let signer = fixture.parent.managed_agent_signer().unwrap();
+        let plan = crate::session::message::plan_with_delivery(
+            &fixture.node,
+            &cause,
+            &target,
+            RenderedBody {
+                content: "follow up".into(),
+                goal: None,
+            },
+            None,
+            if active {
+                AgentMessageDelivery::Steer
+            } else {
+                AgentMessageDelivery::Queue
+            },
+            &signer,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let receipt = crate::session::message::commit(&fixture.node, &cause, &mut tool, plan, true)
+            .await
+            .unwrap();
+        let query = format!(
+            "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
+            crate::store::graphql::escape_graphql_string(&receipt.request_doc_id),
+            crate::SIGNED_REQUEST_FIELDS
+        );
+        let row = child_access.execute(&query).await.unwrap();
+        let row: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(row["data"]["AgentRequest"][0].clone()).unwrap();
+        assert_eq!(row.admission_kind.as_deref(), Some("client"));
+        assert_eq!(
+            row.admission_signer_did.as_deref(),
+            Some(fixture.parent.did())
+        );
+        assert_eq!(row.requester_did.as_deref(), Some(fixture.parent.did()));
+        assert_eq!(row.agent_did.as_deref(), Some(fixture.child.did()));
+        assert!(row
+            .session_doc_id
+            .as_deref()
+            .is_some_and(|value| !value.is_empty()));
+        assert!(row
+            .agent_doc_id
+            .as_deref()
+            .is_some_and(|value| !value.is_empty()));
+        crate::request::admission::verify_request_receipt_signature(&row).unwrap();
+        let request = AgentRequest::try_from(row).unwrap();
+        let (request, admission) = verifier
+            .verify_fresh_for_claim_with_identity(&request, fixture.child.as_ref())
+            .await
+            .unwrap();
+        assert!(admission.is_some());
+        let admin =
+            ConfigAccess::local_as(fixture.node.clone(), fixture.runtime.did().parse().unwrap());
+        if deny {
+            admin
+                .revoke_node_permission(
+                    &fixture.parent.did().parse().unwrap(),
+                    NodePermission::DocumentUpdate,
+                )
+                .await
+                .unwrap();
+        }
+        if active {
+            let blocked = crate::request::lifecycle::queue::steering_snapshot(
+                &fixture.node,
+                child.request(),
+                &verifier,
+                Some(fixture.child.as_ref()),
+            )
+            .await
+            .unwrap();
+            assert!(blocked.inputs.is_empty());
+            admin
+                .grant_node_permission(
+                    &fixture.parent.did().parse().unwrap(),
+                    NodePermission::DocumentUpdate,
+                )
+                .await
+                .unwrap();
+            let snapshot = crate::request::lifecycle::queue::steering_snapshot(
+                &fixture.node,
+                child.request(),
+                &verifier,
+                Some(fixture.child.as_ref()),
+            )
+            .await
+            .unwrap();
+            assert_eq!(snapshot.inputs.len(), 1);
+            writer
+                .publish_authored_message(
+                    &child,
+                    &snapshot.inputs[0].key,
+                    &snapshot.inputs[0].message,
+                )
+                .await
+                .unwrap();
+            let observed = child_access.execute(&query).await.unwrap();
+            assert_eq!(
+                observed["data"]["AgentRequest"][0]["lifecycle_state"],
+                "superseded"
+            );
+        } else {
+            let mut later = RequestLifecycle::new_with_execution_binding(
+                fixture.node.clone(),
+                fixture.child.did(),
+                fixture.runtime.did(),
+                request,
+                60,
+                ExecutionOrigin::Interactive,
+                String::new(),
+            );
+            later.bind_managed_agent(fixture.child.as_ref()).unwrap();
+            later.set_client_claim_admission(admission);
+            let outcome = later.claim_with_identity().await;
+            if deny {
+                assert!(outcome.is_err(), "revoked immediate Agent cannot claim");
+            } else {
+                assert!(matches!(outcome.unwrap(), ClaimOutcome::Claimed));
+            }
+            let observed = child_access.execute(&query).await.unwrap();
+            assert_eq!(
+                observed["data"]["AgentRequest"][0]["lifecycle_state"],
+                if deny { "failed" } else { "claimed" }
+            );
+        }
+        fixture.node.shutdown().await.unwrap();
+    }
 }
