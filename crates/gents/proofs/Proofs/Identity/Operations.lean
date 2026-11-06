@@ -244,7 +244,8 @@ def replicaGrant (state : State) (resource id runtime node user : String)
 
 /-- The pending marker is consumed with the Node parent and reader manager in
 the same native transaction. Once consumed, reconciliation cannot restore a
-relation that was later revoked. -/
+relation that was later revoked. The attachment names the physical Node document;
+a replacement Node requires an explicit administrator reattachment. -/
 def replicaLinkPending (state : State) (resource id runtime node user : String)
     (authorized nodeExists committed : Bool) : State :=
   let marker : Relation := ⟨resource, id, "local_publication", .actor runtime⟩
