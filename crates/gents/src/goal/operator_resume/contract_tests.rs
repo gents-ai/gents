@@ -149,11 +149,16 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                                 f.identity.clone(),
                                 authority,
                             );
-                        verifier
-                            .verify_fresh(&request, &f.parent.agent_did)
+                        let (request, admission) = verifier
+                            .verify_fresh_for_claim_with_identity(&request, f.agent.as_ref())
                             .await
                             .expect("published continuation must pass actual execution admission");
-                        let allowed = access
+                        assert!(
+                            admission.is_some(),
+                            "client continuation must carry claim admission"
+                        );
+                        let allowed = f
+                            .agent_access()
                             .transact_write("test.goal.resume_claim_fence", |txn| {
                                 let request = &request;
                                 Box::pin(async move {

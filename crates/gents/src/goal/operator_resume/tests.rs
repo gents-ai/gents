@@ -455,6 +455,25 @@ async fn client_resume_recovers_pending_relationships_without_replaying_revocati
         })
         .await
         .unwrap();
+    user.transact_write("test.goal.retained_pending_resume", |txn| {
+        let staged = &staged;
+        let agent = &fixture.agent;
+        let agent_doc_id = &fixture.agent_doc_id;
+        let session_doc_id = &fixture.session_doc_id;
+        Box::pin(async move {
+            let doc = escape_graphql_string(&staged.doc_id);
+            let marked = txn.execute_client_signed_update(
+                &format!(r#"mutation($input: AgentRequestMutationInputArg!) {{ update_AgentRequest(filter: {{_docID: {{_eq: "{doc}"}}}}, input: $input) {{_docID}} }}"#),
+                &json!({"input": {"relationships_pending": true}}),
+                gents_protocol::schemas::AGENT_REQUEST,
+            ).await?;
+            anyhow::ensure!(crate::store::graphql::response_has_documents(&marked["data"]["update_AgentRequest"]), "historical request marker was not staged");
+            txn.delete_actor_relationship("AgentRequest", &staged.doc_id, "working_agent", &::identity::Did::new(agent.did())?).await?;
+            txn.delete_resource_relationship("AgentRequest", &staged.doc_id, "parent", "agents", agent_doc_id).await?;
+            txn.delete_resource_relationship("AgentRequest", &staged.doc_id, "session", "sessions", session_doc_id).await?;
+            Ok::<_, anyhow::Error>(())
+        })
+    }).await.unwrap();
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID relationships_pending admission_kind admission_signer_did }} }}"#,
         escape_graphql_string(&staged.doc_id)
