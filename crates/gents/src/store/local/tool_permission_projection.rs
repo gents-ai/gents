@@ -66,7 +66,17 @@ impl ToolPermissionProjection {
         let agents = documents(view, "Agent").await?;
         let contexts = documents(view, "AgentContext").await?;
         let tools = documents(view, "Tools").await?;
+        let datastore_surfaces = documents(view, "DatastoreToolSurface").await?;
         let node = self.node.as_str();
+        let mut surfaces = Vec::new();
+        for doc in datastore_surfaces {
+            let (_, value) = row(doc)?;
+            if field(&value, "node_did") == Some(node) {
+                if let Ok(surface) = serde_json::from_value(value) {
+                    surfaces.push(surface);
+                }
+            }
+        }
         let mut context_by_id = BTreeMap::new();
         for doc in contexts {
             let (id, value) = row(doc)?;
@@ -118,9 +128,11 @@ impl ToolPermissionProjection {
             else {
                 continue;
             };
-            let Ok(operations) =
-                crate::tools::surface::configured_node_operation_sources(&tools, &self.ceiling)
-            else {
+            let Ok(operations) = crate::tools::surface::configured_node_operation_sources(
+                &tools,
+                &surfaces,
+                &self.ceiling,
+            ) else {
                 continue;
             };
             for operation in operations {
@@ -253,6 +265,99 @@ fn external(error: impl std::fmt::Display) -> Error {
 mod tests {
     use super::*;
     use crate::store::graphql::escape_graphql_string;
+
+    #[tokio::test]
+    async fn selected_datastore_query_grants_collection_access_until_removed() -> anyhow::Result<()>
+    {
+        let node_did = "did:key:node";
+        let agent_did = "did:key:agent";
+        let projector = Arc::new(
+            super::super::runtime_document_projection::RuntimeDocumentProjector::new(
+                node_did,
+                crate::tools::surface::ToolCeiling::meta_only(),
+            )?,
+        );
+        let node = Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(node_did)
+                .with_node_acp_enabled()
+                .with_document_projector(projector)
+                .build()
+                .await?,
+        );
+        crate::ensure_runtime_schemas(&node).await?;
+        let node_value = escape_graphql_string(node_did);
+        let agent_value = escape_graphql_string(agent_did);
+        let entries = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+            "entries": [{"kind":"query", "tool_name":"find_probe", "collection":"Probe",
+                "description":"Find a probe", "fields":["name"]}]
+        }))?;
+        let datastore = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+            "datastore_tool_surface_ids": ["surface"]
+        }))?;
+        for mutation in [
+            format!(
+                r#"mutation {{ create_DatastoreToolSurface(input: {{node_did:"{node_value}",surface_id:"surface",enabled:true,entries:{entries}}}) {{_docID}} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_Tools(input: {{node_did:"{node_value}",tools_id:"tools",datastore:{datastore}}}) {{_docID}} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_AgentContext(input: {{node_did:"{node_value}",context_id:"context",tools_id:"tools"}}) {{_docID}} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"nonce",context_id:"context",enabled:true}}) {{_docID}} }}"#
+            ),
+        ] {
+            let response = node.execute(&mutation).await;
+            anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
+        }
+        let agent = identity::Did::new(agent_did)?;
+        let access = crate::ConfigAccess::local_as(node.clone(), agent.clone());
+        let model = crate::lean_vocab_test::lean_identity_household_cases()
+            .iter()
+            .find(|case| case.name == "configuration-explicit-grants")
+            .expect("configuration contract");
+        let expected = |name: &str| {
+            model
+                .tool_operation_cases
+                .iter()
+                .find(|case| case["name"] == name)
+                .expect("modeled operation case")["sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|source| source["permission"] == "get-collection")
+        };
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::CollectionGet)
+                .await?,
+            expected("datastore-query"),
+        );
+        assert!(access.collection_version("Node").await?.is_some());
+        let response = node.execute(&format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:true}}}}) {{_docID}} }}"#)).await;
+        anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
+        let response = node.execute(&format!(r#"mutation {{ update_DatastoreToolSurface(filter: {{node_did:{{_eq:"{node_value}"}},surface_id:{{_eq:"surface"}}}},input:{{enabled:false}}) {{_docID}} }}"#)).await;
+        anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::CollectionGet)
+                .await?,
+            expected("schema"),
+        );
+        let response = node.execute(&format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:false}}}}) {{_docID}} }}"#)).await;
+        anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::CollectionGet)
+                .await?,
+            expected("none"),
+        );
+        assert!(access.collection_version("Node").await.is_err());
+        node.shutdown().await?;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn selected_schema_tool_grants_and_revokes_only_its_native_source() -> anyhow::Result<()>

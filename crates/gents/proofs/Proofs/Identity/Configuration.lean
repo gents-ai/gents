@@ -36,6 +36,11 @@ def selfConfigScopeEnabled : ToolPolicy.EndpointScope String Unit → Bool
   | .all => true
   | .only keys _ => decide keys.Nonempty
 
+def datastoreScopeEnabled : ToolPolicy.EndpointScope (String × String) (Finset String) → Bool
+  | .none => false
+  | .all => true
+  | .only keys _ => decide keys.Nonempty
+
 /-- Project operation requirements from the existing configured tool surface
 after its stable ceiling, independently of transient service availability.
 These source-specific node permissions do not confer document ACP, bypass,
@@ -44,6 +49,8 @@ def toolOperationSources (surface : ToolPolicy.Surface) (packInstall : Bool) : L
   let emit (purpose : String) (enabled : Bool) (permissions : List String) : List (String × String) :=
     if enabled then permissions.map (fun permission => (purpose, permission)) else []
   emit "schema" surface.schemaManagement schemaToolPermissions ++
+  emit "datastore-query" (datastoreScopeEnabled surface.queryTools) ["get-collection"] ++
+  emit "datastore-write" (datastoreScopeEnabled surface.writeTools) ["get-collection"] ++
   emit "session-history" surface.sessionHistory ["read-document"] ++
   emit "goal" surface.goalTools ["read-document", "update-document"] ++
   emit "goal-create" (surface.goalTools && surface.goalCreate)

@@ -1318,7 +1318,22 @@ def toolOperationCaseJson (name : String) (schema history goal create selfConfig
   Json.mkObj [("name", toJson name), ("schema", toJson schema), ("history", toJson history),
     ("goal", toJson goal), ("create", toJson create), ("self_config", toJson selfConfig),
     ("category", toJson category), ("pack", toJson pack),
+    ("query", toJson false), ("write", toJson false),
     ("sources", toJson ((Configuration.toolOperationSources surface pack).map fun (purpose, permission) =>
+      Json.mkObj [("purpose", toJson purpose), ("permission", toJson permission)]))]
+
+def datastoreOperationCaseJson (name : String) (query write : Bool) : Json :=
+  let scope : ToolPolicy.EndpointScope (String × String) (Finset String) :=
+    .only {("tool", "collection")} (fun _ => ∅)
+  let surface : ToolPolicy.Surface :=
+    { ToolPolicy.ContractCases.secureMinimal with
+      queryTools := if query then scope else .none
+      writeTools := if write then scope else .none }
+  Json.mkObj [("name", toJson name), ("schema", toJson false), ("history", toJson false),
+    ("goal", toJson false), ("create", toJson false), ("self_config", toJson false),
+    ("category", toJson "none"), ("pack", toJson false),
+    ("query", toJson query), ("write", toJson write),
+    ("sources", toJson ((Configuration.toolOperationSources surface false).map fun (purpose, permission) =>
       Json.mkObj [("purpose", toJson purpose), ("permission", toJson permission)]))]
 
 def toolOperationCases : List Json :=
@@ -1338,7 +1353,10 @@ def toolOperationCases : List Json :=
    toolOperationCaseJson "self-config-automation" false false false false true false "automation",
    toolOperationCaseJson "pack-independent" false false false false true true "backend",
    toolOperationCaseJson "schema-and-pack-overlap" true false false false true true "all",
-   toolOperationCaseJson "all" true true true true true true "all"]
+   toolOperationCaseJson "all" true true true true true true "all",
+   datastoreOperationCaseJson "datastore-query" true false,
+   datastoreOperationCaseJson "datastore-write" false true,
+   datastoreOperationCaseJson "datastore-overlap" true true]
 
 theorem tools_writer_cannot_grant_itself_schema_authority :
     let initial : Configuration.ToolGrantProjection := { admins := [userDid] }

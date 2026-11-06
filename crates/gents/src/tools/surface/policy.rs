@@ -225,8 +225,8 @@ pub struct ToolNodeOperationSource {
 }
 
 impl ToolPolicySurface {
-    /// Project the native operations required by the configured schema,
-    /// session-history and goal tools after the stable ceiling is applied.
+    /// Project the native operations required by configured tools after the
+    /// stable ceiling is applied.
     /// For self-config and pack this covers only selection-replacement DAC
     /// removal; their other operations need separate mappings. Transient service
     /// availability does not revoke standing native authority.
@@ -256,6 +256,12 @@ impl ToolPolicySurface {
                     NodePermission::ViewAdd,
                 ],
             );
+        }
+        if !self.query_tools.is_deny_all() {
+            emit("datastore-query", &[NodePermission::CollectionGet]);
+        }
+        if !self.write_tools.is_deny_all() {
+            emit("datastore-write", &[NodePermission::CollectionGet]);
         }
         if self.session_history {
             emit("session-history", &[NodePermission::DocumentRead]);

@@ -33,7 +33,10 @@ impl RuntimeDocumentProjector {
         doc_id: &str,
     ) -> Result<()> {
         self.require_node(ctx)?;
-        if matches!(collection, "Agent" | "AgentContext" | "Tools") {
+        if matches!(
+            collection,
+            "Agent" | "AgentContext" | "Tools" | "DatastoreToolSurface"
+        ) {
             self.tools.update(ctx.view).await?;
         }
         if collection == gents_protocol::schemas::NODE_NAME {

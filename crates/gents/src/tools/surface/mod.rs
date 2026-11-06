@@ -20,22 +20,27 @@ pub use build::resolve_effective_tool_root;
 pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
 pub(crate) use output_budget::configured_output_budget;
+pub(crate) use policy::ToolNodeOperationSource;
 pub use policy::{
     EndpointScope, RuntimeToolAvailability, ToolPolicyBash, ToolPolicySurface, ToolPolicyVersion,
     TOOL_POLICY_V1,
 };
-pub(crate) use policy::ToolNodeOperationSource;
 
 pub(crate) fn configured_node_operation_sources(
     tools: &crate::documents::Tools,
+    surfaces: &[crate::documents::DatastoreToolSurfaceDocument],
     ceiling: &ToolCeiling,
 ) -> anyhow::Result<Vec<ToolNodeOperationSource>> {
-    let selection = selection::ResolvedToolSelection::from_document(tools)?;
+    let mut selection = selection::ResolvedToolSelection::from_document(tools)?;
+    if let Ok(merged) = crate::documents::merge_datastore_tool_surfaces(tools, surfaces) {
+        selection.query_tools = merged.query_tools;
+        selection.write_tools = merged.write_tools;
+    }
     let agents = selection::AgentToolConfig::from_document(tools)?;
-    let policy = policy::ToolPolicySurface::from_selection(&selection, &agents)
-        .meet(ceiling.policy());
+    let policy =
+        policy::ToolPolicySurface::from_selection(&selection, &agents).meet(ceiling.policy());
     Ok(policy.covered_node_operation_sources(selection.enable_pack_install))
-};
+}
 #[doc(hidden)]
 pub use root_admission::{
     admit_authored_root, canonicalize_tools_root, load_workspace_root_policy,
@@ -46,8 +51,8 @@ pub(crate) use root_admission::{
     load_workspace_root_policy_in_txn, resolve_admitted_tool_root, RootExecutionGuard,
 };
 pub use root_publication::{
-    delete_workspace_root, grant_workspace_root_reader, revoke_workspace_root_reader, set_workspace_root,
-    set_workspace_root_with_readers, WorkspaceRootWriteError,
+    delete_workspace_root, grant_workspace_root_reader, revoke_workspace_root_reader,
+    set_workspace_root, set_workspace_root_with_readers, WorkspaceRootWriteError,
 };
 pub use runtime_context::ToolRuntimeContext;
 pub use selection::{resolve_goal_capabilities, CustomToolFactory, ResolvedToolSelection};
