@@ -47,8 +47,9 @@ async fn teardown(admission: PublishedAdmission) {
 async fn job_row_has_kind_plugin_job() {
     let admission = published_job_row("job-kind").await;
     assert_eq!(admission.tool.kind(), ToolRowKind::PluginJob);
-    let loaded = ToolCallLifecycle::load_by_doc_id(
+    let loaded = ToolCallLifecycle::load_by_doc_id_as(
         admission.node.clone(),
+        admission.tool.actor().clone(),
         admission.tool.doc_id().unwrap(),
         &admission.node_did,
         "session-job-kind",
@@ -73,8 +74,9 @@ async fn orphan_sweep_excludes_job_rows() {
     .await
     .unwrap();
     assert_eq!(report.tool_calls_terminalized, 0);
-    let loaded = ToolCallLifecycle::load_by_doc_id(
+    let loaded = ToolCallLifecycle::load_by_doc_id_as(
         admission.node.clone(),
+        admission.tool.actor().clone(),
         admission.tool.doc_id().unwrap(),
         &admission.node_did,
         "session-job-sweep",
@@ -131,14 +133,16 @@ async fn published_admission_with_job_pin_loads_as_plugin_job() {
     let admission = published_job_row("job-pin").await;
     assert_eq!(admission.tool.kind(), ToolRowKind::PluginJob);
     let response = admission
-        .node
+        .tool
+        .access()
+        .unwrap()
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ job_pin }} }}"#,
             admission.tool.doc_id().unwrap()
         ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let stored = &response.data.unwrap()["AgentToolCall"][0]["job_pin"];
+        .await
+        .expect("read pinned job row as its owning actor");
+    let stored = &response["AgentToolCall"][0]["job_pin"];
     assert_eq!(
         serde_json::from_value::<gents_protocol::job::JobPin>(stored.clone()).unwrap(),
         fixture_job_pin()

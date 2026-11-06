@@ -653,8 +653,9 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
             r#"deadline_at: "2020-01-01T00:00:00Z""#,
         )
         .await;
-        let error = match ToolCallLifecycle::load_by_doc_id(
+        let error = match ToolCallLifecycle::load_by_doc_id_as(
             admission.node.clone(),
+            admission.tool.actor().clone(),
             &tool_doc_id,
             &admission.node_did,
             admission.tool.session_id(),

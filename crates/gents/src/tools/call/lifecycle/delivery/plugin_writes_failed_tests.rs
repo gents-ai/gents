@@ -131,11 +131,11 @@ async fn denied_plugin_write_rolls_back_completed_terminal_and_settles_failed() 
         .expect("both writes pass the plugin grant before ACP is checked");
     let mut baseline = pending.writes[0].clone();
     baseline.fields.insert("body".into(), json!("baseline"));
-    ConfigAccess::transact_local_write(
-        &fixture.node,
-        Some(actor.clone()),
-        "test.plugin_permitted_baseline",
-        |txn| {
+    fixture
+        .tool
+        .access()
+        .unwrap()
+        .transact_write("test.plugin_permitted_baseline", |txn| {
             let actor = actor.clone();
             let baseline = baseline.clone();
             let grant = grant.clone();
@@ -152,8 +152,7 @@ async fn denied_plugin_write_rolls_back_completed_terminal_and_settles_failed() 
                 )
                 .await
             })
-        },
-    )
+        })
     .await
     .expect("the first plugin write is permitted for the same actor");
     tokio::time::timeout(

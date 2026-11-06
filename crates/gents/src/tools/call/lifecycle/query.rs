@@ -508,8 +508,13 @@ mod tests {
         let session_id = tool.session_id.clone();
         let did = fixture.node_did;
         let requester = tool.requester_did.clone();
+        let actor = tool.actor().clone();
         let tool = Arc::new(tokio::sync::Mutex::new(tool));
-        ConfigAccess::transact_local_readonly(&node, None, "test.tool.accepted_snapshot", |txn| {
+        ConfigAccess::transact_local_readonly(
+            &node,
+            Some(actor.clone()),
+            "test.tool.accepted_snapshot",
+            |txn| {
             let node = node.clone();
             let tool = tool.clone();
             let (doc_id, session_id, did, requester) = (&doc_id, &session_id, &did, &requester);
@@ -545,8 +550,9 @@ mod tests {
         })
         .await
         .unwrap();
-        let fresh = ToolCallLifecycle::load_by_doc_id(
+        let fresh = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            actor,
             &doc_id,
             &did,
             &session_id,
@@ -577,13 +583,24 @@ mod tests {
             .await
             .expect("runtime schemas");
 
-        let node_did = "did:test:host";
+        use crate::NodeIdentity as _;
+        let node_did = node
+            .node_identity_did()
+            .expect("fixture node has an identity");
+        let coordinator_keys = tempfile::tempdir().expect("coordinator key directory");
+        let coordinator = crate::KeyIdentity::load_or_create(
+            coordinator_keys.path().join("coordinator.key"),
+            None,
+        )
+        .expect("coordinator identity")
+        .did()
+        .to_string();
         let mut request = claimed_request(
             &node,
             "request-routed",
             "session-routed",
             node_did,
-            Some("did:test:coordinator"),
+            Some(coordinator.as_str()),
         )
         .await;
         let writer = DefraStreamWriter::new(node.clone(), node_did, Duration::from_millis(1));
@@ -635,7 +652,7 @@ mod tests {
         let mut lifecycle = ToolCallLifecycle::from_accepted(
             node.clone(),
             node_did.to_string(),
-            Some("did:test:coordinator".to_string()),
+            Some(coordinator.clone()),
             accepted,
             deadline,
             AwaitMode::Foreground,
@@ -644,15 +661,18 @@ mod tests {
         .with_selected_tool_identity(Some(selected));
         lifecycle.start_running().await.expect("dispatch tool call");
 
-        let loaded = ToolCallLifecycle::load(node.clone(), "session-routed", "tool-call-routed")
-            .await
+        let actor = lifecycle.actor().clone();
+        let loaded = ToolCallLifecycle::load_as(
+            node.clone(),
+            actor,
+            "session-routed",
+            "tool-call-routed",
+        )
+        .await
             .expect("load tool call")
             .expect("persisted tool call");
 
-        assert_eq!(
-            loaded.requester_did.as_deref(),
-            Some("did:test:coordinator")
-        );
+        assert_eq!(loaded.requester_did.as_deref(), Some(coordinator.as_str()));
         let selected = loaded.selected_tool_identity.expect("selected identity");
         assert_eq!(selected.service_id, "metrics-prod");
         assert_eq!(selected.tool_name, "query_metrics");
