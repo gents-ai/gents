@@ -166,6 +166,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                                         txn,
                                         request,
                                         "2026-10-23T00:00:00Z",
+                                        true,
                                     )
                                     .await
                                 })
@@ -173,7 +174,8 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                             .await
                             .unwrap();
                         assert_eq!(
-                            allowed, opening_is_entry,
+                            allowed == crate::goal::GoalClaimFence::Allowed,
+                            opening_is_entry,
                             "the publication must pass the modeled assignment-opening claim fence"
                         );
                     }

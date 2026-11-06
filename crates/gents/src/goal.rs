@@ -102,7 +102,7 @@ pub use backed_request::{
 pub use controller::{claim_continuation, claim_retry_continuation, update_goal_fields_if_status};
 pub(crate) use controller::{
     claim_continuation_from_access, claim_retry_continuation_from_access,
-    fence_goal_continuation_claim_in_txn, update_goal_fields_if_status_from_access,
+    fence_goal_continuation_claim_in_txn, update_goal_fields_if_status_from_access, GoalClaimFence,
 };
 use creation::stage_goal_and_claim;
 pub(crate) use creation::{

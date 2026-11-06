@@ -192,10 +192,17 @@ where
                     .await?;
                     return Ok(None);
                 }
-                if !crate::goal::fence_goal_continuation_claim_in_txn(txn, request, claimed_at)
-                    .await?
-                {
-                    return Ok(None);
+                match crate::goal::fence_goal_continuation_claim_in_txn(
+                    txn, request, claimed_at, client && request.input.goal_continuation.is_some(),
+                ).await? {
+                    crate::goal::GoalClaimFence::Allowed => {}
+                    crate::goal::GoalClaimFence::Retired => return Ok(None),
+                    crate::goal::GoalClaimFence::Rejected => {
+                        let rejected = reject_pending_admission_in_txn(
+                            txn, request, "request authorization denied", claimed_at,
+                        ).await?;
+                        return Ok(rejected.then_some(Err(())));
+                    }
                 }
                 if request.purpose == gents_protocol::request_admission::RequestPurpose::Normal
                     && !super::query::claim_queue_allows(txn, request).await?

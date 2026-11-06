@@ -789,14 +789,7 @@ impl AgentRequestAdmissionVerifier {
                 && !(allow_cross_actor_client_claim
                     && admission.kind == AgentRequestAdmissionKind::Client
                     && row.purpose == Some(RequestPurpose::Normal)
-                    && row.input.as_ref().is_none_or(|input| {
-                        input.queue.as_ref().is_none_or(|queue| {
-                            queue.source == gents_protocol::request_input::QueueSource::User
-                                || (local_agent_message
-                                    && queue.source
-                                        == gents_protocol::request_input::QueueSource::Steering)
-                        })
-                    })))
+                    && client_claim_queue_candidate(row.input.as_ref(), local_agent_message)))
         {
             return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
                 "atomic requester authorization at agent execution is unavailable"
@@ -995,6 +988,20 @@ impl AgentRequestAdmissionVerifier {
             .map_err(AgentRequestAdmissionError::denied)?;
         Ok((request, client_claim))
     }
+}
+
+fn client_claim_queue_candidate(
+    input: Option<&gents_protocol::request_input::RequestInput>,
+    local_agent_message: bool,
+) -> bool {
+    use gents_protocol::request_input::QueueSource;
+    input.is_none_or(|input| {
+        input.queue.as_ref().is_none_or(|queue| {
+            queue.source == QueueSource::User
+                || (local_agent_message && queue.source == QueueSource::Steering)
+                || (queue.source == QueueSource::Goal && input.goal_continuation.is_some())
+        })
+    })
 }
 
 fn verify_auxiliary_request_shape(

@@ -195,26 +195,57 @@ pub(crate) async fn claim_retry_continuation_from_access(
         .is_some_and(mutation_returned_rows))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GoalClaimFence {
+    Allowed,
+    Retired,
+    Rejected,
+}
+
+fn client_goal_claim_binding(goal: Option<&GoalDocument>, goal_id: Option<&str>) -> bool {
+    goal.is_some_and(|goal| {
+        goal_id == Some(goal.goal_id.as_str())
+            && goal
+                .assignment_root_request_doc_id
+                .as_deref()
+                .is_some_and(|doc| !doc.is_empty())
+    })
+}
+
 pub(crate) async fn fence_goal_continuation_claim_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &crate::request::watcher::AgentRequest,
     now: &str,
-) -> Result<bool> {
+    client_goal: bool,
+) -> Result<GoalClaimFence> {
     if request.caused_by_trigger_kind.as_deref() != Some(GOAL_TRIGGER_KIND) {
-        return Ok(true);
+        return Ok(if client_goal {
+            GoalClaimFence::Rejected
+        } else {
+            GoalClaimFence::Allowed
+        });
     }
-    let Some(goal) =
-        load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id).await?
-    else {
-        return Ok(true);
+    let goal = load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id).await?;
+    if client_goal
+        && !client_goal_claim_binding(goal.as_ref(), request.caused_by_trigger_id.as_deref())
+    {
+        return Ok(GoalClaimFence::Rejected);
+    }
+    let Some(goal) = goal else {
+        return Ok(GoalClaimFence::Allowed);
     };
-    request_head::retire_stale_assignment_continuations_in_txn(
+    let allowed = request_head::retire_stale_assignment_continuations_in_txn(
         txn,
         &goal,
         Some(&request.doc_id),
         now,
     )
-    .await
+    .await?;
+    Ok(if allowed {
+        GoalClaimFence::Allowed
+    } else {
+        GoalClaimFence::Retired
+    })
 }
 
 #[cfg(test)]
