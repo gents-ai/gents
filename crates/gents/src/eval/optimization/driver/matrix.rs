@@ -71,9 +71,21 @@ impl Harness {
                         1,
                     ),
                 ),
-                tools(launching.owner()),
-                context(launching.owner(), BASELINE_PROMPT),
             ])
+            .await;
+        // Tools and AgentContext are source-projected: created by the evaluator
+        // they are not updatable by the owner, which the pack install below
+        // needs. The Node owner creates them, as it does for every other
+        // source-projected fixture document.
+        let owner_access = launching.owner_access().unwrap();
+        launching
+            .install_as(
+                &owner_access,
+                vec![
+                    tools(launching.owner()),
+                    context(launching.owner(), BASELINE_PROMPT),
+                ],
+            )
             .await;
         let pack = launching.pack("subject", "Off");
         let binding = launching.provision_agent();
@@ -105,7 +117,6 @@ impl Harness {
         let mut identity =
             crate::pack::PackIdentity::new(&authored.manifest, authored.digest, Vec::new());
         identity.agent_bindings = agent_bindings;
-        let owner_access = launching.owner_access().unwrap();
         crate::pack::install_pack_documents(
             &owner_access,
             launching.owner(),
