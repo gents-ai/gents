@@ -982,9 +982,11 @@ async fn crud_automation_keeps_strict_creation_and_selected_task_owner() {
 
 #[tokio::test]
 async fn crud_exact_context_and_tools_preserve_shared_document_guards() {
-    let (node, owner, tools) = setup("crud-sharing", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) = authenticated_setup("crud-sharing", &["node", "tools", "agent"]).await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     let tools_id = format!("{worker}:tools");
     ok(&tools,json!({"argv":["context","update"],"target_id":context_id,"set":{"system_prompt":"Review clearly."}})).await;
@@ -995,7 +997,7 @@ async fn crud_exact_context_and_tools_preserve_shared_document_guards() {
     .await;
     ok(
         &tools,
-        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+        json!({"argv":["agent","update",current],"set":{"context_id":context_id}}),
     )
     .await;
     for (resource, id) in [("context", context_id), ("tools", tools_id)] {
@@ -1012,14 +1014,17 @@ async fn crud_exact_context_and_tools_preserve_shared_document_guards() {
 /// accepted with the acknowledgement, and the receipt lists every agent.
 #[tokio::test]
 async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledgement() {
-    let (node, owner, tools) = setup("shared-context-ack", &["node", "tools", "agent"]).await;
-    let worker = "aaa-worker".to_string();
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) =
+        authenticated_setup("shared-context-ack", &["node", "tools", "agent"]).await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     // Two agents select one Context: the invoking agent and the worker.
     ok(
         &tools,
-        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+        json!({"argv":["agent","update",current],"set":{"context_id":context_id}}),
     )
     .await;
 
@@ -1034,7 +1039,7 @@ async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledge
         "the refusal must point at the acknowledgement: {refusal}"
     );
     assert!(
-        refusal.contains("beh-test") && refusal.contains(&worker),
+        refusal.contains(current) && refusal.contains(&worker),
         "the refusal must name every affected agent: {refusal}"
     );
 
@@ -1045,7 +1050,7 @@ async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledge
     .await;
     assert_eq!(receipt["committed"], true);
     assert_eq!(
-        receipt["agent_did"], "beh-test",
+        receipt["agent_did"], current,
         "the invoking referrer owns the edit"
     );
     let agents = receipt["shared"]["agents"]
@@ -1057,7 +1062,9 @@ async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledge
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
     named.sort();
-    assert_eq!(named, vec![worker.clone(), "beh-test".to_string()]);
+    let mut expected = vec![worker.clone(), current.to_string()];
+    expected.sort();
+    assert_eq!(named, expected);
     let digest = receipt["shared"]["sha256"]
         .as_str()
         .unwrap_or_else(|| panic!("receipt must carry the new sha256: {receipt}"));
@@ -1076,14 +1083,17 @@ async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledge
 /// The same rule for Tools, reached through a shared Context.
 #[tokio::test]
 async fn shared_tools_edit_is_refused_by_default_and_accepted_with_acknowledgement() {
-    let (node, owner, tools) = setup("shared-tools-ack", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) =
+        authenticated_setup("shared-tools-ack", &["node", "tools", "agent"]).await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     let tools_id = format!("{worker}:tools");
     ok(
         &tools,
-        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+        json!({"argv":["agent","update",current],"set":{"context_id":context_id}}),
     )
     .await;
 
@@ -1122,14 +1132,16 @@ async fn shared_tools_edit_is_refused_by_default_and_accepted_with_acknowledgeme
 /// exact-ID path already required `node` at the command layer.
 #[tokio::test]
 async fn shared_acknowledgement_does_not_widen_who_may_write() {
-    let (node, owner, tools) = setup("shared-authority", &["tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) = authenticated_setup("shared-authority", &["tools", "agent"]).await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     // Two agents select one Context: the invoking agent and the worker.
     ok(
         &tools,
-        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+        json!({"argv":["agent","update",current],"set":{"context_id":context_id}}),
     )
     .await;
 
@@ -1145,18 +1157,21 @@ async fn shared_acknowledgement_does_not_widen_who_may_write() {
         "the refusal must name the missing grant: {refusal}"
     );
     assert!(
-        refusal.contains("beh-test") && refusal.contains(&worker),
+        refusal.contains(current) && refusal.contains(&worker),
         "the refusal must name every affected agent: {refusal}"
     );
 
     // The same call with the node grant lands.
-    let (node2, owner2, tools2) = setup("shared-authority-node", &["node", "tools", "agent"]).await;
-    let worker2 = format!("{owner2}:worker");
-    crate::test_support::install_test_agent(&node2, &owner2, &worker2).await;
+    let (fixture2, tools2) =
+        authenticated_setup("shared-authority-node", &["node", "tools", "agent"]).await;
+    let current2 = fixture2.agent_did();
+    let worker2 = fixture2.install_sibling("worker").await;
+    fixture2.grant_node_reader().await;
+    fixture2.grant_sibling_configuration(&worker2).await;
     let context2 = format!("{worker2}:context");
     ok(
         &tools2,
-        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context2}}),
+        json!({"argv":["agent","update",current2],"set":{"context_id":context2}}),
     )
     .await;
     let receipt = ok(
@@ -1172,13 +1187,15 @@ async fn shared_acknowledgement_does_not_widen_who_may_write() {
 /// `shared_ack` before the caller assigned it, so it always refused.
 #[tokio::test]
 async fn bound_context_update_honours_the_acknowledgement() {
-    let (node, owner, tools) = setup("bound-ack", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) = authenticated_setup("bound-ack", &["node", "tools", "agent"]).await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     ok(
         &tools,
-        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+        json!({"argv":["agent","update",current],"set":{"context_id":context_id}}),
     )
     .await;
 
@@ -1199,7 +1216,7 @@ async fn bound_context_update_honours_the_acknowledgement() {
     assert_eq!(receipt["committed"], true);
     let read = ok(
         &tools,
-        json!({"argv":["context","get"],"options":{"agent":"worker"}}),
+        json!({"argv":["context","get"],"options":{"agent":worker}}),
     )
     .await;
     assert_eq!(read["document"]["system_prompt"], "Bound prompt.");
@@ -1208,13 +1225,16 @@ async fn bound_context_update_honours_the_acknowledgement() {
 /// The bound `context preview` path must honour it too, and write nothing.
 #[tokio::test]
 async fn bound_context_preview_honours_the_acknowledgement() {
-    let (node, owner, tools) = setup("bound-ack-preview", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) =
+        authenticated_setup("bound-ack-preview", &["node", "tools", "agent"]).await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     ok(
         &tools,
-        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+        json!({"argv":["agent","update",current],"set":{"context_id":context_id}}),
     )
     .await;
 
@@ -1226,7 +1246,7 @@ async fn bound_context_preview_honours_the_acknowledgement() {
     assert_eq!(preview["committed"], false);
     let read = ok(
         &tools,
-        json!({"argv":["context","get"],"options":{"agent":"worker"}}),
+        json!({"argv":["context","get"],"options":{"agent":worker}}),
     )
     .await;
     assert_ne!(read["document"]["system_prompt"], "Previewed prompt.");
@@ -1237,13 +1257,15 @@ async fn bound_context_preview_honours_the_acknowledgement() {
 /// the order the fields were set in.
 #[tokio::test]
 async fn shared_receipt_digest_is_over_the_published_projection() {
-    let (node, owner, tools) = setup("shared-digest", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) = authenticated_setup("shared-digest", &["node", "tools", "agent"]).await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     ok(
         &tools,
-        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+        json!({"argv":["agent","update",current],"set":{"context_id":context_id}}),
     )
     .await;
 
@@ -1272,9 +1294,11 @@ async fn shared_receipt_digest_is_over_the_published_projection() {
 /// An unshared edit keeps its old receipt: no `shared` block appears.
 #[tokio::test]
 async fn unshared_context_edit_receipt_has_no_shared_block() {
-    let (node, owner, tools) = setup("unshared-receipt", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) =
+        authenticated_setup("unshared-receipt", &["node", "tools", "agent"]).await;
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
+    fixture.grant_sibling_configuration(&worker).await;
     let context_id = format!("{worker}:context");
     let receipt = ok(
         &tools,
@@ -1292,9 +1316,10 @@ async fn unshared_context_edit_receipt_has_no_shared_block() {
 /// something.
 #[tokio::test]
 async fn shared_option_rejects_other_values_and_other_resources() {
-    let (node, owner, tools) = setup("shared-option", &["node", "tools", "agent"]).await;
-    let worker = format!("{owner}:worker");
-    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let (fixture, tools) = authenticated_setup("shared-option", &["node", "tools", "agent"]).await;
+    let current = fixture.agent_did();
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
     let context_id = format!("{worker}:context");
     let error = refused(
         &tools,
@@ -1304,7 +1329,7 @@ async fn shared_option_rejects_other_values_and_other_resources() {
     assert!(error.contains("acknowledge"), "{error}");
     let error = refused(
         &tools,
-        json!({"argv":["agent","update","beh-test"],"options":{"shared":"acknowledge"},"set":{"display_name":"x"}}),
+        json!({"argv":["agent","update",current],"options":{"shared":"acknowledge"},"set":{"display_name":"x"}}),
     )
     .await;
     assert!(error.contains("shared applies only"), "{error}");

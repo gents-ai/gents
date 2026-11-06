@@ -168,6 +168,58 @@ impl SelfConfigFixture {
             .unwrap();
     }
 
+    pub(super) async fn grant_sibling_configuration(&self, sibling: &str) {
+        let admin = crate::ConfigAccess::local_as(
+            self.db.node.clone(),
+            identity::Did::new(self.db.node_identity.did()).unwrap(),
+        );
+        let user = identity::Did::new(self.user_access.actor_did().unwrap()).unwrap();
+        admin
+            .grant_node_permission(
+                &user,
+                crate::store::config_client::NodePermission::DacRelationDelete,
+            )
+            .await
+            .unwrap();
+        self.user_access
+            .transact_write("test.self_config.grant_sibling", |txn| {
+                let owner = self.db.node_identity.did();
+                let actor = &self.agent_did;
+                Box::pin(async move {
+                    crate::store::config_client::grant_selected_self_configuration(
+                        txn, owner, sibling,
+                    )
+                    .await?;
+                    let (doc_id, _) =
+                        crate::store::config_client::read_desired_state_record_in_txn(
+                            txn,
+                            crate::Collection::Agent,
+                            owner,
+                            sibling,
+                        )
+                        .await?
+                        .expect("sibling Agent exists");
+                    txn.delete_actor_relationship(
+                        "Agent",
+                        &doc_id,
+                        "config_writer",
+                        &identity::Did::new(sibling)?,
+                    )
+                    .await?;
+                    txn.add_actor_relationship(
+                        "Agent",
+                        &doc_id,
+                        "config_writer",
+                        &identity::Did::new(actor)?,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+    }
+
     async fn grant_pack_install(&self) {
         use crate::store::config_client::{
             apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
