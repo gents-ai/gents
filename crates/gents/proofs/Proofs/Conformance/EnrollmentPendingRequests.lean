@@ -1,4 +1,5 @@
 import Proofs.Enrollment.DurableProjection
+import Proofs.Conformance.ContractCases.Enrollment
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.EnrollmentPendingRequests
@@ -123,5 +124,17 @@ private def routeCaseJson (c : RouteCase) : String :=
     c.network c.digest c.sequenceFresh c.leaseFresh c.operatorEndpoint) ++ "}"
 
 def routeCasesJson : String := jsonArray (routeCases.map routeCaseJson)
+
+/-- The input is a fresh runtime with no request, decision, or authorization. -/
+def freshStartupPreservesAuthority : Bool :=
+  let before : Enrollment.State := {}
+  let after := reconcileExisting before Conformance.ContractCases.enrollmentRequest
+    Conformance.ContractCases.enrollmentDecision
+  decide (after.acceptedRequests = before.acceptedRequests ∧
+    after.decisions = before.decisions ∧ after.authorizations = before.authorizations)
+
+def startupCasesJson : String :=
+  "[{\"name\":\"fresh_startup\",\"expected_authority_unchanged\":" ++
+    boolJson freshStartupPreservesAuthority ++ "}]"
 
 end Conformance.EnrollmentPendingRequests

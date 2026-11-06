@@ -556,6 +556,8 @@ def snapshotSessionCasesJson : String :=
       ++ Conformance.EnrollmentPendingRequests.absentPeerCasesJson ++ ","
     ++ "\"enrollment_route_readiness_cases\":"
       ++ Conformance.EnrollmentPendingRequests.routeCasesJson ++ ","
+    ++ "\"enrollment_startup_cases\":"
+      ++ Conformance.EnrollmentPendingRequests.startupCasesJson ++ ","
     ++ "\"enrollment_encoding_cases\":"
       ++ enrollmentEncodingCasesJson ++ ","
     ++ "\"enrollment_digest_cases\":"
