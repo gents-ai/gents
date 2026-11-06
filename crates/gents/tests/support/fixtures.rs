@@ -370,6 +370,25 @@ pub async fn configure_agent_tools(
     tools: gents::documents::Tools,
     referenced_documents: Vec<(gents::Collection, serde_json::Value)>,
 ) {
+    configure_agent_tools_as(
+        &gents::ConfigAccess::local(node.clone()),
+        node_did,
+        agent_did,
+        system_prompt,
+        tools,
+        referenced_documents,
+    )
+    .await;
+}
+
+pub async fn configure_agent_tools_as(
+    access: &gents::ConfigAccess,
+    node_did: &str,
+    agent_did: &str,
+    system_prompt: Option<String>,
+    tools: gents::documents::Tools,
+    referenced_documents: Vec<(gents::Collection, serde_json::Value)>,
+) {
     use gents::documents::AgentContext;
     use gents::store::config_client::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
@@ -377,63 +396,64 @@ pub async fn configure_agent_tools(
     use gents::Collection;
 
     assert_eq!(tools.node_did, node_did);
-    gents::ConfigAccess::transact_local_write(node, None, "test.configure_agent_tools", |txn| {
-        let tools = tools.clone();
-        let referenced_documents = referenced_documents.clone();
-        let system_prompt = system_prompt.clone();
-        Box::pin(async move {
-            let (_, behavior) = read(txn, Collection::Agent, node_did, agent_did)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("behavior {agent_did} is missing"))?;
-            let mut behavior: gents::AgentDocument = serde_json::from_value(behavior)?;
-            let context_id = behavior
-                .context_id
-                .clone()
-                .unwrap_or_else(|| format!("{agent_did}:context"));
-            let mut context = read(txn, Collection::AgentContext, node_did, &context_id)
-                .await?
-                .map(|(_, value)| serde_json::from_value::<AgentContext>(value))
-                .transpose()?
-                .unwrap_or_else(|| AgentContext {
-                    context_id: context_id.clone(),
-                    node_did: node_did.to_string(),
-                    display_name: None,
-                    description: None,
-                    system_prompt: None,
-                    tools_id: None,
-                    compaction_id: None,
-                    skill_ids: Vec::new(),
-                    tags: Vec::new(),
-                });
-            context.tools_id = Some(tools.tools_id.clone());
-            if let Some(system_prompt) = system_prompt {
-                context.system_prompt = Some(system_prompt);
-            }
-            behavior.context_id = Some(context_id);
+    access
+        .transact_write("test.configure_agent_tools", |txn| {
+            let tools = tools.clone();
+            let referenced_documents = referenced_documents.clone();
+            let system_prompt = system_prompt.clone();
+            Box::pin(async move {
+                let (_, behavior) = read(txn, Collection::Agent, node_did, agent_did)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("behavior {agent_did} is missing"))?;
+                let mut behavior: gents::AgentDocument = serde_json::from_value(behavior)?;
+                let context_id = behavior
+                    .context_id
+                    .clone()
+                    .unwrap_or_else(|| format!("{agent_did}:context"));
+                let mut context = read(txn, Collection::AgentContext, node_did, &context_id)
+                    .await?
+                    .map(|(_, value)| serde_json::from_value::<AgentContext>(value))
+                    .transpose()?
+                    .unwrap_or_else(|| AgentContext {
+                        context_id: context_id.clone(),
+                        node_did: node_did.to_string(),
+                        display_name: None,
+                        description: None,
+                        system_prompt: None,
+                        tools_id: None,
+                        compaction_id: None,
+                        skill_ids: Vec::new(),
+                        tags: Vec::new(),
+                    });
+                context.tools_id = Some(tools.tools_id.clone());
+                if let Some(system_prompt) = system_prompt {
+                    context.system_prompt = Some(system_prompt);
+                }
+                behavior.context_id = Some(context_id);
 
-            let mut documents = referenced_documents;
-            documents.extend([
-                (Collection::Tools, serde_json::to_value(tools)?),
-                (Collection::AgentContext, serde_json::to_value(context)?),
-                (Collection::Agent, serde_json::to_value(behavior)?),
-            ]);
-            let plan = DesiredStateApplyPlan::new(
-                documents
-                    .into_iter()
-                    .map(|(collection, value)| DesiredStateApplyDocument {
-                        collection,
-                        add: value.clone(),
-                        update: value,
-                    })
-                    .collect(),
-            )?;
-            gents::store::config_client::apply_desired_state_plan(txn, &plan)
-                .await
-                .map(|_| ())
+                let mut documents = referenced_documents;
+                documents.extend([
+                    (Collection::Tools, serde_json::to_value(tools)?),
+                    (Collection::AgentContext, serde_json::to_value(context)?),
+                    (Collection::Agent, serde_json::to_value(behavior)?),
+                ]);
+                let plan = DesiredStateApplyPlan::new(
+                    documents
+                        .into_iter()
+                        .map(|(collection, value)| DesiredStateApplyDocument {
+                            collection,
+                            add: value.clone(),
+                            update: value,
+                        })
+                        .collect(),
+                )?;
+                gents::store::config_client::apply_desired_state_plan(txn, &plan)
+                    .await
+                    .map(|_| ())
+            })
         })
-    })
-    .await
-    .unwrap();
+        .await
+        .unwrap();
 }
 
 pub fn agent_target(
