@@ -425,16 +425,25 @@ async fn usage_capture_rejected_records_error_source_and_keeps_the_marker() {
 
 #[tokio::test]
 async fn usage_capture_requires_no_persistent_schema() {
+    use crate::NodeIdentity;
+    let identity = tokio::task::spawn_blocking(|| {
+        crate::support::fixtures::test_identity("provider-no-schema")
+    })
+    .await
+    .unwrap();
     let node = std::sync::Arc::new(
         defra_node::Node::builder()
+            .with_node_identity_did(identity.did())
             .build()
             .await
             .expect("node without schemas"),
     );
+    let cache = std::sync::Arc::default();
+    let account = usage_account(identity.did(), "backend-usage-failure");
     let reporter = crate::inference::usage_observation::UsageReporter::new(
-        std::sync::Arc::default(),
-        node,
-        usage_account("did:key:z6MkUsageA", "backend-usage-failure"),
+        cache.clone(),
+        node.clone(),
+        account.clone(),
     );
     let client = ProviderHttpClient::with_usage(ReqwestClient::new(), reporter);
     let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, r#"{"ok":true}"#).await;
@@ -446,4 +455,8 @@ async fn usage_capture_requires_no_persistent_schema() {
         response.into_body().await.expect("body"),
         Bytes::from_static(br#"{"ok":true}"#)
     );
+    let stored = stored_usage_eventually(&cache, &node, &account)
+        .await
+        .expect("usage recorded without schemas");
+    assert_eq!(stored.report.windows[0].used_pct, 12.0);
 }
