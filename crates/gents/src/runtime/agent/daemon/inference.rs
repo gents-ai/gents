@@ -1441,61 +1441,6 @@ pub(super) mod tests {
         .unwrap()
     }
 
-    async fn create_routed_request(
-        node: &std::sync::Arc<defra_node::Node>,
-        agent_config: &ResolvedAgent,
-        requester_did: &str,
-    ) -> AgentRequest {
-        crate::test_support::install_test_agent(
-            node,
-            agent_config.node_did(),
-            &agent_config.agent_did,
-        )
-        .await;
-        let request_id = uuid::Uuid::new_v4().to_string();
-        let session_id = uuid::Uuid::new_v4().to_string();
-        let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            request_id,
-            agent_config.node_did(),
-            requester_did,
-            &agent_config.agent_did,
-            session_id,
-            "route this reply",
-            "interactive",
-            created_at,
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                agent_config.node_did(),
-            ),
-        );
-        create.request_hop = 1;
-        create.caused_by_parent_request_id = Some("parent-request".into());
-        create.caused_by_parent_request_doc_id = Some("parent-request-doc".into());
-        create.caused_by_parent_tool_call_id = Some("parent-tool-call".into());
-        create.caused_by_parent_tool_call_doc_id = Some("parent-tool-call-doc".into());
-        crate::sign_agent_request_create(agent_config.node_identity().as_ref(), &mut create)
-            .await
-            .unwrap();
-        let response = node.execute(&create.graphql_mutation().unwrap()).await;
-        assert!(
-            !response.has_errors(),
-            "create routed AgentRequest failed: {:?}",
-            response.errors
-        );
-        let doc_id =
-            crate::store::graphql::single_mutation_document(&response, "create_AgentRequest")
-                .unwrap()
-                .expect("created request receipt")["_docID"]
-                .as_str()
-                .expect("created request physical ID")
-                .to_owned();
-
-        crate::request::admission::load_request_for_admission_test(node, &doc_id)
-            .await
-            .unwrap()
-    }
-
     async fn create_enrollment_daemon_request(
         node: &std::sync::Arc<defra_node::Node>,
         agent_config: &ResolvedAgent,
