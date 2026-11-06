@@ -8,7 +8,7 @@ import type { BackendDeleteRequest } from "./BackendDeleteRequest.js";
 import type { BackendHealthView } from "./BackendHealthView.js";
 import type { BackendRotationSetRequest } from "./BackendRotationSetRequest.js";
 import type { BackendSaveRequest } from "./BackendSaveRequest.js";
-import type { Channel } from "@tauri-apps/api/core.js";
+import type { Channel } from "@tauri-apps/api/core";
 import type { ChatSendRequest } from "./ChatSendRequest.js";
 import type { ChatSendResult } from "./ChatSendResult.js";
 import type { ChatSubmissionQuery } from "./ChatSubmissionQuery.js";
