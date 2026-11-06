@@ -1,11 +1,11 @@
 use super::support::*;
 use super::*;
-use crate::runtime::status::{RECONCILE_PHASE_EVENT_TARGET, ReconcilePhase};
+use crate::runtime::status::{ReconcilePhase, RECONCILE_PHASE_EVENT_TARGET};
 use crate::store::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET;
 use crate::store::identity::NodeIdentity;
 use anyhow::Result;
-use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex as StdMutex;
 use tracing::field::{Field, Visit};
 use tracing::instrument::WithSubscriber;
 use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
@@ -116,26 +116,26 @@ fn test_tool_runtime(
     .with_plugins(resolve_context.plugins.clone())
 }
 
-async fn update_node_enabled(node: &defra_node::Node, node_did: &str, enabled: bool) {
+async fn update_node_enabled(access: &crate::ConfigAccess, node_did: &str, enabled: bool) {
     let escaped_node_did = escape_graphql_string(node_did);
-    let mutation = format!(
-        r#"mutation {{
-            update_Node(
-                filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
-                input: {{ enabled: {enabled} }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "update_Node failed: {:?}",
-        response.errors
-    );
+    let response = access
+        .execute(&format!(
+            r#"{{ Node(filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }}) {{ _docID }} }}"#
+        ))
+        .await
+        .unwrap();
+    let rows = response["data"]["Node"].as_array().unwrap();
+    let [row] = rows.as_slice() else {
+        panic!("fixture Node must be unique")
+    };
+    let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
+    access.write("test.node.enabled", &format!(
+        r#"mutation {{ update_Node(docID: "{doc}", input: {{ enabled: {enabled} }}) {{ _docID }} }}"#
+    )).await.unwrap();
 }
 
 async fn write_documents(
-    node: &Arc<defra_node::Node>,
+    access: &crate::ConfigAccess,
     operation: &'static str,
     documents: Vec<(crate::Collection, serde_json::Value)>,
 ) {
@@ -150,33 +150,36 @@ async fn write_documents(
         )
         .collect();
     let plan = crate::store::config_client::DesiredStateApplyPlan::new(documents).unwrap();
-    crate::store::config_client::ConfigAccess::transact_local_write(node, None, operation, |txn| {
-        let plan = &plan;
-        Box::pin(
-            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
-        )
-    })
-    .await
-    .unwrap();
+    access
+        .transact_write(operation, |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
 async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     crate::test_support::enable_scoped_event_capture();
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("control-watcher"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture(
+        "control-watcher",
         "backend-control",
         "http://127.0.0.1:8111/v1",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let user_access = fixture.user_access.clone();
+    let agent_access = fixture.agent_config_access().await;
+    assert_ne!(fixture.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -216,19 +219,15 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         },
     ])
     .unwrap();
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        &node,
-        None,
-        "test.context.update",
-        |txn| {
+    user_access
+        .transact_write("test.context.update", |txn| {
             let plan = &plan;
             Box::pin(async move {
                 crate::store::config_client::apply_desired_state_plan(txn, plan).await
             })
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .await
+        .unwrap();
 
     let watcher_task = tokio::spawn(
         run_test_control_watcher(ControlWatcherInputs {
@@ -290,18 +289,24 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         "{}:context",
         agent.default_agent_did()
     ));
+    let observed = user_access
+        .execute(&format!(
+            r#"{{ AgentContext(filter: {{context_id: {{_eq: "{context_id}"}}}}) {{_docID}} }}"#
+        ))
+        .await
+        .unwrap();
+    let rows = observed["data"]["AgentContext"].as_array().unwrap();
+    let [row] = rows.as_slice() else {
+        panic!("fixture context must be unique")
+    };
+    let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
     let mutation = format!(
-        r#"mutation {{ update_AgentContext(
-        filter: {{context_id: {{_eq: "{context_id}"}}}},
-        input: {{display_name: "Retagged context"}}) {{context_id}} }}"#
+        r#"mutation {{ update_AgentContext(docID: "{doc}", input: {{display_name: "Retagged context"}}) {{_docID}} }}"#
     );
-    crate::store::config_client::ConfigAccess::write_local(
-        &node,
-        "test.context.metadata",
-        &mutation,
-    )
-    .await
-    .unwrap();
+    agent_access
+        .write("test.context.metadata", &mutation)
+        .await
+        .unwrap();
     let repeated = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
         .expect("metadata write must reach reconcile owner")
@@ -322,20 +327,21 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
 
 #[tokio::test]
 async fn control_watcher_reconciles_a_local_write_without_the_replication_debounce() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("control-watcher-local"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture(
+        "control-watcher-local",
         "backend-control",
         "http://127.0.0.1:8111/v1",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let agent_access = fixture.agent_config_access().await;
+    assert_ne!(fixture.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -374,7 +380,7 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
     ));
 
     write_documents(
-        &node,
+        &agent_access,
         "test.context.local",
         vec![(
             crate::Collection::AgentContext,
@@ -408,20 +414,20 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
 #[tokio::test]
 async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
     crate::test_support::enable_scoped_event_capture();
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("control-watcher-health"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture(
+        "control-watcher-health",
         "backend-measured",
         "http://127.0.0.1:8113/v1",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    assert_ne!(fixture.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -537,20 +543,21 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
 #[tokio::test]
 async fn control_watcher_recovers_after_resolve_error() {
     crate::test_support::enable_scoped_event_capture();
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("control-watcher-recover"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture(
+        "control-watcher-recover",
         "backend-control-recover",
         "http://127.0.0.1:8112/v1",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let user_access = fixture.user_access.clone();
+    assert_ne!(fixture.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -589,7 +596,7 @@ async fn control_watcher_recovers_after_resolve_error() {
     );
 
     tokio::task::yield_now().await;
-    update_node_enabled(node.as_ref(), agent.node_did(), false).await;
+    update_node_enabled(&user_access, agent.node_did(), false).await;
 
     let failed_status =
         wait_for_runtime_reconcile_phase(node.as_ref(), agent.node_did(), "idle").await;
@@ -602,7 +609,7 @@ async fn control_watcher_recovers_after_resolve_error() {
         "a transient resolution failure must retry during the settle window"
     );
 
-    update_node_enabled(node.as_ref(), agent.node_did(), true).await;
+    update_node_enabled(&user_access, agent.node_did(), true).await;
 
     let snapshot = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
@@ -616,20 +623,21 @@ async fn control_watcher_recovers_after_resolve_error() {
 
 #[tokio::test]
 async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("control-watcher-tools"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture(
+        "control-watcher-tools",
         "backend-control-tools",
         "http://127.0.0.1:8113/v1",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let user_access = fixture.user_access.clone();
+    assert_ne!(fixture.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -670,12 +678,9 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
         "host": {"files": {"mode": "ReadOnly"}}
     }))
     .unwrap();
-    crate::store::config_client::write_tools_document(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        &tools,
-    )
-    .await
-    .unwrap();
+    crate::store::config_client::write_tools_document(&user_access, &tools)
+        .await
+        .unwrap();
 
     tokio::task::yield_now().await;
     tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.debounce + Duration::from_millis(10)).await;
@@ -697,20 +702,21 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
 
 #[tokio::test]
 async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("control-watcher-settle"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
+    let fixture = held_runtime_fixture(
+        "control-watcher-settle",
         "backend-settle",
         "http://127.0.0.1:8114/v1",
     )
     .await;
+    let node = fixture.db.node.clone();
+    let identity = fixture.db.node_identity.clone();
+    let user_access = fixture.user_access.clone();
+    assert_ne!(fixture.user.did(), identity.did());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
             tool_ceiling: ToolCeiling::meta_only(),
             ..Default::default()
         },
@@ -743,16 +749,24 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
             models,
         }
     };
-    crate::inference::backends::registry::record_model_catalog(
-        &node,
-        &backend,
-        catalog(
-            "2026-01-01T00:00:00Z",
-            vec![advertised("default"), advertised("retired-model")],
-        ),
-    )
-    .await
-    .unwrap();
+    let runtime_access = crate::ConfigAccess::local_as(node.clone(), node_did.parse().unwrap());
+    let first_catalog = catalog(
+        "2026-01-01T00:00:00Z",
+        vec![advertised("default"), advertised("retired-model")],
+    );
+    runtime_access
+        .transact_write("test.catalog.initial", |txn| {
+            let catalog = first_catalog.clone();
+            let backend = &backend;
+            Box::pin(async move {
+                crate::inference::backends::registry::record_model_catalog_in_txn(
+                    txn, backend, catalog,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
 
     let resolve_context = agent
         .document_runtime_context()
@@ -767,10 +781,17 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
 
     let subscription = subscribe_control_changes(&node).unwrap();
-    let spare_agent_did = format!("{selected_agent_did}:spare");
+    let spare = crate::store::identity::provision_agent_identity_authorized(
+        &node,
+        fixture.db.node_identity.as_ref(),
+        &fixture.user.did().parse().unwrap(),
+    )
+    .await
+    .unwrap();
+    let spare_agent_did = spare.agent_did.clone();
     let spare_profile_id = format!("{spare_agent_did}:inference");
     write_documents(
-        &node,
+        &user_access,
         "test.settle.spare",
         vec![
             (
@@ -787,19 +808,27 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
                 serde_json::json!({
                     "node_did": node_did,
                     "agent_did": spare_agent_did,
+                    "creation_nonce": spare.creation_nonce,
                     "inference_profile_id": spare_profile_id
                 }),
             ),
         ],
     )
     .await;
-    crate::inference::backends::registry::record_model_catalog(
-        &node,
-        &backend,
-        catalog("2026-01-02T00:00:00Z", vec![advertised("default")]),
-    )
-    .await
-    .unwrap();
+    let final_catalog = catalog("2026-01-02T00:00:00Z", vec![advertised("default")]);
+    runtime_access
+        .transact_write("test.catalog.final", |txn| {
+            let catalog = final_catalog.clone();
+            let backend = &backend;
+            Box::pin(async move {
+                crate::inference::backends::registry::record_model_catalog_in_txn(
+                    txn, backend, catalog,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
 
     let watcher_task = tokio::spawn(run_test_control_watcher(ControlWatcherInputs {
         node: node.clone(),

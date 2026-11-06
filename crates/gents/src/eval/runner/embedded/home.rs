@@ -308,7 +308,7 @@ impl EmbeddedHome {
     }
 
     #[cfg(test)]
-    pub(super) fn backend_admission(
+    pub(crate) fn backend_admission(
         &self,
     ) -> crate::store::local::backend_protection::BackendAdmission {
         self.backend_admission.clone()

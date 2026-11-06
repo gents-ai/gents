@@ -50,7 +50,7 @@ pub fn materialization_identity_for(did: &str) -> Arc<dyn NodeIdentity> {
 }
 
 pub struct TestDb {
-    home: EmbeddedHome,
+    pub(crate) home: EmbeddedHome,
     pub node: Arc<EmbeddedNode>,
     pub node_identity: Arc<dyn NodeIdentity>,
     pub process_generation: u64,
