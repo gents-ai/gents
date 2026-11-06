@@ -728,65 +728,61 @@ mod tests {
     #[tokio::test]
     async fn job_rows_keep_child_request_id_none() {
         use crate::tools::call::lifecycle::admission_fixture::{
-            claimed_request, publish_accepted_on_claimed_request, write_fixture_job_pin,
+            published_admission_with_owner, PublishedAdmissionOptions,
         };
         use crate::tools::call::lifecycle::AwaitMode;
 
-        const NODE_DID: &str = "did:test:job-timeline";
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let mut root = claimed_request(&node, "job-root", "job-root-session", NODE_DID).await;
-        let root_doc_id = root.request().doc_id.clone();
-        let call = publish_accepted_on_claimed_request(
-            node.clone(),
-            &mut root,
-            NODE_DID,
-            0,
-            "workflow",
-            "job-call",
-            serde_json::json!({"argv": ["run"]}),
-            AwaitMode::Background,
-            true,
-        )
+        let (fixture, root) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "job-timeline".into(),
+            tool_name: Some("workflow".into()),
+            await_mode: AwaitMode::Background,
+            job_pin: true,
+            ..Default::default()
+        })
         .await
         .unwrap();
-        let tool_doc_id = call.doc_id().unwrap().to_owned();
-        write_fixture_job_pin(&node, &tool_doc_id).await.unwrap();
+        let node = &fixture.node;
+        let root_id = root.request().request_id.clone();
+        let root_doc_id = root.request().doc_id.clone();
+        let tool_doc_id = fixture.tool.doc_id().unwrap().to_owned();
+        let tool_call_id = fixture.tool.tool_call_id().to_owned();
         for slot in ["alpha", "beta"] {
-            let response = node
-                .execute(&format!(
-                    r#"mutation {{ create_AgentRequest(input: {{
-                        request_id: "job-child-{slot}", purpose: "normal", node_did: "{NODE_DID}",
-                        agent_did: "general", session_id: "job-child-session-{slot}",
-                        content: "child", lifecycle_state: "completed", backend_id: "",
-                        created_at: "2026-08-26T00:00:00Z", retry_count: 0, request_hop: 1,
-                        caused_by_parent_request_id: "job-root",
-                        caused_by_parent_request_doc_id: "{root_doc}",
-                        caused_by_parent_tool_call_id: "job-call",
-                        caused_by_parent_tool_call_doc_id: "{tool_doc}"
-                    }}) {{ _docID }} }}"#,
-                    root_doc = escape_graphql_string(&root_doc_id),
-                    tool_doc = escape_graphql_string(&tool_doc_id),
-                ))
-                .await;
-            assert!(
-                !response.has_errors(),
-                "seed child {slot}: {:?}",
-                response.errors
-            );
+            let input = serde_json::json!({
+                "request_id": format!("job-child-{slot}"),
+                "purpose": "normal", "node_did": fixture.node_did,
+                "agent_did": root.request().agent_did,
+                "session_id": format!("job-child-session-{slot}"),
+                "content": "child", "lifecycle_state": "completed", "backend_id": "",
+                "created_at": "2026-08-26T00:00:00Z", "retry_count": 0, "request_hop": 1,
+                "caused_by_parent_request_id": root_id,
+                "caused_by_parent_request_doc_id": root_doc_id,
+                "caused_by_parent_tool_call_id": tool_call_id,
+                "caused_by_parent_tool_call_doc_id": tool_doc_id,
+            });
+            fixture.client.transact_write("test.timeline.historical_child", |txn| {
+                let input = &input;
+                Box::pin(async move {
+                    let response = txn.execute_client_signed_create(
+                        "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                        &serde_json::json!({"input":input}), gents_protocol::schemas::AGENT_REQUEST,
+                    ).await?;
+                    crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            }).await.unwrap();
         }
-
-        let rows = load_run_timeline_rows(&ConfigAccess::local(node.clone()), "job-root")
+        let rows = load_run_timeline_rows(&fixture.client, &root_id)
             .await
             .unwrap();
 
         let job = rows
             .tool_calls
             .iter()
-            .find(|row| row.tool_call_id == "job-call")
+            .find(|row| row.tool_call_id == tool_call_id)
             .expect("the job row");
         assert_eq!(job.child_request_id, None);
         node.shutdown().await.expect("node shutdown");
+        tokio::fs::remove_dir_all(fixture.path).await.unwrap();
     }
 
     #[tokio::test]
