@@ -143,4 +143,11 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
         });
     assert!(notification.contains("status=\"failed\""));
     assert!(notification.contains("<reason>tool_panicked</reason>"));
+    hook_execution_fixtures()
+        .lock()
+        .await
+        .remove(&hook_execution_fixture_key(
+            &hook,
+            "request-background-panic",
+        ));
 }

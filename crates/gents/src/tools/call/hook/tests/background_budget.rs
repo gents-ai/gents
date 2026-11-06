@@ -4,6 +4,106 @@ use crate::store::identity::NodeIdentity;
 
 struct PendingTool;
 
+struct BudgetHookFixture {
+    db: crate::support::TestDb,
+    user: crate::KeyIdentity,
+    owner: crate::ConfigAccess,
+    agent: Arc<dyn NodeIdentity>,
+    access: crate::ConfigAccess,
+    hook: DefraSessionHook,
+    request_id: String,
+    session_id: String,
+}
+
+async fn budget_hook_fixture(
+    name: &str,
+    registry: BackgroundToolRegistry,
+    executions: BackgroundExecutionRegistry,
+) -> BudgetHookFixture {
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+
+    let (db, user, owner, binding) = crate::test_support::signed_test_node(name).await;
+    let node = db.node.clone();
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let request_id = format!("request-{name}-{}", uuid::Uuid::new_v4());
+    let session_id = format!("session-{name}-{}", uuid::Uuid::new_v4());
+    let create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        &request_id,
+        db.node_identity.did(),
+        user.did(),
+        agent.did(),
+        &session_id,
+        "spawn",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        AgentRequestAdmissionRecord::client(user.did()),
+    );
+    let mut lifecycle =
+        crate::tools::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            &node,
+            &owner,
+            db.node_identity.clone(),
+            &user,
+            agent.as_ref(),
+            create,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        crate::request::lifecycle::ClaimOutcome::Claimed
+    );
+    let hook = DefraSessionHook::resume_with_actor_policy(
+        node,
+        &session_id,
+        db.node_identity.did(),
+        Some(user.did()),
+        agent.did().parse().unwrap(),
+        FailurePolicy::default(),
+    )
+    .await
+    .unwrap()
+    .with_managed_identity(agent.as_ref())
+    .unwrap()
+    .with_background_tool_registry(registry)
+    .with_background_execution_registry(executions);
+    bind_claimed_hook_request(&hook, lifecycle, Utc::now() + chrono::Duration::minutes(5)).await;
+    BudgetHookFixture {
+        db,
+        user,
+        owner,
+        agent,
+        access,
+        hook,
+        request_id,
+        session_id,
+    }
+}
+
+async fn tool_row(access: &crate::ConfigAccess, session: &str, tool: &str) -> serde_json::Value {
+    let session = crate::store::graphql::escape_graphql_string(session);
+    let tool = crate::store::graphql::escape_graphql_string(tool);
+    let response = access.execute(&format!(r#"{{ AgentToolCall(filter: {{session_id: {{_eq: "{session}"}}, tool_call_id: {{_eq: "{tool}"}}}}, limit: 2) {{ _docID request_doc_id node_did requester_did session_id lifecycle_state await_mode deadline_at selected_service_id selected_tool_name }} }}"#)).await.unwrap();
+    let [row] = response["data"]["AgentToolCall"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("selected Agent must read exactly one tool call: {response}");
+    };
+    row.clone()
+}
+
 impl ToolDyn for PendingTool {
     fn name(&self) -> String {
         "slow_tool".into()
@@ -32,13 +132,17 @@ async fn invoke(hook: &DefraSessionHook, id: &str, name: &str, args: &str) -> se
     serde_json::from_str(&reason).unwrap()
 }
 
-async fn assert_background_rows(node: &EmbeddedNode, request: &str, count: usize, state: &str) {
-    let response = node.execute(&format!(
+async fn assert_background_rows(
+    access: &crate::ConfigAccess,
+    request: &str,
+    count: usize,
+    state: &str,
+) {
+    let response = access.execute(&format!(
         r#"{{ AgentToolCall(filter: {{ request_id: {{_eq: "{}"}}, await_mode: {{_eq: "background"}} }}) {{ _docID lifecycle_state tool_name }} }}"#,
         crate::store::graphql::escape_graphql_string(request),
-    )).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let data = response.data.unwrap();
+    )).await.unwrap();
+    let data = &response["data"];
     let rows = data["AgentToolCall"].as_array().unwrap();
     assert_eq!(rows.len(), count);
     for row in rows {
@@ -53,43 +157,21 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         .iter()
         .find(|w| w.witness_kind == "admission_bound")
         .expect("modeled admission bound");
-    let dir = tempfile::tempdir().unwrap();
-    let identity =
-        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
-            .unwrap();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(dir.path())
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
     let executions = BackgroundExecutionRegistry::default();
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
-            .with_background_tool_registry(BackgroundToolRegistry::from_tools(
-                vec![Box::new(PendingTool)],
-                &["slow_tool".into()],
-            ))
-            .with_background_execution_registry(executions.clone());
+    let registry =
+        BackgroundToolRegistry::from_tools(vec![Box::new(PendingTool)], &["slow_tool".into()]);
+    let fixture = budget_hook_fixture("background-budget", registry, executions.clone()).await;
+    let BudgetHookFixture {
+        db,
+        access,
+        hook,
+        request_id,
+        session_id: session,
+        ..
+    } = fixture;
+    let node = db.node.clone();
     hook.on_completion_call(&user_text_message("fill background capacity"), &[])
         .await;
-    let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_did(&node, &session, identity.did(), "general")
-        .await
-        .unwrap();
-    let request_id = format!("budget-{}", uuid::Uuid::new_v4());
-    bind_interruptible_request(
-        &node,
-        &hook,
-        &request_id,
-        &session,
-        Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
     let args = r#"{"tool_name":"slow_tool","args":{}}"#;
     let mut children = Vec::new();
     for index in 0..witness.numeric_bound {
@@ -97,9 +179,9 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         assert_eq!(receipt["status"], "running");
         assert_eq!(receipt["await_mode"], witness.kind_field("await_mode"));
         let child = receipt["tool_call_id"].as_str().unwrap().to_owned();
-        let row = fetch_tool_call_row(&node, &session, &child).await;
+        let row = tool_row(&access, &session, &child).await;
         assert_eq!(row["await_mode"], witness.kind_field("await_mode"));
-        assert_background_rows(&node, &request_id, index + 1, "running").await;
+        assert_background_rows(&access, &request_id, index + 1, "running").await;
         children.push(child);
     }
     let denied = invoke(&hook, "budget-overflow", "spawn_process", args).await;
@@ -115,14 +197,14 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         denied["max_backgrounded"].as_u64(),
         Some(witness.numeric_bound as u64)
     );
-    assert_background_rows(&node, &request_id, witness.numeric_bound, "running").await;
+    assert_background_rows(&access, &request_id, witness.numeric_bound, "running").await;
     for (index, child) in children.iter().enumerate() {
         let args = json!({"tool_call_id": child}).to_string();
         let result = invoke(&hook, &format!("cancel-{index}"), "cancel_process", &args).await;
         assert_eq!(result["status"], "cancelled");
         executions.wait_for_completion(child).await;
     }
-    assert_background_rows(&node, &request_id, witness.numeric_bound, "cancelled").await;
+    assert_background_rows(&access, &request_id, witness.numeric_bound, "cancelled").await;
     let batch = crate::lean_vocab_test::lean_r6_backgrounding_cases()
         .iter()
         .filter(|case| case.group == "budget_batch")
@@ -186,7 +268,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         batch.iter().filter(|case| case.legal).count()
     );
     assert_eq!(rejected, batch.iter().filter(|case| !case.legal).count());
-    let data = crate::ConfigAccess::local(node.clone()).execute(&format!(
+    let data = access.execute(&format!(
         r#"{{ AgentToolCall(filter: {{ request_id: {{_eq: "{}"}}, await_mode: {{_eq: "background"}}, lifecycle_state: {{_eq: "running"}} }}) {{ _docID tool_call_id }} }}"#,
         crate::store::graphql::escape_graphql_string(&request_id),
     )).await.unwrap();
@@ -206,7 +288,10 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         assert_eq!(result["status"], "cancelled");
         executions.wait_for_completion(child).await;
     }
-    hook_execution_fixtures().lock().await.remove(&request_id);
+    hook_execution_fixtures()
+        .lock()
+        .await
+        .remove(&hook_execution_fixture_key(&hook, &request_id));
     node.shutdown().await.expect("shut down test node");
 }
 
@@ -234,22 +319,24 @@ impl ToolDyn for NamedPendingTool {
 
 #[tokio::test]
 async fn configured_background_lifetimes_and_waits_follow_the_target() {
-    let dir = tempfile::tempdir().unwrap();
-    let identity =
-        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
-            .unwrap();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(dir.path())
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
+    let executions = BackgroundExecutionRegistry::default();
+    let fixture = budget_hook_fixture(
+        "configured-background-timeouts",
+        BackgroundToolRegistry::default(),
+        executions.clone(),
+    )
+    .await;
+    let BudgetHookFixture {
+        db,
+        access,
+        hook,
+        request_id,
+        session_id: session,
+        ..
+    } = fixture;
+    let node = db.node.clone();
     let tools: crate::documents::Tools = serde_json::from_value(json!({
-        "tools_id": "timed", "node_did": identity.did(),
+        "tools_id": "timed", "node_did": db.node_identity.did(),
         "host": {"bash": {"mode": "ReadOnly", "background_enabled": true,
             "background_timeout_secs": 60}},
         "remote": {"services": [{"mcp_service_id": "search", "style": "flat",
@@ -262,33 +349,17 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
         allowlist: vec!["bash".into(), remote_name.clone()],
         timeouts: crate::tools::surface::ToolTimeouts::from_document(&tools).background,
     };
-    let executions = BackgroundExecutionRegistry::default();
-    let hook =
-        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
-            .with_background_tool_registry(BackgroundToolRegistry::from_config(
-                vec![
-                    Box::new(NamedPendingTool("bash".into())),
-                    Box::new(NamedPendingTool(remote_name.clone())),
-                ],
-                &config,
-            ))
-            .with_remote_tools(tools.remote.clone())
-            .with_background_execution_registry(executions.clone());
+    let hook = hook
+        .with_background_tool_registry(BackgroundToolRegistry::from_config(
+            vec![
+                Box::new(NamedPendingTool("bash".into())),
+                Box::new(NamedPendingTool(remote_name.clone())),
+            ],
+            &config,
+        ))
+        .with_remote_tools(tools.remote.clone());
     hook.on_completion_call(&user_text_message("configured background"), &[])
         .await;
-    let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_did(&node, &session, identity.did(), "general")
-        .await
-        .unwrap();
-    let request_id = format!("timed-{}", uuid::Uuid::new_v4());
-    bind_interruptible_request(
-        &node,
-        &hook,
-        &request_id,
-        &session,
-        Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
 
     let mut children = Vec::new();
     for (index, (tool, lifetime, selected)) in [
@@ -308,7 +379,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
             "{receipt}"
         );
         let child = receipt["tool_call_id"].as_str().unwrap().to_owned();
-        let row = fetch_tool_call_row(&node, &session, &child).await;
+        let row = tool_row(&access, &session, &child).await;
         let deadline = chrono::DateTime::parse_from_rfc3339(row["deadline_at"].as_str().unwrap())
             .unwrap()
             .with_timezone(&Utc);
@@ -356,7 +427,10 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
         assert_eq!(result["status"], "cancelled");
         executions.wait_for_completion(child).await;
     }
-    hook_execution_fixtures().lock().await.remove(&request_id);
+    hook_execution_fixtures()
+        .lock()
+        .await
+        .remove(&hook_execution_fixture_key(&hook, &request_id));
     node.shutdown().await.expect("shut down test node");
 }
 
@@ -384,43 +458,29 @@ impl ToolDyn for NoisyTool {
 
 #[tokio::test]
 async fn background_completion_summary_honors_the_configured_output_budget() {
-    let dir = tempfile::tempdir().unwrap();
-    let identity =
-        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
-            .unwrap();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(dir.path())
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
     let executions = BackgroundExecutionRegistry::default();
-    let mut hook =
-        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
-            .with_background_tool_registry(BackgroundToolRegistry::from_tools(
-                vec![Box::new(NoisyTool("bash".into()))],
-                &["bash".into()],
-            ))
-            .with_background_execution_registry(executions.clone());
-    let session = hook.session_id().await.unwrap();
-    let request_id = format!("budgeted-{}", uuid::Uuid::new_v4());
-    bind_managed_hook_request(
-        &mut hook,
-        &request_id,
-        &identity,
-        Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
-    let agent = hook_managed_identity(&hook, &request_id).await;
+    let registry = BackgroundToolRegistry::from_tools(
+        vec![Box::new(NoisyTool("bash".into()))],
+        &["bash".into()],
+    );
+    let fixture =
+        budget_hook_fixture("background-output-budget", registry, executions.clone()).await;
+    let BudgetHookFixture {
+        db,
+        user,
+        owner,
+        agent,
+        access,
+        hook,
+        request_id,
+        session_id: session,
+    } = fixture;
+    let node = db.node.clone();
     {
         use crate::store::config_client::{
-            apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
-            DesiredStateApplyPlan,
+            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
-        let tools = json!({"node_did": identity.did(), "tools_id": format!("{}:tools", agent.did()),
+        let tools = json!({"node_did": db.node_identity.did(), "tools_id": format!("{}:tools", agent.did()),
             "host": {"bash": {"mode": "ReadOnly", "background_enabled": true,
                 "max_output_chars": 10}}});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -429,12 +489,13 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
             update: tools,
         }])
         .unwrap();
-        ConfigAccess::transact_local_write(&node, None, "test.output_budget", |txn| {
-            let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
-        })
-        .await
-        .unwrap();
+        owner
+            .transact_write("test.output_budget", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            })
+            .await
+            .unwrap();
     }
     hook.on_completion_call(&user_text_message("budgeted background"), &[])
         .await;
@@ -447,12 +508,17 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
     .await;
     let child = receipt["tool_call_id"].as_str().unwrap().to_owned();
     executions.wait_for_completion(&child).await;
-    let row = fetch_tool_call_row(&node, &session, &child).await;
+    let row = tool_row(&access, &session, &child).await;
     assert_eq!(row["lifecycle_state"], "completed", "{row}");
 
-    let history = crate::session::load_history(&node, &session, identity.did(), Some(agent.did()))
-        .await
-        .unwrap();
+    let history = crate::session::load_history_with_access(
+        &access,
+        &session,
+        db.node_identity.did(),
+        Some(user.did()),
+    )
+    .await
+    .unwrap();
     let marker = format!("<tool-completion tool_call_id=\"{child}\"");
     let notification = history
         .iter()
@@ -474,10 +540,9 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
 
     {
         use crate::store::config_client::{
-            apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
-            DesiredStateApplyPlan,
+            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
-        let tools = json!({"node_did": identity.did(), "tools_id": format!("{}:tools", agent.did()),
+        let tools = json!({"node_did": db.node_identity.did(), "tools_id": format!("{}:tools", agent.did()),
             "host": {"bash": {"mode": "ReadOnly", "background_enabled": true,
                 "max_output_chars": 25}}});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -486,22 +551,18 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
             update: tools,
         }])
         .unwrap();
-        ConfigAccess::transact_local_write(&node, None, "test.output_budget", |txn| {
-            let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
-        })
-        .await
-        .unwrap();
+        owner
+            .transact_write("test.output_budget", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            })
+            .await
+            .unwrap();
     }
     let tool_doc_id = row["_docID"].as_str().unwrap();
     crate::tools::background::completion::append_background_tool_completion(
         &node,
-        &crate::ConfigAccess::local_managed_agent(
-            node.clone(),
-            identity::Did::new(agent.did()).unwrap(),
-            agent.as_ref(),
-        )
-        .unwrap(),
+        &access,
         &session,
         &request_id,
         tool_doc_id,
@@ -513,9 +574,14 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
     )
     .await
     .expect("redrive after a budget change replays the published notice");
-    let history = crate::session::load_history(&node, &session, identity.did(), Some(agent.did()))
-        .await
-        .unwrap();
+    let history = crate::session::load_history_with_access(
+        &access,
+        &session,
+        db.node_identity.did(),
+        Some(user.did()),
+    )
+    .await
+    .unwrap();
     let notices = history
         .iter()
         .filter_map(|message| match message {
@@ -527,6 +593,9 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
         .count();
     assert_eq!(notices, 1, "redrive must not publish a second notice");
 
-    hook_execution_fixtures().lock().await.remove(&request_id);
+    hook_execution_fixtures()
+        .lock()
+        .await
+        .remove(&hook_execution_fixture_key(&hook, &request_id));
     node.shutdown().await.expect("shut down test node");
 }
