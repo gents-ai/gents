@@ -156,6 +156,7 @@ pub(super) fn trusted_delete_schema(collection: &str) -> Option<&'static str> {
         gents_protocol::schemas::WORKSPACE_ROOT_NAME,
         gents_protocol::schemas::PACK_INSTALLATION_NAME,
         gents_protocol::schemas::BACKEND_CREDENTIAL_NAME,
+        gents_protocol::schemas::OAUTH_CREDENTIAL_NAME,
         gents_protocol::schemas::INFERENCE_BACKEND_OBSERVATION_NAME,
         gents_protocol::schemas::GOAL_NAME,
         gents_protocol::schemas::GOAL_CREATION_CLAIM_NAME,

@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use serde_json::Value;
 
 use super::*;
 
@@ -210,27 +209,15 @@ pub async fn remove_account_in_txn(
             "query {{ OAuthCredential(filter: {filter}) {{ {OAUTH_CREDENTIAL_FIELDS} }} }}"
         ))
         .await?;
-    oauth_credentials_from_response(&response)
+    let row = oauth_credentials_from_response(&response)
         .into_iter()
         .next()
         .ok_or_else(|| account_not_found(credential_id))??;
-    let response = txn
-        .execute(&format!(
-            "mutation {{ delete_OAuthCredential(filter: {filter}) {{ _docID }} }}"
-        ))
+    let doc_id = row
+        .doc_id
+        .as_deref()
+        .context("stored OAuthCredential has no _docID")?;
+    txn.delete_configuration_document(gents_protocol::schemas::OAUTH_CREDENTIAL_NAME, doc_id)
         .await?;
-    ensure_matched(&response, "delete_OAuthCredential", credential_id)?;
     Ok(())
-}
-
-fn ensure_matched(response: &Value, field: &str, credential_id: &str) -> Result<()> {
-    if response
-        .get("data")
-        .and_then(|data| data.get(field))
-        .is_some_and(crate::store::graphql::response_has_documents)
-    {
-        Ok(())
-    } else {
-        Err(account_not_found(credential_id))
-    }
 }
