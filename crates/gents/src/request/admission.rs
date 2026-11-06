@@ -2519,6 +2519,8 @@ mod tests {
     async fn runtime_receipt_authenticates_terminal_expired_child_and_rejects_forgery() {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("receipt.key"), None).unwrap();
+        let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
+        let agent = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
         let node = std::sync::Arc::new(
             defra_node::Node::builder()
                 .with_node_identity_did(identity.did())
@@ -2527,22 +2529,23 @@ mod tests {
                 .unwrap(),
         );
         ensure_runtime_schemas(&node).await.unwrap();
+        // A runtime-local-control receipt is issued and signed by the target Agent itself.
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "receipt-child",
             identity.did(),
             identity.did(),
-            "agent-1",
+            agent.did(),
             "receipt-session",
             "original continuation",
             "scheduled",
             "2020-01-01T00:00:00Z",
-            AgentRequestAdmissionRecord::runtime_local_control(identity.did(), "receipt-parent"),
+            AgentRequestAdmissionRecord::runtime_local_control(agent.did(), "receipt-parent"),
         );
         create.caused_by_parent_request_id = Some("receipt-parent".into());
         create.caused_by_parent_request_doc_id = Some("receipt-parent-doc".into());
         create.valid_until = Some("2020-01-01T00:00:01Z".into());
-        crate::sign_agent_request_create(&identity, &mut create)
+        crate::sign_agent_request_create(agent.as_ref(), &mut create)
             .await
             .unwrap();
         let response = node.execute(&create.graphql_mutation().unwrap()).await;
