@@ -814,6 +814,153 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_non_admin_tools_writer_cannot_grant_managed_agent_schema_authority(
+    ) -> anyhow::Result<()> {
+        use crate::store::config_client::{ConfigAccess, GraphqlEndpoint};
+        use serde_json::json;
+
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("runtime");
+        let runtime = crate::KeyIdentity::load_or_create(&path, None)?;
+        let user = crate::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
+        let binding = crate::store::identity::provision_agent_identity(&runtime)?;
+        let key = crate::store::identity::load_file_identity(&path)?.private_key_bytes();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let projector = Arc::new(
+            super::super::runtime_document_projection::RuntimeDocumentProjector::new(
+                Arc::new(crate::KeyIdentity::load_or_create(&path, None)?),
+                crate::tools::surface::ToolCeiling::meta_only(),
+            )?,
+        );
+        let node = Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(runtime.did())
+                .with_signing_key(defra_node::SigningKey::Ed25519(key))
+                .with_node_acp_enabled()
+                .with_http(defra_node::HttpConfig::with_listener(listener)?)
+                .with_document_projector(projector)
+                .build()
+                .await?,
+        );
+        crate::ensure_runtime_schemas(&node).await?;
+        let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+        let user_did = identity::Did::new(user.did())?;
+        let agent_did = identity::Did::new(&binding.agent_did)?;
+        for permission in [
+            NodePermission::CollectionGet,
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+        ] {
+            owner.grant_node_permission(&user_did, permission).await?;
+        }
+        let node_value = escape_graphql_string(runtime.did());
+        let agent_value = escape_graphql_string(&binding.agent_did);
+        let nonce = escape_graphql_string(&binding.creation_nonce);
+        let response = owner.write("test.http_projection.tools", &format!(
+            r#"mutation {{ create_Tools(input: {{node_did:"{node_value}",tools_id:"http-tools",display_name:"before",built_ins:{{enable_schema_tool:false}}}}) {{_docID}} }}"#
+        )).await?;
+        let tools_doc = crate::store::graphql::created_doc_id(&response, "Tools")?;
+        for mutation in [
+            format!(
+                r#"mutation {{ create_AgentContext(input: {{node_did:"{node_value}",context_id:"http-context",tools_id:"http-tools"}}) {{_docID}} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"{nonce}",context_id:"http-context",enabled:true}}) {{_docID}} }}"#
+            ),
+        ] {
+            owner.write("test.http_projection.setup", &mutation).await?;
+        }
+        owner
+            .add_actor_relationship("Tools", &tools_doc, "writer", &user_did)
+            .await?;
+        assert!(!node.nac_manager().is_admin(&user_did).await?);
+        assert!(
+            !node
+                .nac_manager()
+                .check_permission(&agent_did, NodePermission::CollectionPatch)
+                .await?
+        );
+        let model = crate::lean_vocab_test::lean_identity_household_cases()
+            .iter()
+            .find(|case| case.name == "configuration-explicit-grants")
+            .expect("configuration model");
+        let model_non_admin = model
+            ._tool_grantor_cases
+            .iter()
+            .find(|case| {
+                case["committed"] == true
+                    && case["admins"]
+                        .as_array()
+                        .is_some_and(|admins| !admins.contains(&case["grantor"]))
+            })
+            .expect("non-admin writer model");
+        assert!(model_non_admin["expected_grants"]
+            .as_array()
+            .expect("modeled grants")
+            .is_empty());
+
+        let access = ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), user.did())
+                .with_client_signing_capability(user.client_signing_capability()?)?
+                .with_client_signed_agent_creates(),
+        );
+        let mutation = format!(
+            r#"mutation($input: ToolsMutationInputArg!) {{ update_Tools(docID:"{}", input:$input) {{_docID}} }}"#,
+            escape_graphql_string(&tools_doc)
+        );
+        let harmless = json!({"input":{"display_name":"reviewed"}});
+        let response = access
+            .transact_write("test.http_projection.harmless", |txn| {
+                let (mutation, harmless) = (&mutation, &harmless);
+                Box::pin(async move {
+                    txn.execute_desired_state_mutation(
+                        mutation,
+                        harmless,
+                        crate::Collection::Tools,
+                        false,
+                    )
+                    .await
+                })
+            })
+            .await?;
+        assert_eq!(response["data"]["update_Tools"][0]["_docID"], tools_doc);
+        let elevated = json!({"input":{"built_ins":{"enable_schema_tool":true}}});
+        let failure = access
+            .transact_write("test.http_projection.denied", |txn| {
+                let (mutation, elevated) = (&mutation, &elevated);
+                Box::pin(async move {
+                    txn.execute_desired_state_mutation(
+                        mutation,
+                        elevated,
+                        crate::Collection::Tools,
+                        false,
+                    )
+                    .await
+                })
+            })
+            .await
+            .expect_err("a non-admin cannot create the required native source grant");
+        assert!(failure.is_permission_denied(), "{failure:?}");
+        assert!(!failure.is_retryable_database_conflict());
+        let persisted = owner.execute(&format!(r#"{{ Tools(filter: {{_docID: {{_eq: "{}"}}}}) {{ _docID display_name built_ins }} }}"#, escape_graphql_string(&tools_doc))).await?;
+        assert_eq!(persisted["data"]["Tools"][0]["_docID"], tools_doc);
+        assert_eq!(persisted["data"]["Tools"][0]["display_name"], "reviewed");
+        assert_eq!(
+            persisted["data"]["Tools"][0]["built_ins"]["enable_schema_tool"],
+            false
+        );
+        assert!(
+            !node
+                .nac_manager()
+                .check_permission(&agent_did, NodePermission::CollectionPatch)
+                .await?
+        );
+        node.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn user_signed_configuration_cannot_grant_schema_to_foreign_identity(
     ) -> anyhow::Result<()> {
         use crate::store::config_client::{ConfigAccess, GraphqlEndpoint};
