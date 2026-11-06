@@ -423,7 +423,7 @@ pub(crate) async fn install_remote(
         .chain(dependencies.iter())
         .map(|source| source.digest().to_owned())
         .collect::<Vec<_>>();
-    let session = PackInstallSession::start(endpoint, request, owner, &digests).await?;
+    let mut session = PackInstallSession::start(endpoint, request, owner, &digests).await?;
     let preparation = session.preparation().clone();
     let access = gents::store::config_client::ConfigAccess::Graphql(endpoint.clone());
     let requested = crate::commands::pack::parse_inference_slot_bindings(&args.inference_slots)?;
@@ -441,6 +441,15 @@ pub(crate) async fn install_remote(
     )
     .await?;
     let graph = gents::pack::hosted_document_graph(pack.archive(), &prepared, explicit)?;
+    gents::pack::apply_prepared_dependency_schemas(&access, &prepared).await?;
+    let temp = tempfile::tempdir()?;
+    let root = pack.shared_archive();
+    let path = temp.path().to_owned();
+    tokio::task::spawn_blocking(move || gents::pack::materialize::materialize(&root, &path))
+        .await
+        .context("materializing the reviewed root pack")??;
+    crate::commands::schema::apply_pack_schemas_if_present(&access, temp.path()).await?;
+    send(&mut session.socket, json!({"type": "schemas_ready"})).await?;
     let replay = std::sync::Arc::new(PackReplaySession::new(session));
     let access = gents::store::config_client::ConfigAccess::Graphql(
         endpoint.clone().with_pack_replay(replay.clone())?,
