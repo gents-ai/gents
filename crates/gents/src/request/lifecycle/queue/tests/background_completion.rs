@@ -568,29 +568,44 @@ fn wake_agent_request(
 #[tokio::test]
 async fn notification_is_atomically_bound_to_coalesced_wake() {
     let db = test_db("atomic-background-notification").await;
-    let parent = root_parent(&db, "atomic-background-session").await;
-    let first = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "first notification",
-        "background-completion-notification:first:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
-    )
-    .await
-    .unwrap();
-    let second = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "second notification",
-        "background-completion-notification:second:tool",
-        "review notifications",
-        background_hints(&parent),
-        None,
-    )
-    .await
-    .unwrap();
+    let mut fixture = canonical_background_fixture(&db, "atomic-background-session").await;
+    let parent = fixture.parent.clone();
+    let first_tool = fixture
+        .prepare_notification("first notification")
+        .await
+        .unwrap();
+    let second_tool = fixture
+        .prepare_notification("second notification")
+        .await
+        .unwrap();
+    let selection = fixture.writer.terminal_output(&parent.doc_id).await;
+    fixture
+        .lifecycle
+        .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
+        .await
+        .unwrap();
+    let first = fixture
+        .publish_prepared_notification(
+            "first notification",
+            "background-completion-notification:first:tool",
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &first_tool,
+        )
+        .await
+        .unwrap();
+    let second = fixture
+        .publish_prepared_notification(
+            "second notification",
+            "background-completion-notification:second:tool",
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &second_tool,
+        )
+        .await
+        .unwrap();
     assert!(first.created_request);
     assert!(!second.created_request);
     assert_eq!(
@@ -607,13 +622,8 @@ async fn notification_is_atomically_bound_to_coalesced_wake() {
         }}"#,
         escape_graphql_string(&first.request.as_ref().expect("non-Goal wake").doc_id)
     );
-    let wake_response = db.node.execute(&wake_query).await;
-    assert!(
-        !wake_response.has_errors(),
-        "wake query: {:?}",
-        wake_response.errors
-    );
-    let wake = &wake_response.data.as_ref().unwrap()["AgentRequest"][0];
+    let wake_response = db.agent_access.execute(&wake_query).await.unwrap();
+    let wake = &wake_response["data"]["AgentRequest"][0];
     assert_eq!(
         wake["caused_by_parent_request_id"].as_str(),
         Some(parent.request_id.as_str())
@@ -626,21 +636,14 @@ async fn notification_is_atomically_bound_to_coalesced_wake() {
     let query = format!(
         r#"{{
             AgentMessage(
-                filter: {{ session_id: {{ _eq: "{}" }} }},
+                filter: {{ session_id: {{ _eq: "{}" }}, message_key: {{ _like: "background-completion-notification:%:tool" }} }},
                 order: {{ sequence: ASC }}
             ) {{ request_doc_id }}
         }}"#,
         escape_graphql_string(&parent.session_id)
     );
-    let response = db.node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "message query: {:?}",
-        response.errors
-    );
-    let rows = response.data.as_ref().unwrap()["AgentMessage"]
-        .as_array()
-        .unwrap();
+    let response = db.agent_access.execute(&query).await.unwrap();
+    let rows = response["data"]["AgentMessage"].as_array().unwrap();
     assert_eq!(rows.len(), 2);
     for row in rows {
         assert_eq!(
@@ -659,30 +662,43 @@ async fn notification_is_atomically_bound_to_coalesced_wake() {
 #[tokio::test]
 async fn duplicate_notification_key_recovers_its_original_wake_binding() {
     let db = test_db("atomic-background-idempotent-notification").await;
-    let parent = root_parent(&db, "atomic-background-idempotent-notification-session").await;
+    let mut fixture =
+        canonical_background_fixture(&db, "atomic-background-idempotent-notification-session")
+            .await;
+    let parent = fixture.parent.clone();
     let message_key = "background-completion-notification:idempotent:tool";
-    let first = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "idempotent notification",
-        message_key,
-        "review notifications",
-        background_hints(&parent),
-        None,
-    )
-    .await
-    .unwrap();
-    let retry = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "idempotent notification",
-        message_key,
-        "review notifications",
-        background_hints(&parent),
-        None,
-    )
-    .await
-    .unwrap();
+    let tool = fixture
+        .prepare_notification("idempotent notification")
+        .await
+        .unwrap();
+    let selection = fixture.writer.terminal_output(&parent.doc_id).await;
+    fixture
+        .lifecycle
+        .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
+        .await
+        .unwrap();
+    let first = fixture
+        .publish_prepared_notification(
+            "idempotent notification",
+            message_key,
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &tool,
+        )
+        .await
+        .unwrap();
+    let retry = fixture
+        .publish_prepared_notification(
+            "idempotent notification",
+            message_key,
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &tool,
+        )
+        .await
+        .unwrap();
 
     assert_eq!(
         retry.request.as_ref().expect("non-Goal wake").doc_id,
@@ -699,17 +715,17 @@ async fn duplicate_notification_key_recovers_its_original_wake_binding() {
     assert_eq!(retry.message_sequence, first.message_sequence);
     assert!(!retry.created_request);
 
-    let conflict = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "changed notification",
-        message_key,
-        "review notifications",
-        background_hints(&parent),
-        None,
-    )
-    .await
-    .unwrap_err();
+    let conflict = fixture
+        .publish_prepared_notification(
+            "changed notification",
+            message_key,
+            "review notifications",
+            background_hints(&parent),
+            None,
+            &tool,
+        )
+        .await
+        .unwrap_err();
     assert!(
         conflict
             .to_string()
