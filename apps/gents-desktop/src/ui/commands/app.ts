@@ -1,4 +1,12 @@
-import { Inbox, LayoutGrid, ListTree, Package, Play, Plus, Settings } from "lucide-react";
+import {
+  Inbox,
+  LayoutGrid,
+  ListTree,
+  Package,
+  Play,
+  Plus,
+  Settings,
+} from "lucide-react";
 import { navigate } from "@/lib/router";
 import { flag } from "@/preferences";
 import { registerCommand } from "./commands";
