@@ -444,7 +444,7 @@ theorem invoke_is_distinct_and_revocable :
 
 theorem invoke_only_preserves_session_isolation :
     observed initial invokeOnlySessionActions =
-      [true, true, false, true, true, true, true, true, false] := by native_decide
+      [true, true, false, true, true, true, false, true, false] := by native_decide
 
 theorem request_session_reader_is_revocable :
     observed initial requestSessionChanges = [false, true, false] := by native_decide
@@ -472,7 +472,7 @@ theorem household_ownership_and_isolation :
     [true, true, true, true, true, false, false, false, true, false] := by native_decide
 
 theorem household_revocation : observed initial changes =
-    [true, true, false, false, true, false, true, false, false, true, true, false,
+    [true, true, false, false, true, false, false, false, false, true, true, false,
      true, true, true, false, true, false, false] := by native_decide
 
 theorem operations_follow_cause_and_preserve_user_visibility :

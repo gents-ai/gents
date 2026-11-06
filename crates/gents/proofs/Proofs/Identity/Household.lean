@@ -117,7 +117,7 @@ def policy : List ResourceDefinition :=
       relations := [⟨"parent", ["agents"], []⟩, ⟨"reader", ["actor"], []⟩,
         ⟨"working_agent", ["actor"], []⟩]
       permissions := [permission "read" ["reader", "working_agent"] [("parent", "session_read")],
-        permission "update" ["working_agent"] [("parent", "session_admin"), ("parent", "session_writer")],
+        permission "update" ["working_agent"] [("parent", "session_admin")],
         permission "delete" [] [("parent", "session_admin")]] }
   , { name := "delivered_requests"
       relations := [⟨"parent", ["agents"], []⟩, ⟨"session", ["sessions"], []⟩,
