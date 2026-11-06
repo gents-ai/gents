@@ -509,7 +509,7 @@ async fn staged_evidence_wins_over_the_persisted_one() {
     finish(admission).await;
 }
 
-use crate::tools::background::job::input::tests::{live_settings, new_job, request, resume_block};
+use crate::tools::background::job::input::tests::{live_settings, new_job, request_as, resume_block};
 use crate::tools::background::job::keys::{job_session_id, job_spawn_key};
 use crate::tools::background::job::records::{write_progress_in_txn, HostProgressFacts};
 use gents_protocol::job::{JobBudget, JobPolicy};
@@ -549,8 +549,8 @@ async fn read_step_row_carries_the_pin_progress_and_derived_children() {
     let pin = job.pin(&row, None);
     job.write_pin(&row, &pin).await;
     job.write_progress(&row, JobState::Running, 1).await;
-    request(
-        &job.node,
+    request_as(
+        &job.access,
         &row,
         "child-1",
         &job_session_id(&row, "slot-a", 0),
@@ -1112,8 +1112,8 @@ async fn job_step_runs_without_a_tool_dispatcher() {
 #[tokio::test]
 async fn failed_slot_shows_state_failed_while_the_row_keeps_running() {
     let step = stepper(json!({"effects": {}})).await;
-    request(
-        &step.job.node,
+    request_as(
+        &step.job.access,
         &step.row,
         "child-1",
         &job_session_id(&step.row, "slot-a", 0),
@@ -1283,8 +1283,8 @@ async fn stale_step_is_discarded_and_restepped_from_fresh_input() {
 #[tokio::test]
 async fn terminal_with_a_live_child_fails_closed() {
     let step = stepper(json!({"result": "done"})).await;
-    request(
-        &step.job.node,
+    request_as(
+        &step.job.access,
         &step.row,
         "child-1",
         &job_session_id(&step.row, "slot-a", 0),
@@ -1374,8 +1374,8 @@ async fn committed_step_persists_its_evidence_and_a_stale_step_does_not() {
     let block = resume_block("prior");
     step.job.write_step_state(&step.row, Some(&block)).await;
     // One observed-but-unaccounted terminal child, so the no-op step is not a stall.
-    request(
-        &step.job.node,
+    request_as(
+        &step.job.access,
         &step.row,
         "child-1",
         &job_session_id(&step.row, "slot-a", 0),

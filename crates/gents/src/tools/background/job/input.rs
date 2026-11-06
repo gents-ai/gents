@@ -901,6 +901,54 @@ pub(crate) mod tests {
         created_at: &str,
         terminalized_at: Option<&str>,
     ) {
+        let value = child_request(
+            chain, request_id, session_id, retry_key, agent_did, state, title, created_at,
+            terminalized_at,
+        );
+        insert(node, "AgentRequest", value).await;
+    }
+
+    /// Seeds a job child request through `access`. A job's children are
+    /// created by the job's own Agent, so a fixture whose reads run as that
+    /// Agent must seed them through its access.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "test seed helper takes the seeded row's fields"
+    )]
+    pub(crate) async fn request_as(
+        access: &ConfigAccess,
+        chain: &str,
+        request_id: &str,
+        session_id: &str,
+        retry_key: &str,
+        agent_did: &str,
+        state: &str,
+        title: Option<&str>,
+        created_at: &str,
+        terminalized_at: Option<&str>,
+    ) {
+        let value = child_request(
+            chain, request_id, session_id, retry_key, agent_did, state, title, created_at,
+            terminalized_at,
+        );
+        insert_as(access, "AgentRequest", value).await;
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "test seed helper takes the seeded row's fields"
+    )]
+    fn child_request(
+        chain: &str,
+        request_id: &str,
+        session_id: &str,
+        retry_key: &str,
+        agent_did: &str,
+        state: &str,
+        title: Option<&str>,
+        created_at: &str,
+        terminalized_at: Option<&str>,
+    ) -> Value {
         let mut value = json!({
             "request_id": request_id,
             "purpose": "normal",
@@ -922,7 +970,7 @@ pub(crate) mod tests {
         if let Some(at) = terminalized_at {
             value["terminalized_at"] = json!(at);
         }
-        insert(node, "AgentRequest", value).await;
+        value
     }
 
     async fn usage(
@@ -1292,11 +1340,12 @@ pub(crate) mod tests {
             lifecycle.claim().await.unwrap(),
             crate::request::lifecycle::ClaimOutcome::Claimed
         );
-        let writer = crate::request::streaming::DefraStreamWriter::new(
+        let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
             node.clone(),
-            node_did,
+            &lifecycle,
             std::time::Duration::from_millis(1),
-        );
+        )
+        .unwrap();
         lifecycle.begin_owned_execution(&writer).await.unwrap();
         writer
             .start_provider_attempt(
@@ -2039,8 +2088,8 @@ pub(crate) mod tests {
             ("slot-a", 0, "a0"),
             ("slot-b", 0, "b0"),
         ] {
-            request(
-                &job.node,
+            request_as(
+                &job.access,
                 &row,
                 request_id,
                 &job_session_id("root", slot, attempt),
