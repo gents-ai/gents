@@ -1258,7 +1258,8 @@ async fn bind_claimed_hook_request(
         !request_doc_id.is_empty(),
         "claimed request has a physical identity"
     );
-    if hook.actor.is_some() {
+    if let Some(actor) = &hook.actor {
+        assert_eq!(actor.as_str(), lifecycle.request().agent_did);
         let access = hook.actor_access().expect("hook's selected Agent access");
         let observed = crate::request::binding::load_agent_request_by_doc_id_with_access(
             &access,
