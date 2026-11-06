@@ -143,20 +143,22 @@ async fn apply_in_txn(
     let (decision, session) = apply_transition(row.session, expected_revision, archived, now);
     let outcome = match decision {
         Decision::Applied => {
-            let archived_at = session
-                .archived_at
-                .as_ref()
-                .map(|value| format!("\"{}\"", escape_graphql_string(value)))
-                .unwrap_or_else(|| "null".into());
-            let response = txn
-                .execute(&format!(
-                    r#"mutation {{ update_AgentSession(
-            filter: {{ _docID: {{ _eq: "{}" }}, {filter} }},
-            input: {{ archived_at: {archived_at}, archive_revision: {} }}
+            let mutation = format!(
+                r#"mutation($input: AgentSessionMutationInputArg!) {{ update_AgentSession(
+            docID: "{}", filter: {{ {filter} }}, input: $input
         ) {{ _docID }} }}"#,
-                    escape_graphql_string(&row.doc_id),
-                    session.archive_revision
-                ))
+                escape_graphql_string(&row.doc_id)
+            );
+            let input = serde_json::json!({"input": {
+                "archived_at": session.archived_at,
+                "archive_revision": session.archive_revision,
+            }});
+            let response = txn
+                .execute_client_signed_update(
+                    &mutation,
+                    &input,
+                    gents_protocol::schemas::AGENT_SESSION,
+                )
                 .await?;
             let documents =
                 crate::store::graphql::mutation_documents(&response, "update_AgentSession")?

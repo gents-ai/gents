@@ -345,40 +345,194 @@ async fn concurrent_archive_calls_commit_one_revision() {
 }
 
 #[tokio::test]
-async fn authenticated_http_archive_uses_the_same_durable_transaction_owner() {
+async fn authenticated_http_archive_uses_the_same_durable_transaction_owner() -> Result<()> {
     let home = tempfile::tempdir().unwrap();
-    let actor = key(home.path(), "operator").await;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+    let user = key(home.path(), "user").await;
+    let runtime = key(home.path(), "runtime").await;
+    let reader = key(home.path(), "reader").await;
+    let binding = crate::store::identity::provision_agent_identity(&runtime)?;
+    let agent = crate::store::identity::resolve_agent_identity(&runtime, &binding)?;
+    let worker_binding = crate::store::identity::provision_agent_identity(&runtime)?;
+    let worker = crate::store::identity::resolve_agent_identity(&runtime, &worker_binding)?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
     let node = Arc::new(
         EmbeddedNode::builder()
-            .with_node_identity_did(actor.did())
-            .with_node_acp_enabled()
-            .with_http(defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap())
+            .enable_signing()
+            .with_node_identity_did(runtime.did())
+            .with_node_acp_owner(user.did().to_owned())
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
             .build()
-            .await
-            .unwrap(),
+            .await?,
     );
-    node.add_collection(gents_protocol::schemas::AGENT_SESSION)
-        .await
-        .unwrap();
-    create_session(&node, &actor).await.unwrap();
-    let access = ConfigAccess::Graphql(crate::store::config_client::GraphqlEndpoint::as_principal(
-        endpoint,
-        actor.did(),
-    ));
-    let receipt = set_session_archived_on(&access, "runtime", "archive-session", &actor, 0, true)
-        .await
-        .unwrap();
-    assert_eq!(receipt.outcome, SessionArchiveOutcome::Applied);
+    let context = defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
+    let policy = node
+        .add_dac_policy_with_counter_as(
+            &context,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
+        .await?;
+    assert_eq!(policy, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID);
+    for schema in [
+        gents_protocol::schemas::NODE,
+        gents_protocol::schemas::AGENT,
+        gents_protocol::schemas::AGENT_SESSION,
+    ] {
+        node.add_collection_as(&context, schema).await?;
+    }
+    for actor in [agent.did(), worker.did(), reader.did()] {
+        for permission in [
+            acp::nac::NodePermission::DocumentRead,
+            acp::nac::NodePermission::DocumentUpdate,
+            acp::nac::NodePermission::CollectionGet,
+            acp::nac::NodePermission::DacRelationAdd,
+        ] {
+            node.add_nac_actor_relationship_as(&context, permission.as_str(), actor)
+                .await?;
+        }
+    }
+    let client = |identity: &crate::KeyIdentity| -> Result<ConfigAccess> {
+        Ok(ConfigAccess::Graphql(
+            crate::store::config_client::GraphqlEndpoint::as_principal(&endpoint, identity.did())
+                .with_client_signing_capability(identity.client_signing_capability()?)?
+                .with_client_signed_agent_creates(),
+        ))
+    };
+    let access = client(&user)?;
+    let node_doc = access
+        .transact_write("test.archive.node", |txn| {
+            Box::pin(async {
+                txn.execute_client_signed_create(
+                "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                &serde_json::json!({"input": {"node_did": runtime.did()}}),
+                gents_protocol::schemas::NODE,
+            ).await
+            })
+        })
+        .await?;
+    let node_doc = crate::store::graphql::created_doc_id(&node_doc, "Node")?;
+    let agent_doc = access.transact_write("test.archive.agent", |txn| {
+        Box::pin(async {
+            txn.execute_client_signed_create(
+                "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                &serde_json::json!({"input": {"node_did": runtime.did(), "agent_did": worker.did(), "creation_nonce": worker_binding.creation_nonce}}),
+                gents_protocol::schemas::AGENT,
+            ).await
+        })
+    }).await?;
+    let agent_doc = crate::store::graphql::created_doc_id(&agent_doc, "Agent")?;
+    access
+        .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
+        .await?;
+    let creator = ConfigAccess::local_managed_agent(
+        node.clone(),
+        ::identity::Did::new(agent.did())?,
+        agent.as_ref(),
+    )?;
+    let created = creator.write("test.archive.session", &format!(
+        r#"mutation {{ create_AgentSession(input: {{session_id: "archive-session", node_did: "{}", requester_did: "{}", agent_did: "{}", created_at: "2026-01-01T00:00:00Z"}}) {{ _docID }} }}"#,
+        escape_graphql_string(runtime.did()), escape_graphql_string(agent.did()), escape_graphql_string(worker.did()),
+    )).await?;
+    let session_doc = crate::store::graphql::created_doc_id(&created, "AgentSession")?;
+    creator
+        .add_resource_relationship("AgentSession", &session_doc, "parent", "agents", &agent_doc)
+        .await?;
+    creator
+        .add_actor_relationship(
+            "AgentSession",
+            &session_doc,
+            "working_agent",
+            &::identity::Did::new(worker.did())?,
+        )
+        .await?;
+    creator
+        .add_actor_relationship(
+            "AgentSession",
+            &session_doc,
+            "reader",
+            &::identity::Did::new(reader.did())?,
+        )
+        .await?;
+    let owners = || async {
+        creator
+            .transact_readonly("test.archive.owner", |txn| {
+                let session_doc = &session_doc;
+                Box::pin(async move {
+                    txn.document_owners("AgentSession", std::slice::from_ref(session_doc))
+                        .await
+                })
+            })
+            .await
+    };
     assert_eq!(
-        read_as(&node, &actor).await.unwrap().archived_at,
+        owners().await?[0]
+            .owner
+            .as_ref()
+            .map(|owner| owner.as_str()),
+        Some(agent.did())
+    );
+    let denied = client(&reader)?;
+    assert!(
+        set_session_archived_on(&denied, runtime.did(), "archive-session", &reader, 0, true)
+            .await
+            .is_err()
+    );
+    assert_eq!(read_as(&node, &user).await?.archive_revision, 0);
+    let unsigned = ConfigAccess::Graphql(
+        crate::store::config_client::GraphqlEndpoint::as_principal(&endpoint, user.did()),
+    );
+    assert!(
+        set_session_archived_on(&unsigned, runtime.did(), "archive-session", &user, 0, true)
+            .await
+            .is_err()
+    );
+    let receipt =
+        set_session_archived_on(&access, runtime.did(), "archive-session", &user, 0, true).await?;
+    assert_eq!(receipt.outcome, SessionArchiveOutcome::Applied);
+    assert_eq!(receipt.revision, "1");
+    assert_eq!(
+        read_as(&node, worker.as_ref()).await?.archived_at,
         receipt.archived_at
     );
-    let receipt = set_session_archived_on(&access, "runtime", "archive-session", &actor, 1, false)
-        .await
-        .unwrap();
+    assert_eq!(
+        read_as(&node, &reader).await?.archived_at,
+        receipt.archived_at
+    );
+    let session = access
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _version {{ cid }} }} }}"#,
+            escape_graphql_string(&session_doc)
+        ))
+        .await?;
+    let cid = session["data"]["AgentSession"][0]["_version"][0]["cid"]
+        .as_str()
+        .context("archive update missing version")?;
+    assert_eq!(node.verified_block_signer_did(cid).await?, user.did());
+    assert_eq!(
+        owners().await?[0]
+            .owner
+            .as_ref()
+            .map(|owner| owner.as_str()),
+        Some(agent.did())
+    );
+    assert_eq!(
+        set_session_archived_on(&access, runtime.did(), "archive-session", &user, 0, false)
+            .await?
+            .outcome,
+        SessionArchiveOutcome::Conflict
+    );
+    let receipt =
+        set_session_archived_on(&access, runtime.did(), "archive-session", &user, 1, false).await?;
     assert_eq!(receipt.outcome, SessionArchiveOutcome::Applied);
-    assert_eq!(read_as(&node, &actor).await.unwrap().archive_revision, 2);
-    node.shutdown().await.expect("shut down test node");
+    assert_eq!(read_as(&node, &user).await?.archive_revision, 2);
+    assert_eq!(
+        owners().await?[0]
+            .owner
+            .as_ref()
+            .map(|owner| owner.as_str()),
+        Some(agent.did())
+    );
+    node.shutdown().await?;
+    Ok(())
 }
