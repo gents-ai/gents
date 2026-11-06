@@ -14,7 +14,7 @@ structure Graph where
   signatureValid : Bool
   deriving BEq, DecidableEq, Repr
 
-def matches (graph : Graph) (intent : CrossActorAuthorization.Intent) (inputDigest evidenceDigest : String) : Bool :=
+def graphMatches (graph : Graph) (intent : CrossActorAuthorization.Intent) (inputDigest evidenceDigest : String) : Bool :=
   graph.signatureValid && graph.author == intent.author && graph.session == intent.session &&
     graph.agentDocument == intent.agentDocument && graph.inputDigest == inputDigest &&
     graph.evidenceDigest == evidenceDigest
@@ -45,7 +45,7 @@ structure Effect where
 def stage (intent : CrossActorAuthorization.Intent) (graph : Graph) (inputDigest evidenceDigest : String)
     (tx : NativeTransaction) : Effect :=
   if tx.mixedActorsSupported && tx.requesterChecksCommitted && tx.commitSucceeded &&
-      matches graph intent inputDigest evidenceDigest then ⟨true, true, true⟩ else ⟨false, false, false⟩
+      graphMatches graph intent inputDigest evidenceDigest then ⟨true, true, true⟩ else ⟨false, false, false⟩
 
 theorem unsupported_mixed_actor_is_atomic_noop
     (intent : CrossActorAuthorization.Intent) (graph : Graph) (digest evidence : String)
@@ -62,13 +62,13 @@ theorem mismatched_input_never_publishes
     (intent : CrossActorAuthorization.Intent) (graph : Graph) (digest evidence : String)
     (tx : NativeTransaction) (mismatch : (graph.inputDigest == digest) = false) :
     stage intent graph digest evidence tx = ⟨false, false, false⟩ := by
-  simp [stage, matches, mismatch]
+  simp [stage, graphMatches, mismatch]
 
 theorem changed_evidence_never_publishes
     (intent : CrossActorAuthorization.Intent) (graph : Graph) (digest evidence : String)
     (tx : NativeTransaction) (mismatch : (graph.evidenceDigest == evidence) = false) :
     stage intent graph digest evidence tx = ⟨false, false, false⟩ := by
-  simp [stage, matches, mismatch]
+  simp [stage, graphMatches, mismatch]
 
 /-- A committed receipt is a terminal observation; recovery never creates or
 regrants replacement documents after later revocation. -/
