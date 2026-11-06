@@ -1749,10 +1749,8 @@ async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
     )
     .await
     .unwrap();
-    crate::test_support::install_test_agent_binding_with_access(
-        &node, did, "future", &future, &access,
-    )
-    .await;
+    crate::test_support::install_test_agent_binding_with_access(did, "future", &future, &access)
+        .await;
     let doc = find_owned_doc(
         &access,
         "InferenceBackendMetadata",

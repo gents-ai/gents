@@ -1406,14 +1406,6 @@ are external premises of this decision. -/
 def backendMetadataShareable (currentSecret historicalSecret : Bool) : Bool :=
   !currentSecret && !historicalSecret
 
-/-- The legacy ungoverned lineage is safe for Agent admission only after the
-native store has durably fenced history, writes, recreation, and replication. -/
-def legacyBackendAdmissionAllowed (nativeLockdownProven : Bool) : Bool :=
-  nativeLockdownProven
-
-theorem unavailable_legacy_lockdown_denies_admission :
-    legacyBackendAdmissionAllowed false = false := rfl
-
 /-- A separate fresh-store admission requires a witness made before the store
 was opened, and a legacy collection installed with its private policy from
 birth. The native collection binding and historical-block read checks remain

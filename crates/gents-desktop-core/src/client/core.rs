@@ -737,11 +737,7 @@ impl ClientCore {
 }
 
 impl ClientCore {
-    pub fn session_unreadable_reason(
-        &self,
-        _session_id: &str,
-        node_did: &str,
-    ) -> Option<&'static str> {
+    pub fn session_unreadable_reason(&self, node_did: &str) -> Option<&'static str> {
         self.operator_observation_graphql(node_did)
             .is_none()
             .then_some("Connect to the runtime to read this session.")

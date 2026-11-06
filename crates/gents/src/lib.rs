@@ -269,7 +269,6 @@ pub(crate) mod test_support {
         .await
         .unwrap();
         install_test_agent_binding_with_access(
-            &db.node,
             runtime.did(),
             "Default fixture agent",
             &binding,
@@ -364,11 +363,10 @@ pub(crate) mod test_support {
             node.clone(),
             identity::Did::new(actor).unwrap(),
         );
-        install_test_agent_binding_with_access(node, owner, display_name, binding, &access).await;
+        install_test_agent_binding_with_access(owner, display_name, binding, &access).await;
     }
 
     pub(crate) async fn install_test_agent_binding_with_access(
-        _node: &std::sync::Arc<defra_node::Node>,
         owner: &str,
         display_name: &str,
         binding: &gents_protocol::agent_identity::AgentIdentityBinding,
@@ -578,8 +576,7 @@ pub use runtime::agent::{
     ProcessLifecycleState, RuntimeSnapshotObserver,
 };
 pub use runtime::oneshot::{
-    run_openai_oneshot, run_openai_oneshot_admitted, run_openai_oneshot_with_tools,
-    run_openai_oneshot_with_tools_admitted, OneshotRunResult,
+    run_openai_oneshot_admitted, run_openai_oneshot_with_tools_admitted, OneshotRunResult,
 };
 pub use runtime::p2p::observability::{
     JsonP2pSyncStatusAdapter, P2pInboundClassSnapshot, P2pPeerBacklogSnapshot,

@@ -590,6 +590,36 @@ async fn single_version_unknown_root_is_rejected() {
 }
 
 #[tokio::test]
+async fn fresh_backend_collections_reject_a_foreign_single_root() {
+    for (name, sdl) in [
+        (
+            schemas::INFERENCE_BACKEND_METADATA_NAME,
+            schemas::INFERENCE_BACKEND_METADATA,
+        ),
+        (
+            schemas::BACKEND_CREDENTIAL_NAME,
+            schemas::BACKEND_CREDENTIAL,
+        ),
+    ] {
+        let body = sdl.trim_end().strip_suffix('}').expect("bundled SDL type");
+        let node = fresh_node().await;
+        node.add_collection(&format!("{body}    foreign_field: String\n}}"))
+            .await
+            .expect("register foreign root");
+
+        let err = ensure_migrations(node.as_ref())
+            .await
+            .expect_err("a foreign root must fail closed");
+        assert!(
+            matches!(err, Error::UnknownLineage { ref collection, .. } if collection == name),
+            "unexpected error for {name}: {err}"
+        );
+
+        node.shutdown().await.expect("shut down test node");
+    }
+}
+
+#[tokio::test]
 async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
     const EXPECTED_SDL: &str = "type PinnedFixture { name: String label: String }";
     const OLD_SDL: &str = "type PinnedFixture { name: String }";

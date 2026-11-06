@@ -54,13 +54,12 @@ pub(in crate::tauri_commands) async fn start_running_managed_pairing(
         );
         return;
     }
-    start_managed_runtime_pairing(state, core, node_home, target).await;
+    start_managed_runtime_pairing(state, core, target).await;
 }
 
 pub(super) async fn start_managed_runtime_pairing(
     state: &DesktopAppState,
     core: Arc<ClientCore>,
-    _node_home: std::path::PathBuf,
     target: ManagedPairingTarget,
 ) {
     {

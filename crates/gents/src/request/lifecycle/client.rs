@@ -1014,7 +1014,7 @@ mod tests {
 
     #[tokio::test]
     async fn delegated_recovery_does_not_grant_a_signed_request_without_its_creation_receipt() {
-        let db = crate::support::test_signed_db("delegated-recovery").await;
+        let db = crate::support::test_db("delegated-recovery").await;
         let (db, user, user_access, parent) =
             crate::test_support::signed_test_node_from_db(db, "delegated-recovery").await;
         let node = db.node.clone();
@@ -1027,7 +1027,6 @@ mod tests {
         .await
         .unwrap();
         crate::test_support::install_test_agent_binding_with_access(
-            &node,
             runtime.did(),
             "target",
             &target,

@@ -181,7 +181,7 @@ mod tests {
         use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
         let runs = tempfile::tempdir().unwrap();
         let path = runs.path().join("trial/home");
-        let home = EmbeddedHome::create_trial_retained(&path).await.unwrap();
+        let home = EmbeddedHome::create_retained(&path).await.unwrap();
         let db = crate::support::test_db_from_home(home);
         let (db, user, client, binding) =
             crate::test_support::signed_test_node_from_db(db, "eval-inspect-retained").await;

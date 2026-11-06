@@ -237,7 +237,7 @@ fn generated_document_capture_cases_match_lean() {
 
 #[tokio::test]
 async fn l1_backend_capture_grades_metadata_without_retaining_auth() {
-    let mut home = EmbeddedHome::create_trial_temp("eval-backend-metadata")
+    let mut home = EmbeddedHome::create_temp("eval-backend-metadata")
         .await
         .unwrap();
     let evaluator = crate::eval::runner::embedded::home::bind_test_evaluator(&mut home);
@@ -469,7 +469,7 @@ async fn retained_capture_uses_the_evaluator_actor_for_document_access() {
     use crate::store::config_client::NodePermission;
     use crate::store::identity::{KeyIdentity, NodeIdentity};
 
-    let home = EmbeddedHome::create_trial_temp("capture-evaluator-acp")
+    let home = EmbeddedHome::create_temp("capture-evaluator-acp")
         .await
         .unwrap();
     let directory = tempfile::tempdir().unwrap();
@@ -618,9 +618,7 @@ async fn logical_backend_capture_and_live_counts_use_held_user_metadata() {
     let dir = tempfile::tempdir().unwrap();
     let pack = dir.path().join("pack");
     write_slot_pack(&pack, "gents:inference-slot:primary");
-    let mut home = EmbeddedHome::create_trial_temp("backend-capture")
-        .await
-        .unwrap();
+    let mut home = EmbeddedHome::create_temp("backend-capture").await.unwrap();
     let evaluator = Arc::new(
         crate::KeyIdentity::load_or_create(dir.path().join("evaluator.key"), None).unwrap(),
     );

@@ -26,9 +26,7 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
     let dir = tempfile::tempdir().unwrap();
     let pack = dir.path().join("pack");
     write_slot_pack(&pack, "gents:inference-slot:primary");
-    let mut home = EmbeddedHome::create_trial_temp("checkpoint-agent")
-        .await
-        .unwrap();
+    let mut home = EmbeddedHome::create_temp("checkpoint-agent").await.unwrap();
     let mut spec = TrialSpec {
         pack_digest: materialized_digest(&pack),
         pack_dir: pack,
@@ -282,7 +280,7 @@ async fn every_installed_trial_agent_can_read_its_operational_collections() {
     let dir = tempfile::tempdir().unwrap();
     let pack_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/configurator_evals/sessions/subject");
-    let mut home = EmbeddedHome::create_trial_temp("all-agent-operations")
+    let mut home = EmbeddedHome::create_temp("all-agent-operations")
         .await
         .unwrap();
     let mut spec = TrialSpec {
@@ -328,9 +326,7 @@ async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
     let dir = tempfile::tempdir().unwrap();
     let pack_dir = dir.path().join("pack");
     write_slot_pack(&pack_dir, "gents:inference-slot:primary");
-    let mut home = EmbeddedHome::create_trial_temp("slot-binding")
-        .await
-        .unwrap();
+    let mut home = EmbeddedHome::create_temp("slot-binding").await.unwrap();
     let workspace = dir.path().join("workspace");
     let mut spec = TrialSpec {
         pack_digest: materialized_digest(&pack_dir),
@@ -580,9 +576,7 @@ async fn authored_seed_schema_signs_without_installing_the_collection() {
         },
         ..TrialSpec::empty_for_tests("seed-schema")
     };
-    let mut home = EmbeddedHome::create_trial_temp("seed-schema")
-        .await
-        .unwrap();
+    let mut home = EmbeddedHome::create_temp("seed-schema").await.unwrap();
     bind_test_evaluator(&mut spec, &mut home);
     install(&spec, &home, &dir.path().join("workspace"))
         .await
@@ -779,9 +773,7 @@ async fn session_fixtures_publish_only_declared_cross_agent_readers() {
         },
         ..TrialSpec::empty_for_tests("session-fixtures")
     };
-    let mut home = EmbeddedHome::create_trial_temp("session-fixtures")
-        .await
-        .unwrap();
+    let mut home = EmbeddedHome::create_temp("session-fixtures").await.unwrap();
     bind_test_evaluator(&mut spec, &mut home);
     let subject = install(&spec, &home, &dir.path().join("workspace"))
         .await
@@ -895,9 +887,7 @@ async fn expired_request_fixtures_are_signed_published_and_expired_without_infer
         },
         ..TrialSpec::empty_for_tests("expired-fixtures")
     };
-    let mut home = EmbeddedHome::create_trial_temp("expired-fixtures")
-        .await
-        .unwrap();
+    let mut home = EmbeddedHome::create_temp("expired-fixtures").await.unwrap();
     bind_test_evaluator(&mut spec, &mut home);
     let agent = install(&spec, &home, &dir.path().join("workspace"))
         .await
@@ -976,7 +966,7 @@ async fn discover_old_fixture_publishes_full_expired_traffic() {
         ..TrialSpec::empty_for_tests("discover-old-full")
     };
     let dir = tempfile::tempdir().unwrap();
-    let mut home = EmbeddedHome::create_trial_temp("discover-old-full")
+    let mut home = EmbeddedHome::create_temp("discover-old-full")
         .await
         .unwrap();
     bind_test_evaluator(&mut spec, &mut home);

@@ -7,13 +7,13 @@ use gents::NodeIdentity;
 use crate::support::accepted_turn::boot_prepared_accepted_turn;
 use crate::support::live_inference::live_target;
 use crate::support::signed_mailbox::{prepare_signed_mailbox_turn, wait_for_request_terminal_on};
-use crate::support::test_signed_db;
+use crate::support::test_db;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "live: set GENTS_EVAL_TARGET and pass --ignored"]
 async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     let target = live_target();
-    let db = test_signed_db("mailbox-real-inference").await;
+    let db = test_db("mailbox-real-inference").await;
     let request_id = "request-mailbox-live";
     let session_id = "session-mailbox-live";
     let prompt = "Call file_mailbox_item exactly once with title='Mailbox live verified', then answer MAILBOX_FILED. The tool owns notification identity and handling.";

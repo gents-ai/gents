@@ -242,7 +242,7 @@ pub(crate) async fn verify_fresh_local_self_request(
     observation.requester_matches_target = row.requester_did.as_deref() == row.agent_did.as_deref();
     if admission.kind == AgentRequestAdmissionKind::Client {
         observation.requester_matches_session_scope =
-            client_requester_scope_matches(node, &row, &admission).await?;
+            client_requester_scope_matches(node, &row).await?;
     }
     observation.hop_within_bound = request_hop_admitted(node, &row).await?;
     require_admitted_observation(observation, None)?;
@@ -259,7 +259,6 @@ pub(crate) async fn verify_fresh_local_self_request(
 async fn client_requester_scope_matches(
     node: &Arc<EmbeddedNode>,
     row: &AgentRequestRow,
-    _admission: &AgentRequestAdmissionRecord,
 ) -> AdmissionResult<bool> {
     let session_scope = crate::session::load_session_requester_scope(
         node,
@@ -798,7 +797,7 @@ impl AgentRequestAdmissionVerifier {
         match admission.kind {
             AgentRequestAdmissionKind::Client => {
                 observation.requester_matches_session_scope =
-                    client_requester_scope_matches(&self.node, &row, &admission).await?;
+                    client_requester_scope_matches(&self.node, &row).await?;
                 if local_agent_message {
                     let source = crate::session::origin::verified_agent_source(
                         &crate::ConfigAccess::local_as(

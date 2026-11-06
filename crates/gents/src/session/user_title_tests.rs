@@ -527,7 +527,6 @@ async fn title_observation_uses_selected_agent_session_access() {
     .await
     .unwrap();
     crate::test_support::install_test_agent_binding_with_access(
-        &db.node,
         db.node_identity.did(),
         "Other title agent",
         &second,

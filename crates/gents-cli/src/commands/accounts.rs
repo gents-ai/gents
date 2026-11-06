@@ -119,7 +119,6 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
             let did = resolve_node_did(Some(&home_dir), target.node_did.as_deref())?;
             let rows = list_with_usage(
                 &access,
-                &home_dir,
                 &did,
                 target.provider.as_deref(),
                 refresh,
@@ -446,7 +445,6 @@ pub(crate) fn attach_reads(rows: &mut [AccountRow], reads: &UsageReads, node_did
 
 pub(crate) async fn list_with_usage(
     access: &ConfigAccess,
-    _home: &std::path::Path,
     node_did: &str,
     provider: Option<&str>,
     refresh: bool,

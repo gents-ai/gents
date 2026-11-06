@@ -25,7 +25,7 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) async fn new() -> Self {
-        let db = crate::support::test_signed_db("task-hook-recovery").await;
+        let db = crate::support::test_db("task-hook-recovery").await;
         let (db, user, owner_access, binding) =
             crate::test_support::signed_test_node_from_db(db, "task-hook-recovery-user").await;
         let node = db.node.clone();
@@ -65,7 +65,6 @@ impl Fixture {
         .await
         .unwrap();
         crate::test_support::install_test_agent_binding_with_access(
-            &self.node,
             self.did(),
             "other hook agent",
             &binding,

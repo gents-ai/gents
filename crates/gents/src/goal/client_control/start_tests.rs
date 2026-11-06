@@ -92,7 +92,6 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
         .await
         .unwrap();
         crate::test_support::install_test_agent_binding_with_access(
-            &node,
             identity.did(),
             "second goal agent",
             &other_binding,

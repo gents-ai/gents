@@ -29,9 +29,7 @@ async fn a_cancelled_seed_stage_is_runtime_before_any_request_exists() {
     spec.fixtures
         .seed_schemas
         .push("type NoSuchItem { label: String }".to_owned());
-    let mut home = EmbeddedHome::create_trial_temp("seed-cancel")
-        .await
-        .unwrap();
+    let mut home = EmbeddedHome::create_temp("seed-cancel").await.unwrap();
     bind_test_evaluator(&mut spec, &mut home);
     let cancel = CancellationToken::new();
     let stage = StageSpec {
@@ -118,7 +116,7 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
             inference,
             ..TrialSpec::empty_for_tests("scheduled-teardown")
         };
-        let mut home = EmbeddedHome::create_trial_temp("scheduled-teardown")
+        let mut home = EmbeddedHome::create_temp("scheduled-teardown")
             .await
             .unwrap();
         bind_test_evaluator(&mut spec, &mut home);
@@ -389,7 +387,7 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
     spec.fixtures
         .seed_schemas
         .push("type EvalSeed { payload: JSON }".to_owned());
-    let mut home = EmbeddedHome::create_trial_temp("seed-template-failure")
+    let mut home = EmbeddedHome::create_temp("seed-template-failure")
         .await
         .unwrap();
     bind_test_evaluator(&mut spec, &mut home);

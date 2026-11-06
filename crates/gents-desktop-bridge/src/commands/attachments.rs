@@ -13,7 +13,7 @@ pub async fn request_attachments(
     message_key: Option<&str>,
     index: Option<u32>,
 ) -> Result<Vec<RequestAttachment>, BridgeError> {
-    if let Some(reason) = core.session_unreadable_reason(session_id, node_did) {
+    if let Some(reason) = core.session_unreadable_reason(node_did) {
         return Err(BridgeError::untyped(reason));
     }
     let attachments = if let Some(message_key) = message_key {

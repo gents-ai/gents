@@ -606,7 +606,6 @@ async fn background_wake_is_visible_to_the_owning_user_and_selected_agent() {
     .await
     .unwrap();
     crate::test_support::install_test_agent_binding_with_access(
-        &admission.node,
         admission.runtime.did(),
         "Unrelated agent",
         &binding,

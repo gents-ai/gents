@@ -1405,29 +1405,6 @@ fn verify_one_collection(
             collection: entry.name.to_string(),
         })?;
 
-    // These fresh schemas have no historical lineage. Derive their exact pin
-    // from the bundled SDL until the generated baseline pins are recorded.
-    if matches!(
-        entry.name,
-        gents_protocol::schemas::INFERENCE_BACKEND_METADATA_NAME
-            | gents_protocol::schemas::BACKEND_CREDENTIAL_NAME
-    ) {
-        let parsed = query::parse_sdl(entry.sdl).map_err(|error| Error::StateVerification {
-            collection: entry.name.to_string(),
-            step: "baseline".into(),
-            detail: error.to_string(),
-        })?;
-        if parsed.len() != 1
-            || parsed[0].name != entry.name
-            || parsed[0].version_id != active.version_id
-        {
-            return Err(Error::UnknownLineage {
-                collection: entry.name.to_string(),
-                versions: active.version_id.clone(),
-            });
-        }
-    }
-
     if let Some(target) = target_active.get(entry.name) {
         if active.version_id != *target {
             return Err(Error::VersionPinMismatch {

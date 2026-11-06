@@ -349,20 +349,6 @@ impl ConfigAccess {
     /// ordinary writes under the mutation gate. Authorization is re-checked
     /// before commit admission; native commit does not atomically check wall
     /// clock, so this is not a durable-commit-before-expiry guarantee.
-    #[allow(dead_code)]
-    pub(crate) async fn renew_execution_lease<'a, T, E, F>(
-        node: &'a Arc<EmbeddedNode>,
-        identity: Option<Did>,
-        renew: F,
-    ) -> Result<T, E>
-    where
-        T: Send + 'a,
-        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
-        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
-    {
-        Self::renew_execution_lease_with_signer(node, identity, None, renew).await
-    }
-
     pub(crate) async fn renew_execution_lease_with_signer<'a, T, E, F>(
         node: &'a Arc<EmbeddedNode>,
         identity: Option<Did>,

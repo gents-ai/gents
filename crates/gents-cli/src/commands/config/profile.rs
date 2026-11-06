@@ -43,16 +43,7 @@ pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) ->
         &args.profile,
     )?;
     let output = match args.account.as_deref() {
-        None => {
-            list_candidates(
-                &access,
-                &node_did,
-                &args.profile,
-                &slots,
-                args.home.as_deref(),
-            )
-            .await?
-        }
+        None => list_candidates(&access, &node_did, &args.profile, &slots).await?,
         Some(account) => {
             set_account(
                 &access,
@@ -90,7 +81,6 @@ async fn list_candidates(
     node_did: &str,
     profile_id: &str,
     plugin_slots: &[String],
-    _home: Option<&std::path::Path>,
 ) -> Result<Value> {
     let observations = if let ConfigAccess::Graphql(graphql) = access {
         let identity = crate::load_client_identity().await?;
@@ -901,7 +891,7 @@ mod tests {
     async fn set_account_without_an_account_lists_the_candidates() {
         let (access, b_backend, _) = seeded().await;
         with_agents(&access).await;
-        let output = list_candidates(&access, DID, "p-original", &[], None)
+        let output = list_candidates(&access, DID, "p-original", &[])
             .await
             .unwrap();
         assert_eq!(output["profile"], json!("p-original"));

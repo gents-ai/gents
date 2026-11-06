@@ -237,7 +237,6 @@ async fn step0(output: Value, options: Options) -> Step0 {
     .await
     .unwrap();
     crate::test_support::install_test_agent_binding_with_access(
-        &node,
         identity.did(),
         "worker",
         &worker_binding,

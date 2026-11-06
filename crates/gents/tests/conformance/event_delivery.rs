@@ -206,7 +206,7 @@ impl ProductionEventDeliveryDriver {
         source: EventDeliverySourceContract,
         world: &lean_vocab_test::LeanEventDeliveryWorld,
     ) -> Self {
-        let db = support::test_signed_db(&format!("event-delivery-{}", source.name)).await;
+        let db = support::test_db(&format!("event-delivery-{}", source.name)).await;
         let watcher_fixture = Some(support::managed_agent_fixture(&db).await);
         let mock_subs = MockUpdateSubscriptionSource::new();
         let cancel = CancellationToken::new();

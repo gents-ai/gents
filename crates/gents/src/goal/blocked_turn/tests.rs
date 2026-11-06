@@ -569,7 +569,6 @@ async fn embedded() -> (
     .await
     .unwrap();
     crate::test_support::install_test_agent_binding_with_access(
-        &db.node,
         node_did,
         "Sibling agent",
         &sibling,

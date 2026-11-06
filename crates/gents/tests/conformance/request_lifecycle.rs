@@ -39,7 +39,7 @@ fn rust_request_recovery_sweep_writer(from: &str, to: &str) -> Option<&'static s
 
 #[tokio::test]
 async fn ordinary_completion_rejects_claimed_without_execution() {
-    let db = support::test_signed_db("ordinary-complete-from-claimed").await;
+    let db = support::test_db("ordinary-complete-from-claimed").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -105,7 +105,7 @@ async fn ordinary_completion_rejects_claimed_without_execution() {
 
 #[tokio::test]
 async fn claim_atomically_projects_the_request_owned_session() {
-    let db = support::test_signed_db("claim-atomically-projects-session").await;
+    let db = support::test_db("claim-atomically-projects-session").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -1371,7 +1371,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
 
 #[tokio::test]
 async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
-    let db = support::test_signed_db("scheduled-materialize").await;
+    let db = support::test_db("scheduled-materialize").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let agent = &fixture.agent;
     let access = gents::ConfigAccess::local_managed_agent(
@@ -1426,7 +1426,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
 
 #[tokio::test]
 async fn scheduled_materialization_persists_trigger_lineage() {
-    let db = support::test_signed_db("scheduled-materialize-lineage").await;
+    let db = support::test_db("scheduled-materialize-lineage").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let agent = &fixture.agent;
     let access = gents::ConfigAccess::local_managed_agent(
