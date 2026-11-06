@@ -790,7 +790,6 @@ where
                                 } => {
                                     let processor = &mut processor;
                                     let stream = &mut stream;
-                                    let request_token = &request_token;
                                     let session_id = &session_id;
                                     let trigger_correlation = &trigger_correlation;
                                     let trigger_context = &trigger_context;
