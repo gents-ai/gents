@@ -205,6 +205,87 @@ pub(crate) mod test_support {
         access
     }
 
+    pub(crate) async fn signed_test_node(
+        name: &str,
+    ) -> (
+        crate::support::TestDb,
+        crate::KeyIdentity,
+        crate::store::config_client::ConfigAccess,
+        gents_protocol::agent_identity::AgentIdentityBinding,
+    ) {
+        use crate::store::config_client::{
+            ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
+        };
+        use crate::store::identity::NodeIdentity;
+
+        let db = crate::support::test_db(name).await;
+        let user = crate::support::fixtures::test_identity(name);
+        let runtime = db.node_identity.as_ref();
+        assert_ne!(runtime.did(), user.did());
+        let admin =
+            ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
+        let user_did = identity::Did::new(user.did()).unwrap();
+        for permission in [
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::DacRelationAdd,
+            NodePermission::CollectionGet,
+        ] {
+            admin
+                .grant_node_permission(&user_did, permission)
+                .await
+                .unwrap();
+        }
+        let access = db.client_access(&user);
+        let node_input = serde_json::json!({"node_did": runtime.did()});
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: crate::Collection::Node,
+            add: node_input.clone(),
+            update: node_input,
+        }])
+        .unwrap();
+        access
+            .transact_write("test.signed_node", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                })
+            })
+            .await
+            .unwrap();
+        let binding = crate::store::identity::provision_agent_identity_authorized(
+            &db.node, runtime, &user_did,
+        )
+        .await
+        .unwrap();
+        install_test_agent_binding_with_access(
+            &db.node,
+            runtime.did(),
+            "Default fixture agent",
+            &binding,
+            &access,
+        )
+        .await;
+        let node_input =
+            serde_json::json!({"node_did": runtime.did(), "default_agent_did": binding.agent_did});
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: crate::Collection::Node,
+            add: node_input.clone(),
+            update: node_input,
+        }])
+        .unwrap();
+        access
+            .transact_write("test.signed_default_agent", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                })
+            })
+            .await
+            .unwrap();
+        (db, user, access, binding)
+    }
+
     pub(crate) async fn install_test_agent_as(
         node: &std::sync::Arc<defra_node::Node>,
         runtime: &dyn crate::store::identity::NodeIdentity,

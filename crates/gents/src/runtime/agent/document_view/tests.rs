@@ -904,49 +904,53 @@ async fn usage_collection_write_never_reloads_the_runtime_view() {
 
 #[tokio::test]
 async fn load_document_runtime_view_populates_tasks_and_schedules() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-tasks-schedules"));
-    let node_did = identity.did();
-    bind_default_agent_backend(
-        &node,
-        node_did,
-        &crate::test_support::ensure_test_default_agent(&node, node_did)
+    let (db, _user, access, _agent) =
+        crate::test_support::signed_test_node("document-view-tasks-schedules").await;
+    let node = &db.node;
+    let node_did = db.node_identity.did();
+    let response = access.execute("{ Node { _docID } }").await.unwrap();
+    let node_doc = response["data"]["Node"][0]["_docID"].as_str().unwrap();
+    let documents = [
+        (
+            "Task",
+            gents_protocol::schemas::TASK,
+            serde_json::json!({"node_did": node_did, "task_id": "task-alpha", "agent_did": "agent-that-never-existed", "prompt_template": "unused", "enabled": false}),
+        ),
+        (
+            "Task",
+            gents_protocol::schemas::TASK,
+            serde_json::json!({"node_did": node_did, "task_id": "task-beta", "agent_did": "agent-that-never-existed", "prompt_template": "unused", "enabled": false}),
+        ),
+        (
+            "Schedule",
+            gents_protocol::schemas::SCHEDULE,
+            serde_json::json!({"node_did": node_did, "schedule_id": "schedule-alpha", "cadence": {"kind": "interval", "interval_secs": 60}}),
+        ),
+        (
+            "Trigger",
+            gents_protocol::schemas::TRIGGER,
+            serde_json::json!({"node_did": node_did, "trigger_id": "trigger-schedule-alpha", "task_id": "task-alpha", "source": {"kind": "schedule", "schedule_id": "schedule-alpha"}, "enabled": true, "concurrency": "serial"}),
+        ),
+    ];
+    for (name, schema, input) in documents {
+        let created = access.transact_write("test.signed_automation", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                txn.execute_client_signed_create(
+                    &format!("mutation($input: {name}MutationInputArg!) {{ create_{name}(input: $input) {{ _docID }} }}"),
+                    &serde_json::json!({"input": input}),
+                    schema,
+                ).await
+            })
+        }).await.unwrap();
+        let doc = crate::store::graphql::created_doc_id(&created, name).unwrap();
+        access
+            .add_resource_relationship(name, &doc, "parent", "nodes", node_doc)
             .await
-            .agent_did,
-    )
-    .await;
+            .unwrap();
+    }
 
-    create_task_bound(
-        &node,
-        node_did,
-        "task-alpha",
-        "agent-that-never-existed",
-        "unused",
-        false,
-    )
-    .await;
-    create_task_bound(
-        &node,
-        node_did,
-        "task-beta",
-        "agent-that-never-existed",
-        "unused",
-        false,
-    )
-    .await;
-    create_schedule_with_concurrency(
-        &node,
-        node_did,
-        "trigger-schedule-alpha",
-        "task-alpha",
-        "schedule-alpha",
-        60,
-        "serial",
-    )
-    .await;
-
-    let view = load_document_runtime_view(&node, node_did)
+    let view = load_document_runtime_view(node, node_did)
         .await
         .expect("document view should load");
 
