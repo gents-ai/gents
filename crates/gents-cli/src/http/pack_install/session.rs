@@ -497,19 +497,22 @@ async fn run_inner(
     gents::pack::apply_prepared_dependency_schemas(&runtime_access, &prepared)
         .await
         .map_err(|error| (error, "not_installed"))?;
-    let root = received.root.shared_archive();
-    let temp = tokio::task::spawn_blocking(move || {
-        let temp = tempfile::tempdir()?;
-        gents::pack::materialize::materialize(&root, temp.path())?;
-        Ok::<_, anyhow::Error>(temp)
-    })
-    .await
-    .map_err(|error| (anyhow::Error::new(error), "not_installed"))?
-    .map_err(|error| (error, "not_installed"))?;
-    let schemas =
+    let schemas = if received.root.manifest().metadata.kind == gents::pack::PackKind::Documents {
+        let root = received.root.shared_archive();
+        let temp = tokio::task::spawn_blocking(move || {
+            let temp = tempfile::tempdir()?;
+            gents::pack::materialize::materialize(&root, temp.path())?;
+            Ok::<_, anyhow::Error>(temp)
+        })
+        .await
+        .map_err(|error| (anyhow::Error::new(error), "not_installed"))?
+        .map_err(|error| (error, "not_installed"))?;
         crate::commands::schema::apply_pack_schemas_if_present(&runtime_access, temp.path())
             .await
-            .map_err(|error| (error, "not_installed"))?;
+            .map_err(|error| (error, "not_installed"))?
+    } else {
+        None
+    };
     let policy = if received.request.overwrite {
         gents::pack::DriftPolicy::Overwrite
     } else if received.request.keep {

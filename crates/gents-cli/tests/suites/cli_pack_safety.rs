@@ -276,6 +276,10 @@ async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()>
     assert_eq!(outcome.is_ok(), expected);
     let outcome = outcome?;
     assert_eq!(outcome["apply"]["plugins"][0]["name"], "job_fixture");
+    assert!(
+        outcome["schemas"].is_null(),
+        "plugin-only installation must not install schemas"
+    );
     let installed =
         gents::plugin::store::read_record(&home.join(".gents"), "fixture", "job_fixture")?;
     assert!(installed
