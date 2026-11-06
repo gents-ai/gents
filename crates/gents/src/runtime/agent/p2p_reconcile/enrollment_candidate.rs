@@ -394,7 +394,9 @@ async fn persisted_request(
     Ok(Some((request, row.doc_id.clone())))
 }
 
-async fn write_enrollment_request(
+/// Publish a request authored by the local runtime after the caller verifies
+/// the offer's signature and authenticated server identity.
+pub async fn write_enrollment_request(
     node: &Arc<EmbeddedNode>,
     request: &EnrollmentRequestRecord,
 ) -> Result<String> {
