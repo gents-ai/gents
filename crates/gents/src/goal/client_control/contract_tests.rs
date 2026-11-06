@@ -61,8 +61,8 @@ async fn generated_goal_client_controls_drive_signed_commands() {
         .await;
         execute(&fixture.agent_access(), &format!(r#"mutation {{ update_Goal(docID: "{}", input: {{ objective: "{}" }}) {{ _docID }} }}"#,
             escape_graphql_string(&fixture.goal.doc_id), escape_graphql_string(case.before["objective"].as_str().unwrap()))).await;
-        let access = fixture.user_access();
-        let session = access
+        let owner_access = fixture.user_access();
+        let session = owner_access
             .transact_readonly("test.goal_session", |txn| {
                 Box::pin(async {
                     crate::session::load_agent_session_owner_in_txn(
@@ -76,6 +76,81 @@ async fn generated_goal_client_controls_drive_signed_commands() {
             .await
             .unwrap()
             .unwrap();
+        let (requester, access) = if case.facts["authorized"] == false {
+            let requester = Arc::new(
+                tokio::task::spawn_blocking(|| {
+                    crate::support::fixtures::test_identity("goal-denied-requester")
+                })
+                .await
+                .unwrap(),
+            );
+            let requester_did = ::identity::Did::new(requester.did()).unwrap();
+            let admin = crate::ConfigAccess::local_as(
+                fixture.node.clone(),
+                ::identity::Did::new(fixture.identity.did()).unwrap(),
+            );
+            for permission in [
+                crate::store::config_client::NodePermission::CollectionGet,
+                crate::store::config_client::NodePermission::DocumentRead,
+                crate::store::config_client::NodePermission::DocumentUpdate,
+                crate::store::config_client::NodePermission::DacRelationAdd,
+            ] {
+                admin
+                    .grant_node_permission(&requester_did, permission)
+                    .await
+                    .unwrap();
+            }
+            owner_access
+                .add_actor_relationship("AgentSession", &session.doc_id, "reader", &requester_did)
+                .await
+                .unwrap();
+            owner_access
+                .add_actor_relationship(
+                    "Agent",
+                    &fixture.agent_doc_id,
+                    "session_writer",
+                    &requester_did,
+                )
+                .await
+                .unwrap();
+            let owner_endpoint = match &owner_access {
+                crate::ConfigAccess::Graphql(endpoint) => endpoint.url(),
+                crate::ConfigAccess::Local(_) => panic!("fixture requires held client access"),
+            };
+            let access = crate::ConfigAccess::Graphql(
+                crate::store::config_client::GraphqlEndpoint::as_principal(
+                    owner_endpoint,
+                    requester.did(),
+                )
+                .with_client_signing_capability(requester.client_signing_capability().unwrap())
+                .unwrap()
+                .with_client_signed_agent_creates(),
+            );
+            let decisions = fixture
+                .agent_access()
+                .transact_readonly("test.goal_denied_session_authority", |txn| {
+                    let requester_did = &requester_did;
+                    let session_doc = &session.doc_id;
+                    Box::pin(async move {
+                        txn.observe_document_access(
+                            requester_did,
+                            "AgentSession",
+                            std::slice::from_ref(session_doc),
+                            defra_node::DocumentAccessMode::Named {
+                                permission: "update".into(),
+                                node_permission: acp::nac::NodePermission::DocumentUpdate,
+                            },
+                        )
+                        .await
+                    })
+                })
+                .await
+                .unwrap();
+            assert_eq!(decisions, [defra_node::DocumentAccessDecision::Denied]);
+            (requester, access)
+        } else {
+            (fixture.user.clone(), owner_access)
+        };
         let revision = fixture.goal_commit(&fixture.goal.doc_id).await.cid;
         let before = fixture.observe().await;
         let mut operation = case.operation.clone();
@@ -86,7 +161,7 @@ async fn generated_goal_client_controls_drive_signed_commands() {
         let mut command = SessionGoalControl {
             version: SESSION_GOAL_CONTROL_VERSION,
             command_id: uuid::Uuid::new_v4().to_string(),
-            requester_did: fixture.user.did().into(),
+            requester_did: requester.did().into(),
             requester_peer_id: None,
             node_did: fixture.identity.did().into(),
             agent_did: session.session.agent_did.clone(),
@@ -120,14 +195,10 @@ async fn generated_goal_client_controls_drive_signed_commands() {
             native_evidence: None,
             signature: Vec::new(),
         };
-        command.signature = fixture
-            .user
+        command.signature = requester
             .sign(&command.signing_payload().unwrap())
             .await
             .unwrap();
-        if case.facts["authorized"] == false {
-            command.signature[0] ^= 1;
-        }
         let doc_id = persist_command(&access, &command).await;
         let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
         assert_eq!(
