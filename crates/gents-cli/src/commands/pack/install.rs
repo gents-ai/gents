@@ -118,10 +118,6 @@ pub(crate) async fn install_documents_pack_resolved(
         .await
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "local install adds held Node and client access to the shared pack inputs"
-)]
 async fn install_documents_pack_resolved_inner(
     access: &gents::store::config_client::ConfigAccess,
     owner: &str,
