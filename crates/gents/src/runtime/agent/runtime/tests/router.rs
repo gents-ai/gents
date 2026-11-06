@@ -70,52 +70,15 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
     grant_held_agent_operations(&node, root.as_ref(), agent.as_ref()).await;
     let node_did = root.did();
     let agent_did = agent.did();
-    let response = node
-        .execute(&format!(
-            r#"mutation {{
-                create_AgentRequest(input: {{
-                    request_id: "invalid-origin-route-request"
-                    purpose: "normal"
-                    node_did: "{node_did}"
-                    agent_did: "{agent_did}"
-                    session_id: "invalid-origin-route-session"
-                    content: "hostile"
-                    lifecycle_state: "pending"
-                    created_at: "2026-09-03T00:00:00Z"
-                }}) {{ _docID }}
-            }}"#,
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "create malformed routed request: {:?}",
-        response.errors
-    );
-    let response = node
-        .execute(
-            r#"{
-                AgentRequest(
-                    filter: { request_id: { _eq: "invalid-origin-route-request" } }
-                    limit: 1
-                ) { _docID }
-            }"#,
-        )
-        .await;
-    assert!(
-        !response.has_errors(),
-        "lookup malformed routed request: {:?}",
-        response.errors
-    );
-    let doc_id = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|rows| rows.as_array())
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("_docID"))
-        .and_then(Value::as_str)
-        .expect("malformed request doc id")
-        .to_string();
+    let doc_id = create_held_agent_request(
+        &node,
+        node_did,
+        agent.as_ref(),
+        "invalid-origin-route-request",
+        "invalid-origin-route-session",
+        "hostile",
+    )
+    .await;
     let mut malformed = request(Some(agent_did), "invalid-origin-route-session");
     malformed.doc_id = doc_id;
     malformed.request_id = "invalid-origin-route-request".to_string();
