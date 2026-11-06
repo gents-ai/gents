@@ -463,7 +463,6 @@ async fn invalid_edited_attachment_does_not_supersede_the_original() {
 async fn edited_skill_outside_context_does_not_supersede_the_original() {
     let db = test_db("invalid-edited-skill").await;
     let agent = support::managed_agent(&db).await;
-    let did = db.node_identity.did();
     let original = enqueue_owned(
         &db,
         agent.did(),

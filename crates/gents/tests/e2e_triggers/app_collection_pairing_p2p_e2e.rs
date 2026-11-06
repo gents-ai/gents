@@ -1188,6 +1188,6 @@ async fn matching_document_packs_sync_over_explicit_app_collection_pairing() {
     let _ = stop_b.send(true);
     task_a.await.unwrap().unwrap();
     task_b.await.unwrap().unwrap();
-    a.node.shutdown().await;
-    b.node.shutdown().await;
+    a.node.shutdown().await.unwrap();
+    b.node.shutdown().await.unwrap();
 }
