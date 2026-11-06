@@ -832,7 +832,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                     controller_generation: 1
                     backend_config_fingerprint: "fp"
                 }}) {{ _docID }}
-            }}"#
+            }}"#,
                 agent_did = escape_graphql_string(&agent.agent_did),
             );
             access
