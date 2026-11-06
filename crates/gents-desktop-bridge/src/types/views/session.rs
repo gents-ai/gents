@@ -103,7 +103,8 @@ pub enum RequestOriginView {
         #[ts(optional)]
         wrapup: Option<bool>,
     },
-    BackgroundCompletion,
+    #[serde(rename_all = "camelCase")]
+    BackgroundCompletion { notification: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

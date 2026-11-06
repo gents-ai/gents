@@ -119,7 +119,7 @@ it("offers editing only for readable authored user messages", () => {
         item: {
           ...item,
           kind: "automatedInput",
-          origin: { kind: "backgroundCompletion" },
+          origin: { kind: "backgroundCompletion", notification: true },
         },
         onEdit,
       }),
