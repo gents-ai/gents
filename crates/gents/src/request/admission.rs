@@ -758,8 +758,6 @@ impl AgentRequestAdmissionVerifier {
                     && row.input.as_ref().is_none_or(|input| {
                         input.queue.as_ref().is_none_or(|queue| {
                             queue.source == gents_protocol::request_input::QueueSource::User
-                                && queue.delivery
-                                    == gents_protocol::request_input::QueueDelivery::Queue
                         })
                     })))
         {

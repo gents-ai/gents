@@ -95,6 +95,21 @@ def decideClaim (intent : Intent) (observation : Observation) (commit : NativeCo
       !observation.requesterNodePermission then .denied
   else .claimed
 
+/-- Delivery selects the pending-work boundary; it does not replace the
+native authorization of the immediate author when that work is claimed. -/
+inductive ClientDelivery where
+  | queue | steer
+  deriving DecidableEq, Repr
+
+def decideIdleClientClaim (_delivery : ClientDelivery) (intent : Intent)
+    (observation : Observation) (commit : NativeCommit) : Decision :=
+  decideClaim intent observation commit
+
+theorem idle_queue_and_steer_use_same_native_claim
+    (intent : Intent) (observation : Observation) (commit : NativeCommit) :
+    decideIdleClientClaim .queue intent observation commit =
+      decideIdleClientClaim .steer intent observation commit := by rfl
+
 /-- A pending request changes only with the native commit. Rejection uses the
 existing failed lifecycle and no-message terminal selection, and never exposes
 which authorization fact was absent. Existing terminal work is unchanged. -/

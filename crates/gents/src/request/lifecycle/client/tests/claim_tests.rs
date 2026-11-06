@@ -384,11 +384,14 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
 #[tokio::test]
 async fn signed_client_claim_uses_transaction_bound_intent_and_native_permissions() {
     let modeled = crate::lean_vocab_test::lean_contract_snapshot();
-    for (name, mutate, scheduled) in [
-        ("committed_claim", false, false),
-        ("committed_claim", false, true),
-        ("invalid_signature", true, false),
-        ("invoke_denied_at_check", false, false),
+    for (name, mutate, scheduled, steer) in [
+        ("committed_claim", false, false, false),
+        ("committed_claim", false, true, false),
+        ("invalid_signature", true, false, false),
+        ("invoke_denied_at_check", false, false, false),
+        ("committed_claim", false, false, true),
+        ("invalid_signature", true, false, true),
+        ("invoke_denied_at_check", false, false, true),
     ] {
         let case = modeled
             .cross_actor_authorization_cases
@@ -457,6 +460,18 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         );
         if scheduled {
             create.max_retries = 1;
+        }
+        if steer {
+            create.input.queue = Some(gents_protocol::request_input::RequestQueue {
+                delivery: gents_protocol::request_input::QueueDelivery::Steer,
+                source: gents_protocol::request_input::QueueSource::User,
+                policy: gents_protocol::request_input::QueuePolicy::Append,
+                position: None,
+                key: None,
+                queued_after_request_id: None,
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            });
         }
         create.session_doc_id = Some(reserve_goal_session(&user_access, &create).await.unwrap());
         let agent = user_access
