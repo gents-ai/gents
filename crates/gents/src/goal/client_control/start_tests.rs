@@ -146,6 +146,11 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                 .await
                 .unwrap();
         }
+        let (user, access, foreign, foreign_access) = if case.name == "foreign_requester" {
+            (foreign, foreign_access, user, access)
+        } else {
+            (user, access, foreign, foreign_access)
+        };
         case.requested["agent_did"] = json!(if case.requested["agent"] == 4 {
             &other_binding.agent_did
         } else {
@@ -195,6 +200,17 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             )
             .await
             .unwrap();
+            if foreign_owner {
+                session_access
+                    .add_actor_relationship(
+                        "AgentSession",
+                        &session_doc,
+                        "reader",
+                        &::identity::Did::new(user.did()).unwrap(),
+                    )
+                    .await
+                    .unwrap();
+            }
             if case.name == "wrong_signed_agent" {
                 session_access
                     .add_actor_relationship(
@@ -216,10 +232,28 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             })
             .await
             .unwrap();
-        let signed_session_doc_id = if let Some(session) = session_before
-            .as_ref()
-            .filter(|session| session.session.requester_did.as_deref() == Some(user.did()))
-        {
+        if case.name == "foreign_requester" {
+            let session = session_before.as_ref().unwrap();
+            let owners = access
+                .transact_readonly("test.foreign_session_owner", |txn| {
+                    Box::pin(
+                        txn.document_owners("AgentSession", std::slice::from_ref(&session.doc_id)),
+                    )
+                })
+                .await
+                .unwrap();
+            assert_eq!(owners.len(), 1);
+            assert_eq!(
+                owners[0].owner.as_ref().map(::identity::Did::as_str),
+                Some(foreign.did())
+            );
+            assert_ne!(foreign.did(), user.did());
+        }
+        let signed_session_doc_id = if let Some(session) =
+            session_before.as_ref().filter(|session| {
+                session.session.requester_did.as_deref() == Some(user.did())
+                    || case.name == "foreign_requester"
+            }) {
             session.doc_id.clone()
         } else {
             access
@@ -362,7 +396,10 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             RequestPurpose::Normal,
             "first",
             identity.did(),
-            user.did(),
+            session_before
+                .as_ref()
+                .and_then(|session| session.session.requester_did.as_deref())
+                .unwrap_or(user.did()),
             &signed_agent,
             SESSION,
             "Work on this goal",
