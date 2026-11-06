@@ -581,6 +581,199 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_delete_sources_grant_revoke_and_preserve_independent_permissions(
+    ) -> anyhow::Result<()> {
+        let (_directory, runtime, node) = projection_node().await?;
+        let binding = crate::store::identity::provision_agent_identity(&runtime)?;
+        let signer = crate::store::identity::resolve_agent_identity(&runtime, &binding)?;
+        let agent = identity::Did::new(&binding.agent_did)?;
+        let owner = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+        for permission in [
+            NodePermission::CollectionGet,
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+        ] {
+            owner.grant_node_permission(&agent, permission).await?;
+        }
+        node.add_collection(&format!(
+            "type DeleteProjectionProbe @policy(id: \"{}\", resource: \"configuration\") {{ name: String }}",
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+        )).await?;
+        let node_value = escape_graphql_string(runtime.did());
+        let agent_value = escape_graphql_string(&binding.agent_did);
+        let nonce = escape_graphql_string(&binding.creation_nonce);
+        for mutation in [
+            format!(
+                r#"mutation {{ create_Tools(input: {{node_did:"{node_value}",tools_id:"delete-tools",self_config:{{enable_self_config:true,self_config_categories:["agent"],enable_pack_install:false}}}}) {{_docID}} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_AgentContext(input: {{node_did:"{node_value}",context_id:"delete-context",tools_id:"delete-tools"}}) {{_docID}} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"{nonce}",context_id:"delete-context",enabled:true}}) {{_docID}} }}"#
+            ),
+        ] {
+            owner
+                .write("test.delete_projection.create", &mutation)
+                .await?;
+        }
+        let actor =
+            crate::ConfigAccess::local_managed_agent(node.clone(), agent.clone(), signer.as_ref())?;
+        let model = crate::lean_vocab_test::lean_identity_household_cases()
+            .iter()
+            .find(|case| case.name == "configuration-explicit-grants")
+            .expect("configuration model");
+        let expected = |name: &str| {
+            model
+                .tool_operation_cases
+                .iter()
+                .find(|case| case["name"] == name)
+                .expect("modeled tool operation")["sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|source| source["permission"] == NodePermission::DocumentDelete.as_str())
+        };
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?,
+            expected("self-config-agent")
+        );
+        let created = actor
+            .write(
+                "test.delete_projection.create_probe",
+                r#"mutation { create_DeleteProjectionProbe(input: {name:"probe"}) {_docID} }"#,
+            )
+            .await?;
+        let doc = crate::store::graphql::created_doc_id(&created, "DeleteProjectionProbe")?;
+        let delete = format!(
+            r#"mutation {{ delete_DeleteProjectionProbe(docID:"{}") {{_docID}} }}"#,
+            escape_graphql_string(&doc)
+        );
+        let denied = actor.write("test.delete_projection.denied", &delete).await;
+        assert!(!denied
+            .as_ref()
+            .is_ok_and(|value| value["data"]["delete_DeleteProjectionProbe"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty())));
+        let update = |category: &str, pack: bool| {
+            format!(
+                r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"delete-tools"}}}},input:{{self_config:{{enable_self_config:true,self_config_categories:["{category}"],enable_pack_install:{pack}}}}}) {{_docID}} }}"#
+            )
+        };
+        owner
+            .write(
+                "test.delete_projection.enable_overlap",
+                &update("tools", true),
+            )
+            .await?;
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?,
+            expected("self-config-tools")
+        );
+        let deleted = actor
+            .write("test.delete_projection.allowed", &delete)
+            .await?;
+        assert_eq!(
+            deleted["data"]["delete_DeleteProjectionProbe"][0]["_docID"],
+            doc
+        );
+        owner
+            .write(
+                "test.delete_projection.remove_pack",
+                &update("tools", false),
+            )
+            .await?;
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?,
+            expected("self-config-tools")
+        );
+        owner
+            .write("test.delete_projection.pack_only", &update("agent", true))
+            .await?;
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?,
+            expected("pack-independent")
+        );
+        owner
+            .write("test.delete_projection.remove_all", &update("agent", false))
+            .await?;
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?,
+            expected("self-config-agent")
+        );
+        let second = actor
+            .write(
+                "test.delete_projection.second_probe",
+                r#"mutation { create_DeleteProjectionProbe(input: {name:"second"}) {_docID} }"#,
+            )
+            .await?;
+        let second_doc = crate::store::graphql::created_doc_id(&second, "DeleteProjectionProbe")?;
+        let second_delete = format!(
+            r#"mutation {{ delete_DeleteProjectionProbe(docID:"{}") {{_docID}} }}"#,
+            escape_graphql_string(&second_doc)
+        );
+        let denied = actor
+            .write("test.delete_projection.revoked", &second_delete)
+            .await;
+        assert!(!denied
+            .as_ref()
+            .is_ok_and(|value| value["data"]["delete_DeleteProjectionProbe"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty())));
+        let remaining = actor
+            .execute(&format!(
+                r#"{{ DeleteProjectionProbe(filter: {{_docID:{{_eq:"{}"}}}}) {{_docID}} }}"#,
+                escape_graphql_string(&second_doc)
+            ))
+            .await?;
+        assert_eq!(
+            remaining["data"]["DeleteProjectionProbe"][0]["_docID"],
+            second_doc
+        );
+        owner
+            .grant_node_permission(&agent, NodePermission::DocumentDelete)
+            .await?;
+        owner
+            .write(
+                "test.delete_projection.enable_again",
+                &update("tools", false),
+            )
+            .await?;
+        owner
+            .write(
+                "test.delete_projection.disable_again",
+                &update("agent", false),
+            )
+            .await?;
+        assert!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?
+        );
+        owner
+            .revoke_node_permission(&agent, NodePermission::DocumentDelete)
+            .await?;
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?,
+            expected("self-config-agent")
+        );
+        node.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn selected_schema_tool_grants_and_revokes_only_its_native_source() -> anyhow::Result<()>
     {
         let (_directory, runtime, node) = projection_node().await?;
