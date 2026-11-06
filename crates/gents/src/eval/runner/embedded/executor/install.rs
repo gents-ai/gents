@@ -228,7 +228,7 @@ pub(super) async fn install(
     Ok(agent_did)
 }
 
-async fn grant_trial_operations(home: &EmbeddedHome, target: &str) -> Result<()> {
+pub(crate) async fn grant_trial_operations(home: &EmbeddedHome, target: &str) -> Result<()> {
     use crate::store::config_client::NodePermission;
 
     let owner = ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(home.did())?);

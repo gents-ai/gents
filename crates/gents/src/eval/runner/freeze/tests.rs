@@ -35,6 +35,12 @@ impl Launching {
         let evaluator_did = evaluator.did().to_owned();
         let capability = evaluator.client_signing_capability().unwrap();
         home.set_evaluator(evaluator, capability);
+        crate::eval::runner::embedded::executor::install::grant_trial_operations(
+            &home,
+            &evaluator_did,
+        )
+        .await
+        .unwrap();
         let access = home.client_access(&evaluator_did).unwrap();
         let launching = Self { home, access, dirs };
         launching
@@ -156,6 +162,64 @@ impl Launching {
             captures: Vec::new(),
         }
     }
+}
+
+#[tokio::test]
+async fn launching_fixture_commits_user_signed_node_and_denies_ungranted_client() {
+    let launching = Launching::new().await;
+    let response = launching
+        .access
+        .execute("{ Node { _docID _version { cid } } }")
+        .await
+        .unwrap();
+    let rows = response["data"]["Node"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    let cid = rows[0]["_version"][0]["cid"].as_str().unwrap();
+    let evaluator = launching.evaluator_did();
+    let (block, signature) = launching
+        .home
+        .node
+        .authorized_signed_block_bytes(cid, Some(&evaluator))
+        .await
+        .unwrap();
+    let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();
+    let signature = defra_core::block::Signature::from_dag_cbor(&signature).unwrap();
+    assert_eq!(
+        db::block::verify::verified_signature_signer_did(&block, &signature).unwrap(),
+        evaluator
+    );
+    assert_ne!(launching.owner(), evaluator);
+
+    let stranger = crate::store::identity::KeyIdentity::load_or_create(
+        launching.dirs.path().join("ungranted.key"),
+        None,
+    )
+    .unwrap();
+    let outsider = ConfigAccess::Graphql(
+        crate::store::config_client::GraphqlEndpoint::as_principal(
+            launching.home.graphql_endpoint().unwrap(),
+            stranger.did(),
+        )
+        .with_client_signing_capability(stranger.client_signing_capability().unwrap())
+        .unwrap()
+        .with_client_signed_agent_creates(),
+    );
+    let stranger_did = stranger.did().to_owned();
+    let result = outsider
+        .transact_write("freeze.ungranted", |txn| {
+            let stranger_did = &stranger_did;
+            Box::pin(async move {
+                txn.execute_desired_state_mutation(
+                    "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
+                    &json!({"input": {"node_did": stranger_did}}),
+                    Collection::Node,
+                    true,
+                )
+                .await
+            })
+        })
+        .await;
+    assert!(result.is_err(), "ungranted user must not publish a Node");
 }
 
 fn definition(owner: &str) -> Value {
