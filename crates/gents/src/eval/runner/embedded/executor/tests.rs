@@ -321,18 +321,16 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
         review_previous: false,
         captures: Vec::new(),
     };
-    for state in ["processing", "pending"] {
-        super::submit::submit_stage(
-            &home,
-            &spec.evaluator_did,
-            &locator,
-            &agent_did,
-            &stage,
-            &format!("retained-{state}"),
-        )
-        .await
-        .unwrap();
-    }
+    super::submit::submit_stage(
+        &home,
+        &spec.evaluator_did,
+        &locator,
+        &agent_did,
+        &stage,
+        "retained-processing",
+    )
+    .await
+    .unwrap();
     let client = home.client_access(&spec.evaluator_did).unwrap();
     let agents = client
         .execute("{ Agent { agent_did creation_nonce } }")
@@ -390,6 +388,16 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
     drop(lifecycle);
     drop(verifier);
     drop(agent_access);
+    super::submit::submit_stage(
+        &home,
+        &spec.evaluator_did,
+        &locator,
+        &agent_did,
+        &stage,
+        "retained-pending",
+    )
+    .await
+    .unwrap();
     let subject = crate::eval::runner::subject_binding::SubjectAgent {
         slot: "subject".into(),
         agent_did,
