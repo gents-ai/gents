@@ -1,5 +1,5 @@
 use super::{plan::document_identity, read, ConfigApplyTxn, DesiredStateApplyPlan};
-use crate::documents::CallbackHandler;
+use crate::documents::references_of;
 use crate::Collection;
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,25 +18,14 @@ async fn links(
     else {
         return Ok(BTreeSet::new());
     };
-    let callback: crate::documents::Callback = serde_json::from_value(value)?;
+    let callback: crate::documents::Callback = serde_json::from_value(value.clone())?;
     if !callback.enabled {
         return Ok(BTreeSet::new());
     }
-    let selection = match callback.handler {
-        CallbackHandler::BuiltIn {
-            workspace_agents, ..
-        }
-        | CallbackHandler::Module {
-            workspace_agents, ..
-        } => workspace_agents,
-        CallbackHandler::Plugin { .. } => None,
-    };
-    let Some(selection) = selection else {
-        return Ok(BTreeSet::new());
-    };
-    let dids = [selection.writer_agent_did, selection.integrator_agent_did]
+    let dids = references_of(Collection::Callback, &value, owner)?
         .into_iter()
-        .chain(selection.readers.into_iter().map(|reader| reader.agent_did))
+        .filter(|reference| reference.collection == Collection::Agent)
+        .map(|reference| reference.id)
         .collect::<BTreeSet<_>>();
     let mut links = BTreeSet::new();
     for did in dids {

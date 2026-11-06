@@ -5,6 +5,7 @@ use serde_json::json;
 
 use super::apply_task_selections;
 use crate::lean_vocab_test::lean_identity_household_cases;
+use crate::store::config_client::desired_state::selection::tests::canonical;
 use crate::store::config_client::desired_state::selection::{apply_selection_changes, Change};
 use crate::store::config_client::ConfigAccess;
 use crate::store::identity::NodeIdentity;
@@ -102,12 +103,12 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
             .add_actor_relationship("Agent", doc, "executor", &identity::Did::new(actor)?)
             .await?;
     }
-    let change = |collection, doc_id: &str, before, after| Change {
+    let change = |collection, doc_id: &str, before: Option<serde_json::Value>, after| Change {
         collection,
         node_did: runtime.did().into(),
         doc_id: doc_id.into(),
-        before,
-        after,
+        before: before.map(|before| canonical(collection, runtime.did(), before)),
+        after: canonical(collection, runtime.did(), after),
     };
     let graph = vec![
         change(
@@ -139,7 +140,10 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
         .transact_write("test.task_target.select", |txn| {
             let (graph, first) = (&graph, &first);
             Box::pin(async move {
-                apply_selection_changes(txn, graph, |_| true).await?;
+                apply_selection_changes(txn, graph, |collection| {
+                    collection != Collection::InferenceProfile
+                })
+                .await?;
                 apply_task_selections(txn, first).await
             })
         })
@@ -213,7 +217,10 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
                     let (changes, update) = (&changes, &update);
                     Box::pin(async move {
                         txn.execute(update).await?;
-                        apply_selection_changes(txn, changes, |_| true).await
+                        apply_selection_changes(txn, changes, |collection| {
+                            collection != Collection::InferenceProfile
+                        })
+                        .await
                     })
                 })
                 .await?;

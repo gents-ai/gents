@@ -1,66 +1,62 @@
+use std::collections::VecDeque;
+
 use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::{read::read_record, ConfigApplyTxn};
+use crate::documents::{references_of, RequiredReference};
 use crate::Collection;
 
 /// Each physical link follows the revocable Agent self-configuration role.
-/// Independent actor grants are not changed by this publication.
+/// Independent actor grants are not changed by this publication. The walk is
+/// the Agent's InferenceProfile and the canonical references below it.
 pub(super) async fn grant_selected_inference(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     agent_doc: &str,
     agent_document: &Value,
 ) -> Result<()> {
-    let Some(profile_id) = reference(agent_document, "inference_profile_id") else {
-        return Ok(());
-    };
-    let profile = grant(
-        txn,
-        node_did,
-        agent_doc,
-        Collection::InferenceProfile,
-        profile_id,
-    )
-    .await?;
-    if let Some(id) = reference(&profile, "backend_id") {
-        let (backend_doc, _) = read_record(txn, Collection::InferenceBackend, node_did, id)
-            .await?
-            .context("selected InferenceBackendMetadata is unavailable")?;
-        txn.add_entity_set_relationship(
-            Collection::InferenceBackend.graphql_type(),
-            &backend_doc,
-            "selection_manager",
-            "agents",
-            agent_doc,
-            "config_writer",
-        )
-        .await?;
-    }
-    if let Some(id) = reference(&profile, "sampling_id") {
-        grant(txn, node_did, agent_doc, Collection::InferenceSampling, id).await?;
-    }
-    if let Some(id) = reference(&profile, "execution_id") {
-        let execution = grant(txn, node_did, agent_doc, Collection::InferenceExecution, id).await?;
-        if let Some(id) = reference(&execution, "retry_policy_id") {
-            grant(
-                txn,
-                node_did,
+    let mut pending = selected(Collection::Agent, node_did, agent_document)?
+        .filter(|reference| reference.collection == Collection::InferenceProfile)
+        .collect::<VecDeque<_>>();
+    while let Some(reference) = pending.pop_front() {
+        if reference.collection == Collection::InferenceBackend {
+            let (backend_doc, _) =
+                read_record(txn, Collection::InferenceBackend, node_did, &reference.id)
+                    .await?
+                    .context("selected InferenceBackendMetadata is unavailable")?;
+            txn.add_entity_set_relationship(
+                Collection::InferenceBackend.graphql_type(),
+                &backend_doc,
+                "selection_manager",
+                "agents",
                 agent_doc,
-                Collection::InferenceRetryPolicy,
-                id,
+                "config_writer",
             )
             .await?;
+            continue;
         }
+        let document = grant(
+            txn,
+            node_did,
+            agent_doc,
+            reference.collection,
+            &reference.id,
+        )
+        .await?;
+        pending.extend(selected(reference.collection, node_did, &document)?);
     }
     Ok(())
 }
 
-fn reference<'a>(document: &'a Value, field: &str) -> Option<&'a str> {
-    document
-        .get(field)
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())
+fn selected(
+    collection: Collection,
+    node_did: &str,
+    document: &Value,
+) -> Result<impl Iterator<Item = RequiredReference>> {
+    Ok(references_of(collection, document, node_did)?
+        .into_iter()
+        .filter(|reference| !reference.id.is_empty()))
 }
 
 async fn grant(
@@ -98,6 +94,7 @@ async fn grant(
 mod tests {
     use std::sync::Arc;
 
+    use super::super::selection::tests::canonical;
     use super::*;
     use crate::store::config_client::{ConfigAccess, NodePermission};
     use crate::store::identity::NodeIdentity;
@@ -476,8 +473,16 @@ mod tests {
             collection: Collection::InferenceProfile,
             node_did: runtime_did.clone(),
             doc_id: profile.clone(),
-            before: Some(serde_json::json!({"execution_id":"execution"})),
-            after: serde_json::json!({"execution_id":"new-execution"}),
+            before: Some(canonical(
+                Collection::InferenceProfile,
+                &runtime_did,
+                serde_json::json!({"execution_id":"execution"}),
+            )),
+            after: canonical(
+                Collection::InferenceProfile,
+                &runtime_did,
+                serde_json::json!({"execution_id":"new-execution"}),
+            ),
         };
         let rebind = agent
             .transact_write("test.inference.rebind", |txn| {

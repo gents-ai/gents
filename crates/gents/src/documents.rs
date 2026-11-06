@@ -49,6 +49,7 @@ pub use installation::{
     ProjectionAcpBinding, ProjectionAcpObservation, RepositoryPlacement, ToolServiceRegistry,
 };
 pub use pack_config::PackConfig;
+pub(crate) use references::{references_of, RequiredReference};
 pub use references::{ConfigReferences, MissingReference};
 
 #[allow(unused_imports)]

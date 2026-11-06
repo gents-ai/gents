@@ -246,6 +246,8 @@ impl ToolPermissionProjection {
         }
         let mut desired: BTreeMap<&'static str, BTreeMap<String, String>> = BTreeMap::new();
         let mut plugin_desired: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        // Agent rows are read by field: the projection serves Agents whose rows
+        // omit inference_profile_id, which the typed reference owner rejects.
         for doc in agents {
             let (_, value) = row(doc)?;
             if field(&value, "node_did") != Some(node)
@@ -278,10 +280,10 @@ impl ToolPermissionProjection {
             let Some((context_doc, context)) = context_by_id.get(context_id) else {
                 continue;
             };
-            let Some(tools_id) = field(context, "tools_id") else {
+            let Some(tools_id) = selected_tools(node, context) else {
                 continue;
             };
-            let Some((tools_doc, tool_value)) = tools_by_id.get(tools_id) else {
+            let Some((tools_doc, tool_value)) = tools_by_id.get(&tools_id) else {
                 continue;
             };
             let Ok(tools) = serde_json::from_value::<crate::documents::Tools>(tool_value.clone())
@@ -576,6 +578,15 @@ fn row(doc: document::Document) -> Result<(String, serde_json::Value)> {
         object.remove("updated_at");
     }
     Ok((id, value))
+}
+
+fn selected_tools(node: &str, context: &serde_json::Value) -> Option<String> {
+    crate::documents::references_of(crate::Collection::AgentContext, context, node)
+        .ok()?
+        .into_iter()
+        .find(|reference| reference.collection == crate::Collection::Tools)
+        .map(|reference| reference.id)
+        .filter(|id| !id.is_empty())
 }
 
 fn field<'a>(value: &'a serde_json::Value, name: &str) -> Option<&'a str> {
