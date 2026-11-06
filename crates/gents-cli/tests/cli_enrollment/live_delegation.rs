@@ -4,6 +4,7 @@ use gents::store::config_client::{
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::{Collection, Tools};
+use serde_json::json;
 use std::sync::Arc;
 
 async fn publish(access: &ConfigAccess, documents: Vec<(Collection, Value)>) -> Result<()> {
@@ -208,6 +209,59 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         let restored = core.set_session_archived(&node_did, &child_session, next_revision, false).await?;
         assert_eq!(restored.outcome, gents_protocol::session::SessionArchiveOutcome::Applied);
         assert!(restored.archived_at.is_none());
+        // Revoke only the explicit caller-to-target authority after the successful
+        // delegation, then exercise the same target in a fresh full Agent turn.
+        access.transact_write("test.live_delegation_revoke", |txn| {
+            let (node_did, a_did, b_did) = (&node_did, &a.agent_did, &b.agent_did);
+            Box::pin(async move {
+                let (doc, _) = read_desired_state_record_in_txn(txn, Collection::Agent, node_did, b_did)
+                    .await?.context("child Agent unavailable to its User owner")?;
+                txn.delete_actor_relationship("Agent", &doc, "session_writer", &a_did.parse()?).await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        }).await?;
+        let runtime_identity = identity_from_init(&init)?;
+        let a_signer = gents::store::identity::resolve_agent_identity(&runtime_identity, &a)?;
+        let agent_access = ConfigAccess::Graphql(
+            gents::store::config_client::GraphqlEndpoint::as_principal(&graphql, &a.agent_did)
+                .with_client_signing_capability(a_signer.client_signing_capability()?)?,
+        );
+        for did in [&b.agent_did, &format!("{}:missing", b.agent_did)] {
+            let rows = agent_access.execute(&format!("{{ Agent(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{_docID}} }}", escape_graphql_string(did))).await?;
+            assert_eq!(rows["data"]["Agent"], json!([]), "hidden and missing targets must both be opaque: {rows}");
+        }
+        let denied_session = Uuid::new_v4().to_string();
+        let denied_prompt = format!("Use agent_new once to delegate to child: 'Say hello.' Request {}. Do not answer in place of the child.", Uuid::new_v4());
+        let denied = core.submit_request(&denied_session, &node_did, &denied_prompt, Some(&a.agent_did)).await?;
+        let deadline = Instant::now() + Duration::from_secs(240);
+        let (denied_doc, denied_tool) = loop {
+            let rows = access.execute(&format!("{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{_docID lifecycle_state}} AgentToolCall(filter: {{request_id: {{_eq: \"{}\"}}, tool_name: {{_eq: \"agent_new\"}}}}) {{_docID lifecycle_state tool_failure_class}} }}", escape_graphql_string(&denied.request_id), escape_graphql_string(&denied.request_id))).await?;
+            let request = &rows["data"]["AgentRequest"][0];
+            let tools = rows["data"]["AgentToolCall"].as_array().context("denied turn tool rows unavailable")?;
+            anyhow::ensure!(tools.len() <= 1, "more than one agent_new in denied turn: {tools:?}");
+            if request["lifecycle_state"] == "completed" {
+                let tool = tools.first().context("the model completed without an agent_new attempt; denial was not exercised")?;
+                anyhow::ensure!(tool["lifecycle_state"] == "failed" && tool["tool_failure_class"] == "serviceUnavailable", "agent_new was not denied as unavailable: {tool}");
+                break (request["_docID"].as_str().context("denied request doc")?.to_owned(), tool["_docID"].as_str().context("denied tool doc")?.to_owned());
+            }
+            anyhow::ensure!(request["lifecycle_state"] != "failed", "denied parent turn failed before model-facing result: {request}");
+            anyhow::ensure!(Instant::now() < deadline, "denied turn did not complete: {rows}");
+            sleep(Duration::from_millis(250)).await;
+        };
+        let children = access.execute(&format!("{{ AgentRequest(filter: {{caused_by_parent_request_doc_id: {{_eq: \"{}\"}}}}) {{_docID}} }}", escape_graphql_string(&denied_doc))).await?;
+        assert_eq!(children["data"]["AgentRequest"], json!([]), "denied tool published a child: {children}");
+        let calls = access.execute(&format!("{{ InferenceCall(filter: {{request_id: {{_eq: \"{}\"}}}}) {{agent_did model_name call_state}} }}", escape_graphql_string(&denied.request_id))).await?;
+        anyhow::ensure!(calls["data"]["InferenceCall"].as_array().is_some_and(|rows| rows.iter().any(|row| row["agent_did"] == a.agent_did && row["model_name"] == model_name && row["call_state"] == "completed")), "denied turn did not run the selected model: {calls}");
+        let segments = access.execute(&format!("{{ AgentOutputSegment(filter: {{request_doc_id: {{_eq: \"{}\"}}}}) {{source ordinal payload close}} }}", escape_graphql_string(&denied_doc))).await?;
+        let mut tool_segments: Vec<_> = segments["data"]["AgentOutputSegment"].as_array().context("denied tool output unavailable")?.iter()
+            .filter(|row| row["source"]["kind"] == "tool_call" && row["source"]["tool_call_doc_id"] == denied_tool)
+            .collect();
+        tool_segments.sort_by_key(|row| row["ordinal"].as_u64().unwrap_or(u64::MAX));
+        anyhow::ensure!(tool_segments.iter().any(|row| !row["close"].is_null()), "denied tool output has no durable close");
+        let output: String = tool_segments.iter().filter_map(|row| row["payload"].as_str()).collect();
+        anyhow::ensure!(!output.is_empty(), "denied tool output is empty");
+        assert!(!output.contains(&b.agent_did), "denied tool disclosed the hidden Agent DID: {output}");
+        assert!(!output.contains("no longer exists"), "denied tool asserted hidden target nonexistence: {output}");
         Arc::new(core).shutdown().await?;
         Ok(([a, b], (child_doc, session_doc, tool_doc, inference_docs)))
     }).await?;
