@@ -979,7 +979,7 @@ pub(super) async fn replace_pending_user_messages(
     .await?;
     let mut graphs = Vec::with_capacity(creates.len());
     for create in &creates {
-        let input = crate::request::lifecycle::client_request_input(create)?;
+        let input = crate::store::config_client::client_request_input(create)?;
         let evidence =
             crate::store::config_client::prepare_request_evidence(signer, input.clone()).await?;
         graphs.push(std::sync::Arc::new(

@@ -46,7 +46,7 @@ pub async fn prepare_session_goal_control(
                 && request.agent_doc_id.as_deref() == Some(command.agent_doc_id.as_str()),
             "goal request differs from its signed command scope"
         );
-        let input = crate::request::lifecycle::client_request_input(request)?;
+        let input = crate::store::config_client::client_request_input(request)?;
         let request = crate::store::config_client::prepare_request_evidence(signer, input).await?;
         let replacement_delete = match command.expected.as_ref() {
             Some(revision) => Some(

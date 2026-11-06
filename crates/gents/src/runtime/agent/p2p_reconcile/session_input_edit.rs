@@ -211,7 +211,7 @@ async fn verified_graphs(
         .iter()
         .zip(&command.replacement_evidence)
     {
-        let input = match crate::request::lifecycle::client_request_input(create) {
+        let input = match crate::store::config_client::client_request_input(create) {
             Ok(input) => input,
             Err(_) => return Ok(Err("invalid replacement input".into())),
         };
@@ -445,7 +445,7 @@ async fn test_signed_replacement_fields(
         evidence.push(
             crate::store::config_client::prepare_request_evidence(
                 signer,
-                crate::request::lifecycle::client_request_input(create).unwrap(),
+                crate::store::config_client::client_request_input(create).unwrap(),
             )
             .await
             .unwrap(),

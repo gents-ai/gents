@@ -248,7 +248,7 @@ async fn user_goal_continuation_claim_fences_current_physical_binding() {
                 .await
                 .unwrap();
             if other.is_some() {
-                let input = crate::request::lifecycle::client_request_input(&opening).unwrap();
+                let input = crate::store::config_client::client_request_input(&opening).unwrap();
                 let session_doc = &f.session_doc_id;
                 let selected_agent = f.agent.did();
                 user.transact_write("test.goal.foreign_agent_opening", |txn| {

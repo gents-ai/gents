@@ -146,7 +146,7 @@ async fn submit_prepared_edit(
         replacement_evidence.push(
             crate::store::config_client::prepare_request_evidence(
                 signer,
-                crate::request::lifecycle::client_request_input(create)?,
+                crate::store::config_client::client_request_input(create)?,
             )
             .await?,
         );

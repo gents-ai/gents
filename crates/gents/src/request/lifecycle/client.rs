@@ -48,40 +48,6 @@ fn request_actor(access: &ConfigAccess, create: &AgentRequestCreate) -> anyhow::
     Ok(actor)
 }
 
-/// Translate the canonical request owner's GraphQL input into the native
-/// signed-create adapter's variables without constructing another wire shape.
-pub fn client_request_input(create: &AgentRequestCreate) -> anyhow::Result<serde_json::Value> {
-    let document = create
-        .graphql_client_publication_mutation()
-        .map_err(anyhow::Error::msg)?;
-    let parsed = query::query_parse::parse_request_with_limits(
-        &document,
-        None,
-        None,
-        query::QueryLimits::default(),
-    )?;
-    let query::query_parse::ParsedOperation::Mutation {
-        mutations,
-        explain: None,
-    } = parsed
-    else {
-        anyhow::bail!("client request is not a create mutation");
-    };
-    anyhow::ensure!(
-        mutations.len() == 1
-            && mutations[0].collection_name == "AgentRequest"
-            && mutations[0].mutation_type == query::MutationType::Add
-            && mutations[0].create_input.len() == 1,
-        "client request must create exactly one document"
-    );
-    let mut input = serde_json::to_value(&mutations[0].create_input[0])?;
-    input
-        .as_object_mut()
-        .context("client request input is not an object")?
-        .insert("relationships_pending".into(), false.into());
-    Ok(input)
-}
-
 pub(crate) async fn stage_request_relationships_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &str,
@@ -183,7 +149,7 @@ pub(crate) async fn stage_client_request_in_txn(
             && sessions[0]["relationships_pending"] == false,
         "client request session relationships are incomplete"
     );
-    let input = client_request_input(create)?;
+    let input = crate::store::config_client::client_request_input(create)?;
     let response = txn.execute_client_signed_create(
         "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
         &serde_json::json!({"input": input}),

@@ -35,7 +35,7 @@ impl ConfigApplyTxn<'_> {
         {
             return Err(ConfigClientError::TransactionActorMismatch);
         }
-        let input = crate::request::lifecycle::client_request_input(create)
+        let input = crate::store::config_client::client_request_input(create)
             .map_err(|_| ConfigClientError::ClientConfigurationUpdateInvalid)?;
         if !graph.matches_input("AgentRequest", &input) {
             return Err(ConfigClientError::ClientConfigurationUpdateInvalid);

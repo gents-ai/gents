@@ -190,7 +190,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             .context("signature evidence missing")?;
         let byte = signature[0].as_u64().context("signature byte missing")?;
         signature[0] = serde_json::json!(byte ^ 1);
-        let input = crate::request::lifecycle::client_request_input(&command.replacements[0])?;
+        let input = crate::store::config_client::client_request_input(&command.replacements[0])?;
         let tampered_accepted =
             crate::store::config_client::verify_request_evidence(input, altered)
                 .await

@@ -500,7 +500,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
         command.native_evidence = Some(gents_protocol::goal_control::GoalNativeEvidence {
             request: crate::store::config_client::prepare_request_evidence(
                 &user,
-                crate::request::lifecycle::client_request_input(initial).unwrap(),
+                crate::store::config_client::client_request_input(initial).unwrap(),
             )
             .await
             .unwrap(),
@@ -830,7 +830,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                 bs58::encode(&initial.admission.signature).into_string()
             );
             let expected_graph = crate::store::config_client::verify_request_evidence(
-                crate::request::lifecycle::client_request_input(initial).unwrap(),
+                crate::store::config_client::client_request_input(initial).unwrap(),
                 command.native_evidence.as_ref().unwrap().request.clone(),
             )
             .await
@@ -1068,7 +1068,7 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
                 .unwrap();
             let request_graph = crate::store::config_client::prepare_request_evidence(
                 requester,
-                crate::request::lifecycle::client_request_input(&initial).unwrap(),
+                crate::store::config_client::client_request_input(&initial).unwrap(),
             )
             .await
             .unwrap();
@@ -1266,7 +1266,7 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
                 owners[0].owner.as_ref().map(|owner| owner.as_str()),
                 Some(user.did())
             );
-            let input = crate::request::lifecycle::client_request_input(&request).unwrap();
+            let input = crate::store::config_client::client_request_input(&request).unwrap();
             let evidence =
                 crate::store::config_client::prepare_request_evidence(&user, input.clone())
                     .await

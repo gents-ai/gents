@@ -263,7 +263,7 @@ pub(super) async fn run(case: &Value) {
     command.native_evidence = Some(gents_protocol::goal_control::GoalNativeEvidence {
         request: crate::store::config_client::prepare_request_evidence(
             fixture.user.as_ref(),
-            crate::request::lifecycle::client_request_input(initial).unwrap(),
+            crate::store::config_client::client_request_input(initial).unwrap(),
         )
         .await
         .unwrap(),

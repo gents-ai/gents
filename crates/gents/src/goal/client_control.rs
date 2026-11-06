@@ -88,7 +88,7 @@ pub(crate) async fn attach_client_goal_graphs(
     {
         return Ok(Err("goal creation actor or physical targets differ".into()));
     }
-    let input = crate::request::lifecycle::client_request_input(request)?;
+    let input = crate::store::config_client::client_request_input(request)?;
     let graph =
         match crate::store::config_client::verify_request_evidence(input, evidence.request.clone())
             .await

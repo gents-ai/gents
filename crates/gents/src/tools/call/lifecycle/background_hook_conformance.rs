@@ -339,7 +339,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
         historical.admission.signing_payload(&fields)
     };
     historical.admission.signature = agent.sign(&payload).await.unwrap();
-    let mut input = crate::request::lifecycle::client_request_input(&historical).unwrap();
+    let mut input = crate::store::config_client::client_request_input(&historical).unwrap();
     input["requester_did"] = serde_json::Value::Null;
     access.transact_write("test.historical_request", |txn| {
         let input = &input;

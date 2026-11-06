@@ -1519,7 +1519,7 @@ pub(super) mod tests {
         crate::sign_agent_request_create(member, &mut create)
             .await
             .unwrap();
-        let input = crate::request::lifecycle::client_request_input(&create).unwrap();
+        let input = crate::store::config_client::client_request_input(&create).unwrap();
         let agent_did = identity::Did::new(&agent_config.agent_did).unwrap();
         let doc_id = member_access
             .transact_write("test.enrollment_request", |txn| {

@@ -124,7 +124,7 @@ async fn signed_edit_targets(
         evidence.push(
             gents::store::config_client::prepare_request_evidence(
                 signer,
-                gents::request::lifecycle::client_request_input(replacement).unwrap(),
+                gents::store::config_client::client_request_input(replacement).unwrap(),
             )
             .await
             .unwrap(),
