@@ -1095,6 +1095,7 @@ async fn signed_pack_tool(
     let fixture = SelfConfigFixture::new(label).await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
+    fixture.grant_agent_schema().await;
     let mut tool_config = config(&[]);
     tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.enable_pack_install = true;
