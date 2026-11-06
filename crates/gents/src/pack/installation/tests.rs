@@ -1412,12 +1412,16 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
         .execute("{ PackInstallation { _docID } }")
         .await
         .unwrap();
-    let retained = crate::lean_vocab_test::lean_plugin_reference_cases()
-        .iter()
-        .find(|case| !case["root_ships"].as_array().unwrap().is_empty())
-        .unwrap()["retain_notification_record"]
-        .as_bool()
-        .unwrap();
+    let retained = tokio::task::spawn_blocking(|| {
+        crate::lean_vocab_test::lean_plugin_reference_cases()
+            .iter()
+            .find(|case| !case["root_ships"].as_array().unwrap().is_empty())
+            .unwrap()["retain_notification_record"]
+            .as_bool()
+            .unwrap()
+    })
+    .await
+    .unwrap();
     assert_eq!(
         !response["data"]["PackInstallation"]
             .as_array()
