@@ -1413,6 +1413,7 @@ mod data_calls {
     use super::*;
     use crate::plugin::data::DataCaller;
     use crate::plugin::PluginVerdict;
+    use crate::store::config_client::ConfigAccess;
 
     const NODE: &str = "did:key:z6Mknode";
 
@@ -2003,7 +2004,6 @@ mod job_calls {
     use crate::plugin::executor::PluginCall;
     use crate::plugin::job_calls::JobCaller;
     use crate::plugin::PluginVerdict;
-    use crate::store::config_client::ConfigAccess;
     use crate::tools::background::job::driver::{settle_plugin_job, Settlement};
     use crate::tools::background::job::input::tests::{completed_request, open};
     use crate::tools::background::job::keys::{job_session_id, job_spawn_key};
