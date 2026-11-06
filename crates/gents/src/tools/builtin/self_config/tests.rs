@@ -6804,23 +6804,17 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
         home.path().to_owned(),
     )));
-    let node = build_agent_node().await;
-    let identity = node_identity("native-pack");
-    let did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &did, "setup").await;
+    let fixture = SelfConfigFixture::new("native-pack").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_pack_install().await;
+    let node = fixture.db.node.clone();
+    let did = fixture.db.node_identity.did().to_owned();
     let mut cfg = config(&["tools", "agent"]);
-    cfg.agent_did = "setup".into();
+    cfg.agent_did = fixture.agent_did().to_owned();
     cfg.enable_pack_install = true;
     cfg.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadOnly;
     cfg.process_ceiling.root = Some(workspace.path().to_owned());
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        did.clone(),
-        Some(identity),
-        &cfg,
-        plugins.clone(),
-    );
+    let tools = fixture.tools_with_plugins(&cfg, plugins.clone());
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -6894,24 +6888,25 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
         .unwrap();
     let readback = config_call(&tools, &["tools", "get"]).await.unwrap();
     assert!(readback.contains("fixture/native_echo"));
-    let persisted: crate::documents::Tools =
-        crate::store::config_client::ConfigAccess::local(node.clone())
-            .transact_readonly("test.self_config.read_native_pack_tools", |txn| {
-                let did = did.clone();
-                Box::pin(async move {
-                    let value = crate::store::config_client::read_desired_state_document_in_txn(
-                        txn,
-                        crate::Collection::Tools,
-                        &did,
-                        "setup:tools",
-                    )
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("persisted Tools document disappeared"))?;
-                    Ok::<_, anyhow::Error>(serde_json::from_value(value)?)
-                })
+    let persisted: crate::documents::Tools = fixture
+        .user_access
+        .transact_readonly("test.self_config.read_native_pack_tools", |txn| {
+            let did = did.clone();
+            let tools_id = format!("{}:tools", fixture.agent_did());
+            Box::pin(async move {
+                let value = crate::store::config_client::read_desired_state_document_in_txn(
+                    txn,
+                    crate::Collection::Tools,
+                    &did,
+                    &tools_id,
+                )
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("persisted Tools document disappeared"))?;
+                Ok::<_, anyhow::Error>(serde_json::from_value(value)?)
             })
-            .await
-            .unwrap();
+        })
+        .await
+        .unwrap();
     assert_eq!(
         persisted
             .integrations
@@ -6924,7 +6919,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     let record = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
     assert!(record.granted.is_none());
     let surface = crate::tools::surface::AgentToolSurfaceConfig::from_tools_document(
-        "setup",
+        fixture.agent_did(),
         &persisted,
         &crate::tools::surface::ToolCeiling::readonly_at(workspace.path()),
         Vec::new(),
@@ -6984,22 +6979,14 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
     let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
         home.path().to_owned(),
     )));
-    let node = build_agent_node().await;
-    let identity = node_identity("native-pack-refusals");
-    let did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &did, "setup").await;
+    let fixture = SelfConfigFixture::new("native-pack-refusals").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_pack_install().await;
     let mut cfg = config(&["tools"]);
-    cfg.agent_did = "setup".into();
+    cfg.agent_did = fixture.agent_did().to_owned();
     cfg.enable_pack_install = true;
     cfg.process_ceiling.root = Some(workspace.path().to_owned());
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        did.clone(),
-        Some(identity.clone()),
-        &cfg,
-        plugins.clone(),
-    );
+    let tools = fixture.tools_with_plugins(&cfg, plugins.clone());
     let path = artifact.to_str().unwrap();
     assert!(config_call(&tools, &["pack", "get", path])
         .await
@@ -7007,14 +6994,7 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
         .to_string()
         .contains("effective file read permission"));
     cfg.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadOnly;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        did,
-        Some(identity),
-        &cfg,
-        plugins,
-    );
+    let tools = fixture.tools_with_plugins(&cfg, plugins);
     assert!(config_call(&tools, &["pack", "get", path])
         .await
         .unwrap_err()
@@ -7140,8 +7120,11 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
     std::fs::write(&artifact, &bytes).unwrap();
 
     let (home, plugins) = crate::test_support::home_with_pack_dir(&directory);
-    let (node, did, tools) =
+    let (agent_fixture, tools) =
         pack_tool_with_local_read("local-mixed-documents", plugins, fixture.path()).await;
+    let node = &agent_fixture.db.node;
+    let did = agent_fixture.db.node_identity.did();
+    let slot = format!("worker={}:inference", agent_fixture.agent_did());
 
     // get: reports kind, digest and the operator blocker for the plugin.
     let get: Value = serde_json::from_str(
@@ -7190,7 +7173,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
                 "install",
                 artifact.to_str().unwrap(),
                 "--inference-slot",
-                "worker=setup:inference",
+                &slot,
             ],
         )
         .await
@@ -7222,7 +7205,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
             "--digest",
             &digest,
             "--inference-slot",
-            "worker=setup:inference",
+            &slot,
         ],
     )
     .await
@@ -7231,7 +7214,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
         refused.to_string().contains("operator authorization"),
         "{refused}"
     );
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let access = &agent_fixture.user_access;
     assert!(
         crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
             .await
@@ -7274,7 +7257,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
                 "--digest",
                 &digest,
                 "--inference-slot",
-                "worker=setup:inference",
+                &slot,
             ],
         )
         .await
@@ -7309,7 +7292,7 @@ async fn native_pack_local_path_plugins_only_still_requires_operator_grant() {
         home.path().to_owned(),
     )));
     let workspace = &workspace;
-    let (_node, _did, tools) =
+    let (_agent_fixture, tools) =
         pack_tool_with_local_read("local-plugins-only", plugins, workspace.path()).await;
     let path = artifact.to_str().unwrap().to_owned();
 
@@ -7340,39 +7323,22 @@ async fn pack_tool_with_local_read(
     label: &str,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
     root: &std::path::Path,
-) -> (
-    std::sync::Arc<defra_node::Node>,
-    String,
-    Vec<Box<dyn ToolDyn>>,
-) {
-    let node = build_agent_node().await;
-    let identity = node_identity(label);
-    let node_did = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
+) -> (SelfConfigFixture, Vec<Box<dyn ToolDyn>>) {
+    let fixture = SelfConfigFixture::new(label).await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_pack_install().await;
     let mut tool_config = config(&["tools"]);
-    tool_config.agent_did = "setup".to_string();
+    tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.enable_pack_install = true;
     tool_config.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadOnly;
     tool_config.process_ceiling.root = Some(root.to_owned());
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        Some(identity),
-        &tool_config,
-        plugins,
-    );
+    let tools = fixture.tools_with_plugins(&tool_config, plugins);
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
-    tool.call(
-        json!({"argv":["tools","update"],"set":{"host":{"root":root,"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}})
-            .to_string(),
-    )
-    .await
-    .unwrap();
-    (node, node_did, tools)
+    tool.call(json!({"argv":["tools","update"],"set":{"host":{"root":root,"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string()).await.unwrap();
+    (fixture, tools)
 }
 
 /// Installs two ChatGptCodex OAuth backends for `owner` — the provider's
