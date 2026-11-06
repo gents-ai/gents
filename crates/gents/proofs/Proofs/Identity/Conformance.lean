@@ -2125,7 +2125,7 @@ def householdCasesJson : String := (toJson [HouseholdFixture.json, OperationsFix
 
 def identityContractsJson : String := (toJson [Json.mkObj
   [("name", toJson "identity.agent_owned_data"),
-   ("statement", toJson "User keys stay on clients. Node keys serve P2P and own node-local operational data not caused by agents; operational data inherits user read access through Node. Agent work never falls back to runtime authority. Agent DIDs derive from immutable creation nonces and select all agent work. Users own Node configuration and transitively administer Agents. User-created sessions are user-owned; unattended sessions are agent-owned with configured user access and deletion. Agents own session children with parent-session user access and control. Full policy wiring remains follow-up."),
+   ("statement", toJson "User keys stay on clients. Node keys serve P2P and own node-local operational data not caused by agents; operational data inherits user read access through Node. Agent work never falls back to runtime authority. Agent DIDs derive from immutable creation nonces and select all agent work. Users own Node configuration and transitively administer Agents. User-created sessions are user-owned; unattended sessions are agent-owned with configured user access and deletion. Agents own session children with parent-session user access and control."),
    ("node_local_collections", toJson nodeLocalCollections),
    ("replicated_protocol_collections", toJson replicatedProtocolCollections),
    ("schema_actor", toJson (schemaActor { did := runtimeDid, displayName := none, enabled := true } .createSchema)),
