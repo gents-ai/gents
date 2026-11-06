@@ -259,8 +259,11 @@ impl PackInstallSession {
 }
 
 async fn send(socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>, value: Value) -> Result<()> {
+    let encoded = tokio::task::spawn_blocking(move || serde_json::to_string(&value))
+        .await
+        .context("encoding remote pack install message")??;
     socket
-        .send(Message::Text(serde_json::to_string(&value)?.into()))
+        .send(Message::Text(encoded.into()))
         .await
         .context("remote pack install connection lost; inspect the runtime before retrying")
 }
@@ -268,7 +271,12 @@ async fn send(socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>, value: Va
 async fn receive(socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>) -> Result<ServerMessage> {
     loop {
         match socket.next().await {
-            Some(Ok(Message::Text(text))) => return Ok(serde_json::from_str(&text)?),
+            Some(Ok(Message::Text(text))) => {
+                return tokio::task::spawn_blocking(move || serde_json::from_str(&text))
+                    .await
+                    .context("decoding remote pack install message")?
+                    .context("invalid remote pack install message");
+            }
             Some(Ok(Message::Ping(_)))
             | Some(Ok(Message::Pong(_)))
             | Some(Ok(Message::Frame(_))) => {}
