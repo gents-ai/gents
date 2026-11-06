@@ -24,11 +24,18 @@ pub(super) struct ToolPermissionProjection {
 }
 
 impl ToolPermissionProjection {
-    pub(super) fn new(node: &str, ceiling: crate::tools::surface::ToolCeiling) -> std::result::Result<Self, identity::Error> {
+    pub(super) fn new(
+        node: &str,
+        ceiling: crate::tools::surface::ToolCeiling,
+    ) -> std::result::Result<Self, identity::Error> {
         Ok(Self {
             node: identity::Did::new(node)?,
             ceiling,
         })
+    }
+
+    pub(super) fn node(&self) -> &identity::Did {
+        &self.node
     }
 
     fn prefix(&self) -> String {
@@ -55,7 +62,7 @@ impl ToolPermissionProjection {
         source
     }
 
-    async fn update(&self, view: &db::DocumentMutationView) -> Result<()> {
+    pub(super) async fn update(&self, view: &db::DocumentMutationView) -> Result<()> {
         let agents = documents(view, "Agent").await?;
         let contexts = documents(view, "AgentContext").await?;
         let tools = documents(view, "Tools").await?;
@@ -92,7 +99,10 @@ impl ToolPermissionProjection {
                 continue;
             };
             if identity::Did::new(agent).is_err() {
-                tracing::warn!(agent_did = agent, "invalid Agent identity cannot receive tool permissions");
+                tracing::warn!(
+                    agent_did = agent,
+                    "invalid Agent identity cannot receive tool permissions"
+                );
                 continue;
             }
             let Some((context_doc, context)) = context_by_id.get(context_id) else {
@@ -108,7 +118,8 @@ impl ToolPermissionProjection {
             else {
                 continue;
             };
-            let Ok(operations) = crate::tools::surface::configured_node_operation_sources(&tools, &self.ceiling)
+            let Ok(operations) =
+                crate::tools::surface::configured_node_operation_sources(&tools, &self.ceiling)
             else {
                 continue;
             };
@@ -186,25 +197,6 @@ impl ToolPermissionProjection {
     }
 }
 
-#[async_trait::async_trait]
-impl db::DocumentMutationProjector for ToolPermissionProjection {
-    async fn reconcile(&self, view: &db::DocumentMutationView) -> Result<()> {
-        self.update(view).await
-    }
-
-    async fn project(
-        &self,
-        view: &db::DocumentMutationView,
-        collection: &str,
-        _doc_id: &str,
-    ) -> Result<()> {
-        if matches!(collection, "Agent" | "AgentContext" | "Tools") {
-            self.update(view).await?;
-        }
-        Ok(())
-    }
-}
-
 async fn documents(view: &db::DocumentMutationView, name: &str) -> Result<Vec<document::Document>> {
     let system = view.sibling(Namespace::Systemstore);
     let Some(collection) = db::collection::loader::load_collection_from_systemstore(&system, name)
@@ -267,7 +259,12 @@ mod tests {
     {
         let node_did = "did:key:node";
         let agent_did = "did:key:agent";
-        let projector = Arc::new(ToolPermissionProjection::new(node_did, crate::tools::surface::ToolCeiling::meta_only())?);
+        let projector = Arc::new(
+            super::super::runtime_document_projection::RuntimeDocumentProjector::new(
+                node_did,
+                crate::tools::surface::ToolCeiling::meta_only(),
+            )?,
+        );
         let node = Arc::new(
             defra_node::Node::builder()
                 .with_node_identity_did(node_did)
