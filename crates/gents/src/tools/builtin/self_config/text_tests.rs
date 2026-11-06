@@ -163,34 +163,19 @@ async fn type_errors_name_the_field_path_and_shape() {
 
 #[tokio::test]
 async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
-    let node = build_agent_node().await;
-    let identity = node_identity("tools-drop");
-    let owner = identity.did().to_string();
-    for agent in ["setup", "worker"] {
-        crate::test_support::install_test_agent(&node, &owner, agent).await;
-    }
+    let fixture = SelfConfigFixture::new("tools-drop").await;
+    fixture.grant_selected_configuration().await;
+    let worker = fixture.install_sibling("worker").await;
+    fixture.grant_node_reader().await;
     let mut grants = config(&["node", "tools"]);
-    grants.agent_did = "setup".into();
+    grants.agent_did = fixture.agent_did().to_owned();
     grants.preview = true;
     grants.no_lockout = true;
     let mut unguarded = grants.clone();
     unguarded.no_lockout = false;
-    let setup_tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity.clone()),
-        &unguarded,
-        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
-    );
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
-    );
+    let setup_tools = fixture.tools_with_config(&unguarded);
+    let tools = fixture.tools_with_config(&grants);
+    let tools_id = format!("{}:tools", fixture.agent_did());
     for surface in ["engineer-mailbox", "worker-surface"] {
         ok(
             &setup_tools,
@@ -198,7 +183,7 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
         )
         .await;
     }
-    let setup_core = SelfConfigCore::new(node.clone(), owner.clone(), "setup".into()).unwrap();
+    let setup_core = fixture.core();
     setup_core
         .apply(tools_request(
             &setup_core,
@@ -229,9 +214,9 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
             && error.contains("allow-drop"),
         "{error}"
     );
-    let exact_error = refused(&tools, json!({"argv":["tools","preview","update"],"target_id":"setup:tools","set":{"datastore":partial}})).await;
+    let exact_error = refused(&tools, json!({"argv":["tools","preview","update"],"target_id":tools_id,"set":{"datastore":partial}})).await;
     assert!(exact_error.contains("allow-drop"), "{exact_error}");
-    let exact_lockout = refused(&tools, json!({"argv":["tools","update"],"target_id":"setup:tools","set":{"self_config":{"enable_self_config":false}}})).await;
+    let exact_lockout = refused(&tools, json!({"argv":["tools","update"],"target_id":tools_id,"set":{"self_config":{"enable_self_config":false}}})).await;
     assert!(exact_lockout.contains("no-lockout"), "{exact_lockout}");
     let error = refused(
         &tools,
@@ -251,7 +236,7 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
     .await;
     ok(
         &tools,
-        json!({"argv":["tools","preview"],"options":{"agent":"worker"},"set":{"datastore":partial}}),
+        json!({"argv":["tools","preview"],"options":{"agent":worker},"set":{"datastore":partial}}),
     )
     .await;
 }
