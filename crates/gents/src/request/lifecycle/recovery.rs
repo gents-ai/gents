@@ -9,8 +9,8 @@ pub(super) use canonical_recovery::request_segments;
 
 #[cfg(test)]
 pub(crate) use canonical_recovery::{
-    recover_expired_generation_with_access_for_test, recover_expired_generation_with_facts,
-    RecoveryResult, RecoverySelectionChoice, RecoverySelectionRejected,
+    recover_expired_generation_with_access_for_test, RecoveryResult, RecoverySelectionChoice,
+    RecoverySelectionRejected,
 };
 
 #[derive(Debug, Default)]

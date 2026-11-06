@@ -99,13 +99,13 @@ impl GrantSet {
                 None => GrantSetError::Grant {
                     set: self.name(),
                     relation: relation.name(),
-                    source,
+                    source: Box::new(source),
                 },
                 Some(rollback) => GrantSetError::Rollback {
                     set: self.name(),
                     relation: relation.name(),
-                    source,
-                    rollback,
+                    source: Box::new(source),
+                    rollback: Box::new(rollback),
                 },
             });
         }
@@ -126,7 +126,7 @@ impl GrantSet {
                 .map_err(|source| GrantSetError::Revoke {
                     set: self.name(),
                     relation: relation.name(),
-                    source,
+                    source: Box::new(source),
                 })?;
         }
         Ok(())
@@ -173,7 +173,7 @@ pub enum GrantSetError {
         set: &'static str,
         relation: &'static str,
         #[source]
-        source: ConfigClientError,
+        source: Box<ConfigClientError>,
     },
     #[error(
         "granting {set} relation {relation} failed and revoking its earlier grants also failed \
@@ -183,15 +183,15 @@ pub enum GrantSetError {
         set: &'static str,
         relation: &'static str,
         #[source]
-        source: ConfigClientError,
-        rollback: ConfigClientError,
+        source: Box<ConfigClientError>,
+        rollback: Box<ConfigClientError>,
     },
     #[error("revoking {set} relation {relation} failed")]
     Revoke {
         set: &'static str,
         relation: &'static str,
         #[source]
-        source: ConfigClientError,
+        source: Box<ConfigClientError>,
     },
 }
 

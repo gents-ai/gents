@@ -227,41 +227,6 @@ pub(crate) async fn recover_expired_generation_with_access_for_test(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "called from the lean_vocab_test native adapter with this shape"
-)]
-#[cfg(test)]
-pub(crate) async fn recover_expired_generation_with_facts(
-    node: &std::sync::Arc<defra_node::Node>,
-    observed: &AgentRequestRow,
-    expected_generation: &str,
-    expected_expiry: &str,
-    fresh_generation: String,
-    observed_now: DateTime<Utc>,
-    selection_choice: Option<RecoverySelectionChoice>,
-    expected_outcome: Option<RequestLifecycleState>,
-) -> Result<RecoveryResult> {
-    let actor = identity::Did::new(
-        observed
-            .agent_did
-            .clone()
-            .context("request is missing agent DID")?,
-    )?;
-    let access = ConfigAccess::local_as(node.clone(), actor);
-    recover_expired_generation_with_access_and_facts(
-        &access,
-        observed,
-        expected_generation,
-        expected_expiry,
-        fresh_generation,
-        observed_now,
-        selection_choice,
-        expected_outcome,
-    )
-    .await
-}
-
-#[expect(
-    clippy::too_many_arguments,
     reason = "recovery facts are supplied by the conformance adapter"
 )]
 async fn recover_expired_generation_with_access_and_facts(

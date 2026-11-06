@@ -143,13 +143,15 @@ pub(super) async fn load_canonical_selection_in_txn(
     }
     load_referenced_bases(
         txn,
-        &root_headers,
-        &copied,
-        &output_segments,
+        ReferencedBasesInput {
+            headers: &root_headers,
+            copied: &copied,
+            segments: &output_segments,
+            node_did: &scope.node_did,
+            requester_did: requester,
+        },
         &mut bases,
         &mut effects,
-        &scope.node_did,
-        requester,
     )
     .await?;
     load_effect_children(txn, scope, &bases, &mut effects).await?;
@@ -383,16 +385,29 @@ async fn load_request_segments(
     Ok(())
 }
 
+/// The selected headers and segments whose referenced bases and effects the
+/// caller loads at one read snapshot.
+struct ReferencedBasesInput<'a> {
+    headers: &'a [crate::session::canonical_rows::TranscriptMessageRow],
+    copied: &'a CopiedForks,
+    segments: &'a [crate::session::canonical_rows::OutputSegmentRow],
+    node_did: &'a str,
+    requester_did: &'a str,
+}
+
 async fn load_referenced_bases(
     txn: &ConfigApplyTxn<'_>,
-    headers: &[crate::session::canonical_rows::TranscriptMessageRow],
-    copied: &CopiedForks,
-    segments: &[crate::session::canonical_rows::OutputSegmentRow],
+    input: ReferencedBasesInput<'_>,
     bases: &mut Vec<ScopedDocument>,
     effects: &mut Vec<ToolEffectRow>,
-    node_did: &str,
-    requester_did: &str,
 ) -> Result<()> {
+    let ReferencedBasesInput {
+        headers,
+        copied,
+        segments,
+        node_did,
+        requester_did,
+    } = input;
     use gents_protocol::output::{MessageBlock, MessagePublication, OutputSource};
     use gents_protocol::session_hydration::SessionHydrationCollection;
     let mut wanted = BTreeSet::new();
