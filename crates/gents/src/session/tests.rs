@@ -134,6 +134,49 @@ async fn history_reconstruction_batches_distinct_requests() {
     db.node.shutdown().await.expect("shut down test node");
 }
 
+async fn signed_compaction_fixture(
+    name: &str,
+    session: &str,
+    count: usize,
+) -> (
+    crate::support::TestDb,
+    crate::KeyIdentity,
+    std::sync::Arc<dyn crate::store::identity::NodeIdentity>,
+    crate::ConfigAccess,
+    Vec<(String, String)>,
+) {
+    let (db, user, client, binding) = crate::test_support::signed_test_node(name).await;
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let access = crate::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let messages = (0..count)
+        .map(|index| format!("work {index}"))
+        .collect::<Vec<_>>();
+    publish_signed_history(&db, &user, &client, &binding, session, &messages).await;
+    let mut requests = Vec::new();
+    for index in 0..count {
+        let request = format!("{session}-request-{index}");
+        let response = access.execute(&format!(
+            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{ _docID }} }}"#,
+            escape_graphql_string(&request),
+        )).await.unwrap();
+        let [row] = response["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .as_slice()
+        else {
+            panic!("compaction fixture request must be unique");
+        };
+        requests.push((request, row["_docID"].as_str().unwrap().to_owned()));
+    }
+    (db, user, agent, access, requests)
+}
+
 #[tokio::test]
 async fn compaction_entries_track_files_cumulatively() {
     let data_path = std::env::temp_dir().join(format!("gents-compaction-{}", uuid::Uuid::new_v4()));
@@ -401,14 +444,15 @@ async fn legacy_cumulative_compaction_paths_extend_and_redeliver_as_deltas() {
 
 #[tokio::test]
 async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    let generation = load_prompt_compaction_state(
-        &node,
-        "did:test:test",
+    use crate::store::identity::NodeIdentity;
+    let (db, user, agent, access, requests) =
+        signed_compaction_fixture("compaction-race", "session-race", 2).await;
+    let node_did = db.node_identity.did();
+    let generation = load_prompt_compaction_state_with_access(
+        &access,
         "session-race",
-        "did:test:test",
-        None,
+        node_did,
+        Some(user.did()),
         None,
     )
     .await
@@ -417,14 +461,14 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
 
     let left_files = ["/tmp/left.rs".to_string()];
     let right_files = ["/tmp/right.rs".to_string()];
-    let left = save_compaction_entry_with_requester_did(
-        &node,
-        "did:test:test",
+    let left = compaction_entries::save_compaction_entry_with_access(
+        &access,
+        agent.did(),
         "session-race",
-        "did:test:test",
-        None,
-        "request-left",
-        "request-doc-left",
+        node_did,
+        Some(user.did()),
+        &requests[0].0,
+        &requests[0].1,
         "left summary",
         &left_files,
         &[],
@@ -434,14 +478,14 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
         20,
         &generation,
     );
-    let right = save_compaction_entry_with_requester_did(
-        &node,
-        "did:test:test",
+    let right = compaction_entries::save_compaction_entry_with_access(
+        &access,
+        agent.did(),
         "session-race",
-        "did:test:test",
-        None,
-        "request-right",
-        "request-doc-right",
+        node_did,
+        Some(user.did()),
+        &requests[1].0,
+        &requests[1].1,
         "right summary",
         &[],
         &right_files,
@@ -463,7 +507,7 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
         "unexpected loser error: {loser:#}"
     );
 
-    let entries = load_compaction_entries(&crate::store::config_client::ConfigAccess::local(node.clone()), "session-race", "did:test:test", None)
+    let entries = load_compaction_entries(&access, "session-race", node_did, Some(user.did()))
         .await
         .unwrap();
     assert_eq!(entries.len(), 1);
@@ -487,29 +531,31 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
 
 #[tokio::test]
 async fn exact_compaction_redelivery_is_idempotent() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    let generation = load_prompt_compaction_state(
-        &node,
-        "did:test:test",
+    use crate::store::identity::NodeIdentity;
+    let (db, user, agent, access, requests) =
+        signed_compaction_fixture("compaction-redelivery", "session-redelivery", 2).await;
+    let node_did = db.node_identity.did();
+    let generation = load_prompt_compaction_state_with_access(
+        &access,
         "session-redelivery",
-        "did:test:test",
-        None,
+        node_did,
+        Some(user.did()),
         None,
     )
     .await
     .unwrap()
     .generation;
+
     let files = ["/tmp/a.rs".to_string()];
     let save = || {
-        save_compaction_entry_with_requester_did(
-            &node,
-            "did:test:test",
+        compaction_entries::save_compaction_entry_with_access(
+            &access,
+            agent.did(),
             "session-redelivery",
-            "did:test:test",
-            None,
-            "request-redelivery",
-            "request-doc-redelivery",
+            node_did,
+            Some(user.did()),
+            &requests[0].0,
+            &requests[0].1,
             "same summary",
             &files,
             &[],
@@ -523,25 +569,24 @@ async fn exact_compaction_redelivery_is_idempotent() {
     let first = save().await.unwrap();
     let second = save().await.unwrap();
     assert_eq!(second, first);
-    let next_generation = load_prompt_compaction_state(
-        &node,
-        "did:test:test",
+    let next_generation = load_prompt_compaction_state_with_access(
+        &access,
         "session-redelivery",
-        "did:test:test",
-        None,
+        node_did,
+        Some(user.did()),
         None,
     )
     .await
     .unwrap()
     .generation;
-    save_compaction_entry_with_requester_did(
-        &node,
-        "did:test:test",
+    compaction_entries::save_compaction_entry_with_access(
+        &access,
+        agent.did(),
         "session-redelivery",
-        "did:test:test",
-        None,
-        "request-later",
-        "request-doc-later",
+        node_did,
+        Some(user.did()),
+        &requests[1].0,
+        &requests[1].1,
         "later summary",
         &[],
         &[],
@@ -556,7 +601,7 @@ async fn exact_compaction_redelivery_is_idempotent() {
     let replay_after_later = save().await.unwrap();
     assert_eq!(replay_after_later, first);
     assert_eq!(
-        load_compaction_entries(&crate::store::config_client::ConfigAccess::local(node.clone()), "session-redelivery", "did:test:test", None)
+        load_compaction_entries(&access, "session-redelivery", node_did, Some(user.did()))
             .await
             .unwrap()
             .len(),
