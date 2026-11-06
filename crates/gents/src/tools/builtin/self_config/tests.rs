@@ -4035,6 +4035,106 @@ async fn agent_clone_by_holder_copies_granted_source() {
 }
 
 #[tokio::test]
+async fn own_agent_edit_needs_the_agent_category_not_the_catalog() {
+    let fixture = SelfConfigFixture::new("own-agent-category").await;
+    fixture.grant_selected_configuration().await;
+    let current = fixture.agent_did().to_owned();
+    let catalog_only = fixture.tools(&["node"]);
+    let error = call_config_tool(
+        &catalog_only,
+        vec![
+            "agent".into(),
+            "edit".into(),
+            current,
+            "--set".into(),
+            r#"display_name="Renamed""#.into(),
+        ],
+    )
+    .await
+    .expect_err("the catalog grant does not edit the invoking Agent's own configuration");
+    assert!(error.contains("agent configuration is not granted"), "{error}");
+}
+
+#[tokio::test]
+async fn foreign_agent_configuration_needs_the_catalog_grant() {
+    let fixture = SelfConfigFixture::new("foreign-agent-catalog").await;
+    fixture.grant_selected_configuration().await;
+    let sibling = fixture.install_sibling("sibling-agent").await;
+    let agent_only = fixture.tools(&["agent"]);
+    for argv in [
+        vec![
+            "agent".into(),
+            "edit".into(),
+            sibling.clone(),
+            "--set".into(),
+            r#"display_name="Renamed""#.into(),
+        ],
+        vec![
+            "agent".into(),
+            "context".into(),
+            "get".into(),
+            "--agent".into(),
+            sibling.clone(),
+        ],
+    ] {
+        let error = call_config_tool(&agent_only, argv.clone())
+            .await
+            .expect_err("an agent-category grant does not reach another Agent");
+        assert!(error.contains("agent catalog grant"), "{argv:?}: {error}");
+    }
+}
+
+#[tokio::test]
+async fn clone_does_not_inherit_self_config_from_its_source() {
+    let fixture = SelfConfigFixture::new("clone-self-config").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let node_did = fixture.node_did().to_owned();
+    let source = fixture.install_sibling("self-config-source").await;
+    fixture.grant_pack_install_to(&source).await;
+    let profile = format!("{source}:inference");
+    let mut tool_config = config(&["node"]);
+    tool_config.agent_did = fixture.agent_did().to_owned();
+    let tool = take_agent_tool(fixture.tools_with_config(&tool_config));
+    let output: Value = serde_json::from_str(
+        &tool
+            .call(
+                json!({"argv": ["agent", "clone", "--display-name", "Plain Copy",
+                                "--from", source, "--profile", profile]})
+                .to_string(),
+            )
+            .await
+            .expect("a catalog holder clones a source that carries self-config"),
+    )
+    .unwrap();
+    assert_eq!(output["committed"], true);
+    let clone_tools_id = format!("{}:tools", output["agent_did"].as_str().unwrap());
+    let stored = fixture
+        .user_access()
+        .transact_readonly("test.self_config.clone_tools", |txn| {
+            let owner = node_did.clone();
+            let tools_id = clone_tools_id.clone();
+            Box::pin(async move {
+                let (_, tools) = crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Tools,
+                    &owner,
+                    &tools_id,
+                )
+                .await?
+                .expect("the clone's Tools exists");
+                Ok::<_, anyhow::Error>(tools)
+            })
+        })
+        .await
+        .unwrap();
+    assert!(
+        stored.get("self_config").is_none_or(Value::is_null),
+        "a clone must not inherit self-config: {stored}"
+    );
+}
+
+#[tokio::test]
 async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_lockout() {
     let fixture = SelfConfigFixture::new("canonical-self-config").await;
     fixture.grant_selected_configuration().await;

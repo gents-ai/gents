@@ -37,7 +37,7 @@ impl ConfigCommandTool {
                     Some(id) => self.resolve_agent_did(id).await?,
                     None => self.core.agent_did().to_owned(),
                 };
-                self.ensure_agent_catalog("get", Some(&id))?;
+                self.ensure_config_scope(Some("agent"), &id)?;
                 agent_inspect(&self.core, &id).await
             }
             "preview" => {
@@ -61,8 +61,7 @@ impl ConfigCommandTool {
                     let agent_did = argv.get(2).context(
                         "agent preview update requires target_id and fields in set or clear",
                     )?;
-                    self.ensure_agent_catalog("preview edit", Some(agent_did))?;
-                    let core = self.target_core(Some(agent_did)).await?;
+                    let core = self.target_core(Some(agent_did), Some("agent")).await?;
                     let patch = parse_patch(&argv[3..], SelfConfigTarget::Agent)?;
                     return self
                         .patch(
@@ -78,7 +77,7 @@ impl ConfigCommandTool {
                 }
                 let mut params = agent_params("preview", Some(operation.clone()), &argv[2..])?;
                 self.resolve_agent_dids(operation, &mut params).await?;
-                self.ensure_agent_operation(operation, params.agent_did.as_deref())?;
+                self.ensure_agent_mutation(operation, params.agent_did.as_deref())?;
                 self.ensure_default_selection(&params)?;
                 self.ensure_agent_stays_enabled(operation, params.agent_did.as_deref())?;
                 agent_management::model_agent_preview(&self.core, &params).await
@@ -87,8 +86,7 @@ impl ConfigCommandTool {
                 let agent_did = argv
                     .get(1)
                     .context("agent update requires target_id and fields in set or clear")?;
-                self.ensure_agent_catalog("edit", Some(agent_did))?;
-                let core = self.target_core(Some(agent_did)).await?;
+                let core = self.target_core(Some(agent_did), Some("agent")).await?;
                 let (shared_ack, rest) = extract_shared(&argv[2..])?;
                 anyhow::ensure!(
                     !shared_ack,
@@ -112,7 +110,7 @@ impl ConfigCommandTool {
                 )?;
                 let mut params = agent_params(verb, None, &argv[1..])?;
                 self.resolve_agent_dids(verb, &mut params).await?;
-                self.ensure_agent_operation(verb, params.agent_did.as_deref())?;
+                self.ensure_agent_mutation(verb, params.agent_did.as_deref())?;
                 self.ensure_default_selection(&params)?;
                 self.ensure_agent_stays_enabled(verb, params.agent_did.as_deref())?;
                 self.execution.enter_mutation();
@@ -152,7 +150,9 @@ impl ConfigCommandTool {
             .map(String::as_str)
             .context("agent context requires get, preview, or edit")?;
         let (agent_did, rest) = extract_agent_target(&argv[1..])?;
-        let core = self.target_core(agent_did.as_deref()).await?;
+        let core = self
+            .target_core(agent_did.as_deref(), Some("agent"))
+            .await?;
         match verb {
             "get" => {
                 anyhow::ensure!(
@@ -325,15 +325,20 @@ impl ConfigCommandTool {
         Ok(())
     }
 
-    /// Resource targets are gated by their own category (`ensure_resource`);
-    /// only the Agent command also needs the agent catalog gate, which callers
-    /// apply themselves (`NodeProvisioning.agentCommandExposed`).
-    pub(super) async fn target_core(&self, agent_did: Option<&str>) -> Result<SelfConfigCore> {
+    /// Core for the Agent whose configuration an operation touches. `category`
+    /// is the document category it reads or edits (`ensure_config_scope`); None
+    /// is an effective read that needs no category grant on the invoking Agent.
+    pub(super) async fn target_core(
+        &self,
+        agent_did: Option<&str>,
+        category: Option<&str>,
+    ) -> Result<SelfConfigCore> {
         let agent_did = match agent_did {
             Some(id) => self.resolve_agent_did(id).await?,
             None => self.core.agent_did().to_owned(),
         };
         let agent_did = agent_did.as_str();
+        self.ensure_config_scope(category, agent_did)?;
         let invoking_agent_did = self.core.agent_did().to_owned();
         SelfConfigCore::new(
             self.node.clone(),

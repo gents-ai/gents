@@ -202,3 +202,37 @@ pub(crate) struct LeanSiblingToolsCase {
     pub(crate) admitted: bool,
     pub(crate) result_network: String,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LeanSelfConfigScopeEditCase {
+    pub(crate) name: String,
+    pub(crate) categories: Vec<String>,
+    pub(crate) category: String,
+    pub(crate) scope: String,
+    pub(crate) allowed: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LeanSelfConfigGroupCase {
+    pub(crate) name: String,
+    pub(crate) enabled: bool,
+    pub(crate) categories: Option<Vec<String>>,
+    pub(crate) effective: Vec<String>,
+    pub(crate) may_create_agent: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LeanSelfConfigScopeOfCase {
+    pub(crate) name: String,
+    pub(crate) invoking_agent: String,
+    pub(crate) target_agent: String,
+    pub(crate) shared: bool,
+    pub(crate) scope: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LeanSelfConfigScopeCases {
+    pub(crate) edit: Vec<LeanSelfConfigScopeEditCase>,
+    pub(crate) groups: Vec<LeanSelfConfigGroupCase>,
+    pub(crate) scope_of: Vec<LeanSelfConfigScopeOfCase>,
+}
