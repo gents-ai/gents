@@ -45,7 +45,10 @@ pub use resolve::{
     pick_oauth_credential, pick_oauth_pool, resolve_oauth_credential, resolve_oauth_pool,
     AccountPick,
 };
-pub(crate) use resolve::{provider_default_account_ref, resolve_oauth_credential_in_txn};
+pub(crate) use resolve::{
+    provider_default_account_ref, resolve_oauth_credential_in_txn,
+    runtime_default_account_from_response, runtime_default_account_query,
+};
 pub(crate) use rows::runtime_credential_access;
 pub use rows::{
     list_oauth_credentials, list_oauth_credentials_on, lookup_oauth_credential_by_doc_id,

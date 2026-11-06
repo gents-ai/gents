@@ -98,11 +98,42 @@ pub(crate) async fn provider_default_account_ref(
     node_did: &str,
     provider: &str,
 ) -> Result<Option<String>> {
+    if txn.managed_agent_signer().is_some() {
+        return txn
+            .runtime_default_oauth_account_ref(node_did, provider)
+            .await
+            .map_err(Into::into);
+    }
     Ok(
         resolve_oauth_credential_in_txn(txn, node_did, provider, AccountPick::ProviderDefault)
             .await?
             .and_then(|row| row.account_ref),
     )
+}
+
+pub(crate) fn runtime_default_account_query(node_did: &str, provider: &str) -> String {
+    enabled_oauth_credentials_query(node_did, provider, OAUTH_PICK_FIELDS)
+}
+
+pub(crate) fn runtime_default_account_from_response(
+    response: &Value,
+    node_did: &str,
+    provider: &str,
+) -> Result<Option<(String, Option<String>)>> {
+    let rows = gents_protocol::graphql::graphql_rows_from_response(response, "OAuthCredential")
+        .into_iter()
+        .map(pick_row_from_value)
+        .collect::<Result<Vec<_>>>()?;
+    pick_oauth_credential(&rows, node_did, provider, AccountPick::ProviderDefault)
+        .map(|row| {
+            Ok((
+                row.doc_id
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("default account has no document ID"))?,
+                row.account_ref.clone(),
+            ))
+        })
+        .transpose()
 }
 
 pub(crate) async fn resolve_oauth_credential_in_txn(

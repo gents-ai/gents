@@ -4634,6 +4634,94 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
     core.apply(backend_request(endpoint)).await.unwrap();
 }
 
+#[tokio::test]
+async fn backend_choice_uses_runtime_visible_default_in_agent_transaction() {
+    let fixture = SelfConfigFixture::new("account-default-choice").await;
+    fixture.grant_node_reader().await;
+    let owner = fixture.node_did();
+    let credential = crate::inference::auth::credential::OAuthCredential {
+        doc_id: None,
+        credential_id: "model-default-credential".into(),
+        node_did: owner.into(),
+        provider: crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER.into(),
+        access_token: "private-access".into(),
+        refresh_token: "private-refresh".into(),
+        id_token: None,
+        account_id: None,
+        chatgpt_plan_type: None,
+        is_fedramp: false,
+        access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        last_refresh: None,
+        enabled: true,
+        account_ref: Some("g2".into()),
+        connected_at: Some(chrono::Utc::now()),
+        provider_account_key: None,
+        label: None,
+    };
+    crate::inference::auth::credential::upsert_oauth_credential_on(
+        fixture.user_access(),
+        &credential,
+    )
+    .await
+    .unwrap();
+    let model = crate::lean_vocab_test::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .unwrap();
+    let core = fixture.core();
+    let access = core.access().unwrap();
+    let mut disabled = false;
+    for (index, case) in model.runtime_default_choice_cases.iter().enumerate() {
+        if case["visible_default"].is_null() && !disabled {
+            crate::inference::auth::credential::set_account_enabled(
+                fixture.user_access(),
+                owner,
+                &credential.credential_id,
+                false,
+            )
+            .await
+            .unwrap();
+            disabled = true;
+        }
+        let current_id = format!("guard-current-{index}");
+        let next_id = format!("guard-next-{index}");
+        for (id, kind, account) in [
+            (&current_id, &case["current_kind"], &case["current_ref"]),
+            (&next_id, &case["next_kind"], &case["next_ref"]),
+        ] {
+            let backend: crate::InferenceBackend = serde_json::from_value(json!({
+                "node_did": owner, "backend_id": id, "name": id,
+                "provider_kind": kind, "endpoint": "http://127.0.0.1:1/v1",
+                "auth": {"kind":"node_oauth", "account_ref": account},
+            }))
+            .unwrap();
+            crate::store::config_client::write_inference_backend_document(
+                fixture.user_access(),
+                &backend,
+            )
+            .await
+            .unwrap();
+        }
+        let result = access
+            .transact_readonly("test.account_choice.runtime_default", |txn| {
+                let (current_id, next_id) = (&current_id, &next_id);
+                Box::pin(async move {
+                    ops::guard_backend_choice_in_txn(txn, owner, Some(current_id), next_id).await
+                })
+            })
+            .await;
+        assert_eq!(
+            result.is_ok(),
+            case["accepted"].as_bool().unwrap(),
+            "{}: {result:?}",
+            case["name"]
+        );
+        if let Err(error) = result {
+            assert!(!format!("{error:#}").contains("g2"));
+        }
+    }
+}
+
 async fn account_choice_core(
     agent: &str,
 ) -> (
