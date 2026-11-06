@@ -203,12 +203,20 @@ impl SchemaTool {
             !(command.preview && command.digest.is_some()),
             "preview returns a digest; omit options.digest while previewing"
         );
+        let mut sdl_warnings = Vec::new();
         let before = match words.as_slice() {
             ["collection", "create"] | ["view", "create"] => {
                 if words[0] == "view" {
                     text("query")?;
                 }
-                let definitions = query::parse_sdl(text("sdl")?).context(SchemaSdlFailure)?;
+                let parsed = query::sdl_parse::parse_sdl_with_warnings(text("sdl")?)
+                    .context(SchemaSdlFailure)?;
+                sdl_warnings = parsed
+                    .warnings
+                    .into_iter()
+                    .map(|warning| warning.to_string())
+                    .collect();
+                let definitions = parsed.collections;
                 ensure!(
                     !definitions.is_empty(),
                     "SDL must declare at least one collection"
@@ -279,12 +287,14 @@ impl SchemaTool {
             )?)
         );
         if command.preview {
-            return Ok(
-                json!({"committed":false,"digest":digest,"command":args.argv,"target_id":args.target_id,"before":before,
+            let mut preview = json!({"committed":false,"digest":digest,"command":args.argv,"target_id":args.target_id,"before":before,
                 "effect":help::effect(&words),
                 "validation":"Input shape and observed schema checked. DefraDB validates and authorizes publication when applied; preview is not a transaction.",
-                "next_call":{"tool":"schema","args":apply_call(args, &digest)}}),
-            );
+                "next_call":{"tool":"schema","args":apply_call(args, &digest)}});
+            if !sdl_warnings.is_empty() {
+                preview["warnings"] = json!(sdl_warnings);
+            }
+            return Ok(preview);
         }
         if command.digest.as_deref() != Some(digest.as_str()) {
             return Err(SchemaDigestMismatch.into());
@@ -330,7 +340,11 @@ impl SchemaTool {
             }
             _ => unreachable!(),
         };
-        Ok(json!({"committed":true,"result":result}))
+        let mut response = json!({"committed":true,"result":result});
+        if !sdl_warnings.is_empty() {
+            response["warnings"] = json!(sdl_warnings);
+        }
+        Ok(response)
     }
 }
 
@@ -497,10 +511,16 @@ impl SchemaTool {
                 let encoded = if command.preview {
                     let effect = value.as_object_mut().unwrap().remove("effect").unwrap();
                     let next_call = value.as_object_mut().unwrap().remove("next_call").unwrap();
+                    let warnings = value.as_object_mut().unwrap().remove("warnings");
+                    let mut output =
+                        json!({"effect":effect,"next_call":next_call,"metadata":value});
+                    if let Some(warnings) = warnings {
+                        output["warnings"] = warnings;
+                    }
                     serde_json::to_string(
                         &crate::tools::builtin::self_config::Ordered::reading_order(
-                            json!({"effect":effect,"next_call":next_call,"metadata":value}),
-                            &["effect", "next_call", "metadata"],
+                            output,
+                            &["effect", "warnings", "next_call", "metadata"],
                         ),
                     )
                 } else {

@@ -105,6 +105,61 @@ async fn node() -> Arc<EmbeddedNode> {
 }
 
 #[tokio::test]
+async fn schema_preview_and_publication_expose_ignored_native_directives() {
+    use crate::store::config_client::NodePermission;
+    use crate::store::identity::NodeIdentity;
+
+    let (db, _user, _user_access, binding) =
+        crate::test_support::signed_test_node("schema-native-warnings").await;
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let admin = ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(db.node_identity.did()).unwrap(),
+    );
+    let agent_did = identity::Did::new(agent.did()).unwrap();
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::CollectionPatch,
+    ] {
+        admin
+            .grant_node_permission(&agent_did, permission)
+            .await
+            .unwrap();
+    }
+    let tool = SchemaTool::for_managed_agent(db.node.clone(), agent.as_ref()).unwrap();
+    let preview = call(
+        &tool,
+        json!({"argv":["collection","preview","create"],"options":{
+            "sdl":"type WarningProbe { code: String @unique }"
+        }}),
+    )
+    .await;
+    let warnings = preview["warnings"]
+        .as_array()
+        .expect("native warnings in preview");
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0]
+        .as_str()
+        .unwrap()
+        .contains("unknown directive @unique"));
+    assert!(warnings[0].as_str().unwrap().contains("ignored"));
+    let result = call(&tool, preview["next_call"]["args"].clone()).await;
+    assert_eq!(result["committed"], true);
+    assert_eq!(result["warnings"], preview["warnings"]);
+
+    let valid = call(
+        &tool,
+        json!({"argv":["collection","preview","create"],"options":{
+            "sdl":"type IndexedProbe { code: String @index(ordered: {unique: true}) }"
+        }}),
+    )
+    .await;
+    assert!(valid.get("warnings").is_none(), "{valid}");
+    db.node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn schema_publication_matches_executable_lean_contract() {
     for case in &crate::lean_vocab_test::lean_contract_snapshot().schema_publication_cases {
         if !case["native_allowed"].as_bool().unwrap() {
