@@ -10,7 +10,7 @@ use axum::response::Response;
 use futures_util::StreamExt;
 use gents::store::config_client::{
     ConfigAccess, ConfigApplyTxn, PackApprovalError, PackApprovalScope, PackEffectApprover,
-    PackEvidence, PackMutation, PackRelationship, PackRelationshipEvidence,
+    PackEvidence, PackMutation, PackRelationship, PackRelationshipEvidence, PackSchemaEvidence,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -26,8 +26,7 @@ enum ClientMessage {
         request: InstallRequest,
     },
     SchemasReady {
-        #[serde(default)]
-        schemas: Value,
+        evidence: PackSchemaEvidence,
     },
     Read {
         id: u64,
@@ -75,12 +74,34 @@ pub(crate) async fn install_session(
     let Some(runtime) = state.activation_runtime.get() else {
         return refused(StatusCode::SERVICE_UNAVAILABLE, "runtime is not ready");
     };
-    let user_access = ConfigAccess::local_as(runtime.observation_node().clone(), actor);
+    let node = runtime.observation_node().clone();
+    let runtime_did = match identity::Did::new(&state.node_did) {
+        Ok(did) => did,
+        Err(error) => return refused(StatusCode::SERVICE_UNAVAILABLE, error),
+    };
+    if node.node_identity_did() != Some(runtime_did.as_str()) {
+        return refused(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "runtime Node identity mismatch",
+        );
+    }
+    let runtime_access = ConfigAccess::local_as(node.clone(), runtime_did);
+    let user_access = ConfigAccess::local_as(node, actor.clone());
     upgrade
         .max_message_size(MAX_BODY.saturating_add(128))
         .max_frame_size(MAX_BODY.saturating_add(128))
         .on_upgrade(move |socket| async move {
-            if let Err(error) = tokio::spawn(run(socket, state, home, access, user_access)).await {
+            if let Err(error) = tokio::spawn(run(
+                socket,
+                state,
+                home,
+                access,
+                user_access,
+                runtime_access,
+                actor,
+            ))
+            .await
+            {
                 tracing::error!(%error, "hosted pack session task failed");
             }
         })
@@ -302,9 +323,20 @@ async fn run(
     home: PathBuf,
     access: ConfigAccess,
     user_access: ConfigAccess,
+    runtime_access: ConfigAccess,
+    actor: identity::Did,
 ) {
     let socket = Arc::new(Mutex::new(socket));
-    let result = run_inner(&socket, &state, home, access, user_access).await;
+    let result = run_inner(
+        &socket,
+        &state,
+        home,
+        access,
+        user_access,
+        runtime_access,
+        actor,
+    )
+    .await;
     if let Err((error, outcome)) = result {
         let _ = send(
             &mut *socket.lock().await,
@@ -320,7 +352,23 @@ async fn run_inner(
     home: PathBuf,
     access: ConfigAccess,
     user_access: ConfigAccess,
+    runtime_access: ConfigAccess,
+    actor: identity::Did,
 ) -> std::result::Result<(), (anyhow::Error, &'static str)> {
+    let runtime_did = identity::Did::new(&state.node_did)
+        .map_err(|error| (anyhow::Error::new(error), "not_installed"))?;
+    runtime_access
+        .transact_readonly("pack.hosted_schema.authorize", |txn| {
+            let runtime_did = &runtime_did;
+            let actor = &actor;
+            Box::pin(async move {
+                gents::store::config_client::require_node_update_in_txn(txn, runtime_did, actor)
+                    .await
+                    .map_err(anyhow::Error::from)
+            })
+        })
+        .await
+        .map_err(|error| (error, "not_installed"))?;
     let prepare = async {
         let ClientMessage::Start { request } = receive(&mut *socket.lock().await).await? else {
             anyhow::bail!("pack session requires a start request");
@@ -423,7 +471,7 @@ async fn run_inner(
     )
     .await
     .map_err(|error| (error, "not_installed"))?;
-    let schemas = match tokio::time::timeout(
+    let evidence = match tokio::time::timeout(
         std::time::Duration::from_secs(300),
         receive(&mut *socket.lock().await),
     )
@@ -436,7 +484,7 @@ async fn run_inner(
     })?
     .map_err(|error| (error, "not_installed"))?
     {
-        ClientMessage::SchemasReady { schemas } => schemas,
+        ClientMessage::SchemasReady { evidence } => evidence,
         _ => {
             return Err((
                 anyhow::anyhow!("client did not finish schema preparation"),
@@ -444,6 +492,24 @@ async fn run_inner(
             ))
         }
     };
+    gents::store::config_client::verify_pack_schema_approval(actor.as_str(), &scope, evidence)
+        .map_err(|error| (anyhow::Error::new(error), "not_installed"))?;
+    gents::pack::apply_prepared_dependency_schemas(&runtime_access, &prepared)
+        .await
+        .map_err(|error| (error, "not_installed"))?;
+    let root = received.root.shared_archive();
+    let temp = tokio::task::spawn_blocking(move || {
+        let temp = tempfile::tempdir()?;
+        gents::pack::materialize::materialize(&root, temp.path())?;
+        Ok::<_, anyhow::Error>(temp)
+    })
+    .await
+    .map_err(|error| (anyhow::Error::new(error), "not_installed"))?
+    .map_err(|error| (error, "not_installed"))?;
+    let schemas =
+        crate::commands::schema::apply_pack_schemas_if_present(&runtime_access, temp.path())
+            .await
+            .map_err(|error| (error, "not_installed"))?;
     let policy = if received.request.overwrite {
         gents::pack::DriftPolicy::Overwrite
     } else if received.request.keep {

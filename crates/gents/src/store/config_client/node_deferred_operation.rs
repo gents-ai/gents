@@ -19,6 +19,8 @@ pub enum DeferredOperationError {
     Config(#[from] ConfigClientError),
     #[error(transparent)]
     Graphql(#[from] gents_protocol::graphql::GraphqlError),
+    #[error("authenticated actor cannot update the local Node")]
+    NodeUpdateDenied,
     #[error("unsupported deferred operation collection")]
     UnsupportedCollection,
     #[error("deferred operation is not uniquely visible")]
@@ -35,6 +37,48 @@ pub enum DeferredOperationError {
     MissingNodeOwner,
     #[error("deferred operation changed before its Node link was recorded")]
     ChangedBeforeLink,
+}
+
+/// Authorize a client-requested runtime operation against the native Node ACP.
+pub async fn require_node_update_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    runtime: &identity::Did,
+    actor: &identity::Did,
+) -> std::result::Result<(), DeferredOperationError> {
+    txn.validate_runtime_actor(runtime)?;
+    let did = escape_graphql_string(runtime.as_str());
+    let response = txn
+        .execute(&format!(
+            r#"{{ Node(filter: {{node_did: {{_eq: "{did}"}}}}, limit: 2) {{_docID}} }}"#
+        ))
+        .await?;
+    let nodes = gents_protocol::graphql::graphql_rows_from_response(&response, "Node");
+    let [node] = nodes.as_slice() else {
+        return Err(DeferredOperationError::AmbiguousNode);
+    };
+    let id = node["_docID"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or(DeferredOperationError::MissingNodeId)?
+        .to_owned();
+    let decisions = txn
+        .observe_document_access(
+            actor,
+            "Node",
+            &[id],
+            defra_node::DocumentAccessMode::Named {
+                permission: "update".into(),
+                node_permission: acp::nac::NodePermission::DocumentUpdate,
+            },
+        )
+        .await?;
+    if !matches!(
+        decisions.as_slice(),
+        [defra_node::DocumentAccessDecision::Allowed]
+    ) {
+        return Err(DeferredOperationError::NodeUpdateDenied);
+    }
+    Ok(())
 }
 
 /// Publish the Node parent only in the transaction that marks the relationship

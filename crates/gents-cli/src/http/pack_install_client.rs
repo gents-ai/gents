@@ -1,9 +1,9 @@
 use anyhow::{bail, ensure, Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use gents::store::config_client::{
-    prepare_pack_evidence_from_history, prepare_pack_relationship, ClientSigningCapability,
-    GraphqlEndpoint, PackApprovalError, PackApprovalScope, PackMutation, PackRelationship,
-    PackReplayTransport,
+    prepare_pack_evidence_from_history, prepare_pack_relationship, prepare_pack_schema_approval,
+    ClientSigningCapability, GraphqlEndpoint, PackApprovalError, PackApprovalScope, PackMutation,
+    PackRelationship, PackReplayTransport,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -460,18 +460,10 @@ pub(crate) async fn install_remote(
     })
     .await
     .context("reconstructing the reviewed pack graph")??;
-    gents::pack::apply_prepared_dependency_schemas(&access, &prepared).await?;
-    let temp = tempfile::tempdir()?;
-    let root = pack.shared_archive();
-    let path = temp.path().to_owned();
-    tokio::task::spawn_blocking(move || gents::pack::materialize::materialize(&root, &path))
-        .await
-        .context("materializing the reviewed root pack")??;
-    let schemas =
-        crate::commands::schema::apply_pack_schemas_if_present(&access, temp.path()).await?;
+    let evidence = prepare_pack_schema_approval(&session.actor, &session.scope).await?;
     send(
         &mut session.socket,
-        json!({"type": "schemas_ready", "schemas": schemas}),
+        json!({"type": "schemas_ready", "evidence": evidence}),
     )
     .await?;
     let replay = std::sync::Arc::new(PackReplaySession::new(session));

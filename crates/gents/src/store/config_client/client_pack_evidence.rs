@@ -93,6 +93,51 @@ pub struct PackRelationshipEvidence {
     signature: Vec<u8>,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackSchemaEvidence {
+    scope: PackApprovalScope,
+    actor_did: String,
+    signature: Vec<u8>,
+}
+
+fn schema_payload(scope: &PackApprovalScope, actor: &str) -> Result<Vec<u8>, PackEvidenceError> {
+    validate_scope(scope)?;
+    Ok(serde_json::to_vec(&(
+        "gents.pack.schemas.v1",
+        scope,
+        actor,
+    ))?)
+}
+
+/// Approves schema assets from the exact reviewed archive graph for this Node.
+pub async fn prepare_pack_schema_approval(
+    actor: &ClientSigningCapability,
+    scope: &PackApprovalScope,
+) -> Result<PackSchemaEvidence, PackEvidenceError> {
+    let signature = sign_client_payload(actor, schema_payload(scope, actor.did())?).await?;
+    Ok(PackSchemaEvidence {
+        scope: scope.clone(),
+        actor_did: actor.did().to_owned(),
+        signature,
+    })
+}
+
+pub fn verify_pack_schema_approval(
+    actor: &str,
+    scope: &PackApprovalScope,
+    evidence: PackSchemaEvidence,
+) -> Result<(), PackEvidenceError> {
+    if evidence.actor_did != actor || evidence.scope != *scope {
+        return Err(PackEvidenceError::Mismatch);
+    }
+    let payload = schema_payload(scope, actor)?;
+    if !crate::store::identity::verify_did_signature(actor, &payload, &evidence.signature)? {
+        return Err(PackEvidenceError::Mismatch);
+    }
+    Ok(())
+}
+
 pub(super) enum VerifiedPackEvidence {
     Create(Arc<VerifiedClientCreate>),
     Mutation(Arc<VerifiedClientMutation>),
@@ -530,6 +575,117 @@ mod tests {
     use super::*;
     use crate::store::identity::{KeyIdentity, NodeIdentity};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn hosted_schema_approval_conforms_to_lean() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let user = KeyIdentity::load_or_create(dir.path().join("user"), None)?;
+        let other = KeyIdentity::load_or_create(dir.path().join("other"), None)?;
+        let runtime = KeyIdentity::load_or_create(dir.path().join("runtime"), None)?;
+        let node = Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(runtime.did())
+                .with_node_acp_owner(user.did().to_owned())
+                .build()
+                .await?,
+        );
+        crate::ensure_runtime_schemas(&node).await?;
+        let user_access = ConfigAccess::local_as(node.clone(), user.did().parse()?);
+        let node_access = ConfigAccess::local_as(node, runtime.did().parse()?);
+        let scope = PackApprovalScope {
+            node_did: runtime.did().into(),
+            pack_digests: vec!["sha256:fixture".into()],
+            nonce: "session".into(),
+        };
+        let create = PackMutation::Create {
+            collection: "Node".into(),
+            input: json!({"node_did": runtime.did(), "enabled": true}),
+        };
+        let user_key = user.client_signing_capability()?;
+        let create_evidence =
+            prepare_pack_evidence(&user_access, &user_key, &scope, &create).await?;
+        user_access
+            .transact_verified_pack("test.hosted_schema.node", |txn| {
+                let create_evidence = create_evidence.clone();
+                let create = &create;
+                let scope = &scope;
+                let runtime = &runtime;
+                let user_key = &user_key;
+                Box::pin(async move {
+                    let result = txn.apply(scope, create, create_evidence).await?;
+                    let id = crate::store::graphql::created_doc_id(&result, "Node")?;
+                    let relationship = PackRelationship {
+                        collection: "Node".into(),
+                        doc_id: id,
+                        relation: "runtime_reader".into(),
+                        target: PackRelationshipTarget::Actor {
+                            did: runtime.did().into(),
+                        },
+                        delete: false,
+                    };
+                    let signed = prepare_pack_relationship(user_key, scope, &relationship).await?;
+                    txn.apply_relationship(scope, &relationship, signed).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await?;
+        let cases = tokio::task::spawn_blocking(|| {
+            crate::lean_vocab_test::lean_contract_snapshot()
+                .hosted_pack_schema_cases
+                .clone()
+        })
+        .await?;
+        let signed = prepare_pack_schema_approval(&user_key, &scope).await?;
+        for case in cases {
+            let scope_matches = case["scope_matches"].as_bool().unwrap();
+            let signature_valid = case["signed"].as_bool().unwrap();
+            let native_update = case["native_update"].as_bool().unwrap();
+            let subject = if native_update { &user } else { &other };
+            let mut evidence = signed.clone();
+            if !signature_valid {
+                evidence.signature.clear();
+            }
+            if !scope_matches {
+                evidence.scope.nonce.push_str("-other");
+            }
+            // The actor binding remains valid when exercising native denial.
+            if !native_update {
+                evidence =
+                    prepare_pack_schema_approval(&other.client_signing_capability()?, &scope)
+                        .await?;
+                if !signature_valid {
+                    evidence.signature.clear();
+                }
+                if !scope_matches {
+                    evidence.scope.nonce.push_str("-other");
+                }
+            }
+            let valid = verify_pack_schema_approval(subject.did(), &scope, evidence).is_ok();
+            let observed = node_access
+                .transact_readonly("test.hosted_schema.authorize", |txn| {
+                    let runtime = &runtime;
+                    let subject = subject;
+                    Box::pin(async move {
+                        super::super::require_node_update_in_txn(
+                            txn,
+                            &identity::Did::new(runtime.did())?,
+                            &identity::Did::new(subject.did())?,
+                        )
+                        .await
+                        .map_err(anyhow::Error::from)
+                    })
+                })
+                .await
+                .is_ok();
+            assert_eq!(observed, native_update, "{case}");
+            assert_eq!(
+                valid && observed,
+                case["allowed"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn verified_pack_evidence_binds_mutation_actor_and_snapshot() -> anyhow::Result<()> {

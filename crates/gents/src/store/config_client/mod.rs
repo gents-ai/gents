@@ -23,8 +23,9 @@ mod client_pack_evidence;
 mod client_signed_agent;
 pub use client_pack_evidence::{
     prepare_pack_evidence, prepare_pack_evidence_from_history, prepare_pack_evidence_in_txn,
-    prepare_pack_relationship, PackApprovalScope, PackEvidence, PackEvidenceError, PackMutation,
-    PackRelationship, PackRelationshipEvidence, PackRelationshipTarget,
+    prepare_pack_relationship, prepare_pack_schema_approval, verify_pack_schema_approval,
+    PackApprovalScope, PackEvidence, PackEvidenceError, PackMutation, PackRelationship,
+    PackRelationshipEvidence, PackRelationshipTarget, PackSchemaEvidence,
 };
 pub use client_signed_agent::prepare_request_evidence;
 pub use client_signed_agent::ClientSigningCapability;
@@ -125,7 +126,9 @@ pub use inference_profile::{
     agent_accounts, list_inference_profiles_in_txn, write_inference_profile_document,
 };
 pub(crate) use node_deferred_operation::recover_deferred_node_operations;
-pub use node_deferred_operation::{maybe_link_deferred_operation_in_txn, DeferredOperationError};
+pub use node_deferred_operation::{
+    maybe_link_deferred_operation_in_txn, require_node_update_in_txn, DeferredOperationError,
+};
 pub(crate) use node_document_publication::{
     publish_node_child_in_txn, publish_node_managers_in_txn, publish_secret_configuration_in_txn,
 };
