@@ -1,7 +1,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -283,7 +283,7 @@ impl CommandRunner for ProcessCommandRunner {
 
         let mut stdout = tempfile::tempfile().context("creating native command stdout capture")?;
         let mut stderr = tempfile::tempfile().context("creating native command stderr capture")?;
-        let mut command = Command::new(program);
+        let mut command = gents::tools::exec::native_spawn::std_command(program);
         if program == OsStr::new("systemctl") {
             command.arg("--no-pager");
         }

@@ -1,3 +1,4 @@
+pub mod native_spawn;
 mod output;
 pub(crate) mod ownership;
 mod process;

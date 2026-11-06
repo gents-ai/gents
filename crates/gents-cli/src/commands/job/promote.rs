@@ -1,7 +1,6 @@
 //! `gents job promote`: a finished dynamic run becomes an installed, wired tool.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context, Result};
 use gents::documents::Tools;
@@ -142,7 +141,10 @@ fn reserve_promoted_dir(home: &Path, name: &str) -> Result<PathBuf> {
 
 fn javy_version() -> Result<String, JavyMissing> {
     let javy = std::env::var("JAVY").unwrap_or_else(|_| "javy".into());
-    match Command::new(&javy).arg("--version").output() {
+    match gents::tools::exec::native_spawn::std_command(&javy)
+        .arg("--version")
+        .output()
+    {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
         }

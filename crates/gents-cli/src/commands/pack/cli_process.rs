@@ -3,14 +3,13 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use tokio::process::Command;
 
 pub(super) fn path_arg(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
 pub(super) async fn run_cli_text(bin: &Path, args: &[String]) -> Result<String> {
-    let output = Command::new(bin)
+    let output = tokio::process::Command::from(gents::tools::exec::native_spawn::std_command(bin))
         .args(args)
         .output()
         .await
@@ -40,7 +39,7 @@ pub(super) async fn run_cli_json_with_env(
     args: &[String],
     environment: BTreeMap<String, String>,
 ) -> Result<Value> {
-    let output = Command::new(bin)
+    let output = tokio::process::Command::from(gents::tools::exec::native_spawn::std_command(bin))
         .args(args)
         .envs(environment)
         .output()

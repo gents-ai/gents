@@ -3,7 +3,6 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use gents_codex_protocol as codex;
-use tokio::process::Command;
 
 use crate::commands::codex_shim::{ShimState, JSONRPC_INTERNAL_ERROR};
 
@@ -110,7 +109,8 @@ async fn run_git_output(
     cwd: &Path,
     args: &[&str],
 ) -> Result<std::process::Output, HostRuntimeError> {
-    let mut command = Command::new("git");
+    let mut command =
+        tokio::process::Command::from(gents::tools::exec::native_spawn::std_command("git"));
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args(["-c", "core.hooksPath=/dev/null"])

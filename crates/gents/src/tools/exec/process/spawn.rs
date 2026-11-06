@@ -9,6 +9,8 @@ use std::process::Stdio;
 
 use tokio::process::{Child, Command};
 
+use super::super::native_spawn::spawn_tokio;
+
 #[cfg(test)]
 mod tests;
 
@@ -43,7 +45,7 @@ pub(super) fn spawn_child(
         if let Some(environment) = environment {
             command.env_clear().envs(environment);
         }
-        command.spawn()
+        spawn_tokio(&mut command)
     };
     #[cfg(target_os = "macos")]
     if let Some(result) = spawn_supplied_path(program, cwd, environment, &spawn) {
