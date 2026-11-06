@@ -767,7 +767,7 @@ mod tests {
         );
         assert_eq!(
             rows(&node, "{ PluginOwned { body owner } }", "PluginOwned").await,
-            vec![json!({"body": "x", "owner": "did:key:zPluginOwner"})]
+            vec![json!({"body": "x", "owner": crate::triggers::callback::test_agent_did()})]
         );
         assert_eq!(
             rows(&node, "{ CallbackResult { result_id } }", "CallbackResult")
