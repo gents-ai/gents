@@ -333,6 +333,23 @@ pub async fn prepare_document_pack_archive(
 }
 
 /// Prepare a local operator install with the held Node identity used for slots.
+fn require_documents_dependency(dependency: &super::super::PackManifest) -> Result<()> {
+    anyhow::ensure!(
+        matches!(dependency.metadata.kind, super::super::PackKind::Documents),
+        "dependency {}/{} is a {:?} pack, which cannot be installed as a dependency; \
+         install it with `gents pack install` or `gents plugin install`, then remove it from `dependencies`",
+        dependency.metadata.namespace, dependency.name, dependency.metadata.kind
+    );
+    anyhow::ensure!(
+        dependency.metadata.dependencies.is_empty(),
+        "dependency {}/{} declares dependencies of its own; dependencies are one level: \
+         install it with `gents pack install`, then remove it from `dependencies`",
+        dependency.metadata.namespace,
+        dependency.name
+    );
+    Ok(())
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "archive preparation shares canonical install inputs"
@@ -482,10 +499,7 @@ async fn prepare_document_pack_archive_inputs(
             declared.contains(&coordinate),
             "prepared dependency {coordinate:?} is not declared by the root pack"
         );
-        anyhow::ensure!(
-            manifest.metadata.dependencies.is_empty(),
-            "nested pack dependencies are unsupported"
-        );
+        require_documents_dependency(manifest)?;
         let loaded = super::super::agent_bindings::load_pack_install_config_with_dependencies(
             access,
             manifest,
@@ -603,25 +617,7 @@ async fn prepare_document_pack_install_inner(
                 plugin_home,
             )?;
         }
-        let dependency = dependency.manifest();
-        anyhow::ensure!(
-            matches!(
-                dependency.metadata.kind,
-                super::super::PackKind::Documents
-            ),
-            "dependency {}/{} is a {:?} pack, which cannot be installed as a dependency; \
-             install it with `gents pack install` or `gents plugin install`, then remove it from `dependencies`",
-            dependency.metadata.namespace,
-            dependency.name,
-            dependency.metadata.kind
-        );
-        anyhow::ensure!(
-            dependency.metadata.dependencies.is_empty(),
-            "dependency {}/{} declares dependencies of its own; dependencies are one level: \
-             install it with `gents pack install`, then remove it from `dependencies`",
-            dependency.metadata.namespace,
-            dependency.name
-        );
+        require_documents_dependency(dependency.manifest())?;
     }
     for slot in requested.keys() {
         anyhow::ensure!(
