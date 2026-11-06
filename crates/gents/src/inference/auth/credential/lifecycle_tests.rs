@@ -1,9 +1,7 @@
 use anyhow::Result;
-use defra_node::Node as EmbeddedNode;
 use serde_json::{json, Value};
-use std::sync::Arc;
 
-use super::test_support::{test_node, unsigned_jwt};
+use super::test_support::unsigned_jwt;
 use super::*;
 use crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 use crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
@@ -77,8 +75,13 @@ impl Product {
     }
 }
 
-async fn access() -> ConfigAccess {
-    ConfigAccess::local(test_node().await)
+async fn access() -> (
+    crate::support::TestDb,
+    crate::KeyIdentity,
+    ConfigAccess,
+    gents_protocol::agent_identity::AgentIdentityBinding,
+) {
+    crate::test_support::signed_test_node("credential-interactive-sign-in").await
 }
 
 async fn store(access: &ConfigAccess, credential: OAuthCredential) -> SignIn {
@@ -94,15 +97,10 @@ async fn rows(access: &ConfigAccess, did: &str, provider: &str) -> Vec<OAuthCred
         .collect()
 }
 
-async fn set_enabled(access: &ConfigAccess, credential_id: &str, enabled: bool) {
-    let mutation = format!(
-        r#"mutation {{ update_OAuthCredential(filter: {{ credential_id: {{ _eq: "{credential_id}" }} }}, input: {{ enabled: {enabled} }}) {{ _docID }} }}"#
-    );
-    access.write("test.set_enabled", &mutation).await.unwrap();
-}
-
-fn did(test: &str, product: Product) -> String {
-    format!("did:key:z6MkTest{test}{product:?}")
+async fn set_enabled(access: &ConfigAccess, did: &str, credential_id: &str, enabled: bool) {
+    set_account_enabled(access, did, credential_id, enabled)
+        .await
+        .unwrap();
 }
 
 fn chatgpt_with(
@@ -155,15 +153,20 @@ fn grok(did: &str, principal_id: &str, refresh_token: &str) -> OAuthCredential {
 }
 
 async fn seed_raw(access: &ConfigAccess, input: Value) {
+    let did = input["node_did"].as_str().unwrap().to_owned();
     access
         .transact_write("test.seed_raw", |txn| {
             let input = input.clone();
+            let did = did.clone();
             Box::pin(async move {
-                txn.execute_with_variables(
+                let response = txn.execute_client_signed_create(
                     "mutation($input: OAuthCredentialMutationInputArg!) { create_OAuthCredential(input: $input) { _docID } }",
                     &json!({ "input": input }),
-                )
-                .await
+                    gents_protocol::schemas::OAUTH_CREDENTIAL,
+                ).await?;
+                let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
+                crate::store::config_client::publish_secret_configuration_in_txn(txn, "OAuthCredential", &doc, &did).await?;
+                Ok::<(), anyhow::Error>(())
             })
         })
         .await
@@ -189,17 +192,15 @@ async fn labeled(access: &ConfigAccess, credential: OAuthCredential, label: &str
         .unwrap()
 }
 
-fn node(access: &ConfigAccess) -> &Arc<EmbeddedNode> {
-    access.local_node().expect("tests run on a local node")
-}
-
 async fn backends(access: &ConfigAccess, did: &str) -> Vec<crate::InferenceBackend> {
-    crate::inference::backends::registry::list_all_backends(node(access))
+    access
+        .transact_readonly("test.interactive.backends", |txn| {
+            Box::pin(async move {
+                crate::store::config_client::list_inference_backends_in_txn(txn, did).await
+            })
+        })
         .await
         .unwrap()
-        .into_iter()
-        .filter(|backend| backend.node_did == did)
-        .collect()
 }
 
 fn preset(product: Product) -> crate::inference::backends::setup::InferenceConnectionSpec {
@@ -224,9 +225,9 @@ async fn remove(access: &ConfigAccess, did: &str, credential_id: &str) -> Result
 
 #[tokio::test]
 async fn a_first_sign_in_is_the_original_account() {
-    let access = access().await;
+    let (db, _user, access, _binding) = access().await;
     for product in PRODUCTS {
-        let did = did("First", product);
+        let did = db.node_identity.did().to_owned();
         let signed = store(&access, product.sign_in(&did, "a", "refresh-1")).await;
         assert_eq!(signed.result, SignInResult::Added, "{product:?}");
         let stored = rows(&access, &did, product.provider()).await;
@@ -237,14 +238,19 @@ async fn a_first_sign_in_is_the_original_account() {
         );
         assert_eq!(stored[0].account_ref, None, "{product:?}");
         assert!(stored[0].connected_at.is_some(), "{product:?}");
+        let runtime_row = lookup_oauth_credential_by_id(&db.node, &stored[0].credential_id)
+            .await
+            .unwrap()
+            .expect("runtime writer can read the interactive sign-in");
+        assert_eq!(runtime_row, stored[0], "{product:?}");
     }
 }
 
 #[tokio::test]
 async fn another_account_is_added_beside_the_first() {
-    let access = access().await;
+    let (db, _user, access, _binding) = access().await;
     for product in PRODUCTS {
-        let did = did("Another", product);
+        let did = db.node_identity.did().to_owned();
         let provider = product.provider();
         store(&access, product.sign_in(&did, "a", "refresh-a")).await;
         let first = rows(&access, &did, provider).await.remove(0);
@@ -285,15 +291,15 @@ async fn another_account_is_added_beside_the_first() {
 
 #[tokio::test]
 async fn the_same_account_refreshes_in_place() {
-    let access = access().await;
+    let (db, _user, access, _binding) = access().await;
     for product in PRODUCTS {
-        let did = did("Same", product);
+        let did = db.node_identity.did().to_owned();
         let provider = product.provider();
         let first = store(&access, product.sign_in(&did, "a", "refresh-1")).await;
         assert_eq!(first.result, SignInResult::Added, "{product:?}");
         let before = rows(&access, &did, provider).await.remove(0);
         assert!(before.connected_at.is_some(), "{product:?}");
-        set_enabled(&access, &before.credential_id, false).await;
+        set_enabled(&access, &did, &before.credential_id, false).await;
 
         let again = store(&access, product.sign_in(&did, "a", "refresh-2")).await;
         assert_eq!(again.result, SignInResult::Refreshed, "{product:?}");
@@ -311,9 +317,9 @@ async fn the_same_account_refreshes_in_place() {
 
 #[tokio::test]
 async fn two_concurrent_first_sign_ins_both_store() {
-    let access = access().await;
+    let (db, _user, access, _binding) = access().await;
     for product in PRODUCTS {
-        let did = did("Concurrent", product);
+        let did = db.node_identity.did().to_owned();
         let (a, b) = tokio::join!(
             store_sign_in(&access, product.sign_in(&did, "a", "refresh-a"), None),
             store_sign_in(&access, product.sign_in(&did, "b", "refresh-b"), None),

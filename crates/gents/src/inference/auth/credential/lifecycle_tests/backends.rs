@@ -2,9 +2,9 @@ use super::*;
 
 #[tokio::test]
 async fn only_added_accounts_create_a_backend() {
-    let access = access().await;
     for product in PRODUCTS {
-        let did = did("Backend", product);
+        let (db, _user, access, _binding) = access().await;
+        let did = db.node_identity.did().to_owned();
         store(&access, product.sign_in(&did, "a", "refresh-a")).await;
         assert!(backends(&access, &did).await.is_empty(), "{product:?}");
 
@@ -56,9 +56,9 @@ async fn only_added_accounts_create_a_backend() {
 
 #[tokio::test]
 async fn each_accounts_backend_keeps_its_own_models() {
-    let access = access().await;
     for product in PRODUCTS {
-        let did = did("Models", product);
+        let (db, _user, access, _binding) = access().await;
+        let did = db.node_identity.did().to_owned();
         let spec = preset(product);
         let original = crate::InferenceBackend {
             physical_doc_id: None,
@@ -106,14 +106,20 @@ async fn each_accounts_backend_keeps_its_own_models() {
             .unwrap();
         }
         for (backend, model) in [(&original, "model-a"), (&added, "model-b")] {
-            let observation = crate::inference::backends::registry::lookup_backend_observation(
-                node(&access),
-                &did,
-                &backend.backend_id,
-            )
-            .await
-            .unwrap()
-            .unwrap();
+            let node_did = did.as_str();
+            let backend_id = backend.backend_id.as_str();
+            let observation = access
+                .transact_readonly("test.backend_observation", |txn| {
+                    Box::pin(async move {
+                        crate::inference::backends::registry::lookup_backend_observation_in_txn(
+                            txn, node_did, backend_id,
+                        )
+                        .await
+                    })
+                })
+                .await
+                .unwrap()
+                .unwrap();
             let models: Vec<_> = observation
                 .catalogs
                 .iter()
@@ -126,9 +132,9 @@ async fn each_accounts_backend_keeps_its_own_models() {
 
 #[tokio::test]
 async fn a_lost_backend_comes_back_at_the_next_sign_in() {
-    let access = access().await;
     for product in PRODUCTS {
-        let did = did("LostBackend", product);
+        let (db, _user, access, _binding) = access().await;
+        let did = db.node_identity.did().to_owned();
         store(&access, product.sign_in(&did, "a", "refresh-a")).await;
         let b = store(&access, product.sign_in(&did, "b", "refresh-b")).await;
         let reference = b.credential.account_ref.clone().unwrap();
@@ -139,13 +145,21 @@ async fn a_lost_backend_comes_back_at_the_next_sign_in() {
                 .count()
         };
         let backend_id = format!("{}-{reference}", product.provider());
+        let plan = crate::store::config_client::DesiredStateApplyPlan::new(Vec::new())
+            .unwrap()
+            .with_removals(vec![(
+                crate::Collection::InferenceBackend,
+                did.clone(),
+                backend_id,
+            )])
+            .unwrap();
         access
-            .write(
-                "test.backend_rm",
-                &format!(
-                    r#"mutation {{ delete_InferenceBackend(filter: {{ backend_id: {{ _eq: "{backend_id}" }} }}) {{ _docID }} }}"#
-                ),
-            )
+            .transact_write("test.backend_rm", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    crate::store::config_client::apply_desired_state_plan(txn, plan).await
+                })
+            })
             .await
             .unwrap();
         assert_eq!(serving(backends(&access, &did).await), 0);
@@ -160,18 +174,22 @@ async fn a_lost_backend_comes_back_at_the_next_sign_in() {
 
 #[tokio::test]
 async fn an_invalid_config_fails_an_add_with_a_clear_error() {
-    let access = access().await;
-    let did = "did:key:z6MkTestInvalidConfig";
+    let (db, _user, access, _binding) = access().await;
+    let did = db.node_identity.did();
     store(&access, Product::Claude.sign_in(did, "a", "refresh-a")).await;
-    access
-        .write(
-            "test.seed_invalid_profile",
-            &format!(
-                r#"mutation {{ create_InferenceProfile(input: {{ node_did: "{did}", profile_id: "profile-x", backend_id: "missing-backend", model_name: "model-x" }}) {{ _docID }} }}"#
-            ),
-        )
-        .await
-        .unwrap();
+    access.transact_write("test.seed_invalid_profile", |txn| {
+        Box::pin(async move {
+            let input = json!({"node_did": did, "profile_id": "profile-x", "backend_id": "missing-backend", "model_name": "model-x"});
+            let response = txn.execute_client_signed_create(
+                "mutation($input: InferenceProfileMutationInputArg!) { create_InferenceProfile(input: $input) { _docID } }",
+                &json!({"input": input}),
+                gents_protocol::schemas::INFERENCE_PROFILE,
+            ).await?;
+            let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "InferenceProfile")?;
+            crate::store::config_client::publish_node_child_in_txn(txn, "InferenceProfile", &doc, did).await?;
+            Ok::<(), anyhow::Error>(())
+        })
+    }).await.unwrap();
 
     let error = store_sign_in(
         &access,
