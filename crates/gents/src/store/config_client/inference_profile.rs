@@ -134,7 +134,10 @@ mod tests {
     async fn replacement_preserves_other_owner_and_clears_optional_selection() -> Result<()> {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::local(node);
+        let access = ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(node.node_identity_did().expect("fixture node has an identity")).unwrap(),
+        );
         for owner in ["did:key:owner", "did:key:other"] {
             crate::test_support::bootstrap_signed_test_node(&access, owner).await;
             let backend = json!({"node_did":owner,"backend_id":"local","name":"Local",
@@ -224,7 +227,10 @@ mod tests {
         let did = "did:key:z6MkTestProfileEvents";
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::local(node);
+        let access = ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(node.node_identity_did().expect("fixture node has an identity")).unwrap(),
+        );
         crate::test_support::bootstrap_signed_test_node(&access, did).await;
         let spec = crate::inference::backends::setup::connection_spec(
             crate::inference::backends::setup::InferenceProviderId::Anthropic,
@@ -373,7 +379,10 @@ mod tests {
         let did = "did:key:z6MkTestAgentAccounts";
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::local(node);
+        let access = ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(node.node_identity_did().expect("fixture node has an identity")).unwrap(),
+        );
         crate::test_support::bootstrap_signed_test_node(&access, did).await;
         let spec = crate::inference::backends::setup::connection_spec(
             crate::inference::backends::setup::InferenceProviderId::Anthropic,

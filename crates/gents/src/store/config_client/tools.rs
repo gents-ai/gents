@@ -43,7 +43,10 @@ mod tests {
     async fn replacement_revokes_omitted_groups_without_changing_other_owner() -> Result<()> {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::local(node);
+        let access = ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(node.node_identity_did().expect("fixture node has an identity")).unwrap(),
+        );
         crate::test_support::bootstrap_signed_test_node(&access, "did:key:owner").await;
         crate::test_support::bootstrap_signed_test_node(&access, "did:key:other").await;
         let mut tools: Tools = serde_json::from_value(json!({
