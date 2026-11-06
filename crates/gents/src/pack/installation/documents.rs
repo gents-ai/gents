@@ -332,6 +332,49 @@ pub async fn prepare_document_pack_archive(
     .await
 }
 
+/// Prepare a local operator install with the held Node identity used for slots.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "archive preparation shares canonical install inputs"
+)]
+pub async fn prepare_document_pack_archive_with_runtime(
+    access: &ConfigAccess,
+    owner: &str,
+    archive: &PackArchive,
+    requested: &PackInferenceBindings,
+    dependencies: &[&PackArchive],
+    plugin_home: Option<&Path>,
+    environment: &(dyn Fn(&str) -> Option<String> + Sync),
+    runtime: &dyn crate::store::identity::NodeIdentity,
+) -> Result<PreparedDocumentPackInstall> {
+    let node = access
+        .local_node()
+        .context("local pack preparation requires an embedded Node")?;
+    anyhow::ensure!(
+        runtime.did() == owner && node.node_identity_did() == Some(owner),
+        "held runtime identity does not match the selected Node"
+    );
+    let provisioner = super::super::agent_bindings::AgentProvisioner {
+        node,
+        runtime,
+        actor: None,
+        selected_agent_did: None,
+        node_binding: None,
+    };
+    prepare_document_pack_archive_with_provisioner(
+        access,
+        owner,
+        archive,
+        requested,
+        dependencies,
+        InstalledVia::Operator,
+        plugin_home,
+        environment,
+        Some(&provisioner),
+    )
+    .await
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "archive preparation includes an optional executing Agent provisioner"
