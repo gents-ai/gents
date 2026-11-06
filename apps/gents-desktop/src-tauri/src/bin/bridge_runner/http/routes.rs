@@ -675,8 +675,7 @@ pub(super) async fn handle_request(
             save_agent_config(fixture.desktop_core().as_ref(), request).await?;
             snapshot_response(fixture).await
         }
-        // Test-only: write on the remote core so the desktop-snapshot read
-        // exercises the real P2P propagation path (cross-node witness).
+        // Test-only: write to the runtime as the desktop User for the propagation witness.
         ("POST", "/desktop/test-fixture/remote-save-agent") => {
             if std::env::var("GENTS_TAURI_LIVE").as_deref() != Ok("1") {
                 return Ok(HttpResponse::json_error(
@@ -686,8 +685,8 @@ pub(super) async fn handle_request(
             }
             let req =
                 decode::<AgentSaveRequest>(&request.body, "decoding remote agent save request")?;
-            tracing::info!(agent_did = %req.document.agent_did, "remote-save-agent: writing to remote core");
-            save_agent_config(fixture.remote_core().as_ref(), req).await?;
+            tracing::info!(agent_did = %req.document.agent_did, "remote-save-agent: writing to runtime as desktop user");
+            save_agent_config(fixture.desktop_core().as_ref(), req).await?;
             Ok(HttpResponse::json_ok(
                 serde_json::json!({ "ok": true }).to_string(),
             ))
@@ -847,7 +846,7 @@ pub(super) async fn handle_request(
                 "decoding component apply request",
             )?;
             gents_desktop_bridge::commands::apply_config_components(
-                fixture.remote_core().as_ref(),
+                fixture.desktop_core().as_ref(),
                 request,
             )
             .await?;
@@ -859,7 +858,7 @@ pub(super) async fn handle_request(
                 "decoding component patch request",
             )?;
             gents_desktop_bridge::commands::patch_config_components(
-                fixture.remote_core().as_ref(),
+                fixture.desktop_core().as_ref(),
                 request,
             )
             .await?;
