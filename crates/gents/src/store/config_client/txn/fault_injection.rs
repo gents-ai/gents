@@ -336,6 +336,20 @@ impl ConfigApplyTxn<'_> {
     where
         F: Future,
     {
+        let (output, fired, _) =
+            Self::with_successful_mutation_pause_and_count(after, reached, release, future).await;
+        (output, fired)
+    }
+
+    pub(crate) async fn with_successful_mutation_pause_and_count<F>(
+        after: usize,
+        reached: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> (F::Output, bool, usize)
+    where
+        F: Future,
+    {
         assert!(after > 0);
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
@@ -368,6 +382,7 @@ impl ConfigApplyTxn<'_> {
                 .expect("pause configured")
                 .fired
                 .load(Ordering::Relaxed),
+            fault.count.load(Ordering::Relaxed),
         )
     }
 

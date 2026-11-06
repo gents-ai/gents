@@ -617,6 +617,35 @@ pub(crate) async fn update_session_title_with_source(
         .await
 }
 
+/// Rename through the held client identity, rebuilding from the current session
+/// only when the transaction owner confirms that a conflicting attempt aborted.
+pub async fn rename_session_on(
+    access: &crate::ConfigAccess,
+    node_did: &str,
+    requester_did: &str,
+    session_id: &str,
+    title: &str,
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    access
+        .transact_signed_conflict_rebuild("rename_session", |txn| {
+            let now = &now;
+            Box::pin(async move {
+                apply_title_in_txn(
+                    txn,
+                    node_did,
+                    Some(requester_did),
+                    session_id,
+                    Some(title),
+                    gents_protocol::session::SessionTitleSource::User,
+                    now,
+                )
+                .await
+            })
+        })
+        .await
+}
+
 pub async fn apply_title_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,

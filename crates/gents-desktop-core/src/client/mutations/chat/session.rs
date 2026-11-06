@@ -26,22 +26,5 @@ pub async fn rename_session(
         })
         .ok_or_else(|| anyhow::anyhow!("session {} not found", session_id))?;
 
-    let now = chrono::Utc::now().to_rfc3339();
-    access
-        .transact_write("rename_session", |txn| {
-            let now = &now;
-            Box::pin(async move {
-                gents::session::apply_title_in_txn(
-                    txn,
-                    node_did,
-                    Some(requester_did),
-                    session_id,
-                    Some(title),
-                    gents_protocol::session::SessionTitleSource::User,
-                    now,
-                )
-                .await
-            })
-        })
-        .await
+    gents::session::rename_session_on(access, node_did, requester_did, session_id, title).await
 }

@@ -68,7 +68,6 @@ pub(crate) use history::{
     load_sequenced_history_for_request, load_sequenced_history_projection_on,
     retry_has_published_input,
 };
-pub use observations::apply_title_in_txn;
 pub(crate) use observations::load_latest_requests_in_txn;
 pub(crate) use observations::{
     advance_refused_request_observation_in_txn, advance_session_request_observation_in_txn,
@@ -76,6 +75,7 @@ pub(crate) use observations::{
     refresh_session_request_observation_in_txn, session_needs_generated_title,
     update_session_title_with_source, SessionRequestRefresh, REFUSAL_PROJECTION_EVENT_TARGET,
 };
+pub use observations::{apply_title_in_txn, rename_session_on};
 pub use observations::{load_latest_request_in_txn, SessionRequestFact};
 pub(crate) use observations::{load_session_current_hop, load_session_current_hop_in_txn};
 #[cfg(test)]

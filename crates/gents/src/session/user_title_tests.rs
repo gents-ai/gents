@@ -70,6 +70,144 @@ async fn user_title_update_is_signed_on_authenticated_http() -> anyhow::Result<(
 }
 
 #[tokio::test]
+async fn user_rename_rebuilds_after_confirmed_http_commit_conflict() -> anyhow::Result<()> {
+    use crate::store::config_client::{
+        ConfigAccess, ConfigApplyTxn, GraphqlEndpoint, NodePermission,
+    };
+    use crate::store::identity::NodeIdentity;
+
+    let (db, user, access, binding) =
+        crate::test_support::signed_test_node("http-user-title-conflict").await;
+    let node_did = db.node_identity.did();
+    let session_id = "http-title-conflict-session";
+    crate::request::lifecycle::build_signed_client_request(
+        &access,
+        crate::request::lifecycle::RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            crate::request::lifecycle::RequestIdentity {
+                request_id: "http-title-conflict-request".into(),
+                node_did: node_did.into(),
+                requester_did: Some(user.did().into()),
+                agent_did: binding.agent_did,
+                session_id: session_id.into(),
+                content: "work".into(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: "2026-09-22T00:00:00Z".into(),
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+        ),
+        crate::request::lifecycle::RequestSigner::Identity(&user),
+    )
+    .await?;
+
+    let reader = tokio::task::spawn_blocking(|| {
+        crate::support::fixtures::test_identity("http-user-title-reader")
+    })
+    .await?;
+    let reader_did = identity::Did::new(reader.did())?;
+    let admin = ConfigAccess::local_as(db.node.clone(), identity::Did::new(node_did)?);
+    for permission in [
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::CollectionGet,
+    ] {
+        admin.grant_node_permission(&reader_did, permission).await?;
+    }
+    let before = access.execute(
+        r#"{ AgentSession(filter: {session_id: {_eq: "http-title-conflict-session"}}) {_docID title} }"#,
+    ).await?;
+    let doc = before["data"]["AgentSession"][0]["_docID"]
+        .as_str()
+        .unwrap();
+    access
+        .add_actor_relationship("AgentSession", doc, "reader", &reader_did)
+        .await?;
+    let reader_access = db.client_access(&reader);
+    let visible = reader_access.execute(
+        r#"{ AgentSession(filter: {session_id: {_eq: "http-title-conflict-session"}}) {_docID} }"#,
+    ).await?;
+    assert_eq!(visible["data"]["AgentSession"][0]["_docID"], doc);
+    let denied = super::rename_session_on(
+        &reader_access,
+        node_did,
+        user.did(),
+        session_id,
+        "unauthorized",
+    )
+    .await;
+    assert!(
+        denied.is_err(),
+        "a reader must not acquire update permission"
+    );
+    let after_denial = access.execute(
+        r#"{ AgentSession(filter: {session_id: {_eq: "http-title-conflict-session"}}) {_docID title} }"#,
+    ).await?;
+    assert_eq!(
+        after_denial["data"]["AgentSession"],
+        before["data"]["AgentSession"]
+    );
+
+    let missing_signer = ConfigAccess::Graphql(GraphqlEndpoint::as_principal(
+        db.client_endpoint(),
+        user.did(),
+    ));
+    let error = super::rename_session_on(
+        &missing_signer,
+        node_did,
+        user.did(),
+        session_id,
+        "untrusted",
+    )
+    .await
+    .unwrap_err();
+    assert!(error.chain().any(|cause| matches!(
+        cause.downcast_ref::<crate::store::config_client::ConfigClientError>(),
+        Some(crate::store::config_client::ConfigClientError::ClientAgentSignerRequired)
+    )));
+    let error =
+        super::rename_session_on(&access, node_did, user.did(), "missing-session", "missing")
+            .await
+            .unwrap_err();
+    assert!(error.to_string().contains("no AgentSession"), "{error:#}");
+
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let mut rename = Box::pin(ConfigApplyTxn::with_successful_mutation_pause_and_count(
+        1,
+        reached.clone(),
+        release.clone(),
+        super::rename_session_on(&access, node_did, user.did(), session_id, "final title"),
+    ));
+    tokio::select! {
+        () = reached.notified() => {}
+        result = &mut rename => panic!("rename finished before the staged update: {result:?}"),
+    }
+    super::rename_session_on(
+        &access,
+        node_did,
+        user.did(),
+        session_id,
+        "concurrent title",
+    )
+    .await?;
+    release.notify_one();
+    let (result, paused, updates) = rename.await;
+    assert!(paused);
+    result?;
+    assert_eq!(updates, 2, "the aborted signed update must be rebuilt once");
+
+    let response = access.execute(
+        r#"{ AgentSession(filter: {session_id: {_eq: "http-title-conflict-session"}}) {title _version {cid}} }"#,
+    ).await?;
+    let row = &response["data"]["AgentSession"][0];
+    assert_eq!(row["title"]["text"], "final title");
+    let cid = row["_version"][0]["cid"].as_str().expect("title version");
+    assert_eq!(db.node.verified_block_signer_did(cid).await?, user.did());
+    db.node.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn title_transitions_preserve_session_and_request_observation() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     node.add_collection(gents_protocol::schemas::AGENT_SESSION)
