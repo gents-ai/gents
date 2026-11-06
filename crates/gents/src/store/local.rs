@@ -3,6 +3,8 @@ pub mod backend_protection;
 mod backend_protection_tests;
 pub mod file_lock;
 pub mod home;
+#[cfg(test)]
+mod node_release_tests;
 pub(crate) mod plugin_delete_source;
 mod runtime_document_projection;
 pub mod storage_backend;
