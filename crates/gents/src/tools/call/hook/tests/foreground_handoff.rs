@@ -3,6 +3,65 @@ use gents_loop::session_hook::ForegroundResult;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
+#[tokio::test]
+async fn background_request_observation_uses_selected_agent_authority() {
+    use crate::tools::call::lifecycle::admission_fixture::{
+        published_admission_with_owner, PublishedAdmissionOptions,
+    };
+
+    let (admission, parent) = published_admission_with_owner(PublishedAdmissionOptions {
+        name: "foreground-actor-observation".into(),
+        tool_name: Some("bash".into()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let node = admission.node.clone();
+    let signer = admission.tool.managed_agent_signer().unwrap();
+    let access = admission.tool.access().unwrap();
+    let doc = admission.tool.doc_id().unwrap();
+    let mut hook = DefraSessionHook::with_identity(
+        node.clone(),
+        &admission.node_did,
+        FailurePolicy::default(),
+    );
+    hook.actor = Some(identity::Did::new(signer.did()).unwrap());
+    hook = hook.with_managed_identity(&signer).unwrap();
+
+    assert_eq!(hook.foreground_background_request(doc).await.unwrap(), None);
+    assert!(
+        crate::tools::background::status::request_foreground_backgrounding(
+            &access,
+            &admission.node_did,
+            &parent.request().session_id,
+            &parent.request().request_id,
+            admission.tool.tool_call_id(),
+        )
+        .await
+        .unwrap()
+    );
+    let expected = hook.foreground_background_request(doc).await.unwrap();
+    assert!(expected.is_some());
+
+    let node_view = crate::ConfigAccess::local(node.clone())
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+            crate::store::graphql::escape_graphql_string(doc),
+        ))
+        .await;
+    assert!(node_view.is_err() || node_view.unwrap()["data"]["AgentToolCall"] == json!([]));
+
+    let foreign = tokio::task::spawn_blocking(|| {
+        crate::support::fixtures::test_identity("foreground-observation-foreign")
+    })
+    .await
+    .unwrap();
+    hook.actor = Some(identity::Did::new(foreign.did()).unwrap());
+    hook.agent_signer = None;
+    assert!(hook.foreground_background_request(doc).await.is_err());
+    node.shutdown().await.unwrap();
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn foreground_background_handoff_keeps_the_same_process_after_parent_completion() {
