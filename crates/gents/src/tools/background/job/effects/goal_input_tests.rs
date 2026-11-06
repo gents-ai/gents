@@ -331,13 +331,9 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
         } else {
             None
         };
-        let requester = if remote {
-            caller.did()
-        } else if case["plugin"] == true {
-            f.identity.did()
-        } else {
-            f.agent.did()
-        };
+        // A local job child's session is requested by the job's own Agent,
+        // which signs the delivered request, as a staged spawn records it.
+        let requester = if remote { caller.did() } else { f.agent.did() };
         let access = f.agent_access();
         if case["existing"] == true {
             access
@@ -376,14 +372,23 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
                 })
                 .await
                 .unwrap();
+            // A delivered client request requires its existing session's
+            // relationships to be complete, as session creation records them.
             access
-                .add_resource_relationship(
-                    "AgentSession",
-                    &session_doc,
-                    "parent",
-                    "agents",
-                    &f.agent_doc_id,
-                )
+                .transact_write("test.delivery.session_relationships", |txn| {
+                    let session_doc = &session_doc;
+                    let agent_doc = &f.agent_doc_id;
+                    let agent = &f.agent;
+                    Box::pin(async move {
+                        crate::session::stage_created_session_relationships_in_txn(
+                            txn,
+                            session_doc,
+                            agent_doc,
+                            &identity::Did::new(agent.did())?,
+                        )
+                        .await
+                    })
+                })
                 .await
                 .unwrap();
             if remote {

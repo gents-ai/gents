@@ -590,15 +590,17 @@ mod tests {
         .unwrap()
     }
 
-    async fn stamp(node: &std::sync::Arc<EmbeddedNode>, doc_id: &str) -> Option<String> {
+    /// Reads the request's interrupt latch as `access`; an Agent-owned
+    /// request is visible only to its owning Agent's access.
+    async fn stamp(access: &ConfigAccess, doc_id: &str) -> Option<String> {
         let escaped = crate::store::graphql::escape_graphql_string(doc_id);
-        let response = node
+        let response = access
             .execute(&format!(
                 "{{AgentRequest(filter:{{_docID:{{_eq:\"{escaped}\"}}}}){{interrupt_requested_at}}}}"
             ))
-            .await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        response.data.unwrap()["AgentRequest"][0]["interrupt_requested_at"]
+            .await
+            .unwrap();
+        response["data"]["AgentRequest"][0]["interrupt_requested_at"]
             .as_str()
             .map(str::to_owned)
     }
@@ -620,7 +622,7 @@ mod tests {
             session_id: "child".into(),
             requester_did: None,
         };
-        assert!(stamp(&node, &child).await.is_none());
+        assert!(stamp(&ConfigAccess::local(node.clone()), &child).await.is_none());
         assert!(interrupt_slots(
             &node,
             &crate::ConfigAccess::local(node.clone()),
@@ -630,7 +632,7 @@ mod tests {
         )
         .await
         .is_err());
-        assert!(stamp(&node, &child).await.is_none());
+        assert!(stamp(&ConfigAccess::local(node.clone()), &child).await.is_none());
         node.shutdown().await.expect("shut down test node");
     }
 
@@ -692,6 +694,9 @@ mod tests {
         cause: SessionMessageCause,
         ctx: StepContext,
         row: StepRow,
+        /// The caller's managed Agent, which is also the `general` target.
+        agent: Arc<dyn crate::store::identity::NodeIdentity>,
+        runtime: Arc<dyn crate::store::identity::NodeIdentity>,
     }
 
     async fn harness(name: &str) -> Harness {
@@ -721,7 +726,19 @@ mod tests {
             tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
             correlation: None,
         };
-        let ctx = context(&admission.node_did);
+        let stored = crate::load_agent(&admission.node, &caller.agent_did)
+            .await
+            .unwrap()
+            .expect("caller Agent");
+        let agent = crate::store::identity::resolve_agent_identity(
+            admission.runtime.as_ref(),
+            &gents_protocol::agent_identity::AgentIdentityBinding {
+                agent_did: stored.agent_did,
+                creation_nonce: stored.creation_nonce,
+            },
+        )
+        .unwrap();
+        let ctx = context(&admission.node_did, &caller.agent_did);
         // Child session creation verifies each spawn against the job row's
         // pin, so the harness job is its own chain root with that pin stored.
         let mut row = running_row();
@@ -748,6 +765,8 @@ mod tests {
             cause,
             ctx,
             row,
+            agent,
+            runtime: admission.runtime.clone(),
         }
     }
 
@@ -803,7 +822,9 @@ mod tests {
         }
     }
 
-    fn context(node_did: &str) -> StepContext {
+    /// Target id `general` names the caller's own Agent: a child session's
+    /// relationships are staged from that Agent's stored document.
+    fn context(node_did: &str, agent_did: &str) -> StepContext {
         StepContext {
             live: ceiling(),
             available: true,
@@ -817,10 +838,10 @@ mod tests {
             engine_digest: "engine".to_owned(),
             engine_provenance_operator: true,
             max_hop: Some(8),
-            target_hops: vec![((node_did.to_owned(), "general".to_owned()), 0)],
+            target_hops: vec![((node_did.to_owned(), agent_did.to_owned()), 0)],
             target_ids: vec![(
                 "general".to_owned(),
-                (node_did.to_owned(), "general".to_owned()),
+                (node_did.to_owned(), agent_did.to_owned()),
             )],
             live_background: 0,
             started_by_job: false,
@@ -977,23 +998,9 @@ mod tests {
 
     #[tokio::test]
     async fn signed_staged_slot_can_be_interrupted_only_by_its_caller() {
-        let mut harness = harness("job-slot-authority").await;
-        harness.cause.caller_session_id = "session-job-slot-authority".into();
-        harness.cause.caller_agent_did = "general".into();
-        harness.row.root = harness.cause.tool_call_doc_id.clone();
-        harness.row.row_doc_id = harness.row.root.clone();
-        let mut job_pin = pin();
-        job_pin.chain_root_doc_id = harness.row.root.clone();
-        harness.access.transact_write("test.job_slot_pin", |txn| {
-            let doc = &harness.row.root;
-            let pin = &job_pin;
-            Box::pin(async move {
-                crate::tools::background::job::records::write_pin_in_txn(txn, doc, pin).await
-            })
-        })
-        .await
-        .unwrap();
-        let child = spawn("worker", 0, "work", "Worker", None);
+        let harness = harness("job-slot-authority").await;
+        // The claim admits the child's cwd from disk, so it must exist.
+        let child = spawn("worker", 0, "work", "Worker", harness.path.to_str());
         stage(
             &harness,
             std::slice::from_ref(&child),
@@ -1015,32 +1022,49 @@ mod tests {
             .unwrap();
         let row: gents_protocol::row::AgentRequestRow =
             serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+        // The child is client-admitted by the job's Agent; its claim carries
+        // the verified admission, as the request watcher's does.
+        let (_authority_owner, authority) =
+            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+        let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+            harness.node.clone(),
+            harness.runtime.clone(),
+            authority,
+        );
+        let (request, admission) = verifier
+            .verify_fresh_for_claim_with_identity(&row.try_into().unwrap(), harness.agent.as_ref())
+            .await
+            .unwrap();
         let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
             harness.node.clone(),
-            "general",
+            &harness.cause.caller_agent_did,
             &harness.cause.caller_node_did,
-            row.try_into().unwrap(),
+            request,
             60,
         );
+        lifecycle.bind_managed_agent(harness.agent.as_ref()).unwrap();
+        lifecycle.set_client_claim_admission(admission);
         assert_eq!(
-            lifecycle.claim().await.unwrap(),
+            lifecycle.claim_with_identity().await.unwrap(),
             crate::request::lifecycle::ClaimOutcome::Claimed
         );
-        let writer = crate::request::streaming::DefraStreamWriter::new(
+        let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
             harness.node.clone(),
-            &harness.cause.caller_node_did,
+            &lifecycle,
             std::time::Duration::ZERO,
-        );
+        )
+        .unwrap();
         lifecycle.begin_owned_execution(&writer).await.unwrap();
         let caller = SessionScope {
             node_did: harness.cause.caller_node_did.clone(),
             session_id: harness.cause.caller_session_id.clone(),
-            requester_did: Some(harness.cause.caller_node_did.clone()),
+            requester_did: harness.cause.caller_requester_did.clone(),
         };
+        // The job's Agent signs its child, so it is the child's requester.
         let target = SessionScope {
             node_did: harness.cause.caller_node_did.clone(),
             session_id: job_session_id(&harness.row.root, "worker", 0),
-            requester_did: Some(harness.cause.caller_node_did.clone()),
+            requester_did: Some(harness.cause.caller_agent_did.clone()),
         };
         let foreign = SessionScope {
             session_id: "other-session".into(),
@@ -1055,7 +1079,7 @@ mod tests {
         )
         .await
         .is_err());
-        assert!(stamp(&harness.node, doc).await.is_none());
+        assert!(stamp(&harness.access, doc).await.is_none());
         interrupt_slots(
             &harness.node,
             &harness.access,
@@ -1065,7 +1089,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let latched = stamp(&harness.node, doc).await;
+        let latched = stamp(&harness.access, doc).await;
         assert!(latched.is_some());
         interrupt_slots(
             &harness.node,
@@ -1076,7 +1100,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(stamp(&harness.node, doc).await, latched);
+        assert_eq!(stamp(&harness.access, doc).await, latched);
         harness.close().await;
     }
 
@@ -1127,22 +1151,24 @@ mod tests {
         .await
         .unwrap();
         let lost = || anyhow::anyhow!("commit acknowledgement lost");
-        super::recover_step_commit(&harness.node, None, lost(), &staged)
+        // Production recovers as the job's caller Agent, which owns the children.
+        let caller = || Some(identity::Did::new(harness.cause.caller_agent_did.clone()).unwrap());
+        super::recover_step_commit(&harness.node, caller(), lost(), &staged)
             .await
             .unwrap();
         let mut absent = staged.clone();
         absent[0].retry_key = Some(job_spawn_key(&harness.row.root, "never", 0));
-        let error = super::recover_step_commit(&harness.node, None, lost(), &absent)
+        let error = super::recover_step_commit(&harness.node, caller(), lost(), &absent)
             .await
             .unwrap_err();
         assert_eq!(error.to_string(), "commit acknowledgement lost");
-        let error = super::recover_step_commit(&harness.node, None, lost(), &[])
+        let error = super::recover_step_commit(&harness.node, caller(), lost(), &[])
             .await
             .unwrap_err();
         assert_eq!(error.to_string(), "commit acknowledgement lost");
         let mut changed = staged.clone();
         changed[0].content = "second".to_owned();
-        let error = super::recover_step_commit(&harness.node, None, lost(), &changed)
+        let error = super::recover_step_commit(&harness.node, caller(), lost(), &changed)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("integrity"), "{error:#}");
@@ -1209,12 +1235,25 @@ mod tests {
     #[tokio::test]
     async fn message_k_is_one_plus_the_admitted_messages_of_the_slot_attempt() {
         let harness = harness("job-stage-message").await;
+        // A message is delivered into the slot attempt's existing session.
+        let opened = spawn("slot", 0, "first", "Slot", None);
+        stage(
+            &harness,
+            std::slice::from_ref(&opened),
+            &job_effects(vec![opened.clone()], Vec::new()),
+            &harness.row,
+        )
+        .await
+        .unwrap();
         let mut row = harness.row.clone();
         row.children.push(StepChild {
             retry_key: job_spawn_key(&harness.row.root, "slot", 0),
             slot: "slot".to_owned(),
             attempt: 0,
-            target: (harness.cause.caller_node_did.clone(), "general".to_owned()),
+            target: (
+                harness.cause.caller_node_did.clone(),
+                harness.cause.caller_agent_did.clone(),
+            ),
             state: JobChildState::Live,
             messages: 2,
         });
