@@ -150,9 +150,8 @@ impl ClientCore {
             let (store, _store_updates) = ObservedStore::new(initial_snapshot);
             checkpoint("initial_snapshot");
 
-            let p2p = node
-                .p2p_arc()
-                .context("desktop node started without P2P support")?;
+            let p2p = gents::store::identity::node_p2p(&node)
+                .context("desktop node started without identity-bound P2P support")?;
             let local_peer_id = p2p_local_peer_id(&p2p)
                 .await
                 .context("reading desktop P2P peer id")?;

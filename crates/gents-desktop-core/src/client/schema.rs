@@ -12,8 +12,9 @@ pub async fn ensure_schemas(node: &EmbeddedNode) -> Result<()> {
 }
 
 pub async fn subscribe_all_collections(node: &EmbeddedNode) -> Result<()> {
-    let p2p = node.p2p().context("desktop node missing P2P support")?;
-    subscribe_runtime_collections(p2p).await
+    let p2p = gents::store::identity::node_p2p(node)
+        .context("desktop node missing identity-bound P2P support")?;
+    subscribe_runtime_collections(p2p.as_ref()).await
 }
 
 pub(crate) async fn subscribe_runtime_collections(
