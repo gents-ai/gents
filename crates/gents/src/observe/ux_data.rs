@@ -321,18 +321,19 @@ impl UxDataWatch {
     }
 }
 
-/// The caller must authenticate the node operator. Subscription precedes the
-/// initial read so a concurrent change remains pending for the next read.
+/// The caller must authenticate the runtime Node DID as operator. Subscription
+/// precedes the initial read so a concurrent change remains pending for the next read.
 pub async fn watch_local(
     home: &Path,
     node: Arc<crate::defra_node::Node>,
     request: UxDataCall,
 ) -> Result<UxDataWatch> {
+    let node_did = node.node_identity_did().context("runtime Node identity is unavailable")?;
     anyhow::ensure!(
-        node.node_identity_did() == Some(request.node_did.as_str()),
+        node_did == request.node_did,
         "selected node does not own this runtime"
     );
-    let access = ConfigAccess::local(node.clone());
+    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(node_did)?);
     let declaration = watch_declaration(home, &access, &request).await?;
     let changes = crate::subscribe_collections(
         &node,
