@@ -951,16 +951,55 @@ mod tests {
 
     use super::*;
 
-    const TEST_NODE_DID: &str = "did:test:claim-order-test";
+    fn test_node_did() -> String {
+        use crate::store::identity::NodeIdentity as _;
+        crate::triggers::callback::test_root_identity()
+            .did()
+            .to_owned()
+    }
     fn test_agent_did() -> String {
         crate::triggers::callback::test_agent_did()
     }
     const TEST_BACKEND_ID: &str = "backend-order";
 
     async fn test_node() -> Arc<EmbeddedNode> {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        // The node must run under the fixture root so that the managed Agent
+        // signer bound by `test_lifecycle` names this node.
+        let root = test_node_did();
+        let node = Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(root.as_str())
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         node
+    }
+
+    fn test_lifecycle(
+        node: Arc<EmbeddedNode>,
+        agent_did: &str,
+        node_did: &str,
+        request: AgentRequest,
+        deadline_duration_secs: u64,
+        execution_origin: ExecutionOrigin,
+        backend_id: &str,
+    ) -> RequestLifecycle {
+        let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+            node,
+            agent_did,
+            node_did,
+            request,
+            deadline_duration_secs,
+            execution_origin,
+            backend_id,
+        );
+        let agent = crate::triggers::callback::test_agent_identity();
+        lifecycle
+            .bind_managed_agent(agent.as_ref())
+            .expect("bind the fixture managed Agent signer");
+        lifecycle
     }
 
     #[tokio::test]
@@ -1064,7 +1103,7 @@ mod tests {
     ) -> AgentRequest {
         insert_pending_request_for_owner(
             node,
-            TEST_NODE_DID,
+            &test_node_did(),
             request_id,
             session_id,
             created_at,
@@ -1164,10 +1203,10 @@ mod tests {
         )
         .await;
         let doc_id = request.doc_id.clone();
-        let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        let mut lifecycle = test_lifecycle(
             node.clone(),
             &test_agent_did(),
-            TEST_NODE_DID,
+            &test_node_did(),
             request,
             60,
             ExecutionOrigin::Interactive,
@@ -1320,7 +1359,7 @@ mod tests {
         let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
         let queue_cases = contract["trigger_delivery"]["queues"].as_array().unwrap();
         let identity = |source_doc_id: &str| gents_protocol::trigger_delivery::FireIdentity {
-            owner_did: TEST_NODE_DID.into(),
+            owner_did: test_node_did().into(),
             trigger_id: "serial-trigger".into(),
             source_collection: "Work".into(),
             source_doc_id: source_doc_id.into(),
@@ -1442,9 +1481,18 @@ mod tests {
             for task_budget in [None, Some(50)] {
                 let node = test_node().await;
                 let session = "task-goal-session";
+                crate::session::ensure_session_with_agent_did_and_requester_did(
+                    &node,
+                    session,
+                    &test_node_did(),
+                    &test_agent_did(),
+                    None,
+                )
+                .await
+                .unwrap();
                 let original = crate::goal::set_goal(
                     &node,
-                    TEST_NODE_DID,
+                    &test_node_did(),
                     session,
                     Some("finish original work"),
                     Some(crate::goal::GoalStatus::Active),
@@ -1473,7 +1521,7 @@ mod tests {
                 .await;
                 let assigned_doc_id = second.doc_id.clone();
                 let receipt = serde_json::json!({
-                    "fire_key": "task-goal-fire", "owner_did": TEST_NODE_DID,
+                    "fire_key": "task-goal-fire", "owner_did": test_node_did(),
                     "task_id": "goal-task", "created_at": "2026-01-01T00:00:01Z",
                     "trigger_id": "task-goal-trigger", "source_collection": "Work",
                     "source_doc_id": "assignment", "request_id": second.request_id,
@@ -1489,19 +1537,19 @@ mod tests {
                 Ok::<_, anyhow::Error>(())
             })
         }).await.unwrap();
-                let mut first_lifecycle = RequestLifecycle::new_with_execution_binding(
+                let mut first_lifecycle = test_lifecycle(
                     node.clone(),
                     &test_agent_did(),
-                    TEST_NODE_DID,
+                    &test_node_did(),
                     first,
                     60,
                     ExecutionOrigin::Interactive,
                     TEST_BACKEND_ID,
                 );
-                let mut second_lifecycle = RequestLifecycle::new_with_execution_binding(
+                let mut second_lifecycle = test_lifecycle(
                     node.clone(),
                     &test_agent_did(),
-                    TEST_NODE_DID,
+                    &test_node_did(),
                     second,
                     60,
                     ExecutionOrigin::Interactive,
@@ -1520,7 +1568,7 @@ mod tests {
                         .unwrap(),
                     DurableClaimOutcome::NotClaimed(ClaimOutcome::Queued)
                 ));
-                let unchanged = crate::goal::load_canonical_goal(&node, TEST_NODE_DID, session)
+                let unchanged = crate::goal::load_canonical_goal(&node, &test_node_did(), session)
                     .await
                     .unwrap()
                     .unwrap();
@@ -1532,10 +1580,11 @@ mod tests {
                 let finish = format!(
                     r#"mutation {{
             update_AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, input: {{lifecycle_state: "completed"}}) {{_docID}}
-            create_InferenceCall(input: {{call_id: "prior-usage", request_doc_id: "{}", request_id: "prior-request", node_did: "{TEST_NODE_DID}", backend_id: "test-backend", call_state: "completed", prompt_tokens: 100, completion_tokens: 0}}) {{_docID}}
+            create_InferenceCall(input: {{call_id: "prior-usage", request_doc_id: "{}", request_id: "prior-request", node_did: "{}", backend_id: "test-backend", call_state: "completed", prompt_tokens: 100, completion_tokens: 0}}) {{_docID}}
         }}"#,
                     escape_graphql_string(&first_doc_id),
-                    escape_graphql_string(&first_doc_id)
+                    escape_graphql_string(&first_doc_id),
+                    test_node_did(),
                 );
                 crate::store::config_client::ConfigAccess::transact_local_write(
                     &node,
@@ -1554,7 +1603,7 @@ mod tests {
                 if stopped {
                     crate::goal::set_goal(
                         &node,
-                        TEST_NODE_DID,
+                        &test_node_did(),
                         session,
                         None,
                         Some(crate::goal::GoalStatus::Complete),
@@ -1568,7 +1617,7 @@ mod tests {
                     .await
                     .unwrap()
                     .was_claimed());
-                let assigned = crate::goal::load_canonical_goal(&node, TEST_NODE_DID, session)
+                let assigned = crate::goal::load_canonical_goal(&node, &test_node_did(), session)
                     .await
                     .unwrap()
                     .unwrap();
@@ -1637,7 +1686,7 @@ mod tests {
         for request in [&first, &second] {
             let input = serde_json::json!({
                 "fire_key": format!("test-fire:{}", request.request_id),
-                "owner_did": TEST_NODE_DID,
+                "owner_did": test_node_did(),
                 "trigger_id": "queued-serial-trigger",
                 "source_collection": "Work",
                 "source_doc_id": request.request_id,
@@ -1661,19 +1710,19 @@ mod tests {
         }
         let first_doc_id = first.doc_id.clone();
         let second_doc_id = second.doc_id.clone();
-        let mut first_lifecycle = RequestLifecycle::new_with_execution_binding(
+        let mut first_lifecycle = test_lifecycle(
             node.clone(),
             &test_agent_did(),
-            TEST_NODE_DID,
+            &test_node_did(),
             first,
             60,
             ExecutionOrigin::Interactive,
             TEST_BACKEND_ID,
         );
-        let mut second_lifecycle = RequestLifecycle::new_with_execution_binding(
+        let mut second_lifecycle = test_lifecycle(
             node.clone(),
             &test_agent_did(),
-            TEST_NODE_DID,
+            &test_node_did(),
             second,
             60,
             ExecutionOrigin::Interactive,
@@ -1748,19 +1797,19 @@ mod tests {
         )
         .await;
 
-        let mut first_lifecycle = RequestLifecycle::new_with_execution_binding(
+        let mut first_lifecycle = test_lifecycle(
             node.clone(),
             &test_agent_did(),
-            TEST_NODE_DID,
+            &test_node_did(),
             first,
             60,
             ExecutionOrigin::Interactive,
             TEST_BACKEND_ID,
         );
-        let mut second_lifecycle = RequestLifecycle::new_with_execution_binding(
+        let mut second_lifecycle = test_lifecycle(
             node.clone(),
             &test_agent_did(),
-            TEST_NODE_DID,
+            &test_node_did(),
             second,
             60,
             ExecutionOrigin::Interactive,
@@ -1933,7 +1982,7 @@ mod tests {
         .await;
 
         let request_doc_id = request.doc_id.clone();
-        let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        let mut lifecycle = test_lifecycle(
             node.clone(),
             &test_agent_did(),
             identity.did(),
@@ -2072,7 +2121,7 @@ mod tests {
             .await
             .unwrap();
         let doc_id = request.doc_id.clone();
-        let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        let mut lifecycle = test_lifecycle(
             node.clone(),
             &test_agent_did(),
             identity.did(),
@@ -2131,10 +2180,10 @@ mod tests {
             )
             .await;
             request.max_total_tokens = Some(999);
-            let mut first = RequestLifecycle::new_with_execution_binding(
+            let mut first = test_lifecycle(
                 node.clone(),
                 &test_agent_did(),
-                TEST_NODE_DID,
+                &test_node_did(),
                 request,
                 3600,
                 ExecutionOrigin::Interactive,
@@ -2166,10 +2215,10 @@ mod tests {
             .await
             .unwrap();
             resumed_request.max_total_tokens = expected;
-            let mut resumed = RequestLifecycle::new_with_execution_binding(
+            let mut resumed = test_lifecycle(
                 node.clone(),
                 &test_agent_did(),
-                TEST_NODE_DID,
+                &test_node_did(),
                 resumed_request,
                 3600,
                 ExecutionOrigin::Interactive,
