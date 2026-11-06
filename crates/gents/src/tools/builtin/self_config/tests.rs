@@ -7670,6 +7670,7 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
     let fixture = SelfConfigFixture::new("native-pack-refusals").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
+    fixture.publish_workspace_root(workspace.path()).await;
     let mut cfg = config(&["tools"]);
     cfg.agent_did = fixture.agent_did().to_owned();
     cfg.enable_pack_install = true;
@@ -8015,6 +8016,7 @@ async fn pack_tool_with_local_read(
     let fixture = SelfConfigFixture::new(label).await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
+    fixture.publish_workspace_root(root).await;
     let mut tool_config = config(&["tools"]);
     tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.enable_pack_install = true;
