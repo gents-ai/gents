@@ -723,7 +723,9 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
         crate::tools::workspace::isolated_workspace_upsert_mutation(&workspace),
         crate::tools::workspace::workspace_placement_upsert_mutation(&placement, &updated_at),
     ] {
-        ConfigAccess::write_local(&harness.node, "test.task_hook_workspace", &mutation)
+        harness
+            .agent_access
+            .write("test.task_hook_workspace", &mutation)
             .await
             .expect("install isolated workspace and placement");
     }
@@ -732,17 +734,16 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
 async fn workspace_bindings(
     harness: &Harness,
 ) -> Vec<crate::tools::workspace::WorkspaceBindingDoc> {
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        &harness.node,
+    let response = harness.agent_access.execute(
         &format!(
             r#"{{ WorkspaceBinding(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ binding_id workspace_id request_id request_doc_id authority owner_node_did seal_hash lifecycle_state }} }}"#,
             crate::store::graphql::escape_graphql_string(WORKSPACE_ID),
             crate::store::graphql::escape_graphql_string(harness.owner()),
         ),
-        "test.task_hook_bindings",
     )
     .await
     .unwrap();
+    let response: query::QueryResponse = serde_json::from_value(response).unwrap();
     crate::store::graphql::rows(&response, "WorkspaceBinding").unwrap()
 }
 
@@ -775,8 +776,7 @@ async fn claim_admission_rejection_releases_the_bound_workspace() {
         .await
         .iter()
         .any(|binding| binding.is_active_read_write()));
-    ConfigAccess::write_local(
-        &harness.node,
+    harness.agent_access.write(
         "test.remove_workspace_placement",
         &format!(
             r#"mutation {{ delete_WorkspacePlacement(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
@@ -1022,8 +1022,7 @@ async fn losing_the_lease_mid_work_skips_after_failure_and_still_cleans_up() {
         while harness.calls() == 0 {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        ConfigAccess::write_local(
-            &harness.node,
+        harness.agent_access.write(
             "test.replace_task_hook_generation",
             &format!(
                 r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
@@ -1183,8 +1182,7 @@ impl Harness {
             while !marker.exists() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            ConfigAccess::write_local(
-                &self.node,
+            self.agent_access.write(
                 "test.supersede_task_hook_execution",
                 &format!(
                     r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
@@ -1293,7 +1291,7 @@ async fn revocation_between_hooks_is_checked_before_the_next_renewal_poll() {
         while !harness.mark("ready").exists() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        ConfigAccess::write_local(&harness.node, "test.revoke_between_task_hooks", &format!(
+        harness.agent_access.write("test.revoke_between_task_hooks", &format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
             crate::store::graphql::escape_graphql_string(&doc_id)
         )).await.unwrap();
