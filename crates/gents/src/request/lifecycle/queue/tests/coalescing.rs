@@ -117,11 +117,12 @@ async fn atomic_background_completion_ignores_append_row_with_same_source_and_ke
         interrupted_request_id: None,
         background_completion_wake_version: None,
     };
-    insert_raw_queue_request(
+    insert_runtime_queue_request(
         &db,
+        &parent,
         "req-existing-append-same-key",
-        session_id,
-        &wake_queue_input(append_hints.clone()),
+        "raw duplicate",
+        wake_queue_input(append_hints.clone()),
     )
     .await;
     let coalesce_hints = RequestQueue {
@@ -194,36 +195,23 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
         .unwrap()
         .request
         .expect("non-Goal wake");
-    let duplicate = session_request_create_mutation(
+    let duplicate_doc_id = insert_runtime_queue_request(
+        &db,
         &parent,
-        SessionRequestFields {
-            agent_did: db.agent_did(),
-            content: "raw duplicate",
-            execution_origin: ExecutionOrigin::Scheduled,
-            input: wake_queue_input(hints.clone()),
-            request_id: "req-coalesce-race-duplicate",
-            created_at: &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            retry_key: None,
-        },
+        "req-coalesce-race-duplicate",
+        "raw duplicate",
+        wake_queue_input(hints.clone()),
     )
-    .await
-    .unwrap();
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        &db.node,
-        "test.signed_duplicate_wake",
-        &duplicate,
-    )
-    .await
-    .unwrap();
-    let duplicate_doc_id = extract_single_doc_id(&response, "create_AgentRequest").unwrap();
+    .await;
 
-    let reconciled = reconcile_coalesced_pending_request(
-        &db.node,
+    let reconciled = reconcile_coalesced_pending_request_for_with_access(
+        (&db.node, &db.agent_access),
         db.agent_did(),
         session_id,
         db.node_did(),
         QueueSource::BackgroundCompletion,
         &key,
+        None,
     )
     .await
     .unwrap()

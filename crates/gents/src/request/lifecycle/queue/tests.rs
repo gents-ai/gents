@@ -248,6 +248,68 @@ async fn insert_raw_queue_request(
         .expect("raw queue create returns _docID")
 }
 
+async fn insert_runtime_queue_request(
+    db: &TestDb,
+    parent: &AgentRequest,
+    request_id: &str,
+    content: &str,
+    input: RequestInput,
+) -> String {
+    let signer = db.agent_identity.managed_agent_signer().unwrap();
+    let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mutation = super::mutation::session_request_create_mutation_at_hop_with_signer(
+        parent,
+        parent.request_hop,
+        SessionRequestFields {
+            agent_did: db.agent_did(),
+            content,
+            execution_origin: ExecutionOrigin::Scheduled,
+            input,
+            request_id,
+            created_at: &created_at,
+            retry_key: None,
+        },
+        Some(&signer),
+    )
+    .await
+    .unwrap();
+    let agent = escape_graphql_string(db.agent_did());
+    let session = escape_graphql_string(&parent.session_id);
+    let node = escape_graphql_string(db.node_did());
+    let targets = db.agent_access.execute(&format!(
+        r#"{{ Agent(filter: {{agent_did: {{_eq: "{agent}"}}}}, limit: 1) {{_docID}} AgentSession(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}}}, limit: 1) {{_docID}} }}"#,
+    )).await.unwrap();
+    let agent_doc = targets["data"]["Agent"][0]["_docID"].as_str().unwrap();
+    let session_doc = targets["data"]["AgentSession"][0]["_docID"]
+        .as_str()
+        .unwrap();
+    let actor = identity::Did::new(db.agent_did()).unwrap();
+    db.agent_access
+        .transact_write("test.runtime_queue_fixture", |txn| {
+            let mutation = &mutation;
+            let actor = &actor;
+            Box::pin(async move {
+                let response = txn.execute(mutation).await?;
+                let doc = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                txn.add_actor_relationship("AgentRequest", &doc, "working_agent", actor)
+                    .await?;
+                txn.add_resource_relationship("AgentRequest", &doc, "parent", "agents", agent_doc)
+                    .await?;
+                txn.add_resource_relationship(
+                    "AgentRequest",
+                    &doc,
+                    "session",
+                    "sessions",
+                    session_doc,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await
+        .unwrap()
+}
+
 async fn insert_signed_queue_request(
     db: &TestDb,
     request_id: &str,
