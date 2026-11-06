@@ -1252,13 +1252,32 @@ async fn an_upgrade_that_drops_a_documents_dependency_releases_it() {
     install_dependent_with_dependee(&access, &node, &runtime, &dependee, &dependent, None).await;
     let agents = access.execute("{ Agent { agent_did } }").await.unwrap();
     let before = agents["data"]["Agent"].as_array().unwrap().len();
+    let (prior, dependency) = access
+        .transact_readonly("test.pack.previous_bindings", |txn| {
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>((
+                    read_record(txn, owner, "fixture/dependent_fixture").await?,
+                    read_record(txn, owner, "fixture/dependee_fixture").await?,
+                ))
+            })
+        })
+        .await
+        .unwrap();
+    let dependency_agent = dependency.agent_bindings["fixture-dependee"]
+        .agent_did
+        .clone();
+    assert!(agents["data"]["Agent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|agent| agent["agent_did"] == dependency_agent));
 
     super::super::install_pack_documents(
         &access,
         owner,
         &PackIdentity {
-            installation_doc_id: None,
-            agent_bindings: BTreeMap::new(),
+            installation_doc_id: prior.doc_id,
+            agent_bindings: prior.agent_bindings,
             coordinate: "fixture/dependent_fixture".into(),
             version: "2".into(),
             digest: format!("sha256:{}", "2".repeat(64)),
@@ -1288,6 +1307,11 @@ async fn an_upgrade_that_drops_a_documents_dependency_releases_it() {
         agents["data"]["Agent"].as_array().unwrap().len() < before,
         "the released dependency's own documents are removed: {agents}"
     );
+    assert!(agents["data"]["Agent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|agent| agent["agent_did"] != dependency_agent));
 }
 
 #[tokio::test]
