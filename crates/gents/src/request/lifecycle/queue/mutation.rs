@@ -19,16 +19,15 @@ pub(super) struct SessionRequestFields<'a> {
 pub(super) async fn session_request_create_mutation(
     parent: &AgentRequest,
     fields: SessionRequestFields<'_>,
+    signer: &crate::store::identity::ManagedAgentSigner,
 ) -> Result<String> {
-    session_request_create_mutation_at_hop(parent, parent.request_hop, fields).await
-}
-
-pub(super) async fn session_request_create_mutation_at_hop(
-    parent: &AgentRequest,
-    hop: u32,
-    fields: SessionRequestFields<'_>,
-) -> Result<String> {
-    session_request_create_mutation_at_hop_with_signer(parent, hop, fields, None).await
+    session_request_create_mutation_at_hop_with_signer(
+        parent,
+        parent.request_hop,
+        fields,
+        Some(signer),
+    )
+    .await
 }
 
 pub(super) async fn session_request_create_mutation_at_hop_with_signer(

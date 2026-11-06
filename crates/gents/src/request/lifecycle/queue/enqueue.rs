@@ -6,6 +6,7 @@ pub async fn enqueue_local_steering_request(
     parent_request_doc_id: &str,
     content: &str,
     input: RequestInput,
+    signer: &crate::store::identity::ManagedAgentSigner,
 ) -> Result<EnqueuedAgentRequest> {
     let parent = crate::request::binding::load_agent_request_by_doc_id(node, parent_request_doc_id)
         .await?
@@ -14,7 +15,7 @@ pub async fn enqueue_local_steering_request(
         parent.request_id == parent_request_id,
         "steering parent request changed logical binding"
     );
-    enqueue_steering_request(node, &parent, content, input).await
+    enqueue_steering_request(node, &parent, content, input, signer).await
 }
 
 pub(crate) async fn enqueue_steering_request(
@@ -22,6 +23,7 @@ pub(crate) async fn enqueue_steering_request(
     parent: &AgentRequest,
     content: &str,
     input: RequestInput,
+    signer: &crate::store::identity::ManagedAgentSigner,
 ) -> Result<EnqueuedAgentRequest> {
     let queue = input
         .queue
@@ -38,15 +40,21 @@ pub(crate) async fn enqueue_steering_request(
         "steering enqueue must not carry the background wake marker"
     );
     let agent_did = parent_agent_did(parent)?;
+    anyhow::ensure!(
+        signer.did() == parent.agent_did,
+        "steering signer differs from parent Agent"
+    );
     let request_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let (agent_did, content, input, request_id, now) =
         (&agent_did, content, &input, &request_id, &now);
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        Some(identity::Did::new(parent.agent_did.clone())?),
-        "lifecycle.enqueue_steering",
-        move |txn| {
+    let access = crate::store::config_client::ConfigAccess::local_with_agent_signer(
+        node.clone(),
+        identity::Did::new(parent.agent_did.clone())?,
+        signer.clone(),
+    )?;
+    access
+        .transact_write("lifecycle.enqueue_steering", move |txn| {
             Box::pin(async move {
                 // Read the session's current hop under the write gate so a
                 // higher append committed first is never missed.
@@ -56,7 +64,7 @@ pub(crate) async fn enqueue_steering_request(
                     &parent.session_id,
                 )
                 .await?;
-                let mutation = session_request_create_mutation_at_hop(
+                let mutation = session_request_create_mutation_at_hop_with_signer(
                     parent,
                     hop,
                     SessionRequestFields {
@@ -68,11 +76,11 @@ pub(crate) async fn enqueue_steering_request(
                         created_at: now,
                         retry_key: None,
                     },
+                    Some(signer),
                 )
                 .await?;
                 steering_transaction_attempt(txn, parent, request_id, &mutation).await
             })
-        },
-    )
-    .await
+        })
+        .await
 }
