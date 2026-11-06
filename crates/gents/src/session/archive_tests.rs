@@ -416,6 +416,14 @@ async fn authenticated_http_archive_uses_the_same_durable_transaction_owner() ->
                 .await?;
         }
     }
+    // Block signature verification reads the signed block as the node identity,
+    // so the runtime must hold document read to verify the session's update.
+    node.add_nac_actor_relationship_as(
+        &context,
+        acp::nac::NodePermission::DocumentRead.as_str(),
+        runtime.did(),
+    )
+    .await?;
     let client = |identity: &crate::KeyIdentity| -> Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
             crate::store::config_client::GraphqlEndpoint::as_principal(&endpoint, identity.did())
