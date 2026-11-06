@@ -508,7 +508,7 @@ mod turn_assignment_tests {
         .unwrap();
         let node = &admission.node;
         let did = &admission.node_did;
-        let session = caused_session_id(node, &caused_request_doc_id).await;
+        let session = caused_session_id(&admission.tool.access().unwrap(), &caused_request_doc_id).await;
         let head_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         let create = format!(
@@ -879,7 +879,7 @@ mod turn_assignment_tests {
         crate::goal::set_goal_from_access(
             &admission.tool.access().unwrap(),
             did,
-            &caused_session_id(node, &caused_request_doc_id).await,
+            &caused_session_id(&admission.tool.access().unwrap(), &caused_request_doc_id).await,
             Some("hold"),
             Some(crate::goal::GoalStatus::Active),
             None,
@@ -888,7 +888,6 @@ mod turn_assignment_tests {
         .await
         .expect("persist an active Goal in the caused session");
         bind_caused_assignment(
-            node,
             &admission.tool.access().unwrap(),
             did,
             &caused_request_doc_id,
@@ -1044,7 +1043,7 @@ mod turn_assignment_tests {
         crate::goal::set_goal_from_access(
             &admission.tool.access().unwrap(),
             did,
-            &caused_session_id(node, &caused_request_doc_id).await,
+            &caused_session_id(&admission.tool.access().unwrap(), &caused_request_doc_id).await,
             Some("done"),
             Some(crate::goal::GoalStatus::Complete),
             None,
@@ -1053,7 +1052,6 @@ mod turn_assignment_tests {
         .await
         .expect("persist a complete Goal in the caused session");
         bind_caused_assignment(
-            node,
             &admission.tool.access().unwrap(),
             did,
             &caused_request_doc_id,
@@ -1128,7 +1126,7 @@ mod turn_assignment_tests {
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
         let session_id = admission.tool.session_id().to_owned();
         crate::test_support::install_test_agent(node, did, "general").await;
-        let goal_session_id = caused_session_id(node, &caused_request_doc_id).await;
+        let goal_session_id = caused_session_id(&admission.tool.access().unwrap(), &caused_request_doc_id).await;
         crate::goal::set_goal_from_access(
             &admission.tool.access().unwrap(),
             did,
@@ -1141,7 +1139,6 @@ mod turn_assignment_tests {
         .await
         .expect("persist an active Goal in the caused session");
         bind_caused_assignment(
-            node,
             &admission.tool.access().unwrap(),
             did,
             &caused_request_doc_id,
@@ -1322,12 +1319,11 @@ mod turn_assignment_tests {
     }
 
     async fn bind_caused_assignment(
-        node: &Arc<EmbeddedNode>,
         access: &crate::ConfigAccess,
         did: &str,
         request_doc: &str,
     ) {
-        let session = caused_session_id(node, request_doc).await;
+        let session = caused_session_id(access, request_doc).await;
         let goal = access
             .transact_readonly("test.load_caused_goal", |txn| {
                 Box::pin(crate::goal::load_canonical_goal_in_txn(txn, did, &session))
@@ -1340,19 +1336,15 @@ mod turn_assignment_tests {
                 escape_graphql_string(&goal.doc_id), escape_graphql_string(request_doc))).await.unwrap();
     }
 
-    async fn caused_session_id(node: &Arc<EmbeddedNode>, caused_request_doc_id: &str) -> String {
+    async fn caused_session_id(access: &crate::ConfigAccess, caused_request_doc_id: &str) -> String {
         let doc_id = escape_graphql_string(caused_request_doc_id);
-        let response = node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ session_id }} }}"#
-        ))
-        .await;
-        assert!(
-            !response.has_errors(),
-            "caused request lookup: {:#?}",
-            response.errors
-        );
-        response.data.unwrap()["AgentRequest"][0]["session_id"]
+        let response = access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ session_id }} }}"#
+            ))
+            .await
+            .unwrap();
+        response["data"]["AgentRequest"][0]["session_id"]
             .as_str()
             .expect("the caused request names its session")
             .to_owned()
