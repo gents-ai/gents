@@ -23,7 +23,7 @@ use crate::tools::background::job::keys::{job_session_id, job_spawn_key};
 use crate::tools::background::job::records::{read_pin, read_progress, write_pin_in_txn};
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::lifecycle::admission_fixture::{
-    claimed_request, fixture_job_pin, publish_accepted_on_claimed_request,
+    fixture_job_pin, published_admission, PublishedAdmissionOptions,
 };
 use crate::tools::call::lifecycle::AwaitMode;
 
@@ -730,60 +730,30 @@ async fn list_jobs_keeps_only_the_named_plugins_rows() {
 
 #[tokio::test]
 async fn job_view_reads_over_a_served_graphql_endpoint() {
-    let address = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(node_did())
-            .data_path(dir.path().join("db"))
-            .with_http(defra_node::HttpConfig::with_addr(address))
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let served = ConfigAccess::graphql(format!("http://{address}/api/v0/graphql"));
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while served
-            .execute("query { AgentRequest { _docID } }")
-            .await
-            .is_err()
-        {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+    let fixture = published_admission(PublishedAdmissionOptions {
+        name: "job-view-http".into(),
+        tool_name: Some("workflow".into()),
+        await_mode: AwaitMode::Foreground,
+        ..Default::default()
     })
     .await
-    .expect("the embedded HTTP GraphQL endpoint must become ready");
-
-    let mut request = claimed_request(&node, "request-1", "session-1", node_did()).await;
-    let call = publish_accepted_on_claimed_request(
-        node.clone(),
-        &mut request,
-        node_did(),
-        0,
-        "workflow",
-        "call-1",
-        json!({"argv": ["run"]}),
-        AwaitMode::Foreground,
-        true,
-    )
-    .await
     .unwrap();
+    let node = fixture.node;
+    let call = fixture.tool;
+    let served = fixture.client;
+    let local = call.access().unwrap();
     let row = call.doc_id().unwrap().to_owned();
     let pin = JobPin {
         chain_root_doc_id: row.clone(),
         ..fixture_job_pin()
     };
-    ConfigAccess::transact_local_write(&node, None, "test.view.served_pin", |txn| {
-        let (row, pin) = (&row, &pin);
-        Box::pin(async move { write_pin_in_txn(txn, row, pin).await })
-    })
-    .await
-    .unwrap();
-    let local = ConfigAccess::local_as(node.clone(), call.actor().clone());
+    local
+        .transact_write("test.view.served_pin", |txn| {
+            let (row, pin) = (&row, &pin);
+            Box::pin(async move { write_pin_in_txn(txn, row, pin).await })
+        })
+        .await
+        .unwrap();
     assert!(read_pin(&local, &row).await.unwrap().is_some());
     let mut lifecycle = load_lifecycle(&local, &row).await.unwrap();
     settle_plugin_job(&mut lifecycle, fail("engine_boom"))
@@ -807,4 +777,5 @@ async fn job_view_reads_over_a_served_graphql_endpoint() {
     );
     assert_eq!(over_http, over_local);
     node.shutdown().await.expect("shut down test node");
+    tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }
