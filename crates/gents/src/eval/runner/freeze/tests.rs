@@ -100,14 +100,9 @@ impl Launching {
                         read_desired_state_record_in_txn(txn, collection, self.owner(), id)
                             .await?
                             .context("document to delete")?;
-                    txn.execute(&format!(
-                        r#"mutation {{ delete_{name}(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ _docID }} }}"#,
-                        name = collection.graphql_type(),
-                        doc_id = crate::store::graphql::escape_graphql_string(&doc_id),
-                    ))
-                    .await
-                    .map(|_| ())
-                    .map_err(anyhow::Error::from)
+                    txn.delete_configuration_document(collection.graphql_type(), &doc_id)
+                        .await
+                        .map_err(anyhow::Error::from)
                 })
             })
             .await
