@@ -31,6 +31,8 @@ def delegationCases : List (String × Recipient × Change) :=
    ("owner-grants-admin-class", .initUser, grant "add-nac-relation"),
    ("default-agent-grants-held", .defaultAgent, grant "update-document"),
    ("default-agent-refused-unheld", .defaultAgent, grant "delete-document"),
+   ("default-agent-grants-nac-status", .defaultAgent, grant "get-nac-status"),
+   ("enrolled-refused-nac-status", .enrolledUser, grant "get-nac-status"),
    ("agent-refused-held", .agent, grant "read-document"),
    ("agent-refused-revoke", .agent, revoke "read-document")]
 
