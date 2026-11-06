@@ -7,7 +7,7 @@ use super::{
     draw_footer, draw_no_matches, draw_row, draw_rows, pane_box, sessions, sidebar, theme,
 };
 use crate::app::input::LineInput;
-use crate::app::layers::{picker_matches, Layer, LayerKind};
+use crate::app::layers::{Layer, LayerKind};
 use crate::app::App;
 use crate::jump;
 use crate::keys::KeySet;
@@ -87,9 +87,13 @@ fn draw_picker(app: &App, layer: &Layer, rect: Rect, focused: bool, buf: &mut Bu
         height: area.height - 5,
         ..area
     };
-    let rows: Vec<SidebarRow> = picker_matches(layer.filter.text())
+    let rows: Vec<SidebarRow> = app
+        .picker_matches(layer.filter.text())
         .into_iter()
-        .map(|agent| note(agent.text, agent.tone))
+        .map(|agent| SidebarRow {
+            text: agent.text.clone().into(),
+            ..note("", agent.tone)
+        })
         .collect();
     if rows.is_empty() {
         draw_no_matches(list, buf);

@@ -1592,6 +1592,7 @@ fn ambient_context_counts_statics_outside_test_items() {
 /// classifiers match those enums; application code may use `anyhow`.
 const OWNER_MODULES: &[&str] = &[
     "crates/gents-claude/src",
+    "crates/gents-cli/src/commands/shell/client.rs",
     "crates/gents-protocol/src",
     "crates/gents-loop/src",
     "crates/gents-migration/src",

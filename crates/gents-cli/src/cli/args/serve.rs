@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use super::{
     parse_agent_did, parse_env_var_name, P2pDiscoveryArg, P2pRelayModeArg, P2pTransportArg,
-    ToolCeilingArg,
+    StoreKeyCustodyArg, ToolCeilingArg,
 };
 
 #[derive(clap::Args)]
@@ -280,4 +280,34 @@ pub(crate) struct CodexArgs {
     /// Set by `gents --continue`, never by a flag.
     #[arg(skip)]
     pub(crate) resume: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ShellArgs {
+    /// Node home to set up or open. Defaults to GENTS_HOME, the folder chosen at setup, then ~/.gents.
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    /// As on `init`: tests pass `file` so they never write login-keychain items.
+    #[arg(long, value_enum, hide = true)]
+    pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
+    /// This home's runtime endpoint when it serves on another port, as `gents runtime server --codex-shim-port` sets. Loopback ws:// only.
+    #[arg(long, value_name = "WS_URL", value_parser = parse_loopback_codex_remote)]
+    pub(crate) codex_remote: Option<String>,
+}
+
+pub(crate) fn parse_loopback_codex_remote(value: &str) -> Result<String, String> {
+    let loopback = url::Url::parse(value).is_ok_and(|url| {
+        url.scheme() == "ws"
+            && url.port().is_some()
+            && url
+                .host()
+                .is_some_and(|host| crate::commands::codex::is_loopback_host(&host))
+    });
+    if loopback {
+        Ok(value.to_string())
+    } else {
+        Err(format!(
+            "{value} is not a loopback ws:// address; remote homes come later"
+        ))
+    }
 }

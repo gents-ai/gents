@@ -423,15 +423,18 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     let cli = Cli::parse();
     let command = match cli.command {
         None => {
-            return commands::start::run(commands::start::StartArgs {
-                home: cli.home,
-                store_key_custody: cli.store_key_custody,
-                agent: cli.agent,
-                print: cli.print,
-                prompt: cli.prompt,
-                continue_session: cli.continue_session,
-                yolo: cli.yolo,
-            })
+            return commands::start::run(
+                commands::start::StartArgs {
+                    home: cli.home,
+                    store_key_custody: cli.store_key_custody,
+                    agent: cli.agent,
+                    print: cli.print,
+                    prompt: cli.prompt,
+                    continue_session: cli.continue_session,
+                    yolo: cli.yolo,
+                },
+                runtime,
+            )
             .await
         }
         Some(Command::NativeFsRunner(args)) => {
@@ -441,6 +444,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Some(Command::Codex(args)) => {
             return commands::codex::codex(args).await;
         }
+        Some(Command::Shell(args)) => return commands::start::shell(args, runtime).await,
         Some(command) => command,
     };
     gents::enable_self_runner();
@@ -543,7 +547,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
                 commands::optimization::dispatch(command, runtime).await
             }
         },
-        Command::Codex(_) | Command::NativeFsRunner(_) | Command::DocsBundle(_) => {
+        Command::Codex(_) | Command::Shell(_) | Command::NativeFsRunner(_) | Command::DocsBundle(_) => {
             unreachable!("handled before telemetry initialization")
         }
     };

@@ -13,14 +13,14 @@ use crate::client_settings::InterfaceClient;
 use crate::commands::codex_shim::RuntimeIdentity;
 use crate::commands::start::interface_install_message;
 
-mod relay;
+pub(crate) mod relay;
 
 const SHIM_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const PUBLISH_WAIT: Duration = Duration::from_secs(5);
 pub(crate) const CODEX_BIN_ENV: &str = "GENTS_CODEX_BIN";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum RemoteEndpoint {
+pub(crate) enum RemoteEndpoint {
     WebSocket {
         authority: String,
         secure: bool,
@@ -413,7 +413,7 @@ fn codex_command_args(args: &CodexArgs, cd: Option<&Path>) -> Vec<String> {
     command
 }
 
-fn resolve_endpoint(remote: &str) -> Result<RemoteEndpoint> {
+pub(crate) fn resolve_endpoint(remote: &str) -> Result<RemoteEndpoint> {
     if remote.starts_with("unix://") {
         return Ok(RemoteEndpoint::UnixSocket);
     }

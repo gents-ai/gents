@@ -1,14 +1,14 @@
 use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Margin, Position, Rect};
 
-use super::layers::{picker_matches, LayerKind};
+use super::layers::LayerKind;
 use super::{App, Pane};
 use crate::draw::agent::{chip_at, first_line, message_box_area, slash_area, slash_rows, ChipHit};
 use crate::draw::layers::list_start;
 use crate::draw::sidebar::{first_diff_row, view_at};
 use crate::keys::Action;
 use crate::layout::{running_area, sidebar_rows_area, Right};
-use crate::sample::{diff, menu, view_rows, MenuId, SidebarRow, Tone, DIFF_BACK_ROW, SESSIONS};
+use crate::sample::{diff, menu, view_rows, MenuId, SidebarRow, Tone, DIFF_BACK_ROW};
 
 impl App {
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) {
@@ -69,13 +69,15 @@ impl App {
             height: area.height - 5,
             ..area
         };
-        let Some(top) = self.layers.last_mut().filter(|_| list.contains(at)) else {
+        let Some(top) = self.layers.last().filter(|_| list.contains(at)) else {
             return;
         };
         let first = list_start(top.selected, usize::from(list.height));
         let index = first + usize::from(at.y - list.y);
-        if index < picker_matches(top.filter.text()).len() {
-            top.selected = index;
+        if index < self.picker_matches(top.filter.text()).len() {
+            if let Some(top) = self.layers.last_mut() {
+                top.selected = index;
+            }
             self.submit_layer();
         }
     }
@@ -132,7 +134,11 @@ impl App {
     fn click_sessions(&mut self, rect: Rect, at: Position) {
         let rows = rect.inner(Margin::new(1, 1));
         let row = usize::from(at.y.saturating_sub(rows.y));
-        if rows.contains(at) && SESSIONS.get(row).is_some_and(SidebarRow::selectable) {
+        let selectable = self
+            .session_rows()
+            .get(row)
+            .is_some_and(SidebarRow::selectable);
+        if rows.contains(at) && selectable {
             self.sessions_sel = row;
             self.activate_session_row();
         }

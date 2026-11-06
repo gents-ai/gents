@@ -21,6 +21,8 @@ pub(super) const NO_MODEL_ENDPOINT: &str = "http://127.0.0.1:9/v1";
 pub(super) const NO_MODEL_NAME: &str = "no-model";
 pub(super) const MISSING_BIN: &str = "/nonexistent/gents-live-interface";
 pub(super) const INSTALL_MESSAGE: &str = "Codex was not found";
+/// The built-in shell turns on mouse capture once raw mode and the alternate screen are on.
+const SHELL_UP: &str = "\x1b[?1006h";
 /// Longer than the 60 s `gents` itself waits for the endpoint.
 pub(super) const RUNTIME_UP: Duration = Duration::from_secs(90);
 pub(super) const EXIT: Duration = Duration::from_secs(10);
@@ -202,6 +204,7 @@ impl LiveBox {
             String::from_utf8_lossy(&output.stderr)
         );
         let init: Value = serde_json::from_slice(&output.stdout)?;
+        self.use_codex(&home)?;
         Ok(InitializedHome {
             home,
             node_did: node_did_from_init(&init)?,
@@ -299,6 +302,12 @@ impl LiveBox {
             Terminal::spawn(&self.bare_gents(MISSING_BIN, home), &self.log("bring-up"))?;
         terminal.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
         terminal.expect_exit(1).await
+    }
+
+    /// These tests drive Codex's launcher, and a home starts on the built-in shell.
+    pub(super) fn use_codex(&self, home: &Path) -> Result<()> {
+        let home = home.to_string_lossy();
+        self.gents_ok(&["config", "client", "set", "codex", "--home", &home])
     }
 
     pub(super) fn gents_ok(&self, args: &[&str]) -> Result<()> {
@@ -583,6 +592,13 @@ impl Terminal {
             }
             seen = now;
         }
+    }
+
+    /// Bare `gents` opens the built-in shell once setup finishes; `esc :q` quits it.
+    pub(super) async fn quit_shell(&mut self) -> Result<()> {
+        self.expect(SHELL_UP, RUNTIME_UP).await?;
+        self.send("\x1b:q\r")?;
+        self.expect_exit(0).await
     }
 
     pub(super) async fn expect_exit(&mut self, code: u32) -> Result<()> {

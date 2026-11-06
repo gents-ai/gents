@@ -4,7 +4,7 @@ use super::input::LineInput;
 use super::{App, Pane};
 use crate::keys::{Action, KeySet};
 use crate::layout::{sidebar_rows_area, Right};
-use crate::sample::{view_rows, SidebarRow, Tone, SESSIONS};
+use crate::sample::{view_rows, SidebarRow, Tone};
 
 /// `start` and `end` count characters, not bytes or columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,7 +80,11 @@ impl App {
         search.query.edit(action);
         if matches!(
             action,
-            Action::Insert(_) | Action::Backspace | Action::Delete | Action::DeleteWord
+            Action::Insert(_)
+                | Action::Backspace
+                | Action::Delete
+                | Action::DeleteWord
+                | Action::DeleteToStart
         ) {
             search.current = 0;
             self.go_to_match();
@@ -140,7 +144,10 @@ impl App {
             (Pane::Agent, _) => {
                 self.tabs[self.active].scroll = (lines.len() - 1 - found.row).min(max);
             }
-            (Pane::Sessions, _) => select_at_or_after(SESSIONS, found.row, &mut self.sessions_sel),
+            (Pane::Sessions, _) => {
+                let rows = self.session_rows();
+                select_at_or_after(&rows, found.row, &mut self.sessions_sel);
+            }
             (Pane::Sidebar, Some(_)) => self.diff_scroll = found.row.min(max),
             (Pane::Sidebar, None) => {
                 let selected = &mut self.view_sel[self.view as usize];
@@ -160,7 +167,11 @@ impl App {
 
     pub fn search_lines(&self, pane: Pane) -> Vec<String> {
         match (pane, self.diff) {
-            (Pane::Sessions, _) => SESSIONS.iter().map(|row| row.text.to_string()).collect(),
+            (Pane::Sessions, _) => self
+                .session_rows()
+                .into_iter()
+                .map(|row| row.text.into_owned())
+                .collect(),
             (Pane::Sidebar, Some(file)) => texts(self.diff_rows(file)),
             (Pane::Sidebar, None) => view_rows(self.view)
                 .iter()
@@ -557,6 +568,7 @@ mod tests {
         app.tabs[0].lines = vec![ChatLine {
             text: "日本語 sign".to_string(),
             tone: Tone::Plain,
+            item: None,
         }];
         press(&mut app, "esc /");
         type_text(&mut app, "本");
@@ -641,6 +653,7 @@ mod tests {
         app.tabs[0].lines = vec![ChatLine {
             text: "日本語 test".to_string(),
             tone: Tone::Plain,
+            item: None,
         }];
         press(&mut app, "esc /");
         type_text(&mut app, "TEST");

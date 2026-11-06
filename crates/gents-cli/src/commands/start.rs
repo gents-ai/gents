@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use clap::CommandFactory as _;
 use gents::store::config_client::GraphqlEndpoint;
+use tokio::runtime::Handle;
 
-use crate::cli::args::{CodexArgs, StoreKeyCustodyArg};
+use crate::cli::args::{CodexArgs, ShellArgs, StoreKeyCustodyArg};
 use crate::cli::Cli;
 use crate::client_settings::{ensure_client_supported, ClientSettings, InterfaceClient};
 use crate::commands::codex::{
@@ -16,6 +17,7 @@ use crate::commands::codex::{
 use crate::graphql_access::graphql_endpoint_available;
 use crate::home_state::{read_finished_init_config, read_runtime_state, resolve_home_dir};
 use crate::native_service::{NativeServiceConfig, NativeServiceManager, NativeServicePlatform};
+use crate::shared::StoredInitConfig;
 
 mod setup;
 mod yolo;
@@ -27,7 +29,7 @@ const ENDPOINT_WAIT: Duration = Duration::from_secs(60);
 const YOLO_PUBLISH_WAIT: Duration = Duration::from_secs(30);
 
 enum InterfaceEndpoint {
-    /// Waits for the same endpoint as Codex: the shell will read this home's runtime there.
+    /// Waits for the same endpoint as Codex: the shell reads this home's runtime there.
     Shell {
         remote: String,
     },
@@ -111,6 +113,14 @@ impl InterfaceEndpoint {
         }
     }
 
+    /// Where this home's runtime says who it is and which agents can run.
+    fn remote(&self) -> &str {
+        match self {
+            Self::Shell { remote } | Self::Codex { remote } => remote,
+            Self::Grok { runtime, .. } => runtime,
+        }
+    }
+
     fn describe(&self) -> String {
         match self {
             Self::Shell { remote } => format!("runtime endpoint {remote}"),
@@ -124,20 +134,15 @@ impl InterfaceEndpoint {
         agent: Option<String>,
         prompt: Option<String>,
         resume: Option<String>,
+        runtime: Handle,
     ) -> Result<()> {
         match self {
-            Self::Shell { .. } => {
+            Self::Shell { remote } => {
                 ensure!(
-                    agent.is_none(),
-                    "the shell cannot open a given agent yet; run `gents config client set codex` to use `--agent`"
+                    resume.is_none(),
+                    "the shell cannot open a session at launch yet. Send the next turn with `gents --continue SESSION_ID -p MESSAGE`, or switch to Codex with `gents config client set codex`."
                 );
-                // The shell's loop blocks on terminal reads, so it runs off the runtime's workers.
-                tokio::task::spawn_blocking(|| {
-                    gents_shell::terminal::run(gents_shell::keys::KeySet::Vim)
-                })
-                .await
-                .context("the shell's thread")?
-                .context("running the shell")
+                crate::commands::shell::open(&remote, agent, prompt, runtime).await
             }
             Self::Codex { remote } => {
                 open_codex(CodexArgs {
@@ -175,7 +180,7 @@ pub(crate) struct StartArgs {
 }
 
 /// Dispatched before telemetry, so nothing writes over the interface.
-pub(crate) async fn run(mut args: StartArgs) -> Result<()> {
+pub(crate) async fn run(mut args: StartArgs, runtime: Handle) -> Result<()> {
     // Setup prompts go to stderr, so a redirected stderr would hide them.
     let terminal = std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal()
@@ -185,19 +190,7 @@ pub(crate) async fn run(mut args: StartArgs) -> Result<()> {
         std::process::exit(2);
     }
     let home_given = args.home.take().map(crate::absolutize).transpose()?;
-    let mut home = crate::absolutize(resolve_home_dir(home_given.as_deref()))?;
-    let config = match read_finished_init_config(&home)? {
-        Some(config) => config,
-        None => {
-            ensure!(
-                terminal,
-                "{} is not set up yet; run `gents` in a terminal to set it up, then run this again",
-                crate::shell_word(&home)
-            );
-            home = setup::setup(home_given.clone(), args.store_key_custody).await?;
-            read_finished_init_config(&home)?.context("setup left this home uninitialized")?
-        }
-    };
+    let (home, config) = ready_home(home_given.clone(), args.store_key_custody, terminal).await?;
     let Some(message) = args.print.take() else {
         let client = ClientSettings::read(&home)?.client;
         ensure!(
@@ -211,16 +204,10 @@ pub(crate) async fn run(mut args: StartArgs) -> Result<()> {
         if let (true, Some(agent)) = (made, agent.as_deref()) {
             wait_for_agent_to_publish(crate::DEFAULT_CODEX_REMOTE, agent, YOLO_PUBLISH_WAIT).await;
         }
-        ensure_an_agent_can_run(
-            crate::DEFAULT_CODEX_REMOTE,
-            &home,
-            agent.is_some(),
-            PUBLISH_WAIT,
-        )
-        .await?;
+        ensure_an_agent_can_run(endpoint.remote(), &home, agent.is_some(), PUBLISH_WAIT).await?;
         let opened_at = chrono::Utc::now();
         let opened = endpoint
-            .open(agent.clone(), args.prompt, args.continue_session)
+            .open(agent.clone(), args.prompt, args.continue_session, runtime)
             .await;
         print_continue_hint(
             &home,
@@ -348,6 +335,59 @@ async fn session_agent(graphql: &GraphqlEndpoint, node_did: &str, session: &str)
     Ok(agent)
 }
 
+/// Dispatched before telemetry, so nothing writes over the shell.
+pub(crate) async fn shell(args: ShellArgs, runtime: Handle) -> Result<()> {
+    let (home, config) = ready_home(args.home, args.store_key_custody, true).await?;
+    let overridden = args.codex_remote.is_some();
+    let mut endpoint = InterfaceEndpoint::Shell {
+        remote: args
+            .codex_remote
+            .unwrap_or_else(|| crate::DEFAULT_CODEX_REMOTE.to_string()),
+    };
+    if overridden {
+        ensure_override_answers(&endpoint, &home).await?;
+        // The general refusal says to stop whatever holds the endpoint, which on a mistyped
+        // override can be another home's runtime.
+        if endpoint
+            .ensure_is_this_homes(&home, &config.node_did)
+            .await
+            .is_err()
+        {
+            bail!(
+                "{} answers, but it is not this home's runtime; point --codex-remote at the --codex-shim-port this home's `gents runtime server` uses",
+                endpoint.remote()
+            );
+        }
+    } else {
+        ensure_runtime(&home, &config.node_did, &mut endpoint).await?;
+    }
+    ensure_an_agent_can_run(endpoint.remote(), &home, false, PUBLISH_WAIT).await?;
+    endpoint.open(None, None, None, runtime).await
+}
+
+/// Setup asks its questions on the terminal, so a home that needs it and has none is refused.
+async fn ready_home(
+    home: Option<PathBuf>,
+    custody: Option<StoreKeyCustodyArg>,
+    terminal: bool,
+) -> Result<(PathBuf, StoredInitConfig)> {
+    let home_given = home.map(crate::absolutize).transpose()?;
+    let mut home = crate::absolutize(resolve_home_dir(home_given.as_deref()))?;
+    let config = match read_finished_init_config(&home)? {
+        Some(config) => config,
+        None => {
+            ensure!(
+                terminal,
+                "{} is not set up yet; run `gents` in a terminal to set it up, then run this again",
+                crate::shell_word(&home)
+            );
+            home = setup::setup(home_given, custody).await?;
+            read_finished_init_config(&home)?.context("setup left this home uninitialized")?
+        }
+    };
+    Ok((home, config))
+}
+
 /// `-p` needs only GraphQL, so a runtime with its interface endpoints off still answers it.
 async fn ensure_graphql(home: &Path) -> Result<GraphqlEndpoint> {
     if let Some(graphql) = answering_graphql(home).await? {
@@ -390,6 +430,24 @@ async fn answering_graphql(home: &Path) -> Result<Option<GraphqlEndpoint>> {
         )),
         _ => Ok(None),
     }
+}
+
+/// An overridden endpoint is one a person started by hand, so nothing is started here.
+/// `ensure_runtime` installs a service definition under the one per-user label
+/// (`native_service::SERVICE_LABEL`) for the first home that asks, and the service manager
+/// then refuses every other home.
+async fn ensure_override_answers(endpoint: &InterfaceEndpoint, home: &Path) -> Result<()> {
+    let remote = endpoint.remote();
+    let port = url::Url::parse(remote)
+        .ok()
+        .and_then(|url| url.port())
+        .with_context(|| format!("{remote} names no port"))?;
+    ensure!(
+        endpoint.answers().await,
+        "nothing answers at {remote}; start this home's runtime there first with `gents runtime server --home {home} --http-port <free port> --codex-shim-port {port}`, then run `gents shell` again",
+        home = crate::shell_word(home)
+    );
+    Ok(())
 }
 
 async fn ensure_runtime(
@@ -524,6 +582,114 @@ pub(crate) fn interface_install_message(client: InterfaceClient) -> String {
 mod tests {
     use super::*;
     use crate::commands::codex::tests::{identity, runtime_answering, runtime_answering_on};
+    use crate::commands::eval::testing::test_runtime_handle;
+
+    #[tokio::test]
+    async fn an_override_that_does_not_answer_names_gents_server_and_starts_nothing() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let endpoint = InterfaceEndpoint::Shell {
+            remote: format!("ws://127.0.0.1:{port}/"),
+        };
+
+        let error = ensure_override_answers(&endpoint, Path::new("/srv/home"))
+            .await
+            .expect_err("nothing answers on a closed port");
+
+        let error = error.to_string();
+        assert!(
+            error.contains(&format!(
+                "`gents runtime server --home /srv/home --http-port <free port> --codex-shim-port {port}`"
+            )),
+            "{error}"
+        );
+        assert!(!error.contains("service"), "{error}");
+    }
+
+    /// A home `init` finished, whose recorded runtime answers GraphQL. Were `shell` to reach
+    /// `ensure_runtime`, it would wait on that runtime instead of installing or starting the
+    /// machine's one service job, which a test build shares with the user's daily runtime.
+    async fn initialized_home(node_did: &str) -> tempfile::TempDir {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().to_string_lossy().into_owned();
+        crate::home_state::write_init_config(
+            home.path(),
+            &StoredInitConfig {
+                home: path.clone(),
+                node_name: "fixture".into(),
+                node_did: node_did.into(),
+                key_path: None,
+                identity_backend: None,
+                keychain_label: None,
+                secure_enclave_label: None,
+                tool_package: None,
+                tool_ceiling: crate::cli::args::ToolCeilingArg::MetaOnly,
+                tool_root: None,
+                store_encryption: None,
+            },
+        )
+        .unwrap();
+        let graphql = runtime_answering(vec![serde_json::json!({})]).await;
+        crate::home_state::write_runtime_state(
+            home.path(),
+            &crate::shared::StoredRuntimeState {
+                home: path,
+                graphql: format!("http://{graphql}/api/v0/graphql"),
+                node_name: "fixture".into(),
+                node_did: node_did.into(),
+                default_agent_id: "a".into(),
+                p2p_transport: "none".into(),
+                p2p_peer_id: None,
+                p2p_listen_addresses: Vec::new(),
+                p2p_admission: None,
+            },
+        )
+        .unwrap();
+        home
+    }
+
+    fn shell_args(home: &Path, remote: &str) -> ShellArgs {
+        ShellArgs {
+            home: Some(home.to_path_buf()),
+            store_key_custody: None,
+            codex_remote: Some(remote.to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_shell_with_a_silent_override_never_reaches_ensure_runtime() {
+        let home = initialized_home("mine").await;
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let remote = format!("ws://{}/", closed.local_addr().unwrap());
+        drop(closed);
+
+        let error = shell(shell_args(home.path(), &remote), test_runtime_handle())
+            .await
+            .expect_err("nothing answers on the override");
+
+        let error = format!("{error:#}");
+        assert!(
+            error.starts_with(&format!("nothing answers at {remote}; ")),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_override_held_by_another_runtime_names_this_homes_port_and_stops_nothing() {
+        let home = initialized_home("mine").await;
+        let other = runtime_answering(vec![runtime_holding("other", None)]).await;
+        let remote = format!("ws://{other}/");
+
+        let error = shell(shell_args(home.path(), &remote), test_runtime_handle())
+            .await
+            .expect_err("another home's runtime answers");
+
+        assert_eq!(
+            format!("{error:#}"),
+            format!("{remote} answers, but it is not this home's runtime; point --codex-remote at the --codex-shim-port this home's `gents runtime server` uses")
+        );
+    }
 
     #[tokio::test]
     async fn wait_for_endpoint_gives_up_naming_gents_service_status() {
@@ -769,20 +935,6 @@ mod tests {
         };
         assert_eq!(remote, crate::DEFAULT_CODEX_REMOTE);
         assert!(endpoint.describe().contains(crate::DEFAULT_CODEX_REMOTE));
-    }
-
-    #[tokio::test]
-    async fn the_shell_refuses_a_given_agent_it_cannot_open_yet() {
-        let endpoint = InterfaceEndpoint::for_client(InterfaceClient::Shell).unwrap();
-        let error = endpoint
-            .open(Some("reviewer".to_string()), None, None)
-            .await
-            .unwrap_err();
-        let message = format!("{error:#}");
-        assert!(
-            message.contains("gents config client set codex"),
-            "{message}"
-        );
     }
 
     #[test]

@@ -94,7 +94,7 @@ async fn read_head(client: &mut TcpStream) -> Result<(Vec<u8>, usize)> {
     }
 }
 
-fn agent_route_target(agent_id: &str) -> String {
+pub(crate) fn agent_route_target(agent_id: &str) -> String {
     let mut route = Url::parse("ws://relay/agents").expect("a constant URL parses");
     route
         .path_segments_mut()

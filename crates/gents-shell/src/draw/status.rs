@@ -8,8 +8,16 @@ use crate::app::layers::LayerKind;
 use crate::app::{App, Mode};
 use crate::keys::KeySet;
 use crate::sample::Tone;
+use crate::source::Connection;
 
-const RIGHT: &str = "sample data ";
+fn right(connection: &Connection) -> &'static str {
+    match connection {
+        Connection::Sample => "sample data ",
+        Connection::Connecting => "connecting ",
+        Connection::Ready => "runtime ready ",
+        Connection::Lost(_) => "runtime lost ",
+    }
+}
 
 fn layer_hints(kind: LayerKind, set: KeySet) -> &'static str {
     match (kind, set) {
@@ -81,15 +89,63 @@ pub fn draw(app: &App, area: Rect, buf: &mut Buffer) {
     let chip_style = Style::new().fg(theme::CHIP_FG).bg(theme::ACCENT);
     buf.set_string(area.x, area.y, &chip, chip_style);
 
-    let right_x = area.right().saturating_sub(RIGHT.len() as u16);
+    let right = right(&app.connection);
+    let right_x = area.right().saturating_sub(right.len() as u16);
     let hints_x = area.x + chip.len() as u16 + 1;
     let room = right_x.saturating_sub(hints_x + 1) as usize;
-    let text = app
-        .keymap
-        .pending()
-        .or(app.notice.as_deref())
-        .unwrap_or_else(|| whole_hints(hints(app), room));
+    let lost = match &app.connection {
+        Connection::Lost(message) => Some(message.as_str()),
+        _ => None,
+    };
+    let message = app.keymap.pending().or(app.notice.as_deref()).or(lost);
+    let wide = message.is_some_and(|message| Span::raw(message).width() > room);
+    let room = if wide {
+        area.right().saturating_sub(hints_x) as usize
+    } else {
+        room
+    };
+    let text = message.unwrap_or_else(|| whole_hints(hints(app), room));
     buf.set_stringn(hints_x, area.y, text, room, theme::tone(Tone::Label));
 
-    buf.set_string(right_x, area.y, RIGHT, theme::tone(Tone::Accent));
+    if !wide {
+        buf.set_string(right_x, area.y, right, theme::tone(Tone::Accent));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::app::App;
+    use crate::keys::KeySet::Vim;
+    use crate::source::{Connection, Update};
+    use crate::testing::{find, screen};
+
+    #[test]
+    fn the_status_bar_shows_the_connection() {
+        for (width, height) in [(132, 36), (60, 16)] {
+            let last = height - 1;
+            let at = |text: &str| Some((last, width - text.len() as u16 - 1));
+            assert_eq!(
+                find(&screen(&App::new(Vim, width, height)), "sample data"),
+                at("sample data")
+            );
+
+            let (intents, _receiver) = std::sync::mpsc::channel();
+            let mut app = App::connected(Vim, width, height, intents);
+            assert_eq!(find(&screen(&app), "connecting"), at("connecting"));
+            app.apply(Update::Connection(Connection::Ready));
+            let s = screen(&app);
+            assert_eq!(find(&s, "runtime ready"), at("runtime ready"));
+            assert!(s[usize::from(last)].contains("esc normal mode"), "{width}");
+
+            let lost = "check gents status";
+            app.apply(Update::Connection(Connection::Lost(lost.to_string())));
+            let s = screen(&app);
+            assert_eq!(find(&s, "runtime lost"), at("runtime lost"));
+            assert_eq!(find(&s, lost).map(|(row, _)| row), Some(last), "{width}");
+            assert!(!s[usize::from(last)].contains("esc normal mode"), "{width}");
+
+            app.apply(Update::Notice("a notice".to_string()));
+            assert!(find(&screen(&app), "a notice").is_some(), "{width}");
+        }
+    }
 }

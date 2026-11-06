@@ -38,8 +38,11 @@ pub enum Action {
     Backspace,
     Delete,
     DeleteWord,
+    DeleteToStart,
     CursorLeft,
     CursorRight,
+    WordLeft,
+    WordRight,
     Home,
     End,
     Submit,
@@ -112,8 +115,12 @@ impl Keymap {
             return self.control(ctx, key.code);
         }
         if key.modifiers.contains(KeyModifiers::ALT) {
-            let bar = self.set == KeySet::Emacs && key.code == KeyCode::Char('x');
-            return if bar { Action::OpenBar } else { Action::None };
+            return match key.code {
+                KeyCode::Char('x') if self.set == KeySet::Emacs => Action::OpenBar,
+                KeyCode::Char('b') if in_line(ctx) => Action::WordLeft,
+                KeyCode::Char('f') if in_line(ctx) => Action::WordRight,
+                _ => Action::None,
+            };
         }
         match key.code {
             KeyCode::Esc => Action::Back,
@@ -124,9 +131,7 @@ impl Keymap {
             KeyCode::PageDown if matches!(ctx, KeyCtx::Normal | KeyCtx::Input) => Action::PageDown,
             KeyCode::Char(c) => self.character(ctx, c),
             KeyCode::Tab if ctx == KeyCtx::Input => Action::Complete,
-            code if matches!(ctx, KeyCtx::Input | KeyCtx::Filter | KeyCtx::SearchLine) => {
-                edit_key(code)
-            }
+            code if in_line(ctx) => edit_key(code),
             _ => Action::None,
         }
     }
@@ -184,15 +189,16 @@ impl Keymap {
             return Action::None;
         };
         let emacs = self.set == KeySet::Emacs;
-        let line = matches!(ctx, KeyCtx::Input | KeyCtx::Filter);
+        let line = in_line(ctx);
         match c {
             'c' => Action::Interrupt,
             'g' => Action::Back,
             'n' => Action::Next,
             'p' if !emacs && matches!(ctx, KeyCtx::Normal | KeyCtx::Input) => Action::Palette,
             'p' => Action::Prev,
-            'a' if emacs && line => Action::Home,
-            'e' if emacs && line => Action::End,
+            'a' if line => Action::Home,
+            'e' if line => Action::End,
+            'u' if line => Action::DeleteToStart,
             'w' if !emacs && matches!(ctx, KeyCtx::Input | KeyCtx::SearchLine) => {
                 Action::DeleteWord
             }
@@ -239,6 +245,12 @@ impl Keymap {
     }
 }
 
+/// A box that takes typed text. macOS terminals send readline keys for Cmd-Backspace and
+/// Cmd or Option with the arrows (Ghostty's defaults), so those edit it in both key sets.
+pub fn in_line(ctx: KeyCtx) -> bool {
+    matches!(ctx, KeyCtx::Input | KeyCtx::Filter | KeyCtx::SearchLine)
+}
+
 fn edit_key(code: KeyCode) -> Action {
     match code {
         KeyCode::Backspace => Action::Backspace,
@@ -278,8 +290,11 @@ mod tests {
         (Menu, "ctrl-c", A::Interrupt), (Menu, "ctrl-w ]", A::ToggleSidebar), (Filter, "j", A::Insert('j')), (Filter, "bs", A::Backspace), (Filter, "ctrl-c", A::Interrupt), (Filter, "ctrl-n", A::Next), (Filter, "ctrl-p", A::Prev), (Filter, "up", A::Prev),
         (Filter, "ctrl-w h", A::MoveFocus(Dir::Left)), (Filter, "enter", A::Submit),
         (Normal, "ctrl-w ctrl-h", A::MoveFocus(Dir::Left)), (Normal, "ctrl-w ctrl-j", A::MoveFocus(Dir::Down)), (Normal, "ctrl-w ctrl-k", A::MoveFocus(Dir::Up)), (Normal, "ctrl-w ctrl-l", A::MoveFocus(Dir::Right)),
-        (Normal, "ctrl-w ctrl-q", A::None), (Menu, "ctrl-w ctrl-l", A::MoveFocus(Dir::Right)), (Filter, "ctrl-w ctrl-h", A::MoveFocus(Dir::Left)), (Input, "ctrl-a", A::None), (Input, "ctrl-e", A::None),
+        (Normal, "ctrl-w ctrl-q", A::None), (Menu, "ctrl-w ctrl-l", A::MoveFocus(Dir::Right)), (Filter, "ctrl-w ctrl-h", A::MoveFocus(Dir::Left)), (Input, "ctrl-a", A::Home), (Input, "ctrl-e", A::End),
         (SearchLine, "x", A::Insert('x')), (SearchLine, "bs", A::Backspace), (SearchLine, "ctrl-c", A::Interrupt), (SearchLine, "enter", A::Submit), (SearchLine, "esc", A::Back), (SearchLine, "ctrl-g", A::Back), (SearchLine, "ctrl-w", A::DeleteWord),
+        (Input, "ctrl-u", A::DeleteToStart), (Filter, "ctrl-u", A::DeleteToStart), (SearchLine, "ctrl-u", A::DeleteToStart), (Filter, "ctrl-a", A::Home), (Filter, "ctrl-e", A::End), (SearchLine, "ctrl-a", A::Home), (SearchLine, "ctrl-e", A::End),
+        (Input, "alt-b", A::WordLeft), (Input, "alt-f", A::WordRight), (Filter, "alt-b", A::WordLeft), (Filter, "alt-f", A::WordRight), (SearchLine, "alt-b", A::WordLeft), (SearchLine, "alt-f", A::WordRight),
+        (Normal, "ctrl-u", A::None), (Normal, "ctrl-a", A::None), (Normal, "ctrl-e", A::None), (Menu, "ctrl-u", A::None), (Normal, "alt-b", A::None), (Menu, "alt-f", A::None),
     ];
 
     #[rustfmt::skip]
@@ -293,6 +308,9 @@ mod tests {
         (Filter, "j", A::Insert('j')), (Filter, "ctrl-n", A::Next), (Filter, "ctrl-x o", A::NextPane), (Filter, "ctrl-x ctrl-c", A::Quit), (Filter, "alt-x", A::OpenBar), (Filter, "ctrl-x x", A::OpenBar),
         (SearchLine, "ctrl-s", A::SearchNext), (SearchLine, "ctrl-r", A::SearchPrev), (SearchLine, "enter", A::Submit), (SearchLine, "ctrl-g", A::Back), (SearchLine, "ctrl-x ctrl-c", A::Quit), (SearchLine, "alt-x", A::OpenBar), (SearchLine, "ctrl-x x", A::OpenBar),
         (Input, "ctrl-a", A::Home), (Input, "ctrl-e", A::End), (Filter, "ctrl-a", A::Home), (Filter, "ctrl-e", A::End), (Menu, "ctrl-a", A::None), (Input, "ctrl-w", A::None),
+        (Input, "ctrl-u", A::DeleteToStart), (Filter, "ctrl-u", A::DeleteToStart), (SearchLine, "ctrl-u", A::DeleteToStart), (SearchLine, "ctrl-a", A::Home), (SearchLine, "ctrl-e", A::End),
+        (Input, "alt-b", A::WordLeft), (Input, "alt-f", A::WordRight), (Filter, "alt-b", A::WordLeft), (Filter, "alt-f", A::WordRight), (SearchLine, "alt-b", A::WordLeft), (SearchLine, "alt-f", A::WordRight),
+        (Menu, "ctrl-u", A::None), (Menu, "alt-b", A::None), (Menu, "alt-f", A::None),
     ];
 
     /// Earlier keys of a sequence return `None`; the action comes from the last.

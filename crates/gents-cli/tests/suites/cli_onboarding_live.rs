@@ -471,16 +471,13 @@ mod no_model {
         let mut terminal = Terminal::spawn(&live.first_run(MISSING_BIN), &live.log("first-run"))?;
 
         terminal.expect("██", PROMPT).await?;
-        terminal.expect(INSTALL_MESSAGE, PROMPT).await?;
         terminal
             .answer(FOLDER_QUESTION, &folder.to_string_lossy())
             .await?;
         terminal
             .answer_scanned_inference(backend.endpoint(), NO_MODEL_NAME)
             .await?;
-        terminal.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
-        terminal.expect("gents -p MESSAGE", EXIT).await?;
-        terminal.expect_exit(1).await?;
+        terminal.quit_shell().await?;
 
         let init = read_json_file(&folder.join("init.json"))?;
         assert_eq!(init["tool_package"], json!("Yolo"));
@@ -565,6 +562,7 @@ mod no_model {
         shim_call("/", "thread/loaded/list", json!({})).await?;
 
         let pid = live.service_pid().context("the service runs")?;
+        live.use_codex(&folder)?;
         let mut no_flags = live.gents();
         no_flags.env("GENTS_CODEX_BIN", MISSING_BIN);
         let mut second = Terminal::spawn(&no_flags, &live.log("second-run"))?;
@@ -1462,8 +1460,7 @@ mod with_model {
         let folder = live.folder("data");
 
         let mut terminal = set_up(&live, MISSING_BIN, &folder, &endpoint, &model).await?;
-        terminal.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
-        terminal.expect_exit(1).await?;
+        terminal.quit_shell().await?;
         crate::support::graphql::register_served_home(&live.root, &folder, &[], HTTP_PORT)?;
 
         let prompt = format!("Reply with exactly this token: {}", uuid::Uuid::new_v4());
@@ -1491,7 +1488,7 @@ mod with_model {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "needs a local model, real launchd and real Codex; run through `make live-onboarding`"]
-    async fn first_run_opens_real_codex_and_a_turn_completes() -> Result<()> {
+    async fn real_codex_opens_after_first_run_and_a_turn_completes() -> Result<()> {
         let (endpoint, model) = live_model().await?;
         let Some(codex) = real_interface("codex") else {
             return Ok(());
@@ -1500,7 +1497,12 @@ mod with_model {
         let folder = live.folder("data");
         let codex = codex.to_string_lossy();
 
-        let mut terminal = set_up(&live, &codex, &folder, &endpoint, &model).await?;
+        set_up(&live, &codex, &folder, &endpoint, &model)
+            .await?
+            .quit_shell()
+            .await?;
+        live.use_codex(&folder)?;
+        let mut terminal = Terminal::spawn(&live.bare_gents(&codex, &folder), &live.log("codex"))?;
         let result = turn_in_codex(&live, &mut terminal, &folder).await;
         result.with_context(|| format!("Codex transcript:\n{}", terminal.transcript()))
     }

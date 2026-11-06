@@ -4,9 +4,10 @@ use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 
 use crate::app::layers::LayerKind;
+use crate::app::session_rows;
 use crate::app::{App, ChatLine};
 use crate::draw;
-use crate::sample::{Tone, SESSIONS};
+use crate::sample::{self, Tone};
 
 /// One token of the `press` grammar. SHIFT follows uppercase as crossterm reports it
 /// (`crossterm-0.29.0/src/event/sys/unix/parse.rs:129-135`).
@@ -105,12 +106,13 @@ pub fn numbered(count: usize) -> Vec<ChatLine> {
         .map(|n| ChatLine {
             text: format!("message {n}"),
             tone: Tone::Plain,
+            item: None,
         })
         .collect()
 }
 
 pub fn session_row(text: &str) -> usize {
-    SESSIONS
+    session_rows(&sample::sessions())
         .iter()
         .position(|row| row.text.contains(text))
         .expect("a sample session")

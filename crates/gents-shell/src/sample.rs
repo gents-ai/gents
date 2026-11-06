@@ -1,3 +1,8 @@
+use std::borrow::Cow;
+
+use crate::app::{sample_chat, ChatLine};
+use crate::source::{Agent, Day, Intent, Session, SessionState, Update};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
     Plain,
@@ -19,21 +24,19 @@ pub enum RowAction {
     OpenMenu(MenuId),
     None,
     NewSession,
-    OpenSession {
-        tab: &'static str,
-        agent: &'static str,
-    },
+    /// A position in `App.sessions`.
+    OpenSession(usize),
     OpenDiff(usize),
     NotWired,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SidebarRow {
-    pub text: &'static str,
+    pub text: Cow<'static, str>,
     pub tone: Tone,
     pub action: RowAction,
     /// A session's name and day for the jump bar; empty on every other row.
-    pub name: &'static str,
+    pub name: Cow<'static, str>,
     pub date: &'static str,
 }
 
@@ -77,19 +80,12 @@ impl MenuId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AgentRow {
-    pub name: &'static str,
-    pub text: &'static str,
-    pub tone: Tone,
-}
-
-const fn row(text: &'static str, tone: Tone, action: RowAction) -> SidebarRow {
+pub const fn row(text: &'static str, tone: Tone, action: RowAction) -> SidebarRow {
     SidebarRow {
-        text,
+        text: Cow::Borrowed(text),
         tone,
         action,
-        name: "",
+        name: Cow::Borrowed(""),
         date: "",
     }
 }
@@ -98,44 +94,37 @@ pub const fn note(text: &'static str, tone: Tone) -> SidebarRow {
     row(text, tone, RowAction::None)
 }
 
-const fn session(
-    text: &'static str,
-    tone: Tone,
-    tab: &'static str,
-    agent: &'static str,
-    name: &'static str,
-    date: &'static str,
-) -> SidebarRow {
-    SidebarRow {
-        text,
-        tone,
-        action: RowAction::OpenSession { tab, agent },
-        name,
-        date,
-    }
-}
-
 const fn item(text: &'static str, tone: Tone) -> SidebarRow {
     row(text, tone, RowAction::NotWired)
 }
 
 const BLANK: SidebarRow = note("", Tone::Plain);
 
+fn session(name: &str, tab: &str, agent: &str, day: Day, state: SessionState) -> Session {
+    Session {
+        id: name.to_string(),
+        agent: agent.to_string(),
+        name: name.to_string(),
+        tab: tab.to_string(),
+        day,
+        state,
+    }
+}
+
 #[rustfmt::skip]
-pub const SESSIONS: &[SidebarRow] = &[
-    row(" + New session", Tone::Accent, RowAction::NewSession),
-    BLANK,
-    note(" TODAY", Tone::Label),
-    session(" ● cli ux redesign", Tone::Plain, "cli ux", "Engineer", "cli ux redesign", "today"),
-    session(" ○ flaky recovery test", Tone::Plain, "flaky", "Reviewer", "flaky recovery test", "today"),
-    session(" ! pack registry login", Tone::Warn, "packs", "Engineer", "pack registry login", "today"),
-    BLANK,
-    note(" YESTERDAY", Tone::Label),
-    session(" ○ eval baseline", Tone::Plain, "eval", "Researcher", "eval baseline", "yesterday"),
-    session(" ○ desktop plugin page", Tone::Plain, "desktop", "Engineer", "desktop plugin page", "yesterday"),
-    session(" ○ weekly triage", Tone::Plain, "triage", "Triage", "weekly triage", "yesterday"),
-    session(" ○ pack review notes", Tone::Plain, "review notes", "Reviewer", "pack review notes", "yesterday"),
-];
+pub fn sessions() -> Vec<Session> {
+    use Day::{Today, Yesterday};
+    use SessionState::{Active, Error, Idle};
+    vec![
+        session("cli ux redesign", "cli ux", "Engineer", Today, Active),
+        session("flaky recovery test", "flaky", "Reviewer", Today, Idle),
+        session("pack registry login", "packs", "Engineer", Today, Error),
+        session("eval baseline", "eval", "Researcher", Yesterday, Idle),
+        session("desktop plugin page", "desktop", "Engineer", Yesterday, Idle),
+        session("weekly triage", "triage", "Triage", Yesterday, Idle),
+        session("pack review notes", "review notes", "Reviewer", Yesterday, Idle),
+    ]
+}
 
 pub const START_SESSION: usize = 3;
 
@@ -328,28 +317,87 @@ pub const RUNNING: &[Running] = &[
     },
 ];
 
-pub const AGENTS: &[AgentRow] = &[
-    AgentRow {
-        name: "Engineer",
-        text: " Engineer     default       ChatGPT subscription",
-        tone: Tone::Plain,
-    },
-    AgentRow {
-        name: "Reviewer",
-        text: " Reviewer                   Claude subscription",
-        tone: Tone::Plain,
-    },
-    AgentRow {
-        name: "Researcher",
-        text: " Researcher                 Grok subscription",
-        tone: Tone::Plain,
-    },
-    AgentRow {
-        name: "Triage",
-        text: " Triage       signed out    Grok subscription",
-        tone: Tone::Warn,
-    },
-];
+fn agent(name: &str, text: &str, tone: Tone) -> Agent {
+    Agent {
+        id: name.to_string(),
+        name: name.to_string(),
+        text: text.to_string(),
+        tone,
+    }
+}
+
+pub fn agents() -> Vec<Agent> {
+    vec![
+        agent(
+            "Engineer",
+            " Engineer     default       ChatGPT subscription",
+            Tone::Plain,
+        ),
+        agent(
+            "Reviewer",
+            " Reviewer                   Claude subscription",
+            Tone::Plain,
+        ),
+        agent(
+            "Researcher",
+            " Researcher                 Grok subscription",
+            Tone::Plain,
+        ),
+        agent(
+            "Triage",
+            " Triage       signed out    Grok subscription",
+            Tone::Warn,
+        ),
+    ]
+}
+
+const SAMPLE_REPLY: &str = " sample reply: nothing is wired to an agent yet.";
+const SAMPLE_SUBAGENT_REPLY: &str = " ◆ sample reply: nothing is wired to an agent yet.";
+
+/// What a source would answer, at once. Its lines carry no transcript item, so each appends.
+pub fn answer(intent: &Intent, subagent: bool) -> Vec<Update> {
+    match intent {
+        Intent::Open { session, agent } => vec![Update::Opened {
+            session: session.clone(),
+            lines: sample_chat(agent),
+            running: RUNNING,
+        }],
+        Intent::Send {
+            tab, session, text, ..
+        } => {
+            let mut updates = Vec::new();
+            let session = match session {
+                Some(session) => session.clone(),
+                None => {
+                    let session = format!("sample:{tab}");
+                    updates.push(Update::Started {
+                        tab: *tab,
+                        session: session.clone(),
+                    });
+                    session
+                }
+            };
+            let reply = if subagent {
+                SAMPLE_SUBAGENT_REPLY
+            } else {
+                SAMPLE_REPLY
+            };
+            for (text, tone) in [(text.as_str(), Tone::You), (reply, Tone::Reply)] {
+                let line = ChatLine {
+                    text: text.to_string(),
+                    tone,
+                    item: None,
+                };
+                updates.push(Update::Item {
+                    session: session.clone(),
+                    line,
+                });
+            }
+            updates
+        }
+        Intent::Interrupt { .. } => Vec::new(),
+    }
+}
 
 pub const PICKER_FOOTER: &str = " enter open in a new tab · esc back";
 

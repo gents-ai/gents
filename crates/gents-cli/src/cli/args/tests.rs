@@ -278,6 +278,7 @@ fn root_help_lists_every_visible_command_exactly_once() {
         "server",
         "service",
         "codex",
+        "shell",
     ] {
         assert!(
             !rows.iter().any(|(name, _)| *name == hidden),
@@ -308,4 +309,61 @@ fn root_help_lists_every_visible_command_exactly_once() {
     listed.sort_unstable();
     visible.sort_unstable();
     assert_eq!(listed, visible);
+}
+
+#[test]
+fn the_shell_takes_a_loopback_codex_remote() {
+    for remote in [
+        "ws://127.0.0.1:39292/",
+        "ws://localhost:39292/",
+        "ws://[::1]:39292/",
+    ] {
+        assert_eq!(
+            parse_loopback_codex_remote(remote).as_deref(),
+            Ok(remote),
+            "{remote}"
+        );
+    }
+}
+
+#[test]
+fn a_remote_codex_endpoint_is_refused_for_now() {
+    for remote in [
+        "ws://192.0.2.1:9292/",
+        "wss://127.0.0.1:9292/",
+        "unix:///tmp/gents-codex.sock",
+        "not an address",
+        "ws://127.0.0.1/",
+    ] {
+        let error = parse_loopback_codex_remote(remote).expect_err(remote);
+        assert!(
+            error.contains("remote homes come later"),
+            "{remote}: {error}"
+        );
+    }
+}
+
+#[test]
+fn gents_shell_parses_its_home_and_remote() {
+    let cli = Cli::try_parse_from([
+        "gents",
+        "shell",
+        "--home",
+        "/tmp/gents-shell-dev",
+        "--codex-remote",
+        "ws://127.0.0.1:39292/",
+    ])
+    .expect("shell should parse");
+    let Some(Command::Shell(args)) = cli.command else {
+        panic!("expected `shell`");
+    };
+    assert_eq!(args.home, Some(PathBuf::from("/tmp/gents-shell-dev")));
+    assert_eq!(args.codex_remote.as_deref(), Some("ws://127.0.0.1:39292/"));
+
+    let Err(error) =
+        Cli::try_parse_from(["gents", "shell", "--codex-remote", "ws://192.0.2.1:9292/"])
+    else {
+        panic!("a remote endpoint should not parse");
+    };
+    assert_eq!(error.kind(), ErrorKind::ValueValidation);
 }

@@ -275,6 +275,7 @@ mod tests {
     use crate::app::{sample_chat, ChatLine, Tab};
     use crate::keys::KeySet::{Emacs, Vim};
     use crate::sample::Tone;
+    use crate::source::{Agent, Update};
     use crate::testing::{buffer, find, press, screen, with_right_pane};
 
     fn no_logo(app: &App) -> bool {
@@ -288,6 +289,7 @@ mod tests {
             .map(|text| ChatLine {
                 text: text.to_string(),
                 tone: Tone::Plain,
+                item: None,
             })
             .collect();
         tab
@@ -404,6 +406,7 @@ mod tests {
         tab.lines = vec![ChatLine {
             text: "hello 世界 wörld 🦀 ".repeat(8),
             tone: Tone::You,
+            item: None,
         }];
         let rows = rows_at(&tab, 56);
         assert!(rows.len() > 1);
@@ -568,6 +571,70 @@ mod tests {
         }
         let drawn = buf.content().iter().filter(|c| c.symbol().starts_with('✔'));
         assert_eq!(drawn.count(), 60);
+    }
+
+    #[test]
+    fn a_multi_line_reply_wraps_each_line_and_keeps_its_tone() {
+        let mut tab = Tab::new_session();
+        let line = |text: &str, tone| ChatLine {
+            text: text.to_string(),
+            tone,
+            item: None,
+        };
+        tab.lines = vec![
+            line("one\ntwo three", Tone::Reply),
+            line("ok\n", Tone::Label),
+        ];
+        assert_eq!(
+            tab.wrapped_rows(5),
+            [
+                ("one".to_string(), Tone::Reply),
+                ("two".to_string(), Tone::Reply),
+                ("three".to_string(), Tone::Reply),
+                ("ok".to_string(), Tone::Label),
+                (String::new(), Tone::Label),
+            ]
+        );
+
+        tab.lines = vec![line("a\nlonger", Tone::You)];
+        let rows = rows_at(&tab, 20);
+        assert_eq!(rows.len(), 2);
+        let left = |row: &String| row.len() - row.trim_start().len();
+        assert_eq!(left(&rows[0]), left(&rows[1]), "{rows:?}");
+    }
+
+    #[test]
+    fn the_first_tab_takes_the_default_agent() {
+        let (intents, _receiver) = std::sync::mpsc::channel();
+        let mut app = App::connected(Vim, 132, 36, intents);
+        crate::testing::type_text(&mut app, "hi");
+        press(&mut app, "enter");
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("still connecting to the runtime")
+        );
+        assert_eq!(app.tabs[0].input.text(), "hi");
+
+        let agent = |id: &str, name: &str| Agent {
+            id: id.to_string(),
+            name: name.to_string(),
+            text: format!(" {name} agent"),
+            tone: Tone::Plain,
+        };
+        app.apply(Update::Agents(vec![
+            agent("local:default", "default"),
+            agent("local:reviewer", "reviewer"),
+        ]));
+        assert_eq!(app.tabs[0].agent_id, "local:default");
+        press(&mut app, "ctrl-c");
+        let s = screen(&app);
+        assert!(find(&s, "Message default").is_some());
+        assert!(find(&s, "1 new session · default").is_some());
+
+        app.push_layer(crate::app::layers::LayerKind::Picker);
+        let s = screen(&app);
+        assert!(find(&s, "default agent").is_some());
+        assert!(find(&s, "reviewer agent").is_some());
     }
 
     #[test]

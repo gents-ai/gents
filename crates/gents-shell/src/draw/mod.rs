@@ -177,7 +177,7 @@ fn draw_row(buf: &mut Buffer, area: Rect, y: u16, text: &str, tone: Tone, select
 
 fn draw_rows(buf: &mut Buffer, area: Rect, rows: &[SidebarRow], selected: Option<usize>) {
     for (index, (row, y)) in rows.iter().zip(area.top()..area.bottom()).enumerate() {
-        draw_row(buf, area, y, row.text, row.tone, selected == Some(index));
+        draw_row(buf, area, y, &row.text, row.tone, selected == Some(index));
     }
 }
 

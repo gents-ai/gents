@@ -3,6 +3,8 @@ pub mod layers;
 mod mouse;
 pub mod search;
 
+use std::sync::mpsc::Sender;
+
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -10,22 +12,25 @@ use ratatui::text::Span;
 
 use crate::commands::{Command, Effect, COMMANDS};
 use crate::filter::subsequence;
-use crate::keys::{in_key_set, Action, Dir, KeyCtx, KeySet, Keymap};
+use crate::keys::{in_key_set, in_line, Action, Dir, KeyCtx, KeySet, Keymap};
 use crate::layout::{
     conversation_area, layout, sessions_can_dock, sidebar_can_dock, sidebar_rows_area, Panes,
     Right, Screen, Wanted,
 };
 use crate::sample::{
-    diff, view_rows, Opens, RowAction, Running, SidebarRow, Tone, View, CHAT, DIFF_BACK_ROW,
-    PROMPT_ROW, RUNNING, SESSIONS, START_SESSION,
+    answer, diff, note, row, view_rows, Opens, RowAction, Running, SidebarRow, Tone, View, CHAT,
+    DIFF_BACK_ROW, PROMPT_ROW, START_SESSION,
 };
+use crate::source::{Agent, Connection, Day, Intent, Session, SessionState, Update};
 use input::LineInput;
 use layers::{Layer, LayerKind};
 use search::Search;
 
-const SAMPLE_REPLY: &str = " sample reply: nothing is wired to an agent yet.";
-const SAMPLE_SUBAGENT_REPLY: &str = " ◆ sample reply: nothing is wired to an agent yet.";
 const NOT_WIRED: &str = "not wired yet";
+const SOURCE_GONE: &str = "the runtime source stopped: reopen the shell";
+const CONNECTING: &str = "still connecting to the runtime";
+const STOPPING: &str = "stopping the turn";
+const STARTING: &str = "starting the session, try again in a moment";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
@@ -44,14 +49,28 @@ pub enum Mode {
 pub struct ChatLine {
     pub text: String,
     pub tone: Tone,
+    /// The transcript item the line shows.
+    pub item: Option<String>,
+}
+
+fn blank() -> ChatLine {
+    ChatLine {
+        text: String::new(),
+        tone: Tone::Plain,
+        item: None,
+    }
 }
 
 /// `scroll` counts lines up from the bottom. No `lines` means no messages yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tab {
-    pub session: Option<usize>,
+    /// Set by `App::push_tab`; a stepped-in subagent keeps its parent's.
+    pub id: u64,
+    /// The id of the session the tab shows.
+    pub session: Option<String>,
     pub name: String,
     pub agent: String,
+    pub agent_id: String,
     pub lines: Vec<ChatLine>,
     pub scroll: usize,
     pub input: LineInput,
@@ -59,6 +78,10 @@ pub struct Tab {
     pub running: &'static [Running],
     /// The selected running row, while those rows have the keys.
     pub running_sel: Option<usize>,
+    /// The session's turn in progress.
+    pub turn: Option<String>,
+    /// A send without a session is waiting for its `Started`.
+    pub starting: bool,
     /// Whether the right pane is wanted while this tab shows. Not saved across runs.
     pub sidebar: bool,
     /// The tab to step back out to. Stepping in swaps the subagent's tab into this slot.
@@ -68,15 +91,19 @@ pub struct Tab {
 impl Tab {
     pub fn new_session() -> Tab {
         Tab {
+            id: 0,
             session: None,
             name: "new session".to_string(),
             agent: "Engineer".to_string(),
+            agent_id: "Engineer".to_string(),
             lines: Vec::new(),
             scroll: 0,
             input: LineInput::default(),
             agent_picked: false,
             running: &[],
             running_sel: None,
+            turn: None,
+            starting: false,
             sidebar: false,
             parent: None,
         }
@@ -90,12 +117,38 @@ impl Tab {
                 let rows = if line.tone == Tone::You {
                     bubble(&line.text, width)
                 } else {
-                    wrap(&line.text, width)
+                    wrap_lines(&line.text, width)
                 };
                 rows.into_iter().map(|row| (row, line.tone))
             })
             .collect()
     }
+
+    /// An unseen item appends its line and a blank, and a seen one replaces its line.
+    fn put(&mut self, line: ChatLine) {
+        let seen = line.item.as_deref().and_then(|item| self.item_line(item));
+        match seen {
+            Some(index) => self.lines[index] = line,
+            None => self.lines.extend([line, blank()]),
+        }
+    }
+
+    fn set_agent(&mut self, agent: &Agent) {
+        self.agent = agent.name.clone();
+        self.agent_id = agent.id.clone();
+    }
+
+    fn item_line(&self, item: &str) -> Option<usize> {
+        self.lines
+            .iter()
+            .position(|line| line.item.as_deref() == Some(item))
+    }
+}
+
+fn wrap_lines(text: &str, width: usize) -> Vec<String> {
+    text.split('\n')
+        .flat_map(|line| wrap(line, width))
+        .collect()
 }
 
 /// Breaks at the last space that fits, dropping the spaces there, and inside a word only when the row holds no
@@ -133,7 +186,7 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 /// on each side. Padding in the text keeps search columns right.
 fn bubble(text: &str, width: usize) -> Vec<String> {
     let room = (width * 3 / 4).min(width.saturating_sub(2)).max(1);
-    let rows = wrap(text, room);
+    let rows = wrap_lines(text, room);
     let rows: Vec<&str> = rows.iter().map(|row| row.trim_start()).collect();
     let widest = rows.iter().map(|row| Span::raw(*row).width()).max();
     let left = width.saturating_sub(widest.unwrap_or(0) + 1);
@@ -147,6 +200,7 @@ fn chat_lines(chat: &[(&str, Tone)]) -> Vec<ChatLine> {
         .map(|&(text, tone)| ChatLine {
             text: text.to_string(),
             tone,
+            item: None,
         })
         .collect()
 }
@@ -156,8 +210,47 @@ pub fn sample_chat(agent: &str) -> Vec<ChatLine> {
         .map(|&(text, tone)| ChatLine {
             text: text.replace("Engineer", agent),
             tone,
+            item: None,
         })
         .collect()
+}
+
+/// `+ New session`, then each day's sessions under its header, in list order.
+pub fn session_rows(sessions: &[Session]) -> Vec<SidebarRow> {
+    let mut rows = vec![row(" + New session", Tone::Accent, RowAction::NewSession)];
+    for day in [Day::Today, Day::Yesterday, Day::Older] {
+        let mut listed = sessions
+            .iter()
+            .enumerate()
+            .filter(|(_, session)| session.day == day)
+            .peekable();
+        if listed.peek().is_none() {
+            continue;
+        }
+        let header = format!(" {}", day.label().to_uppercase());
+        rows.extend([
+            note("", Tone::Plain),
+            SidebarRow {
+                text: header.into(),
+                ..note("", Tone::Label)
+            },
+        ]);
+        rows.extend(listed.map(|(index, session)| {
+            let (mark, tone) = match session.state {
+                SessionState::Active => ('●', Tone::Plain),
+                SessionState::Idle => ('○', Tone::Plain),
+                SessionState::Error => ('!', Tone::Warn),
+            };
+            SidebarRow {
+                text: format!(" {mark} {}", session.name).into(),
+                tone,
+                action: RowAction::OpenSession(index),
+                name: session.name.clone().into(),
+                date: day.label(),
+            }
+        }));
+    }
+    rows
 }
 
 pub struct App {
@@ -178,6 +271,12 @@ pub struct App {
     /// The selected row of the open slash list, as a position in `slash_matches`.
     pub slash: Option<usize>,
     pub search: Option<Search>,
+    pub sessions: Vec<Session>,
+    pub agents: Vec<Agent>,
+    /// Without a source, the sample answers each intent at once.
+    intents: Option<Sender<Intent>>,
+    pub connection: Connection,
+    next_tab: u64,
     quit: bool,
 }
 
@@ -207,7 +306,7 @@ fn step_row(rows: &[SidebarRow], from: usize, forward: bool) -> usize {
 
 impl App {
     pub fn new(set: KeySet, width: u16, height: u16) -> App {
-        App {
+        let mut app = App {
             size: (width, height),
             keymap: Keymap::new(set),
             focus: Pane::Agent,
@@ -218,15 +317,250 @@ impl App {
             view_sel: [View::Changes, View::Workflows, View::Agents]
                 .map(|view| first_selectable(view_rows(view))),
             notice: None,
-            tabs: vec![Tab::new_session()],
+            tabs: Vec::new(),
             active: 0,
             diff: None,
             diff_scroll: 0,
             layers: Vec::new(),
             slash: None,
             search: None,
+            sessions: crate::sample::sessions(),
+            agents: crate::sample::agents(),
+            intents: None,
+            connection: Connection::Sample,
+            next_tab: 0,
             quit: false,
+        };
+        app.push_tab(Tab::new_session());
+        app
+    }
+
+    pub fn connected(set: KeySet, width: u16, height: u16, intents: Sender<Intent>) -> App {
+        App {
+            sessions: Vec::new(),
+            agents: Vec::new(),
+            sessions_sel: 0,
+            intents: Some(intents),
+            connection: Connection::Connecting,
+            ..App::new(set, width, height)
         }
+    }
+
+    /// A tab with no picked agent starts on the default one, once the agents are known.
+    fn push_tab(&mut self, mut tab: Tab) -> usize {
+        tab.id = self.next_tab;
+        self.next_tab += 1;
+        if let Some(agent) = self.agents.first().filter(|_| !tab.agent_picked) {
+            tab.set_agent(agent);
+        }
+        self.tabs.push(tab);
+        self.tabs.len() - 1
+    }
+
+    /// A lost source reads no more intents, so an action that needs one keeps its state.
+    fn says_lost(&mut self) -> bool {
+        let Connection::Lost(why) = &self.connection else {
+            return false;
+        };
+        self.notice = Some(why.clone());
+        true
+    }
+
+    fn emit(&mut self, intent: Intent) {
+        let Some(intents) = &self.intents else {
+            let subagent = self.tabs[self.active].parent.is_some();
+            for update in answer(&intent, subagent) {
+                self.apply(update);
+            }
+            return;
+        };
+        if intents.send(intent).is_err() {
+            self.connection = Connection::Lost(SOURCE_GONE.to_string());
+        }
+    }
+
+    pub fn apply(&mut self, update: Update) {
+        match update {
+            Update::Opened {
+                session,
+                lines,
+                running,
+            } => self.opened(&session, lines, running),
+            Update::Started { tab, session } => self.started(tab, session),
+            Update::StartFailed { tab, message } => self.start_failed(tab, message),
+            Update::Item { session, line } => {
+                if let Some(index) = self.showing(&session) {
+                    self.tabs[index].put(line);
+                }
+            }
+            Update::Delta {
+                session,
+                item,
+                text,
+                tone,
+            } => self.delta(&session, item, &text, tone),
+            Update::Turn { session, turn } => {
+                if let Some(index) = self.showing(&session) {
+                    self.tabs[index].turn = Some(turn);
+                }
+            }
+            Update::TurnEnded { session, turn } => {
+                if let Some(index) = self.showing(&session) {
+                    let tab = &mut self.tabs[index];
+                    if tab.turn.as_ref() == Some(&turn) {
+                        tab.turn = None;
+                    }
+                }
+            }
+            Update::SessionState { session, state } => {
+                if let Some(listed) = self.sessions.iter_mut().find(|listed| listed.id == session) {
+                    listed.state = state;
+                }
+            }
+            Update::Sessions(sessions) => self.set_sessions(sessions),
+            Update::Agents(agents) => self.set_agents(agents),
+            Update::Connection(connection) => self.connection = connection,
+            Update::Notice(notice) => self.notice = Some(notice),
+            Update::Begin { agent, prompt } => self.begin(agent, prompt),
+        }
+    }
+
+    fn delta(&mut self, session: &str, item: String, text: &str, tone: Tone) {
+        let Some(index) = self.showing(session) else {
+            return;
+        };
+        let tab = &mut self.tabs[index];
+        match tab.item_line(&item) {
+            Some(line) => tab.lines[line].text.push_str(text),
+            None => tab.put(ChatLine {
+                text: text.to_string(),
+                tone,
+                item: Some(item),
+            }),
+        }
+    }
+
+    fn set_sessions(&mut self, sessions: Vec<Session>) {
+        for tab in &mut self.tabs {
+            let listed = sessions
+                .iter()
+                .find(|listed| tab.session.as_ref() == Some(&listed.id));
+            if let Some(listed) = listed {
+                tab.name = listed.tab.clone();
+            }
+        }
+        let selected = match self
+            .session_rows()
+            .get(self.sessions_sel)
+            .map(|row| row.action)
+        {
+            Some(RowAction::OpenSession(index)) => Some(self.sessions[index].id.clone()),
+            _ => None,
+        };
+        self.sessions = sessions;
+        let rows = self.session_rows();
+        let kept = rows.iter().position(|row| match row.action {
+            RowAction::OpenSession(index) => selected.as_ref() == Some(&self.sessions[index].id),
+            _ => false,
+        });
+        self.sessions_sel = kept.unwrap_or_else(|| {
+            let clamped = self.sessions_sel.min(rows.len() - 1);
+            if rows[clamped].selectable() {
+                clamped
+            } else {
+                step_row(&rows, clamped, false)
+            }
+        });
+    }
+
+    /// A first tab with no session and no picked agent is still the starter tab, even with a
+    /// draft typed while connecting.
+    fn set_agents(&mut self, agents: Vec<Agent>) {
+        let first = &mut self.tabs[0];
+        if let (Some(agent), None, false) = (agents.first(), &first.session, first.agent_picked) {
+            first.set_agent(agent);
+        }
+        self.agents = agents;
+    }
+
+    /// A starter tab the user has already sent from, opened a session in or picked an agent
+    /// for keeps what they did.
+    fn begin(&mut self, agent: Option<String>, prompt: Option<String>) {
+        let first = &self.tabs[0];
+        if first.session.is_some() || first.starting || first.agent_picked {
+            return;
+        }
+        if let Some(id) = agent {
+            match self.agents.iter().find(|known| known.id == id) {
+                Some(known) => {
+                    let first = &mut self.tabs[0];
+                    first.set_agent(known);
+                    first.agent_picked = true;
+                }
+                None => {
+                    let default = &self.tabs[0].agent;
+                    self.notice = Some(format!(
+                        "agent {id} is not open in this shell; using {default}"
+                    ));
+                }
+            }
+        }
+        if let Some(text) = prompt {
+            let first = &mut self.tabs[0];
+            first.starting = true;
+            let intent = Intent::Send {
+                tab: first.id,
+                session: None,
+                agent: first.agent_id.clone(),
+                text,
+            };
+            self.emit(intent);
+        }
+    }
+
+    fn showing(&self, session: &str) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|tab| tab.session.as_deref() == Some(session))
+    }
+
+    fn opened(&mut self, session: &str, lines: Vec<ChatLine>, running: &'static [Running]) {
+        let Some(index) = self.showing(session) else {
+            return;
+        };
+        let tab = &mut self.tabs[index];
+        tab.lines = lines;
+        tab.running = running;
+        // Opening left an empty tab in input mode; a user who has acted since keeps their mode.
+        let untouched = index == self.active
+            && self.mode == Mode::Input
+            && self.tabs[index].input.is_empty()
+            && self.search.is_none()
+            && self.slash.is_none()
+            && self.layers.is_empty();
+        if untouched {
+            self.mode = Mode::Normal;
+        }
+    }
+
+    fn start_failed(&mut self, tab: u64, message: String) {
+        if let Some(tab) = self.tabs.iter_mut().find(|shown| shown.id == tab) {
+            tab.starting = false;
+            self.notice = Some(message);
+        }
+    }
+
+    /// A tab binds one session; a late `Started` never rebinds it.
+    fn started(&mut self, tab: u64, session: String) {
+        let waiting = |shown: &&mut Tab| shown.id == tab && shown.session.is_none();
+        if let Some(tab) = self.tabs.iter_mut().find(waiting) {
+            tab.session = Some(session);
+            tab.starting = false;
+        }
+    }
+
+    pub fn session_rows(&self) -> Vec<SidebarRow> {
+        session_rows(&self.sessions)
     }
 
     pub fn wanted(&self) -> Wanted {
@@ -343,9 +677,11 @@ impl App {
         match row.opens {
             Opens::Agent(chat) => {
                 let mut child = Tab::new_session();
-                child.session = tab.session;
+                child.id = tab.id;
+                child.session = tab.session.clone();
                 child.name = row.job.to_string();
                 child.agent = row.name.to_string();
+                child.agent_id = row.name.to_string();
                 child.lines = chat_lines(chat);
                 child.sidebar = tab.sidebar;
                 let parent = std::mem::replace(tab, child);
@@ -397,8 +733,15 @@ impl App {
 
     fn handle_key(&mut self, key: KeyEvent) {
         // Esc and the next key in one read reach crossterm as alt-<key>
-        // (crossterm-0.29.0/src/event/sys/unix/parse.rs:34-42).
-        if self.keymap.set() == KeySet::Vim && key.modifiers.contains(KeyModifiers::ALT) {
+        // (crossterm-0.29.0/src/event/sys/unix/parse.rs:34-42). In a line, `esc b` and `esc f`
+        // are also what terminals send for option-left and option-right, so they move by word.
+        let word_move = key.modifiers == KeyModifiers::ALT
+            && matches!(key.code, KeyCode::Char('b' | 'f'))
+            && in_line(self.ctx());
+        if self.keymap.set() == KeySet::Vim
+            && key.modifiers.contains(KeyModifiers::ALT)
+            && !word_move
+        {
             self.press(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
             self.press(KeyEvent::new(key.code, key.modifiers - KeyModifiers::ALT));
         } else {
@@ -422,8 +765,11 @@ impl App {
             | Action::Backspace
             | Action::Delete
             | Action::DeleteWord
+            | Action::DeleteToStart
             | Action::CursorLeft
             | Action::CursorRight
+            | Action::WordLeft
+            | Action::WordRight
             | Action::Home
             | Action::End => self.edit(action),
             Action::Submit if self.ctx() == KeyCtx::SearchLine => self.submit_search(),
@@ -501,7 +847,11 @@ impl App {
             self.slash = None;
         } else if matches!(
             action,
-            Action::Insert(_) | Action::Backspace | Action::Delete | Action::DeleteWord
+            Action::Insert(_)
+                | Action::Backspace
+                | Action::Delete
+                | Action::DeleteWord
+                | Action::DeleteToStart
         ) {
             self.slash = self.slash.map(|_| 0);
         }
@@ -612,28 +962,28 @@ impl App {
     }
 
     fn send(&mut self) {
-        let tab = &mut self.tabs[self.active];
-        if tab.input.text().trim().is_empty() {
+        if self.tabs[self.active].input.text().trim().is_empty() || self.says_lost() {
             return;
         }
-        let reply = if tab.parent.is_some() {
-            SAMPLE_SUBAGENT_REPLY
-        } else {
-            SAMPLE_REPLY
+        if self.agents.is_empty() {
+            self.notice = Some(CONNECTING.to_string());
+            return;
+        }
+        let tab = &mut self.tabs[self.active];
+        if tab.starting {
+            self.notice = Some(STARTING.to_string());
+            return;
+        }
+        let intent = Intent::Send {
+            tab: tab.id,
+            session: tab.session.clone(),
+            agent: tab.agent_id.clone(),
+            text: tab.input.text().to_string(),
         };
-        let rows = [
-            (tab.input.text(), Tone::You),
-            ("", Tone::Plain),
-            (reply, Tone::Reply),
-            ("", Tone::Plain),
-        ]
-        .map(|(text, tone)| ChatLine {
-            text: text.to_string(),
-            tone,
-        });
-        tab.lines.extend(rows);
+        tab.starting = tab.session.is_none();
         tab.input.clear();
         tab.scroll = 0;
+        self.emit(intent);
     }
 
     fn interrupt(&mut self) {
@@ -643,9 +993,7 @@ impl App {
             (None, Some(search)) if searching => &mut search.query,
             _ => &mut self.tabs[self.active].input,
         };
-        if input.is_empty() {
-            self.notice = Some(self.quit_hint().to_string());
-        } else {
+        if !input.is_empty() {
             input.clear();
             if self.layers.is_empty() {
                 self.slash = None;
@@ -653,6 +1001,22 @@ impl App {
             if searching {
                 self.go_to_match();
             }
+            return;
+        }
+        let tab = &self.tabs[self.active];
+        if let (Some(session), Some(turn)) = (&tab.session, &tab.turn) {
+            let intent = Intent::Interrupt {
+                session: session.clone(),
+                agent: tab.agent_id.clone(),
+                turn: turn.clone(),
+            };
+            if self.says_lost() {
+                return;
+            }
+            self.emit(intent);
+            self.notice = Some(STOPPING.to_string());
+        } else {
+            self.notice = Some(self.quit_hint().to_string());
         }
     }
 
@@ -777,20 +1141,20 @@ impl App {
         };
     }
 
-    pub fn open_tab_with_agent(&mut self, agent: &str) {
+    pub fn open_tab_with_agent(&mut self, agent: usize) {
         self.layers.clear();
         let mut tab = Tab::new_session();
-        tab.agent = agent.to_string();
+        tab.set_agent(&self.agents[agent]);
         tab.agent_picked = true;
-        self.tabs.push(tab);
-        self.activate_tab(self.tabs.len() - 1);
+        let index = self.push_tab(tab);
+        self.activate_tab(index);
     }
 
     pub fn close_tab(&mut self) {
         self.diff = None;
         self.tabs.remove(self.active);
         if self.tabs.is_empty() {
-            self.tabs.push(Tab::new_session());
+            self.push_tab(Tab::new_session());
         }
         self.activate_tab(self.active.saturating_sub(1));
     }
@@ -807,31 +1171,49 @@ impl App {
     /// The untouched starter tab may become the session's. Any other keeps its draft and its
     /// picked agent, because a tab cannot switch agent.
     pub fn open_session(&mut self, row: usize) {
-        let RowAction::OpenSession { tab: name, agent } = SESSIONS[row].action else {
+        let RowAction::OpenSession(index) = self.session_rows()[row].action else {
             return;
         };
         self.layers.clear();
-        if let Some(index) = self.tabs.iter().position(|tab| tab.session == Some(row)) {
+        let session = self.sessions[index].clone();
+        let shown = self
+            .tabs
+            .iter()
+            .position(|tab| tab.session.as_ref() == Some(&session.id));
+        if let Some(index) = shown {
             self.activate_tab(index);
+            return;
+        }
+        if self.says_lost() {
             return;
         }
         let current = &self.tabs[self.active];
         let untouched = current.session.is_none()
+            && !current.starting
             && current.lines.is_empty()
             && current.input.is_empty()
             && !current.agent_picked;
         if !untouched {
-            self.tabs.push(Tab::new_session());
-            self.active = self.tabs.len() - 1;
+            self.active = self.push_tab(Tab::new_session());
             self.diff = None;
         }
+        let agent = self.agent_name(&session.agent);
         let tab = &mut self.tabs[self.active];
-        tab.session = Some(row);
-        tab.name = name.to_string();
-        tab.agent = agent.to_string();
-        tab.lines = sample_chat(agent);
-        tab.running = RUNNING;
+        tab.session = Some(session.id.clone());
+        tab.name = session.tab;
+        tab.agent = agent;
+        tab.agent_id = session.agent.clone();
         self.activate_tab(self.active);
+        self.emit(Intent::Open {
+            session: session.id,
+            agent: session.agent,
+        });
+    }
+
+    /// An agent the list does not hold shows by its id.
+    fn agent_name(&self, id: &str) -> String {
+        let found = self.agents.iter().find(|agent| agent.id == id);
+        found.map_or(id, |agent| &agent.name).to_string()
     }
 
     fn toggle_sessions(&mut self) {
@@ -906,7 +1288,7 @@ impl App {
     }
 
     fn step_session(&mut self, forward: bool) {
-        self.sessions_sel = step_row(SESSIONS, self.sessions_sel, forward);
+        self.sessions_sel = step_row(&self.session_rows(), self.sessions_sel, forward);
     }
 
     fn step_sidebar(&mut self, forward: bool) {
@@ -953,9 +1335,9 @@ impl App {
     }
 
     fn activate_session_row(&mut self) {
-        match SESSIONS[self.sessions_sel].action {
+        match self.session_rows()[self.sessions_sel].action {
             RowAction::NewSession => self.push_layer(LayerKind::Picker),
-            RowAction::OpenSession { .. } => self.open_session(self.sessions_sel),
+            RowAction::OpenSession(_) => self.open_session(self.sessions_sel),
             _ => {}
         }
     }
@@ -982,7 +1364,7 @@ mod tests {
     use crate::draw;
     use crate::draw::theme;
     use crate::keys::KeySet::{Emacs, Vim};
-    use crate::sample::SUBAGENT_MARK;
+    use crate::sample::{RUNNING, SUBAGENT_MARK};
     use crate::testing::{
         buffer, find, keys, numbered, press, screen, session_row, type_text, with_right_pane,
     };
@@ -1031,7 +1413,7 @@ mod tests {
     #[test]
     fn selections_start_on_a_selectable_row() {
         let app = App::new(Vim, 80, 24);
-        assert!(crate::sample::SESSIONS[app.sessions_sel]
+        assert!(app.session_rows()[app.sessions_sel]
             .text
             .contains("cli ux redesign"));
         for (view, selected) in [View::Changes, View::Workflows, View::Agents]
@@ -1154,6 +1536,56 @@ mod tests {
         app.handle(alt('j'));
         assert_eq!(app.tabs[0].scroll, 3);
         assert!(app.tabs[0].input.is_empty());
+    }
+
+    #[test]
+    fn ctrl_u_clears_the_message_box_a_jump_filter_and_the_search_line() {
+        for (set, jump, search) in [(Vim, "esc :", "esc /"), (Emacs, "alt-x", "ctrl-s")] {
+            let mut app = App::new(set, 132, 36);
+            type_text(&mut app, "hello there");
+            press(&mut app, "ctrl-u");
+            assert!(app.tabs[0].input.is_empty(), "{set:?}");
+
+            press(&mut app, jump);
+            type_text(&mut app, "acc");
+            press(&mut app, "ctrl-u");
+            assert_eq!(top_layer(&app), LayerKind::Jump, "{set:?}");
+            assert!(app.layers[0].filter.is_empty(), "{set:?}");
+            press(&mut app, "esc");
+
+            press(&mut app, search);
+            type_text(&mut app, "abc");
+            press(&mut app, "ctrl-u");
+            assert!(app.search.as_ref().unwrap().query.is_empty(), "{set:?}");
+        }
+    }
+
+    fn top_layer(app: &App) -> LayerKind {
+        app.layers.last().expect("a layer").kind
+    }
+
+    /// Option-left and option-right send `esc b` and `esc f`, which arrive as alt-b and alt-f.
+    #[test]
+    fn alt_b_and_alt_f_move_by_word_in_a_vim_line_and_other_alt_keys_still_split() {
+        let mut app = App::new(Vim, 132, 36);
+        type_text(&mut app, "one two");
+        app.handle(alt('b'));
+        type_text(&mut app, "x");
+        app.handle(alt('f'));
+        type_text(&mut app, "!");
+        assert_eq!(app.tabs[0].input.text(), "one xtwo!");
+        assert_eq!(app.mode, Mode::Input);
+
+        app.handle(alt('x'));
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.tabs[0].input.text(), "one xtwo!");
+
+        press(&mut app, ":");
+        type_text(&mut app, "ab cd");
+        app.handle(alt('b'));
+        assert_eq!(top_layer(&app), LayerKind::Jump);
+        type_text(&mut app, "x");
+        assert_eq!(app.layers[0].filter.text(), "ab xcd");
     }
 
     #[test]
@@ -2037,7 +2469,7 @@ mod tests {
         for _ in 0..20 {
             press(&mut app, "j");
         }
-        assert_eq!(app.sessions_sel, SESSIONS.len() - 1);
+        assert_eq!(app.sessions_sel, app.session_rows().len() - 1);
         for _ in 0..20 {
             press(&mut app, "k");
         }
@@ -2545,7 +2977,7 @@ mod tests {
     #[test]
     fn a_session_never_takes_over_a_tab_with_a_picked_agent() {
         let mut app = App::new(Vim, 132, 36);
-        app.open_tab_with_agent("Reviewer");
+        app.open_tab_with_agent(1);
         enter_on_session(&mut app, "cli ux");
         assert_eq!(app.tabs.len(), 3);
         assert_eq!(app.active, 2);
@@ -2720,6 +3152,605 @@ mod tests {
             vim.diff_rows(0).last().expect("rows").0,
             " esc back to files"
         );
+    }
+
+    fn listed(name: &str, day: Day, state: SessionState) -> Session {
+        Session {
+            id: name.to_string(),
+            agent: "Engineer".to_string(),
+            name: name.to_string(),
+            tab: name.to_string(),
+            day,
+            state,
+        }
+    }
+
+    fn texts(rows: &[SidebarRow]) -> Vec<&str> {
+        rows.iter().map(|row| row.text.as_ref()).collect()
+    }
+
+    #[test]
+    fn session_rows_group_by_day_with_state_marks() {
+        let rows = session_rows(&[
+            listed("one", Day::Today, SessionState::Active),
+            listed("two", Day::Today, SessionState::Error),
+            listed("three", Day::Yesterday, SessionState::Idle),
+        ]);
+        assert_eq!(
+            texts(&rows),
+            [
+                " + New session",
+                "",
+                " TODAY",
+                " ● one",
+                " ! two",
+                "",
+                " YESTERDAY",
+                " ○ three"
+            ]
+        );
+        assert!(rows.iter().all(|row| row.text != " OLDER"));
+        let tones: Vec<Tone> = rows[3..].iter().map(|row| row.tone).collect();
+        use Tone::{Label, Plain, Warn};
+        assert_eq!(tones, [Plain, Warn, Plain, Label, Plain]);
+        assert_eq!(rows[4].action, RowAction::OpenSession(1));
+        assert_eq!(
+            (rows[7].name.as_ref(), rows[7].date),
+            ("three", "yesterday")
+        );
+    }
+
+    #[test]
+    fn an_older_session_gets_its_own_group() {
+        let rows = session_rows(&[
+            listed("new", Day::Today, SessionState::Idle),
+            listed("old", Day::Older, SessionState::Idle),
+        ]);
+        assert_eq!(
+            texts(&rows),
+            [
+                " + New session",
+                "",
+                " TODAY",
+                " ○ new",
+                "",
+                " OLDER",
+                " ○ old"
+            ]
+        );
+        assert_eq!(rows[6].action, RowAction::OpenSession(1));
+        assert_eq!(rows[6].date, "older");
+    }
+
+    #[test]
+    fn sample_rows_match_the_old_sidebar() {
+        let rows = session_rows(&crate::sample::sessions());
+        assert_eq!(
+            texts(&rows),
+            [
+                " + New session",
+                "",
+                " TODAY",
+                " ● cli ux redesign",
+                " ○ flaky recovery test",
+                " ! pack registry login",
+                "",
+                " YESTERDAY",
+                " ○ eval baseline",
+                " ○ desktop plugin page",
+                " ○ weekly triage",
+                " ○ pack review notes",
+            ]
+        );
+        assert_eq!(rows[START_SESSION].text, " ● cli ux redesign");
+    }
+
+    fn connected() -> (App, std::sync::mpsc::Receiver<Intent>) {
+        let (intents, receiver) = std::sync::mpsc::channel();
+        let mut app = App::connected(Vim, 132, 36, intents);
+        app.agents = crate::sample::agents();
+        (app, receiver)
+    }
+
+    fn said(text: &str, tone: Tone, item: &str) -> ChatLine {
+        ChatLine {
+            text: text.to_string(),
+            tone,
+            item: Some(item.to_string()),
+        }
+    }
+
+    fn item(session: &str, line: ChatLine) -> Update {
+        Update::Item {
+            session: session.to_string(),
+            line,
+        }
+    }
+
+    #[test]
+    fn a_connected_tab_sends_an_intent_and_waits() {
+        let (mut app, intents) = connected();
+        type_text(&mut app, "hello");
+        press(&mut app, "enter");
+        let sent = intents.try_recv().expect("an intent");
+        assert!(
+            matches!(&sent, Intent::Send { session: None, text, .. } if text == "hello"),
+            "{sent:?}"
+        );
+        assert!(app.tabs[0].lines.is_empty());
+        assert!(app.tabs[0].input.is_empty());
+    }
+
+    #[test]
+    fn started_binds_the_tab_and_items_follow() {
+        let (mut app, _intents) = connected();
+        type_text(&mut app, "hello");
+        press(&mut app, "enter");
+        let tab = app.tabs[0].id;
+        app.apply(Update::Started {
+            tab,
+            session: "s1".to_string(),
+        });
+        app.apply(item("s1", said("hello", Tone::You, "u1")));
+        assert_eq!(app.tabs[0].session.as_deref(), Some("s1"));
+        assert_eq!(app.tabs[0].lines, [said("hello", Tone::You, "u1"), blank()]);
+    }
+
+    #[test]
+    fn an_item_seen_again_replaces_its_line() {
+        let (mut app, _intents) = connected();
+        app.tabs[0].session = Some("s1".to_string());
+        app.apply(item("s1", said("working", Tone::Reply, "r1")));
+        app.apply(item("s1", said("  … run   ls", Tone::Warn, "c1")));
+        app.apply(item("s1", said("worked", Tone::Reply, "r1")));
+        assert_eq!(
+            app.tabs[0].lines,
+            [
+                said("worked", Tone::Reply, "r1"),
+                blank(),
+                said("  … run   ls", Tone::Warn, "c1"),
+                blank()
+            ]
+        );
+    }
+
+    #[test]
+    fn opening_a_connected_session_emits_open_and_shows_opened() {
+        let (mut app, intents) = connected();
+        app.sessions = crate::sample::sessions();
+        enter_on_session(&mut app, "flaky");
+        let open = Intent::Open {
+            session: "flaky recovery test".to_string(),
+            agent: "Reviewer".to_string(),
+        };
+        assert_eq!(intents.try_recv(), Ok(open));
+        assert!(app.tabs[0].lines.is_empty());
+
+        app.apply(Update::Opened {
+            session: "flaky recovery test".to_string(),
+            lines: sample_chat("Reviewer"),
+            running: &[],
+        });
+        assert_eq!(app.tabs[0].lines, sample_chat("Reviewer"));
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(find(&screen(&app), "Group the sign-in").is_some());
+    }
+
+    #[test]
+    fn updates_for_a_session_no_tab_shows_are_dropped() {
+        let (mut app, _intents) = connected();
+        let before = app.tabs.clone();
+        for update in [
+            Update::Started {
+                tab: 99,
+                session: "s1".to_string(),
+            },
+            item("s1", said("hi", Tone::You, "u1")),
+            Update::Opened {
+                session: "s1".to_string(),
+                lines: sample_chat("Engineer"),
+                running: RUNNING,
+            },
+            Update::Delta {
+                session: "s1".to_string(),
+                item: "r1".to_string(),
+                text: "hi".to_string(),
+                tone: Tone::Reply,
+            },
+            turn("t1"),
+            ended("t1"),
+        ] {
+            app.apply(update);
+        }
+        assert_eq!(app.tabs, before);
+    }
+
+    #[test]
+    fn a_closed_source_marks_the_connection_lost() {
+        let (mut app, intents) = connected();
+        drop(intents);
+        type_text(&mut app, "hello");
+        press(&mut app, "enter");
+        assert!(
+            matches!(app.connection, Connection::Lost(_)),
+            "{:?}",
+            app.connection
+        );
+    }
+
+    fn delta(item: &str, text: &str, tone: Tone) -> Update {
+        Update::Delta {
+            session: "s1".to_string(),
+            item: item.to_string(),
+            text: text.to_string(),
+            tone,
+        }
+    }
+
+    fn turn(turn: &str) -> Update {
+        Update::Turn {
+            session: "s1".to_string(),
+            turn: turn.to_string(),
+        }
+    }
+
+    fn ended(turn: &str) -> Update {
+        Update::TurnEnded {
+            session: "s1".to_string(),
+            turn: turn.to_string(),
+        }
+    }
+
+    #[test]
+    fn deltas_append_to_the_reply_in_order() {
+        let (mut app, _intents) = connected();
+        app.tabs[0].session = Some("s1".to_string());
+        app.apply(item("s1", said("", Tone::Reply, "r1")));
+        for text in ["Moving ", "them", " under auth"] {
+            app.apply(delta("r1", text, Tone::Reply));
+        }
+        let reply = said("Moving them under auth", Tone::Reply, "r1");
+        assert_eq!(app.tabs[0].lines, [reply, blank()]);
+    }
+
+    #[test]
+    fn a_delta_for_a_new_item_starts_a_line_in_its_tone() {
+        let (mut app, _intents) = connected();
+        app.tabs[0].session = Some("s1".to_string());
+        app.apply(item("s1", said("  … run   ls", Tone::Warn, "c1")));
+        app.apply(delta("c1/output", "Cargo.toml", Tone::Label));
+        app.apply(delta("c1/output", "\nsrc", Tone::Label));
+        assert_eq!(
+            app.tabs[0].lines,
+            [
+                said("  … run   ls", Tone::Warn, "c1"),
+                blank(),
+                said("Cargo.toml\nsrc", Tone::Label, "c1/output"),
+                blank()
+            ]
+        );
+    }
+
+    #[test]
+    fn ctrl_c_stops_a_running_turn_only_with_an_empty_box() {
+        let (mut app, intents) = connected();
+        app.tabs[0].session = Some("s1".to_string());
+        app.apply(turn("t1"));
+        type_text(&mut app, "draft");
+        press(&mut app, "ctrl-c");
+        assert!(app.tabs[0].input.is_empty());
+        assert!(
+            intents.try_recv().is_err(),
+            "clearing the box stops nothing"
+        );
+
+        press(&mut app, "ctrl-c");
+        let stop = Intent::Interrupt {
+            session: "s1".to_string(),
+            agent: "Engineer".to_string(),
+            turn: "t1".to_string(),
+        };
+        assert_eq!(intents.try_recv(), Ok(stop));
+        assert_eq!(app.notice.as_deref(), Some("stopping the turn"));
+
+        app.apply(ended("t1"));
+        press(&mut app, "ctrl-c");
+        assert!(intents.try_recv().is_err());
+        let hint = "esc first, then :q then enter to quit";
+        assert_eq!(app.notice.as_deref(), Some(hint));
+    }
+
+    #[test]
+    fn an_older_turn_ending_leaves_the_newer_one() {
+        let (mut app, intents) = connected();
+        app.tabs[0].session = Some("s1".to_string());
+        app.apply(turn("A"));
+        app.apply(turn("B"));
+        app.apply(ended("A"));
+        assert_eq!(app.tabs[0].turn.as_deref(), Some("B"));
+        press(&mut app, "ctrl-c");
+        let stop = Intent::Interrupt {
+            session: "s1".to_string(),
+            agent: "Engineer".to_string(),
+            turn: "B".to_string(),
+        };
+        assert_eq!(intents.try_recv(), Ok(stop));
+        app.apply(ended("B"));
+        assert_eq!(app.tabs[0].turn, None);
+    }
+
+    #[test]
+    fn a_relist_keeps_the_selected_session() {
+        let (mut app, _intents) = connected();
+        let today = |name| listed(name, Day::Today, SessionState::Idle);
+        app.apply(Update::Sessions(vec![today("one"), today("two")]));
+        app.sessions_sel = 3;
+        assert_eq!(app.session_rows()[app.sessions_sel].text, " ○ one");
+
+        app.apply(Update::Sessions(vec![today("two"), today("one")]));
+        assert_eq!(app.session_rows()[app.sessions_sel].text, " ○ one");
+    }
+
+    #[test]
+    fn a_refreshed_list_keeps_the_selection_in_range() {
+        let (mut app, _intents) = connected();
+        app.apply(Update::Sessions(crate::sample::sessions()));
+        enter_on_session(&mut app, "weekly triage");
+        app.sessions_sel = app.session_rows().len() - 1;
+
+        let mut renamed = listed("weekly triage", Day::Today, SessionState::Idle);
+        renamed.tab = "triage, renamed".to_string();
+        app.apply(Update::Sessions(vec![renamed]));
+        assert_eq!(app.sessions_sel, 3);
+        assert_eq!(
+            app.session_rows()[app.sessions_sel].text,
+            " ○ weekly triage"
+        );
+        assert_eq!(app.tabs[0].name, "triage, renamed");
+
+        app.apply(Update::SessionState {
+            session: "weekly triage".to_string(),
+            state: SessionState::Error,
+        });
+        let row = &app.session_rows()[3];
+        assert_eq!(
+            (row.text.as_ref(), row.tone),
+            (" ! weekly triage", Tone::Warn)
+        );
+    }
+
+    fn with_runtime_agents() -> (App, std::sync::mpsc::Receiver<Intent>) {
+        let (intents, receiver) = std::sync::mpsc::channel();
+        let mut app = App::connected(Vim, 132, 36, intents);
+        let agent = |id: &str, name: &str| Agent {
+            id: id.to_string(),
+            name: name.to_string(),
+            text: format!(" {name}"),
+            tone: Tone::Plain,
+        };
+        app.apply(Update::Agents(vec![
+            agent("local:default", "default"),
+            agent("local:reviewer", "reviewer"),
+        ]));
+        (app, receiver)
+    }
+
+    fn agent_of(tab: &Tab) -> (&str, &str) {
+        (&tab.agent, &tab.agent_id)
+    }
+
+    #[test]
+    fn a_starter_tab_already_sent_from_keeps_its_agent_and_sends_no_prompt() {
+        let (mut app, intents) = with_runtime_agents();
+        type_text(&mut app, "mine");
+        press(&mut app, "enter");
+        intents.try_recv().expect("the user's own send");
+
+        app.apply(Update::Begin {
+            agent: Some("local:reviewer".to_string()),
+            prompt: Some("hello".to_string()),
+        });
+
+        assert_eq!(agent_of(&app.tabs[0]), ("default", "local:default"));
+        assert!(intents.try_recv().is_err());
+    }
+
+    #[test]
+    fn closing_the_last_tab_takes_the_default_agent() {
+        let (intents, _receiver) = std::sync::mpsc::channel();
+        let mut app = App::connected(Vim, 132, 36, intents);
+        press(&mut app, "esc ctrl-w q");
+        let waiting = agent_of(&app.tabs[0]);
+        assert_eq!(
+            waiting,
+            ("Engineer", "Engineer"),
+            "before the agents arrive"
+        );
+
+        let (mut app, _intents) = with_runtime_agents();
+        let closed = app.tabs[0].id;
+        press(&mut app, "esc ctrl-w q");
+        assert_eq!(app.tabs.len(), 1);
+        assert_ne!(app.tabs[0].id, closed);
+        assert_eq!(agent_of(&app.tabs[0]), ("default", "local:default"));
+    }
+
+    #[test]
+    fn a_new_session_tab_takes_the_default_agent() {
+        let (mut app, _intents) = with_runtime_agents();
+        app.focus = Pane::Sessions;
+        app.sessions_sel = 0;
+        press(&mut app, "enter enter");
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(agent_of(&app.tabs[1]), ("default", "local:default"));
+
+        type_text(&mut app, "/new");
+        press(&mut app, "enter enter");
+        assert_eq!(app.tabs.len(), 3);
+        assert_eq!(agent_of(&app.tabs[2]), ("default", "local:default"));
+    }
+
+    fn opened(session: &str) -> Update {
+        Update::Opened {
+            session: session.to_string(),
+            lines: sample_chat("Engineer"),
+            running: &[],
+        }
+    }
+
+    #[test]
+    fn opened_leaves_a_draft_typed_while_it_loaded() {
+        let (mut app, _intents) = connected();
+        app.sessions = crate::sample::sessions();
+        enter_on_session(&mut app, "flaky");
+        type_text(&mut app, "dr");
+        app.apply(opened("flaky recovery test"));
+        assert_eq!(app.tabs[0].lines, sample_chat("Engineer"));
+        assert_eq!(app.mode, Mode::Input);
+        assert_eq!(app.focus, Pane::Agent);
+        type_text(&mut app, "aft :");
+        assert_eq!(app.tabs[0].input.text(), "draft :");
+        assert!(app.layers.is_empty());
+    }
+
+    #[test]
+    fn opened_for_a_tab_in_the_background_moves_nothing() {
+        let (mut app, _intents) = connected();
+        app.sessions = crate::sample::sessions();
+        enter_on_session(&mut app, "flaky");
+        enter_on_session(&mut app, "cli ux");
+        assert_eq!((app.active, app.mode), (1, Mode::Input));
+        app.apply(opened("flaky recovery test"));
+        assert_eq!(app.tabs[0].lines, sample_chat("Engineer"));
+        assert_eq!((app.active, app.mode), (1, Mode::Input));
+    }
+
+    #[test]
+    fn a_tab_starts_one_session_however_fast_it_sends() {
+        let (mut app, intents) = connected();
+        type_text(&mut app, "one");
+        press(&mut app, "enter");
+        type_text(&mut app, "two");
+        press(&mut app, "enter");
+        let first = intents.try_recv().expect("the first send");
+        assert!(
+            matches!(&first, Intent::Send { session: None, text, .. } if text == "one"),
+            "{first:?}"
+        );
+        assert!(intents.try_recv().is_err(), "the second send waits");
+        let waiting = "starting the session, try again in a moment";
+        assert_eq!(app.notice.as_deref(), Some(waiting));
+        assert_eq!(app.tabs[0].input.text(), "two");
+
+        let tab = app.tabs[0].id;
+        app.apply(Update::Started {
+            tab,
+            session: "s1".to_string(),
+        });
+        press(&mut app, "enter");
+        let second = intents.try_recv().expect("the send after Started");
+        assert!(
+            matches!(&second, Intent::Send { session: Some(session), text, .. }
+                if session == "s1" && text == "two"),
+            "{second:?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_start_frees_the_tab_to_send_again() {
+        let (mut app, intents) = connected();
+        type_text(&mut app, "one");
+        press(&mut app, "enter");
+        assert!(intents.try_recv().is_ok());
+        assert!(app.tabs[0].starting);
+
+        app.apply(Update::StartFailed {
+            tab: 99,
+            message: "elsewhere".to_string(),
+        });
+        assert!(app.tabs[0].starting, "another tab's failure");
+        assert_eq!(app.notice, None);
+
+        let tab = app.tabs[0].id;
+        app.apply(Update::StartFailed {
+            tab,
+            message: "the runtime refused the thread".to_string(),
+        });
+        assert!(!app.tabs[0].starting);
+        let refused = "the runtime refused the thread";
+        assert_eq!(app.notice.as_deref(), Some(refused));
+        assert!(app.tabs[0].input.is_empty());
+
+        type_text(&mut app, "two");
+        press(&mut app, "enter");
+        let again = intents.try_recv().expect("a send after the failure");
+        assert!(
+            matches!(&again, Intent::Send { session: None, text, .. } if text == "two"),
+            "{again:?}"
+        );
+    }
+
+    #[test]
+    fn a_session_opened_while_the_first_tab_starts_gets_its_own_tab() {
+        let (mut app, intents) = connected();
+        app.sessions = crate::sample::sessions();
+        type_text(&mut app, "hello");
+        press(&mut app, "enter");
+        assert!(intents.try_recv().is_ok());
+        let first = app.tabs[0].id;
+        enter_on_session(&mut app, "flaky");
+        let flaky = Some("flaky recovery test");
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.tabs[0].session, None);
+        assert_eq!(app.tabs[1].session.as_deref(), flaky);
+
+        app.apply(Update::Started {
+            tab: first,
+            session: "s-new".to_string(),
+        });
+        assert_eq!(app.tabs[0].session.as_deref(), Some("s-new"));
+        assert_eq!(app.tabs[1].session.as_deref(), flaky);
+        app.apply(Update::Started {
+            tab: first,
+            session: "s-again".to_string(),
+        });
+        assert_eq!(app.tabs[0].session.as_deref(), Some("s-new"), "bound once");
+    }
+
+    #[test]
+    fn a_lost_source_keeps_the_draft_and_says_why() {
+        let why = "runtime closed: check `gents status`, then reopen the shell";
+        let lost = || Update::Connection(Connection::Lost(why.to_string()));
+        let (mut app, intents) = connected();
+        app.apply(lost());
+        type_text(&mut app, "hello");
+        press(&mut app, "enter");
+        assert!(intents.try_recv().is_err());
+        assert_eq!(app.tabs[0].input.text(), "hello");
+        assert!(!app.tabs[0].starting);
+        assert_eq!(app.notice.as_deref(), Some(why));
+
+        app.sessions = crate::sample::sessions();
+        press(&mut app, "ctrl-c");
+        enter_on_session(&mut app, "flaky");
+        assert!(intents.try_recv().is_err());
+        assert_eq!(app.tabs[0].session, None);
+        assert_eq!(app.notice.as_deref(), Some(why));
+
+        app.tabs[0].session = Some("s1".to_string());
+        app.apply(turn("t1"));
+        app.focus = Pane::Agent;
+        press(&mut app, "ctrl-c");
+        assert!(intents.try_recv().is_err());
+        assert_eq!(app.notice.as_deref(), Some(why));
+
+        let (intents, _receiver) = std::sync::mpsc::channel();
+        let mut app = App::connected(Vim, 132, 36, intents);
+        app.apply(lost());
+        type_text(&mut app, "hello");
+        press(&mut app, "enter");
+        assert_eq!(app.notice.as_deref(), Some(why), "before the agents arrive");
+        assert_eq!(app.tabs[0].input.text(), "hello");
     }
 
     #[test]

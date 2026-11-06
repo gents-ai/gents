@@ -222,7 +222,7 @@ fn config_client_set_and_show() -> Result<()> {
         assert!(output.status.success(), "stderr:\n{}", stderr_of(&output));
         Ok(String::from_utf8(output.stdout)?)
     };
-    assert_eq!(show()?.trim(), "codex");
+    assert_eq!(show()?.trim(), "shell");
 
     let set = run_gents(
         user_home.path(),

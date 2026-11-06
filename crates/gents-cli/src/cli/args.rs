@@ -237,6 +237,11 @@ pub(crate) enum Command {
         hide = true
     )]
     Codex(CodexArgs),
+    #[command(
+        about = "Open the built-in shell against this home's runtime",
+        hide = true
+    )]
+    Shell(ShellArgs),
     /// Installed service definitions run `gents server --home`, so this name
     /// outlives the binary that wrote them.
     #[command(name = "server", hide = true)]

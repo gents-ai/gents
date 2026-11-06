@@ -8,7 +8,8 @@ use crate::jump::{self, Target};
 use crate::keys::{Action, Dir, KeyCtx};
 pub use crate::layout::LayerKind;
 use crate::layout::{keys_rows_area, layer_rect, sessions_can_dock, sidebar_can_dock};
-use crate::sample::{menu, AgentRow, RowAction, AGENTS, KEY_ROWS};
+use crate::sample::{menu, RowAction, KEY_ROWS};
+use crate::source::Agent;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layer {
@@ -17,14 +18,14 @@ pub struct Layer {
     pub selected: usize,
 }
 
-pub fn picker_matches(query: &str) -> Vec<&'static AgentRow> {
-    AGENTS
-        .iter()
-        .filter(|agent| subsequence(query, agent.name))
-        .collect()
-}
-
 impl App {
+    pub fn picker_matches(&self, query: &str) -> Vec<&Agent> {
+        self.agents
+            .iter()
+            .filter(|agent| subsequence(query, &agent.name))
+            .collect()
+    }
+
     /// A kind already in the stack comes to the top. The bar looks only at the top, because
     /// opening it again over a menu is how depth grows.
     pub fn push_layer(&mut self, kind: LayerKind) {
@@ -71,11 +72,16 @@ impl App {
             return;
         };
         match action {
-            Action::Insert(_) | Action::Backspace | Action::Delete => {
+            Action::Insert(_) | Action::Backspace | Action::Delete | Action::DeleteToStart => {
                 top.filter.edit(action);
                 top.selected = 0;
             }
-            Action::CursorLeft | Action::CursorRight | Action::Home | Action::End => {
+            Action::CursorLeft
+            | Action::CursorRight
+            | Action::WordLeft
+            | Action::WordRight
+            | Action::Home
+            | Action::End => {
                 top.filter.edit(action);
             }
             Action::Submit => self.submit_layer(),
@@ -115,9 +121,12 @@ impl App {
         };
         match top.kind {
             LayerKind::Picker => {
-                let matches = picker_matches(top.filter.text());
-                if let Some(agent) = matches.get(top.selected) {
-                    self.open_tab_with_agent(agent.name);
+                let matches = self.picker_matches(top.filter.text());
+                let picked = matches
+                    .get(top.selected)
+                    .and_then(|picked| self.agents.iter().position(|agent| agent.id == picked.id));
+                if let Some(agent) = picked {
+                    self.open_tab_with_agent(agent);
                 }
             }
             LayerKind::Menu(id) => match menu(id).0[top.selected].action {
@@ -141,7 +150,7 @@ impl App {
                 self.activate_tab(index);
             }
             Target::Session(row) => self.open_session(row),
-            Target::Agent(name) => self.open_tab_with_agent(name),
+            Target::Agent(agent) => self.open_tab_with_agent(agent),
             Target::Menu(id) => self.push_layer(LayerKind::Menu(id)),
             Target::Command(index) => self.run_effect(COMMANDS[index].effect),
         }
@@ -159,8 +168,11 @@ impl App {
         };
         match top.kind {
             LayerKind::Picker => {
-                let max = picker_matches(top.filter.text()).len().saturating_sub(1);
-                top.selected = stepped(top.selected, forward, max);
+                let query = top.filter.text().to_string();
+                let max = self.picker_matches(&query).len().saturating_sub(1);
+                if let Some(top) = self.layers.last_mut() {
+                    top.selected = stepped(top.selected, forward, max);
+                }
             }
             LayerKind::Menu(id) => top.selected = step_row(menu(id).0, top.selected, forward),
             LayerKind::Keys => {
@@ -188,7 +200,7 @@ mod tests {
     use crate::app::{Mode, Pane};
     use crate::draw::theme;
     use crate::keys::KeySet::{Emacs, Vim};
-    use crate::sample::{MenuId, View, SESSIONS};
+    use crate::sample::{MenuId, View};
     use crate::testing::{buffer, find, kinds, press, screen, type_text, with_right_pane};
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::Event;
@@ -971,7 +983,7 @@ mod tests {
         press(&mut app, "esc ctrl-w [");
         let s = screen(&app);
         assert!(find(&s, "Sessions").is_some());
-        for row in SESSIONS.iter().filter(|row| !row.text.is_empty()) {
+        for row in app.session_rows().iter().filter(|row| !row.text.is_empty()) {
             assert!(find(&s, row.text.trim()).is_some(), "{}", row.text);
         }
         press(&mut app, "j enter");

@@ -1,7 +1,7 @@
 use crate::app::App;
 use crate::commands::COMMANDS;
 use crate::filter::{rank, Rank};
-use crate::sample::{MenuId, AGENTS, MENUS, SESSIONS, TOOLS_PACK};
+use crate::sample::{MenuId, MENUS, TOOLS_PACK};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
@@ -30,7 +30,8 @@ impl Group {
 pub enum Target {
     Tab(usize),
     Session(usize),
-    Agent(&'static str),
+    /// A position in `App.agents`.
+    Agent(usize),
     Menu(MenuId),
     Command(usize),
 }
@@ -78,10 +79,10 @@ pub fn items(app: &App, query: &str) -> Vec<JumpItem> {
         let label = format!("{} {name}", index + 1);
         add(Group::Tabs, label, "", Target::Tab(index), matched);
     }
-    for (index, row) in SESSIONS.iter().enumerate() {
+    for (index, row) in app.session_rows().iter().enumerate() {
         if !row.name.is_empty() {
             let label = format!("○ {}", row.name);
-            let matched = rank(query, row.name, &[]);
+            let matched = rank(query, &row.name, &[]);
             add(
                 Group::Sessions,
                 label,
@@ -91,13 +92,13 @@ pub fn items(app: &App, query: &str) -> Vec<JumpItem> {
             );
         }
     }
-    for agent in AGENTS {
+    for (index, agent) in app.agents.iter().enumerate() {
         add(
             Group::Agents,
-            agent.name.to_string(),
+            agent.name.clone(),
             "open in a new tab",
-            Target::Agent(agent.name),
-            rank(query, agent.name, &[]),
+            Target::Agent(index),
+            rank(query, &agent.name, &[]),
         );
     }
     for id in MENUS {
