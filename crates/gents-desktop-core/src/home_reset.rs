@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
 use crate::preference::{StoredManagedServer, MANAGED_SERVER_CONFIG};
-const ARCHIVE_CONSEQUENCE: &str = "The selected local state is moved into a timestamped backup. Nothing is imported into the new home.";
+const ARCHIVE_CONSEQUENCE: &str = "The selected local state is moved into a timestamped backup. The desktop User identity, key custody, and saved peers are retained.";
 const DELETE_CONSEQUENCE: &str =
-    "The selected local state is permanently deleted. Nothing is imported into the new home.";
+    "The selected local state is permanently deleted. The desktop User identity, key custody, and saved peers are retained.";
 const FULL_ARCHIVE_CONSEQUENCE: &str = "The managed home, client state and service definition are backed up. Browser storage and caches are permanently cleared and are not included in the backup.";
 const FULL_DELETE_CONSEQUENCE: &str = "The managed home, client state and service definition are permanently deleted. Browser storage and caches are permanently cleared.";
 
@@ -618,11 +618,12 @@ fn plan_reset(
         let preference = desktop_root.join(MANAGED_SERVER_CONFIG);
         ownership_records.extend(decoded_desktop_records(&canonical, &preference));
         desktop_owned |= !ownership_records.is_empty();
-        for entry in canonical
-            .client_state_entries()
-            .into_iter()
-            .chain(std::iter::once(preference))
-        {
+        let entries = if full_reset {
+            canonical.client_state_entries()
+        } else {
+            vec![canonical.node_data_dir().to_path_buf()]
+        };
+        for entry in entries.into_iter().chain(std::iter::once(preference)) {
             if desktop_owned && present(&entry)? {
                 client_entries.push(entry);
             }
@@ -642,10 +643,13 @@ fn plan_reset(
     let mut store_keys = Vec::new();
     if retires_client_state && desktop_owned {
         let canonical = crate::client::DesktopPaths::from_root(&desktop_root);
-        if let Some(key) = recorded_store_key(
-            canonical.store_encryption_path().to_path_buf(),
-            canonical.store_key_path().to_path_buf(),
-            false,
+        if let (true, Some(key)) = (
+            full_reset,
+            recorded_store_key(
+                canonical.store_encryption_path().to_path_buf(),
+                canonical.store_key_path().to_path_buf(),
+                false,
+            ),
         ) {
             add_store_key(&mut store_keys, key);
         }
@@ -654,7 +658,7 @@ fn plan_reset(
             canonical.store_key_path().to_path_buf(),
         )?;
         client_entries.extend(entries);
-        if let Some(key) = key {
+        if let (true, Some(key)) = (full_reset, key) {
             add_store_key(&mut store_keys, key);
         }
     }
@@ -1428,6 +1432,69 @@ mod tests {
             );
         }
         (home, desktop, service)
+    }
+
+    #[test]
+    fn desktop_reset_scope_matches_identity_model() {
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let contract = snapshot["identity_household_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "configuration-explicit-grants")
+            .unwrap();
+        for case in contract["desktop_reset_cases"].as_array().unwrap() {
+            let temp = tempfile::tempdir().unwrap();
+            let user = temp.path().canonicalize().unwrap();
+            let (home, desktop, service) = fixture(&user);
+            write(&desktop.node_data_dir().join("MANIFEST"), "REGOMAN");
+            write(desktop.identity_key_path(), "user key");
+            write(desktop.iroh_secret_key_path(), "client p2p key");
+            write(
+                desktop.store_encryption_path(),
+                r#"{"version":1,"custody":"file"}"#,
+            );
+            write(desktop.store_key_path(), "store key");
+            write(desktop.peer_directory_path(), "{}");
+            let upgrade =
+                gents::store::local::store_key::upgrade::journal_path(desktop.node_data_dir());
+            write(
+                &upgrade,
+                r#"{"version":1,"record":{"version":1,"custody":"file"},"phase":"copying"}"#,
+            );
+            let full = case["full"].as_bool().unwrap();
+            let plan = if full {
+                plan_full_reset(Some(&home), &desktop, &user, &service).unwrap()
+            } else {
+                plan_home_reset(None, None, None, &desktop, &user, ClientBinding::Orphaned).unwrap()
+            };
+            let binding = desktop.root().join(MANAGED_SERVER_CONFIG);
+            let path = match case["asset"].as_str().unwrap() {
+                "cache" => desktop.node_data_dir(),
+                "binding" => &binding,
+                "upgrade" => &upgrade,
+                "user_key" => desktop.identity_key_path(),
+                "user_metadata" => desktop.principal_metadata_path(),
+                "p2p_key" => desktop.iroh_secret_key_path(),
+                "custody" => desktop.store_encryption_path(),
+                "peers" => desktop.peer_directory_path(),
+                _ => panic!("unknown modeled desktop asset"),
+            };
+            assert_eq!(
+                plan.client_entries.iter().any(|entry| entry == path),
+                case["retired"].as_bool().unwrap(),
+                "{case}"
+            );
+            if !full {
+                assert!(
+                    plan.store_keys.is_empty(),
+                    "client custody must remain live: {case}"
+                );
+                assert!(!plan
+                    .client_entries
+                    .contains(&desktop.store_key_path().to_path_buf()));
+            }
+        }
     }
 
     #[test]

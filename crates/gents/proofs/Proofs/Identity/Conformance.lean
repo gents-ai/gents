@@ -1596,6 +1596,13 @@ def inferenceSelfConfigCase (phase actor document : String) : Json :=
 
 def json : Json := Json.mkObj
   [("name", toJson "configuration-explicit-grants"),
+   ("desktop_reset_cases", toJson (([false, true] : List Bool).flatMap fun full =>
+     ([("cache", Configuration.DesktopResetAsset.cache),
+       ("binding", .binding), ("upgrade", .upgrade), ("user_key", .userKey),
+       ("user_metadata", .userMetadata), ("p2p_key", .p2pKey),
+       ("custody", .custody), ("peers", .peers)]).map fun (name, asset) =>
+       Json.mkObj [("full", toJson full), ("asset", toJson name),
+         ("retired", toJson (Configuration.desktopResetRetires full asset))])),
    ("backend_credential_cases", toJson backendCredentialCases),
    ("runtime_default_account_cases", toJson runtimeDefaultAccountCases),
    ("runtime_default_choice_cases", toJson runtimeDefaultChoiceCases),

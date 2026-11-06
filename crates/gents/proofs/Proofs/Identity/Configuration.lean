@@ -1517,4 +1517,26 @@ theorem unlinked_agent_is_not_visible_to_runtime :
       relations := [⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩] }
       "runtime" "agents" "agent" "read" = false := by native_decide
 
+/-- The desktop User, its key custody, and its P2P identity belong to the
+client, independently of a managed runtime's Node identity. A runtime or
+binding reset can retire its local cache and binding; only an explicit full
+client reset retires the independent client identity. -/
+inductive DesktopResetAsset where
+  | cache | binding | upgrade | userKey | userMetadata | p2pKey | custody | peers
+  deriving BEq, DecidableEq
+
+def desktopResetRetires (full : Bool) (asset : DesktopResetAsset) : Bool :=
+  full || asset == .cache || asset == .binding || asset == .upgrade
+
+theorem runtime_reset_preserves_client_identity :
+    [desktopResetRetires false .userKey, desktopResetRetires false .userMetadata,
+     desktopResetRetires false .p2pKey, desktopResetRetires false .custody,
+     desktopResetRetires false .peers] = [false, false, false, false, false] := by
+  decide
+
+theorem runtime_reset_retires_cache_and_binding :
+    [desktopResetRetires false .cache, desktopResetRetires false .binding,
+     desktopResetRetires false .upgrade] = [true, true, true] := by
+  decide
+
 end Identity.Configuration
