@@ -18,6 +18,15 @@ abbrev Target.category (t : Target) := ConfigDocuments.Collection.category t
 def selfConfigCategories : List String :=
   ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation"]
 def defaultCategories : List String := ["agent", "tools", "profile"]
+
+/-- A resource category exposes its read commands. Document access remains
+subject to native authorization for the invoking actor. -/
+def resourceReadExposed (categories : List String) (target : Target) : Bool :=
+  categories.contains target.category
+
+theorem backend_read_does_not_require_agent_catalog :
+    resourceReadExposed ["backend"] .inferenceBackend = true := by decide
+
 abbrev FieldKey := String
 abbrev allFields := ConfigDocuments.Collection.fields
 

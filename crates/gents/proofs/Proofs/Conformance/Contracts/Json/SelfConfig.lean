@@ -22,6 +22,20 @@ def selfConfigFieldTableJson (t : Target) : String :=
 def selfConfigFieldTablesJson : String :=
   jsonArray (allTargets.map selfConfigFieldTableJson)
 
+def selfConfigResourceReadExposureCasesJson : String :=
+  let cases : List (String × Target × List String) :=
+    [("backend", .inferenceBackend, ["backend"]),
+     ("backend", .inferenceBackend, ["backend", "node"]),
+     ("backend", .inferenceBackend, ["backend", "agent"]),
+     ("backend", .inferenceBackend, ["node"]),
+     ("backend", .inferenceBackend, ["agent"]),
+     ("tools", .tools, ["tools"]),
+     ("profile", .inferenceProfile, ["profile"])]
+  jsonArray (cases.map fun (resource, target, enabled) =>
+    "{\"resource\":" ++ jsonString resource ++
+    ",\"categories\":" ++ jsonStringArray enabled ++
+    ",\"exposed\":" ++ scBool (resourceReadExposed enabled target) ++ "}")
+
 def fieldValuePairJson (entry : FieldKey × FieldValue) : String :=
   "{"
     ++ "\"field\":" ++ jsonString entry.1 ++ ","
