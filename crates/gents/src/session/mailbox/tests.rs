@@ -377,7 +377,7 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
     .unwrap();
     let enqueued = crate::request::lifecycle::materialize::write_pending_agent_request_with_lineage_workspace_and_conversation_title(
         &node,
-        ::identity::Did::new(identity.did().to_owned()).expect("fixture creator DID"),
+        ::identity::Did::new(agent.did().to_owned()).expect("fixture managed Agent DID"),
         identity.did(),
         agent.did(),
         "continue the run",
@@ -395,7 +395,7 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
         requester_did,
         Some("event-trigger-config-doc-1"),
         None,
-        &identity,
+        agent.as_ref(),
     )
     .await
     .unwrap();
