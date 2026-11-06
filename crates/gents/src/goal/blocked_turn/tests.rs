@@ -554,11 +554,19 @@ async fn embedded() -> (
 
     let (db, user, access, primary) = crate::test_support::signed_test_node("blocked-turn").await;
     let node_did = db.node_identity.did();
-    let sibling = crate::test_support::install_test_agent_as(
+    let sibling = crate::store::identity::provision_agent_identity_authorized(
         &db.node,
         db.node_identity.as_ref(),
-        &user,
+        &identity::Did::new(user.did()).unwrap(),
+    )
+    .await
+    .unwrap();
+    crate::test_support::install_test_agent_binding_with_access(
+        &db.node,
+        node_did,
         "Sibling agent",
+        &sibling,
+        &access,
     )
     .await;
     let mut agents = vec![primary.agent_did.clone(), sibling.agent_did.clone()];
