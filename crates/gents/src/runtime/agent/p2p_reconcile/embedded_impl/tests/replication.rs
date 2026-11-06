@@ -387,6 +387,161 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         case("after-repair")?["app_read"] == true
     );
 
+    let runtime_registry = admin_local.write(
+        "test.transport.runtime_registry",
+        &format!(r#"mutation {{ create_PeerRegistry(input: {{peer_id:"runtime-owned",node_did:"{}",addresses:["local"]}}) {{_docID}} }}"#, escape_graphql_string(admin.did())),
+    ).await?;
+    let runtime_registry =
+        gents_protocol::graphql::extract_mutation_doc_id(&runtime_registry, "PeerRegistry")?;
+    {
+        let txn = admin_node.database().new_txn(false).await?;
+        let view = txn.datastore()?;
+        crate::store::config_client::transport_publication::project_transport_document(
+            &view,
+            admin_node.document_acp().as_ref(),
+            &reader,
+            "PeerRegistry",
+            &runtime_registry,
+        )
+        .await?;
+        drop(view);
+        txn.commit().await?;
+    }
+    let registry_mutation = |id: &str| {
+        format!(
+            r#"mutation {{ update_PeerRegistry(docID:"{}",input:{{status:"updated"}}) {{_docID}} }}"#,
+            escape_graphql_string(id)
+        )
+    };
+    let discovery_cases =
+        &crate::lean_vocab_test::lean_contract_snapshot().identity_discovery_policy_cases;
+    let discovery_expected = |name: &str| {
+        discovery_cases
+            .iter()
+            .find(|case| case["name"] == name)
+            .with_context(|| format!("missing discovery case {name}"))
+    };
+    let user_write = http(admin_address, &user)?
+        .write(
+            "test.transport.user_registry",
+            &registry_mutation(&runtime_registry),
+        )
+        .await;
+    assert_eq!(
+        user_write
+            .as_ref()
+            .is_ok_and(|value| gents_protocol::graphql::extract_mutation_doc_id(
+                value,
+                "PeerRegistry"
+            )
+            .is_ok()),
+        discovery_expected("local-user-write")?["allowed"] == true
+    );
+
+    let user_registry = http(admin_address, &user)?.write(
+        "test.transport.user_registry_create",
+        &format!(r#"mutation {{ create_PeerRegistry(input: {{peer_id:"user-owned",node_did:"{}",addresses:["local"]}}) {{_docID}} }}"#, escape_graphql_string(admin.did())),
+    ).await?;
+    let user_registry =
+        gents_protocol::graphql::extract_mutation_doc_id(&user_registry, "PeerRegistry")?;
+    {
+        let txn = admin_node.database().new_txn(false).await?;
+        let view = txn.datastore()?;
+        crate::store::config_client::transport_publication::project_transport_document(
+            &view,
+            admin_node.document_acp().as_ref(),
+            &reader,
+            "PeerRegistry",
+            &user_registry,
+        )
+        .await?;
+        drop(view);
+        txn.commit().await?;
+    }
+    let writer_cases =
+        &crate::lean_vocab_test::lean_contract_snapshot().identity_local_registry_writer_cases;
+    let modeled_runtime = writer_cases
+        .iter()
+        .find(|case| case["name"] == "user-owner")
+        .context("missing user-owned registry writer case")?["writer"]
+        == "runtime";
+    let runtime_write = admin_local
+        .write(
+            "test.transport.runtime_registry_update",
+            &registry_mutation(&user_registry),
+        )
+        .await;
+    assert_eq!(
+        runtime_write
+            .as_ref()
+            .is_ok_and(|value| gents_protocol::graphql::extract_mutation_doc_id(
+                value,
+                "PeerRegistry"
+            )
+            .is_ok()),
+        modeled_runtime
+    );
+    let foreign_write = http(admin_address, &user)?
+        .write(
+            "test.transport.foreign_registry_update",
+            &registry_mutation(&public_doc),
+        )
+        .await;
+    let modeled_foreign = writer_cases
+        .iter()
+        .find(|case| case["name"] == "foreign-owner")
+        .context("missing foreign registry writer case")?["writer"]
+        .is_string();
+    assert_eq!(
+        foreign_write.as_ref().is_ok_and(|value| {
+            gents_protocol::graphql::extract_mutation_doc_id(value, "PeerRegistry").is_ok()
+        }),
+        modeled_foreign
+    );
+    {
+        let txn = admin_node.database().new_txn(false).await?;
+        let view = txn.datastore()?;
+        admin_node
+            .document_acp()
+            .change_node_admin_relationship(
+                view.sibling(storage::namespace::Namespace::Acpstore),
+                &reader,
+                acp::Subject::entity(identity::Did::new(user.did())?),
+                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                "discovery",
+                &runtime_registry,
+                "writer",
+                true,
+            )
+            .await?;
+        crate::store::config_client::transport_publication::project_transport_document(
+            &view,
+            admin_node.document_acp().as_ref(),
+            &reader,
+            "PeerRegistry",
+            &runtime_registry,
+        )
+        .await?;
+        drop(view);
+        txn.commit().await?;
+    }
+    let revoked_write = http(admin_address, &user)?
+        .write(
+            "test.transport.revoked_registry_update",
+            &registry_mutation(&runtime_registry),
+        )
+        .await;
+    assert_eq!(
+        revoked_write
+            .as_ref()
+            .is_ok_and(|value| gents_protocol::graphql::extract_mutation_doc_id(
+                value,
+                "PeerRegistry"
+            )
+            .is_ok()),
+        discovery_expected("revoked-user-write")?["allowed"] == true
+    );
+
     candidate_local
         .delete_actor_relationship("NetworkEnrollmentRequest", &doc, "reader", &reader)
         .await?;
