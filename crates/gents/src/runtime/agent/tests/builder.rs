@@ -28,9 +28,10 @@ async fn builder_rejects_node_without_signing_did() {
 
 #[tokio::test]
 async fn builder_includes_custom_tools_in_resolved_tool_surface() {
-    let (node, identity, owner) = test_node("builder-custom-tools").await;
+    let (db, _owner_identity, owner) = test_node("builder-custom-tools").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     insert_backend(
-        &node,
         identity.did(),
         &owner,
         "builder-backend",
@@ -38,10 +39,17 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
     )
     .await;
 
-    let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+    let binding = crate::store::identity::provision_agent_identity_authorized(
+        &node,
+        identity.as_ref(),
+        &identity::Did::new(owner.actor_did().expect("signed fixture owner")).unwrap(),
+    )
+    .await
+    .unwrap();
     let expected_agent_did = binding.agent_did.clone();
     let agent = Gents::builder()
         .node(node.clone())
+        .backend_admission(db.home.backend_admission())
         .identity(identity.clone())
         .tool_ceiling(ToolCeiling::meta_only())
         .agent("policy-ops")
@@ -74,10 +82,13 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
 
 #[tokio::test]
 async fn builder_requires_resolvable_backend_documents() {
-    let (node, identity, _owner) = test_node("builder-missing-backend").await;
+    let (db, _owner_identity, _owner) = test_node("builder-missing-backend").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
 
     let error = match Gents::builder()
         .node(node)
+        .backend_admission(db.home.backend_admission())
         .identity(identity)
         .agent("policy-ops")
         .backend_id("missing-backend")
@@ -96,9 +107,10 @@ async fn builder_requires_resolvable_backend_documents() {
 
 #[tokio::test]
 async fn builder_rejects_backend_vetoed_by_measured_health() {
-    let (node, identity, owner) = test_node("builder-measured-unhealthy").await;
+    let (db, _owner_identity, owner) = test_node("builder-measured-unhealthy").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     insert_backend(
-        &node,
         identity.did(),
         &owner,
         "builder-vetoed-backend",
@@ -117,6 +129,7 @@ async fn builder_rejects_backend_vetoed_by_measured_health() {
 
     let error = match Gents::builder()
         .node(node)
+        .backend_admission(db.home.backend_admission())
         .identity(identity)
         .backend_health(backend_health)
         .agent("policy-ops")

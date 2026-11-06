@@ -10,44 +10,43 @@ use crate::store::identity::KeyIdentity;
 
 pub(super) async fn test_node(
     name: &str,
-) -> (Arc<EmbeddedNode>, Arc<KeyIdentity>, Arc<KeyIdentity>) {
-    let identity = Arc::new(test_identity(name));
-    let owner = Arc::new(test_identity("agent-test-owner"));
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(identity.did())
-            .with_node_acp_enabled()
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    crate::test_support::bootstrap_test_node(&node, identity.as_ref(), owner.as_ref()).await;
-    (node, identity, owner)
+) -> (crate::support::TestDb, KeyIdentity, crate::ConfigAccess) {
+    let db = crate::support::test_signed_db(name).await;
+    crate::test_support::signed_test_node_without_agent_from_db(db, name).await
 }
 
 pub(super) async fn install_agent(
     node: &Arc<EmbeddedNode>,
-    identity: &KeyIdentity,
-    owner: &KeyIdentity,
+    identity: &dyn NodeIdentity,
+    owner: &crate::ConfigAccess,
     name: &str,
 ) -> String {
-    crate::test_support::install_test_agent_as(node, identity, owner, name)
-        .await
-        .agent_did
+    let owner_did = owner.actor_did().expect("signed fixture owner");
+    let binding = crate::store::identity::provision_agent_identity_authorized(
+        node,
+        identity,
+        &identity::Did::new(owner_did).unwrap(),
+    )
+    .await
+    .unwrap();
+    crate::test_support::install_test_agent_binding_with_access(
+        node,
+        identity.did(),
+        name,
+        &binding,
+        owner,
+    )
+    .await;
+    binding.agent_did
 }
 
 pub(super) async fn install_default_agent(
     node: &Arc<EmbeddedNode>,
-    identity: &KeyIdentity,
-    owner: &KeyIdentity,
+    identity: &dyn NodeIdentity,
+    owner: &crate::ConfigAccess,
 ) -> String {
     let did = install_agent(node, identity, owner, "Default fixture agent").await;
-    let access = crate::store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        owner.did().parse().unwrap(),
-    );
-    crate::test_support::set_test_default_agent_as(&access, identity.did(), &did).await;
+    crate::test_support::set_test_default_agent_as(owner, identity.did(), &did).await;
     did
 }
 
@@ -98,9 +97,8 @@ impl Tool for EchoTool {
 }
 
 pub(super) async fn insert_backend(
-    node: &Arc<EmbeddedNode>,
     node_did: &str,
-    owner: &KeyIdentity,
+    owner: &crate::ConfigAccess,
     backend_id: &str,
     endpoint: &str,
 ) {
@@ -121,7 +119,7 @@ pub(super) async fn insert_backend(
         },
     ])
     .unwrap();
-    crate::store::config_client::ConfigAccess::local_as(node.clone(), owner.did().parse().unwrap())
+    owner
         .transact_write("test.insert_backend", |txn| {
             let plan = &plan;
             Box::pin(async move {
@@ -130,8 +128,8 @@ pub(super) async fn insert_backend(
         })
         .await
         .unwrap();
-    crate::inference::backends::registry::set_backend_probe_status(
-        node, node_did, backend_id, "healthy",
+    crate::inference::backends::registry::set_backend_probe_status_as(
+        owner, node_did, backend_id, "healthy",
     )
     .await
     .unwrap();

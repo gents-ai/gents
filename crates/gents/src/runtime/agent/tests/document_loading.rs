@@ -6,7 +6,7 @@ use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use super::super::*;
 use super::support::*;
 use crate::documents::{Agent, AgentTargetDocument, Tools};
-use crate::store::identity::KeyIdentity;
+use crate::store::config_client::ConfigAccess;
 use crate::tools::native::ToolSet;
 use crate::tools::surface::ToolCeiling;
 
@@ -33,12 +33,15 @@ async fn document_constructor_rejects_node_without_signing_did_before_migrations
 
 #[tokio::test]
 async fn from_default_agent_documents_preserves_identity_only_principal() {
-    let (node, identity, _owner) = test_node("bootstrap-profile").await;
+    let (db, _owner_identity, _owner) = test_node("bootstrap-profile").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let did = identity.did().to_string();
     let agent = Gents::from_default_agent_documents(
         node,
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -53,13 +56,15 @@ async fn from_default_agent_documents_preserves_identity_only_principal() {
 
 #[tokio::test]
 async fn from_default_agent_documents_composes_behavior_and_inference_profile() {
-    let (node, identity, owner) = test_node("composed-profile").await;
+    let (db, _owner_identity, owner) = test_node("composed-profile").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let did = identity.did().to_string();
-    let default_agent_did = install_default_agent(&node, &identity, &owner).await;
+    let default_agent_did = install_default_agent(&node, identity.as_ref(), &owner).await;
 
     let sampling_id = format!("{default_agent_did}:sampling");
     write_document(
-        &node,
+        &owner,
         crate::Collection::InferenceSampling,
         &crate::documents::InferenceSampling {
             node_did: did.clone(),
@@ -73,25 +78,27 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
             repetition_penalty: Some(1.1),
             ..Default::default()
         },
-        &owner,
     )
     .await
     .unwrap();
     let profile_id = format!("{default_agent_did}:inference");
-    let mut profile = crate::load_inference_profile(&node, &did, &profile_id)
-        .await
-        .unwrap()
-        .expect("installed chain profile");
+    let mut profile: crate::documents::InferenceProfile = read_document(
+        &owner,
+        &did,
+        crate::Collection::InferenceProfile,
+        &profile_id,
+    )
+    .await;
     profile.sampling_id = Some(sampling_id);
     profile.reasoning_effort = Some(crate::inference::resolved::ReasoningEffort::Max);
     profile.context_window = Some(32768);
     profile.max_output_tokens = Some(4096);
-    write_document(&node, crate::Collection::InferenceProfile, &profile, &owner)
+    write_document(&owner, crate::Collection::InferenceProfile, &profile)
         .await
         .unwrap();
     let execution_id = format!("{default_agent_did}:execution");
     write_document(
-        &node,
+        &owner,
         crate::Collection::InferenceExecution,
         &crate::documents::InferenceExecution {
             node_did: did.clone(),
@@ -102,24 +109,26 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
             deadline_duration_secs: Some(120),
             ..Default::default()
         },
-        &owner,
     )
     .await
     .unwrap();
-    let mut profile = crate::load_inference_profile(&node, &did, &profile_id)
-        .await
-        .unwrap()
-        .expect("installed chain profile");
+    let mut profile: crate::documents::InferenceProfile = read_document(
+        &owner,
+        &did,
+        crate::Collection::InferenceProfile,
+        &profile_id,
+    )
+    .await;
     profile.execution_id = Some(execution_id);
-    write_document(&node, crate::Collection::InferenceProfile, &profile, &owner)
+    write_document(&owner, crate::Collection::InferenceProfile, &profile)
         .await
         .unwrap();
-    let mut context = load_installed_context(&node, &did, &default_agent_did).await;
+    let mut context = load_installed_context(&owner, &did, &default_agent_did).await;
     context.system_prompt = Some("You are precise.".to_string());
-    upsert_context(&node, &context, &owner).await;
+    upsert_context(&owner, &context).await;
 
     let backend: crate::documents::InferenceBackend = read_document(
-        &node,
+        &owner,
         &did,
         crate::Collection::InferenceBackend,
         &format!("{default_agent_did}:backend"),
@@ -130,6 +139,7 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
         node,
         identity.clone(),
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -188,7 +198,7 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
 }
 
 async fn read_document<T>(
-    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
     owner: &str,
     collection: crate::Collection,
     id: &str,
@@ -198,34 +208,30 @@ where
 {
     let owner = owner.to_owned();
     let id = id.to_owned();
-    let value = crate::store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        node.node_identity_did().unwrap().parse().unwrap(),
-    )
-    .transact_write("test.read_configuration", |txn| {
-        let owner = &owner;
-        let id = &id;
-        Box::pin(async move {
-            Ok::<_, anyhow::Error>(
-                crate::store::config_client::read_desired_state_record_in_txn(
-                    txn, collection, owner, id,
+    let value = access
+        .transact_readonly("test.read_configuration", |txn| {
+            let owner = &owner;
+            let id = &id;
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>(
+                    crate::store::config_client::read_desired_state_record_in_txn(
+                        txn, collection, owner, id,
+                    )
+                    .await?
+                    .expect("installed document")
+                    .1,
                 )
-                .await?
-                .expect("installed document")
-                .1,
-            )
+            })
         })
-    })
-    .await
-    .unwrap();
+        .await
+        .unwrap();
     serde_json::from_value(value).unwrap()
 }
 
 async fn write_document<T>(
-    node: &Arc<EmbeddedNode>,
+    owner: &ConfigAccess,
     collection: crate::Collection,
     document: &T,
-    owner: &KeyIdentity,
 ) -> anyhow::Result<()>
 where
     T: serde::Serialize,
@@ -238,7 +244,7 @@ where
             update: value,
         },
     ])?;
-    crate::store::config_client::ConfigAccess::local_as(node.clone(), owner.did().parse().unwrap())
+    owner
         .transact_write("test.write_configuration", |txn| {
             let plan = &plan;
             Box::pin(async move {
@@ -250,13 +256,13 @@ where
 }
 
 async fn load_installed_context(
-    node: &Arc<EmbeddedNode>,
+    access: &ConfigAccess,
     did: &str,
     agent_did: &str,
 ) -> crate::documents::AgentContext {
-    let behavior: Agent = read_document(node, did, crate::Collection::Agent, agent_did).await;
+    let behavior: Agent = read_document(access, did, crate::Collection::Agent, agent_did).await;
     read_document(
-        node,
+        access,
         did,
         crate::Collection::AgentContext,
         behavior.context_id.as_deref().expect("chain context"),
@@ -264,25 +270,23 @@ async fn load_installed_context(
     .await
 }
 
-async fn upsert_context(
-    node: &Arc<EmbeddedNode>,
-    context: &crate::documents::AgentContext,
-    owner: &KeyIdentity,
-) {
-    write_document(node, crate::Collection::AgentContext, context, owner)
+async fn upsert_context(owner: &ConfigAccess, context: &crate::documents::AgentContext) {
+    write_document(owner, crate::Collection::AgentContext, context)
         .await
         .unwrap();
 }
 
 #[tokio::test]
 async fn from_default_agent_documents_resolves_tool_selection_with_ceiling() {
-    let (node, identity, owner) = test_node("tool-selection").await;
+    let (db, _owner_identity, owner) = test_node("tool-selection").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let did = identity.did().to_string();
-    let default_agent_did = install_default_agent(&node, &identity, &owner).await;
+    let default_agent_did = install_default_agent(&node, identity.as_ref(), &owner).await;
 
-    let researcher = install_agent(&node, &identity, &owner, "researcher").await;
+    let researcher = install_agent(&node, identity.as_ref(), &owner, "researcher").await;
     write_document(
-        &node,
+        &owner,
         crate::Collection::AgentTarget,
         &AgentTargetDocument {
             target_id: format!("{default_agent_did}:researcher"),
@@ -293,11 +297,10 @@ async fn from_default_agent_documents_resolves_tool_selection_with_ceiling() {
             description: None,
             tags: Vec::new(),
         },
-        &owner,
     )
     .await
     .unwrap();
-    let mut tools = load_installed_tools(&node, &did, &default_agent_did).await;
+    let mut tools = load_installed_tools(&owner, &did, &default_agent_did).await;
     tools.host = Some(
         serde_json::from_value(
             serde_json::json!({"files":{"mode":"ReadWrite"},"bash":{"mode":"Unrestricted"}}),
@@ -308,12 +311,13 @@ async fn from_default_agent_documents_resolves_tool_selection_with_ceiling() {
         target_ids: vec![format!("{default_agent_did}:researcher")],
         enabled: Some(true),
     });
-    upsert_tools(&node, &tools, &owner).await;
+    upsert_tools(&owner, &tools).await;
 
     let agent = Gents::from_default_agent_documents(
         node,
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -352,10 +356,10 @@ async fn from_default_agent_documents_resolves_tool_selection_with_ceiling() {
     assert!(tool_names.contains(&"agent_message".to_string()));
 }
 
-async fn load_installed_tools(node: &Arc<EmbeddedNode>, did: &str, agent_did: &str) -> Tools {
-    let context = load_installed_context(node, did, agent_did).await;
+async fn load_installed_tools(access: &ConfigAccess, did: &str, agent_did: &str) -> Tools {
+    let context = load_installed_context(access, did, agent_did).await;
     read_document(
-        node,
+        access,
         did,
         crate::Collection::Tools,
         context.tools_id.as_deref().expect("chain tools"),
@@ -363,33 +367,32 @@ async fn load_installed_tools(node: &Arc<EmbeddedNode>, did: &str, agent_did: &s
     .await
 }
 
-async fn upsert_tools(node: &Arc<EmbeddedNode>, tools: &Tools, owner: &KeyIdentity) {
-    write_document(node, crate::Collection::Tools, tools, owner)
+async fn upsert_tools(owner: &ConfigAccess, tools: &Tools) {
+    write_document(owner, crate::Collection::Tools, tools)
         .await
         .unwrap();
 }
 
-async fn upsert_agent(
-    node: &Arc<EmbeddedNode>,
-    agent: &Agent,
-    owner: &KeyIdentity,
-) -> anyhow::Result<()> {
-    write_document(node, crate::Collection::Agent, agent, owner).await
+async fn upsert_agent(owner: &ConfigAccess, agent: &Agent) -> anyhow::Result<()> {
+    write_document(owner, crate::Collection::Agent, agent).await
 }
 
 #[tokio::test]
 async fn from_default_agent_documents_filters_inactive_agent_targets() {
-    let (node, identity, owner) = test_node("agent-target-disabled").await;
+    let (db, _owner_identity, owner) = test_node("agent-target-disabled").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let did = identity.did().to_string();
-    let default_agent_did = install_default_agent(&node, &identity, &owner).await;
+    let default_agent_did = install_default_agent(&node, identity.as_ref(), &owner).await;
 
-    let disabled_did = install_agent(&node, &identity, &owner, "disabled-researcher").await;
-    let behavior: Agent = read_document(&node, &did, crate::Collection::Agent, &disabled_did).await;
+    let disabled_did = install_agent(&node, identity.as_ref(), &owner, "disabled-researcher").await;
+    let behavior: Agent =
+        read_document(&owner, &did, crate::Collection::Agent, &disabled_did).await;
     let mut disabled = behavior;
     disabled.enabled = false;
-    upsert_agent(&node, &disabled, &owner).await.unwrap();
+    upsert_agent(&owner, &disabled).await.unwrap();
     write_document(
-        &node,
+        &owner,
         crate::Collection::AgentTarget,
         &AgentTargetDocument {
             target_id: format!("{default_agent_did}:disabled-researcher"),
@@ -400,16 +403,15 @@ async fn from_default_agent_documents_filters_inactive_agent_targets() {
             description: None,
             tags: Vec::new(),
         },
-        &owner,
     )
     .await
     .unwrap();
-    let mut tools = load_installed_tools(&node, &did, &default_agent_did).await;
+    let mut tools = load_installed_tools(&owner, &did, &default_agent_did).await;
     tools.agents = Some(crate::documents::AgentTools {
         target_ids: vec![format!("{default_agent_did}:disabled-researcher")],
         enabled: Some(true),
     });
-    upsert_tools(&node, &tools, &owner).await;
+    upsert_tools(&owner, &tools).await;
 
     let snapshot = resolve_document_runtime_snapshot(
         &node,
@@ -439,13 +441,16 @@ async fn from_default_agent_documents_filters_inactive_agent_targets() {
 
 #[tokio::test]
 async fn from_default_agent_documents_rejects_unresolved_agent_target() {
-    let (node, identity, owner) = test_node("agent-target-missing").await;
+    let (db, _owner_identity, owner) = test_node("agent-target-missing").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let did = identity.did().to_string();
-    let default_agent_did = install_default_agent(&node, &identity, &owner).await;
+    let default_agent_did = install_default_agent(&node, identity.as_ref(), &owner).await;
 
-    let target_did = install_agent(&node, &identity, &owner, "target-before-corruption").await;
+    let target_did =
+        install_agent(&node, identity.as_ref(), &owner, "target-before-corruption").await;
     write_document(
-        &node,
+        &owner,
         crate::Collection::AgentTarget,
         &AgentTargetDocument {
             target_id: format!("{default_agent_did}:missing-behavior"),
@@ -456,28 +461,35 @@ async fn from_default_agent_documents_rejects_unresolved_agent_target() {
             description: None,
             tags: Vec::new(),
         },
-        &owner,
     )
     .await
     .unwrap();
-    let mut tools = load_installed_tools(&node, &did, &default_agent_did).await;
+    let mut tools = load_installed_tools(&owner, &did, &default_agent_did).await;
     tools.agents = Some(crate::documents::AgentTools {
         target_ids: vec![format!("{default_agent_did}:missing-behavior")],
         enabled: Some(true),
     });
-    upsert_tools(&node, &tools, &owner).await;
+    upsert_tools(&owner, &tools).await;
 
-    let escaped_node_did = crate::store::graphql::escape_graphql_string(&did);
-    let target_id = crate::store::graphql::escape_graphql_string(&format!(
-        "{default_agent_did}:missing-behavior"
-    ));
-    crate::store::config_client::ConfigAccess::local_as(node.clone(), owner.did().parse().unwrap())
-        .write("test.corrupt_target", &format!(r#"mutation {{ update_AgentTarget(filter: {{node_did: {{_eq: "{escaped_node_did}"}}, target_id: {{_eq: "{target_id}"}}}}, input: {{agent_did: "missing-behavior"}}) {{_docID}} }}"#))
-        .await.unwrap();
+    let target_id = format!("{default_agent_did}:missing-behavior");
+    owner.transact_write("test.corrupt_target", |txn| {
+        let did = &did;
+        let target_id = &target_id;
+        Box::pin(async move {
+            let (doc_id, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                txn, crate::Collection::AgentTarget, did, target_id,
+            ).await?.expect("installed target");
+            let mutation = format!(r#"mutation($input: AgentTargetMutationInputArg!) {{ update_AgentTarget(docID: "{}", input: $input) {{ _docID }} }}"#,
+                crate::store::graphql::escape_graphql_string(&doc_id));
+            txn.execute_client_signed_update(&mutation, &serde_json::json!({"input":{"agent_did":"missing-behavior"}}), gents_protocol::schemas::AGENT_TARGET).await?;
+            Ok::<_, anyhow::Error>(())
+        })
+    }).await.unwrap();
     let agent = Gents::from_default_agent_documents(
         node,
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -502,29 +514,41 @@ async fn from_default_agent_documents_rejects_unresolved_agent_target() {
 
 #[tokio::test]
 async fn from_default_agent_documents_loads_runnable_agents_and_tracks_unavailable() {
-    let (node, identity, owner) = test_node("behavior-catalog").await;
+    let (db, _owner_identity, owner) = test_node("behavior-catalog").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let did = identity.did().to_string();
-    let code = install_agent(&node, &identity, &owner, "code").await;
-    let broken = install_agent(&node, &identity, &owner, "broken").await;
-    let disabled_did = install_agent(&node, &identity, &owner, "disabled").await;
-    let unhealthy = install_agent(&node, &identity, &owner, "unhealthy").await;
+    let code = install_agent(&node, identity.as_ref(), &owner, "code").await;
+    let broken = install_agent(&node, identity.as_ref(), &owner, "broken").await;
+    let disabled_did = install_agent(&node, identity.as_ref(), &owner, "disabled").await;
+    let unhealthy = install_agent(&node, identity.as_ref(), &owner, "unhealthy").await;
     let mut disabled: Agent =
-        read_document(&node, &did, crate::Collection::Agent, &disabled_did).await;
+        read_document(&owner, &did, crate::Collection::Agent, &disabled_did).await;
     disabled.enabled = false;
-    write_document(&node, crate::Collection::Agent, &disabled, &owner)
+    write_document(&owner, crate::Collection::Agent, &disabled)
         .await
         .unwrap();
-    set_probe_status(&node, &did, &format!("{code}:backend"), "healthy").await;
-    set_probe_status(&node, &did, &format!("{unhealthy}:backend"), "unhealthy").await;
-    let escaped_node_did = crate::store::graphql::escape_graphql_string(&did);
-    let profile_id = crate::store::graphql::escape_graphql_string(&format!("{broken}:inference"));
-    crate::store::config_client::ConfigAccess::local_as(node.clone(), owner.did().parse().unwrap())
-        .write("test.corrupt_profile", &format!(r#"mutation {{ update_InferenceProfile(filter: {{node_did: {{_eq: "{escaped_node_did}"}}, profile_id: {{_eq: "{profile_id}"}}}}, input: {{backend_id: "backend-missing"}}) {{_docID}} }}"#))
-        .await.unwrap();
+    set_probe_status(&owner, &did, &format!("{code}:backend"), "healthy").await;
+    set_probe_status(&owner, &did, &format!("{unhealthy}:backend"), "unhealthy").await;
+    let profile_id = format!("{broken}:inference");
+    owner.transact_write("test.corrupt_profile", |txn| {
+        let did = &did;
+        let profile_id = &profile_id;
+        Box::pin(async move {
+            let (doc_id, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                txn, crate::Collection::InferenceProfile, did, profile_id,
+            ).await?.expect("installed profile");
+            let mutation = format!(r#"mutation($input: InferenceProfileMutationInputArg!) {{ update_InferenceProfile(docID: "{}", input: $input) {{ _docID }} }}"#,
+                crate::store::graphql::escape_graphql_string(&doc_id));
+            txn.execute_client_signed_update(&mutation, &serde_json::json!({"input":{"backend_id":"backend-missing"}}), gents_protocol::schemas::INFERENCE_PROFILE).await?;
+            Ok::<_, anyhow::Error>(())
+        })
+    }).await.unwrap();
     let agent = Gents::from_default_agent_documents(
         node,
         identity,
         DocumentRuntimeOptions {
+            backend_admission: Some(db.home.backend_admission()),
             tool_ceiling: ToolCeiling::readonly(),
             ..Default::default()
         },
@@ -574,8 +598,10 @@ async fn from_default_agent_documents_loads_runnable_agents_and_tracks_unavailab
     );
 }
 
-async fn set_probe_status(node: &Arc<EmbeddedNode>, did: &str, backend_id: &str, status: &str) {
-    crate::inference::backends::registry::set_backend_probe_status(node, did, backend_id, status)
-        .await
-        .unwrap();
+async fn set_probe_status(access: &ConfigAccess, did: &str, backend_id: &str, status: &str) {
+    crate::inference::backends::registry::set_backend_probe_status_as(
+        access, did, backend_id, status,
+    )
+    .await
+    .unwrap();
 }
