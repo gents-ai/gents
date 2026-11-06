@@ -1229,35 +1229,6 @@ async fn config_tools_cannot_self_grant_pack_install() {
     );
 }
 
-async fn operator_replace_tools(node: &Arc<defra_node::Node>, tools: Value) {
-    use crate::store::config_client::{
-        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: crate::Collection::Tools,
-        add: tools.clone(),
-        update: tools,
-    }])
-    .unwrap();
-    ConfigAccess::transact_local_write(node, None, "test.operator_tools", |txn| {
-        let plan = &plan;
-        Box::pin(
-            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
-        )
-    })
-    .await
-    .unwrap();
-}
-
-async fn operator_grant_pack_install(node: &Arc<defra_node::Node>, owner: &str, tools_id: &str) {
-    operator_replace_tools(
-        node,
-        json!({"node_did": owner, "tools_id": tools_id,
-               "self_config": {"enable_self_config": true, "enable_pack_install": true}}),
-    )
-    .await;
-}
-
 #[tokio::test]
 async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
     let fixture = SelfConfigFixture::new("granted-tools-edit").await;
@@ -6828,49 +6799,30 @@ fn reselection_keeps_job_grants() {
     ops::reselection_keeps_grants(&held, None, Some(&plain)).expect("no block, no grant");
 }
 
-async fn grant_pack_install_for_test(node: &Arc<defra_node::Node>, owner: &str, tools_id: &str) {
-    let value = json!({"node_did":owner,"tools_id":tools_id,"self_config":{"enable_self_config":true,"enable_pack_install":true}});
-    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-        crate::store::config_client::DesiredStateApplyDocument {
-            collection: crate::Collection::Tools,
-            add: value.clone(),
-            update: value,
-        },
-    ])
-    .unwrap();
-    crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        None,
-        "test.operator_grant",
-        |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await
-            })
-        },
-    )
-    .await
-    .unwrap();
-}
-
 #[tokio::test]
 async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
-    let node = build_agent_node().await;
-    let identity = node_identity("reselection-grant-bound");
-    let owner = identity.did().to_owned();
-    for id in ["worker", "sibling", "granted"] {
-        crate::test_support::install_test_agent(&node, &owner, id).await;
-    }
-    grant_pack_install_for_test(&node, &owner, "granted:tools").await;
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "sibling".into())
-        .unwrap()
-        .with_lockout_agent_did("worker".into());
+    let fixture = SelfConfigFixture::new("reselection-grant-bound").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_agent_relation_delete().await;
+    fixture.grant_node_reader().await;
+    let sibling = fixture.install_sibling("sibling").await;
+    let granted = fixture.install_sibling("granted").await;
+    fixture.grant_sibling_configuration(&sibling).await;
+    fixture.grant_pack_install_to(&granted).await;
+    let context = format!("{granted}:context");
+    let core = SelfConfigCore::new(
+        fixture.db.node.clone(),
+        fixture.node_did().to_owned(),
+        sibling.clone(),
+    )
+    .unwrap()
+    .with_lockout_agent_did(fixture.agent_did().to_owned())
+    .with_agent_signer(fixture.agent.managed_agent_signer())
+    .with_runtime_identity(Some(fixture.db.node_identity.clone()))
+    .with_node_binding(Some(fixture.node_binding.clone()));
     for preview in [true, false] {
         let request = protect_working_agent(
-            agent_request(
-                &core,
-                vec![("context_id".into(), Some(json!("granted:context")))],
-            ),
+            agent_request(&core, vec![("context_id".into(), Some(json!(context)))]),
             false,
             true,
         );
@@ -6881,22 +6833,49 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         };
         assert!(format!("{:#}", result.unwrap_err()).contains("cannot be self-granted"));
     }
+    fixture.grant_pack_install().await;
     let holder = core.with_held_grants(ops::OperatorGrants {
         pack_install: true,
         ..Default::default()
     });
     holder
         .apply(protect_working_agent(
-            agent_request(
-                &holder,
-                vec![("context_id".into(), Some(json!("granted:context")))],
-            ),
+            agent_request(&holder, vec![("context_id".into(), Some(json!(context)))]),
             false,
             true,
         ))
         .await
         .unwrap();
-    let no_grant = SelfConfigCore::new(node.clone(), owner, "sibling".into()).unwrap();
+    fixture
+        .user_access
+        .transact_write("test.grant_sibling_self_config", |txn| {
+            let owner = fixture.node_did();
+            let sibling = &sibling;
+            Box::pin(async move {
+                crate::store::config_client::grant_selected_self_configuration(txn, owner, sibling)
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+    let sibling_doc = crate::load_agent(&fixture.db.node, &sibling)
+        .await
+        .unwrap()
+        .unwrap();
+    let sibling_signer = crate::store::identity::resolve_agent_identity(
+        fixture.db.node_identity.as_ref(),
+        &sibling_doc.identity_binding(),
+    )
+    .unwrap();
+    let no_grant = SelfConfigCore::new(
+        fixture.db.node.clone(),
+        fixture.node_did().to_owned(),
+        sibling,
+    )
+    .unwrap()
+    .with_agent_signer(sibling_signer.managed_agent_signer())
+    .with_runtime_identity(Some(fixture.db.node_identity.clone()))
+    .with_node_binding(Some(fixture.node_binding.clone()));
     no_grant
         .apply(tools_request(
             &no_grant,
