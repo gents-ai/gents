@@ -409,6 +409,20 @@ async fn cycle_probes_anthropic_key_backends_independently() {
     for backend in &backends {
         fixture.write(backend).await;
     }
+    let backends = crate::inference::backends::registry::list_enabled_backends_for_runtime(
+        &node,
+        fixture.db.node_identity.did(),
+    )
+    .await
+    .unwrap()
+    .into_iter()
+    .filter(|backend| ["a", "b"].contains(&backend.backend_id.as_str()))
+    .collect::<Vec<_>>();
+    assert_eq!(backends.len(), 2);
+    assert!(backends.iter().all(|backend| matches!(
+        &backend.auth,
+        crate::documents::BackendAuth::Credential { .. }
+    )));
 
     probe_backends_cycle(
         &node,
