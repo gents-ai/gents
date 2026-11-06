@@ -25,7 +25,7 @@ pub use core::{
 pub use gents::P2pSyncStatusSnapshot;
 pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};
 pub use mutations::{
-    DeliveryUnconfirmed, SubmissionAttemptError, SubmissionCleanupIncomplete,
+    DeliveryUnconfirmed, SubmissionAttemptError, SubmissionCleanupIncomplete, SubmissionError,
     SubmissionOutcomeUnknown, UnresolvedSubmission,
 };
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};

@@ -6,7 +6,7 @@ use super::{
     agent_did_for_write, ensure_peer_chat_ready_at, find_request_in_scope,
     observe_submitted_request, ClientCore,
 };
-use crate::client::mutations::{self, SubmitRequestOptions, SubmittedRequest};
+use crate::client::mutations::{self, SubmissionError, SubmitRequestOptions, SubmittedRequest};
 
 fn request_in_scope(
     rows: &[AgentRequestRow],
@@ -33,6 +33,7 @@ impl ClientCore {
             SubmitRequestOptions::default(),
         )
         .await
+        .map_err(Into::into)
     }
 
     pub async fn submit_request_with_options(
@@ -42,12 +43,11 @@ impl ClientCore {
         content: &str,
         agent_did: Option<&str>,
         mut options: SubmitRequestOptions,
-    ) -> Result<SubmittedRequest> {
+    ) -> std::result::Result<SubmittedRequest, SubmissionError> {
         if let Some(intent) = options.caller_intent.as_ref() {
-            anyhow::ensure!(
-                intent.node_did == node_did,
-                "caller submission belongs to another node"
-            );
+            if intent.node_did != node_did {
+                return Err(anyhow::anyhow!("caller submission belongs to another node").into());
+            }
             if let Some(receipt) = self.recover_caller_submission(intent).await? {
                 return Ok(receipt);
             }

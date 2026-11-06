@@ -565,9 +565,10 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
             }
             let mut reply = delivery::reconcile(&node, Some(&access), retained).await;
             if expected == Outcome::Accepted && !stale {
-                assert!(reply
-                    .unwrap_err()
-                    .is::<super::super::SubmissionOutcomeUnknown>());
+                assert!(matches!(
+                    reply.unwrap_err(),
+                    super::super::SubmissionError::Unknown(_)
+                ));
                 let unknown = journal::caller::recover(&node, &proposal.intent)
                     .await?
                     .context("unknown outcome remains retained")?;
@@ -580,9 +581,13 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
             if expected == Outcome::Accepted {
                 assert_eq!(reply?, proposal.reference.request);
             } else {
-                let SubmissionNotDelivered::Rejected { request, .. } = reply
-                    .expect_err("confirmed rejection")
-                    .downcast::<SubmissionNotDelivered>()?;
+                let super::super::SubmissionError::NotDelivered(SubmissionNotDelivered::Rejected {
+                    request,
+                    ..
+                }) = reply.expect_err("confirmed rejection")
+                else {
+                    panic!("rejection expected")
+                };
                 assert_eq!(request, proposal.reference.request);
             }
             let retained = journal::caller::recover(&node, &proposal.intent)
@@ -601,7 +606,10 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
             if expected == Outcome::Accepted {
                 assert_eq!(replay?, proposal.reference.request);
             } else {
-                assert!(replay.unwrap_err().is::<SubmissionNotDelivered>());
+                assert!(matches!(
+                    replay.unwrap_err(),
+                    super::super::SubmissionError::NotDelivered(_)
+                ));
             }
             assert_eq!(
                 server.received_requests().await.unwrap().len(),
@@ -628,7 +636,10 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
             if expected == Outcome::Accepted {
                 assert_eq!(frozen?, proposal.reference.request);
             } else {
-                assert!(frozen.unwrap_err().is::<SubmissionNotDelivered>());
+                assert!(matches!(
+                    frozen.unwrap_err(),
+                    super::super::SubmissionError::NotDelivered(_)
+                ));
             }
             assert_eq!(
                 server.received_requests().await.unwrap().len(),
@@ -655,7 +666,7 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
 }
 
 async fn check_recovery_route(activate_route: bool) -> Result<()> {
-    use super::super::{journal, SubmissionOutcomeUnknown};
+    use super::super::{journal, SubmissionError};
     use crate::client::{ClientCore, ClientCoreOptions, DesktopPaths};
     use gents::store::config_client::ConfigAccess;
     use std::sync::Arc;
@@ -686,7 +697,10 @@ async fn check_recovery_route(activate_route: bool) -> Result<()> {
             .recover_caller_submission(&proposal.intent)
             .await
             .expect_err("missing runtime authority must remain unconfirmed");
-        let pending = unresolved.downcast::<SubmissionOutcomeUnknown>()?.pending;
+        let SubmissionError::Unknown(unknown) = unresolved else {
+            anyhow::bail!("unknown outcome expected")
+        };
+        let pending = unknown.pending;
         assert_eq!(
             digest(pending.mutation.as_bytes()),
             proposal.reference.signed_payload_hash

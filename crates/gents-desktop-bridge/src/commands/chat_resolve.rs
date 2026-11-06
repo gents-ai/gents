@@ -7,8 +7,8 @@
 
 use anyhow::Result;
 use gents_desktop_core::client::{
-    ClientCore, DeliveryUnconfirmed, SubmissionCleanupIncomplete, SubmissionNotDelivered,
-    SubmissionOutcomeUnknown, SubmittedRequest,
+    ClientCore, SubmissionCleanupIncomplete, SubmissionError, SubmissionNotDelivered,
+    SubmittedRequest,
 };
 
 use crate::types::{ChatSendOutcome, ChatSendRequest, ChatSendResult};
@@ -23,13 +23,12 @@ pub(super) fn resolve_target(request: &ChatSendRequest) -> Option<&str> {
 }
 
 /// Report a submission, turning an unknown owner outcome into a typed result.
-pub(super) fn sent(submitted: Result<SubmittedRequest>) -> Result<ChatSendResult> {
-    let error = match submitted {
-        Ok(receipt) => return Ok(receipt.into()),
-        Err(error) => error,
-    };
-    let error = match error.downcast::<SubmissionCleanupIncomplete>() {
-        Ok(incomplete) => {
+pub(super) fn sent(
+    submitted: std::result::Result<SubmittedRequest, SubmissionError>,
+) -> Result<ChatSendResult> {
+    match submitted {
+        Ok(receipt) => Ok(receipt.into()),
+        Err(SubmissionError::Cleanup(incomplete)) => {
             let (mut result, error) = match incomplete {
                 SubmissionCleanupIncomplete::Accepted { request, cause } => (
                     ChatSendResult::from(request),
@@ -58,20 +57,14 @@ pub(super) fn sent(submitted: Result<SubmittedRequest>) -> Result<ChatSendResult
                 }
             };
             result.delivery_error = Some(error);
-            return Ok(result);
+            Ok(result)
         }
-        Err(error) => error,
-    };
-    let error = match error.downcast::<SubmissionNotDelivered>() {
-        Ok(SubmissionNotDelivered::Rejected { request, cause }) => {
+        Err(SubmissionError::NotDelivered(SubmissionNotDelivered::Rejected { request, cause })) => {
             let mut result = ChatSendResult::with_outcome(request, ChatSendOutcome::NotDelivered);
             result.delivery_error = cause.map(crate::error::BridgeError::classify_transport_error);
-            return Ok(result);
+            Ok(result)
         }
-        Err(error) => error,
-    };
-    let error = match error.downcast::<SubmissionOutcomeUnknown>() {
-        Ok(unknown) => {
+        Err(SubmissionError::Unknown(unknown)) => {
             let delivery_error = unknown
                 .cause
                 .map(crate::error::BridgeError::classify_transport_error)
@@ -87,12 +80,9 @@ pub(super) fn sent(submitted: Result<SubmittedRequest>) -> Result<ChatSendResult
                 ChatSendOutcome::DeliveryUnknown,
             );
             result.delivery_error = delivery_error;
-            return Ok(result);
+            Ok(result)
         }
-        Err(error) => error,
-    };
-    match error.downcast::<DeliveryUnconfirmed>() {
-        Ok(unconfirmed) => Ok(ChatSendResult::with_outcome(
+        Err(SubmissionError::Unconfirmed(unconfirmed)) => Ok(ChatSendResult::with_outcome(
             SubmittedRequest {
                 request_id: unconfirmed.request_id,
                 session_id: unconfirmed.session_id,
@@ -101,7 +91,7 @@ pub(super) fn sent(submitted: Result<SubmittedRequest>) -> Result<ChatSendResult
             },
             ChatSendOutcome::DeliveryUnknown,
         )),
-        Err(error) => Err(error),
+        Err(SubmissionError::Other(error)) => Err(error),
     }
 }
 
@@ -146,6 +136,7 @@ pub(super) async fn resolve_chat_submission(
 #[cfg(test)]
 mod storage_failure_tests {
     use super::*;
+    use gents_desktop_core::client::SubmissionOutcomeUnknown;
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };

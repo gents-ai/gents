@@ -9,7 +9,7 @@ use anyhow::Result;
 
 use super::super::super::mutations::{
     reconcile_unretained_submission, resolve_unresolved_submission, SubmissionAttemptError,
-    SubmissionCleanupIncomplete, SubmissionOutcomeUnknown, SubmittedRequest,
+    SubmissionError, SubmittedRequest,
 };
 use super::super::super::mutations::{
     submission_delivery, submission_journal, SubmissionIntent, SubmissionReference,
@@ -73,7 +73,7 @@ impl ClientCore {
     pub async fn recover_caller_submission(
         &self,
         intent: &SubmissionIntent,
-    ) -> Result<Option<SubmittedRequest>> {
+    ) -> std::result::Result<Option<SubmittedRequest>, SubmissionError> {
         self.ensure_caller_submission_actor(intent)?;
         let Some(record) = submission_journal::caller::recover(&self.node, intent).await? else {
             return Ok(None);
@@ -89,7 +89,8 @@ impl ClientCore {
                     let capability =
                         gents::store::config_client::ClientSigningCapability::from_ed25519_key(
                             self.node_identity.private_key_bytes(),
-                        )?;
+                        )
+                        .map_err(anyhow::Error::from)?;
                     self.options
                         .operator_identity_interaction
                         .endpoint(&peer, &capability)
@@ -169,12 +170,13 @@ impl ClientCore {
     /// Map a submit failure, keeping the signed payload of an unknown-outcome
     /// send for identical replay. An unknown outcome is not recorded as a
     /// mutation failure: the request may have been delivered.
-    pub(super) fn submit_failure(&self, error: anyhow::Error) -> anyhow::Error {
-        if error.is::<SubmissionCleanupIncomplete>() {
-            return self.record_mutation_error("submission cleanup", error);
-        }
-        if !error.is::<SubmissionOutcomeUnknown>() {
-            return self.record_mutation_error("submit request", error);
+    pub(super) fn submit_failure(&self, error: SubmissionError) -> SubmissionError {
+        match &error {
+            SubmissionError::Cleanup(_) => {
+                self.record_mutation_error_message("submission cleanup", &error)
+            }
+            SubmissionError::Unknown(_) => {}
+            _ => self.record_mutation_error_message("submit request", &error),
         }
         error
     }
@@ -192,7 +194,7 @@ impl ClientCore {
         session_id: &str,
         request_id: &str,
         content: &str,
-    ) -> Result<Option<SubmittedRequest>> {
+    ) -> std::result::Result<Option<SubmittedRequest>, SubmissionError> {
         let retained = super::super::super::mutations::submission_journal::load(
             &self.node,
             self.node_identity.did(),
@@ -201,16 +203,20 @@ impl ClientCore {
         .await?;
         let resolved = match retained {
             Some(pending) => {
-                anyhow::ensure!(
-                    pending.node_did == node_did && pending.session_id == session_id,
-                    "unresolved submission {request_id} belongs to another session"
-                );
+                if pending.node_did != node_did || pending.session_id != session_id {
+                    return Err(anyhow::anyhow!(
+                        "unresolved submission {request_id} belongs to another session"
+                    )
+                    .into());
+                }
                 // Mailbox answers carry no composer content; they are keyed by
                 // their mailbox item instead.
-                anyhow::ensure!(
-                    pending.accepts_composer_content(content),
-                    "unresolved submission {request_id} is a different message"
-                );
+                if !pending.accepts_composer_content(content) {
+                    return Err(anyhow::anyhow!(
+                        "unresolved submission {request_id} is a different message"
+                    )
+                    .into());
+                }
                 let access = self.session_queue_access(&pending.node_did)?;
                 match resolve_unresolved_submission(&access, &pending).await {
                     Ok(receipt) => {

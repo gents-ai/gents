@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use gents_desktop_core::client::{
-    ClientCore, SubmissionIntent, SubmissionReference, SubmittedRequest,
+    ClientCore, SubmissionError, SubmissionIntent, SubmissionReference, SubmittedRequest,
 };
 
 use crate::types::{
@@ -53,7 +53,7 @@ fn receipt(intent: &SubmissionIntent, reference: SubmissionReference) -> ChatSub
 pub(super) async fn sent(
     core: &ClientCore,
     intent: &SubmissionIntent,
-    submitted: Result<SubmittedRequest>,
+    submitted: std::result::Result<SubmittedRequest, SubmissionError>,
 ) -> Result<ChatSendResult> {
     let mut result = super::chat_resolve::sent(submitted)?;
     let reference = core
@@ -95,7 +95,9 @@ pub async fn recover_chat_submission(
                 core,
                 &intent,
                 recovered.and_then(|result| {
-                    result.context("retained submission reply omitted its result")
+                    result
+                        .context("retained submission reply omitted its result")
+                        .map_err(SubmissionError::from)
                 }),
             )
             .await?,

@@ -93,7 +93,9 @@ pub async fn send_chat_message(
                     core,
                     intent,
                     recovered.and_then(|receipt| {
-                        receipt.context("retained submission reply omitted its result")
+                        receipt
+                            .context("retained submission reply omitted its result")
+                            .map_err(gents_desktop_core::client::SubmissionError::from)
                     }),
                 )
                 .await;

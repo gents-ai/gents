@@ -84,13 +84,18 @@ pub enum SubmissionAttemptError {
     Rejected(ClientSubmissionError),
 }
 
-impl SubmissionAttemptError {
-    pub(crate) fn into_error(self) -> anyhow::Error {
-        match self {
-            Self::Unknown(error) => error.into(),
-            Self::Rejected(error) => error.into(),
-        }
-    }
+#[derive(Debug, thiserror::Error)]
+pub enum SubmissionError {
+    #[error(transparent)]
+    Unknown(#[from] SubmissionOutcomeUnknown),
+    #[error(transparent)]
+    Cleanup(#[from] SubmissionCleanupIncomplete),
+    #[error(transparent)]
+    NotDelivered(#[from] SubmissionNotDelivered),
+    #[error(transparent)]
+    Unconfirmed(#[from] DeliveryUnconfirmed),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
 
 /// A confirmed delivery outcome whose retained local journal could not be retired.
@@ -115,13 +120,14 @@ pub(crate) fn report_cleanup(
     pending: &UnresolvedSubmission,
     delivery: std::result::Result<SubmittedRequest, SubmissionAttemptError>,
     cleanup: Result<()>,
-) -> Result<SubmittedRequest> {
-    if matches!(delivery, Err(SubmissionAttemptError::Unknown(_))) {
-        return delivery.map_err(SubmissionAttemptError::into_error);
-    }
-    let delivery = delivery.map_err(SubmissionAttemptError::into_error);
+) -> std::result::Result<SubmittedRequest, SubmissionError> {
+    let delivery = match delivery {
+        Err(SubmissionAttemptError::Unknown(error)) => return Err(error.into()),
+        Err(SubmissionAttemptError::Rejected(error)) => Err(anyhow::Error::from(error)),
+        Ok(request) => Ok(request),
+    };
     match cleanup {
-        Ok(()) => delivery,
+        Ok(()) => delivery.map_err(SubmissionError::Other),
         Err(cause) => match delivery {
             Ok(request) => Err(SubmissionCleanupIncomplete::Accepted { request, cause }.into()),
             Err(rejection) => Err(SubmissionCleanupIncomplete::Rejected {
@@ -138,7 +144,7 @@ pub(crate) fn report_rejection(
     pending: &UnresolvedSubmission,
     rejection: anyhow::Error,
     cleanup: Result<()>,
-) -> anyhow::Error {
+) -> SubmissionError {
     match cleanup {
         Err(cause) => SubmissionCleanupIncomplete::Rejected {
             request: pending.result.clone(),
@@ -258,6 +264,7 @@ impl UnresolvedSubmission {
         }
     }
 
+    #[cfg(test)]
     fn outcome_unknown(&self, cause: Option<anyhow::Error>) -> anyhow::Error {
         self.unknown(cause).into()
     }
@@ -393,7 +400,7 @@ pub async fn reconcile_unretained_submission(
     node_did: &str,
     session_id: &str,
     request_id: &str,
-) -> Result<SubmittedRequest> {
+) -> std::result::Result<SubmittedRequest, SubmissionError> {
     match submitted_request_exists(access, node_did, session_id, request_id).await {
         Ok(true) => Ok(SubmittedRequest {
             request_id: request_id.to_string(),
@@ -577,10 +584,9 @@ mod tests {
             );
             assert_eq!(case["expected_outcome"].as_str(), Some(outcome));
             if case["cleanup_failed"].as_bool().unwrap() {
-                let error = result
-                    .unwrap_err()
-                    .downcast::<SubmissionCleanupIncomplete>()
-                    .unwrap();
+                let SubmissionError::Cleanup(error) = result.unwrap_err() else {
+                    panic!("cleanup failure must retain its outcome");
+                };
                 let (observed, accepted, cause) = match error {
                     SubmissionCleanupIncomplete::Accepted { request, cause } => {
                         (request, true, cause)
@@ -595,9 +601,9 @@ mod tests {
             } else if outcome == "accepted" {
                 assert_eq!(result.unwrap().request_id, request);
             } else if outcome == "unresolved" {
-                assert!(result.unwrap_err().is::<SubmissionOutcomeUnknown>());
+                assert!(matches!(result.unwrap_err(), SubmissionError::Unknown(_)));
             } else {
-                assert!(!result.unwrap_err().is::<SubmissionCleanupIncomplete>());
+                assert!(!matches!(result.unwrap_err(), SubmissionError::Cleanup(_)));
             }
         }
     }
@@ -629,7 +635,11 @@ mod tests {
                 }
                 .into()
             };
-            let SubmissionNotDelivered::Rejected { request, cause } = error.downcast().unwrap();
+            let SubmissionError::NotDelivered(SubmissionNotDelivered::Rejected { request, cause }) =
+                error
+            else {
+                panic!("rejection expected")
+            };
             assert_eq!(
                 request.request_id,
                 case["expected_request"].as_u64().unwrap().to_string()
@@ -1258,9 +1268,9 @@ mod tests {
         .await
         .expect_err("an absent receipt does not prove the original never commits");
 
-        let unconfirmed = error
-            .downcast_ref::<DeliveryUnconfirmed>()
-            .unwrap_or_else(|| panic!("absence must stay unresolved: {error:#}"));
+        let SubmissionError::Unconfirmed(unconfirmed) = &error else {
+            panic!("absence must stay unresolved: {error:#}");
+        };
         assert_eq!(unconfirmed.request_id, result.request_id);
         assert_eq!(unconfirmed.session_id, result.session_id);
         assert!(
@@ -1284,7 +1294,7 @@ mod tests {
         .await
         .expect_err("an unreadable receipt proves nothing");
 
-        assert!(error.downcast_ref::<DeliveryUnconfirmed>().is_some());
+        assert!(matches!(error, SubmissionError::Unconfirmed(_)));
     }
 
     #[tokio::test]

@@ -54,18 +54,18 @@ pub async fn submit_request(
     content: &str,
     agent_did: Option<&str>,
     options: SubmitRequestOptions,
-) -> Result<SubmittedRequest> {
+) -> std::result::Result<SubmittedRequest, receipt::SubmissionError> {
     receipt::journal::require_client_signer(node, signer.did())?;
     let caller_intent = options.caller_intent.clone();
     if let Some(intent) = caller_intent.as_ref() {
-        anyhow::ensure!(
-            intent.client_did == signer.did(),
-            "caller submission belongs to another client identity"
-        );
-        anyhow::ensure!(
-            intent.node_did == node_did,
-            "caller submission belongs to another node"
-        );
+        if intent.client_did != signer.did() {
+            return Err(
+                anyhow::anyhow!("caller submission belongs to another client identity").into(),
+            );
+        }
+        if intent.node_did != node_did {
+            return Err(anyhow::anyhow!("caller submission belongs to another node").into());
+        }
         if let Some(record) = receipt::journal::caller::recover(node, intent).await? {
             return receipt::delivery::reconcile(node, Some(access), record).await;
         }
@@ -97,10 +97,10 @@ pub async fn submit_request(
         return receipt::delivery::reconcile(node, Some(access), record).await;
     }
     receipt::journal::save(node, signer.did(), &pending).await?;
-    let result = receipt::commit_signed_submission(access, pending.clone()).await;
-    if matches!(result, Err(receipt::SubmissionAttemptError::Unknown(_))) {
-        return result.map_err(receipt::SubmissionAttemptError::into_error);
-    }
+    let result = match receipt::commit_signed_submission(access, pending.clone()).await {
+        Err(receipt::SubmissionAttemptError::Unknown(error)) => return Err(error.into()),
+        result => result,
+    };
     let cleanup = receipt::journal::forget(node, signer.did(), &pending.request_id).await;
     receipt::report_cleanup(&pending, result, cleanup)
 }
@@ -305,6 +305,7 @@ pub async fn resend_request(
         },
     )
     .await
+    .map_err(Into::into)
 }
 
 async fn fetch_request_view(
@@ -364,6 +365,6 @@ pub(super) mod retry;
 pub use receipt::correlated::{Intent as SubmissionIntent, Reference as SubmissionReference};
 pub use receipt::{
     reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
-    SubmissionAttemptError, SubmissionCleanupIncomplete, SubmissionNotDelivered,
+    SubmissionAttemptError, SubmissionCleanupIncomplete, SubmissionError, SubmissionNotDelivered,
     SubmissionOutcomeUnknown, UnresolvedSubmission,
 };

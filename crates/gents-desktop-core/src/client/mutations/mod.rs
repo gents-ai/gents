@@ -5,8 +5,8 @@ mod setup;
 
 pub use chat::{
     reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
-    SubmissionAttemptError, SubmissionCleanupIncomplete, SubmissionIntent, SubmissionNotDelivered,
-    SubmissionOutcomeUnknown, SubmissionReference, UnresolvedSubmission,
+    SubmissionAttemptError, SubmissionCleanupIncomplete, SubmissionError, SubmissionIntent,
+    SubmissionNotDelivered, SubmissionOutcomeUnknown, SubmissionReference, UnresolvedSubmission,
 };
 pub use chat::{
     rename_session, resend_request, retry_request, submit_request, submit_task_request,

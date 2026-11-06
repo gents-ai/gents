@@ -222,11 +222,15 @@ impl ClientCore {
     }
 
     fn record_mutation_error(&self, operation: &str, error: anyhow::Error) -> anyhow::Error {
+        self.record_mutation_error_message(operation, &error);
+        error
+    }
+
+    fn record_mutation_error_message(&self, operation: &str, error: &dyn std::fmt::Display) {
         let message = format!("{operation} failed: {error}");
         *self
             .last_mutation_error
             .write()
             .expect("mutation error lock poisoned") = Some(message);
-        error
     }
 }
