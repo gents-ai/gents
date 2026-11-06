@@ -408,8 +408,8 @@ mod tests {
             (Collection::InferenceProfile, json!({"node_did": did, "profile_id": "profile-b", "backend_id": b_backend, "model_name": "model-x"})),
             (Collection::Compaction, json!({"node_did": did, "compaction_id": "compaction-a", "inference_profile_id": "profile-a"})),
             (Collection::AgentContext, json!({"node_did": did, "context_id": "context-x", "compaction_id": "compaction-a"})),
-            (Collection::Agent, json!({"node_did": did, "agent_did": "agent-x", "context_id": "context-x", "inference_profile_id": "profile-b"})),
-            (Collection::Agent, json!({"node_did": did, "agent_did": "agent-y", "inference_profile_id": "profile-a"})),
+            (Collection::Agent, json!({"node_did": did, "agent_did": "did:key:z6MkTestAgentX", "creation_nonce": "nonce-x", "context_id": "context-x", "inference_profile_id": "profile-b"})),
+            (Collection::Agent, json!({"node_did": did, "agent_did": "did:key:z6MkTestAgentY", "creation_nonce": "nonce-y", "inference_profile_id": "profile-a"})),
         ]
         .into_iter()
         .map(|(collection, value)| DesiredStateApplyDocument {
@@ -441,7 +441,7 @@ mod tests {
         };
 
         assert_eq!(
-            agent_accounts(&access, did, "agent-x").await?,
+            agent_accounts(&access, did, "did:key:z6MkTestAgentX").await?,
             [
                 expected("profile-b", "label-b", AccountState::Enabled),
                 expected("profile-a", "Claude", AccountState::Enabled),
@@ -449,11 +449,11 @@ mod tests {
         );
         set_account_enabled(&access, did, &b.credential.credential_id, false).await?;
         assert_eq!(
-            agent_accounts(&access, did, "agent-x").await?[0],
+            agent_accounts(&access, did, "did:key:z6MkTestAgentX").await?[0],
             expected("profile-b", "label-b", AccountState::Disabled)
         );
         assert_eq!(
-            agent_accounts(&access, did, "agent-y").await?,
+            agent_accounts(&access, did, "did:key:z6MkTestAgentY").await?,
             [expected("profile-a", "Claude", AccountState::Enabled)]
         );
         assert!(agent_accounts(&access, did, "agent-unknown").await.is_err());
