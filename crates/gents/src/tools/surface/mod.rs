@@ -41,6 +41,21 @@ pub(crate) fn configured_node_operation_sources(
         policy::ToolPolicySurface::from_selection(&selection, &agents).meet(ceiling.policy());
     Ok(policy.covered_node_operation_sources(selection.enable_pack_install))
 }
+pub(crate) fn configured_plugin_refs(
+    tools: &crate::documents::Tools,
+    ceiling: &ToolCeiling,
+) -> anyhow::Result<Vec<crate::documents::PluginToolRef>> {
+    let selection = selection::ResolvedToolSelection::from_document(tools)?;
+    let agents = selection::AgentToolConfig::from_document(tools)?;
+    let policy =
+        policy::ToolPolicySurface::from_selection(&selection, &agents).meet(ceiling.policy());
+    Ok(selection
+        .plugin_tools
+        .into_iter()
+        .filter(|plugin| policy.plugin_tools.permits(&plugin.tool_name().to_owned()))
+        .collect())
+}
+
 #[doc(hidden)]
 pub use root_admission::{
     admit_authored_root, canonicalize_tools_root, load_workspace_root_policy,

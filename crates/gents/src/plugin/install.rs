@@ -345,6 +345,19 @@ pub(crate) struct StagedPluginInstall {
 }
 
 impl StagedPluginInstall {
+    pub(crate) fn previous_plugins(&self) -> Vec<InstalledPlugin> {
+        self.records
+            .as_ref()
+            .map(|records| {
+                records
+                    .previous
+                    .iter()
+                    .filter_map(|(_, _, record)| record.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) async fn finish(mut self, committed: bool) -> Result<()> {
         let records = self.records.take();
         tokio::task::spawn_blocking(move || {

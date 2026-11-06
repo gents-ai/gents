@@ -3311,7 +3311,7 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
         false,
         None,
         &BTreeMap::new(),
-        |_| async { Ok(()) },
+        |_, _| async { Ok(()) },
     )
     .await
     .unwrap();
@@ -3332,7 +3332,7 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
         false,
         None,
         &BTreeMap::new(),
-        |_| async { Ok(()) },
+        |_, _| async { Ok(()) },
     )
     .await
     .unwrap();
@@ -3397,7 +3397,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         false,
         None,
         &BTreeMap::new(),
-        |_| async { Ok(()) },
+        |_, _| async { Ok(()) },
     )
     .await
     .unwrap();
@@ -3461,7 +3461,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         false,
         None,
         &BTreeMap::new(),
-        move |identity| async move {
+        move |identity, _| async move {
             super::record_plugin_store_change(
                 &notify_access,
                 &notify_owner,
@@ -3492,7 +3492,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         false,
         None,
         &BTreeMap::new(),
-        move |identity| async move {
+        move |identity, _| async move {
             super::record_plugin_store_change(
                 &notify_access,
                 &notify_owner,
@@ -3528,7 +3528,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
         false,
         None,
         &BTreeMap::new(),
-        |_| async { Ok(()) },
+        |_, _| async { Ok(()) },
     )
     .await
     .unwrap();
@@ -3562,7 +3562,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
         false,
         None,
         &BTreeMap::new(),
-        move |identity| async move {
+        move |identity, _| async move {
             super::record_plugin_store_change(
                 &notify_access,
                 &notify_owner,

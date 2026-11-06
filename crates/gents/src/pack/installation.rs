@@ -682,6 +682,79 @@ pub(crate) async fn record_plugin_store_change_as_with_node_binding(
     installed: Option<&PackIdentity>,
     node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
 ) -> std::result::Result<(), PluginStoreChangeError> {
+    record_plugin_store_change_with_stage(
+        access,
+        owner,
+        identity,
+        home,
+        coordinate,
+        installed,
+        PluginStageContext {
+            node_binding,
+            changes: None,
+        },
+    )
+    .await
+}
+
+/// Publishes a trusted host stage inside the configuration transaction. The
+/// staging owner retains the plugin store fence until transaction finality.
+pub async fn record_staged_plugin_store_change(
+    access: &ConfigAccess,
+    owner: &str,
+    home: &Path,
+    coordinate: &str,
+    installed: Option<&PackIdentity>,
+    changes: &crate::pack::plugin_lifecycle::PluginStageChanges,
+) -> std::result::Result<(), PluginStoreChangeError> {
+    record_plugin_store_change_with_stage(
+        access,
+        owner,
+        None,
+        home,
+        coordinate,
+        installed,
+        PluginStageContext {
+            node_binding: None,
+            changes: Some(changes),
+        },
+    )
+    .await
+}
+
+pub(crate) async fn record_staged_plugin_store_change_as_with_node_binding(
+    access: &ConfigAccess,
+    owner: &str,
+    identity: Option<Did>,
+    home: &Path,
+    coordinate: &str,
+    installed: Option<&PackIdentity>,
+    stage: PluginStageContext<'_>,
+) -> std::result::Result<(), PluginStoreChangeError> {
+    record_plugin_store_change_with_stage(
+        access, owner, identity, home, coordinate, installed, stage,
+    )
+    .await
+}
+
+pub(crate) struct PluginStageContext<'a> {
+    pub(crate) node_binding: Option<&'a crate::store::config_client::ConfigurationNodeBinding>,
+    pub(crate) changes: Option<&'a crate::pack::plugin_lifecycle::PluginStageChanges>,
+}
+
+async fn record_plugin_store_change_with_stage(
+    access: &ConfigAccess,
+    owner: &str,
+    identity: Option<Did>,
+    home: &Path,
+    coordinate: &str,
+    installed: Option<&PackIdentity>,
+    stage: PluginStageContext<'_>,
+) -> std::result::Result<(), PluginStoreChangeError> {
+    let PluginStageContext {
+        node_binding,
+        changes,
+    } = stage;
     if let Some(identity) = identity {
         if access.actor_did().as_deref() != Some(identity.as_str()) {
             return Err(PluginStoreChangeError::Rejected(
@@ -692,6 +765,10 @@ pub(crate) async fn record_plugin_store_change_as_with_node_binding(
     let result = access
         .transact_write_with_finality("pack.record_plugin_store", |txn| {
             Box::pin(async move {
+                if let Some(changes) = changes {
+                    txn.stage_plugin_delete_roots(&changes.previous, &changes.installed)
+                        .await?;
+                }
                 write_plugin_record(txn, owner, home, coordinate, installed, node_binding).await
             })
         })

@@ -3,6 +3,7 @@ pub mod backend_protection;
 mod backend_protection_tests;
 pub mod file_lock;
 pub mod home;
+pub(crate) mod plugin_delete_source;
 mod runtime_document_projection;
 pub mod storage_backend;
 pub mod store_key;
@@ -17,5 +18,16 @@ pub fn document_projector(
 ) -> std::result::Result<std::sync::Arc<dyn db::DocumentMutationProjector>, identity::Error> {
     Ok(std::sync::Arc::new(
         runtime_document_projection::RuntimeDocumentProjector::new(node, ceiling)?,
+    ))
+}
+
+pub(crate) fn document_projector_with_installed_plugins(
+    node: std::sync::Arc<dyn crate::store::identity::NodeIdentity>,
+    ceiling: crate::tools::surface::ToolCeiling,
+    plugins: Vec<crate::plugin::store::InstalledPlugin>,
+) -> std::result::Result<std::sync::Arc<dyn db::DocumentMutationProjector>, identity::Error> {
+    Ok(std::sync::Arc::new(
+        runtime_document_projection::RuntimeDocumentProjector::new(node, ceiling)?
+            .with_startup_plugins(plugins),
     ))
 }

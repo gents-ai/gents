@@ -921,6 +921,7 @@ async fn serve_foreground(
             Some(http_config),
             p2p_config,
             tool_ceiling.clone(),
+            &home_dir,
         )
         .await
         .context("building protected embedded DefraDB node")?;

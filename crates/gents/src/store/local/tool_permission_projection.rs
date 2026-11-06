@@ -65,6 +65,85 @@ impl ToolPermissionProjection {
         source
     }
 
+    pub(super) async fn reconcile_installed(
+        &self,
+        view: &db::DocumentMutationView,
+        installed: &[crate::plugin::store::InstalledPlugin],
+    ) -> Result<()> {
+        let store = Arc::new(acp::zanzibar::store::TransactionZanzibarStore::new(
+            view.sibling(Namespace::Acpstore),
+        ));
+        let nac = NodeACP::new(Arc::clone(&store));
+        nac.load().await.map_err(external)?;
+        let permission = NodePermission::DocumentDelete;
+        let node = self.node.as_str();
+        let index = super::plugin_delete_source::index(node);
+        let mut wanted = BTreeSet::new();
+        for plugin in installed {
+            if plugin
+                .declaration
+                .data
+                .as_ref()
+                .is_some_and(|data| data.ops.iter().any(|op| op == "delete"))
+            {
+                let coordinate = format!("{}/{}", plugin.namespace, plugin.name);
+                wanted.insert(super::plugin_delete_source::root(node, &coordinate, None));
+                wanted.insert(super::plugin_delete_source::root(
+                    node,
+                    &coordinate,
+                    Some(&plugin.digest),
+                ));
+            }
+        }
+        let indexed = store
+            .get_relation_subjects(
+                acp::NODE_POLICY_ID,
+                acp::NODE_RESOURCE_NAME,
+                &super::plugin_delete_source::object(&index),
+                permission.as_str(),
+            )
+            .await
+            .map_err(external)?;
+        for subject in indexed {
+            if let Subject::EntitySet {
+                resource,
+                object_id,
+                relation,
+            } = subject
+            {
+                if resource == acp::NODE_RESOURCE_NAME && relation == permission.as_str() {
+                    if let Some(root) = decode_source(&object_id).filter(|root| {
+                        root.starts_with(&super::plugin_delete_source::root_prefix(node))
+                    }) {
+                        if !wanted.contains(&root) {
+                            nac.change_source_permission(
+                                &self.node, permission, None, "source", &root, true,
+                            )
+                            .await
+                            .map_err(external)?;
+                        }
+                    }
+                }
+            }
+        }
+        for root in wanted {
+            nac.change_source_permission(
+                &self.node,
+                permission,
+                Some(&index),
+                "source",
+                &root,
+                false,
+            )
+            .await
+            .map_err(external)?;
+            nac.change_source_permission(&self.node, permission, None, "source", &root, false)
+                .await
+                .map_err(external)?;
+        }
+        Ok(())
+    }
+
     pub(super) async fn update(&self, view: &db::DocumentMutationView) -> Result<()> {
         let agents = documents(view, "Agent").await?;
         let contexts = documents(view, "AgentContext").await?;
@@ -99,6 +178,7 @@ impl ToolPermissionProjection {
             }
         }
         let mut desired: BTreeMap<&'static str, BTreeMap<String, String>> = BTreeMap::new();
+        let mut plugin_desired: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
         for doc in agents {
             let (_, value) = row(doc)?;
             if field(&value, "node_did") != Some(node)
@@ -148,6 +228,28 @@ impl ToolPermissionProjection {
             ) else {
                 continue;
             };
+            if let Ok(plugins) =
+                crate::tools::surface::configured_plugin_refs(&tools, &self.ceiling)
+            {
+                for plugin in plugins {
+                    let root = super::plugin_delete_source::root(
+                        node,
+                        &plugin.plugin,
+                        plugin.digest.as_deref(),
+                    );
+                    let member = super::plugin_delete_source::member(
+                        node,
+                        &root,
+                        tools_doc,
+                        context_doc,
+                        agent,
+                    );
+                    plugin_desired
+                        .entry(root)
+                        .or_default()
+                        .insert(member, agent.to_owned());
+                }
+            }
             for operation in operations {
                 let source = self.source(tools_doc, context_doc, agent, operation.purpose);
                 desired
@@ -212,6 +314,147 @@ impl ToolPermissionProjection {
                     None,
                     "source",
                     &source,
+                    false,
+                )
+                .await
+                .map_err(external)?;
+            }
+        }
+        self.update_plugins(&nac, &store, plugin_desired).await?;
+        Ok(())
+    }
+
+    async fn update_plugins(
+        &self,
+        nac: &NodeACP<acp::zanzibar::store::TransactionZanzibarStore>,
+        store: &acp::zanzibar::store::TransactionZanzibarStore,
+        mut desired: BTreeMap<String, BTreeMap<String, String>>,
+    ) -> Result<()> {
+        let node = self.node.as_str();
+        let permission = NodePermission::DocumentDelete;
+        let relation = permission.as_str();
+        let index = super::plugin_delete_source::object(&super::plugin_delete_source::index(node));
+        let roots = store
+            .get_relation_subjects(
+                acp::NODE_POLICY_ID,
+                acp::NODE_RESOURCE_NAME,
+                &index,
+                relation,
+            )
+            .await
+            .map_err(external)?;
+        let active = store
+            .get_relation_subjects(
+                acp::NODE_POLICY_ID,
+                acp::NODE_RESOURCE_NAME,
+                acp::NODE_OBJECT_ID,
+                relation,
+            )
+            .await
+            .map_err(external)?;
+        for subject in roots {
+            let Subject::EntitySet {
+                resource,
+                object_id,
+                relation: child_relation,
+            } = subject
+            else {
+                continue;
+            };
+            if resource != acp::NODE_RESOURCE_NAME || child_relation != relation {
+                continue;
+            }
+            let Some(root) = decode_source(&object_id)
+                .filter(|s| s.starts_with(&super::plugin_delete_source::root_prefix(node)))
+            else {
+                continue;
+            };
+            let root_subject =
+                Subject::entity_set(acp::NODE_RESOURCE_NAME, object_id.clone(), relation);
+            let wanted = if active.contains(&root_subject) {
+                desired.remove(&root).unwrap_or_default()
+            } else {
+                BTreeMap::new()
+            };
+            let children = store
+                .get_relation_subjects(
+                    acp::NODE_POLICY_ID,
+                    acp::NODE_RESOURCE_NAME,
+                    &object_id,
+                    relation,
+                )
+                .await
+                .map_err(external)?;
+            for child in children {
+                let Subject::EntitySet {
+                    resource,
+                    object_id: child_object,
+                    relation: child_relation,
+                } = child
+                else {
+                    continue;
+                };
+                if resource != acp::NODE_RESOURCE_NAME || child_relation != relation {
+                    continue;
+                }
+                let Some(member) = decode_source(&child_object)
+                    .filter(|s| s.starts_with(&super::plugin_delete_source::member_prefix(node)))
+                else {
+                    continue;
+                };
+                if !wanted.contains_key(&member) {
+                    let actors = store
+                        .get_relation_subjects(
+                            acp::NODE_POLICY_ID,
+                            acp::NODE_RESOURCE_NAME,
+                            &child_object,
+                            relation,
+                        )
+                        .await
+                        .map_err(external)?;
+                    for actor in actors {
+                        if let Subject::Entity(actor) = actor {
+                            nac.change_source_permission(
+                                &self.node,
+                                permission,
+                                Some(&member),
+                                "actor",
+                                actor.as_str(),
+                                true,
+                            )
+                            .await
+                            .map_err(external)?;
+                        }
+                    }
+                    nac.change_source_permission(
+                        &self.node,
+                        permission,
+                        Some(&root),
+                        "source",
+                        &member,
+                        true,
+                    )
+                    .await
+                    .map_err(external)?;
+                }
+            }
+            for (member, agent) in wanted {
+                nac.change_source_permission(
+                    &self.node,
+                    permission,
+                    Some(&member),
+                    "actor",
+                    &agent,
+                    false,
+                )
+                .await
+                .map_err(external)?;
+                nac.change_source_permission(
+                    &self.node,
+                    permission,
+                    Some(&root),
+                    "source",
+                    &member,
                     false,
                 )
                 .await
@@ -821,6 +1064,179 @@ mod tests {
             !node
                 .nac_manager()
                 .check_permission(&agent, NodePermission::CollectionPatch)
+                .await?
+        );
+        node.shutdown().await?;
+        Ok(())
+    }
+    #[tokio::test]
+    async fn reviewed_plugin_delete_source_tracks_selection_and_reinstall() -> anyhow::Result<()> {
+        use gents_protocol::job::PluginDataDeclaration;
+        let (_directory, runtime, node) = projection_node().await?;
+        let binding = crate::store::identity::provision_agent_identity(&runtime)?;
+        let agent = identity::Did::new(&binding.agent_did)?;
+        let owner = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let record = crate::plugin::store::InstalledPlugin {
+            namespace: "team".into(),
+            name: "worker".into(),
+            version: "1".into(),
+            digest: digest.clone(),
+            language: "wasm".into(),
+            declaration: crate::pack::PackPlugin {
+                data: Some(PluginDataDeclaration {
+                    collections: vec!["Note".into()],
+                    ops: vec!["delete".into()],
+                    stamped: Default::default(),
+                }),
+                ..Default::default()
+            },
+            granted: None,
+            instructions: None,
+            owner_pack_coordinate: None,
+            owner_pack_digest: None,
+            model_binding: None,
+            data_unique_keys: Default::default(),
+            data_collection_fields: Default::default(),
+        };
+        let integration = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+            "plugins": [{"plugin":"team/worker", "digest": digest}]
+        }))?;
+        let node_value = escape_graphql_string(runtime.did());
+        let agent_value = escape_graphql_string(&binding.agent_did);
+        let nonce = escape_graphql_string(&binding.creation_nonce);
+        for mutation in [
+            format!(
+                r#"mutation {{ create_Tools(input: {{node_did:"{node_value}",tools_id:"plugin-tools",integrations:{integration}}}) {{_docID}} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_AgentContext(input: {{node_did:"{node_value}",context_id:"plugin-context",tools_id:"plugin-tools"}}) {{_docID}} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"{nonce}",context_id:"plugin-context",enabled:true}}) {{_docID}} }}"#
+            ),
+        ] {
+            owner.write("test.plugin_delete.create", &mutation).await?;
+        }
+        let model = crate::lean_vocab_test::lean_identity_household_cases()
+            .iter()
+            .find(|case| case.name == "configuration-explicit-grants")
+            .unwrap();
+        let expected = |name: &str| {
+            model
+                .plugin_delete_cases
+                .iter()
+                .find(|case| case["name"] == name)
+                .unwrap()["source_count"]
+                .as_u64()
+                .unwrap()
+                > 0
+        };
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?,
+            expected("uninstalled")
+        );
+        owner
+            .transact_write("test.plugin_delete.install", |txn| {
+                let record = &record;
+                Box::pin(async move {
+                    txn.stage_plugin_delete_roots(&[], std::slice::from_ref(record))
+                        .await
+                })
+            })
+            .await?;
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?,
+            expected("selected-installed")
+        );
+        let mut replacement = record.clone();
+        replacement.digest = format!("sha256:{}", "b".repeat(64));
+        owner
+            .transact_write("test.plugin_delete.upgrade", |txn| {
+                let (old, new) = (&record, &replacement);
+                Box::pin(async move {
+                    txn.stage_plugin_delete_roots(
+                        std::slice::from_ref(old),
+                        std::slice::from_ref(new),
+                    )
+                    .await
+                })
+            })
+            .await?;
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?,
+            expected("replaced-digest")
+        );
+        owner
+            .transact_write("test.plugin_delete.downgrade", |txn| {
+                let (old, new) = (&replacement, &record);
+                Box::pin(async move {
+                    txn.stage_plugin_delete_roots(
+                        std::slice::from_ref(old),
+                        std::slice::from_ref(new),
+                    )
+                    .await
+                })
+            })
+            .await?;
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?,
+            expected("selected-installed")
+        );
+        owner
+            .transact_write("test.plugin_delete.uninstall", |txn| {
+                let record = &record;
+                Box::pin(async move {
+                    txn.stage_plugin_delete_roots(std::slice::from_ref(record), &[])
+                        .await
+                })
+            })
+            .await?;
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?,
+            expected("uninstalled")
+        );
+        owner.write("test.plugin_delete.disable", &format!(r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"plugin-tools"}}}},input:{{integrations:null}}) {{_docID}} }}"#)).await?;
+        owner
+            .transact_write("test.plugin_delete.reinstall", |txn| {
+                let record = &record;
+                Box::pin(async move {
+                    txn.stage_plugin_delete_roots(&[], std::slice::from_ref(record))
+                        .await
+                })
+            })
+            .await?;
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
+                .await?,
+            expected("disabled")
+        );
+        owner
+            .grant_node_permission(&agent, NodePermission::DocumentDelete)
+            .await?;
+        owner
+            .transact_write("test.plugin_delete.remove_again", |txn| {
+                let record = &record;
+                Box::pin(async move {
+                    txn.stage_plugin_delete_roots(std::slice::from_ref(record), &[])
+                        .await
+                })
+            })
+            .await?;
+        assert!(
+            node.nac_manager()
+                .check_permission(&agent, NodePermission::DocumentDelete)
                 .await?
         );
         node.shutdown().await?;

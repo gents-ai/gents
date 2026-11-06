@@ -483,11 +483,11 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 args.grant_authority,
                 slot_owner.as_deref(),
                 &requested,
-                move |identity| {
+                move |identity, changes| {
                     let home = notify_home;
                     async move {
                         if let Some((access, owner)) = notify_scope {
-                            gents::pack::record_plugin_store_change(
+                            gents::pack::record_staged_plugin_store_change(
                                 &access,
                                 &owner,
                                 &home,

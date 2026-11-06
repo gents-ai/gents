@@ -239,6 +239,7 @@ impl EmbeddedHome {
                 identity.clone(),
                 Some(http),
                 p2p.as_ref().map(|p| p(&path)),
+                &path,
             )
             .await?;
         if initialize_schemas {
@@ -379,6 +380,7 @@ impl EmbeddedHome {
                 self.identity.clone(),
                 Some(http),
                 self.p2p.as_ref().map(|p| p(&self.path)),
+                &self.path,
             )
             .await?;
         self.node = node;

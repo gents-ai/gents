@@ -166,6 +166,12 @@ impl HostedPackStage {
             )));
         }
         let graph = self.graph.clone();
+        let previous = self
+            .stage
+            .as_ref()
+            .map(|stage| stage.previous_plugins())
+            .unwrap_or_default();
+        let installed = self.installed_plugins().to_vec();
         let finish = approver.clone();
         let result = access
             .transact_verified_pack_with_approver(
@@ -175,7 +181,12 @@ impl HostedPackStage {
                 |txn| {
                     let graph = graph.clone();
                     let finish = finish.clone();
+                    let previous = previous.clone();
+                    let installed = installed.clone();
                     Box::pin(async move {
+                        txn.interpreter()
+                            .stage_plugin_delete_roots(&previous, &installed)
+                            .await?;
                         let reports = super::documents::apply_hosted_document_graph(
                             txn.interpreter(),
                             owner,

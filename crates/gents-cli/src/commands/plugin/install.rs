@@ -31,14 +31,15 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         &home,
         &pack.archive,
         args.grant_authority,
-        move |identity| async move {
+        move |identity, changes| async move {
             if let Some((access, owner)) = notify_scope {
-                gents::pack::record_plugin_store_change(
+                gents::pack::record_staged_plugin_store_change(
                     &access,
                     &owner,
                     &notify_home,
                     &identity.coordinate,
                     Some(&identity),
+                    &changes,
                 )
                 .await
             } else {
@@ -152,7 +153,12 @@ mod tests {
                 .await
                 .unwrap();
             let records = access.execute("{ PackInstallation { coordinate } }").await;
-            access.local_node().unwrap().shutdown().await.expect("node shutdown");
+            access
+                .local_node()
+                .unwrap()
+                .shutdown()
+                .await
+                .expect("node shutdown");
             records.unwrap()["data"]["PackInstallation"].clone()
         };
 

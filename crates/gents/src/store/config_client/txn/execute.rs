@@ -325,6 +325,95 @@ impl ConfigApplyTxn<'_> {
             .await
     }
 
+    /// The staged records are supplied by the trusted host while its plugin
+    /// store lease is held; the request actor remains the transaction owner.
+    pub(crate) async fn stage_plugin_delete_roots(
+        &self,
+        previous: &[crate::plugin::store::InstalledPlugin],
+        installed: &[crate::plugin::store::InstalledPlugin],
+    ) -> Result<()> {
+        use crate::store::local::plugin_delete_source as source;
+        if !previous.iter().chain(installed).any(|record| {
+            record
+                .declaration
+                .data
+                .as_ref()
+                .is_some_and(|data| data.ops.iter().any(|op| op == "delete"))
+        }) {
+            return Ok(());
+        }
+        let TxnBackend::Embedded {
+            node,
+            handle,
+            identity,
+            native_operations,
+            ..
+        } = &self.backend
+        else {
+            return Err(ConfigClientError::EmbeddedAccessRequired);
+        };
+        let actor = identity
+            .as_ref()
+            .ok_or(ConfigClientError::RelationshipActorRequired)?;
+        let node_did = node
+            .node_identity_did()
+            .ok_or(ConfigClientError::LocalAccessRequired)?;
+        let txn = handle
+            .as_str()
+            .parse()
+            .map_err(|_| ConfigClientError::InvalidHostSourceTransaction)?;
+        let context = defra_core::RequestContext::default()
+            .with_identity(Some(actor.to_string()))
+            .with_txn(Some(txn));
+        let mut edges = Vec::new();
+        for (records, delete) in [(previous, true), (installed, false)] {
+            for record in records {
+                if !record
+                    .declaration
+                    .data
+                    .as_ref()
+                    .is_some_and(|data| data.ops.iter().any(|op| op == "delete"))
+                {
+                    continue;
+                }
+                let coordinate = format!("{}/{}", record.namespace, record.name);
+                for pin in [None, Some(record.digest.as_str())] {
+                    let root = source::root(node_did, &coordinate, pin);
+                    if !delete {
+                        edges.push(query::txn::SourcePermission {
+                            permission: acp::NodePermission::DocumentDelete.as_str().to_owned(),
+                            parent_source: Some(source::index(node_did)),
+                            subject_kind: "source".into(),
+                            subject: root.clone(),
+                            delete: false,
+                        });
+                    }
+                    edges.push(query::txn::SourcePermission {
+                        permission: acp::NodePermission::DocumentDelete.as_str().to_owned(),
+                        parent_source: None,
+                        subject_kind: "source".into(),
+                        subject: root,
+                        delete,
+                    });
+                }
+            }
+        }
+        let node = std::sync::Arc::clone(node);
+        execute_owned_native(
+            async move {
+                for edge in edges {
+                    node.change_host_nac_source_permission_in_txn(&context, &edge)
+                        .await?;
+                }
+                Ok::<_, defra_node::Error>(())
+            },
+            std::sync::Arc::clone(native_operations),
+            self.operation,
+        )
+        .await?
+        .map_err(|error| ConfigClientError::Node(Box::new(error)))
+    }
+
     /// Stage an actor relationship in this transaction.
     pub async fn add_actor_relationship(
         &self,

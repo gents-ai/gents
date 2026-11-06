@@ -8,6 +8,7 @@ use crate::tools::surface::ToolCeiling;
 
 pub(super) struct RuntimeDocumentProjector {
     tools: ToolPermissionProjection,
+    startup_plugins: Option<Vec<crate::plugin::store::InstalledPlugin>>,
 }
 
 impl RuntimeDocumentProjector {
@@ -17,11 +18,23 @@ impl RuntimeDocumentProjector {
     ) -> std::result::Result<Self, identity::Error> {
         Ok(Self {
             tools: ToolPermissionProjection::new(node, ceiling)?,
+            startup_plugins: None,
         })
+    }
+
+    pub(super) fn with_startup_plugins(
+        mut self,
+        plugins: Vec<crate::plugin::store::InstalledPlugin>,
+    ) -> Self {
+        self.startup_plugins = Some(plugins);
+        self
     }
 
     async fn reconcile_runtime(&self, ctx: &db::DocumentMutationContext<'_>) -> Result<()> {
         self.require_node(ctx)?;
+        if let Some(installed) = &self.startup_plugins {
+            self.tools.reconcile_installed(ctx.view, installed).await?;
+        }
         self.tools.update(ctx.view).await?;
         self.reconcile_transport(ctx).await
     }
@@ -35,7 +48,7 @@ impl RuntimeDocumentProjector {
         self.require_node(ctx)?;
         if matches!(
             collection,
-            "Agent" | "AgentContext" | "Tools" | "DatastoreToolSurface"
+            "Agent" | "AgentContext" | "Tools" | "DatastoreToolSurface" | "PackInstallation"
         ) {
             self.tools.update(ctx.view).await?;
         }

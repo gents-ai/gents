@@ -113,14 +113,14 @@ impl PackInstaller {
             false,
             Some(self.core.node_did()),
             &inference.bindings,
-            move |identity| {
+            move |identity, changes| {
                 let access = notify_access;
                 let node_did = notify_node;
                 let identity_did = notify_identity;
                 let node_binding = notify_node_binding;
                 let home = notify_home;
                 async move {
-                    crate::pack::record_plugin_store_change_as_with_node_binding(
+                    crate::pack::record_staged_plugin_store_change_as_with_node_binding(
                         &access,
                         &node_did,
                         Some(identity_did.ok_or_else(|| {
@@ -131,7 +131,10 @@ impl PackInstaller {
                         &home,
                         &identity.coordinate,
                         Some(&identity),
-                        node_binding.as_ref(),
+                        crate::pack::PluginStageContext {
+                            node_binding: node_binding.as_ref(),
+                            changes: Some(&changes),
+                        },
                     )
                     .await
                 }

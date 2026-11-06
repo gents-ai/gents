@@ -53,15 +53,16 @@ pub use installation::{
     list_installed_packs, plugin_data_unique_keys, prepare_document_pack_archive,
     prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
     prepare_hosted_document_pack_archive, preview_installed_pack_scope, read_installed_pack,
-    record_plugin_store_change, record_plugin_store_change_as, referenced_pack_digests,
-    remove_pack, DriftPolicy, HostedDocumentGraph, HostedPackPreparation, InstallReport,
-    InstalledCatalogEntry, InstalledPack, InstalledPackPlugin, InstalledPackScopePreview,
-    PackIdentity, PackRemovalError, PluginStoreChangeError, PreparedDependency,
-    PreparedDocumentPackInstall, RemoveReport, Retained,
+    record_plugin_store_change, record_plugin_store_change_as, record_staged_plugin_store_change,
+    referenced_pack_digests, remove_pack, DriftPolicy, HostedDocumentGraph, HostedPackPreparation,
+    InstallReport, InstalledCatalogEntry, InstalledPack, InstalledPackPlugin,
+    InstalledPackScopePreview, PackIdentity, PackRemovalError, PluginStoreChangeError,
+    PreparedDependency, PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub(crate) use installation::{
     prepare_document_pack_archive_with_provisioner,
-    record_plugin_store_change_as_with_node_binding, sdl_paths,
+    record_plugin_store_change_as_with_node_binding,
+    record_staged_plugin_store_change_as_with_node_binding, sdl_paths, PluginStageContext,
 };
 pub use installation::{
     stage_hosted_pack, HostedHomePublication, HostedPackStage, HostedPackStageError,

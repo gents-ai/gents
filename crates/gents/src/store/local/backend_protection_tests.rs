@@ -68,7 +68,9 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
         .await?
         .preflight(&key, Some(&did))
         .await?;
-    let (node, admission) = protected.start_node(&key, runtime, None, None).await?;
+    let (node, admission) = protected
+        .start_node(&key, runtime, None, None, &home)
+        .await?;
     crate::ensure_runtime_schemas(&node).await?;
     for entry in gents_migration::DEFAULT_BASELINE.iter() {
         let collection = node

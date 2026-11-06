@@ -749,7 +749,7 @@ async fn resolve_config_access_inner(
         (None, None)
     };
     let (node, _admission) = protected
-        .start_node(&store_key, runtime_identity.clone(), http, None)
+        .start_node(&store_key, runtime_identity.clone(), http, None, &home_dir)
         .await?;
     let migration_node = node.clone();
     let access = ConfigAccess::claimed_local_as(
