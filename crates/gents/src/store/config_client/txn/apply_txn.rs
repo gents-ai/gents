@@ -82,10 +82,6 @@ impl<'a> ConfigApplyTxn<'a> {
         }
     }
 
-    pub(crate) fn is_http(&self) -> bool {
-        matches!(&self.backend, TxnBackend::Http { .. })
-    }
-
     pub(crate) fn client_signed_configuration(&self) -> bool {
         self.pack_approval.is_some()
             || matches!(&self.backend, TxnBackend::Http { endpoint, .. } if endpoint.client_signed_agent_creates)

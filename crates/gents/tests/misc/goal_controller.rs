@@ -736,7 +736,6 @@ struct ChildRow {
     doc_id: String,
     request_id: String,
     node_did: String,
-    requester_did: Option<String>,
     session_id: String,
     agent_did: Option<String>,
     caused_by_parent_request_id: Option<String>,
