@@ -2,13 +2,11 @@ use super::contract_tests::{persist_command, receipt, try_persist_command};
 use super::*;
 use crate::runtime::agent::p2p_reconcile::session_goal_control::process_command;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::store::identity::KeyIdentity;
 use gents_protocol::goal_control::{GoalRevision, SESSION_GOAL_CONTROL_VERSION};
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::{QueueDelivery, RequestInput};
 use gents_protocol::session::SessionTitle;
 use serde_json::{json, Value};
-use std::sync::Arc;
 
 #[path = "replacement_tests.rs"]
 mod replacement_tests;
@@ -52,57 +50,6 @@ fn agent(value: &Value) -> String {
         .to_owned()
 }
 
-async fn seed_agents(
-    node: &Arc<EmbeddedNode>,
-    runtime: &dyn NodeIdentity,
-    user: &dyn NodeIdentity,
-    bindings: &[gents_protocol::agent_identity::AgentIdentityBinding],
-) {
-    let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(user.did()).unwrap());
-    let (node_doc, agent_docs) = access.transact_write("test.goal_start.agents", |txn| Box::pin(async move {
-        let node_doc = txn.execute_with_variables(
-            "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
-            &json!({"input": {"node_did": runtime.did()}}),
-        ).await?;
-        let node_doc = crate::store::graphql::created_doc_id(&node_doc, "Node")?;
-        let mut agent_docs = Vec::new();
-        for binding in bindings {
-            let agent_doc = txn.execute_with_variables(
-                "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
-                &json!({"input": {"node_did": runtime.did(), "agent_did": binding.agent_did,
-                    "creation_nonce": binding.creation_nonce}}),
-            ).await?;
-            let agent_doc = crate::store::graphql::created_doc_id(&agent_doc, "Agent")?;
-            agent_docs.push((agent_doc, binding.agent_did.clone()));
-        }
-        Ok::<_, anyhow::Error>((node_doc, agent_docs))
-    })).await.unwrap();
-    access
-        .add_actor_relationship(
-            "Node",
-            &node_doc,
-            "runtime_reader",
-            &::identity::Did::new(runtime.did()).unwrap(),
-        )
-        .await
-        .unwrap();
-    for (agent_doc, agent_did) in agent_docs {
-        access
-            .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
-            .await
-            .unwrap();
-        access
-            .add_actor_relationship(
-                "Agent",
-                &agent_doc,
-                "executor",
-                &::identity::Did::new(&agent_did).unwrap(),
-            )
-            .await
-            .unwrap();
-    }
-}
-
 #[tokio::test]
 async fn generated_goal_starts_commit_the_session_goal_and_first_request_together() {
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
@@ -125,34 +72,79 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             assert!(!case.published);
             continue;
         }
-        let temp = tempfile::tempdir().unwrap();
-        let identity: Arc<dyn NodeIdentity> =
-            Arc::new(KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap());
-        let user = KeyIdentity::load_or_create(temp.path().join("user.key"), None).unwrap();
-        let foreign = KeyIdentity::load_or_create(temp.path().join("other.key"), None).unwrap();
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(identity.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
-        let other_binding =
-            crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+        let (db, user, access, binding) =
+            crate::test_support::signed_test_node("generated-goal-start").await;
+        let node = db.node.clone();
+        let identity = db.node_identity.clone();
+        let foreign = tokio::task::spawn_blocking(|| {
+            crate::support::fixtures::test_identity("goal-start-foreign")
+        })
+        .await
+        .unwrap();
+        let foreign_access = db.client_access(&foreign);
+        let user_did = ::identity::Did::new(user.did()).unwrap();
+        let other_binding = crate::store::identity::provision_agent_identity_authorized(
+            &node,
+            identity.as_ref(),
+            &user_did,
+        )
+        .await
+        .unwrap();
+        crate::test_support::install_test_agent_binding_with_access(
+            &node,
+            identity.did(),
+            "second goal agent",
+            &other_binding,
+            &access,
+        )
+        .await;
         let agent_identity =
             crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
         let other_agent_identity =
             crate::store::identity::resolve_agent_identity(identity.as_ref(), &other_binding)
                 .unwrap();
-        seed_agents(
-            &node,
-            identity.as_ref(),
-            &user,
-            &[binding.clone(), other_binding.clone()],
-        )
-        .await;
+        let admin =
+            ConfigAccess::local_as(node.clone(), ::identity::Did::new(identity.did()).unwrap());
+        for principal in [agent_identity.did(), other_agent_identity.did()] {
+            let principal = ::identity::Did::new(principal).unwrap();
+            for permission in [
+                crate::store::config_client::NodePermission::CollectionGet,
+                crate::store::config_client::NodePermission::DocumentRead,
+                crate::store::config_client::NodePermission::DocumentUpdate,
+                crate::store::config_client::NodePermission::DocumentDelete,
+                crate::store::config_client::NodePermission::DacRelationAdd,
+                crate::store::config_client::NodePermission::DacRelationDelete,
+            ] {
+                admin
+                    .grant_node_permission(&principal, permission)
+                    .await
+                    .unwrap();
+            }
+        }
+        let foreign_did = ::identity::Did::new(foreign.did()).unwrap();
+        for permission in [
+            crate::store::config_client::NodePermission::CollectionGet,
+            crate::store::config_client::NodePermission::DocumentRead,
+            crate::store::config_client::NodePermission::DocumentUpdate,
+            crate::store::config_client::NodePermission::DacRelationAdd,
+        ] {
+            admin
+                .grant_node_permission(&foreign_did, permission)
+                .await
+                .unwrap();
+        }
+        for agent_did in [&binding.agent_did, &other_binding.agent_did] {
+            let doc = super::agent_document_for_test(&access, identity.did(), agent_did).await;
+            access
+                .add_actor_relationship(
+                    "Agent",
+                    &doc,
+                    "session_writer",
+                    &::identity::Did::new(foreign.did()).unwrap(),
+                )
+                .await
+                .unwrap();
+        }
         case.requested["agent_did"] = json!(if case.requested["agent"] == 4 {
             &other_binding.agent_did
         } else {
@@ -165,30 +157,43 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                 &binding.agent_did
             });
         }
-        let access =
-            ConfigAccess::local_as(node.clone(), ::identity::Did::new(user.did()).unwrap());
         if let Some(session) = &case.session {
             let title = session["title"]
                 .as_object()
                 .map(|_| serde_json::from_value::<SessionTitle>(session["title"].clone()).unwrap());
-            let requester = if session["scope"]["requester"] == 1 {
-                user.did()
+            let foreign_owner = session["scope"]["requester"] != 1;
+            let (requester, session_access) = if foreign_owner {
+                (foreign.did(), &foreign_access)
             } else {
-                foreign.did()
+                (user.did(), &access)
             };
-            access.transact_write("test.seed_goal_session", |txn| {
+            let session_doc = session_access.transact_write("test.seed_goal_session", |txn| {
                 let title = title.clone();
                 let identity = identity.as_ref();
                 Box::pin(async move {
                     crate::session::ensure_session_in_txn(txn, SESSION, identity.did(), &agent(session),
                         Some(requester), title, None, &time(session["created_at"].as_u64().unwrap())).await?;
+                    let record = crate::session::load_agent_session_owner_in_txn(txn, identity.did(), SESSION)
+                        .await?.expect("created modeled session");
                     let tags = if session["tags"].as_array().unwrap().is_empty() { Value::Null } else { session["tags"].clone() };
                     let closed = session["closed_at"].as_u64().map(time);
-                    txn.execute_with_variables("mutation($input: AgentSessionMutationInputArg!) { update_AgentSession(filter: {session_id: {_eq: \"start-session\"}}, input: $input) { _docID } }",
-                        &json!({"input":{"closed_at":closed,"tags":tags}})).await?;
-                    Ok::<_, anyhow::Error>(())
+                    if !tags.is_null() || closed.is_some() {
+                        let mutation = format!("mutation($input: AgentSessionMutationInputArg!) {{ update_AgentSession(docID: \"{}\", input: $input) {{ _docID }} }}", escape_graphql_string(&record.doc_id));
+                        txn.execute_client_signed_update(&mutation, &json!({"input":{"closed_at":closed,"tags":tags}}), gents_protocol::schemas::AGENT_SESSION).await?;
+                    }
+                    Ok::<_, anyhow::Error>(record.doc_id)
                 })
             }).await.unwrap();
+            let agent_doc =
+                super::agent_document_for_test(&access, identity.did(), &agent(session)).await;
+            crate::session::grant_created_session_relationships(
+                session_access,
+                &session_doc,
+                &agent_doc,
+                &agent(session),
+            )
+            .await
+            .unwrap();
         }
         let session_before = access
             .transact_readonly("test.session_before", |txn| {
@@ -237,19 +242,6 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
         };
         let signed_agent_doc_id =
             super::agent_document_for_test(&access, identity.did(), &agent(&case.requested)).await;
-        if let Some(session) = &session_before {
-            let session_agent_doc =
-                super::agent_document_for_test(&access, identity.did(), &session.session.agent_did)
-                    .await;
-            crate::session::grant_created_session_relationships(
-                &access,
-                &session.doc_id,
-                &session_agent_doc,
-                &session.session.agent_did,
-            )
-            .await
-            .unwrap();
-        }
         if session_before
             .as_ref()
             .is_none_or(|session| session.doc_id != signed_session_doc_id)
@@ -279,8 +271,17 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                 .as_ref()
                 .map(agent)
                 .unwrap_or_else(|| binding.agent_did.clone());
-            let agent_access =
-                ConfigAccess::local_as(node.clone(), ::identity::Did::new(&actor).unwrap());
+            let selected = if actor == binding.agent_did {
+                &agent_identity
+            } else {
+                &other_agent_identity
+            };
+            let agent_access = ConfigAccess::local_managed_agent(
+                node.clone(),
+                ::identity::Did::new(&actor).unwrap(),
+                selected.as_ref(),
+            )
+            .unwrap();
             let existing = set_goal_from_access(
                 &agent_access,
                 identity.did(),
@@ -335,8 +336,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             crate::sign_agent_request_create(&user, &mut busy)
                 .await
                 .unwrap();
-            access
-                .write("test.busy_goal_session", &busy.graphql_mutation().unwrap())
+            crate::request::lifecycle::submit_client_request(&access, &busy)
                 .await
                 .unwrap();
         }
@@ -621,7 +621,10 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                 case.name,
             );
         }
-        let goal = load_canonical_goal(&node, identity.did(), SESSION)
+        let goal = access
+            .transact_readonly("test.goal_start.result", |txn| {
+                Box::pin(load_canonical_goal_in_txn(txn, identity.did(), SESSION))
+            })
             .await
             .unwrap();
         assert_eq!(
