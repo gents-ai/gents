@@ -3593,74 +3593,41 @@ async fn a_later_limited_call_wins_over_an_earlier_retry() {
     );
 }
 
-async fn seed_a_passed_reset(db: &TestDb, opted_in: bool) {
-    let did = db.node_identity.did();
-    crate::support::fixtures::bind_agent_backend(
-        &db.node,
-        did,
-        crate::support::AGENT_NAME,
-        "reset-backend",
-        "http://127.0.0.1:1/v1",
-        "test-model",
+async fn seed_a_passed_reset(
+    db: &TestDb,
+    opted_in: bool,
+) -> (gents::KeyIdentity, Arc<dyn NodeIdentity>, ConfigAccess) {
+    let (user, agent, access) = goal_recovery_actors(db, "usage-limited-request", "failed").await;
+    let result = access.execute("{AgentRequest(filter: {request_id: {_eq: \"usage-limited-request\"}}) {_docID session_doc_id}}").await.unwrap();
+    let parent = &result["data"]["AgentRequest"][0];
+    seed_failed_call_from_access(
+        &access,
+        &agent,
+        db.node_identity.did(),
+        parent["_docID"].as_str().unwrap(),
+        parent["session_doc_id"].as_str().unwrap(),
+        "limited-call",
+        "inference",
+        1,
+        "2026-07-15T00:00:10Z",
+        RENDERED_LIMIT,
     )
     .await;
-    let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        "usage-limited-request",
-        did,
-        did,
-        crate::support::AGENT_NAME,
-        SESSION,
-        "limited work",
-        "interactive",
-        "2026-07-15T00:00:00Z",
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did),
-    );
-    gents::sign_agent_request_create(db.node_identity.as_ref(), &mut request)
-        .await
-        .expect("sign request");
-    let response = db
-        .node
-        .execute(&request.graphql_mutation().expect("request mutation"))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "seed request: {:?}",
-        response.errors
-    );
-    let response = db
-        .node
-        .execute(&format!(
-            r#"mutation {{
-                update_AgentRequest(filter: {{ request_id: {{ _eq: "usage-limited-request" }} }}, input: {{
-                    lifecycle_state: "failed"
-                }}) {{ _docID }}
-                add_InferenceCall(input: {{
-                    call_id: "limited-call", request_id: "usage-limited-request", call_seq: 1,
-                    backend_id: "reset-backend", agent_did: "{agent}", node_did: "{did}",
-                    call_kind: "inference", attempt: 1, call_state: "failed",
-                    queued_at: "2026-07-15T00:00:05Z", started_at: "2026-07-15T00:00:05Z",
-                    ended_at: "2026-07-15T00:00:10Z", failure_reason: "{RENDERED_LIMIT}"
-                }}) {{ _docID }}
-            }}"#,
-            agent = crate::support::AGENT_NAME,
-        ))
-        .await;
-    assert!(!response.has_errors(), "seed call: {:?}", response.errors);
-    set_goal(
-        &db.node,
-        did,
+    set_goal_from_access(
+        &access,
+        db.node_identity.did(),
         SESSION,
         Some("Resume at the reported reset"),
         Some(GoalStatus::Active),
+        None,
         None,
     )
     .await
     .expect("set goal");
     if opted_in {
         set_goal_from_access(
-            &ConfigAccess::local(db.node.clone()),
-            did,
+            &db.client_access(&user),
+            db.node_identity.did(),
             SESSION,
             None,
             None,
@@ -3670,39 +3637,38 @@ async fn seed_a_passed_reset(db: &TestDb, opted_in: bool) {
         .await
         .expect("opt in");
     }
+    (user, agent, access)
 }
 
-async fn goal_and_children(db: &TestDb) -> (Option<GoalStatus>, usize) {
-    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+async fn goal_and_children(db: &TestDb, access: &ConfigAccess) -> (Option<GoalStatus>, usize) {
+    let goal = load_goal_as(access, db.node_identity.did())
         .await
-        .expect("load goal")
         .expect("goal exists");
-    let response = db.node.execute(r#"{ AgentRequest { retry_key } }"#).await;
-    let children = response.data.as_ref().unwrap()["AgentRequest"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|row| {
-            row["retry_key"]
-                .as_str()
-                .is_some_and(|key| key.starts_with("goal-continuation:"))
-        })
-        .count();
-    (goal.parsed_status(), children)
+    (
+        goal.parsed_status(),
+        goal_children_from_access(access).await.len(),
+    )
 }
 
 async fn goal_after_a_passed_reset(name: &str, opted_in: bool) -> (Option<GoalStatus>, usize) {
     let db = test_db(name).await;
-    seed_a_passed_reset(&db, opted_in).await;
-    let (mut source, _snapshot_tx) = source(&db).await;
-    wait_for_goal_transition(&db, &mut source, "provider reset decision", |goal| {
-        if opted_in {
-            goal.parsed_status() == Some(GoalStatus::Active)
-                && goal.continuation_sequence == Some(1)
-        } else {
-            goal.parsed_status() == Some(GoalStatus::UsageLimited)
-        }
-    })
+    let (_user, agent, access) = seed_a_passed_reset(&db, opted_in).await;
+    let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
+    wait_for_goal_transition_as(
+        &access,
+        &db.node,
+        db.node_identity.did(),
+        &mut source,
+        "provider reset decision",
+        |goal| {
+            if opted_in {
+                goal.parsed_status() == Some(GoalStatus::Active)
+                    && goal.continuation_sequence == Some(1)
+            } else {
+                goal.parsed_status() == Some(GoalStatus::UsageLimited)
+            }
+        },
+    )
     .await;
     if opted_in {
         assert!(
@@ -3712,21 +3678,22 @@ async fn goal_after_a_passed_reset(name: &str, opted_in: bool) -> (Option<GoalSt
             "reset must not publish a second continuation"
         );
     }
-    goal_and_children(&db).await
+    goal_and_children(&db, &access).await
 }
 
 #[tokio::test]
 async fn a_database_update_leaves_a_passed_reset_to_the_rescan_tick() {
     let db = test_db("goal-reset-update").await;
-    seed_a_passed_reset(&db, true).await;
-    publish_node_readiness(
+    let (_user, agent, access) = seed_a_passed_reset(&db, true).await;
+    publish_node_readiness_for_agent(
         &db,
         gents_protocol::row::NodeReadinessProcessState::Ready,
         None,
+        agent.did(),
     )
     .await;
     let updates = MockUpdateSubscriptionSource::new();
-    let (_snapshot_tx, rx) = watch::channel(snapshot(db.node_identity.did()));
+    let (_snapshot_tx, rx) = watch::channel(agent_snapshot(&db, &agent));
     let mut source = GoalSource::with_subscription_source(
         Arc::new(updates.clone()),
         rx,
@@ -3739,7 +3706,7 @@ async fn a_database_update_leaves_a_passed_reset_to_the_rescan_tick() {
         .await
         .is_err());
     assert_eq!(
-        goal_and_children(&db).await,
+        goal_and_children(&db, &access).await,
         (Some(GoalStatus::UsageLimited), 0)
     );
     let goal_collection_id = gents::collection_ids(&db.node, ["Goal"]).unwrap().remove(0);
@@ -3748,7 +3715,7 @@ async fn a_database_update_leaves_a_passed_reset_to_the_rescan_tick() {
         .await
         .is_err());
     assert_eq!(
-        goal_and_children(&db).await,
+        goal_and_children(&db, &access).await,
         (Some(GoalStatus::UsageLimited), 0)
     );
 }
@@ -5614,8 +5581,10 @@ async fn seed_failed_call_from_access(
                 "mutation($input: InferenceCallMutationInputArg!) {add_InferenceCall(input: $input) {_docID}}",
                 &serde_json::json!({"input": {"call_id": call_id, "node_did": node_did,
                     "request_id": "usage-limited-request", "request_doc_id": request_doc,
-                    "session_id": SESSION, "agent_did": agent.did(), "call_seq": 1, "call_kind": call_kind,
-                    "attempt": attempt, "call_state": "failed", "ended_at": ended_at, "failure_reason": failure_reason}}),
+                    "session_id": SESSION, "agent_did": agent.did(), "backend_id": "goal-fixture-backend",
+                    "call_seq": 1, "call_kind": call_kind, "attempt": attempt, "call_state": "failed",
+                    "queued_at": "2026-07-15T00:00:00Z", "started_at": "2026-07-15T00:00:00Z",
+                    "ended_at": ended_at, "failure_reason": failure_reason}}),
             ).await?;
             let doc = gents::store::graphql::created_doc_id(&response, "InferenceCall")?;
             txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
