@@ -153,10 +153,11 @@ def claimCasesJson : String :=
         Request.CrossActorAuthorization.exampleIntent
         ⟨"user", "session-doc", "agent-doc", "input", "evidence", true⟩
         "input" "changed" ⟨true, true, true⟩).replacement)),
-      ("noRegrant", Lean.toJson (Request.ClientSignedEditHandoff.recover true ⟨true, true, true⟩ == ⟨false, false, false⟩)),
+      ("noRegrant", Lean.toJson (Request.ClientSignedEditHandoff.recover true ⟨true, true, true⟩ ==
+        (⟨false, false, false⟩ : Request.ClientSignedEditHandoff.Effect))),
       ("unprovenRemovalPending", Lean.toJson (unprovenRemovalReplay false true)),
       ("applied", Lean.toJson (apply .pending Request.CrossActorAuthorization.exampleIntent
         Request.CrossActorAuthorization.permittedObservation ⟨true, true, true, true⟩
-        (some [selected]) (some [selected]) == .applied))])).compress
+        (some [selected]) (some [selected]) == Outcome.applied))])).compress
 
 end Identity.SessionInputEdit
