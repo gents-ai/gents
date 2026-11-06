@@ -30,16 +30,17 @@ pub(crate) fn bound_bearer(
 }
 
 pub(crate) async fn seed_credential(
-    node: &Arc<EmbeddedNode>,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     provider: &str,
     expires_at: DateTime<Utc>,
 ) {
-    seed_credential_with_refresh_token(node, node_did, provider, expires_at, "refresh-TEST").await;
+    seed_credential_with_refresh_token(access, node_did, provider, expires_at, "refresh-TEST")
+        .await;
 }
 
 pub(crate) async fn seed_credential_with_refresh_token(
-    node: &Arc<EmbeddedNode>,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     provider: &str,
     expires_at: DateTime<Utc>,
@@ -64,7 +65,7 @@ pub(crate) async fn seed_credential_with_refresh_token(
         provider_account_key: None,
         label: None,
     };
-    crate::inference::auth::credential::upsert_oauth_credential(node, &credential)
+    crate::inference::auth::credential::upsert_oauth_credential_on(access, &credential)
         .await
         .expect("seed credential");
 }

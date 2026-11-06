@@ -240,13 +240,20 @@ fn credential_update_omits_set_once_fields_and_retains_tokens() {
 
 #[tokio::test]
 async fn account_fields_are_kept_when_a_row_is_stored_again() {
-    let node = super::test_support::test_node().await;
+    let (db, _user, _user_access, _binding) =
+        crate::test_support::signed_test_node("credential-fields").await;
+    let node = db.node.clone();
+    let access = super::rows::runtime_credential_access(&node, db.node_identity.did()).unwrap();
     let connected_at = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
     let mut credential = sample_credential();
     credential.doc_id = None;
+    credential.node_did = db.node_identity.did().to_owned();
+    credential.credential_id = oauth_credential_id(&credential.node_did, &credential.provider);
     credential.account_ref = Some("acct-b".to_string());
     credential.connected_at = Some(connected_at);
-    upsert_oauth_credential(&node, &credential).await.unwrap();
+    upsert_oauth_credential_on(&access, &credential)
+        .await
+        .unwrap();
 
     let stored = lookup_oauth_credential_by_id(&node, &credential.credential_id)
         .await
@@ -258,7 +265,9 @@ async fn account_fields_are_kept_when_a_row_is_stored_again() {
     credential.account_ref = None;
     credential.connected_at = None;
     credential.access_token = "access-rotated".to_string();
-    upsert_oauth_credential(&node, &credential).await.unwrap();
+    upsert_oauth_credential_on(&access, &credential)
+        .await
+        .unwrap();
 
     let stored = lookup_oauth_credential_by_id(&node, &credential.credential_id)
         .await
