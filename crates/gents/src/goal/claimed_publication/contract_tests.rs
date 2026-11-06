@@ -896,13 +896,24 @@ async fn run_historical_publication_cases() {
                 let rows: Vec<AgentRequestRow> =
                     serde_json::from_value(staged["data"]["AgentRequest"].clone()).unwrap();
                 assert_eq!(rows.len(), 1);
+                let requester = fixture
+                    .parent
+                    .requester_did
+                    .as_deref()
+                    .expect("parent requester");
+                assert_eq!(requester, fixture.user.did());
                 crate::request::admission::verify_runtime_local_control_receipt(
                     &rows[0],
                     fixture.identity.did(),
                     PARENT,
-                    fixture.identity.did(),
+                    requester,
                 )
                 .unwrap();
+                assert_eq!(rows[0].agent_did.as_deref(), Some(fixture.agent.did()));
+                assert_eq!(
+                    rows[0].caused_by_parent_request_doc_id.as_deref(),
+                    Some(fixture.parent.doc_id.as_str()),
+                );
                 assert_eq!(rows[0].doc_id.as_deref(), Some(receipt.doc_id.as_str()));
                 if case.commit {
                     txn.commit().await.unwrap();
