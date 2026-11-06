@@ -569,6 +569,17 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                         )
                         .await
                         .unwrap();
+                    let deleted = access
+                        .execute(&format!(
+                            r#"{{ AgentSession(docID: "{}") {{ _docID }} }}"#,
+                            escape_graphql_string(&old_session),
+                        ))
+                        .await
+                        .unwrap();
+                    assert!(deleted["data"]["AgentSession"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty());
                     let recreated = access
                         .transact_write("test.goal.recreate_session", |txn| {
                             Box::pin(async {
@@ -614,6 +625,9 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                         .execute("{ Goal { _docID } AgentRequest { _docID } GoalCreationClaim { _docID } }")
                         .await
                         .unwrap();
+                    for collection in ["Goal", "AgentRequest", "GoalCreationClaim"] {
+                        assert!(before["data"][collection].as_array().unwrap().is_empty());
+                    }
                     process_command(&node, &identity, &doc_id, selected_identity)
                         .await
                         .unwrap();
