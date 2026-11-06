@@ -677,7 +677,6 @@ mod tests {
             let observed = node_access
                 .transact_readonly("test.hosted_schema.authorize", |txn| {
                     let runtime = &runtime;
-                    let subject = subject;
                     Box::pin(async move {
                         super::super::require_node_update_in_txn(
                             txn,
