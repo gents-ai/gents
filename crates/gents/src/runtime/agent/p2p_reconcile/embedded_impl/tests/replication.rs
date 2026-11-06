@@ -22,6 +22,9 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     let admin_path = directory.path().join("admin");
     let candidate = KeyIdentity::load_or_create(&candidate_path, None)?;
     let admin = KeyIdentity::load_or_create(&admin_path, None)?;
+    let user = KeyIdentity::load_or_create(directory.path().join("user"), None)?;
+    let agent = KeyIdentity::load_or_create(directory.path().join("agent"), None)?;
+    let sibling = KeyIdentity::load_or_create(directory.path().join("sibling"), None)?;
     let outsider = KeyIdentity::load_or_create(directory.path().join("outsider"), None)?;
     let candidate_key =
         crate::store::identity::load_file_identity(&candidate_path)?.private_key_bytes();
@@ -33,9 +36,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     let admin_test = signed_p2p_node_without_schemas(&admin, admin_key, admin_address).await;
     let candidate_node = &candidate_test.node;
     let admin_node = &admin_test.node;
-    let schema = gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST.replace(
-        "type NetworkEnrollmentRequest @branchable",
-        "type NetworkEnrollmentRequest @branchable @policy(id: \"4bb3e26819f6b2d971472ad58838fe45b7f105c55d3d2763a7cb8fa21751e2d5\", resource: \"configuration\")");
+    let schema = gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST;
     for (node, actor) in [(candidate_node, &candidate), (admin_node, &admin)] {
         node.add_dac_policy_with_counter_as(
             &defra_core::RequestContext::default().with_identity(Some(actor.did().to_owned())),
@@ -43,14 +44,20 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             0,
         )
         .await?;
-        node.add_collection(&schema).await?;
+        node.add_collection(schema).await?;
     }
+    admin_node
+        .add_collection(gents_protocol::schemas::NODE)
+        .await?;
     let candidate_local =
         ConfigAccess::local_as(candidate_node.clone(), identity::Did::new(candidate.did())?);
     let admin_local = ConfigAccess::local_as(admin_node.clone(), identity::Did::new(admin.did())?);
     for (access, other) in [
         (&candidate_local, &admin),
         (&admin_local, &candidate),
+        (&admin_local, &user),
+        (&admin_local, &agent),
+        (&admin_local, &sibling),
         (&admin_local, &outsider),
     ] {
         for permission in [NodePermission::DocumentRead, NodePermission::CollectionGet] {
@@ -59,6 +66,20 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
                 .await?;
         }
     }
+    admin_local
+        .grant_node_permission(
+            &identity::Did::new(user.did())?,
+            NodePermission::DocumentUpdate,
+        )
+        .await?;
+    let receiver_model =
+        &crate::lean_vocab_test::lean_contract_snapshot().identity_replica_grant_cases;
+    let case = |name: &str| {
+        receiver_model
+            .iter()
+            .find(|case| case["name"] == name)
+            .with_context(|| format!("missing replica case {name}"))
+    };
     let reader = identity::Did::new(admin.did())?;
     let mutation = format!(
         r#"mutation {{ create_NetworkEnrollmentRequest(input: {{request_id:"probe", candidate_did:"{}", admin_did:"{}", offer_token:"private-offer"}}) {{_docID}} }}"#,
@@ -161,6 +182,114 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         1,
         "signed genesis must retain its actual creator on the receiver"
     );
+    {
+        let txn = admin_node.database().new_txn(false).await?;
+        let view = txn.datastore()?;
+        crate::store::config_client::transport_publication::project_transport_document(
+            &view,
+            admin_node.document_acp().as_ref(),
+            &reader,
+            "NetworkEnrollmentRequest",
+            &doc,
+        )
+        .await?;
+        drop(view);
+        txn.commit().await?;
+    }
+    assert_eq!(
+        count(&admin_local.execute(&query).await?) != 0,
+        case("pending")?["runtime_read"] == true
+    );
+    assert_eq!(
+        count(&http(admin_address, &user)?.execute(&query).await?) != 0,
+        case("pending")?["user_read"] == true
+    );
+    let node = http(admin_address, &user)?
+        .write(
+            "test.transport.create_node",
+            &format!(
+                r#"mutation {{ create_Node(input: {{node_did: "{}"}}) {{_docID}} }}"#,
+                escape_graphql_string(admin.did())
+            ),
+        )
+        .await?;
+    let parent = gents_protocol::graphql::extract_mutation_doc_id(&node, "Node")?;
+    {
+        let txn = admin_node.database().new_txn(false).await?;
+        let view = txn.datastore()?;
+        crate::store::config_client::transport_publication::reconcile_transport_documents(
+            &view,
+            admin_node.document_acp().as_ref(),
+            &reader,
+        )
+        .await?;
+        drop(view);
+        txn.commit().await?;
+    }
+    assert_eq!(
+        count(&http(admin_address, &user)?.execute(&query).await?) != 0,
+        case("linked")?["user_read"] == true
+    );
+    for actor in [&agent, &sibling, &outsider] {
+        assert_eq!(
+            count(&http(admin_address, actor)?.execute(&query).await?),
+            0
+        );
+    }
+    let denied = http(admin_address, &user)?.write(
+        "test.transport.denied_write",
+        &format!(r#"mutation {{ update_NetworkEnrollmentRequest(docID: "{}", input: {{offer_token:"forged"}}) {{_docID}} }}"#,
+            escape_graphql_string(&doc)),
+    ).await;
+    assert!(
+        denied.is_err()
+            || denied.as_ref().is_ok_and(|response| {
+                gents_protocol::graphql::graphql_rows_from_response(
+                    response,
+                    "update_NetworkEnrollmentRequest",
+                )
+                .is_empty()
+            })
+    );
+    assert_eq!(
+        admin_local.execute(&query).await?["data"]["NetworkEnrollmentRequest"][0]["offer_token"],
+        "private-offer"
+    );
+    {
+        let txn = admin_node.database().new_txn(false).await?;
+        let view = txn.datastore()?;
+        admin_node
+            .document_acp()
+            .change_node_admin_relationship(
+                view.sibling(storage::namespace::Namespace::Acpstore),
+                &reader,
+                acp::Subject::entity_set("nodes", parent, ""),
+                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                "enrollment_records",
+                &doc,
+                "parent",
+                true,
+            )
+            .await?;
+        drop(view);
+        txn.commit().await?;
+    }
+    {
+        let txn = admin_node.database().new_txn(false).await?;
+        let view = txn.datastore()?;
+        crate::store::config_client::transport_publication::reconcile_transport_documents(
+            &view,
+            admin_node.document_acp().as_ref(),
+            &reader,
+        )
+        .await?;
+        drop(view);
+        txn.commit().await?;
+    }
+    assert_eq!(
+        count(&http(admin_address, &user)?.execute(&query).await?) != 0,
+        case("after-repair")?["user_read"] == true
+    );
     candidate_local
         .delete_actor_relationship("NetworkEnrollmentRequest", &doc, "reader", &reader)
         .await?;
@@ -170,6 +299,40 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     );
     candidate_node.shutdown().await?;
     admin_node.shutdown().await?;
+    let reopened_address = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
+    let reopened_key = crate::store::identity::load_file_identity(&admin_path)?.private_key_bytes();
+    let reopened = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(admin_test._tempdir.path())
+            .with_node_identity_did(admin.did())
+            .with_signing_key(defra_node::SigningKey::Ed25519(reopened_key))
+            .with_node_acp_enabled()
+            .with_http(defra_node::HttpConfig::with_addr(reopened_address))
+            .build()
+            .await?,
+    );
+    {
+        let txn = reopened.database().new_txn(false).await?;
+        let view = txn.datastore()?;
+        crate::store::config_client::transport_publication::reconcile_transport_documents(
+            &view,
+            reopened.document_acp().as_ref(),
+            &reader,
+        )
+        .await?;
+        drop(view);
+        txn.commit().await?;
+    }
+    let reopened_local = ConfigAccess::local_as(reopened.clone(), reader.clone());
+    assert_eq!(
+        count(&reopened_local.execute(&query).await?) != 0,
+        case("after-repair")?["runtime_read"] == true
+    );
+    assert_eq!(
+        count(&http(reopened_address, &user)?.execute(&query).await?) != 0,
+        case("after-repair")?["user_read"] == true
+    );
+    reopened.shutdown().await?;
     Ok(())
 }
 

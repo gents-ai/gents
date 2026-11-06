@@ -8,7 +8,7 @@ const TEST_SCHEMA: &str = r#"
 
 pub(in crate::runtime::agent::p2p_reconcile) struct TestNode {
     pub(in crate::runtime::agent::p2p_reconcile) node: Arc<EmbeddedNode>,
-    _tempdir: tempfile::TempDir,
+    pub(super) _tempdir: tempfile::TempDir,
 }
 
 async fn p2p_node_with_identity(node_identity_did: Option<&str>) -> TestNode {
