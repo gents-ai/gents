@@ -14,6 +14,7 @@ mod accounts;
 mod backend;
 mod config;
 mod config_documents;
+mod docs;
 mod eval;
 mod optimization;
 mod p2p;
@@ -33,6 +34,7 @@ pub(crate) use backend::*;
 pub use config::ToolCeilingArg;
 pub(crate) use config::*;
 pub(crate) use config_documents::*;
+pub(crate) use docs::*;
 pub(crate) use eval::*;
 pub(crate) use optimization::*;
 pub(crate) use p2p::*;
@@ -151,6 +153,9 @@ pub(crate) enum Command {
     },
     #[command(name = "__native-fs-runner", hide = true)]
     NativeFsRunner(NativeFsRunnerArgs),
+    /// Write the CLI and configuration reference bundle for this build.
+    #[command(name = "__docs-bundle", hide = true)]
+    DocsBundle(DocsBundleArgs),
     #[command(about = "Inspect and control live P2P runtime connectivity", after_help = P2P_AFTER_HELP)]
     P2p {
         #[command(subcommand)]

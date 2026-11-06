@@ -416,9 +416,9 @@ def release_notes(cfg, app, cli, assets):
         "This prerelease contains **only** the macOS arm64 desktop app and the macOS arm64 CLI.",
         "There is no DMG, no Linux package and no x86_64 build in this release.",
         "",
-        "- **Desktop app** (`{}`): Developer ID signed (team NXJ753WW5X), notarized by Apple, "
+        "- **Desktop app** (`{}`): Developer ID signed by Source, Inc. (team 4LPKFKCXDA), notarized by Apple, "
         "ticket stapled. Notary submission `{}`.".format(cfg["app_asset"], app["submission_id"]),
-        "- **CLI** (`{}`): Developer ID signed (team NXJ753WW5X), notarized by Apple "
+        "- **CLI** (`{}`): Developer ID signed by Source, Inc. (team 4LPKFKCXDA), notarized by Apple "
         "(submission `{}`). Command-line binaries cannot carry a stapled ticket; "
         "Gatekeeper checks the ticket online on first run.".format(CLI_TARBALL, cli["submission_id"]),
         "",

@@ -524,10 +524,10 @@ test.describe("kit shell", () => {
     await startDialogObservation(page);
     await page.getByRole("button", { name: "Menu", exact: true }).click();
     await expect(
-      page.getByRole("dialog", { name: "Navigation", exact: true }),
+      page.getByRole("dialog", { name: "Sidebar", exact: true }),
     ).toBeVisible();
     await page
-      .getByRole("dialog", { name: "Navigation", exact: true })
+      .getByRole("dialog", { name: "Sidebar", exact: true })
       .getByRole("button", { name: "Search", exact: true })
       .click();
     await expect(

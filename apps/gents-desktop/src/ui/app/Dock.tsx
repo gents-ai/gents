@@ -9,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
 import { Hint } from "@/screens/Hint";
+import { useAriaKeys, useKeysHint } from "@/commands/commands";
 import { PanelMenu } from "./PanelMenu";
 import { cn } from "@gents/ui/lib/utils";
 import { dockView } from "./dock-scope";
@@ -18,7 +19,7 @@ import { useFleet } from "../hooks/useFleet";
 import { useDragReorder } from "../hooks/useDragReorder";
 
 const DOCK_PANEL_ID = "dock-panel";
-const dockTabId = (surface: string) => `dock-tab-${surface}`;
+export const dockTabId = (surface: string) => `dock-tab-${surface}`;
 
 export function Dock({
   sessionId,
@@ -111,7 +112,7 @@ function OpenAPanel({
               className="flex h-10 cursor-pointer items-center gap-2.5 rounded-xl border border-border/60 px-3 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-none"
             >
               <s.icon className="size-4 shrink-0" />
-              <span className="truncate">{s.title}</span>
+              <span className="min-w-0 flex-1 truncate text-left">{s.title}</span>
             </button>
           ))}
         </div>
@@ -141,6 +142,10 @@ export function DockTabs({
     useFleet((s) => (sessionId ? s.bySessionId[sessionId]?.title : null)) ?? "Session";
   const tabEls = useRef(new Map<string, HTMLButtonElement>());
   const view = dockView(dock, routeName, useSurfaces(), "dock");
+  const expandKeys = useKeysHint("panel.expand");
+  const expandAria = useAriaKeys("panel.expand");
+  const toggleKeys = useKeysHint("panel.toggle");
+  const toggleAria = useAriaKeys("panel.toggle");
   const reorder = useDragReorder<HTMLDivElement>({
     axis: "x",
     keys: view.tabs.map((tab) => tab.id),
@@ -317,11 +322,12 @@ export function DockTabs({
         <AddTab available={view.available} onOpen={openSurface} />
       </div>
       {onExpand && (
-        <Hint label={expanded ? "Restore panel" : "Expand panel"}>
+        <Hint label={expanded ? "Restore panel" : "Expand panel"} keys={expandKeys}>
           <Button
             variant="ghost"
             size="icon-sm"
             aria-label={expanded ? "Restore panel" : "Expand panel"}
+            aria-keyshortcuts={expandAria}
             aria-pressed={expanded}
             className="ml-1 shrink-0"
             onClick={onExpand}
@@ -330,11 +336,12 @@ export function DockTabs({
           </Button>
         </Hint>
       )}
-      <Hint label="Hide panel">
+      <Hint label="Hide panel" keys={toggleKeys}>
         <Button
           variant="ghost"
           size="icon-sm"
           aria-label="Hide panel"
+          aria-keyshortcuts={toggleAria}
           className="ml-1 shrink-0"
           onClick={() => closeDock()}
         >
@@ -345,18 +352,22 @@ export function DockTabs({
   );
 }
 
+/* a tab's full title and its key, where it has one; the rest keep the
+   short tab name's own title */
 /* the panels this page can show that aren't open yet; none, no button */
 function AddTab({
   available,
   onOpen,
 }: {
   available: readonly Surface[];
+  /** the first one's number, after the open tabs, as the picker counts */
   onOpen: (id: string) => void;
 }) {
+  const pickerKeys = useKeysHint("panel.picker");
   if (available.length === 0) return null;
   return (
     <DropdownMenu>
-      <Hint label="Open a panel">
+      <Hint label="Open a panel" keys={pickerKeys}>
         <DropdownMenuTrigger
           render={
             <Button

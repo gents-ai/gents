@@ -5,8 +5,8 @@ use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 
 use crate::pack::store::PackStore;
-use crate::runtime::agent::p2p_reconcile::templates::admit_app_collections;
 use crate::store::config_client::{preview_schema_install, ConfigAccess};
+use gents_protocol::peer_schema::admit_app_collections;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InstalledPackScopePreview {
