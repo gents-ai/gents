@@ -249,16 +249,39 @@ async fn live_glm_plugin_denial_rolls_back_data_and_terminalizes_tool() -> Resul
         publish(&access, vec![(Collection::Tools, serde_json::to_value(&tools)?), (Collection::AgentContext, serde_json::to_value(&context)?)]).await?;
         agent.context_id = Some(context.context_id.clone());
         core.save_agent(&agent).await?;
+        let runtime_identity = identity_from_init(&init)?;
+        let runtime_endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+            &graphql, &node_did,
+        ).with_client_signing_capability(runtime_identity.client_signing_capability()?)?;
+        let activation = runtime_endpoint.authorize(
+            reqwest::Client::new().get(format!("http://127.0.0.1:{port}/activation")),
+        )?.send().await.context("waiting for the selected plugin configuration to activate")?;
+        let activation_status = activation.status();
+        let activation_body = activation.text().await?;
+        anyhow::ensure!(activation_status.is_success(),
+            "selected plugin configuration did not activate: HTTP {activation_status}: {activation_body}");
+        let readiness = access.execute(&format!(
+            r#"{{ NodeReadiness(filter: {{node_did: {{_eq: "{}"}}}}, limit: 1) {{node_did snapshot_json updated_at}} }}"#,
+            escape_graphql_string(&node_did),
+        )).await?;
+        let readiness_row: gents_protocol::row::NodeReadinessRow = serde_json::from_value(
+            first_graphql_row(&readiness, "NodeReadiness")?.clone(),
+        )?;
+        let readiness = gents_protocol::row::decode_node_readiness_snapshot(&readiness_row, &node_did)
+            .map_err(|error| anyhow::anyhow!("invalid selected Agent readiness: {error:?}"))?;
+        anyhow::ensure!(readiness.agents.iter().any(|entry| entry.agent_did == agent_did
+            && entry.state == gents_protocol::node_readiness::AgentReadinessState::Ready),
+            "selected Agent unavailable after plugin configuration activation: {readiness:?}");
         let session = Uuid::new_v4().to_string();
         let prompt = format!("Call job_fixture exactly once with these exact JSON arguments: {}. Do not change any value or retry. Report the result.", args);
         let receipt = core.submit_request(&session, &node_did, &prompt, Some(&agent_did)).await?;
-        let _reply = wait_for_complete_agent_response_with_access(&access, &receipt.request_id, &session, Duration::from_secs(240)).await?;
+        let reply = wait_for_complete_agent_response_with_access(&access, &receipt.request_id, &session, Duration::from_secs(240)).await?;
         let observed = access.execute(&format!("{{ InferenceCall(filter: {{request_id: {{_eq: \"{}\"}}}}) {{model_name agent_did call_state}} AgentToolCall(filter: {{request_id: {{_eq: \"{}\"}}}}) {{_docID node_did requester_did session_id request_doc_id tool_name lifecycle_state tool_failure_class}} }}", escape_graphql_string(&receipt.request_id), escape_graphql_string(&receipt.request_id))).await?;
         let calls = observed["data"]["InferenceCall"].as_array().context("missing inference evidence")?;
         anyhow::ensure!(calls.iter().any(|call| call["model_name"] == model && call["agent_did"] == agent_did && call["call_state"] == "completed"), "missing completed real model call: {calls:?}");
         let tools = observed["data"]["AgentToolCall"].as_array().context("missing tool calls")?;
         let selected: Vec<_> = tools.iter().filter(|call| call["tool_name"] == "job_fixture").collect();
-        anyhow::ensure!(selected.len() == 1, "expected one plugin call: {tools:?}");
+        anyhow::ensure!(selected.len() == 1, "expected one plugin call; terminal response: {:?}; observed calls: {tools:?}", reply.text);
         let call = selected[0];
         anyhow::ensure!(call["lifecycle_state"] == "failed" && call["tool_failure_class"] == "toolReturnedError", "plugin did not settle failed: {call}");
         let actual_args = gents::tools::call::lifecycle::load_tool_call_arguments(&access, call["_docID"].as_str().context("tool doc")?, &node_did, &session, call["requester_did"].as_str()).await?;
