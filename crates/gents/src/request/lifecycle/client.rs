@@ -103,6 +103,38 @@ pub(crate) async fn stage_request_relationships_in_txn(
     Ok(())
 }
 
+/// Commit a selected Agent's signed runtime request with its physical parents.
+pub(crate) async fn stage_runtime_request_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    create: &AgentRequestCreate,
+    session: &str,
+    agent: &str,
+) -> anyhow::Result<String> {
+    anyhow::ensure!(
+        create.admission.kind == AgentRequestAdmissionKind::RuntimeInternal
+            && txn.actor_did() == Some(create.agent_did.as_str())
+            && create.admission.signer_did == create.agent_did
+            && create.session_doc_id.as_deref() == Some(session)
+            && create.agent_doc_id.as_deref() == Some(agent),
+        "runtime request differs from its signing Agent or physical targets"
+    );
+    anyhow::ensure!(
+        crate::store::identity::verify_did_signature(
+            &create.admission.signer_did,
+            &create.signing_payload(),
+            &create.admission.signature,
+        )?,
+        "runtime request requires its valid signed receipt"
+    );
+    let fields = create.graphql_input_fields().map_err(anyhow::Error::msg)?;
+    let response = txn.execute(&format!(
+        "mutation {{ create_AgentRequest(input: {{ {fields}, relationships_pending: false }}) {{ _docID }} }}"
+    )).await?;
+    let request = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+    stage_request_relationships_in_txn(txn, &request, agent, session, &create.agent_did).await?;
+    Ok(request)
+}
+
 /// Create and link a client or local-self request within the transaction that
 /// verifies its physical session and selected Agent. Legacy pending publications
 /// retain their separate authenticated recovery path.

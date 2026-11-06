@@ -184,21 +184,26 @@ async fn stage_claimed_continuation(
         identity.did() == parent.agent_did,
         "claimed publication requires the selected agent's signing identity"
     );
-    let session = escape_graphql_string(&goal.session_id);
-    let node = escape_graphql_string(&goal.node_did);
-    let session_response = txn
-        .execute(&format!(
-            r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }} }}, limit: 2) {{ agent_did }} }}"#
-        ))
-        .await?;
-    let sessions = session_response
-        .pointer("/data/AgentSession")
-        .and_then(serde_json::Value::as_array)
-        .context("claimed publication session query omitted rows")?;
+    let session = crate::session::load_agent_session_row_in_txn(
+        txn,
+        &goal.node_did,
+        &goal.session_id,
+        parent.requester_did.as_deref(),
+    )
+    .await?
+    .context("claimed publication session is unavailable")?;
     anyhow::ensure!(
-        sessions.len() == 1 && sessions[0]["agent_did"].as_str() == Some(identity.did()),
+        session.session.agent_did == identity.did(),
         "claimed publication requires the session's selected agent"
     );
+    let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+        txn,
+        crate::Collection::Agent,
+        &goal.node_did,
+        identity.did(),
+    )
+    .await?
+    .context("claimed publication Agent is unavailable")?;
     let behavior = goal_continuation_agent(txn, &parent).await?;
     let sequence = observed.continuation_sequence();
     let now = Utc::now();
@@ -236,6 +241,8 @@ async fn stage_claimed_continuation(
         &created_at,
         session_hop,
     )?;
+    create.session_doc_id = Some(session.doc_id.clone());
+    create.agent_doc_id = Some(agent_doc.clone());
     create.input.goal_assignment = Some(continuation_assignment(
         &goal,
         &parent,
@@ -339,23 +346,18 @@ async fn stage_claimed_continuation(
     {
         return Ok(None);
     }
-    let response = txn
-        .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
-        .await?;
-    let child = response
-        .pointer("/data/create_AgentRequest")
-        .or_else(|| response.pointer("/data/add_AgentRequest"))
-        .context("claimed child create omitted result")?;
-    let child_doc = child
-        .get("_docID")
-        .or_else(|| child.get(0).and_then(|row| row.get("_docID")))
-        .and_then(serde_json::Value::as_str)
-        .context("claimed child create omitted document ID")?;
+    let child_doc = crate::request::lifecycle::stage_runtime_request_in_txn(
+        txn,
+        &create,
+        &session.doc_id,
+        &agent_doc,
+    )
+    .await?;
     if goal.assignment_root_request_doc_id.is_none() {
         bind_goal_first_request_in_txn(
             txn,
             &goal,
-            child_doc,
+            &child_doc,
             create.input.goal_assignment.as_ref(),
         )
         .await?;
@@ -364,7 +366,7 @@ async fn stage_claimed_continuation(
         goal_status: goal.parsed_status().context("goal has an unknown status")?,
         goal_id: goal.goal_id,
         request_id: create.request_id,
-        doc_id: child_doc.to_owned(),
+        doc_id: child_doc,
         created: true,
     }))
 }
