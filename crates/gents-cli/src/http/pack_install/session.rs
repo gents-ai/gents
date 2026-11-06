@@ -456,19 +456,7 @@ async fn run_inner(
         next_id: AtomicU64::new(1),
         pending_id: AtomicU64::new(0),
     });
-    let reports = stage
-        .apply(&user_access, &state.node_did, scope, approver, policy)
-        .await
-        .map_err(|error| {
-            let outcome = match &error {
-                gents::pack::HostedPackStageError::Rejected(_) => "not_installed",
-                gents::pack::HostedPackStageError::Unconfirmed(_) => "unconfirmed",
-            };
-            (anyhow::Error::new(error), outcome)
-        })?;
-    let report = gents::pack::assemble_document_graph_report(&prepared, reports)
-        .map_err(|error| (error, "unconfirmed"))?;
-    if received.request.explicit {
+    let home_publication = if received.request.explicit {
         let coordinate = format!(
             "{}/{}",
             received.root.manifest().metadata.namespace,
@@ -495,25 +483,33 @@ async fn run_inner(
             installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             installed_via: Some(gents::pack::InstalledVia::Operator),
         };
-        let leases = materialized.2;
-        tokio::task::spawn_blocking(move || {
-            let _leases = leases;
-            gents::pack::record_after_install(
-                &home,
-                record,
-                gents::pack::InstalledVia::Operator,
-                true,
-            )
+        Some(gents::pack::HostedHomePublication {
+            home,
+            record,
+            leases: materialized.2,
         })
+    } else {
+        None
+    };
+    let reports = stage
+        .apply(
+            &user_access,
+            &state.node_did,
+            scope,
+            approver,
+            policy,
+            home_publication,
+        )
         .await
-        .map_err(|error| (anyhow::Error::new(error), "unconfirmed"))?
         .map_err(|error| {
-            (
-                error.context("pack documents committed but home install record failed"),
-                "unconfirmed",
-            )
+            let outcome = match &error {
+                gents::pack::HostedPackStageError::Rejected(_) => "not_installed",
+                gents::pack::HostedPackStageError::Unconfirmed(_) => "unconfirmed",
+            };
+            (anyhow::Error::new(error), outcome)
         })?;
-    }
+    let report = gents::pack::assemble_document_graph_report(&prepared, reports)
+        .map_err(|error| (error, "unconfirmed"))?;
     let origin_tag = gents::pack::pack_origin_tag(&received.root.manifest().name)
         .map_err(|error| (error, "unconfirmed"))?;
     let result = json!({"pack":received.root.manifest().name, "source":received.root.label(), "digest":received.root.digest(), "owner":state.node_did, "inference":prepared.inference, "dependency_inference":prepared.dependency_inference, "origin_tag":origin_tag, "dependencies":received.root.manifest().metadata.dependencies, "schemas":schemas, "apply":report});

@@ -808,6 +808,12 @@ def caseCoverage : List CoverageEntry :=
       "plugin::tests::executor::staged_plugin_resolution_conforms_to_lean")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "hosted_pack_home_cases"
+      "HostedPackHomeCases"
+      "pack::installation::hosted::tests::hosted_home_publication_conforms_to_lean"
+      "Binds actual home record write and failure to modeled success; native commit and cancellation ordering are exercised by the transaction owner.")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "agent_steer_disposition_cases"
       "AgentSteerDispositionCases"
       "session_message::agent_tools_tests::explicit_steer_checks_the_physical_head_at_publication"

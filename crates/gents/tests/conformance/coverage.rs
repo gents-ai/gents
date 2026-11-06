@@ -827,6 +827,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     if !snapshot.hosted_pack_evidence_cases.is_empty() {
         emitted.insert(("hosted_pack_evidence_cases".into(), "HostedPackEvidenceCases".into()));
     }
+    if !snapshot.hosted_pack_home_cases.is_empty() {
+        emitted.insert(("hosted_pack_home_cases".into(), "HostedPackHomeCases".into()));
+    }
     if !snapshot.agent_folded_binding_cases.is_empty() {
         emitted.insert((
             "agent_folded_binding_cases".into(),

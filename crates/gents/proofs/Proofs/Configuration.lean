@@ -635,6 +635,16 @@ replay matches every proposed effect and signals that its plan is complete. -/
 def hostedPackCommitAllowed (effectsMatched clientFinished : Bool) : Bool :=
   effectsMatched && clientFinished
 
+/-- A hosted install reports success only after its required host record has
+been written. A failed host write cannot undo a committed document graph. -/
+def hostedPackReportedSuccess (committed homeRequired homeWritten : Bool) : Bool :=
+  committed && (!homeRequired || homeWritten)
+
+theorem hosted_pack_missing_home_record_is_not_success :
+    hostedPackReportedSuccess true true false = false := by decide
+
+def hostedPackHomeCases : List Bool := [false, true]
+
 theorem hosted_pack_disconnect_before_finish_cannot_commit (effectsMatched : Bool) :
     hostedPackCommitAllowed effectsMatched false = false := by
   simp [hostedPackCommitAllowed]

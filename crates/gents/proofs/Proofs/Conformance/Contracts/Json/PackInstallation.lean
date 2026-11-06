@@ -3,6 +3,10 @@ import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.Contracts.PackInstallation
 
+def homeCasesJson : String := jsonArray (Configuration.hostedPackHomeCases.map fun written =>
+  "{\"home_written\":" ++ toString written ++ ",\"reported_success\":" ++
+    toString (Configuration.hostedPackReportedSuccess true true written) ++ "}")
+
 def evidenceCasesJson : String := jsonArray (Configuration.hostedPackEffectCases.map fun
     (actor, graph, plan) =>
   "{\"actor_matches\":" ++ toString actor ++

@@ -13,6 +13,26 @@ use super::{DriftPolicy, InstallReport};
 use crate::pack::archive::PackArchive;
 use crate::store::config_client::{ConfigAccess, PackApprovalScope, PackEffectApprover};
 
+pub struct HostedHomePublication {
+    pub home: std::path::PathBuf,
+    pub record: crate::pack::HomePackInstall,
+    pub leases: Vec<crate::store::local::file_lock::FileLock>,
+}
+
+async fn publish_hosted_home(publication: HostedHomePublication) -> Result<()> {
+    tokio::task::spawn_blocking(move || {
+        let _leases = publication.leases;
+        crate::pack::record_after_install(
+            &publication.home,
+            publication.record,
+            crate::pack::InstalledVia::Operator,
+            true,
+        )
+    })
+    .await??;
+    Ok(())
+}
+
 /// Holds the runtime's plugin-store lease through the native User transaction.
 pub struct HostedPackStage {
     stage: Option<crate::plugin::install::StagedPluginInstall>,
@@ -111,11 +131,12 @@ impl HostedPackStage {
         scope: PackApprovalScope,
         approver: Arc<dyn PackEffectApprover>,
         policy: DriftPolicy,
+        home_publication: Option<HostedHomePublication>,
     ) -> std::result::Result<Vec<InstallReport>, HostedPackStageError> {
         let access = access.clone();
         let owner = owner.to_owned();
         tokio::spawn(async move {
-            self.apply_owned(&access, &owner, scope, approver, policy)
+            self.apply_owned(&access, &owner, scope, approver, policy, home_publication)
                 .await
         })
         .await
@@ -133,6 +154,7 @@ impl HostedPackStage {
         scope: PackApprovalScope,
         approver: Arc<dyn PackEffectApprover>,
         policy: DriftPolicy,
+        home_publication: Option<HostedHomePublication>,
     ) -> std::result::Result<Vec<InstallReport>, HostedPackStageError> {
         if !(owner == self.node_did
             && scope.node_did == self.node_did
@@ -171,6 +193,17 @@ impl HostedPackStage {
             .as_ref()
             .err()
             .is_some_and(|error| !error.unconfirmed);
+        let home_result = if result.is_ok() {
+            if let Some(publication) = home_publication {
+                publish_hosted_home(publication)
+                    .await
+                    .context("pack documents committed but home install record failed")
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        };
         if let Some(stage) = self.stage.take() {
             stage
                 .finish(!rejected)
@@ -178,6 +211,7 @@ impl HostedPackStage {
                 .context("finishing hosted plugin stage")
                 .map_err(HostedPackStageError::Unconfirmed)?;
         }
+        home_result.map_err(HostedPackStageError::Unconfirmed)?;
         result.map_err(|error| {
             if rejected {
                 HostedPackStageError::Rejected(error.error.context(
@@ -189,5 +223,60 @@ impl HostedPackStage {
                 ))
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn hosted_home_publication_conforms_to_lean() {
+        let cases = tokio::task::spawn_blocking(|| {
+            crate::lean_vocab_test::lean_contract_snapshot()
+                .hosted_pack_home_cases
+                .clone()
+        })
+        .await
+        .unwrap();
+        for case in cases {
+            let directory = tempfile::tempdir().unwrap();
+            let home = directory.path().join("node");
+            let writable = case["home_written"].as_bool().unwrap();
+            if !writable {
+                let path = home.clone();
+                tokio::task::spawn_blocking(move || std::fs::write(path, "not a directory"))
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            let publication = HostedHomePublication {
+                home: home.clone(),
+                record: crate::pack::HomePackInstall {
+                    coordinate: "fixture/hosted".into(),
+                    version: "1".into(),
+                    digest: "sha256:fixture".into(),
+                    kind: crate::pack::PackKind::Documents,
+                    assets: String::new(),
+                    dependency_assets: Vec::new(),
+                    plugins: Vec::new(),
+                    installed_at: "2026-01-01T00:00:00Z".into(),
+                    ux: Vec::new(),
+                    installed_via: Some(crate::pack::InstalledVia::Operator),
+                },
+                leases: Vec::new(),
+            };
+            let result = publish_hosted_home(publication).await;
+            assert_eq!(
+                result.is_ok(),
+                case["reported_success"].as_bool().unwrap(),
+                "{case}: {result:?}"
+            );
+            if writable {
+                assert!(crate::pack::read_home_install(&home, "fixture/hosted")
+                    .unwrap()
+                    .is_some());
+            }
+        }
     }
 }

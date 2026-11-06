@@ -29,7 +29,7 @@ pub use documents::{
     prepare_hosted_document_pack_archive, HostedDocumentGraph, HostedPackPreparation,
     PreparedDependency, PreparedDocumentPackInstall,
 };
-pub use hosted::{stage_hosted_pack, HostedPackStage, HostedPackStageError};
+pub use hosted::{stage_hosted_pack, HostedHomePublication, HostedPackStage, HostedPackStageError};
 pub use removal::ensure_plugins_unreferenced;
 pub use scope_preview::{preview_installed_pack_scope, InstalledPackScopePreview};
 const RECORD: &str = "PackInstallation";

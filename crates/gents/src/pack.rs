@@ -63,7 +63,9 @@ pub(crate) use installation::{
     prepare_document_pack_archive_with_provisioner,
     record_plugin_store_change_as_with_node_binding, sdl_paths,
 };
-pub use installation::{stage_hosted_pack, HostedPackStage, HostedPackStageError};
+pub use installation::{
+    stage_hosted_pack, HostedHomePublication, HostedPackStage, HostedPackStageError,
+};
 pub use loader::{
     decode_pack_config, ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,
 };
