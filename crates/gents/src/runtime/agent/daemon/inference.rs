@@ -1338,6 +1338,7 @@ pub(super) mod tests {
         let agent_identity =
             crate::store::identity::resolve_agent_identity(principal.identity.as_ref(), &binding)
                 .unwrap();
+        let backend_id = format!("{}:backend", binding.agent_did);
         let agent_did = binding.agent_did;
         Arc::new(ResolvedAgent {
             configuration: crate::inference::resolved::ResolvedConfiguration::Static,
@@ -1345,7 +1346,7 @@ pub(super) mod tests {
             agent_did,
             agent_identity,
             node: principal,
-            backend_id: Some("backend-general".to_string()),
+            backend_id: Some(backend_id),
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
             openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
