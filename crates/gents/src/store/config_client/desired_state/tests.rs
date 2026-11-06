@@ -19,6 +19,19 @@ use std::sync::{Arc, Mutex};
 use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
+/// Fixture identities. Node and Agent documents are keyed by DIDs, which the
+/// identity crate validates on creation, so fixtures use real `did:key` values.
+const CODING_AGENT_DID: &str = "did:key:z6MkwUZdxNwTrfGMmUBJxWHoG7KjwfKHSimZMXYhJHCYtRAU";
+const REVIEW_AGENT_DID: &str = "did:key:z6Mksr2NdS5Pt3RRf6azhx52KG5XCbijRezUGhoc9TVd9PQU";
+const DEFAULT_REPLACEMENT_OWNER_DIDS: [&str; 6] = [
+    "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+    "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
+    "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+    "did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh",
+    "did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76",
+    "did:key:z6MknPW5yoqtbf72nEAqce5Rb6ubgcZVwFweMvPdQbYjNLv6",
+];
+
 #[test]
 fn modeled_removal_requires_the_exact_returned_document() {
     let cases = &crate::lean_vocab_test::lean_identity_household_cases()
@@ -77,9 +90,11 @@ async fn modeled_callback_configuration_publication_and_revocation() -> Result<(
             _ => None,
         })
         .unwrap();
+    // The Node is the runtime's identity; the user is the configuration actor.
     let node = Arc::new(
         EmbeddedNode::builder()
-            .with_node_identity_did(user)
+            .with_node_identity_did(runtime)
+            .with_node_acp_owner(user.to_owned())
             .build()
             .await?,
     );
@@ -213,9 +228,12 @@ async fn register_config_schemas_dropping_unique_indexes(
                 .zip(gents_protocol::schemas::ALL),
         )
     {
-        if Collection::ALL
-            .iter()
-            .any(|collection| collection.graphql_type() == *name)
+        // Runtime-only schemas (the backend observation has no Collection variant)
+        // are installed alongside the configuration collections, as in production.
+        if gents_protocol::schemas::RUNTIME_COLLECTION_NAMES.contains(name)
+            || Collection::ALL
+                .iter()
+                .any(|collection| collection.graphql_type() == *name)
         {
             let mut schema = (*schema).to_owned();
             for collection in duplicate_collections {
@@ -302,7 +320,7 @@ async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_ow
     let subscriber = tracing::Dispatch::new(Registry::default().with(capture));
     let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
 
-    let mut backend = backend("did:key:owner", "ignored-wire");
+    let mut backend = backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "ignored-wire");
     backend["provider_kind"] = json!("OpenRouter");
     backend["openai_wire_api"] = json!("responses");
     apply(&access, vec![document(backend.clone())]).await?;
@@ -326,7 +344,7 @@ async fn unchanged_desired_state_replay_does_not_add_document_commit() -> Result
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
-    let owner = "did:key:desired-state-replay";
+    let owner = "did:key:z6MknPW5yoqtbf72nEAqce5Rb6ubgcZVwFweMvPdQbYjNLv6";
     let backend_id = "unchanged-backend";
     let document = document(backend(owner, backend_id));
 
@@ -389,23 +407,23 @@ fn commitments_do_not_reinterpret_authored_strings_as_json() {
 
 #[test]
 fn plans_reject_unknown_fields_sparse_updates_and_scope_changes() {
-    let mut value = backend("did:key:owner", "local");
+    let mut value = backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "local");
     value["probe_status"] = "healthy".into();
     assert!(DesiredStateApplyPlan::new(vec![document(value)]).is_err());
-    let mut doc = document(backend("did:key:owner", "local"));
+    let mut doc = document(backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "local"));
     doc.update = json!({"enabled":false});
     assert!(DesiredStateApplyPlan::new(vec![doc]).is_err());
-    let mut doc = document(backend("did:key:owner", "local"));
-    doc.update["node_did"] = "did:key:other".into();
+    let mut doc = document(backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "local"));
+    doc.update["node_did"] = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into();
     assert!(DesiredStateApplyPlan::new(vec![doc]).is_err());
     assert!(DesiredStateApplyPlan::new(vec![
-        document(backend("did:key:a", "same")),
-        document(backend("did:key:b", "same"))
+        document(backend("did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh", "same")),
+        document(backend("did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76", "same"))
     ])
     .is_ok());
     assert!(DesiredStateApplyPlan::new(vec![
-        document(backend("did:key:a", "same")),
-        document(backend("did:key:a", "same"))
+        document(backend("did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh", "same")),
+        document(backend("did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh", "same"))
     ])
     .is_err());
 }
@@ -415,7 +433,7 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
-    let mut initial = backend("did:key:owner", "local");
+    let mut initial = backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "local");
     initial["max_concurrent"] = 7.into();
     initial["enabled"] = false.into();
     initial["tags"] = json!(["old"]);
@@ -423,17 +441,17 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
         &access,
         vec![
             document(initial),
-            document(backend("did:key:other", "local")),
+            document(backend("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK", "local")),
         ],
     )
     .await?;
-    access.write("test.desired.observe", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:owner"},backend_id:{_eq:"local"}},input:{probe_status:"healthy",catalogs:{entries:[{node_did:null,observed_at:"2026-01-01T00:00:00Z",models:null}]}}){_docID} }"#).await?;
+    access.write("test.desired.observe", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"},backend_id:{_eq:"local"}},input:{probe_status:"healthy",catalogs:{entries:[{node_did:null,observed_at:"2026-01-01T00:00:00Z",models:null}]}}){_docID} }"#).await?;
     let before = node
         .execute("{InferenceBackend{_docID node_did catalogs probe_status}}")
         .await;
     assert!(!before.has_errors());
     let before = before.data.unwrap();
-    apply(&access, vec![document(backend("did:key:owner", "local"))]).await?;
+    apply(&access, vec![document(backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "local"))]).await?;
     let after = node
         .execute(
             "{InferenceBackend{_docID node_did max_concurrent enabled tags catalogs probe_status}}",
@@ -465,10 +483,10 @@ async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> R
     let access = runtime_access(&node)?;
     apply(
         &access,
-        vec![document(backend("did:key:owner", "z_duplicate"))],
+        vec![document(backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "z_duplicate"))],
     )
     .await?;
-    let mut duplicate = backend("did:key:owner", "z_duplicate");
+    let mut duplicate = backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "z_duplicate");
     duplicate["name"] = "Distinct document".into();
     access
         .write(
@@ -482,8 +500,8 @@ async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> R
     assert!(apply(
         &access,
         vec![
-            document(backend("did:key:owner", "a_staged")),
-            document(backend("did:key:owner", "z_duplicate"))
+            document(backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "a_staged")),
+            document(backend("did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", "z_duplicate"))
         ]
     )
     .await
@@ -503,7 +521,7 @@ async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()>
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
-    let owner = "did:key:owner";
+    let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
     let ids = ["a", "b", "c", "d", "e"];
     for id in ids {
         apply(&access, vec![document(backend(owner, id))]).await?;
@@ -537,7 +555,7 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
-    let owner = "did:key:owner";
+    let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
     let docs = ["backend-a", "backend-b", "backend-c"]
         .into_iter()
         .map(|id| document(backend(owner, id)))
@@ -587,7 +605,7 @@ async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<(
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
     let access = runtime_access(&node)?;
-    let owner = "did:key:owner";
+    let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
     apply(&access, vec![document(backend(owner, "dup"))]).await?;
     let mut duplicate = backend(owner, "dup");
     duplicate["name"] = "Second".into();
@@ -634,7 +652,7 @@ fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
         ),
         config(
             Collection::Agent,
-            json!({"node_did":owner,"agent_did":"behavior","creation_nonce":"nonce","inference_profile_id":"profile","context_id":"context"}),
+            json!({"node_did":owner,"agent_did":"did:key:z6MkwUZdxNwTrfGMmUBJxWHoG7KjwfKHSimZMXYhJHCYtRAU","creation_nonce":"nonce","inference_profile_id":"profile","context_id":"context"}),
         ),
         config(
             Collection::AgentContext,
@@ -646,7 +664,7 @@ fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
         ),
         config(
             Collection::AgentTarget,
-            json!({"node_did":owner,"target_id":"target","target_node_did":owner,"agent_did":"behavior","name":"worker"}),
+            json!({"node_did":owner,"target_id":"target","target_node_did":owner,"agent_did":"did:key:z6MkwUZdxNwTrfGMmUBJxWHoG7KjwfKHSimZMXYhJHCYtRAU","name":"worker"}),
         ),
     ]
 }
@@ -661,26 +679,35 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
+    // The Lean cases name agents by label; Agent and Node identities are DIDs.
+    let agent_did = |label: &Value| -> Value {
+        match label.as_str() {
+            None => Value::Null,
+            Some("coding") => json!(CODING_AGENT_DID),
+            Some("review") => json!(REVIEW_AGENT_DID),
+            Some(other) => panic!("unmodeled agent label {other}"),
+        }
+    };
     for (index, case) in cases.iter().enumerate() {
-        let owner = format!("did:key:default-replacement-{index}");
+        let owner = DEFAULT_REPLACEMENT_OWNER_DIDS[index];
         let principal = |default: &Value, name: &str| {
             config(
                 Collection::Node,
-                json!({"node_did":owner,"default_agent_did":default,"display_name":name}),
+                json!({"node_did":owner,"default_agent_did":agent_did(default),"display_name":name}),
             )
         };
         let mut documents = vec![
-            document(backend(&owner, "backend")),
+            document(backend(owner, "backend")),
             config(
                 Collection::InferenceProfile,
                 json!({"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
             ),
             principal(&case["current"], "Original"),
         ];
-        for behavior in ["coding", "review"] {
+        for agent in [CODING_AGENT_DID, REVIEW_AGENT_DID] {
             documents.push(config(
                 Collection::Agent,
-                json!({"node_did":owner,"agent_did":behavior,"inference_profile_id":"profile"}),
+                json!({"node_did":owner,"agent_did":agent,"creation_nonce":"nonce","inference_profile_id":"profile"}),
             ));
         }
         apply(&access, documents).await?;
@@ -688,7 +715,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             "node_did":owner,"display_name":"Changed"
         }});
         if !case["candidate"].is_null() {
-            requested["node"]["default_agent_did"] = case["candidate"].clone();
+            requested["node"]["default_agent_did"] = agent_did(&case["candidate"]);
         }
         let pack: crate::documents::PackConfig = serde_json::from_value(requested)?;
         let mut replacement = DesiredStateApplyPlan::from_pack_config(&pack)?
@@ -696,7 +723,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             .first()
             .expect("pack principal")
             .clone();
-        replacement.add["default_agent_did"] = json!("coding");
+        replacement.add["default_agent_did"] = json!(CODING_AGENT_DID);
         let plan = DesiredStateApplyPlan::new(vec![replacement])?;
         let before = access
             .transact_write("test.default.before", |txn| {
@@ -727,13 +754,13 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             .await?;
         if allowed {
             let (_, after) = after.expect("published principal");
-            assert_eq!(after["default_agent_did"], case["candidate"]);
+            assert_eq!(after["default_agent_did"], agent_did(&case["candidate"]));
             assert_eq!(after["display_name"], "Changed");
         } else {
             assert_eq!(after, before, "refused replacement changed the principal");
             let message = format!("{:#}", published.unwrap_err());
             assert!(message.contains("default_agent_did"), "{message}");
-            assert!(message.contains("coding"), "{message}");
+            assert!(message.contains(CODING_AGENT_DID), "{message}");
         }
     }
     node.shutdown().await.expect("node shutdown");
@@ -745,14 +772,14 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
-    let owner = "did:key:owner";
+    let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
     let mut documents = cyclic_configuration(owner);
-    documents.extend(cyclic_configuration("did:key:foreign"));
+    documents.extend(cyclic_configuration("did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR"));
     let seeded = apply_with_counts(&access, documents).await?;
     for collection in cyclic_configuration(owner).iter().map(|doc| doc.collection) {
         assert_eq!(seeded.get(collection), 2, "{collection:?}");
     }
-    access.write("test.observe", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:owner"}},input:{probe_status:"healthy"}){_docID} }"#).await?;
+    access.write("test.observe", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"}},input:{probe_status:"healthy"}){_docID} }"#).await?;
     let before = node.execute("{InferenceBackend{_docID node_did name probe_status} AgentContext{_docID node_did context_id}}").await.data;
 
     let mut drifted_replacement = cyclic_configuration(owner)
@@ -849,7 +876,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
             .as_array()
             .unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["node_did"], "did:key:foreign");
+        assert_eq!(rows[0]["node_did"], "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR");
     }
     Ok(())
 }
@@ -859,7 +886,7 @@ async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Resu
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::AgentContext]).await?;
     let access = runtime_access(&node)?;
-    let owner = "did:key:owner";
+    let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
     apply(&access, cyclic_configuration(owner)).await?;
     let mut replacement = cyclic_configuration(owner)
         .into_iter()
@@ -870,7 +897,7 @@ async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Resu
     let row = node.execute("{Agent{context_id}}").await;
     assert_eq!(row.data.unwrap()["Agent"][0]["context_id"], "context");
 
-    access.write("test.duplicate.context", r#"mutation { create_AgentContext(input:{node_did:"did:key:owner",context_id:"context",description:"duplicate"}){_docID} }"#).await?;
+    access.write("test.duplicate.context", r#"mutation { create_AgentContext(input:{node_did:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",context_id:"context",description:"duplicate"}){_docID} }"#).await?;
     let error = apply(
         &access,
         vec![document(backend(owner, "unrelated-new-backend"))],
@@ -892,7 +919,7 @@ async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Resu
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
-    let owner = "did:key:owner";
+    let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
     let packaged = ["packaged", "packaged-two", "packaged-three"]
         .into_iter()
         .map(|id| document(backend(owner, id)))
@@ -913,7 +940,7 @@ async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Resu
         "capture and validation each read all three identities in one page"
     );
 
-    access.write("test.drift", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:owner"},backend_id:{_eq:"packaged"}},input:{name:"out-of-band"}){_docID} }"#).await?;
+    access.write("test.drift", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"},backend_id:{_eq:"packaged"}},input:{name:"out-of-band"}){_docID} }"#).await?;
     let error = access
         .transact_write("test.verify.drifted", |txn| {
             let plan = &matching;
@@ -937,10 +964,19 @@ fn expectation(owner: &str, id: &str, digest: Option<String>) -> DesiredStateExp
     }
 }
 
+const CAS_OWNER_DID: &str = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
+
 async fn cas_node() -> Result<(ConfigAccess, &'static str)> {
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
-    Ok((runtime_access(&node)?, "did:key:owner"))
+    Ok((runtime_access(&node)?, CAS_OWNER_DID))
+}
+
+/// The Lean publish-if scenarios name their owner `did:owner`, which is not a DID.
+/// Map it to the fixture node so the Gents owner validates real identities.
+fn modeled_owner(lean_owner: &str) -> &'static str {
+    assert_eq!(lean_owner, "did:owner", "unmodeled Lean owner");
+    CAS_OWNER_DID
 }
 
 async fn live_digest(access: &ConfigAccess, owner: &str, id: &str) -> Result<Option<String>> {
@@ -1085,7 +1121,7 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
         let prior = case
             .pre_desired
             .iter()
-            .map(|row| document(doc_for(&row.target.node_did, &row.target.id, &row.content)))
+            .map(|row| document(doc_for(modeled_owner(&row.target.node_did), &row.target.id, &row.content)))
             .collect::<Vec<_>>();
         apply(&access, prior).await?;
 
@@ -1096,15 +1132,15 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
                 let digest = row
                     .content
                     .as_deref()
-                    .map(|content| authored_digest(&row.target.node_did, &row.target.id, content))
+                    .map(|content| authored_digest(modeled_owner(&row.target.node_did), &row.target.id, content))
                     .transpose()?;
-                Ok(expectation(&row.target.node_did, &row.target.id, digest))
+                Ok(expectation(modeled_owner(&row.target.node_did), &row.target.id, digest))
             })
             .collect::<Result<Vec<_>>>()?;
         let plan = DesiredStateApplyPlan::new(
             case.candidate
                 .iter()
-                .map(|row| document(doc_for(&row.target.node_did, &row.target.id, &row.content)))
+                .map(|row| document(doc_for(modeled_owner(&row.target.node_did), &row.target.id, &row.content)))
                 .collect(),
         )?
         .with_expected(expected)?;
@@ -1126,8 +1162,8 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
 
         let mut after_first = Vec::new();
         for row in &case.expected_after_desired {
-            let live = live_digest(&access, &row.target.node_did, &row.target.id).await?;
-            let want = authored_digest(&row.target.node_did, &row.target.id, &row.content)?;
+            let live = live_digest(&access, modeled_owner(&row.target.node_did), &row.target.id).await?;
+            let want = authored_digest(modeled_owner(&row.target.node_did), &row.target.id, &row.content)?;
             assert_eq!(
                 live,
                 Some(want),
@@ -1167,7 +1203,7 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
             }
             for (row, first) in case.expected_after_desired.iter().zip(&after_first) {
                 assert_eq!(
-                    live_digest(&access, &row.target.node_did, &row.target.id).await?,
+                    live_digest(&access, modeled_owner(&row.target.node_did), &row.target.id).await?,
                     *first,
                     "case {} document {} changed on replay",
                     case.name,
@@ -1213,7 +1249,7 @@ fn rule_documents(
         source["correlation_field"] = json!("message");
     }
     let mut task = json!({
-        "node_did": owner, "task_id": "work", "agent_did": "behavior",
+        "node_did": owner, "task_id": "work", "agent_did": "did:key:z6MkwUZdxNwTrfGMmUBJxWHoG7KjwfKHSimZMXYhJHCYtRAU",
         "prompt_template": prompt_template, "emit_outcome": emit_outcome,
     });
     if let Some(goal_objective_template) = goal_objective_template {
@@ -1234,7 +1270,7 @@ async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Resu
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
-    let owner = "did:key:owner";
+    let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
     let profile = |window: Value| {
         config(
             Collection::InferenceProfile,
@@ -2081,7 +2117,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     let task = |emit_outcome: bool| {
         config(
             Collection::Task,
-            json!({"node_did":owner,"task_id":"handle","agent_did":"behavior","prompt_template":"Handle {{ doc.message }}","emit_outcome":emit_outcome}),
+            json!({"node_did":owner,"task_id":"handle","agent_did":"did:key:z6MkwUZdxNwTrfGMmUBJxWHoG7KjwfKHSimZMXYhJHCYtRAU","prompt_template":"Handle {{ doc.message }}","emit_outcome":emit_outcome}),
         )
     };
     let trigger = config(
@@ -2261,7 +2297,7 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
         ),
         config(
             Collection::Task,
-            json!({"node_did":owner,"task_id":"review","agent_did":"behavior","prompt_template":"Review {{ doc.work_unit_id }} after attempt {{ doc.attempt }}","goal_objective_template":"Seal {{ doc.attempt }}","emit_outcome":true}),
+            json!({"node_did":owner,"task_id":"review","agent_did":"did:key:z6MkwUZdxNwTrfGMmUBJxWHoG7KjwfKHSimZMXYhJHCYtRAU","prompt_template":"Review {{ doc.work_unit_id }} after attempt {{ doc.attempt }}","goal_objective_template":"Seal {{ doc.attempt }}","emit_outcome":true}),
         ),
         config(
             Collection::Trigger,
