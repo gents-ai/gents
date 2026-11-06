@@ -1,6 +1,4 @@
 use anyhow::Result;
-#[cfg(test)]
-use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::OutputSource;
 
 use super::access::ReadAccess;
@@ -28,7 +26,7 @@ pub(crate) async fn resolve_canonical_replay_tags_on(
 
 #[cfg(test)]
 pub(crate) async fn resolve_canonical_replay_tags(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,
     tags: &[gents_loop::claude_messages_body::ReplayTag],
@@ -38,7 +36,7 @@ pub(crate) async fn resolve_canonical_replay_tags(
         Vec<gents_loop::claude_messages_body::ResolvedReplayEvidence>,
     )>,
 > {
-    resolve_canonical_replay_tags_using(ReadAccess::Node(node), node, scope, boundary, tags).await
+    resolve_canonical_replay_tags_on(access, scope, boundary, tags).await
 }
 
 async fn resolve_canonical_replay_tags_using(
@@ -117,13 +115,13 @@ async fn resolve_canonical_replay_tags_using(
 
 #[cfg(test)]
 pub(crate) async fn resolve_canonical_replay_tag(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,
     tag: &gents_loop::claude_messages_body::ReplayTag,
 ) -> Result<Vec<gents_loop::claude_messages_body::ResolvedReplayEvidence>> {
     Ok(
-        resolve_canonical_replay_tags(node, scope, boundary, std::slice::from_ref(tag))
+        resolve_canonical_replay_tags(access, scope, boundary, std::slice::from_ref(tag))
             .await?
             .pop()
             .expect("singleton replay resolution returns one entry")

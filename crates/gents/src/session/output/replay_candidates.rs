@@ -1,6 +1,4 @@
 use anyhow::{Context, Result};
-#[cfg(test)]
-use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{
     MessagePublication, MessageRole, OutputOutcome, OutputSource, OutputWriter, SourceClose,
 };
@@ -27,23 +25,23 @@ use super::{
 /// request supplied by the caller is never a lookup root.
 #[cfg(test)]
 pub(crate) async fn load_canonical_assistant_candidates(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
-    load_canonical_assistant_candidates_with(node, node, scope, boundary, None).await
+    load_canonical_assistant_candidates_with(access, access, scope, boundary, None).await
 }
 
 #[cfg(test)]
 pub(crate) async fn load_canonical_assistant_candidates_with(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     requests: &impl ReplayRequestReader,
     scope: CanonicalReplayScope<'_>,
     boundary: &crate::turn::provider_context_reduction::SourceBoundary,
     selected_tags: Option<&[gents_loop::claude_messages_body::ReplayTag]>,
 ) -> Result<Vec<CanonicalAssistantCandidate>> {
     load_canonical_assistant_candidates_using(
-        ReadAccess::Node(node),
+        ReadAccess::Config(access),
         requests,
         scope,
         boundary,

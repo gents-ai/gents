@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::store::identity::NodeIdentity;
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::message::Message;
 use gents_protocol::output::{
@@ -37,12 +38,18 @@ struct CapturedRequest {
     body: serde_json::Value,
 }
 
-const NODE_DID: &str = "did:test:replay-agent";
 const SESSION_ID: &str = "replay-session";
 const REQUEST_ID: &str = "replay-request";
 
 struct ReplayFixture {
     node: Arc<EmbeddedNode>,
+    _db: crate::support::TestDb,
+    user: crate::KeyIdentity,
+    user_access: crate::ConfigAccess,
+    agent: Arc<dyn crate::NodeIdentity>,
+    access: crate::ConfigAccess,
+    node_did: String,
+    requester_did: String,
     request_doc_id: String,
     request_commit_cid: String,
     header_doc_id: String,
@@ -51,11 +58,33 @@ struct ReplayFixture {
     scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
 }
 
+async fn fixture_write(
+    access: &crate::ConfigAccess,
+    mutation: &str,
+    variables: &serde_json::Value,
+) -> Result<serde_json::Value, crate::store::config_client::ConfigClientError> {
+    access
+        .transact_write("test.replay_fixture", |txn| {
+            Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
+        })
+        .await
+}
+
+async fn fixture_query(access: &crate::ConfigAccess, document: &str) -> query::QueryResponse {
+    let value = if document.trim_start().starts_with("mutation") {
+        access.write("test.replay_query", document).await
+    } else {
+        access.execute(document).await
+    }
+    .unwrap();
+    serde_json::from_value(value).unwrap()
+}
+
 impl ReplayFixture {
     fn scope(&self) -> CanonicalReplayScope<'_> {
         CanonicalReplayScope {
-            node_did: NODE_DID,
-            requester_did: None,
+            node_did: &self.node_did,
+            requester_did: Some(&self.requester_did),
             session_id: SESSION_ID,
             request_id: REQUEST_ID,
             request_doc_id: &self.request_doc_id,
@@ -65,7 +94,7 @@ impl ReplayFixture {
     }
 
     async fn candidates(&self) -> anyhow::Result<Vec<super::output::CanonicalAssistantCandidate>> {
-        load_canonical_assistant_candidates(&self.node, self.scope(), &self.boundary).await
+        load_canonical_assistant_candidates(&self.access, self.scope(), &self.boundary).await
     }
 
     async fn insert_capture(&self, source: RenderedRequestSource) -> Option<CapturedRequest> {
@@ -150,9 +179,9 @@ impl ReplayFixture {
                 request_doc_id: self.request_doc_id.clone(),
                 request_commit_cid: self.request_commit_cid.clone(),
                 request_id: REQUEST_ID.into(),
-                node_did: NODE_DID.into(),
-                requester_did: String::new(),
-                agent_did: "general".into(),
+                node_did: self.node_did.clone(),
+                requester_did: self.requester_did.clone(),
+                agent_did: self.agent.did().to_owned(),
                 session_id: SESSION_ID.into(),
                 model_name: "test-model".into(),
                 provider_family: Some(family.into()),
@@ -168,7 +197,8 @@ impl ReplayFixture {
             None,
         )
         .expect("canonical capture fixture");
-        let sink = DefraRenderedRequestSink::new(self.node.clone());
+        let sink =
+            DefraRenderedRequestSink::new_managed(self.node.clone(), self.agent.as_ref()).unwrap();
         match storage {
             CaptureStorage::Exact => sink.capture(rendered).await.expect("durable capture owner"),
             CaptureStorage::Corrupt => sink
@@ -190,8 +220,8 @@ impl ReplayFixture {
                         doc_id: "bae-00000000-0000-5000-8000-000000000000".into(),
                         field_commit_cid: "missing-base-commit".into(),
                         depth: 0,
-                        node_did: NODE_DID.into(),
-                        requester_did: String::new(),
+                        node_did: self.node_did.clone(),
+                        requester_did: self.requester_did.clone(),
                         session_id: SESSION_ID.into(),
                         source: serde_json::to_value(source)
                             .unwrap()
@@ -228,8 +258,8 @@ impl ReplayFixture {
         let answer = format!("answer-{turn_index}");
         let parts = [reasoning.as_str(), signature.as_str(), answer.as_str()];
         let segment = OutputSegment {
-            node_did: NODE_DID.into(),
-            requester_did: None,
+            node_did: self.node_did.clone(),
+            requester_did: Some(self.requester_did.clone()),
             session_id: SESSION_ID.into(),
             request_doc_id: self.request_doc_id.clone(),
             source: source.clone(),
@@ -274,21 +304,15 @@ impl ReplayFixture {
             }),
             created_at: now.clone(),
         };
-        let created = self
-            .node
-            .execute_request(
-                defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
-                    .with_variables(output_segment_create_variables(&segment).unwrap()),
-            )
-            .await;
-        assert!(!created.has_errors(), "{:?}", created.errors);
+        let created = fixture_write(
+            &self.access,
+            CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+            &output_segment_create_variables(&segment).unwrap(),
+        )
+        .await
+        .unwrap();
         let close_doc_id =
-            crate::store::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
-                .unwrap()
-                .unwrap()["_docID"]
-                .as_str()
-                .unwrap()
-                .to_string();
+            crate::store::graphql::created_doc_id(&created, "AgentOutputSegment").unwrap();
         let header = TranscriptMessage {
             native_request_id: None,
             message_key: format!(
@@ -297,8 +321,8 @@ impl ReplayFixture {
                 serde_json::to_string(&source).unwrap()
             ),
             session_id: SESSION_ID.into(),
-            node_did: NODE_DID.into(),
-            requester_did: None,
+            node_did: self.node_did.clone(),
+            requester_did: Some(self.requester_did.clone()),
             request_doc_id: Some(self.request_doc_id.clone()),
             publication: MessagePublication::RequestExecution {
                 execution_generation: "generation".into(),
@@ -330,14 +354,13 @@ impl ReplayFixture {
             ],
             created_at: now,
         };
-        let created = self
-            .node
-            .execute_request(
-                defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
-                    .with_variables(transcript_message_create_variables(&header).unwrap()),
-            )
-            .await;
-        assert!(!created.has_errors(), "{:?}", created.errors);
+        fixture_write(
+            &self.access,
+            CREATE_AGENT_MESSAGE_MUTATION,
+            &transcript_message_create_variables(&header).unwrap(),
+        )
+        .await
+        .unwrap();
         self.insert_capture_row(
             RenderedRequestSource::ClaudeCliSubscription,
             turn_index,
@@ -348,10 +371,10 @@ impl ReplayFixture {
         .await
         .expect("turn capture");
         self.boundary = capture_source_boundary(
-            &crate::store::config_client::ConfigAccess::local(self.node.clone()),
+            &self.access,
             SESSION_ID,
-            NODE_DID,
-            None,
+            &self.node_did,
+            Some(&self.requester_did),
             &self.request_doc_id,
             &self.request_commit_cid,
         )
@@ -365,8 +388,8 @@ impl ReplayFixture {
             key: "assistant-note".into(),
         };
         let segment = OutputSegment {
-            node_did: NODE_DID.into(),
-            requester_did: None,
+            node_did: self.node_did.clone(),
+            requester_did: Some(self.requester_did.clone()),
             session_id: SESSION_ID.into(),
             request_doc_id: self.request_doc_id.clone(),
             source,
@@ -391,21 +414,15 @@ impl ReplayFixture {
             }),
             created_at: now.clone(),
         };
-        let created = self
-            .node
-            .execute_request(
-                defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
-                    .with_variables(output_segment_create_variables(&segment).unwrap()),
-            )
-            .await;
-        assert!(!created.has_errors(), "{:?}", created.errors);
+        let created = fixture_write(
+            &self.access,
+            CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+            &output_segment_create_variables(&segment).unwrap(),
+        )
+        .await
+        .unwrap();
         let close_doc_id =
-            crate::store::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
-                .unwrap()
-                .unwrap()["_docID"]
-                .as_str()
-                .unwrap()
-                .to_string();
+            crate::store::graphql::created_doc_id(&created, "AgentOutputSegment").unwrap();
         let header = TranscriptMessage {
             native_request_id: None,
             message_key: super::canonical_rows::authored_message_key(
@@ -413,8 +430,8 @@ impl ReplayFixture {
                 "assistant-note",
             ),
             session_id: SESSION_ID.into(),
-            node_did: NODE_DID.into(),
-            requester_did: None,
+            node_did: self.node_did.clone(),
+            requester_did: Some(self.requester_did.clone()),
             request_doc_id: Some(self.request_doc_id.clone()),
             publication: MessagePublication::RequestExecution {
                 execution_generation: "generation".into(),
@@ -434,19 +451,18 @@ impl ReplayFixture {
             }],
             created_at: now,
         };
-        let created = self
-            .node
-            .execute_request(
-                defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
-                    .with_variables(transcript_message_create_variables(&header).unwrap()),
-            )
-            .await;
-        assert!(!created.has_errors(), "{:?}", created.errors);
+        fixture_write(
+            &self.access,
+            CREATE_AGENT_MESSAGE_MUTATION,
+            &transcript_message_create_variables(&header).unwrap(),
+        )
+        .await
+        .unwrap();
         self.boundary = capture_source_boundary(
-            &crate::store::config_client::ConfigAccess::local(self.node.clone()),
+            &self.access,
             SESSION_ID,
-            NODE_DID,
-            None,
+            &self.node_did,
+            Some(&self.requester_did),
             &self.request_doc_id,
             &self.request_commit_cid,
         )
@@ -483,7 +499,7 @@ async fn signed_oneshot_continuation_resolves_its_own_physical_capture_scope() {
         },
     };
     let evidence = super::output::replay_tags::resolve_canonical_replay_tag(
-        &fixture.node,
+        &fixture.access,
         fixture.scope(),
         &fixture.boundary,
         &tag,
@@ -507,7 +523,7 @@ async fn signed_oneshot_continuation_resolves_its_own_physical_capture_scope() {
     };
     *attempt += 1;
     let batched = super::output::replay_tags::resolve_canonical_replay_tags(
-        &fixture.node,
+        &fixture.access,
         fixture.scope(),
         &fixture.boundary,
         &[tag.clone(), absent.clone(), tag.clone()],
@@ -529,7 +545,7 @@ async fn signed_oneshot_continuation_resolves_its_own_physical_capture_scope() {
         ..fixture.scope()
     };
     let without_scope = super::output::replay_tags::resolve_canonical_replay_tag(
-        &fixture.node,
+        &fixture.access,
         wrong_scope,
         &fixture.boundary,
         &tag,
@@ -559,40 +575,84 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
     scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
     with_tool: bool,
 ) -> ReplayFixture {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let now = chrono::Utc::now().to_rfc3339();
-    let created = node
-        .execute(&format!(
-            r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "{}", purpose: "normal", node_did: "{}",
-                agent_did: "general", session_id: "{}", content: "prompt",
-                lifecycle_state: "pending", execution_origin: "interactive",
-                created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
-            }}) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(REQUEST_ID),
-            crate::store::graphql::escape_graphql_string(NODE_DID),
-            crate::store::graphql::escape_graphql_string(SESSION_ID),
-            crate::store::graphql::escape_graphql_string(&now),
-        ))
-        .await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
-    let request_doc_id =
-        crate::store::graphql::single_mutation_document(&created, "create_AgentRequest")
-            .unwrap()
-            .unwrap()["_docID"]
-            .as_str()
-            .unwrap()
-            .to_string();
-    let request_commit_cid = crate::store::graphql::newest_document_composite_commit(
-        &node,
-        &request_doc_id,
-        "replay fixture request",
+    use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    let (db, user, user_access, binding) =
+        crate::test_support::signed_test_node("canonical-replay").await;
+    let node = db.node.clone();
+    let node_did = db.node_identity.did().to_owned();
+    let requester_did = user.did().to_owned();
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let agent_did = ::identity::Did::new(agent.did()).unwrap();
+    let admin =
+        crate::ConfigAccess::local_as(node.clone(), ::identity::Did::new(&node_did).unwrap());
+    for permission in [
+        crate::store::config_client::NodePermission::CollectionGet,
+        crate::store::config_client::NodePermission::DocumentRead,
+        crate::store::config_client::NodePermission::DocumentUpdate,
+        crate::store::config_client::NodePermission::DocumentDelete,
+        crate::store::config_client::NodePermission::DacRelationAdd,
+        crate::store::config_client::NodePermission::DacRelationDelete,
+    ] {
+        admin
+            .grant_node_permission(&agent_did, permission)
+            .await
+            .unwrap();
+    }
+    let access =
+        crate::ConfigAccess::local_managed_agent(node.clone(), agent_did, agent.as_ref()).unwrap();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let create = crate::request::lifecycle::build_signed_client_request(
+        &user_access,
+        RequestSpec::new(
+            RequestPurpose::Normal,
+            RequestIdentity {
+                request_id: REQUEST_ID.into(),
+                node_did: node_did.clone(),
+                requester_did: Some(requester_did.clone()),
+                agent_did: agent.did().to_owned(),
+                session_id: SESSION_ID.into(),
+                content: "prompt".into(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: now.clone(),
+            },
+            AgentRequestAdmissionRecord::client(&requester_did),
+        ),
+        RequestSigner::Identity(&user),
     )
     .await
-    .unwrap()
-    .unwrap()
-    .cid;
+    .unwrap();
+    crate::request::lifecycle::submit_client_request(&user_access, &create)
+        .await
+        .unwrap();
+    let response = user_access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+            crate::store::graphql::escape_graphql_string(REQUEST_ID),
+        ))
+        .await
+        .unwrap();
+    let request_doc_id = response["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let request_commit_cid = access
+        .transact_readonly("test.replay_request_commit", |txn| {
+            let id = &request_doc_id;
+            Box::pin(async move {
+                crate::store::graphql::newest_document_composite_commit_in_txn(
+                    txn,
+                    id,
+                    "test.replay_request_commit",
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap()
+        .cid;
 
     let source = OutputSource::ProviderTurn {
         scope: format!("{scope_kind}.1").parse().unwrap(),
@@ -686,8 +746,8 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         )
     };
     let segment = OutputSegment {
-        node_did: NODE_DID.into(),
-        requester_did: None,
+        node_did: node_did.clone(),
+        requester_did: Some(requester_did.clone()),
         session_id: SESSION_ID.into(),
         request_doc_id: request_doc_id.clone(),
         source: source.clone(),
@@ -704,20 +764,15 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         }),
         created_at: now.clone(),
     };
-    let created = node
-        .execute_request(
-            defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
-                .with_variables(output_segment_create_variables(&segment).unwrap()),
-        )
-        .await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
+    let created = fixture_write(
+        &access,
+        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        &output_segment_create_variables(&segment).unwrap(),
+    )
+    .await
+    .unwrap();
     let close_doc_id =
-        crate::store::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
-            .unwrap()
-            .unwrap()["_docID"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        crate::store::graphql::created_doc_id(&created, "AgentOutputSegment").unwrap();
     let header = TranscriptMessage {
         native_request_id: None,
         message_key: format!(
@@ -726,8 +781,8 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
             serde_json::to_string(&source).unwrap()
         ),
         session_id: SESSION_ID.into(),
-        node_did: NODE_DID.into(),
-        requester_did: None,
+        node_did: node_did.clone(),
+        requester_did: Some(requester_did.clone()),
         request_doc_id: Some(request_doc_id.clone()),
         publication: MessagePublication::RequestExecution {
             execution_generation: "generation".into(),
@@ -788,25 +843,19 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         },
         created_at: now,
     };
-    let created = node
-        .execute_request(
-            defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
-                .with_variables(transcript_message_create_variables(&header).unwrap()),
-        )
-        .await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
-    let header_doc_id =
-        crate::store::graphql::single_mutation_document(&created, "create_AgentMessage")
-            .unwrap()
-            .unwrap()["_docID"]
-            .as_str()
-            .unwrap()
-            .to_string();
+    let created = fixture_write(
+        &access,
+        CREATE_AGENT_MESSAGE_MUTATION,
+        &transcript_message_create_variables(&header).unwrap(),
+    )
+    .await
+    .unwrap();
+    let header_doc_id = crate::store::graphql::created_doc_id(&created, "AgentMessage").unwrap();
     let boundary = capture_source_boundary(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &access,
         SESSION_ID,
-        NODE_DID,
-        None,
+        &node_did,
+        Some(&requester_did),
         &request_doc_id,
         &request_commit_cid,
     )
@@ -814,6 +863,13 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
     .unwrap();
     ReplayFixture {
         node,
+        _db: db,
+        user,
+        user_access,
+        agent,
+        access,
+        node_did,
+        requester_did,
         request_doc_id,
         request_commit_cid,
         header_doc_id,
@@ -853,7 +909,7 @@ async fn signed_capture_restores_exact_authenticated_suffix_and_rejects_rewritte
         content: content.clone(),
     }];
     let evidence = super::output::replay_tags::resolve_canonical_replay_tag(
-        &fixture.node,
+        &fixture.access,
         fixture.scope(),
         &fixture.boundary,
         &tag,
@@ -918,7 +974,7 @@ async fn missing_or_foreign_capture_cannot_authorize_reasoning_suffix() {
         },
     };
     assert!(super::output::replay_tags::resolve_canonical_replay_tag(
-        &missing.node,
+        &missing.access,
         missing.scope(),
         &missing.boundary,
         &tag,
@@ -941,7 +997,7 @@ async fn missing_or_foreign_capture_cannot_authorize_reasoning_suffix() {
         },
     };
     let foreign_evidence = super::output::replay_tags::resolve_canonical_replay_tag(
-        &foreign.node,
+        &foreign.access,
         foreign.scope(),
         &foreign.boundary,
         &foreign_tag,
@@ -970,22 +1026,26 @@ async fn exact_capture_source_binds_canonical_assistant_across_request_versions(
     let later_deadline = crate::store::graphql::escape_graphql_string(
         &(chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
     );
-    let updated = observed
-        .node
-        .execute(&format!(
+    let updated = fixture_query(&observed.access, &format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "{later_deadline}" }}) {{ _docID }} }}"#,
             crate::store::graphql::escape_graphql_string(&observed.request_doc_id),
         ))
         .await;
     assert!(!updated.has_errors(), "{:?}", updated.errors);
-    let newest = crate::store::graphql::newest_document_composite_commit(
-        &observed.node,
-        &observed.request_doc_id,
-        "later replay request version",
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let newest = observed
+        .access
+        .transact_readonly("test.replay_later_commit", |txn| {
+            Box::pin(
+                crate::store::graphql::newest_document_composite_commit_in_txn(
+                    txn,
+                    &observed.request_doc_id,
+                    "test.replay_later_commit",
+                ),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
     assert_ne!(newest.cid, observed.request_commit_cid);
     assert_eq!(observed.candidates().await.unwrap().len(), 1);
 
@@ -1004,7 +1064,7 @@ async fn exact_capture_source_binds_canonical_assistant_across_request_versions(
         },
     };
     let evidence = super::output::replay_tags::resolve_canonical_replay_tag(
-        &claude.node,
+        &claude.access,
         claude.scope(),
         &claude.boundary,
         &tag,
@@ -1040,18 +1100,20 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
         expected_scope_kind: CaptureScopeKind::Inference,
         ..fixture.scope()
     };
-    assert!(
-        load_canonical_assistant_candidates(&fixture.node, inference_scope, &fixture.boundary,)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(load_canonical_assistant_candidates(
+        &fixture.access,
+        inference_scope,
+        &fixture.boundary,
+    )
+    .await
+    .unwrap()
+    .is_empty());
 
-    let history = super::output::sequenced::load_sequenced_messages(
-        &fixture.node,
+    let history = super::output::sequenced::load_sequenced_messages_using(
+        super::output::access::ReadAccess::Config(&fixture.access),
         SESSION_ID,
-        NODE_DID,
-        None,
+        &fixture.node_did,
+        Some(&fixture.requester_did),
         None,
         None,
         Some(&fixture.request_doc_id),
@@ -1117,7 +1179,7 @@ async fn replay_rejects_forged_high_water_and_storage_rejects_sequence_twins() {
     let mut forged = observed.boundary.clone();
     forged.canonical_through.as_mut().unwrap().commit_cid = "not-a-header-commit".into();
     let bad_high_water =
-        load_canonical_assistant_candidates(&observed.node, observed.scope(), &forged)
+        load_canonical_assistant_candidates(&observed.access, observed.scope(), &forged)
             .await
             .err()
             .expect("forged high-water must fail");
@@ -1131,28 +1193,23 @@ async fn replay_rejects_forged_high_water_and_storage_rejects_sequence_twins() {
         ..observed.scope()
     };
     assert!(
-        load_canonical_assistant_candidates(&observed.node, forged_scope, &forged_request)
+        load_canonical_assistant_candidates(&observed.access, forged_scope, &forged_request)
             .await
             .is_err()
     );
 
     let mut twin = observed.header.clone();
     twin.message_key.push_str(":twin");
-    let created = observed
-        .node
-        .execute_request(
-            defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
-                .with_variables(transcript_message_create_variables(&twin).unwrap()),
-        )
-        .await;
-    assert!(
-        created.has_errors(),
-        "a sequence slot cannot hold a second header"
-    );
-    assert!(created
-        .errors
-        .iter()
-        .any(|error| error.message.contains("unique index")));
+    let error = fixture_write(
+        &observed.access,
+        CREATE_AGENT_MESSAGE_MUTATION,
+        &transcript_message_create_variables(&twin).unwrap(),
+    )
+    .await
+    .expect_err("a sequence slot cannot hold a second header");
+    assert!(gents_protocol::error_chain::ErrorChain(&error)
+        .to_string()
+        .contains("unique index"));
     assert!(observed.candidates().await.is_ok());
 }
 
@@ -1175,7 +1232,7 @@ async fn unverifiable_capture_drops_its_reasoning_without_failing_the_request() 
             },
         };
         let evidence = super::output::replay_tags::resolve_canonical_replay_tag(
-            &fixture.node,
+            &fixture.access,
             fixture.scope(),
             &fixture.boundary,
             &tag,
@@ -1219,13 +1276,13 @@ enum RequestFault {
 }
 
 struct FaultingRequests<'a> {
-    node: &'a EmbeddedNode,
+    access: &'a crate::ConfigAccess,
     request_doc_id: &'a str,
     fault: Option<RequestFault>,
 }
 
 struct CountingRequests<'a> {
-    node: &'a EmbeddedNode,
+    access: &'a crate::ConfigAccess,
     rows: std::sync::atomic::AtomicUsize,
     commits: std::sync::atomic::AtomicUsize,
 }
@@ -1242,7 +1299,7 @@ impl ReplayRequestReader for CountingRequests<'_> {
             .fetch_add(ids.len(), std::sync::atomic::Ordering::Relaxed);
         self.rows
             .fetch_add(ids.len(), std::sync::atomic::Ordering::Relaxed);
-        self.node.request_facts(ids).await
+        self.access.request_facts(ids).await
     }
 }
 
@@ -1256,7 +1313,7 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
     let mut duplicate = fixture.header.clone();
     duplicate.sequence += 1;
     duplicate.message_key.push_str("-physical-duplicate");
-    let access = crate::store::config_client::ConfigAccess::local(fixture.node.clone());
+    let access = fixture.access.clone();
     access
         .transact_write("test.replay.duplicate_header", |txn| {
             let duplicate = duplicate.clone();
@@ -1272,24 +1329,24 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
         .await
         .unwrap();
     fixture.boundary = capture_source_boundary(
-        &crate::store::config_client::ConfigAccess::local(fixture.node.clone()),
+        &fixture.access,
         SESSION_ID,
-        NODE_DID,
-        None,
+        &fixture.node_did,
+        Some(&fixture.requester_did),
         &fixture.request_doc_id,
         &fixture.request_commit_cid,
     )
     .await
     .unwrap();
     let requests = CountingRequests {
-        node: &fixture.node,
+        access: &fixture.access,
         rows: std::sync::atomic::AtomicUsize::new(0),
         commits: std::sync::atomic::AtomicUsize::new(0),
     };
     for resolution in 1..=2 {
         let (candidates, segment_scans) = crate::session::count_request_output_scans(
             super::output::replay_candidates::load_canonical_assistant_candidates_with(
-                &fixture.node,
+                &fixture.access,
                 &requests,
                 fixture.scope(),
                 &fixture.boundary,
@@ -1325,7 +1382,7 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
         },
     };
     let selected = super::output::replay_candidates::load_canonical_assistant_candidates_with(
-        &fixture.node,
+        &fixture.access,
         &requests,
         fixture.scope(),
         &fixture.boundary,
@@ -1354,7 +1411,7 @@ impl ReplayRequestReader for FaultingRequests<'_> {
                 _ => {}
             }
         }
-        let mut facts = self.node.request_facts(request_doc_ids).await?;
+        let mut facts = self.access.request_facts(request_doc_ids).await?;
         if matches!(self.fault, Some(RequestFault::Missing)) {
             if let Some(request) = facts.get_mut(self.request_doc_id) {
                 request.rows.clear();
@@ -1372,12 +1429,12 @@ async fn load_with_fault(
     selected_tags: Option<&[ReplayTag]>,
 ) -> anyhow::Result<Vec<super::output::CanonicalAssistantCandidate>> {
     let requests = FaultingRequests {
-        node: &fixture.node,
+        access: &fixture.access,
         request_doc_id: &fixture.request_doc_id,
         fault,
     };
     super::output::replay_candidates::load_canonical_assistant_candidates_with(
-        &fixture.node,
+        &fixture.access,
         &requests,
         scope,
         boundary,
@@ -1393,43 +1450,62 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
         .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
         .await
         .is_some());
-    let now = chrono::Utc::now().to_rfc3339();
-    let created = fixture
-        .node
-        .execute(&format!(
-            r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "replay-request-next", purpose: "normal", node_did: "{}",
-                agent_did: "general", session_id: "{}", content: "next",
-                lifecycle_state: "pending", execution_origin: "interactive",
-                created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
-            }}) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(NODE_DID),
-            crate::store::graphql::escape_graphql_string(SESSION_ID),
-            crate::store::graphql::escape_graphql_string(&now),
-        ))
-        .await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
-    let current_doc_id =
-        crate::store::graphql::single_mutation_document(&created, "create_AgentRequest")
-            .unwrap()
-            .unwrap()["_docID"]
-            .as_str()
-            .unwrap()
-            .to_string();
-    let current_commit_cid = crate::store::graphql::newest_document_composite_commit(
-        &fixture.node,
-        &current_doc_id,
-        "replay fixture next request",
+    use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    let next = crate::request::lifecycle::build_signed_client_request(
+        &fixture.user_access,
+        RequestSpec::new(
+            RequestPurpose::Normal,
+            RequestIdentity {
+                request_id: "replay-request-next".into(),
+                node_did: fixture.node_did.clone(),
+                requester_did: Some(fixture.requester_did.clone()),
+                agent_did: fixture.agent.did().to_owned(),
+                session_id: SESSION_ID.into(),
+                content: "next".into(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            },
+            AgentRequestAdmissionRecord::client(&fixture.requester_did),
+        ),
+        RequestSigner::Identity(&fixture.user),
     )
     .await
-    .unwrap()
-    .unwrap()
-    .cid;
+    .unwrap();
+    crate::request::lifecycle::submit_client_request(&fixture.user_access, &next)
+        .await
+        .unwrap();
+    let response = fixture
+        .user_access
+        .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "replay-request-next"}}) {_docID} }"#)
+        .await
+        .unwrap();
+    let current_doc_id = response["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let current_commit_cid = fixture
+        .access
+        .transact_readonly("test.replay_next_commit", |txn| {
+            let id = &current_doc_id;
+            Box::pin(async move {
+                crate::store::graphql::newest_document_composite_commit_in_txn(
+                    txn,
+                    id,
+                    "test.replay_next_commit",
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap()
+        .cid;
     let boundary = capture_source_boundary(
-        &crate::store::config_client::ConfigAccess::local(fixture.node.clone()),
+        &fixture.access,
         SESSION_ID,
-        NODE_DID,
-        None,
+        &fixture.node_did,
+        Some(&fixture.requester_did),
         &current_doc_id,
         &current_commit_cid,
     )
@@ -1528,14 +1604,15 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
 }
 
 async fn stored_agent_request(fixture: &ReplayFixture) -> crate::request::watcher::AgentRequest {
-    let response = fixture
-        .node
-        .execute(&format!(
+    let response = fixture_query(
+        &fixture.access,
+        &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             crate::store::graphql::escape_graphql_string(&fixture.request_doc_id),
             crate::request::watcher::AGENT_REQUEST_FIELDS,
-        ))
-        .await;
+        ),
+    )
+    .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let row = response.data.unwrap()["AgentRequest"][0].clone();
     crate::request::watcher::AgentRequest::try_from(
@@ -1620,14 +1697,13 @@ async fn replay_resolution_observes_a_header_replicated_before_dispatch() {
     let mut duplicate = fixture.header.clone();
     duplicate.sequence += 1;
     duplicate.message_key.push_str("-replicated-twin");
-    let created = fixture
-        .node
-        .execute_request(
-            defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
-                .with_variables(transcript_message_create_variables(&duplicate).unwrap()),
-        )
-        .await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
+    fixture_write(
+        &fixture.access,
+        CREATE_AGENT_MESSAGE_MUTATION,
+        &transcript_message_create_variables(&duplicate).unwrap(),
+    )
+    .await
+    .unwrap();
 
     let dispatch = resolve(vec![tag]).await.unwrap();
     assert_eq!(
@@ -1737,14 +1813,13 @@ async fn a_header_twin_arriving_between_the_admission_estimate_and_dispatch_wait
     let mut duplicate = fixture.header.clone();
     duplicate.sequence += 1;
     duplicate.message_key.push_str("-estimate-twin");
-    let created = fixture
-        .node
-        .execute_request(
-            defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
-                .with_variables(transcript_message_create_variables(&duplicate).unwrap()),
-        )
-        .await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
+    fixture_write(
+        &fixture.access,
+        CREATE_AGENT_MESSAGE_MUTATION,
+        &transcript_message_create_variables(&duplicate).unwrap(),
+    )
+    .await
+    .unwrap();
 
     let dispatch =
         gents_loop::loop_stream::resolve_replay_evidence(&replay, std::slice::from_ref(&tag))
@@ -1803,7 +1878,7 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
         .iter()
         .map(|candidate| {
             gents_loop::rendered_request::capture_key(
-                NODE_DID,
+                &fixture.node_did,
                 SESSION_ID,
                 &candidate.request_doc_id,
                 &candidate.coordinate.scope.to_string(),
@@ -1818,9 +1893,7 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
         .map(|key| format!("\"{}\"", crate::store::graphql::escape_graphql_string(key)))
         .collect::<Vec<_>>()
         .join(", ");
-    let response = fixture
-        .node
-        .execute(&format!(
+    let response = fixture_query(&fixture.access, &format!(
             r#"{{ RenderedRequest(filter: {{ capture_key: {{ _in: [{filter}] }} }}) {{ capture_version request_json }} }}"#
         ))
         .await;
@@ -1846,7 +1919,7 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
             roots.insert(tree.root.doc_id.clone());
         }
         for entry in
-            crate::inference::rendered_request::manifest_leaf_entries(fixture.node.as_ref(), record)
+            crate::inference::rendered_request::manifest_leaf_entries(&fixture.access, record)
                 .await
                 .unwrap()
         {
@@ -1870,7 +1943,7 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
         crate::session::count_capture_row_queries(
             crate::inference::rendered_request::commits::count_field_commit_statements(
                 super::output::replay_tags::resolve_canonical_replay_tags(
-                    &fixture.node,
+                    &fixture.access,
                     fixture.scope(),
                     &fixture.boundary,
                     &tags,
@@ -1894,7 +1967,7 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
     );
     for (index, tag) in tags.iter().enumerate() {
         let singleton = super::output::replay_tags::resolve_canonical_replay_tag(
-            &fixture.node,
+            &fixture.access,
             fixture.scope(),
             &fixture.boundary,
             tag,
@@ -1964,36 +2037,26 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
         crate::inference::rendered_request::encoding::block_content_key(&poisoned),
         chunks[index].content_key
     );
-    let created = fixture
-        .node
-        .execute_request(
-            defra_node::QueryRequest::new(
-                "mutation($input: RenderedRequestBlockMutationInputArg!) { \
-                 create_RenderedRequestBlock(input: $input) { _docID } }",
-            )
-            .with_variables(serde_json::json!({ "input": {
-                "content_key": chunks[index].content_key,
-                "payload": String::from_utf8(poisoned.clone()).unwrap(),
-                "byte_len": chunks[index].bytes.len(),
-                "created_at": chrono::Utc::now().to_rfc3339(),
-            }})),
-        )
-        .await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
+    let created = fixture_write(
+        &fixture.access,
+        "mutation($input: RenderedRequestBlockMutationInputArg!) { create_RenderedRequestBlock(input: $input) { _docID } }",
+        &serde_json::json!({"input": {
+            "content_key": chunks[index].content_key,
+            "payload": String::from_utf8(poisoned.clone()).unwrap(),
+            "byte_len": chunks[index].bytes.len(),
+            "created_at": chrono::Utc::now().to_rfc3339(),
+        }}),
+    ).await.unwrap();
     let poisoned_doc =
-        crate::store::graphql::single_mutation_document(&created, "create_RenderedRequestBlock")
-            .unwrap()
-            .unwrap()["_docID"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        crate::store::graphql::created_doc_id(&created, "RenderedRequestBlock").unwrap();
 
     fixture.insert_provider_turn(corrupt_turn, body).await;
 
-    let response = fixture
-        .node
-        .execute(r#"{ RenderedRequest { capture_version request_json } }"#)
-        .await;
+    let response = fixture_query(
+        &fixture.access,
+        r#"{ RenderedRequest { capture_version request_json } }"#,
+    )
+    .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let mut referencing = 0usize;
     for row in response.data.unwrap()["RenderedRequest"]
@@ -2011,12 +2074,10 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
                 version, stored, kind,
             )
             .unwrap();
-            let entries = crate::inference::rendered_request::manifest_leaf_entries(
-                fixture.node.as_ref(),
-                record,
-            )
-            .await
-            .unwrap();
+            let entries =
+                crate::inference::rendered_request::manifest_leaf_entries(&fixture.access, record)
+                    .await
+                    .unwrap();
             pins_poison |= entries.iter().any(|entry| entry.doc_id == poisoned_doc);
         }
         referencing += pins_poison as usize;
@@ -2043,7 +2104,7 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
         })
         .collect::<Vec<_>>();
     let resolved = super::output::replay_tags::resolve_canonical_replay_tags(
-        &fixture.node,
+        &fixture.access,
         fixture.scope(),
         &fixture.boundary,
         &tags,
