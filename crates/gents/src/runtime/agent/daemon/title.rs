@@ -381,9 +381,14 @@ where
         mut interrupt_rx: watch::Receiver<Option<crate::request::interrupt::InterruptIntent>>,
         review: Option<review::ReviewExecution>,
     ) -> Result<AuxiliaryResult> {
+        let parent_access = crate::ConfigAccess::local_managed_agent(
+            self.node.clone(),
+            identity::Did::new(&request.agent_did)?,
+            self.agent_config.agent_identity.as_ref(),
+        )?;
         let Some(parent) = super::request::prepare_unless_interrupted(
             &mut interrupt_rx,
-            load_auxiliary_parent(&self.node, &request),
+            load_auxiliary_parent(&parent_access, &request),
         )
         .await
         else {
@@ -601,8 +606,10 @@ where
     }
 }
 
+/// The parent receipt is read as the auxiliary request's Agent: DefraDB ACP
+/// decides visibility, and a denied read is not retried as the node.
 async fn load_auxiliary_parent(
-    node: &EmbeddedNode,
+    access: &crate::ConfigAccess,
     request: &AgentRequest,
 ) -> Result<AgentRequest> {
     let parent_doc_id = request
@@ -614,15 +621,16 @@ async fn load_auxiliary_parent(
         "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{escaped}\" }} }}, limit: 1) {{ {} }} }}",
         crate::request::admission::SIGNED_REQUEST_FIELDS
     );
-    let response = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "load auxiliary parent receipt",
-    )
-    .await?;
+    let response = access
+        .execute(&query)
+        .await
+        .context("load auxiliary parent receipt")?;
+    let value = response
+        .pointer("/data/AgentRequest/0")
+        .cloned()
+        .context("request parent request disappeared")?;
     let row: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&response, "AgentRequest")?
-            .context("request parent request disappeared")?;
+        serde_json::from_value(value).context("decode auxiliary parent receipt")?;
     crate::request::admission::verify_request_receipt_signature(&row)?;
     let parent = AgentRequest::try_from(row)?;
     anyhow::ensure!(
