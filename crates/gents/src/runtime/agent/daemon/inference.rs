@@ -1360,6 +1360,87 @@ pub(super) mod tests {
         })
     }
 
+    async fn held_daemon_fixture(
+        name: &str,
+    ) -> (
+        crate::support::TestDb,
+        crate::KeyIdentity,
+        crate::ConfigAccess,
+        Arc<ResolvedAgent>,
+    ) {
+        use crate::store::config_client::NodePermission;
+        let (db, user, access, binding) = crate::test_support::signed_test_node(name).await;
+        let config = test_agent_with_binding(db.node_identity.clone(), binding);
+        let admin =
+            crate::ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
+        let agent_did = identity::Did::new(&config.agent_did).unwrap();
+        for permission in [
+            NodePermission::CollectionGet,
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::DocumentDelete,
+            NodePermission::DacRelationAdd,
+            NodePermission::DacRelationDelete,
+        ] {
+            admin
+                .grant_node_permission(&agent_did, permission)
+                .await
+                .unwrap();
+        }
+        (db, user, access, config)
+    }
+
+    async fn create_held_routed_request(
+        db: &crate::support::TestDb,
+        user: &crate::KeyIdentity,
+        access: &crate::ConfigAccess,
+        agent_config: &ResolvedAgent,
+    ) -> AgentRequest {
+        use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
+        use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let create = crate::request::lifecycle::build_signed_client_request(
+            access,
+            RequestSpec::new(
+                RequestPurpose::Normal,
+                RequestIdentity {
+                    request_id: request_id.clone(),
+                    node_did: db.node_identity.did().to_owned(),
+                    requester_did: Some(user.did().to_owned()),
+                    agent_did: agent_config.agent_did.clone(),
+                    session_id: uuid::Uuid::new_v4().to_string(),
+                    content: "route this reply".into(),
+                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                },
+                AgentRequestAdmissionRecord::client(user.did()),
+            ),
+            RequestSigner::Identity(user),
+        )
+        .await
+        .unwrap();
+        crate::request::lifecycle::submit_client_request(access, &create)
+            .await
+            .unwrap();
+        let escaped = crate::store::graphql::escape_graphql_string(&request_id);
+        let response = access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{_docID}} }}"#
+            ))
+            .await
+            .unwrap();
+        let doc_id = response["data"]["AgentRequest"][0]["_docID"]
+            .as_str()
+            .unwrap();
+        crate::request::admission::load_request_for_admission_test_as(
+            &db.node,
+            doc_id,
+            &agent_config.agent_did,
+        )
+        .await
+        .unwrap()
+    }
+
     async fn create_routed_request(
         node: &std::sync::Arc<defra_node::Node>,
         agent_config: &ResolvedAgent,
@@ -1642,71 +1723,12 @@ pub(super) mod tests {
     async fn daemon_request_path_stamps_requester_lineage_on_hook_messages() {
         use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-        use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
-        use crate::store::config_client::NodePermission;
-        use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
-        let (db, user, access, binding) =
-            crate::test_support::signed_test_node("daemon-requester-lineage").await;
+        let (db, user, access, agent_config) =
+            held_daemon_fixture("daemon-requester-lineage").await;
         let node = db.node.clone();
         let node_did = db.node_identity.did().to_owned();
-        let agent_config = test_agent_with_binding(db.node_identity.clone(), binding);
-        let admin = crate::ConfigAccess::local_as(node.clone(), node_did.parse().unwrap());
-        let agent_did = identity::Did::new(&agent_config.agent_did).unwrap();
-        for permission in [
-            NodePermission::CollectionGet,
-            NodePermission::DocumentRead,
-            NodePermission::DocumentUpdate,
-            NodePermission::DocumentDelete,
-            NodePermission::DacRelationAdd,
-            NodePermission::DacRelationDelete,
-        ] {
-            admin
-                .grant_node_permission(&agent_did, permission)
-                .await
-                .unwrap();
-        }
         let requester_did = user.did().to_owned();
-        let request_id = uuid::Uuid::new_v4().to_string();
-        let create = crate::request::lifecycle::build_signed_client_request(
-            &access,
-            RequestSpec::new(
-                RequestPurpose::Normal,
-                RequestIdentity {
-                    request_id: request_id.clone(),
-                    node_did: node_did.clone(),
-                    requester_did: Some(requester_did.clone()),
-                    agent_did: agent_config.agent_did.clone(),
-                    session_id: uuid::Uuid::new_v4().to_string(),
-                    content: "route this reply".into(),
-                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                },
-                AgentRequestAdmissionRecord::client(&requester_did),
-            ),
-            RequestSigner::Identity(&user),
-        )
-        .await
-        .unwrap();
-        crate::request::lifecycle::submit_client_request(&access, &create)
-            .await
-            .unwrap();
-        let escaped = crate::store::graphql::escape_graphql_string(&request_id);
-        let response = access
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{_docID}} }}"#
-            ))
-            .await
-            .unwrap();
-        let doc_id = response["data"]["AgentRequest"][0]["_docID"]
-            .as_str()
-            .unwrap();
-        let request = crate::request::admission::load_request_for_admission_test_as(
-            &node,
-            doc_id,
-            &agent_config.agent_did,
-        )
-        .await
-        .unwrap();
+        let request = create_held_routed_request(&db, &user, &access, &agent_config).await;
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
             &agent_config.agent_did,
@@ -2132,54 +2154,25 @@ pub(super) mod tests {
 
     #[tokio::test]
     async fn started_daemon_rechecks_workspace_root_policy_for_each_fresh_request() {
-        let data_path = std::env::temp_dir().join(format!(
-            "daemon-workspace-root-recheck-{}",
-            uuid::Uuid::new_v4()
-        ));
-        let agent_config = test_agent();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(agent_config.node_did())
-                .data_path(&data_path)
-                .build()
-                .await
-                .expect("embedded node"),
-        );
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let (db, user, user_access, agent_config) =
+            held_daemon_fixture("daemon-workspace-root").await;
+        let node = db.node.clone();
         let workspace = tempfile::tempdir().unwrap();
         let selected = workspace.path().join("selected");
         std::fs::create_dir_all(&selected).unwrap();
         let selected = std::fs::canonicalize(selected).unwrap();
-        let escaped_selected =
-            crate::store::graphql::escape_graphql_string(&selected.to_string_lossy());
-        let created = node
-            .execute(&format!(
-                r#"mutation {{ create_WorkspaceRoot(input: {{node_did:"{}", root_path:"{escaped_selected}", enabled:true}}) {{_docID}} }}"#,
-                crate::store::graphql::escape_graphql_string(agent_config.node_did())
-            ))
-            .await;
-        assert!(!created.has_errors(), "{:?}", created.errors);
-        let workspace_root_doc_id =
-            crate::store::graphql::single_mutation_document(&created, "create_WorkspaceRoot")
-                .unwrap()
-                .expect("created WorkspaceRoot")["_docID"]
-                .as_str()
-                .expect("WorkspaceRoot document id")
-                .to_owned();
-
-        let root_owner =
-            crate::ConfigAccess::local_as(node.clone(), agent_config.node_did().parse().unwrap());
-        root_owner
-            .add_actor_relationship(
-                "WorkspaceRoot",
-                &workspace_root_doc_id,
-                "reader",
-                &agent_config.agent_did.parse().unwrap(),
-            )
-            .await
-            .unwrap();
-        let requester_did = agent_config.node_did().to_string();
-        let first = create_routed_request(&node, &agent_config, &requester_did).await;
+        let root_path = selected.to_str().unwrap();
+        crate::tools::surface::set_workspace_root_with_readers(
+            &user_access,
+            agent_config.node_did(),
+            root_path,
+            None,
+            true,
+            std::slice::from_ref(&agent_config.agent_did),
+        )
+        .await
+        .unwrap();
+        let first = create_held_routed_request(&db, &user, &user_access, &agent_config).await;
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
             &agent_config.agent_did,
@@ -2236,16 +2229,10 @@ pub(super) mod tests {
             "the admitted request must reach the provider before revocation"
         );
         let escaped_first_doc_id = crate::store::graphql::escape_graphql_string(&first_doc_id);
-        let first_terminal = node
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_first_doc_id}" }} }}, limit: 1) {{ lifecycle_state failure_reason terminal_output }} }}"#
-            ))
-            .await;
-        assert!(!first_terminal.has_errors(), "{:?}", first_terminal.errors);
-        let first_row: serde_json::Value =
-            crate::store::graphql::first_row(&first_terminal, "AgentRequest")
-                .unwrap()
-                .unwrap();
+        let first_terminal = user_access.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_first_doc_id}" }} }}, limit: 1) {{ lifecycle_state failure_reason terminal_output }} }}"#
+        )).await.unwrap();
+        let first_row = first_terminal["data"]["AgentRequest"][0].clone();
         assert_eq!(
             first_row["lifecycle_state"], "completed",
             "first request failed after provider call: {first_row}"
@@ -2261,14 +2248,16 @@ pub(super) mod tests {
         );
         let calls_before_revocation = calls.load(Ordering::SeqCst);
 
-        let escaped_doc_id = crate::store::graphql::escape_graphql_string(&workspace_root_doc_id);
-        let revoked = node
-            .execute(&format!(
-                r#"mutation {{ update_WorkspaceRoot(filter: {{_docID: {{_eq:"{escaped_doc_id}"}}}}, input: {{enabled:false}}) {{_docID}} }}"#
-            ))
-            .await;
-        assert!(!revoked.has_errors(), "{:?}", revoked.errors);
-        let second = create_routed_request(&node, &agent_config, &requester_did).await;
+        crate::tools::surface::set_workspace_root(
+            &user_access,
+            agent_config.node_did(),
+            root_path,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        let second = create_held_routed_request(&db, &user, &user_access, &agent_config).await;
         let second_doc_id = second.doc_id.clone();
         daemon.process_request(second, shutdown_rx).await.unwrap();
         assert_eq!(
@@ -2277,25 +2266,13 @@ pub(super) mod tests {
             "the revoked fresh request must fail before provider exposure"
         );
         let escaped_request_doc_id = crate::store::graphql::escape_graphql_string(&second_doc_id);
-        let rejected = node
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{escaped_request_doc_id}"}}}}, limit:1) {{lifecycle_state terminal_output}} }}"#
-            ))
-            .await;
-        assert!(!rejected.has_errors(), "{:?}", rejected.errors);
-        let lifecycle_state = rejected
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .and_then(serde_json::Value::as_array)
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("lifecycle_state"))
-            .and_then(serde_json::Value::as_str);
-        assert_eq!(lifecycle_state, Some("failed"));
-        let second_selection: gents_protocol::output::TerminalOutput = serde_json::from_value(
-            rejected.data.as_ref().unwrap()["AgentRequest"][0]["terminal_output"].clone(),
-        )
-        .unwrap();
+        let rejected = user_access.execute(&format!(
+            r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{escaped_request_doc_id}"}}}}, limit:1) {{lifecycle_state terminal_output}} }}"#
+        )).await.unwrap();
+        let row = &rejected["data"]["AgentRequest"][0];
+        assert_eq!(row["lifecycle_state"], "failed");
+        let second_selection: gents_protocol::output::TerminalOutput =
+            serde_json::from_value(row["terminal_output"].clone()).unwrap();
         assert_eq!(
             second_selection,
             gents_protocol::output::TerminalOutput::NoMessage,
@@ -2303,7 +2280,6 @@ pub(super) mod tests {
         );
 
         node.shutdown().await.expect("node shutdown");
-        let _ = std::fs::remove_dir_all(data_path);
     }
 
     #[tokio::test]
