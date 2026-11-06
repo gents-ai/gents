@@ -878,7 +878,7 @@ mod tests {
             .with_timezone(&Utc);
         for case in cases {
             let flag = |name: &str| case[name].as_bool().unwrap();
-            let mut peer = PeerRecord::base("runtime".into(), "peer".into(), "node".into());
+            let mut peer = PeerRecord::base("runtime", "peer", "node");
             peer.source = flag("enrollment").then(|| "enrollment".into());
             peer.pairing_ready = flag("route_applied");
             peer.pairing_network_id = flag("network").then(|| "network".into());
