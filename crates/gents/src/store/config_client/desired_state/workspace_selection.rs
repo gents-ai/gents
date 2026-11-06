@@ -2,10 +2,19 @@ use super::{plan::document_identity, read, ConfigApplyTxn, DesiredStateApplyPlan
 use crate::documents::references_of;
 use crate::Collection;
 use anyhow::Result;
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Default)]
 pub(super) struct Capture(BTreeMap<(String, String), BTreeSet<(String, String)>>);
+
+fn selected_agents(owner: &str, callback: &Value) -> Result<BTreeSet<String>> {
+    Ok(references_of(Collection::Callback, callback, owner)?
+        .into_iter()
+        .filter(|reference| reference.collection == Collection::Agent)
+        .map(|reference| reference.id)
+        .collect())
+}
 
 async fn links(
     txn: &ConfigApplyTxn<'_>,
@@ -22,13 +31,8 @@ async fn links(
     if !callback.enabled {
         return Ok(BTreeSet::new());
     }
-    let dids = references_of(Collection::Callback, &value, owner)?
-        .into_iter()
-        .filter(|reference| reference.collection == Collection::Agent)
-        .map(|reference| reference.id)
-        .collect::<BTreeSet<_>>();
     let mut links = BTreeSet::new();
-    for did in dids {
+    for did in selected_agents(owner, &value)? {
         identity::Did::new(&did)?;
         anyhow::ensure!(
             did != owner,
@@ -123,6 +127,38 @@ mod tests {
             !crate::store::graphql::required_rows::<serde_json::Value>(&response, "Agent")?
                 .is_empty(),
         )
+    }
+
+    #[test]
+    fn workspace_selection_edges_are_the_selected_agents() -> Result<()> {
+        use crate::store::config_client::desired_state::selection::tests::canonical;
+        let owner = "did:key:node";
+        let selection = json!({"writer_agent_did":"did:key:writer",
+            "integrator_agent_did":"did:key:integrator",
+            "readers":[{"agent_did":"did:key:reader-a"},{"agent_did":"did:key:reader-b"}]});
+        let expected = [
+            "did:key:integrator",
+            "did:key:reader-a",
+            "did:key:reader-b",
+            "did:key:writer",
+        ]
+        .map(str::to_owned)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        for handler in [
+            json!({"kind":"built_in","emitter":"create_workspace","workspace_agents":selection}),
+            json!({"kind":"module","module_id":"module","workspace_agents":selection}),
+        ] {
+            let callback = canonical(Collection::Callback, owner, json!({"handler": handler}));
+            assert_eq!(selected_agents(owner, &callback)?, expected);
+        }
+        let plugin = canonical(
+            Collection::Callback,
+            owner,
+            json!({"handler":{"kind":"plugin","plugin":"plugin","digest":"digest"}}),
+        );
+        assert!(selected_agents(owner, &plugin)?.is_empty());
+        Ok(())
     }
 
     #[tokio::test]

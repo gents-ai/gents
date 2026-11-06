@@ -3,13 +3,24 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use serde_json::json;
 
-use super::apply_task_selections;
+use super::{apply_task_selections, selected_agent};
 use crate::lean_vocab_test::lean_identity_household_cases;
 use crate::store::config_client::desired_state::selection::tests::canonical;
 use crate::store::config_client::desired_state::selection::{apply_selection_changes, Change};
 use crate::store::config_client::ConfigAccess;
 use crate::store::identity::NodeIdentity;
 use crate::Collection;
+
+#[test]
+fn task_selection_edge_is_the_task_target_agent() -> Result<()> {
+    let node = "did:key:node";
+    assert_eq!(selected_agent(node, None)?, None);
+    for agent in ["did:key:before", "did:key:after"] {
+        let task = canonical(Collection::Task, node, json!({"agent_did": agent}));
+        assert_eq!(selected_agent(node, Some(&task))?.as_deref(), Some(agent));
+    }
+    Ok(())
+}
 
 #[tokio::test]
 async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> Result<()> {

@@ -640,4 +640,53 @@ mod tests {
         node.shutdown().await?;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn self_config_grant_reads_only_agents_with_a_profile() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("runtime");
+        let runtime = crate::KeyIdentity::load_or_create(&path, None)?;
+        let key = crate::store::identity::load_file_identity(&path)?.private_key_bytes();
+        let node = Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(runtime.did())
+                .with_signing_key(defra_node::SigningKey::Ed25519(key))
+                .with_node_acp_enabled()
+                .build()
+                .await?,
+        );
+        crate::ensure_runtime_schemas(&node).await?;
+        let binding = crate::store::identity::provision_agent_identity(&runtime)?;
+        crate::store::identity::grant_agent_node_capabilities(&node, &runtime, &binding).await?;
+        let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
+        let node_did = crate::store::graphql::escape_graphql_string(runtime.did());
+        let agent_did = crate::store::graphql::escape_graphql_string(&binding.agent_did);
+        let nonce = crate::store::graphql::escape_graphql_string(&binding.creation_nonce);
+        owner.write("test.profileless.context", &format!(r#"mutation {{ create_AgentContext(input: {{node_did:"{node_did}",context_id:"context"}}) {{_docID}} }}"#)).await?;
+        owner.write("test.profileless.agent", &format!(r#"mutation {{ create_Agent(input: {{node_did:"{node_did}",agent_did:"{agent_did}",creation_nonce:"{nonce}",context_id:"context"}}) {{_docID}} }}"#)).await?;
+        let runtime_did = runtime.did().to_owned();
+        let read = owner
+            .transact_readonly("test.profileless.read", |txn| {
+                let agent_did = &binding.agent_did;
+                let runtime_did = &runtime_did;
+                Box::pin(async move {
+                    read_record(txn, Collection::Agent, runtime_did, agent_did).await
+                })
+            })
+            .await;
+        assert!(read.is_err(), "{read:?}");
+        let grant = owner
+            .transact_write("test.profileless.grant", |txn| {
+                let agent_did = &binding.agent_did;
+                let runtime_did = &runtime_did;
+                Box::pin(async move {
+                    super::super::grant_selected_self_configuration(txn, runtime_did, agent_did)
+                        .await
+                })
+            })
+            .await;
+        assert!(grant.is_err());
+        node.shutdown().await?;
+        Ok(())
+    }
 }
