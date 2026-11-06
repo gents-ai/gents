@@ -519,18 +519,26 @@ fn agent_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedA
         )
         .unwrap(),
     );
+    let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+    agent_with_binding(identity, &binding, completion_retry)
+}
+
+fn agent_with_binding(
+    identity: Arc<dyn NodeIdentity>,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    completion_retry: CompletionRetryProfileFields,
+) -> ResolvedAgent {
     let node = Arc::new(RuntimeNode {
         node_did: identity.did().to_string(),
         identity,
-        default_agent_did: "general".to_string(),
+        default_agent_did: binding.agent_did.clone(),
         display_name: None,
         enabled: true,
     });
 
-    let binding = crate::store::identity::provision_agent_identity(node.identity.as_ref()).unwrap();
     let agent_identity =
-        crate::store::identity::resolve_agent_identity(node.identity.as_ref(), &binding).unwrap();
-    let agent_did = binding.agent_did;
+        crate::store::identity::resolve_agent_identity(node.identity.as_ref(), binding).unwrap();
+    let agent_did = binding.agent_did.clone();
     ResolvedAgent {
         configuration: crate::inference::resolved::ResolvedConfiguration::Static,
         profile_id: None,
@@ -790,9 +798,12 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                 .await
                 .unwrap_or_else(|error| panic!("{}: {error}", case.name));
         }
-        let budget = aggregate_token_budget_for_request(&crate::store::config_client::ConfigAccess::local(node.clone()), &request)
-            .await
-            .unwrap_or_else(|error| panic!("{}: rehydrate: {error}", case.name));
+        let budget = aggregate_token_budget_for_request(
+            &crate::store::config_client::ConfigAccess::local(node.clone()),
+            &request,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{}: rehydrate: {error}", case.name));
         match (&case.ledger, budget) {
             (None, None) => {}
             (Some(expected), Some(budget)) => {
@@ -1173,13 +1184,48 @@ fn only_a_usable_newest_call_anchors_the_session() {
 
 #[tokio::test]
 async fn session_calibration_seeds_from_durable_inference_calls() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let agent = agent_with_retry(CompletionRetryProfileFields::default());
+    let (db, user, owner, binding) =
+        crate::test_support::signed_test_node("completion-session-calibration").await;
+    let node = db.node.clone();
+    let agent = agent_with_binding(
+        db.node_identity.clone(),
+        &binding,
+        CompletionRetryProfileFields::default(),
+    );
+    let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(&agent.agent_did).unwrap(),
+        agent.agent_identity.as_ref(),
+    )
+    .unwrap();
+    let other_binding = crate::store::identity::provision_agent_identity_authorized(
+        &node,
+        db.node_identity.as_ref(),
+        &identity::Did::new(user.did()).unwrap(),
+    )
+    .await
+    .unwrap();
+    crate::test_support::install_test_agent_binding_with_access(
+        &node,
+        db.node_identity.did(),
+        "Other calibration agent",
+        &other_binding,
+        &owner,
+    )
+    .await;
+    let other =
+        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &other_binding)
+            .unwrap();
+    let other_access = crate::store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(other.did()).unwrap(),
+        other.as_ref(),
+    )
+    .unwrap();
     let did = agent.node_did().to_string();
     let session = "session-calibration";
     assert_eq!(
-        context_calibration_for_session(&crate::store::config_client::ConfigAccess::local(node.clone()), &agent, &did, session)
+        context_calibration_for_session(&access, &agent, &did, session)
             .await
             .ratio_basis_points(),
         crate::turn::provider_input::budget::UNIT_INPUT_RATIO_BASIS_POINTS,
@@ -1212,7 +1258,7 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
         ),
         (own, session, "2026-10-28T13:00:00Z", 2, 100_000, None),
         (
-            "other-agent",
+            other.did(),
             session,
             "2026-10-28T14:00:00Z",
             30_000,
@@ -1224,6 +1270,8 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
     .enumerate()
     {
         let accounting = escape_graphql_string(&calibration_accounting(estimator, 10_000, ratio));
+        let escaped_agent_did = escape_graphql_string(agent_did);
+        let escaped_session_id = escape_graphql_string(session_id);
         let seed = format!(
             r#"mutation {{
             create_InferenceCall(input: {{
@@ -1231,11 +1279,11 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
                 runtime_instance_id: "runtime-calibration"
                 request_id: "req-calibration"
                 request_doc_id: "doc-calibration-{index}"
-                session_id: "{session_id}"
+                session_id: "{escaped_session_id}"
                 model_name: "{model}"
                 call_seq: {index}
                 backend_id: "backend-calibration"
-                agent_did: "{agent_did}"
+                agent_did: "{escaped_agent_did}"
                 node_did: "{did}"
                 call_kind: "inference"
                 attempt: 1
@@ -1255,13 +1303,15 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
             model = escape_graphql_string(&agent.model_name),
             did = escape_graphql_string(&did),
         );
-        crate::store::config_client::ConfigAccess::local(node.clone())
-            .write("test.calibration_call", &seed)
-            .await
-            .unwrap();
+        let writer = if agent_did == other.did() {
+            &other_access
+        } else {
+            &access
+        };
+        writer.write("test.calibration_call", &seed).await.unwrap();
     }
     assert_eq!(
-        context_calibration_for_session(&crate::store::config_client::ConfigAccess::local(node.clone()), &agent, &did, session)
+        context_calibration_for_session(&access, &agent, &did, session)
             .await
             .ratio_basis_points(),
         15_000,
@@ -1269,7 +1319,7 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
          another agent's or an older build's"
     );
     assert_eq!(
-        context_calibration_for_session(&crate::store::config_client::ConfigAccess::local(node.clone()), &agent, &did, session)
+        context_calibration_for_session(&access, &agent, &did, session)
             .await
             .anchor(),
         Some(crate::turn::provider_input::budget::ContextAnchor {
@@ -1279,8 +1329,8 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
         }),
         "its provider count anchors the next request; another agent's newer call does not"
     );
-    let first = context_calibration_for_session(&crate::store::config_client::ConfigAccess::local(node.clone()), &agent, &did, session).await;
-    let second = context_calibration_for_session(&crate::store::config_client::ConfigAccess::local(node.clone()), &agent, &did, session).await;
+    let first = context_calibration_for_session(&access, &agent, &did, session).await;
+    let second = context_calibration_for_session(&access, &agent, &did, session).await;
     first.observe(40_000, 10_000);
     first.invalidate_anchor();
     assert_eq!(

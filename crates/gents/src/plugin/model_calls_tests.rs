@@ -449,16 +449,16 @@ fn malformed_model_calls_are_named() {
 
 #[tokio::test]
 async fn a_profile_resolves_to_its_chat_completions_endpoint() {
-    let owner = "did:key:model-owner";
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let agent = crate::test_support::install_test_agent(&node, owner, "chandra").await;
+    let (db, user, _access, agent) =
+        crate::test_support::signed_test_node("plugin-model-profile").await;
+    let node = db.node.clone();
+    let owner = db.node_identity.did();
     let models = AccessModels(ConfigAccess::local(node.clone()));
     let binding = |profile: &str| ModelBinding {
         node_did: owner.to_owned(),
         profile_id: profile.to_owned(),
     };
-    let actor = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
+    let actor = identity::Did::new(user.did()).unwrap();
     let endpoint = models
         .resolve(
             &binding(&format!("{}:inference", agent.agent_did)),
