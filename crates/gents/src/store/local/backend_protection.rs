@@ -178,8 +178,21 @@ impl PreflightProtectedBackendStore<'_> {
         http: Option<defra_node::HttpConfig>,
         p2p: Option<defra_node::P2PConfig>,
     ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
+        self.start_node_with_tool_ceiling(key, http, p2p, crate::tools::surface::ToolCeiling::meta_only()).await
+    }
+
+    pub async fn start_node_with_tool_ceiling(
+        self,
+        key: &StoreKey,
+        http: Option<defra_node::HttpConfig>,
+        p2p: Option<defra_node::P2PConfig>,
+        ceiling: crate::tools::surface::ToolCeiling,
+    ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
+        let projection = super::tool_permission_projection::ToolPermissionProjection::new(&self.node_did, ceiling)
+            .map_err(|error| BackendProtectionError::Schema(error.into()))?;
         let mut builder = super::store_key::persistent_builder(&self.store.data, key)
             .map_err(|error| BackendProtectionError::Schema(error.into()))?
+            .with_document_projector(Arc::new(projection))
             .with_node_identity_did(self.node_did)
             .with_node_acp_enabled();
         if let Some(http) = http {

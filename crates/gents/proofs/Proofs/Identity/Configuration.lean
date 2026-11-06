@@ -1,4 +1,5 @@
 import Proofs.Identity.Household
+import Proofs.ToolPolicy.Types
 
 namespace Identity.Configuration
 open Household
@@ -21,6 +22,38 @@ and materialization, migration publication, and view creation. These names
 are the pinned DefraDB node-operation relations for those operations. -/
 def schemaToolPermissions : List String :=
   ["get-collection", "patch-collection", "set-migration", "add-view"]
+
+-- The category scope is owned by the configured tool surface.
+def selfConfigCategoryEnabled (scope : ToolPolicy.EndpointScope String Unit) (category : String) : Bool :=
+  match scope with
+  | .none => false
+  | .all => true
+  | .only keys _ => decide (category ∈ keys)
+
+-- An empty category scope does not expose self-configuration.
+def selfConfigScopeEnabled : ToolPolicy.EndpointScope String Unit → Bool
+  | .none => false
+  | .all => true
+  | .only keys _ => decide keys.Nonempty
+
+/-- Project operation requirements from the existing configured tool surface
+after its stable ceiling, independently of transient service availability.
+These source-specific node permissions do not confer document ACP, bypass,
+or the ability to grant permissions. Native authorization remains decisive. -/
+def toolOperationSources (surface : ToolPolicy.Surface) (packInstall : Bool) : List (String × String) :=
+  let emit (purpose : String) (enabled : Bool) (permissions : List String) : List (String × String) :=
+    if enabled then permissions.map (fun permission => (purpose, permission)) else []
+  emit "schema" surface.schemaManagement schemaToolPermissions ++
+  emit "session-history" surface.sessionHistory ["read-document"] ++
+  emit "goal" surface.goalTools ["read-document", "update-document"] ++
+  emit "goal-create" (surface.goalTools && surface.goalCreate)
+    ["read-document", "update-document", "add-dac-relation"] ++
+  ([("self-config:agent", "agent"), ("self-config:node", "node"),
+    ("self-config:tools", "tools"), ("self-config:profile", "profile")].flatMap fun (purpose, category) =>
+      emit purpose (surface.selfConfig && selfConfigCategoryEnabled surface.selfConfigCategories category)
+        ["delete-dac-relation"]) ++
+  emit "pack-install" (surface.selfConfig && selfConfigScopeEnabled surface.selfConfigCategories && packInstall)
+    ["delete-dac-relation"]
 
 /-- Tool selections and their source-scoped native grants change together.
 Direct grants and ownership are separate native paths. The authorization and
