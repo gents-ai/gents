@@ -85,6 +85,7 @@ serde_yaml.workspace = true
 subtle.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
@@ -143,7 +144,6 @@ db.workspace = true
 defra-core.workspace = true
 futures = "0.3"
 gents-lean-contract.workspace = true
-tokio-tungstenite = "0.26.2"
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"

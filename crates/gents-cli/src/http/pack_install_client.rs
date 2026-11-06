@@ -1,0 +1,455 @@
+use anyhow::{bail, ensure, Context, Result};
+use futures_util::{SinkExt, StreamExt};
+use gents::store::config_client::{
+    prepare_pack_evidence_from_history, prepare_pack_relationship, ClientSigningCapability,
+    GraphqlEndpoint, PackApprovalError, PackApprovalScope, PackMutation, PackRelationship,
+    PackReplayTransport,
+};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use tokio::net::TcpStream;
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{client::IntoClientRequest, protocol::Message},
+    MaybeTlsStream, WebSocketStream,
+};
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum ServerMessage {
+    Ready {
+        scope: PackApprovalScope,
+    },
+    ReadResult {
+        id: u64,
+        result: Value,
+    },
+    ApproveGraph {
+        id: u64,
+        mutation: PackMutation,
+        history: Option<Value>,
+    },
+    ApproveRelationship {
+        id: u64,
+        relationship: PackRelationship,
+    },
+    Applied {
+        id: u64,
+        result: Value,
+    },
+    Timestamp {
+        id: u64,
+        kind: String,
+    },
+    Finished {
+        result: Value,
+    },
+    Failed {
+        error: String,
+        outcome: String,
+    },
+}
+
+/// A single runtime-owned transaction, driven by the client's pack interpreter.
+pub(crate) struct PackInstallSession {
+    socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    actor: ClientSigningCapability,
+    scope: PackApprovalScope,
+    pending: Option<ServerMessage>,
+    next_id: u64,
+}
+
+impl PackInstallSession {
+    pub(crate) async fn start(
+        endpoint: &GraphqlEndpoint,
+        request: Value,
+        node_did: &str,
+        pack_digests: &[String],
+    ) -> Result<Self> {
+        let actor = endpoint.held_client_signing_capability()?.clone();
+        let mut url = reqwest::Url::parse(endpoint.url())?;
+        ensure!(
+            matches!(url.scheme(), "http" | "https")
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none(),
+            "remote pack install requires an HTTP URL without credentials"
+        );
+        let prefix = url
+            .path()
+            .strip_suffix("/api/v0/graphql")
+            .context("remote pack install requires a Gents runtime GraphQL endpoint")?
+            .to_owned();
+        url.set_path(&format!("{prefix}/packs/install/session"));
+        url.set_scheme(if url.scheme() == "https" { "wss" } else { "ws" })
+            .map_err(|_| anyhow::anyhow!("invalid runtime WebSocket URL"))?;
+        let mut upgrade = url.as_str().into_client_request()?;
+        let authorization = endpoint
+            .authorization()?
+            .context("client authentication is required")?;
+        let mut authorization =
+            authorization.parse::<tokio_tungstenite::tungstenite::http::HeaderValue>()?;
+        authorization.set_sensitive(true);
+        upgrade.headers_mut().insert(
+            tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+            authorization,
+        );
+        let (mut socket, _) = connect_async(upgrade)
+            .await
+            .context("connecting remote pack install")?;
+        send(&mut socket, json!({"type": "start", "request": request})).await?;
+        let scope = match receive(&mut socket).await? {
+            ServerMessage::Ready { scope } => scope,
+            ServerMessage::Failed { error, outcome } => {
+                bail!("remote pack install failed ({outcome}): {error}")
+            }
+            _ => bail!("remote pack install returned an unexpected initial message"),
+        };
+        ensure!(
+            scope.node_did == node_did
+                && scope.pack_digests == pack_digests
+                && !scope.nonce.is_empty(),
+            "remote pack install scope does not match the reviewed artifacts and node"
+        );
+        Ok(Self {
+            socket,
+            actor,
+            scope,
+            pending: None,
+            next_id: 1,
+        })
+    }
+
+    pub(crate) async fn read(&mut self, document: &str, variables: &Value) -> Result<Value> {
+        let id = self.next_id;
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .context("pack install request ID exhausted")?;
+        send(
+            &mut self.socket,
+            json!({"type": "read", "id": id, "document": document, "variables": variables}),
+        )
+        .await?;
+        loop {
+            match receive(&mut self.socket).await? {
+                ServerMessage::ReadResult {
+                    id: received,
+                    result,
+                } if received == id => return Ok(result),
+                proposal @ (ServerMessage::ApproveGraph { .. }
+                | ServerMessage::ApproveRelationship { .. }
+                | ServerMessage::Timestamp { .. })
+                    if self.pending.is_none() =>
+                {
+                    self.pending = Some(proposal)
+                }
+                ServerMessage::Failed { error, outcome } => {
+                    bail!("remote pack install failed ({outcome}): {error}")
+                }
+                _ => bail!("unexpected remote pack install response to read"),
+            }
+        }
+    }
+
+    async fn proposal(&mut self) -> Result<ServerMessage> {
+        match self.pending.take() {
+            Some(proposal) => Ok(proposal),
+            None => receive(&mut self.socket).await,
+        }
+    }
+
+    pub(crate) async fn graph(&mut self, expected: &PackMutation) -> Result<Value> {
+        let (id, history) = match self.proposal().await? {
+            ServerMessage::ApproveGraph {
+                id,
+                mutation,
+                history,
+            } if mutation == *expected => (id, history),
+            ServerMessage::Failed { error, outcome } => {
+                bail!("remote pack install failed ({outcome}): {error}")
+            }
+            _ => bail!("runtime pack graph differs from the client's installation plan"),
+        };
+        let evidence =
+            prepare_pack_evidence_from_history(&self.actor, &self.scope, expected, history).await?;
+        send(
+            &mut self.socket,
+            json!({"type": "graph_evidence", "id": id, "evidence": evidence}),
+        )
+        .await?;
+        self.applied(id).await
+    }
+
+    pub(crate) async fn relationship(&mut self, expected: &PackRelationship) -> Result<()> {
+        let id = match self.proposal().await? {
+            ServerMessage::ApproveRelationship { id, relationship }
+                if serde_json::to_value(&relationship)? == serde_json::to_value(expected)? =>
+            {
+                id
+            }
+            ServerMessage::Failed { error, outcome } => {
+                bail!("remote pack install failed ({outcome}): {error}")
+            }
+            _ => bail!("runtime pack relationship differs from the client's installation plan"),
+        };
+        let evidence = prepare_pack_relationship(&self.actor, &self.scope, expected).await?;
+        send(
+            &mut self.socket,
+            json!({"type": "relationship_evidence", "id": id, "evidence": evidence}),
+        )
+        .await?;
+        let result = self.applied(id).await?;
+        ensure!(result.is_null(), "unexpected relationship result");
+        Ok(())
+    }
+
+    async fn applied(&mut self, id: u64) -> Result<Value> {
+        match receive(&mut self.socket).await? {
+            ServerMessage::Applied {
+                id: received,
+                result,
+            } if received == id => Ok(result),
+            ServerMessage::Failed { error, outcome } => {
+                bail!("remote pack install failed ({outcome}): {error}")
+            }
+            _ => bail!("unexpected remote pack install effect response"),
+        }
+    }
+
+    async fn timestamp(&mut self, expected: &str) -> Result<String> {
+        let id = match self.proposal().await? {
+            ServerMessage::Timestamp { id, kind } if kind == expected => id,
+            ServerMessage::Failed { error, outcome } => {
+                bail!("remote pack install failed ({outcome}): {error}")
+            }
+            _ => bail!("runtime pack timestamp differs from the client installation plan"),
+        };
+        let value = gents::store::config_client::mint_recreate_identity_timestamp();
+        send(
+            &mut self.socket,
+            json!({"type": "timestamp_value", "id": id, "value": value}),
+        )
+        .await?;
+        Ok(value)
+    }
+
+    async fn finish(&mut self) -> Result<Value> {
+        ensure!(
+            self.pending.is_none(),
+            "runtime proposed an unexpected extra pack effect"
+        );
+        send(&mut self.socket, json!({"type": "finish"})).await?;
+        match receive(&mut self.socket).await? {
+            ServerMessage::Finished { result } => Ok(result),
+            ServerMessage::Failed { error, outcome } => {
+                bail!("remote pack install failed ({outcome}): {error}")
+            }
+            _ => bail!("unexpected remote pack install completion response"),
+        }
+    }
+}
+
+async fn send(socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>, value: Value) -> Result<()> {
+    socket
+        .send(Message::Text(serde_json::to_string(&value)?.into()))
+        .await
+        .context("remote pack install connection lost; inspect the runtime before retrying")
+}
+
+async fn receive(socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>) -> Result<ServerMessage> {
+    loop {
+        match socket.next().await {
+            Some(Ok(Message::Text(text))) => return Ok(serde_json::from_str(&text)?),
+            Some(Ok(Message::Ping(_)))
+            | Some(Ok(Message::Pong(_)))
+            | Some(Ok(Message::Frame(_))) => {}
+            Some(Ok(_)) | None => {
+                bail!("remote pack install connection closed; inspect the runtime before retrying")
+            }
+            Some(Err(error)) => {
+                return Err(error).context(
+                    "remote pack install connection lost; inspect the runtime before retrying",
+                )
+            }
+        }
+    }
+}
+
+/// Serializes interpreter requests on the same authenticated session.
+pub(crate) struct PackReplaySession {
+    inner: tokio::sync::Mutex<PackReplayState>,
+}
+
+struct PackReplayState {
+    session: Option<PackInstallSession>,
+    result: Option<Value>,
+}
+
+impl PackReplaySession {
+    pub(crate) fn new(session: PackInstallSession) -> Self {
+        Self {
+            inner: tokio::sync::Mutex::new(PackReplayState {
+                session: Some(session),
+                result: None,
+            }),
+        }
+    }
+
+    pub(crate) async fn result(&self) -> Result<Value> {
+        self.inner
+            .lock()
+            .await
+            .result
+            .take()
+            .context("remote pack install has no confirmed result")
+    }
+}
+
+fn transport_error(error: anyhow::Error) -> PackApprovalError {
+    PackApprovalError::Transport(format!("{error:#}"))
+}
+
+#[async_trait::async_trait]
+impl PackReplayTransport for PackReplaySession {
+    async fn read(
+        &self,
+        document: &str,
+        variables: &Value,
+    ) -> std::result::Result<Value, PackApprovalError> {
+        let mut state = self.inner.lock().await;
+        state
+            .session
+            .as_mut()
+            .context("pack session is closed")
+            .map_err(transport_error)?
+            .read(document, variables)
+            .await
+            .map_err(transport_error)
+    }
+
+    async fn apply_graph(
+        &self,
+        mutation: &PackMutation,
+    ) -> std::result::Result<Value, PackApprovalError> {
+        let mut state = self.inner.lock().await;
+        state
+            .session
+            .as_mut()
+            .context("pack session is closed")
+            .map_err(transport_error)?
+            .graph(mutation)
+            .await
+            .map_err(transport_error)
+    }
+
+    async fn apply_relationship(
+        &self,
+        relationship: &PackRelationship,
+    ) -> std::result::Result<(), PackApprovalError> {
+        let mut state = self.inner.lock().await;
+        state
+            .session
+            .as_mut()
+            .context("pack session is closed")
+            .map_err(transport_error)?
+            .relationship(relationship)
+            .await
+            .map_err(transport_error)
+    }
+
+    async fn next_timestamp(
+        &self,
+        kind: &'static str,
+    ) -> std::result::Result<String, PackApprovalError> {
+        let mut state = self.inner.lock().await;
+        state
+            .session
+            .as_mut()
+            .context("pack session is closed")
+            .map_err(transport_error)?
+            .timestamp(kind)
+            .await
+            .map_err(transport_error)
+    }
+
+    async fn commit(&self) -> std::result::Result<(), PackApprovalError> {
+        let mut state = self.inner.lock().await;
+        let result = state
+            .session
+            .as_mut()
+            .context("pack session is closed")
+            .map_err(transport_error)?
+            .finish()
+            .await
+            .map_err(transport_error)?;
+        state.result = Some(result);
+        state.session.take();
+        Ok(())
+    }
+
+    async fn abort(&self) -> std::result::Result<(), PackApprovalError> {
+        let mut state = self.inner.lock().await;
+        if let Some(mut session) = state.session.take() {
+            send(&mut session.socket, json!({"type": "abort"}))
+                .await
+                .map_err(transport_error)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::accept_async;
+
+    #[tokio::test]
+    async fn refuses_a_graph_that_differs_from_the_interpreter() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let mut socket = accept_async(stream).await?;
+            let _ = socket.next().await.context("missing start")??;
+            socket.send(Message::Text(json!({
+                "type": "ready",
+                "scope": {"node_did": "did:key:node", "pack_digests": ["sha256:root"], "nonce": "test"}
+            }).to_string().into())).await?;
+            socket.send(Message::Text(json!({
+                "type": "approve_graph", "id": 1,
+                "mutation": {"kind": "create", "collection": "Tools", "input": {"tools_id": "injected"}},
+                "history": null
+            }).to_string().into())).await?;
+            let next = socket.next().await;
+            anyhow::ensure!(
+                !matches!(next, Some(Ok(Message::Text(_)))),
+                "client sent evidence for a different graph"
+            );
+            Ok::<_, anyhow::Error>(())
+        });
+        let key = ClientSigningCapability::from_ed25519_key(&[7; 32])?;
+        let endpoint = GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"),
+            key.did().to_owned(),
+        )
+        .with_client_signing_capability(key)?;
+        let mut session = PackInstallSession::start(
+            &endpoint,
+            json!({}),
+            "did:key:node",
+            &["sha256:root".to_owned()],
+        )
+        .await?;
+        let expected = PackMutation::Create {
+            collection: "Tools".into(),
+            input: json!({"tools_id": "reviewed"}),
+        };
+        assert!(session.graph(&expected).await.is_err());
+        drop(session);
+        server.await??;
+        Ok(())
+    }
+}
