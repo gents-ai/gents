@@ -1099,7 +1099,34 @@ mod tests {
             .await?;
         let input = json!({"node_did":runtime.did(),"agent_did":binding.agent_did,
             "creation_nonce":binding.creation_nonce,"context_id":"context","enabled":true});
-        access.transact_write("test.user_signed_managed_agent", |txn| {
+        let denied = access.transact_write("test.user_signed_managed_agent", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                txn.execute_desired_state_mutation(
+                    "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID _version { cid } } }",
+                    &json!({"input":input}), crate::Collection::Agent, true,
+                ).await
+            })
+        }).await.expect_err("a non-admin cannot revoke the legacy source or grant the managed Agent");
+        assert!(denied.is_permission_denied(), "{denied:?}");
+        let managed = identity::Did::new(&binding.agent_did)?;
+        assert!(
+            !node
+                .nac_manager()
+                .check_permission(&managed, NodePermission::CollectionPatch)
+                .await?
+        );
+        let rows = owner
+            .execute(&format!(
+                r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+                escape_graphql_string(&binding.agent_did)
+            ))
+            .await?;
+        assert!(
+            rows["data"]["Agent"].as_array().is_some_and(Vec::is_empty),
+            "{rows}"
+        );
+        owner.transact_write("test.owner_managed_agent", |txn| {
             let input = &input;
             Box::pin(async move {
                 txn.execute_desired_state_mutation(
@@ -1115,7 +1142,6 @@ mod tests {
             .unwrap()["allowed"]
             .as_bool()
             .unwrap();
-        let managed = identity::Did::new(&binding.agent_did)?;
         assert_eq!(
             node.nac_manager()
                 .check_permission(&managed, NodePermission::CollectionPatch)
@@ -1729,8 +1755,10 @@ mod tests {
                 })
             })
             .await?;
-        let non_admin = crate::ConfigAccess::local_as(node.clone(), outsider_did.clone());
-        assert!(!node.nac_manager().is_admin(&outsider_did).await?);
+        let signer = crate::store::identity::resolve_agent_identity(&runtime, &binding)?;
+        let non_admin =
+            crate::ConfigAccess::local_managed_agent(node.clone(), agent.clone(), signer.as_ref())?;
+        assert!(!node.nac_manager().is_admin(&agent).await?);
         let modeled = &crate::lean_vocab_test::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
@@ -1756,7 +1784,11 @@ mod tests {
                 })
             })
             .await;
-        assert_eq!(repeat.is_ok(), expected_change("present-noop"));
+        assert_eq!(
+            repeat.is_ok(),
+            expected_change("present-noop"),
+            "{repeat:?}"
+        );
 
         let txn = node.database().new_txn(false).await?;
         let store = Arc::new(acp::zanzibar::store::TransactionZanzibarStore::new(
@@ -1790,7 +1822,11 @@ mod tests {
                 })
             })
             .await;
-        assert_eq!(missing.is_ok(), expected_change("add-denied"));
+        assert_eq!(
+            missing.is_ok(),
+            expected_change("add-denied"),
+            "{missing:?}"
+        );
         owner
             .transact_write("test.plugin_delete.repair", |txn| {
                 let record = &record;
