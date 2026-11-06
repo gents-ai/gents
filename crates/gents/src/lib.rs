@@ -167,7 +167,19 @@ pub(crate) mod test_support {
         );
         let dir = tempfile::tempdir().expect("held identity directory");
         let path = dir.path().join("runtime.key");
-        std::fs::write(&path, &config.private_key_bytes).expect("write held identity key");
+        {
+            use std::io::Write as _;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&path).expect("create held identity key");
+            file.write_all(&config.private_key_bytes)
+                .expect("write held identity key");
+        }
         let identity = crate::store::identity::KeyIdentity::load_existing(path.clone(), None)
             .expect("reload held runtime identity");
         assert_eq!(identity.did(), node_did);
