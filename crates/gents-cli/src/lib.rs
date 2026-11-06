@@ -659,6 +659,31 @@ pub(crate) async fn resolve_config_access(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
 ) -> Result<(ConfigAccess, PathBuf)> {
+    let (access, home, _) = resolve_config_access_inner(home, explicit_graphql, false).await?;
+    Ok((access, home))
+}
+
+pub(crate) async fn resolve_pack_config_access(
+    home: Option<&Path>,
+    explicit_graphql: Option<&str>,
+) -> Result<(
+    ConfigAccess,
+    PathBuf,
+    Option<gents::store::config_client::GraphqlEndpoint>,
+)> {
+    resolve_config_access_inner(home, explicit_graphql, true).await
+}
+
+async fn resolve_config_access_inner(
+    home: Option<&Path>,
+    explicit_graphql: Option<&str>,
+    local_http: bool,
+) -> Result<(
+    ConfigAccess,
+    PathBuf,
+    Option<gents::store::config_client::GraphqlEndpoint>,
+)> {
+    use gents::NodeIdentity as _;
     let home_dir = resolve_home_dir(home);
     let client_identity = load_client_identity().await?;
     if let Some(graphql) = explicit_graphql
@@ -669,6 +694,7 @@ pub(crate) async fn resolve_config_access(
         return Ok((
             ConfigAccess::Graphql(endpoint.with_client_signed_agent_creates()),
             home_dir,
+            None,
         ));
     }
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
@@ -677,6 +703,7 @@ pub(crate) async fn resolve_config_access(
             return Ok((
                 ConfigAccess::Graphql(endpoint.with_client_signed_agent_creates()),
                 home_dir,
+                None,
             ));
         }
     }
@@ -701,8 +728,28 @@ pub(crate) async fn resolve_config_access(
     let protected = protected
         .preflight(&store_key, Some(runtime_identity.did()))
         .await?;
+    let (http, local_endpoint) = if local_http {
+        let (listener, address) = tokio::task::spawn_blocking(|| -> std::io::Result<_> {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+            let address = listener.local_addr()?;
+            Ok((listener, address))
+        })
+        .await??;
+        let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"),
+            client_identity.did(),
+        )
+        .with_client_signing_capability(client_identity.client_signing_capability()?)?
+        .with_client_signed_agent_creates();
+        (
+            Some(gents::defra_node::HttpConfig::with_listener(listener)?),
+            Some(endpoint),
+        )
+    } else {
+        (None, None)
+    };
     let (node, _admission) = protected
-        .start_node(&store_key, runtime_identity.clone(), None, None)
+        .start_node(&store_key, runtime_identity.clone(), http, None)
         .await?;
     let migration_node = node.clone();
     let access = ConfigAccess::claimed_local_as(
@@ -717,7 +764,7 @@ pub(crate) async fn resolve_config_access(
             gents::store::local::storage_backend::classify_store_error(error, &data_dir)
         })?;
     gents::store::local::store_key::upgrade::finish(&data_dir)?;
-    Ok((access, home_dir))
+    Ok((access, home_dir, local_endpoint))
 }
 
 #[cfg(test)]

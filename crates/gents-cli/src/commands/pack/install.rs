@@ -9,6 +9,12 @@ use futures_util::StreamExt;
 use gents::pack::{PackKind, PackManifest};
 use serde_json::json;
 
+struct LocalPackAccess {
+    writer: gents::store::config_client::ConfigAccess,
+    schema: gents::store::config_client::ConfigAccess,
+    runtime: std::sync::Arc<dyn gents::NodeIdentity>,
+}
+
 /// The documents pack install: the CLI's single site that writes a documents
 /// pack and its dependencies. `explicit` is false only when the pack is
 /// installed as another pack's dependency.
@@ -18,6 +24,17 @@ pub(crate) async fn install_documents_pack(
     pack: &PackSource,
     args: &PackInstallArgs,
     explicit: bool,
+) -> Result<serde_json::Value> {
+    install_documents_pack_inner(access, owner, pack, args, explicit, None).await
+}
+
+async fn install_documents_pack_inner(
+    access: &gents::store::config_client::ConfigAccess,
+    owner: &str,
+    pack: &PackSource,
+    args: &PackInstallArgs,
+    explicit: bool,
+    local: Option<&LocalPackAccess>,
 ) -> Result<serde_json::Value> {
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let dependencies: Vec<PackSource> =
@@ -79,7 +96,8 @@ pub(crate) async fn install_documents_pack(
             .await;
         }
     }
-    install_documents_pack_resolved(access, owner, pack, args, explicit, dependencies).await
+    install_documents_pack_resolved_inner(access, owner, pack, args, explicit, dependencies, local)
+        .await
 }
 
 pub(crate) async fn install_documents_pack_resolved(
@@ -90,24 +108,56 @@ pub(crate) async fn install_documents_pack_resolved(
     explicit: bool,
     dependencies: Vec<PackSource>,
 ) -> Result<serde_json::Value> {
+    install_documents_pack_resolved_inner(access, owner, pack, args, explicit, dependencies, None)
+        .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "local install adds held Node and client access to the shared pack inputs"
+)]
+async fn install_documents_pack_resolved_inner(
+    access: &gents::store::config_client::ConfigAccess,
+    owner: &str,
+    pack: &PackSource,
+    args: &PackInstallArgs,
+    explicit: bool,
+    dependencies: Vec<PackSource>,
+    local: Option<&LocalPackAccess>,
+) -> Result<serde_json::Value> {
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let requested = parse_inference_slot_bindings(&args.inference_slots)?;
     let temp = tempfile::tempdir()?;
     gents::pack::materialize::materialize(pack.archive(), temp.path())?;
-    let prepared = gents::pack::prepare_document_pack_archive(
-        access,
-        owner,
-        pack.archive(),
-        &requested,
-        &dependencies
-            .iter()
-            .map(PackSource::archive)
-            .collect::<Vec<_>>(),
-        gents::pack::InstalledVia::Operator,
-        args.scope.graphql.is_none().then_some(home.as_path()),
-        &|name| std::env::var(name).ok(),
-    )
-    .await?;
+    let dependency_archives = dependencies
+        .iter()
+        .map(PackSource::archive)
+        .collect::<Vec<_>>();
+    let prepared = if let Some(local) = local {
+        gents::pack::prepare_document_pack_archive_with_runtime(
+            access,
+            owner,
+            pack.archive(),
+            &requested,
+            &dependency_archives,
+            Some(home.as_path()),
+            &|name| std::env::var(name).ok(),
+            local.runtime.as_ref(),
+        )
+        .await?
+    } else {
+        gents::pack::prepare_document_pack_archive(
+            access,
+            owner,
+            pack.archive(),
+            &requested,
+            &dependency_archives,
+            gents::pack::InstalledVia::Operator,
+            args.scope.graphql.is_none().then_some(home.as_path()),
+            &|name| std::env::var(name).ok(),
+        )
+        .await?
+    };
     let inference = prepared.inference.clone();
     let dependency_inference = prepared.dependency_inference.clone();
     let origin_tag = gents::pack::pack_origin_tag(&pack.manifest().name)?;
@@ -165,12 +215,14 @@ pub(crate) async fn install_documents_pack_resolved(
             )
         })
         .collect();
-    gents::pack::apply_prepared_dependency_schemas(access, &prepared).await?;
-    let schemas = super::super::schema::apply_pack_schemas_if_present(access, temp.path())
+    let schema_access = local.map_or(access, |local| &local.schema);
+    let writer = local.map_or(access, |local| &local.writer);
+    gents::pack::apply_prepared_dependency_schemas(schema_access, &prepared).await?;
+    let schemas = super::super::schema::apply_pack_schemas_if_present(schema_access, temp.path())
         .await
         .context("pack install schemas")?;
     let (apply, plugins) = gents::pack::install_prepared_document_graph(
-        access,
+        writer,
         owner,
         pack.archive(),
         &prepared,
@@ -298,10 +350,20 @@ pub(crate) async fn wire_pack_plugins(
 /// Offline command access owns its node and store claim. DefraDB background
 /// tasks may retain the database after a handle drops, so shutdown must finish
 /// before this command releases its access. HTTP access has no owned node here.
+#[cfg(test)]
 pub(super) async fn install_documents_command(
     access: gents::store::config_client::ConfigAccess,
     pack: &PackSource,
     args: &PackInstallArgs,
+) -> Result<()> {
+    install_documents_command_with_local(access, pack, args, None).await
+}
+
+async fn install_documents_command_with_local(
+    access: gents::store::config_client::ConfigAccess,
+    pack: &PackSource,
+    args: &PackInstallArgs,
+    local_endpoint: Option<gents::store::config_client::GraphqlEndpoint>,
 ) -> Result<()> {
     let result = async {
         let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
@@ -322,7 +384,38 @@ pub(super) async fn install_documents_command(
             Some(&access),
         )
         .await?;
-        let mut output = install_documents_pack(&access, &owner, pack, args, args.explicit).await?;
+        let local = if let Some(endpoint) = local_endpoint {
+            let config =
+                crate::home_state::read_init_config(&home)?.context("home is not initialized")?;
+            let runtime = crate::home_state::load_initialized_home_identity(&home, &config)?;
+            anyhow::ensure!(
+                runtime.did() == owner,
+                "selected Node does not match the held runtime"
+            );
+            let node = access
+                .local_node()
+                .context("local pack install requires the owned Node")?
+                .clone();
+            Some(LocalPackAccess {
+                writer: gents::store::config_client::ConfigAccess::Graphql(endpoint),
+                schema: gents::store::config_client::ConfigAccess::local_as(
+                    node,
+                    identity::Did::new(&owner)?,
+                ),
+                runtime,
+            })
+        } else {
+            None
+        };
+        let mut output = install_documents_pack_inner(
+            &access,
+            &owner,
+            pack,
+            args,
+            args.explicit,
+            local.as_ref(),
+        )
+        .await?;
         if !args.wire.is_empty() && !args.preview && args.scope.graphql.is_none() {
             output["wired"] = wire_pack_plugins(&access, &owner, &home, pack, &args.wire)
                 .await?
@@ -351,12 +444,12 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
     )?;
     match pack.manifest().metadata.kind {
         PackKind::Documents => {
-            let (access, _) = crate::resolve_config_access(
+            let (access, _, local_endpoint) = crate::resolve_pack_config_access(
                 args.scope.home.as_deref(),
                 args.scope.graphql.as_deref(),
             )
             .await?;
-            install_documents_command(access, &pack, &args).await
+            install_documents_command_with_local(access, &pack, &args, local_endpoint).await
         }
         PackKind::Assets | PackKind::Plugins => {
             let requested = parse_inference_slot_bindings(&args.inference_slots)?;
