@@ -749,9 +749,11 @@ impl BackgroundExecutionRegistry {
         ProcessStopOutcome::from_observations(before, after)
     }
 
+    /// Reads a retained process output window as `access`'s actor, which
+    /// must own the tool call: rows are Agent documents under ACP.
     pub async fn read_process_output_snapshot(
         &self,
-        node: &EmbeddedNode,
+        access: &crate::ConfigAccess,
         session_id: &str,
         node_did: &str,
         requester_did: Option<&str>,
@@ -763,8 +765,8 @@ impl BackgroundExecutionRegistry {
             node_did: node_did.to_owned(),
             requester_did: requester_did.map(str::to_owned),
         };
-        let result = crate::tools::background::status::read_tool_output_slice(
-            node,
+        let result = crate::tools::background::status::read_tool_output_slice_with_access(
+            access,
             &caller,
             &self.live_outputs.registry,
             tool_call_id,
