@@ -377,7 +377,7 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
     .unwrap();
     let enqueued = crate::request::lifecycle::materialize::write_pending_agent_request_with_lineage_workspace_and_conversation_title(
         &node,
-        ::identity::Did::new(identity.did().to_owned()).expect("fixture creator DID"),
+        ::identity::Did::new(agent.did().to_owned()).expect("fixture managed Agent DID"),
         identity.did(),
         agent.did(),
         "continue the run",
@@ -395,7 +395,7 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
         requester_did,
         Some("event-trigger-config-doc-1"),
         None,
-        &identity,
+        agent.as_ref(),
     )
     .await
     .unwrap();
@@ -980,6 +980,16 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
     );
 }
 
+/// MailboxItem carries a collection ACP policy, so the block must be read as
+/// the actor that owns the row; the node's own caller cannot read it.
+async fn signer_as_actor(node: &EmbeddedNode, actor: &str, cid: &str) -> anyhow::Result<String> {
+    let (block, signature) = node.authorized_signed_block_bytes(cid, Some(actor)).await?;
+    let block = defra_core::block::Block::from_dag_cbor(&block)?;
+    let signature = defra_core::block::Signature::from_dag_cbor(&signature)?;
+    db::block::verify::verified_signature_signer_did(&block, &signature)
+        .map_err(anyhow::Error::msg)
+}
+
 #[tokio::test]
 async fn remote_client_signs_conditional_mailbox_dismissal() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
@@ -1027,10 +1037,7 @@ async fn remote_client_signs_conditional_mailbox_dismissal() -> anyhow::Result<(
     let row = &created["data"]["add_MailboxItem"][0];
     let doc_id = row["_docID"].as_str().unwrap();
     let initial_cid = row["_version"][0]["cid"].as_str().unwrap();
-    assert_eq!(
-        node.verified_block_signer_did(initial_cid).await?,
-        actor.did()
-    );
+    assert_eq!(signer_as_actor(&node, actor.did(), initial_cid).await?, actor.did());
     let dismissed = dismiss_mailbox_item_on(&access, doc_id).await?;
     assert_eq!(dismissed.status, "dismissed");
     let query = format!(
@@ -1042,7 +1049,7 @@ async fn remote_client_signs_conditional_mailbox_dismissal() -> anyhow::Result<(
         .as_str()
         .unwrap();
     assert_ne!(cid, initial_cid);
-    assert_eq!(node.verified_block_signer_did(cid).await?, actor.did());
+    assert_eq!(signer_as_actor(&node, actor.did(), cid).await?, actor.did());
     assert_eq!(
         dismiss_mailbox_item_on(&access, doc_id).await?.status,
         "dismissed"
