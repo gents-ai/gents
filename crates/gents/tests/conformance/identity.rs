@@ -626,6 +626,7 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
     use crate::lean_vocab_test::{
         lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
     };
+    use anyhow::Context;
     use gents::store::config_client::AgentSelfConfigPermission;
     use gents::NodeIdentity;
 
@@ -657,53 +658,87 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
     };
     let model_agent = executor("general");
     let model_sibling = executor("sibling");
-    let home = tempfile::tempdir()?;
-    let runtime = gents::KeyIdentity::load_or_create(home.path().join("runtime.key"), None)?;
-    let user = gents::KeyIdentity::load_or_create(home.path().join("user.key"), None)?;
-    let agent = gents::store::identity::provision_agent_identity(&runtime)?;
-    let sibling = gents::store::identity::provision_agent_identity(&runtime)?;
-    let _agent_signer = gents::store::identity::resolve_agent_identity(&runtime, &agent)?;
-    let _sibling_signer = gents::store::identity::resolve_agent_identity(&runtime, &sibling)?;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(runtime.did())
-            .with_http(defra_node::HttpConfig::with_listener(listener.into_std()?)?)
-            .build()
-            .await?,
-    );
-    gents::store::schema::ensure_runtime_schemas(&node).await?;
-    let user_access = gents::ConfigAccess::local_as(node.clone(), Did::new(user.did())?);
-    let (node_doc, agent_doc) = user_access.transact_write("test.self_config.seed", |txn| {
-        let agent = &agent;
-        let runtime = &runtime;
-        Box::pin(async move {
-            let response = txn.execute_with_variables(
-                "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
-                &serde_json::json!({"input": {"node_did": runtime.did()}}),
-            ).await?;
-            let node_doc = gents::store::graphql::created_doc_id(&response, "Node")?;
-            let response = txn.execute_with_variables(
-                "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
-                &serde_json::json!({"input": {"node_did": runtime.did(),
-                    "agent_did": agent.agent_did, "creation_nonce": agent.creation_nonce}}),
-            ).await?;
-            let agent_doc = gents::store::graphql::created_doc_id(&response, "Agent")?;
-            Ok::<_, anyhow::Error>((node_doc, agent_doc))
+    let db = crate::support::test_signed_db("modeled-self-config-native").await;
+    let node = db.node.clone();
+    let runtime = db.node_identity.clone();
+    let user = gents::KeyIdentity::load_or_create(db.data_path().join("household-user.key"), None)?;
+    let agent = gents::store::identity::provision_agent_identity(runtime.as_ref())?;
+    let sibling = gents::store::identity::provision_agent_identity(runtime.as_ref())?;
+    let agent_signer = gents::store::identity::resolve_agent_identity(runtime.as_ref(), &agent)?;
+    let sibling_signer =
+        gents::store::identity::resolve_agent_identity(runtime.as_ref(), &sibling)?;
+    let node_admin = gents::ConfigAccess::local_as(node.clone(), Did::new(runtime.did())?);
+    for actor in [user.did(), agent_signer.did(), sibling_signer.did()] {
+        for permission in [
+            gents::store::config_client::NodePermission::DocumentRead,
+            gents::store::config_client::NodePermission::DocumentUpdate,
+            gents::store::config_client::NodePermission::CollectionGet,
+            gents::store::config_client::NodePermission::DacRelationAdd,
+            gents::store::config_client::NodePermission::DacRelationDelete,
+        ] {
+            node_admin
+                .grant_node_permission(&Did::new(actor)?, permission)
+                .await?;
+        }
+    }
+    let user_access = db.client_access(&user);
+    let agent_access = gents::ConfigAccess::local_managed_agent(
+        node.clone(),
+        Did::new(agent_signer.did())?,
+        agent_signer.as_ref(),
+    )?;
+    let sibling_access = gents::ConfigAccess::local_managed_agent(
+        node.clone(),
+        Did::new(sibling_signer.did())?,
+        sibling_signer.as_ref(),
+    )?;
+    let agent_value = serde_json::json!({
+        "node_did": runtime.did(), "agent_did": agent.agent_did,
+        "creation_nonce": agent.creation_nonce,
+    });
+    let node_value = serde_json::json!({"node_did": runtime.did()});
+    let plan = gents::store::config_client::DesiredStateApplyPlan::new(vec![
+        gents::store::config_client::DesiredStateApplyDocument {
+            collection: gents::Collection::Node,
+            add: node_value.clone(),
+            update: node_value,
+        },
+        gents::store::config_client::DesiredStateApplyDocument {
+            collection: gents::Collection::Agent,
+            add: agent_value.clone(),
+            update: agent_value.clone(),
+        },
+    ])?;
+    let agent_doc = user_access
+        .transact_write("test.self_config.seed", |txn| {
+            let plan = &plan;
+            let runtime = &runtime;
+            let agent = &agent;
+            Box::pin(async move {
+                gents::store::config_client::apply_desired_state_plan(txn, plan).await?;
+                let (agent_doc, _) = gents::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    gents::Collection::Agent,
+                    runtime.did(),
+                    &agent.agent_did,
+                )
+                .await?
+                .context("modeled Agent is unavailable")?;
+                Ok::<_, anyhow::Error>(agent_doc)
+            })
         })
-    }).await?;
-    user_access
-        .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
         .await?;
-    user_access
-        .add_actor_relationship(
-            "Agent",
-            &agent_doc,
-            "executor",
-            &Did::new(&agent.agent_did)?,
-        )
-        .await?;
+    let access_for = |did: &str| -> anyhow::Result<gents::ConfigAccess> {
+        if did == user.did() {
+            Ok(user_access.clone())
+        } else if did == agent_signer.did() {
+            Ok(agent_access.clone())
+        } else if did == sibling_signer.did() {
+            Ok(sibling_access.clone())
+        } else {
+            anyhow::bail!("unknown native household actor {did}")
+        }
+    };
     let actor = |modeled: &str| -> anyhow::Result<Did> {
         let did = if modeled == model_user {
             user.did()
@@ -731,9 +766,7 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
             (true, true, false, _) => continue,
             _ => anyhow::bail!("unrepresentable modeled lookup case {}", observation.name),
         };
-        let access = gents::ConfigAccess::Graphql(
-            gents::store::config_client::GraphqlEndpoint::as_principal(endpoint.clone(), caller),
-        );
+        let access = access_for(caller)?;
         let outcome = match access
             .set_agent_self_config_permission(
                 runtime.did(),
@@ -781,12 +814,7 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
                 expected,
                 ..
             } => {
-                let access = gents::ConfigAccess::Graphql(
-                    gents::store::config_client::GraphqlEndpoint::as_principal(
-                        endpoint.clone(),
-                        actor(modeled)?.to_string(),
-                    ),
-                );
+                let access = access_for(actor(modeled)?.as_str())?;
                 let permission = if matches!(action, LeanIdentityAction::GrantAs { .. }) {
                     AgentSelfConfigPermission::Grant
                 } else {
@@ -813,23 +841,38 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
                     )
                     .await?;
                 assert_eq!(allowed, *expected, "modeled {action:?}");
-                let access = gents::ConfigAccess::Graphql(
-                    gents::store::config_client::GraphqlEndpoint::as_principal(
-                        endpoint.clone(),
-                        actor(modeled)?.to_string(),
-                    ),
-                );
-                let response = access.write("test.self_config.update", &format!(
-                    "mutation {{ update_Agent(docID: \"{}\", input: {{description: \"configured\"}}) {{ _docID }} }}",
-                    gents_protocol::graphql::escape_graphql_string(&agent_doc),
-                )).await;
-                let changed = response
-                    .as_ref()
-                    .ok()
-                    .and_then(|value| value.pointer("/data/update_Agent"))
-                    .is_some_and(|rows| {
-                        rows.as_array().is_some_and(|rows| !rows.is_empty()) || rows.is_object()
-                    });
+                let access = access_for(actor(modeled)?.as_str())?;
+                let response = if actor(modeled)?.as_str() == user.did() {
+                    let mut updated = agent_value.clone();
+                    updated["description"] = serde_json::json!("configured");
+                    let plan = gents::store::config_client::DesiredStateApplyPlan::new(vec![
+                        gents::store::config_client::DesiredStateApplyDocument {
+                            collection: gents::Collection::Agent,
+                            add: agent_value.clone(),
+                            update: updated,
+                        },
+                    ])?;
+                    access
+                        .transact_write("test.self_config.update", |txn| {
+                            let plan = &plan;
+                            Box::pin(async move {
+                                gents::store::config_client::apply_desired_state_plan(txn, plan)
+                                    .await
+                            })
+                        })
+                        .await
+                        .map(|_| true)
+                } else {
+                    access.write("test.self_config.update", &format!(
+                        "mutation {{ update_Agent(docID: \"{}\", input: {{description: \"configured\"}}) {{ _docID }} }}",
+                        gents_protocol::graphql::escape_graphql_string(&agent_doc),
+                    )).await.map(|value| {
+                        value.pointer("/data/update_Agent").is_some_and(|rows| {
+                            rows.as_array().is_some_and(|rows| !rows.is_empty()) || rows.is_object()
+                        })
+                    }).map_err(anyhow::Error::from)
+                };
+                let changed = response.as_ref().is_ok_and(|changed| *changed);
                 assert_eq!(changed, *expected, "modeled {action:?}: {response:?}");
             }
             _ => anyhow::bail!("unexpected self-config action {action:?}"),
