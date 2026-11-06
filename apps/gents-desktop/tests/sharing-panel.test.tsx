@@ -10,7 +10,6 @@ import {
   type JoinRequestView,
 } from "@source-inc/gents-desktop-client";
 
-import { resetJoins } from "../src/ui/lib/joinInvite";
 import { parseRoute, pathFor } from "../src/ui/lib/router";
 import { resetPreferences } from "../src/ui/preferences";
 import { AgentScreen } from "../src/ui/screens/agent/AgentScreen";
@@ -166,24 +165,20 @@ function show({
 
 afterEach(() => {
   cleanup();
-  resetJoins();
   resetSharingTab();
   resetPreferences();
   localStorage.clear();
 });
 
 describe("the Sharing page", () => {
-  it("heads the section with its name, what it is for and the ways in", async () => {
+  it("heads the section with its name and what it is for", async () => {
     show();
     const header = (await screen.findByRole("heading", { name: "Sharing" }))
-      .parentElement!.parentElement!;
+      .parentElement!;
     expect(header.textContent).toContain(
       "Who can use Local Agent, and how they got in.",
     );
-    expect(
-      within(header).getByRole("button", { name: "Join with an invite…" }),
-    ).toBeTruthy();
-    expect(within(header).queryByRole("button", { name: "Invite…" })).toBeNull();
+    expect(within(header).queryByRole("button")).toBeNull();
   });
 
   it("lists who is waiting, by shortened DID, with the profile and the times", async () => {
@@ -202,9 +197,7 @@ describe("the Sharing page", () => {
     expect(within(row).getByRole("combobox", { name: /lasts$/ }).textContent).toContain(
       "30 days",
     );
-    expect(
-      screen.getByText("Invites need a newer runtime on Local Agent."),
-    ).toBeTruthy();
+    expect(screen.queryByText(/newer runtime/)).toBeNull();
     expect(
       within(screen.getByRole("tablist"))
         .getAllByRole("tab")
@@ -218,9 +211,7 @@ describe("the Sharing page", () => {
       await screen.findByRole("region", { name: "Requests to join" }),
     ).toBeTruthy();
     expect(
-      screen.getByText(
-        "Access, invites and history need a newer runtime on Local Agent.",
-      ),
+      screen.getByText("Access and history need a newer runtime on Local Agent."),
     ).toBeTruthy();
     expect(screen.queryByRole("tablist")).toBeNull();
   });
@@ -310,14 +301,11 @@ describe("the Sharing page", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("conflicted");
   });
 
-  it("says so in one place when nothing is shared, with the way to join", async () => {
+  it("says so in one place when nothing is shared", async () => {
     show({ requests: [] });
     const empty = await screen.findByTestId("sharing-empty");
     expect(empty.textContent).toContain("Nothing is shared yet.");
-    expect(
-      within(empty).getByRole("button", { name: "Join with an invite" }),
-    ).toBeTruthy();
-    expect(within(empty).queryByRole("button", { name: "Invite someone" })).toBeNull();
+    expect(within(empty).queryByRole("button")).toBeNull();
     expect(screen.queryByRole("region", { name: "Requests to join" })).toBeNull();
     expect(screen.queryByRole("tablist")).toBeNull();
   });

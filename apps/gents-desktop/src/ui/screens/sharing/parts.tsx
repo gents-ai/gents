@@ -26,7 +26,6 @@ import {
 import {
   DEFAULT_LEASE_SECONDS,
   MAX_LEASE_SECONDS,
-  type InviteKind,
   type ShareScope,
   type SharingParty,
 } from "../../../hooks/sharing";
@@ -34,8 +33,7 @@ import { useCopied } from "@/lib/clipboard";
 
 export const DAY_SECONDS = 24 * 60 * 60;
 
-/** how long an approval or a renewal lasts, up to the longest the runtime
-    accepts */
+/** how long an approval lasts, up to the longest the runtime accepts */
 export const LEASES = [
   7 * DAY_SECONDS,
   DEFAULT_LEASE_SECONDS,
@@ -52,24 +50,13 @@ export const shortDid = (did: string) =>
 /** a party as lists name it: by the name its node goes by here, else its DID */
 export const partyName = (party: SharingParty) => party.name ?? shortDid(party.did);
 
+/* the runtime grants only the whole node; each narrower scope names itself
+   here when it grants one */
 /** what a share covers, in a few words */
-export function scopeText(scope: ShareScope): string {
-  if (scope.kind === "node") return "Whole node";
-  if (scope.kind === "pack") return `${scope.name} pack`;
-  if (scope.kind === "session") return `Session “${scope.name}”`;
-  return `${scope.name} agent`;
-}
+export const scopeText = (_scope: ShareScope): string => "Whole node";
 
 /** what a share covers, inside a sentence */
-export const scopeInSentence = (scope: ShareScope) =>
-  scope.kind === "node"
-    ? "the whole node"
-    : scope.kind === "session"
-      ? `the session “${scope.name}”`
-      : `the ${scopeText(scope)}`;
-
-export const kindText = (kind: InviteKind) =>
-  kind === "device" ? "Your device" : "A person";
+export const scopeInSentence = (_scope: ShareScope): string => "the whole node";
 
 export const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);

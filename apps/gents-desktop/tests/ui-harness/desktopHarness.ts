@@ -1,3 +1,9 @@
+import type { SharingAdapter } from "../../src/hooks/sharing";
+import {
+  createHarnessSharing,
+  isSharingScenario,
+  type SharingScenario,
+} from "./sharingHarness";
 import type {
   ChatSendRequest,
   ChatSendResult,
@@ -39,7 +45,6 @@ import type {
   Node,
   Agent,
   AgentView,
-  InstalledPack,
   SessionSummary,
   SessionProvenance,
   TriggerView,
@@ -52,13 +57,6 @@ import type { Task } from "@source-inc/gents-desktop-client/generated/Task";
 import type { Trigger } from "@source-inc/gents-desktop-client/generated/Trigger";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client/generated/RenderedTimelineItem";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client/generated/RenderedToolCallView";
-import type { SharingAdapter } from "../../src/hooks/sharing";
-import {
-  createHarnessSharing,
-  harnessInstalledPacks,
-  isSharingScenario,
-  type SharingScenario,
-} from "./sharingHarness";
 
 const NODE_DID = "did:key:z6MkBombadilAgent";
 const DEFAULT_AGENT_DID = "default";
@@ -1945,10 +1943,6 @@ export function createDesktopUiHarness(
   }
 
   let allowedFolders: AllowedFolder[] = [];
-  /* the sharing scenarios have a pack to share, or one to install */
-  let installedPacks: InstalledPack[] = isSharingScenario(scenario)
-    ? harnessInstalledPacks(scenario)
-    : [];
   const attachmentPayloads = new Map<string, RequestAttachment[]>();
   const adapter: DesktopApiAdapter = {
     readAttachment: async () => {
@@ -2063,7 +2057,7 @@ export function createDesktopUiHarness(
       return snapshot();
     },
     async listInstalledPacks() {
-      return { packs: clone(installedPacks) };
+      return { packs: [] };
     },
     async listPackPluginSlots() {
       return { plugins: [], profiles: [] };
@@ -2080,17 +2074,6 @@ export function createDesktopUiHarness(
     },
     async installPack(request) {
       const [pack, version] = request.package.split("@");
-      if (!request.preview && version)
-        installedPacks = [
-          ...installedPacks.filter((p) => p.pack !== pack),
-          {
-            pack: pack!,
-            installed: version,
-            latest: version,
-            outdated: false,
-            error: null,
-          },
-        ];
       return {
         pack: pack!,
         coordinate: pack!,

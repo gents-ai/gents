@@ -12,7 +12,7 @@ import {
 } from "@gents/ui/components/dialog";
 import { DEFAULT_LEASE_SECONDS, type JoinRequest } from "../../../hooks/sharing";
 import { useSharingActions } from "@/hooks/useSharing";
-import { SHARING_SECTION } from "@/lib/joinInvite";
+import { SHARING_SECTION } from "@/lib/sharingSection";
 import { navigate } from "@/lib/router";
 import { fullTime } from "../TranscriptMarker";
 import { CopyButton, errorMessage, LeaseSelect, partyName, shortDid } from "./parts";
@@ -159,7 +159,6 @@ export function JoinRequestDialog() {
               label={`Access for ${partyName(request.from)} lasts`}
               disabled={busy !== null || gone}
             />
-            {request.inviteId ? "· with an invite you made" : "· no invite"}
           </span>
         </div>
 
@@ -222,25 +221,11 @@ export function JoinRequestDialog() {
   );
 }
 
-/* what approving would let them do, in words */
-function ableTo(request: JoinRequest, nodeName: string) {
-  const { scope } = request;
-  if (scope.kind === "node")
-    return `Use all of ${nodeName}: its agents, settings and sessions, and send requests to any agent.`;
-  if (scope.kind === "pack")
-    return `Use the ${scope.name} pack on ${nodeName}, and nothing else.`;
-  if (scope.kind === "session")
-    return `Read the session “${scope.name}” on ${nodeName}${request.profile.id === "reply" ? ", reply and answer its questions" : ""}, and nothing else.`;
-  return `Start sessions with the ${scope.name} agent on ${nodeName}, and nothing else.`;
-}
+/* what approving would let them do, in words: the runtime grants only the
+   whole node */
+const ableTo = (_request: JoinRequest, nodeName: string) =>
+  `Use all of ${nodeName}: its agents, settings and sessions, and send requests to any agent.`;
 
 /* what of this node they'd see */
-function seeing(request: JoinRequest, nodeName: string) {
-  const { scope } = request;
-  if (scope.kind === "node")
-    return `Everything on ${nodeName}, including every session.`;
-  if (scope.kind === "pack")
-    return `The ${scope.name} pack's data, and nothing else of ${nodeName}.`;
-  if (scope.kind === "session") return `That session, and nothing else of ${nodeName}.`;
-  return `The sessions they start with the ${scope.name} agent.`;
-}
+const seeing = (_request: JoinRequest, nodeName: string) =>
+  `Everything on ${nodeName}, including every session.`;

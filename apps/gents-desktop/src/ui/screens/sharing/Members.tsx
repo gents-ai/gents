@@ -4,10 +4,9 @@ import { Button } from "@gents/ui/components/button";
 import {
   DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuSeparator,
 } from "@gents/ui/components/dropdown-menu";
 import { cn } from "@gents/ui/lib/utils";
-import { DEFAULT_LEASE_SECONDS, type SharingMember } from "../../../hooks/sharing";
+import type { SharingMember } from "../../../hooks/sharing";
 import { useSharingActions } from "@/hooks/useSharing";
 import { fullTime } from "../TranscriptMarker";
 import { span, useMinute } from "../time";
@@ -16,7 +15,6 @@ import {
   DAY_SECONDS,
   errorMessage,
   ItemRow,
-  LeaseSelect,
   MoreMenu,
   Party,
   partyName,
@@ -29,8 +27,7 @@ import {
 const SOON_MS = 7 * DAY_SECONDS * 1000;
 
 /** One grant someone holds: who, what it covers, with which profile and
-    until when. Renewing, where the runtime can, restarts the lease from now;
-    revoking asks here first, then ends the grant at once. */
+    until when. Revoking asks here first, then ends the grant at once. */
 export function MemberRow({
   nodeDid,
   member,
@@ -39,8 +36,7 @@ export function MemberRow({
   member: SharingMember;
 }) {
   const sharing = useSharingActions();
-  const [asking, setAsking] = useState<"renew" | "revoke" | null>(null);
-  const [lease, setLease] = useState(String(DEFAULT_LEASE_SECONDS));
+  const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { party, scope, profile } = member;
@@ -48,16 +44,13 @@ export function MemberRow({
   const thisApp = useThisAppDid() === party.did;
   const who = thisApp ? "This app" : partyName(party);
   const what = scopeText(scope);
-  const renewable = sharing.renew && member.leaseExpiresAt !== null;
 
-  async function run(kind: "renew" | "revoke") {
+  async function revoke() {
     setBusy(true);
     setError(null);
     try {
-      if (kind === "renew")
-        await sharing.renew?.(nodeDid, member.requestId, Number(lease));
-      else await sharing.revoke(nodeDid, member.requestId);
-      setAsking(null);
+      await sharing.revoke(nodeDid, member.requestId);
+      setAsking(false);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -100,24 +93,11 @@ export function MemberRow({
         </>
       }
       actions={
-        asking === null &&
+        !asking &&
         !thisApp && (
           <MoreMenu label={`More for ${who}: ${what}`}>
-            {renewable && (
-              <>
-                <DropdownMenuGroup>
-                  <DropdownMenuItem onClick={() => setAsking("renew")}>
-                    Renew…
-                  </DropdownMenuItem>
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-              </>
-            )}
             <DropdownMenuGroup>
-              <DropdownMenuItem
-                variant="destructive"
-                onClick={() => setAsking("revoke")}
-              >
+              <DropdownMenuItem variant="destructive" onClick={() => setAsking(true)}>
                 Revoke…
               </DropdownMenuItem>
             </DropdownMenuGroup>
@@ -125,35 +105,13 @@ export function MemberRow({
         )
       }
       below={
-        asking === "renew" ? (
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="text-muted-foreground">Renew for</span>
-            <LeaseSelect
-              value={lease}
-              onChange={setLease}
-              label={`Renew ${who}'s access for`}
-              disabled={busy}
-            />
-            <span className="text-muted-foreground">from now</span>
-            <Button size="sm" disabled={busy} onClick={() => void run("renew")}>
-              {busy ? "Renewing…" : "Renew"}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={busy}
-              onClick={() => setAsking(null)}
-            >
-              Cancel
-            </Button>
-          </div>
-        ) : asking === "revoke" ? (
+        asking ? (
           <RevokeAsk
             who={who}
             what={scopeInSentence(scope)}
             busy={busy}
-            onRevoke={() => void run("revoke")}
-            onKeep={() => setAsking(null)}
+            onRevoke={() => void revoke()}
+            onKeep={() => setAsking(false)}
           />
         ) : null
       }

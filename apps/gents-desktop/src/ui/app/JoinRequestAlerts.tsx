@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useHomeDid } from "@/hooks/useClient";
 import { useFleet } from "@/hooks/useFleet";
 import { useSharingActions } from "@/hooks/useSharing";
-import { SHARING_SECTION } from "@/lib/joinInvite";
+import { SHARING_SECTION } from "@/lib/sharingSection";
 import { navigate, type Route } from "@/lib/router";
 import { useFlag } from "@/preferences";
 import type { JoinRequest } from "../../hooks/sharing";
@@ -155,7 +155,7 @@ function JoinRequestNotice({
         </p>
         <p className="truncate text-xs text-muted-foreground" title={request.from.did}>
           {error ??
-            `${shortDid(request.from.did)} · ${request.inviteId ? "your invite" : "no invite"} · wants ${scopeInSentence(request.scope)}`}
+            `${shortDid(request.from.did)} · wants ${scopeInSentence(request.scope)}`}
         </p>
       </div>
       <Button

@@ -22,7 +22,7 @@ import { useContributions } from "@/contrib/react/use-contributions";
 import { AGENT_SECTIONS_AREA, type AgentSectionData } from "@/contrib/types";
 import type { FlagId } from "@/lib/flags";
 import { isOn, usePreferences } from "@/preferences";
-import { SHARING_SECTION } from "@/lib/joinInvite";
+import { SHARING_SECTION } from "@/lib/sharingSection";
 import { AgentPanel } from "./AgentPanel";
 import { AllowedFoldersPanel } from "./AllowedFoldersPanel";
 import { AgentsPanel } from "./BehaviorsPanel";
