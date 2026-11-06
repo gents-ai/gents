@@ -47,6 +47,13 @@ def wireTargetCasesJson : String := jsonArray (
       ",\"remove\":" ++ toString remove ++ ",\"allowed\":" ++
       toString (Configuration.wireTargetAllowed localTarget preview remove) ++ "}")
 
+def operatorWireCasesJson : String := jsonArray (
+  [false, true].flatMap fun operator => [false, true].flatMap fun ready =>
+    [false, true].map fun home =>
+      "{\"operator\":" ++ toString operator ++ ",\"ready\":" ++ toString ready ++
+      ",\"home\":" ++ toString home ++ ",\"allowed\":" ++
+      toString (Configuration.operatorWireAvailable operator ready home) ++ "}")
+
 def casesJson : String := jsonArray [
   caseJson "plugin_references.empty" [[]] [] [] [],
   caseJson "plugin_references.missing" [["acme/search"]] [] [] [],
