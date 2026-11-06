@@ -2098,27 +2098,44 @@ fn preset_tools_document(
     }))
 }
 
+async fn publish_test_root(
+    node: &std::sync::Arc<defra_node::Node>,
+    runtime: &ToolRuntimeContext,
+    root: &str,
+) -> (crate::ConfigAccess, String) {
+    let access = crate::ConfigAccess::local_as(node.clone(), runtime.node_did.parse().unwrap());
+    let response = access.write("test.workspace.root", &format!(
+        r#"mutation {{ create_WorkspaceRoot(input: {{node_did:"{}", root_path:"{}", enabled:true}}) {{_docID}} }}"#,
+        crate::store::graphql::escape_graphql_string(&runtime.node_did),
+        crate::store::graphql::escape_graphql_string(root),
+    )).await.unwrap();
+    let doc = crate::store::graphql::created_doc_id(&response, "WorkspaceRoot").unwrap();
+    let agent = runtime.agent_identity.as_ref().unwrap();
+    access
+        .add_actor_relationship(
+            "WorkspaceRoot",
+            &doc,
+            "reader",
+            &agent.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+    (access, doc)
+}
+
 #[tokio::test]
 async fn tool_construction_rechecks_current_workspace_root_policy() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (node, runtime) = selected_surface_runtime().await;
     let ceiling = tempfile::tempdir().unwrap();
     let selected = ceiling.path().join("selected");
     std::fs::create_dir_all(&selected).unwrap();
     let selected_text = selected.to_string_lossy().into_owned();
-    let node_did = node.node_identity_did().unwrap().to_owned();
-    crate::upsert_node(&node, &node_did, None, None, true, None)
-        .await
-        .unwrap();
-    let access = crate::ConfigAccess::local_as(node.clone(), node_did.parse().unwrap());
-    set_workspace_root(&access, &node_did, &selected_text, None, true)
-        .await
-        .unwrap();
-
+    let (access, root_doc) = publish_test_root(&node, &runtime, &selected_text).await;
+    let agent = runtime.agent_identity.as_ref().unwrap();
     let mut document = preset_tools_document("runtime-root", "ReadOnly", "Off", false, false);
     document.host.as_mut().unwrap().root = Some(selected_text.clone());
     let config = AgentToolSurfaceConfig::from_tools_document(
-        "runtime-root",
+        agent.did(),
         &document,
         &ToolCeiling::readonly_at(ceiling.path()),
         Vec::new(),
@@ -2128,15 +2145,35 @@ async fn tool_construction_rechecks_current_workspace_root_policy() {
         .resolve(&node, "did:test:test", &Default::default())
         .await
         .unwrap();
-    let runtime = agent_tool_runtime(node.clone());
     surface
         .build_tools(&runtime)
         .await
         .expect("enabled published root admits tool construction");
 
-    set_workspace_root(&access, &node_did, &selected_text, None, false)
+    let agent_did = agent.did().parse().unwrap();
+    access
+        .delete_actor_relationship("WorkspaceRoot", &root_doc, "reader", &agent_did)
         .await
         .unwrap();
+    assert!(
+        surface.build_tools(&runtime).await.is_err(),
+        "Agent reader revocation must deny tool construction"
+    );
+    access
+        .add_actor_relationship("WorkspaceRoot", &root_doc, "reader", &agent_did)
+        .await
+        .unwrap();
+    let disabled = access.write("test.workspace.disable", &format!(
+        r#"mutation {{ update_WorkspaceRoot(docID: "{}", input: {{enabled:false}}) {{_docID}} }}"#,
+        crate::store::graphql::escape_graphql_string(&root_doc),
+    )).await.unwrap();
+    assert_eq!(
+        crate::store::graphql::mutation_documents(&disabled, "update_WorkspaceRoot")
+            .unwrap()
+            .unwrap()
+            .len(),
+        1
+    );
     let error = match surface.build_tools(&runtime).await {
         Ok(_) => panic!("fresh tool construction must observe root revocation"),
         Err(error) => error,
@@ -2149,23 +2186,10 @@ async fn tool_construction_rechecks_current_workspace_root_policy() {
 
 #[tokio::test]
 async fn normal_load_rejects_active_blank_root_under_explicit_policy_without_ceiling() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let (node, runtime) = selected_surface_runtime().await;
     let allowed = tempfile::tempdir().unwrap();
-    let node_did = node.node_identity_did().unwrap().to_owned();
-    crate::upsert_node(&node, &node_did, None, None, true, None)
-        .await
-        .unwrap();
-    let access = crate::ConfigAccess::local_as(node.clone(), node_did.parse().unwrap());
-    set_workspace_root(
-        &access,
-        &node_did,
-        &allowed.path().to_string_lossy(),
-        None,
-        true,
-    )
-    .await
-    .unwrap();
+    publish_test_root(&node, &runtime, &allowed.path().to_string_lossy()).await;
+    let agent = runtime.agent_identity.as_ref().unwrap();
 
     let document = preset_tools_document("legacy-blank-root", "ReadOnly", "Off", false, false);
     assert!(document
@@ -2174,7 +2198,7 @@ async fn normal_load_rejects_active_blank_root_under_explicit_policy_without_cei
         .and_then(|host| host.root.as_ref())
         .is_none());
     let config = AgentToolSurfaceConfig::from_tools_document(
-        "legacy-blank-root",
+        agent.did(),
         &document,
         &ToolCeiling::readonly(),
         Vec::new(),
@@ -2184,7 +2208,7 @@ async fn normal_load_rejects_active_blank_root_under_explicit_policy_without_cei
         .resolve(&node, "did:test:test", &Default::default())
         .await
         .unwrap();
-    let error = match surface.build_tools(&agent_tool_runtime(node)).await {
+    let error = match surface.build_tools(&runtime).await {
         Ok(_) => panic!("active legacy Tools must not bypass explicit WorkspaceRoot policy"),
         Err(error) => error,
     };

@@ -2103,8 +2103,10 @@ pub(super) mod tests {
             "daemon-workspace-root-recheck-{}",
             uuid::Uuid::new_v4()
         ));
+        let agent_config = test_agent();
         let node = Arc::new(
-            crate::test_support::node_builder()
+            defra_node::Node::builder()
+                .with_node_identity_did(agent_config.node_did())
                 .data_path(&data_path)
                 .build()
                 .await
@@ -2119,7 +2121,8 @@ pub(super) mod tests {
             crate::store::graphql::escape_graphql_string(&selected.to_string_lossy());
         let created = node
             .execute(&format!(
-                r#"mutation {{ create_WorkspaceRoot(input: {{root_path:"{escaped_selected}", enabled:true}}) {{_docID}} }}"#
+                r#"mutation {{ create_WorkspaceRoot(input: {{node_did:"{}", root_path:"{escaped_selected}", enabled:true}}) {{_docID}} }}"#,
+                crate::store::graphql::escape_graphql_string(agent_config.node_did())
             ))
             .await;
         assert!(!created.has_errors(), "{:?}", created.errors);
@@ -2131,7 +2134,17 @@ pub(super) mod tests {
                 .expect("WorkspaceRoot document id")
                 .to_owned();
 
-        let agent_config = test_agent();
+        let root_owner =
+            crate::ConfigAccess::local_as(node.clone(), agent_config.node_did().parse().unwrap());
+        root_owner
+            .add_actor_relationship(
+                "WorkspaceRoot",
+                &workspace_root_doc_id,
+                "reader",
+                &agent_config.agent_did.parse().unwrap(),
+            )
+            .await
+            .unwrap();
         let requester_did = agent_config.node_did().to_string();
         let first = create_routed_request(&node, &agent_config, &requester_did).await;
         let prompt_builder = LayeredPromptBuilder::for_agent(
