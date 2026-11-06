@@ -127,17 +127,31 @@ async fn install(
     config: &PackConfig,
     policy: DriftPolicy,
 ) -> Result<InstallReport> {
+    install_owned(access, OWNER, version, config, policy).await
+}
+
+async fn install_owned(
+    access: &ConfigAccess,
+    owner: &str,
+    version: &str,
+    config: &PackConfig,
+    policy: DriftPolicy,
+) -> Result<InstallReport> {
     let mut pack = identity(version);
     pack.plugins.clear();
-    super::super::install_pack_documents(access, OWNER, &pack, config, policy).await
+    super::super::install_pack_documents(access, owner, &pack, config, policy).await
 }
 
 async fn edit_tools(access: &ConfigAccess, id: &str, name: &str) {
+    edit_tools_owned(access, OWNER, id, name).await;
+}
+
+async fn edit_tools_owned(access: &ConfigAccess, owner: &str, id: &str, name: &str) {
     let edit =
         crate::store::config_client::DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
             collection: Collection::Tools,
-            add: json!({"tools_id": id, "display_name": name, "node_did": OWNER}),
-            update: json!({"tools_id": id, "display_name": name, "node_did": OWNER}),
+            add: json!({"tools_id": id, "display_name": name, "node_did": owner}),
+            update: json!({"tools_id": id, "display_name": name, "node_did": owner}),
         }])
         .unwrap();
     access
@@ -2851,7 +2865,9 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
 #[tokio::test]
 async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_updated_pin() {
     let home = tempfile::tempdir().unwrap();
-    let (node, access) = dependency_fixture().await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
     let manifest = plugin_pack_manifest("pin_fixture", "documents", &["web_search"]);
     let old_bytes = crate::plugin::tests::build_plugin_afb(
         &crate::plugin::tests::constant_output_wat(br#"{"version":1}"#),
@@ -2867,12 +2883,12 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
         "sha256:{}",
         crate::plugin::store::content_digest_hex(&new_bytes)
     );
-    let empty: PackConfig = serde_json::from_value(json!({"node": {"node_did": OWNER}})).unwrap();
+    let empty: PackConfig = serde_json::from_value(json!({"node": {"node_did": owner}})).unwrap();
     let assets = |bytes: Vec<u8>| BTreeMap::from([("plugins/web_search.afb".to_owned(), bytes)]);
     let bindings = crate::pack::PackInferenceBindings::new();
     let initial = super::documents::install_documents_with_plugins(
         &access,
-        OWNER,
+        owner,
         &manifest,
         &format!("sha256:{}", "1".repeat(64)),
         &empty,
@@ -2888,13 +2904,13 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
     .unwrap();
     assert_eq!(initial.1[0].digest, old_digest);
     let external: PackConfig = serde_json::from_value(json!({
-        "node": {"node_did": OWNER},
-        "agents": [{"agent_did": "survivor", "node_did": OWNER, "context_id": "survivor-context", "inference_profile_id": "glm:inference"}],
-        "contexts": [{"context_id": "survivor-context", "node_did": OWNER, "tools_id": "survivor-tools"}],
-        "tools": [{"tools_id": "survivor-tools", "node_did": OWNER,
+        "node": {"node_did": owner},
+        "agents": [{"agent_did": binding.agent_did, "creation_nonce": binding.creation_nonce, "node_did": owner, "context_id": "survivor-context", "inference_profile_id": "profile"}],
+        "contexts": [{"context_id": "survivor-context", "node_did": owner, "tools_id": "survivor-tools"}],
+        "tools": [{"tools_id": "survivor-tools", "node_did": owner,
             "integrations": {"plugins": [{"plugin": "acme/web_search", "digest": old_digest}]}}],
     })).unwrap();
-    install(&access, "1", &external, DriftPolicy::Refuse)
+    install_owned(&access, owner, "1", &external, DriftPolicy::Refuse)
         .await
         .unwrap();
     let before = crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap();
@@ -2918,7 +2934,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
     };
     let rejected = super::documents::install_documents_with_plugins(
         &access,
-        OWNER,
+        owner,
         &manifest,
         &format!("sha256:{}", "2".repeat(64)),
         &empty,
@@ -2932,22 +2948,25 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
     )
     .await
     .unwrap_err();
-    assert!(format!("{rejected:#}").contains("survivor"), "{rejected:#}");
+    assert!(
+        format!("{rejected:#}").contains(&binding.agent_did),
+        "{rejected:#}"
+    );
     assert_eq!(
         crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap(),
         before
     );
     assert_eq!(access.execute("{Agent {agent_did} Tools {tools_id integrations} PackInstallation {coordinate digest}}").await.unwrap(), before_docs);
     let updated: PackConfig = serde_json::from_value(json!({
-        "node": {"node_did": OWNER},
-        "tools": [{"tools_id": "survivor-tools", "node_did": OWNER,
+        "node": {"node_did": owner},
+        "tools": [{"tools_id": "survivor-tools", "node_did": owner,
             "integrations": {"plugins": [{"plugin": "acme/web_search", "digest": new_digest}]}}],
     }))
     .unwrap();
     let updated = super::super::provenance::stamp_pack_origin(&manifest, &updated).unwrap();
     let accepted = super::documents::install_documents_with_plugins(
         &access,
-        OWNER,
+        owner,
         &manifest,
         &format!("sha256:{}", "2".repeat(64)),
         &updated,
@@ -3041,7 +3060,9 @@ async fn cancelling_pack_install_caller_does_not_cancel_owned_commit() {
 async fn dependency_and_root_pin_update_commit_as_one_graph() {
     use super::documents::{install_document_graph, DocumentPackStage};
     let home = tempfile::tempdir().unwrap();
-    let (node, access) = dependency_fixture().await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
     let dependency = plugin_pack_manifest("pin_dependency", "documents", &["web_search"]);
     let root = plugin_pack_manifest("demo", "documents", &[]);
     let old_bytes = crate::plugin::tests::build_plugin_afb(
@@ -3058,13 +3079,13 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         "sha256:{}",
         crate::plugin::store::content_digest_hex(&new_bytes)
     );
-    let empty: PackConfig = serde_json::from_value(json!({"node": {"node_did": OWNER}})).unwrap();
+    let empty: PackConfig = serde_json::from_value(json!({"node": {"node_did": owner}})).unwrap();
     let root_config = |pin: &str| {
         let config = serde_json::from_value::<PackConfig>(json!({
-        "node": {"node_did": OWNER},
-        "agents": [{"agent_did":"graph-agent", "node_did":OWNER,"context_id":"graph-context","inference_profile_id":"glm:inference"}],
-        "contexts": [{"context_id":"graph-context", "node_did":OWNER,"tools_id":"graph-tools"}],
-        "tools": [{"tools_id":"graph-tools", "node_did":OWNER,"integrations":{"plugins":[{"plugin":"acme/web_search","digest":pin}]}}]
+        "node": {"node_did": owner},
+        "agents": [{"agent_did": binding.agent_did, "creation_nonce": binding.creation_nonce, "node_did":owner,"context_id":"graph-context","inference_profile_id":"profile"}],
+        "contexts": [{"context_id":"graph-context", "node_did":owner,"tools_id":"graph-tools"}],
+        "tools": [{"tools_id":"graph-tools", "node_did":owner,"integrations":{"plugins":[{"plugin":"acme/web_search","digest":pin}]}}]
     })).unwrap();
         super::super::provenance::stamp_pack_origin(&root, &config).unwrap()
     };
@@ -3097,7 +3118,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
     ];
     install_document_graph(
         &access,
-        OWNER,
+        owner,
         initial,
         DriftPolicy::Refuse,
         Some(home.path()),
@@ -3118,7 +3139,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
     ];
     install_document_graph(
         &access,
-        OWNER,
+        owner,
         replacement,
         DriftPolicy::Refuse,
         Some(home.path()),
@@ -3500,7 +3521,9 @@ async fn dependency_schema_is_published_before_root_schema_rejection() {
 #[tokio::test]
 async fn definitive_document_drift_rejection_restores_previously_pinned_plugin() {
     let home = tempfile::tempdir().unwrap();
-    let (node, access) = dependency_fixture().await;
+    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
+    let owner = crate::NodeIdentity::did(&runtime);
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
     let manifest = plugin_pack_manifest("drift_fixture", "documents", &["web_search"]);
     let old_bytes = crate::plugin::tests::build_plugin_afb(
         &crate::plugin::tests::constant_output_wat(br#"{"v":1}"#),
@@ -3513,17 +3536,17 @@ async fn definitive_document_drift_rejection_restores_previously_pinned_plugin()
         crate::plugin::store::content_digest_hex(&old_bytes)
     );
     let config: PackConfig = serde_json::from_value(json!({
-        "node": {"node_did": OWNER},
-        "agents": [{"agent_did":"drift-agent", "node_did":OWNER,"context_id":"drift-context","inference_profile_id":"glm:inference"}],
-        "contexts": [{"context_id":"drift-context", "node_did":OWNER,"tools_id":"drift-tools"}],
-        "tools": [{"tools_id":"drift-tools", "node_did":OWNER,"display_name":"original",
+        "node": {"node_did": owner},
+        "agents": [{"agent_did": binding.agent_did, "creation_nonce": binding.creation_nonce, "node_did":owner,"context_id":"drift-context","inference_profile_id":"profile"}],
+        "contexts": [{"context_id":"drift-context", "node_did":owner,"tools_id":"drift-tools"}],
+        "tools": [{"tools_id":"drift-tools", "node_did":owner,"display_name":"original",
             "integrations":{"plugins":[{"plugin":"acme/web_search","digest":pin}]}}]
     })).unwrap();
     let assets = |bytes| BTreeMap::from([("plugins/web_search.afb".to_owned(), bytes)]);
     let bindings = crate::pack::PackInferenceBindings::new();
     super::documents::install_documents_with_plugins(
         &access,
-        OWNER,
+        owner,
         &manifest,
         &format!("sha256:{}", "1".repeat(64)),
         &config,
@@ -3537,12 +3560,12 @@ async fn definitive_document_drift_rejection_restores_previously_pinned_plugin()
     )
     .await
     .unwrap();
-    edit_tools(&access, "drift-tools", "operator edit").await;
+    edit_tools_owned(&access, owner, "drift-tools", "operator edit").await;
     let before = crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap();
     let docs = access.execute("{Tools(filter: {tools_id: {_eq: \"drift-tools\"}}) {display_name integrations} PackInstallation {coordinate digest}}").await.unwrap();
     let error = super::documents::install_documents_with_plugins(
         &access,
-        OWNER,
+        owner,
         &manifest,
         &format!("sha256:{}", "2".repeat(64)),
         &config,
