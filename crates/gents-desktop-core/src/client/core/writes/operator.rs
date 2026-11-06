@@ -259,7 +259,7 @@ impl ClientCore {
         let endpoint = self
             .operator_graphql(node_did)
             .context("Connect this runtime before creating an agent.")?;
-        crate::agent_identity::provision(&endpoint, node_did).await
+        Ok(crate::agent_identity::provision(&endpoint, node_did).await?)
     }
 
     pub fn local_home_operator_access(

@@ -25,7 +25,9 @@ pub use macos::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
 };
-pub use provision_client::provision as provision_agent_identity_remote;
+pub use provision_client::{
+    provision as provision_agent_identity_remote, RemoteAgentProvisionError,
+};
 use registered::raw_identity_from_signing_config;
 pub use registered::RegisteredIdentity;
 
