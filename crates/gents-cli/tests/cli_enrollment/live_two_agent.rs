@@ -108,6 +108,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
             agent.display_name = Some("live second agent".into());
             core.save_agent(&agent).await?;
             let access = core.operator_access(&node_did)?;
+            grant_configured_workspace_root_readers(&access, &graphql, &init, &owner_home, &[&second]).await?;
             let user_did = core.node_identity().did().to_owned();
             assert_ne!(user_did, node_did);
             let mut requests = Vec::new();

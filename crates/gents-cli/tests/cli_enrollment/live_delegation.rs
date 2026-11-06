@@ -124,6 +124,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             agent.display_name = Some(label.into());
             core.save_agent(&agent).await?;
         }
+        grant_configured_workspace_root_readers(&access, &graphql, &init, &owner_home, &[&a, &b]).await?;
         let target = gents::documents::AgentTargetDocument {
             target_id: "live-delegation-child".into(), node_did: node_did.clone(),
             target_node_did: node_did.clone(), agent_did: b.agent_did.clone(),

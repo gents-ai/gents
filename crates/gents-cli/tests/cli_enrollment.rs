@@ -37,6 +37,88 @@ fn enrollment_e2e_lock() -> &'static Mutex<()> {
     ENROLLMENT_E2E_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+async fn grant_configured_workspace_root_readers(
+    access: &gents::ConfigAccess,
+    graphql: &str,
+    init: &Value,
+    owner_home: &std::path::Path,
+    bindings: &[&gents_protocol::agent_identity::AgentIdentityBinding],
+) -> Result<()> {
+    let node_did = node_did_from_init(init)?;
+    let authored_root = init["tool_root"]
+        .as_str()
+        .context("init has no configured host root")?;
+    let root =
+        gents::tools::surface::resolve_configured_tool_root(std::path::Path::new(authored_root))?;
+    let root = root.to_str().context("configured host root is not UTF-8")?;
+    let bootstrap_user = gents_desktop_core::client::PrincipalIdentity::load_existing(
+        &DesktopPaths::from_root(owner_home.join("cli")),
+    )?;
+    anyhow::ensure!(
+        bootstrap_user.did() != node_did,
+        "workspace root creator must be a distinct User"
+    );
+    let owner_access = gents::ConfigAccess::Graphql(
+        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, bootstrap_user.did())
+            .with_client_signing_capability(gents::NodeIdentity::client_signing_capability(
+            &bootstrap_user,
+        )?)?,
+    );
+    let query = format!(
+        "{{ WorkspaceRoot(filter: {{node_did: {{_eq: \"{}\"}}, root_path: {{_eq: \"{}\"}}}}) {{_docID node_did root_path enabled}} }}",
+        escape_graphql_string(&node_did), escape_graphql_string(root),
+    );
+    let roots = owner_access.execute(&query).await?;
+    let rows = roots["data"]["WorkspaceRoot"]
+        .as_array()
+        .context("User cannot observe configured WorkspaceRoot")?;
+    let [row] = rows.as_slice() else {
+        bail!("configured WorkspaceRoot is unavailable or ambiguous: {roots}")
+    };
+    anyhow::ensure!(
+        row["enabled"] == true,
+        "configured WorkspaceRoot is disabled"
+    );
+    let doc = row["_docID"]
+        .as_str()
+        .context("WorkspaceRoot has no physical ID")?
+        .to_owned();
+    let owners = owner_access
+        .transact_readonly("test.live_workspace_root_owner", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                txn.document_owners("WorkspaceRoot", std::slice::from_ref(doc))
+                    .await
+                    .map_err(anyhow::Error::from)
+            })
+        })
+        .await?;
+    anyhow::ensure!(
+        owners.len() == 1
+            && owners[0].owner.as_ref().map(|did| did.as_str()) == Some(bootstrap_user.did()),
+        "WorkspaceRoot was not authored by the bootstrap User"
+    );
+    let runtime = identity_from_init(init)?;
+    for binding in bindings {
+        gents::tools::surface::grant_workspace_root_reader(access, root, &binding.agent_did)
+            .await?;
+        let agent = gents::store::identity::resolve_agent_identity(&runtime, binding)?;
+        let reader = gents::ConfigAccess::Graphql(
+            gents::store::config_client::GraphqlEndpoint::as_principal(graphql, &binding.agent_did)
+                .with_client_signing_capability(agent.client_signing_capability()?)?,
+        );
+        let visible = reader.execute(&query).await?;
+        let rows = visible["data"]["WorkspaceRoot"]
+            .as_array()
+            .context("selected Agent cannot read WorkspaceRoot")?;
+        anyhow::ensure!(
+            rows.len() == 1 && rows[0]["_docID"] == doc,
+            "root reader grant did not select the expected document: {visible}"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> Result<()> {
     let _guard = enrollment_e2e_lock().lock().await;
