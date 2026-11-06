@@ -226,6 +226,31 @@ pub async fn load_workspace_root_policy(
     ))
 }
 
+/// Read-only startup check that the configured host tool root (the process
+/// ceiling) is covered by a WorkspaceRoot published for this Node. A mismatch
+/// is reported with the operator's fix; nothing is written here.
+pub async fn ensure_configured_root_published(
+    node: &defra_node::Node,
+    configured_root: &Path,
+) -> Result<()> {
+    let policy = load_workspace_root_policy(node, Some(configured_root)).await?;
+    configured_root_coverage(&policy, configured_root)
+}
+
+pub(crate) fn configured_root_coverage(
+    policy: &WorkspaceRootPolicy,
+    configured_root: &Path,
+) -> Result<()> {
+    match policy.admit(configured_root)? {
+        RootAdmission::Admitted(_) => Ok(()),
+        denied @ RootAdmission::Denied { .. } => anyhow::bail!(
+            "configured host tool root {} is not published as a WorkspaceRoot for this Node ({}). Choose this folder in the desktop app while the Node is running, or publish it with `gents config workspace-root set --graphql <url> --node-did <node-did> --path <folder> --reader-agent <engineer-agent-did>`, then start the server again.",
+            configured_root.display(),
+            denied.denial_reason().expect("denied outcome has a reason")
+        ),
+    }
+}
+
 pub fn admit_authored_root(
     policy: &WorkspaceRootPolicy,
     authored_root: &str,
@@ -949,5 +974,44 @@ mod tests {
         let d_volume = PathBuf::from(r"D:\workspace\root");
         assert!(!d_volume.starts_with(&c_volume));
         assert!(!c_volume.starts_with(&d_volume));
+    }
+
+    #[test]
+    fn configured_tool_root_must_be_covered_by_a_published_root() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let published = directory.path().join("published");
+        let other = directory.path().join("other");
+        std::fs::create_dir_all(published.join("nested"))?;
+        std::fs::create_dir_all(&other)?;
+        let policy_for = |root: &Path, ceiling: &Path| {
+            project_workspace_root_policy(
+                vec![WorkspaceRootDocument {
+                    root_path: Some(root.to_string_lossy().into_owned()),
+                    enabled: Some(true),
+                }],
+                Some(ceiling),
+            )
+        };
+        let nested = published.join("nested");
+
+        configured_root_coverage(&policy_for(&published, &published), &published)?;
+        configured_root_coverage(&policy_for(&nested, &nested), &nested)?;
+        // A broader grant does not admit a narrower ceiling at execution, so
+        // the startup check refuses the same configuration.
+        assert!(configured_root_coverage(&policy_for(&published, &nested), &nested).is_err());
+
+        let mismatch = configured_root_coverage(&policy_for(&published, &other), &other)
+            .expect_err("a configured root outside every published root must be refused");
+        let message = mismatch.to_string();
+        assert!(message.contains(&other.display().to_string()), "{message}");
+        assert!(message.contains("workspace-root set"), "{message}");
+        assert!(message.contains("start the server again"), "{message}");
+
+        let unpublished = WorkspaceRootPolicy {
+            configured: true,
+            published: Vec::new(),
+        };
+        assert!(configured_root_coverage(&unpublished, &published).is_err());
+        Ok(())
     }
 }
