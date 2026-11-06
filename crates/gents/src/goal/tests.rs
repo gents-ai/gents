@@ -279,54 +279,92 @@ async fn session_goal_delete_uses_selected_agent_native_owner() {
 
 #[tokio::test]
 async fn goal_and_claim_publication_links_match_lean() {
-    use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+    use crate::store::config_client::{ConfigAccess, NodePermission};
     use crate::store::identity::{KeyIdentity, NodeIdentity};
     use serde_json::json;
-    use std::sync::Arc;
 
     for case in &crate::lean_vocab_test::lean_contract_snapshot().goal_link_cases {
+        let (db, user, user_access, binding) =
+            crate::test_support::signed_test_node("goal-links").await;
+        let node = db.node.clone();
+        let runtime = db.node_identity.clone();
+        let agent =
+            crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
         let home = tempfile::tempdir().unwrap();
-        let runtime = KeyIdentity::load_or_create(home.path().join("node"), None).unwrap();
-        let user = KeyIdentity::load_or_create(home.path().join("user"), None).unwrap();
-        let agent = KeyIdentity::load_or_create(home.path().join("agent"), None).unwrap();
         let reader = KeyIdentity::load_or_create(home.path().join("reader"), None).unwrap();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(runtime.did())
-                .build()
+        let admin =
+            ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
+        for permission in [
+            NodePermission::DacRelationAdd,
+            NodePermission::DacRelationDelete,
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::CollectionGet,
+        ] {
+            admin
+                .grant_node_permission(&identity::Did::new(agent.did()).unwrap(), permission)
                 .await
-                .unwrap(),
-        );
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        let user_access =
-            ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
-        let agent_access =
-            ConfigAccess::local_as(node.clone(), identity::Did::new(agent.did()).unwrap());
-        let reader_access =
-            ConfigAccess::local_as(node.clone(), identity::Did::new(reader.did()).unwrap());
-        let (agent_doc, session_doc) = user_access.transact_write("test.goal_links.seed", |txn| Box::pin(async {
-            let agent_row = txn.execute_with_variables(
-                "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
-                &json!({"input": {"node_did": runtime.did(), "agent_did": agent.did(), "creation_nonce": "a".repeat(64)}}),
-            ).await?;
-            let agent_doc = crate::store::graphql::created_doc_id(&agent_row, "Agent")?;
-            let session_row = txn.execute_with_variables(
-                "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
-                &json!({"input": {"node_did": runtime.did(), "session_id": "links-session", "agent_did": agent.did(),
-                    "requester_did": user.did(), "relationships_pending": true, "created_at": "2026-11-04T00:00:00Z"}}),
-            ).await?;
-            let session_doc = crate::store::graphql::created_doc_id(&session_row, "AgentSession")?;
-            Ok::<_, anyhow::Error>((agent_doc, session_doc))
-        })).await.unwrap();
-        user_access
-            .add_actor_relationship(
-                "Agent",
-                &agent_doc,
-                "executor",
-                &identity::Did::new(agent.did()).unwrap(),
+                .unwrap();
+        }
+        admin
+            .grant_node_permission(
+                &identity::Did::new(user.did()).unwrap(),
+                NodePermission::DacRelationDelete,
             )
             .await
             .unwrap();
+        let agent_access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(agent.did()).unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        let reader_access =
+            ConfigAccess::local_as(node.clone(), identity::Did::new(reader.did()).unwrap());
+        let agent_doc = crate::goal::client_control::agent_document_for_test(
+            &user_access,
+            runtime.did(),
+            agent.did(),
+        )
+        .await;
+        user_access
+            .transact_write("test.goal_links.session", |txn| {
+                let runtime = &runtime;
+                let agent = &agent;
+                let user = &user;
+                Box::pin(async move {
+                    crate::session::ensure_session_in_txn(
+                        txn,
+                        "links-session",
+                        runtime.did(),
+                        agent.did(),
+                        Some(user.did()),
+                        None,
+                        None,
+                        "2026-11-04T00:00:00Z",
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+        let session_doc = user_access
+            .transact_readonly("test.goal_links.session_document", |txn| {
+                let runtime = &runtime;
+                Box::pin(async move {
+                    crate::session::load_agent_session_owner_in_txn(
+                        txn,
+                        runtime.did(),
+                        "links-session",
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap()
+            .unwrap()
+            .doc_id;
         crate::session::grant_created_session_relationships(
             &user_access,
             &session_doc,
@@ -353,61 +391,62 @@ async fn goal_and_claim_publication_links_match_lean() {
             "session_id": "links-session", "session_doc_id": session_doc, "requester_did": user.did(),
             "agent_did": agent.did(), "creator_did": actor, "parent_linked": case.mode == "fresh",
             "objective": "Finish work", "created_at": "2026-11-04T00:00:00Z"});
-        let author = if case.mode == "foreign" {
-            agent.did()
+        let author_access = if case.mode == "foreign" {
+            &agent_access
         } else {
-            actor
+            access
         };
-        let txn = ConfigApplyTxn::begin_local(&node, Some(identity::Did::new(author).unwrap()))
-            .await
-            .unwrap();
-        let mutation = format!(
-            "mutation($input: {}MutationInputArg!) {{ create_{}(input: $input) {{ _docID }} }}",
-            case.collection, case.collection
-        );
-        let doc = if case.mode == "fresh" {
-            let staged = stage_goal_and_claim(
-                &txn,
-                runtime.did(),
-                "links-session",
-                "Finish work",
-                None,
-                GoalState {
-                    status: GoalStatus::Active,
-                    blocked_audits: 0,
-                    wrapup_requested: false,
-                    wrapup_completed: false,
-                },
-                "2026-11-04T00:00:00Z",
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-            if case.collection == "Goal" {
-                staged.goal.doc_id
-            } else {
-                let response = txn
-                    .execute("{ GoalCreationClaim { _docID } }")
-                    .await
-                    .unwrap();
-                response["data"]["GoalCreationClaim"][0]["_docID"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned()
-            }
+        let staged_doc = std::sync::Mutex::new(None::<String>);
+        let outcome = author_access.transact_write("test.goal_links.publication", |txn| {
+            let input = &input;
+            let runtime = &runtime;
+            let staged_doc = &staged_doc;
+            Box::pin(async move {
+                let doc = if case.mode == "fresh" {
+                    let staged = stage_goal_and_claim(
+                        txn, runtime.did(), "links-session", "Finish work", None,
+                        GoalState { status: GoalStatus::Active, blocked_audits: 0,
+                            wrapup_requested: false, wrapup_completed: false },
+                        "2026-11-04T00:00:00Z", None, None,
+                    ).await?;
+                    if case.collection == "Goal" {
+                        staged.goal.doc_id
+                    } else {
+                        let response = txn.execute("{ GoalCreationClaim { _docID } }").await?;
+                        response["data"]["GoalCreationClaim"][0]["_docID"]
+                            .as_str().unwrap().to_owned()
+                    }
+                } else {
+                    let schema = match case.collection.as_str() {
+                        "Goal" => gents_protocol::schemas::GOAL,
+                        "GoalCreationClaim" => gents_protocol::schemas::GOAL_CREATION_CLAIM,
+                        other => panic!("unknown modeled collection {other}"),
+                    };
+                    let mutation = format!(
+                        "mutation($input: {}MutationInputArg!) {{ create_{}(input: $input) {{ _docID }} }}",
+                        case.collection, case.collection,
+                    );
+                    let written = txn.execute_client_signed_create(
+                        &mutation, &json!({"input": input}), schema,
+                    ).await?;
+                    crate::store::graphql::created_doc_id(&written, &case.collection)?
+                };
+                *staged_doc.lock().unwrap() = Some(doc.clone());
+                if !case.commit {
+                    anyhow::bail!("test requested publication rollback");
+                }
+                Ok::<_, anyhow::Error>(doc)
+            })
+        }).await;
+        let doc = if case.commit {
+            outcome.unwrap()
         } else {
-            let written = txn
-                .execute_with_variables(&mutation, &json!({"input": input}))
-                .await
-                .unwrap();
-            crate::store::graphql::created_doc_id(&written, &case.collection).unwrap()
+            assert_eq!(
+                outcome.unwrap_err().to_string(),
+                "test requested publication rollback"
+            );
+            staged_doc.into_inner().unwrap().unwrap()
         };
-        if case.commit {
-            txn.commit().await.unwrap();
-        } else {
-            txn.discard().await.unwrap();
-        }
         if case.mode == "foreign" {
             agent_access
                 .add_actor_relationship(
@@ -520,34 +559,41 @@ async fn goal_and_claim_publication_links_match_lean() {
                 .await
                 .unwrap();
             } else {
-                let attempt =
-                    ConfigApplyTxn::begin_local(&node, Some(identity::Did::new(actor).unwrap()))
-                        .await
-                        .unwrap();
-                if step.parent_ok {
-                    attempt
-                        .add_resource_relationship(
-                            &case.collection,
-                            &doc,
-                            "parent",
-                            "sessions",
-                            &session_doc,
-                        )
-                        .await
-                        .unwrap();
-                }
-                if step.worker_ok {
-                    attempt
-                        .add_actor_relationship(
-                            &case.collection,
-                            &doc,
-                            "working_agent",
-                            &identity::Did::new(agent.did()).unwrap(),
-                        )
-                        .await
-                        .unwrap();
-                }
-                attempt.discard().await.unwrap();
+                let result: anyhow::Result<()> = access
+                    .transact_write("test.goal_links.rollback", |attempt| {
+                        let doc = &doc;
+                        let session_doc = &session_doc;
+                        let agent = &agent;
+                        Box::pin(async move {
+                            if step.parent_ok {
+                                attempt
+                                    .add_resource_relationship(
+                                        &case.collection,
+                                        doc,
+                                        "parent",
+                                        "sessions",
+                                        session_doc,
+                                    )
+                                    .await?;
+                            }
+                            if step.worker_ok {
+                                attempt
+                                    .add_actor_relationship(
+                                        &case.collection,
+                                        doc,
+                                        "working_agent",
+                                        &identity::Did::new(agent.did())?,
+                                    )
+                                    .await?;
+                            }
+                            anyhow::bail!("test requested relationship rollback")
+                        })
+                    })
+                    .await;
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    "test requested relationship rollback"
+                );
             }
             let current = access.execute(&query).await.unwrap();
             assert_eq!(
