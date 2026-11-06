@@ -2998,13 +2998,13 @@ async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
 
 #[tokio::test]
 async fn config_targets_owned_working_agent_for_all_bound_documents() {
-    let node = build_agent_node().await;
-    let identity = node_identity("targeted-config");
-    let owner = identity.did().to_string();
-    for agent in ["setup", "working"] {
-        crate::test_support::install_test_agent(&node, &owner, agent).await;
-    }
-    let setup = SelfConfigCore::new(node.clone(), owner.clone(), "setup".into()).unwrap();
+    let fixture = SelfConfigFixture::new("targeted-config").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    fixture.grant_agent_relation_delete().await;
+    let working_did = fixture.install_sibling("working").await;
+    fixture.grant_sibling_configuration(&working_did).await;
+    let setup = fixture.core();
     setup
         .apply(agent_request(
             &setup,
@@ -3029,24 +3029,17 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
         .unwrap();
 
     let mut tool_config = config(&["node", "agent", "tools", "profile", "backend"]);
-    tool_config.agent_did = "setup".into();
+    tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.preview = true;
     tool_config.no_lockout = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&tool_config);
 
     call_config_tool(
         &tools,
         vec![
             "agent".into(),
             "edit".into(),
-            "working".into(),
+            working_did.clone(),
             "--set".into(),
             "tags=[\"ui:review\"]".into(),
         ],
@@ -3060,7 +3053,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
             "context".into(),
             "edit".into(),
             "--agent".into(),
-            "working".into(),
+            working_did.clone(),
             "--set".into(),
             "system_prompt=\"Review carefully.\"".into(),
             "--set".into(),
@@ -3074,7 +3067,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
         vec![
             "tools".into(),
             "edit".into(),
-            "--agent=working".into(),
+            format!("--agent={working_did}"),
             "--set".into(),
             "agents={\"target_ids\":[],\"enabled\":false}".into(),
             "--set".into(),
@@ -3089,7 +3082,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
             "profile".into(),
             "edit".into(),
             "--agent".into(),
-            "working".into(),
+            working_did.clone(),
             "--set".into(),
             "display_name=\"Working profile\"".into(),
         ],
@@ -3100,7 +3093,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
     let working: Value = serde_json::from_str(
         &call_config_tool(
             &tools,
-            vec!["get".into(), "--agent".into(), "working".into()],
+            vec!["get".into(), "--agent".into(), working_did.clone()],
         )
         .await
         .unwrap(),
@@ -3114,13 +3107,22 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
         working["documents"]["Tools"]["self_config"].is_null(),
         "targeting a sibling must protect the invoking Engineer chain without granting config to the sibling"
     );
-    let working_core = SelfConfigCore::new(node.clone(), owner.clone(), "working".into()).unwrap();
+    let working_core = SelfConfigCore::new(
+        fixture.db.node.clone(),
+        fixture.node_did().to_owned(),
+        working_did.clone(),
+    )
+    .unwrap()
+    .with_lockout_agent_did(fixture.agent_did().to_owned())
+    .with_agent_signer(fixture.agent.managed_agent_signer())
+    .with_runtime_identity(Some(fixture.db.node_identity.clone()))
+    .with_node_binding(Some(fixture.node_binding.clone()));
     working_core
         .apply(agent_request(
             &working_core,
             vec![(
                 "inference_profile_id".into(),
-                Some(json!("setup:inference")),
+                Some(json!(format!("{}:inference", fixture.agent_did()))),
             )],
         ))
         .await
@@ -3131,7 +3133,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
             "backend".into(),
             "edit".into(),
             "--agent".into(),
-            "working".into(),
+            working_did.clone(),
             "--set".into(),
             "enabled=false".into(),
         ],
@@ -3147,7 +3149,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
             &working_core,
             vec![(
                 "inference_profile_id".into(),
-                Some(json!("working:inference")),
+                Some(json!(format!("{working_did}:inference"))),
             )],
         ))
         .await
@@ -3187,7 +3189,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
         "create".into(),
         "review-profile".into(),
         "--set".into(),
-        "backend_id=\"working:backend\"".into(),
+        format!("backend_id=\"{working_did}:backend\""),
         "--set".into(),
         "model_name=\"review-model\"".into(),
         "--set".into(),
@@ -3237,7 +3239,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
                 "agent".into(),
                 "preview".into(),
                 "default".into(),
-                "working".into(),
+                working_did.clone(),
             ],
         )
         .await
@@ -3254,7 +3256,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
             "tools".into(),
             "edit".into(),
             "--agent".into(),
-            "setup".into(),
+            fixture.agent_did().to_owned(),
             "--set".into(),
             "tags=[\"changed\"]".into(),
         ],
@@ -3281,7 +3283,10 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
         .apply(anchored_request(
             SelfConfigTarget::AgentContext,
             "context_id",
-            vec![("tools_id".into(), Some(json!("setup:tools")))],
+            vec![(
+                "tools_id".into(),
+                Some(json!(format!("{}:tools", fixture.agent_did()))),
+            )],
         ))
         .await
         .unwrap();
@@ -3291,7 +3296,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
             "tools".into(),
             "edit".into(),
             "--agent".into(),
-            "working".into(),
+            working_did.clone(),
             "--set".into(),
             "display_name=\"must not land\"".into(),
         ],
@@ -3306,14 +3311,20 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
         .apply(anchored_request(
             SelfConfigTarget::AgentContext,
             "context_id",
-            vec![("tools_id".into(), Some(json!("working:tools")))],
+            vec![(
+                "tools_id".into(),
+                Some(json!(format!("{working_did}:tools"))),
+            )],
         ))
         .await
         .unwrap();
     working_core
         .apply(agent_request(
             &working_core,
-            vec![("context_id".into(), Some(json!("setup:context")))],
+            vec![(
+                "context_id".into(),
+                Some(json!(format!("{}:context", fixture.agent_did()))),
+            )],
         ))
         .await
         .unwrap();
@@ -3324,7 +3335,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
             "context".into(),
             "edit".into(),
             "--agent".into(),
-            "working".into(),
+            working_did.clone(),
             "--set".into(),
             "display_name=\"must not land\"".into(),
         ],
