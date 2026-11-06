@@ -1672,7 +1672,7 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
 }
 
 async fn bind_subscription_backend(
-    node: &Arc<defra_node::Node>,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     agent_did: &str,
     provider: &str,
@@ -1680,25 +1680,10 @@ async fn bind_subscription_backend(
     model: &str,
 ) {
     use crate::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
-        DesiredStateApplyDocument, DesiredStateApplyPlan,
+        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+        DesiredStateApplyPlan,
     };
-    assert!(
-        crate::load_agent(node, agent_did).await.unwrap().is_some(),
-        "fixture agent must be provisioned before binding its backend"
-    );
-    crate::upsert_node(node, node_did, None, Some(agent_did), true, None)
-        .await
-        .unwrap();
-    crate::inference::backends::registry::set_backend_probe_status(
-        node,
-        node_did,
-        &format!("{agent_did}:backend"),
-        "healthy",
-    )
-    .await
-    .unwrap();
-    ConfigAccess::transact_local_write(node, None, "test.subscription_backend", |txn| {
+    access.transact_write("test.subscription_backend", |txn| {
         Box::pin(async move {
             let mut documents = Vec::new();
             for (collection, id, patch) in [
@@ -1715,12 +1700,12 @@ async fn bind_subscription_backend(
 }
 
 async fn bind_default_agent_chatgpt_backend(
-    node: &Arc<defra_node::Node>,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     agent_did: &str,
 ) {
     bind_subscription_backend(
-        node,
+        access,
         node_did,
         agent_did,
         "ChatGptCodex",
@@ -1760,20 +1745,12 @@ async fn insert_enabled_oauth_credential(node: &Arc<defra_node::Node>, node_did:
 
 #[tokio::test]
 async fn chatgpt_codex_behavior_without_credential_is_unavailable() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-chatgpt-nocred"));
-    bind_default_agent_chatgpt_backend(
-        &node,
-        identity.did(),
-        &crate::test_support::ensure_test_default_agent(&node, identity.did())
-            .await
-            .agent_did,
-    )
-    .await;
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, identity.did())
-        .await
-        .agent_did;
+    let (db, _user, access, binding) =
+        crate::test_support::signed_test_node("document-view-chatgpt-nocred").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
+    let default_agent_did = binding.agent_did;
+    bind_default_agent_chatgpt_backend(&access, identity.did(), &default_agent_did).await;
 
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
@@ -1860,21 +1837,13 @@ async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
 
 #[tokio::test]
 async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-chatgpt-cred"));
-    bind_default_agent_chatgpt_backend(
-        &node,
-        identity.did(),
-        &crate::test_support::ensure_test_default_agent(&node, identity.did())
-            .await
-            .agent_did,
-    )
-    .await;
+    let (db, _user, access, binding) =
+        crate::test_support::signed_test_node("document-view-chatgpt-cred").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
+    let default_agent_did = binding.agent_did;
+    bind_default_agent_chatgpt_backend(&access, identity.did(), &default_agent_did).await;
     insert_enabled_oauth_credential(&node, identity.did()).await;
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, identity.did())
-        .await
-        .agent_did;
 
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
@@ -1897,13 +1866,12 @@ async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
 
 #[tokio::test]
 async fn readiness_follows_the_backend_account_reference() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-account-ref"));
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, identity.did())
-        .await
-        .agent_did;
-    bind_default_agent_chatgpt_backend(&node, identity.did(), &default_agent_did).await;
+    let (db, _user, user_access, binding) =
+        crate::test_support::signed_test_node("document-view-account-ref").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
+    let default_agent_did = binding.agent_did;
+    bind_default_agent_chatgpt_backend(&user_access, identity.did(), &default_agent_did).await;
     insert_enabled_oauth_credential(&node, identity.did()).await;
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
@@ -1967,16 +1935,17 @@ async fn readiness_follows_the_backend_account_reference() {
 #[tokio::test]
 async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
     use crate::inference::auth::credential::{set_account_enabled, store_sign_in};
-    use crate::store::config_client::ConfigAccess;
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-account-lifecycle"));
+    let (db, _user, user_access, binding) =
+        crate::test_support::signed_test_node("document-view-account-lifecycle").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let did = identity.did().to_string();
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, &did)
-        .await
-        .agent_did;
-    bind_default_agent_claude_backend(&node, &did, &default_agent_did).await;
-    let access = ConfigAccess::local(node.clone());
+    let default_agent_did = binding.agent_did;
+    bind_default_agent_claude_backend(&user_access, &did, &default_agent_did).await;
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(&did).unwrap(),
+    );
     let sign_in = |who: &str| {
         crate::inference::auth::claude::credential_from_login_tokens(
             did.clone(),
@@ -2051,16 +2020,17 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
 #[tokio::test]
 async fn an_account_pool_agent_follows_its_enabled_accounts() {
     use crate::inference::auth::credential::{set_account_enabled, store_sign_in};
-    use crate::store::config_client::ConfigAccess;
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-account-pool"));
+    let (db, _user, user_access, binding) =
+        crate::test_support::signed_test_node("document-view-account-pool").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let did = identity.did().to_string();
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, &did)
-        .await
-        .agent_did;
-    bind_default_agent_claude_backend(&node, &did, &default_agent_did).await;
-    let access = ConfigAccess::local(node.clone());
+    let default_agent_did = binding.agent_did;
+    bind_default_agent_claude_backend(&user_access, &did, &default_agent_did).await;
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(&did).unwrap(),
+    );
     let sign_in = |who: &str| {
         crate::inference::auth::claude::credential_from_login_tokens(
             did.clone(),
@@ -2137,18 +2107,19 @@ async fn an_account_pool_agent_follows_its_enabled_accounts() {
 #[tokio::test]
 async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     use crate::inference::auth::credential::{set_account_enabled, store_sign_in};
-    use crate::store::config_client::ConfigAccess;
     use gents_protocol::node_readiness::is_behavior_unavailable_rejection;
     use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-account-rejection"));
+    let (db, _user, user_access, binding) =
+        crate::test_support::signed_test_node("document-view-account-rejection").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
     let did = identity.did().to_string();
-    let x = crate::test_support::ensure_test_default_agent(&node, &did)
-        .await
-        .agent_did;
-    bind_default_agent_claude_backend(&node, &did, &x).await;
-    let access = ConfigAccess::local(node.clone());
+    let x = binding.agent_did;
+    bind_default_agent_claude_backend(&user_access, &did, &x).await;
+    let access = crate::store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(&did).unwrap(),
+    );
     let sign_in = |who: &str| {
         crate::inference::auth::claude::credential_from_login_tokens(
             did.clone(),
@@ -2278,12 +2249,12 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
 }
 
 async fn bind_default_agent_claude_backend(
-    node: &Arc<defra_node::Node>,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     agent_did: &str,
 ) {
     bind_subscription_backend(
-        node,
+        access,
         node_did,
         agent_did,
         "ClaudeCliSubscription",
@@ -2295,20 +2266,12 @@ async fn bind_default_agent_claude_backend(
 
 #[tokio::test]
 async fn claude_subscription_behavior_requires_enabled_credential() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-claude-cred"));
-    bind_default_agent_claude_backend(
-        &node,
-        identity.did(),
-        &crate::test_support::ensure_test_default_agent(&node, identity.did())
-            .await
-            .agent_did,
-    )
-    .await;
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, identity.did())
-        .await
-        .agent_did;
+    let (db, _user, access, binding) =
+        crate::test_support::signed_test_node("document-view-claude-cred").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
+    let default_agent_did = binding.agent_did;
+    bind_default_agent_claude_backend(&access, identity.did(), &default_agent_did).await;
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
@@ -2403,20 +2366,12 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
 
 #[tokio::test]
 async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-chatgpt-apply"));
-    bind_default_agent_chatgpt_backend(
-        &node,
-        identity.did(),
-        &crate::test_support::ensure_test_default_agent(&node, identity.did())
-            .await
-            .agent_did,
-    )
-    .await;
-    let default_agent_did = crate::test_support::ensure_test_default_agent(&node, identity.did())
-        .await
-        .agent_did;
+    let (db, _user, access, binding) =
+        crate::test_support::signed_test_node("document-view-chatgpt-apply").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
+    let default_agent_did = binding.agent_did;
+    bind_default_agent_chatgpt_backend(&access, identity.did(), &default_agent_did).await;
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
