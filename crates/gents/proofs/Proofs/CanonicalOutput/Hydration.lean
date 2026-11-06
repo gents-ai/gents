@@ -208,6 +208,26 @@ def terminalRoots (targetSession : SessionId) (messages : List MessageEnvelope)
       | none => .ok later
       | some header => .ok (header.id :: later)
 
+/-- The records a fork header resolves within the observed target session,
+refining `SessionFork.resolveIn`: fork publication copies each referenced
+closure into the fork session with its coordinate naming the logical closing
+record the immutable header references. `segments` is the observation of the
+target session, so copies held by any other session are never among them.
+`none` for a non-fork header, and for a fork published before
+destination-owned copies, which observes no copy for any of its references. -/
+def forkCopies (header : Header) (segments : List Segment) : Option (List Segment) :=
+  match header.publication with
+  | .fork _ =>
+      let logicals := header.refs.map (·.closeId)
+      let copies := segments.filter fun segment => logicals.contains segment.coordinate.request
+      if logicals.isEmpty || !copies.isEmpty then some copies else none
+  | _ => none
+
+/-- A copied closing record stands under the logical identity its header names;
+other copied records keep their physical identity. -/
+def presentCopy (segment : Segment) : Segment :=
+  if segment.close.isSome then { segment with id := segment.coordinate.request } else segment
+
 def collectOne (scope : AuthorizationScope) (messages : List MessageEnvelope) (segments : List Segment)
     (provenance : List ProvenanceAccess) (deniedHeaders deniedSegments : List DocId)
     (dependencyDenials : List DependencyDenial) : Nat → DocId → List DocId →
@@ -220,24 +240,32 @@ def collectOne (scope : AuthorizationScope) (messages : List MessageEnvelope) (s
         let message ← lookupMessage messages deniedHeaders id
         let messageKey ← validateProvenance scope provenance ⟨Collection.agentMessage, id⟩
         let origin ← checkedOrigin message.header
-        match origin with
-        | some originId =>
-            let originMessage ← lookupMessage messages deniedHeaders originId
-            if !forkMetadataMatches message originMessage then .error .originMismatch
-            else pure ()
-        | none => pure ()
-        let headerOwners ← (headerProvenance message.header).mapM
-          (validateProvenance scope provenance)
-        let payload ← referenceListDocuments scope segments deniedSegments dependencyDenials
-          provenance message.header.refs
-        let _ ← (reconstructMessage segments deniedSegments message).mapError Error.message
-        let visited := id :: visited
-        let manifest := messageKey :: headerOwners ++ payload ++ manifest
-        match origin with
-        | none => .ok (visited, manifest)
-        | some originId =>
-            collectOne scope messages segments provenance deniedHeaders deniedSegments dependencyDenials
-              fuel originId (id :: active) visited manifest
+        match forkCopies message.header segments with
+        | some copies =>
+            let _ ← (reconstructMessage (copies.map presentCopy) deniedSegments message).mapError
+              Error.message
+            let copyKeys ← (copies.map fun segment => ⟨Collection.agentOutputSegment, segment.id⟩).mapM
+              (validateProvenance scope provenance)
+            .ok (id :: visited, messageKey :: copyKeys ++ manifest)
+        | none =>
+            match origin with
+            | some originId =>
+                let originMessage ← lookupMessage messages deniedHeaders originId
+                if !forkMetadataMatches message originMessage then .error .originMismatch
+                else pure ()
+            | none => pure ()
+            let headerOwners ← (headerProvenance message.header).mapM
+              (validateProvenance scope provenance)
+            let payload ← referenceListDocuments scope segments deniedSegments dependencyDenials
+              provenance message.header.refs
+            let _ ← (reconstructMessage segments deniedSegments message).mapError Error.message
+            let visited := id :: visited
+            let manifest := messageKey :: headerOwners ++ payload ++ manifest
+            match origin with
+            | none => .ok (visited, manifest)
+            | some originId =>
+                collectOne scope messages segments provenance deniedHeaders deniedSegments dependencyDenials
+                  fuel originId (id :: active) visited manifest
 
 def collectRoots (scope : AuthorizationScope) (messages : List MessageEnvelope) (segments : List Segment)
     (provenance : List ProvenanceAccess) (deniedHeaders deniedSegments : List DocId)
@@ -515,6 +543,30 @@ def originDependenciesProtected : Bool :=
   | .error _ => false
 
 example : originDependenciesProtected = true := by native_decide
+
+def closingCopy : Segment :=
+  { closing with id := 300, coordinate := { closing.coordinate with request := 100 } }
+
+def copyAccess : List ProvenanceAccess :=
+  [ ⟨scope, ⟨.agentMessage, 201⟩, .authorized⟩
+  , ⟨scope, ⟨.agentOutputSegment, 300⟩, .authorized⟩ ]
+
+/-- A published fork hydrates from its own copies: neither its origin header
+nor the source request or closure is observed or selected. -/
+example : resultMatches
+    (buildManifest scope 2 [] [201] [] [childMessage] [closingCopy] copyAccess [] [])
+    (.ok [⟨.agentMessage, 201⟩, ⟨.agentOutputSegment, 300⟩]) = true := by native_decide
+
+example : resultMatches
+    (buildManifest scope 2 [] [201] [] [originMessage, childMessage] [closing, closingCopy]
+      (access ++ copyAccess) [] [])
+    (.ok [⟨.agentMessage, 201⟩, ⟨.agentOutputSegment, 300⟩]) = true := by native_decide
+
+example : resultMatches
+    (buildManifest scope 2 [] [201] [] [childMessage] [closingCopy]
+      (copyAccess.map fun observation => if observation.key = ⟨.agentOutputSegment, 300⟩
+        then { observation with state := .denied } else observation) [] [])
+    (.error (.provenanceDenied ⟨.agentOutputSegment, 300⟩)) = true := by native_decide
 
 example : resultMatches
     (buildManifest scope 2 [] [201] [] [childMessage] [closing] access [] [])
