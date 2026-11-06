@@ -1912,34 +1912,14 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
         DiscoverySourceOutcome, MappingSupportLevel,
     };
 
-    let (node, runtime) = crate::tools::mcp::meta::tests::test_node().await;
-    let runtime: Arc<dyn crate::NodeIdentity> = Arc::new(runtime);
-    let owner = runtime.did().to_owned();
-    let runtime_did = identity::Did::new(&owner).unwrap();
-    let binding = crate::store::identity::provision_agent_identity_authorized(
-        &node,
-        runtime.as_ref(),
-        &runtime_did,
-    )
-    .await
-    .unwrap();
-    crate::test_support::install_test_agent_binding(&node, &owner, "beh-test", &binding).await;
-    let identity =
-        crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
-    let agent_did = binding.agent_did.clone();
-    let runtime_access = crate::ConfigAccess::local_as(node.clone(), runtime_did);
-    runtime_access
-        .transact_write("test.self_config.grant", |txn| {
-            let (owner, agent_did) = (&owner, &agent_did);
-            Box::pin(async move {
-                crate::store::config_client::grant_selected_self_configuration(
-                    txn, owner, agent_did,
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
+    let fixture = SelfConfigFixture::new("discovery-apply").await;
+    fixture.grant_selected_configuration().await;
+    let node = fixture.db.node.clone();
+    let owner = fixture.node_did().to_owned();
+    let identity = fixture.agent.clone();
+    let agent_did = fixture.agent_did().to_owned();
+    let runtime_access =
+        crate::ConfigAccess::local_as(node.clone(), identity::Did::new(&owner).unwrap());
     let agent_access = crate::ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(&agent_did).unwrap(),
@@ -1985,10 +1965,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
         bash_mode: crate::tools::surface::BashMode::Off,
         root: Some(root.path().into()),
     };
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), agent_did.clone())
-        .unwrap()
-        .with_agent_signer(identity.managed_agent_signer())
-        .with_runtime_identity(Some(runtime.clone()));
+    let core = fixture.core();
     core.apply(tools_request(
         &core,
         vec![(
@@ -2001,16 +1978,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     ))
     .await
     .unwrap();
-    let tools = build_self_config_tools_with_runtime(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity.clone()),
-        Some(runtime),
-        &grants,
-        test_plugins(),
-        None,
-    );
+    let tools = fixture.tools_with_config(&grants);
     let scan = vec![
         "discovery".into(),
         "scan".into(),
@@ -4004,33 +3972,11 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
 
 #[tokio::test]
 async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_root() {
-    let (node, runtime) = crate::tools::mcp::meta::tests::test_node().await;
-    let runtime: Arc<dyn crate::NodeIdentity> = Arc::new(runtime);
-    let owner = runtime.did().to_owned();
-    let runtime_did = ::identity::Did::new(&owner).unwrap();
-    let binding = crate::store::identity::provision_agent_identity_authorized(
-        &node,
-        runtime.as_ref(),
-        &runtime_did,
-    )
-    .await
-    .unwrap();
-    crate::test_support::install_test_agent_binding(&node, &owner, "root-policy", &binding).await;
-    let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
-    let agent_did = binding.agent_did.clone();
-    let access = crate::ConfigAccess::local_as(node.clone(), runtime_did);
-    access
-        .transact_write("test.self_config.root_grants", |txn| {
-            let (owner, agent_did) = (&owner, &agent_did);
-            Box::pin(async move {
-                crate::store::config_client::grant_selected_self_configuration(
-                    txn, owner, agent_did,
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
+    let fixture = SelfConfigFixture::new("root-policy").await;
+    fixture.grant_selected_configuration().await;
+    let owner = fixture.node_did().to_owned();
+    let agent_did = fixture.agent_did().to_owned();
+    let access = fixture.user_access();
     let ceiling = tempfile::tempdir().unwrap();
     let selected = ceiling.path().join("selected");
     let sibling = ceiling.path().join("sibling");
@@ -4038,7 +3984,7 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
     std::fs::create_dir_all(&sibling).unwrap();
     let selected_text = selected.to_string_lossy();
     crate::tools::surface::set_workspace_root_with_readers(
-        &access,
+        access,
         &owner,
         &selected_text,
         None,
@@ -4047,15 +3993,14 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
     )
     .await
     .unwrap();
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), agent_did.clone())
-        .unwrap()
-        .with_agent_signer(agent.managed_agent_signer())
-        .with_runtime_identity(Some(runtime))
-        .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
-            file_mode: crate::tools::surface::FileToolMode::ReadOnly,
-            bash_mode: crate::tools::surface::BashMode::Off,
-            root: Some(ceiling.path().to_path_buf()),
-        });
+    let core =
+        fixture
+            .core()
+            .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
+                file_mode: crate::tools::surface::FileToolMode::ReadOnly,
+                bash_mode: crate::tools::surface::BashMode::Off,
+                root: Some(ceiling.path().to_path_buf()),
+            });
     let patch = |root: &std::path::Path| {
         vec![(
             "host".into(),
