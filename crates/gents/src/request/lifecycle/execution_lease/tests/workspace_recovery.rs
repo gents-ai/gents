@@ -20,8 +20,15 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
-    crate::test_support::install_test_agent_binding(&node, did, "workspace recovery", &binding)
-        .await;
+    let admin = crate::ConfigAccess::local_as(node.clone(), identity::Did::new(did).unwrap());
+    crate::test_support::bootstrap_signed_test_node(&admin, did).await;
+    crate::test_support::install_test_agent_binding_with_access(
+        did,
+        "workspace recovery",
+        &binding,
+        &admin,
+    )
+    .await;
     let agent =
         crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
     let agent_did = agent.did();
@@ -128,26 +135,30 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         )
         .await
         .unwrap();
-    async fn requests(node: &EmbeddedNode, owner: &str, requester: &str) -> Vec<AgentRequest> {
+    async fn requests(
+        access: &crate::ConfigAccess,
+        owner: &str,
+        requester: &str,
+    ) -> Vec<AgentRequest> {
         let scope = crate::session::session_scope_filter(
             owner,
             "workspace-recovery-session",
             Some(requester),
         );
-        let result = node
+        let response = access
             .execute(&format!(
                 "{{AgentRequest(filter: {{{scope}}}) {{{}}}}}",
                 crate::SIGNED_REQUEST_FIELDS
             ))
-            .await;
-        assert!(!result.has_errors(), "{:?}", result.errors);
-        crate::store::graphql::rows::<AgentRequestRow>(&result, "AgentRequest")
+            .await
+            .expect("AgentRequest read as its Agent");
+        serde_json::from_value::<Vec<AgentRequestRow>>(response["data"]["AgentRequest"].clone())
             .unwrap()
             .into_iter()
             .map(|row| AgentRequest::try_from(row).unwrap())
             .collect()
     }
-    let parent = requests(&node, did, agent_did).await.remove(0);
+    let parent = requests(&access, did, agent_did).await.remove(0);
     let mut owner = RequestLifecycle::new_with_node_did(node.clone(), agent_did, did, parent, 60);
     owner.bind_managed_agent(agent.as_ref()).unwrap();
     owner.claim().await.unwrap();
@@ -195,7 +206,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     )
     .await
     .unwrap();
-    expire_observed_execution(&node, &parent.doc_id).await;
+    expire_observed_execution(&access, &parent.doc_id).await;
     assert_eq!(
         RequestLifecycle::recover_all_with_identities(&node, did, std::slice::from_ref(&agent))
             .await
@@ -204,10 +215,10 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         1
     );
     assert_eq!(
-        request_row(&node, &parent.doc_id).await.lifecycle_state,
+        request_row(&access, &parent.doc_id).await.lifecycle_state,
         Some(RequestLifecycleState::Failed)
     );
-    let recovered_output = output_segment_snapshot(&node, &parent.doc_id).await;
+    let recovered_output = output_segment_snapshot(&access, &parent.doc_id).await;
     assert!(recovered_output
         .to_string()
         .contains("partial durable response"));
@@ -302,7 +313,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         .await
         .unwrap()
         .unwrap();
-    let children: Vec<_> = requests(&node, did, agent_did)
+    let children: Vec<_> = requests(&access, did, agent_did)
         .await
         .into_iter()
         .filter(|request| request.request_id != parent.request_id)
@@ -361,7 +372,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
                 .await
                 .is_err()
         );
-        let remaining: Vec<_> = requests(&node, did, agent_did)
+        let remaining: Vec<_> = requests(&access, did, agent_did)
             .await
             .into_iter()
             .filter(|request| request.request_id != parent.request_id)

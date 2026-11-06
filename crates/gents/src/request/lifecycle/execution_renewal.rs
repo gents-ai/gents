@@ -119,26 +119,6 @@ async fn renew_once(
 }
 
 #[cfg(test)]
-pub(crate) async fn renew_once_at(
-    node: &std::sync::Arc<EmbeddedNode>,
-    request_doc_id: &str,
-    generation: &str,
-    expected_deadline: DateTime<Utc>,
-    now: DateTime<Utc>,
-) -> Result<RenewalAttemptOutcome> {
-    renew_once_with_time(
-        node,
-        None,
-        None,
-        request_doc_id,
-        generation,
-        Some(expected_deadline),
-        Some(now),
-    )
-    .await
-}
-
-#[cfg(test)]
 pub(crate) async fn renew_once_at_with_access(
     access: &crate::ConfigAccess,
     request_doc_id: &str,
@@ -169,7 +149,7 @@ tokio::task_local! {
 
 #[cfg(test)]
 pub(crate) async fn renew_with_recheck_at(
-    node: &std::sync::Arc<EmbeddedNode>,
+    access: &crate::ConfigAccess,
     request_doc_id: &str,
     generation: &str,
     expected_deadline: DateTime<Utc>,
@@ -179,8 +159,8 @@ pub(crate) async fn renew_with_recheck_at(
     RENEWAL_RECHECK_TIME
         .scope(
             recheck,
-            renew_once_at(
-                node,
+            renew_once_at_with_access(
+                access,
                 request_doc_id,
                 generation,
                 expected_deadline,
