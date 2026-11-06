@@ -920,7 +920,7 @@ mod turn_assignment_tests {
         // advances the row: the converged form is `completed` with the
         // reason rendered. The durable pre-delivery suffix is pinned in the
         // crash-before-notice regression, where the side effect is skipped.
-        let row = tool_call_row(node, &tool_doc_id).await;
+        let row = tool_call_row(&admission.tool.access().unwrap(), &tool_doc_id).await;
         assert_eq!(row["lifecycle_state"], "completed");
         assert_eq!(row["status"], "completed");
 
@@ -1001,7 +1001,7 @@ mod turn_assignment_tests {
         // One settle call persists the suffix, publishes the notice and
         // advances the row; the notice is where the absent-assignment
         // distinction lives (a no-goal session never reads as success).
-        let row = tool_call_row(node, &tool_doc_id).await;
+        let row = tool_call_row(&admission.tool.access().unwrap(), &tool_doc_id).await;
         assert_eq!(row["status"], "completed");
         let notifications =
             session_message_notifications(node, did, admission.tool.session_id()).await;
@@ -1080,7 +1080,7 @@ mod turn_assignment_tests {
         .await
         .unwrap();
         assert_eq!(settled, 1);
-        let row = tool_call_row(node, &tool_doc_id).await;
+        let row = tool_call_row(&admission.tool.access().unwrap(), &tool_doc_id).await;
         assert_eq!(row["status"], "completed");
         let notifications =
             session_message_notifications(node, did, admission.tool.session_id()).await;
@@ -1161,8 +1161,9 @@ mod turn_assignment_tests {
 
         // Settle the lifecycle row only: a crash before the notice side
         // effect leaves `completionPending:assignment_active` outstanding.
-        let mut lifecycle = ToolCallLifecycle::load_by_doc_id(
+        let mut lifecycle = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
+            identity::Did::new(did.as_str()).unwrap(),
             &tool_doc_id,
             did,
             &session_id,
@@ -1206,7 +1207,7 @@ mod turn_assignment_tests {
         // Pre-delivery persisted snapshot: the suffix is durable before any
         // notification exists (lifecycle state is terminal; only the notice
         // side effect is outstanding).
-        let row = tool_call_row(node, &tool_doc_id).await;
+        let row = tool_call_row(&admission.tool.access().unwrap(), &tool_doc_id).await;
         assert_eq!(row["status"], "completionPending:assignment_active");
         assert!(
             session_message_notifications(node, did, &session_id)
@@ -1245,7 +1246,7 @@ mod turn_assignment_tests {
             "replay renders the persisted assignment reason, not live state: {}",
             notifications[0]
         );
-        let row = tool_call_row(node, &tool_doc_id).await;
+        let row = tool_call_row(&admission.tool.access().unwrap(), &tool_doc_id).await;
         assert_eq!(row["status"], "completed", "side effects converged");
         admission
             .node
@@ -1272,15 +1273,18 @@ mod turn_assignment_tests {
         assert_eq!(terminal.notification_status(), "completed");
     }
 
-    async fn tool_call_row(node: &Arc<EmbeddedNode>, tool_doc_id: &str) -> serde_json::Value {
+    async fn tool_call_row(
+        access: &crate::ConfigAccess,
+        tool_doc_id: &str,
+    ) -> serde_json::Value {
         let escaped = escape_graphql_string(tool_doc_id);
-        let response = node
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ status lifecycle_state }} }}"#
-        ))
-        .await;
-        assert!(!response.has_errors(), "{:#?}", response.errors);
-        response.data.unwrap()["AgentToolCall"][0].clone()
+        let response = access
+            .execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ status lifecycle_state }} }}"#
+            ))
+            .await
+            .expect("read the tool call row as its owning Agent");
+        response["AgentToolCall"][0].clone()
     }
 
     async fn session_message_notifications(
