@@ -1042,7 +1042,7 @@ pub(super) mod tests {
     use crate::runtime::agent::completion_retry::CompletionRetryProfileFields;
     use crate::runtime::agent::daemon::AgentDaemonInit;
     use crate::runtime::agent::runtime::StartupBarrier;
-    use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
+    use crate::store::identity::{NodeIdentity, RuntimeNode};
     use crate::tools::call::hook::{
         BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
     };

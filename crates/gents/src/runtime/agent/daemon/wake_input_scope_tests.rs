@@ -64,7 +64,7 @@ impl ScopeFixture {
 
 async fn write_request(fixture: &ScopeFixture, mut create: AgentRequestCreate) -> AgentRequestRow {
     create.session_doc_id = Some(
-        crate::request::lifecycle::client::reserve_goal_session(&fixture.client, &create)
+        crate::request::lifecycle::reserve_goal_session(&fixture.client, &create)
             .await
             .unwrap(),
     );
