@@ -221,23 +221,29 @@ fn callback_admission_reuses_projection_and_filter_secret_checks() {
 
 #[test]
 fn trigger_scope_checks_use_bound_task_and_source_for_both_templates() {
+    use crate::NodeIdentity;
+    let directory = tempfile::tempdir().unwrap();
+    let runtime =
+        crate::KeyIdentity::load_or_create(directory.path().join("runtime"), None).unwrap();
+    let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
+    let owner = runtime.did();
     let base = json!({
-        "node":{"node_did":"owner"},
-        "agents":[{"node_did":"owner","agent_did":"behavior","inference_profile_id":"profile"}],
-        "inference_profiles":[{"node_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model"}],
-        "inference_backends":[{"node_did":"owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible",
+        "node":{"node_did":owner},
+        "agents":[{"node_did":owner,"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"profile"}],
+        "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
+        "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible",
             "endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
-        "tasks":[{"node_did":"owner","task_id":"task","agent_did":"behavior","prompt_template":"{{ ctx.now }}"}],
-        "schedules":[{"node_did":"owner","schedule_id":"schedule","cadence":{"kind":"interval","interval_secs":10}}],
-        "event_sources":[{"node_did":"owner","event_source_id":"event","source_collection":"Records"}],
-        "triggers":[{"node_did":"owner","trigger_id":"trigger","task_id":"task","source":{"kind":"schedule","schedule_id":"schedule"}}]
+        "tasks":[{"node_did":owner,"task_id":"task","agent_did":binding.agent_did,"prompt_template":"{{ ctx.now }}"}],
+        "schedules":[{"node_did":owner,"schedule_id":"schedule","cadence":{"kind":"interval","interval_secs":10}}],
+        "event_sources":[{"node_did":owner,"event_source_id":"event","source_collection":"Records"}],
+        "triggers":[{"node_did":owner,"trigger_id":"trigger","task_id":"task","source":{"kind":"schedule","schedule_id":"schedule"}}]
     });
     let validate = |value| {
         let config = serde_json::from_value::<super::super::PackConfig>(value).unwrap();
         let plan =
             crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
         ConfigReferences::from_documents(
-            "owner",
+            owner,
             plan.documents()
                 .iter()
                 .map(|doc| (doc.collection, doc.add.clone())),
@@ -292,19 +298,26 @@ fn trigger_scope_checks_use_bound_task_and_source_for_both_templates() {
 #[tokio::test]
 async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
     use crate::store::config_client::{
-        apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
-        DesiredStateApplyPlan,
+        apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyPlan,
     };
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::local(node);
+    use crate::NodeIdentity;
+    let (db, user, access, default) =
+        crate::test_support::signed_test_node("event-args-rollback").await;
+    let owner = db.node_identity.did().to_owned();
+    let binding = crate::store::identity::provision_agent_identity_authorized(
+        &db.node,
+        db.node_identity.as_ref(),
+        &identity::Did::new(user.did()).unwrap(),
+    )
+    .await
+    .unwrap();
     let mut config = json!({
-        "node":{"node_did":"owner"},
-        "agents":[{"node_did":"owner","agent_did":"behavior","inference_profile_id":"profile"}],
-        "inference_profiles":[{"node_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model"}],
-        "inference_backends":[{"node_did":"owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
-        "tasks":[{"node_did":"owner","task_id":"task","agent_did":"behavior","prompt_template":"{{ args.name }}"}],
-        "event_sources":[{"node_did":"owner","event_source_id":"event","source_collection":"Records"}]
+        "node":{"node_did":owner,"default_agent_did":default.agent_did},
+        "agents":[{"node_did":owner,"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"profile"}],
+        "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
+        "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
+        "tasks":[{"node_did":owner,"task_id":"task","agent_did":binding.agent_did,"prompt_template":"{{ args.name }}"}],
+        "event_sources":[{"node_did":owner,"event_source_id":"event","source_collection":"Records"}]
     });
     let plan = DesiredStateApplyPlan::from_pack_config(
         &serde_json::from_value::<super::super::PackConfig>(config.clone()).unwrap(),
@@ -318,7 +331,7 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
         .await
         .unwrap();
     config["tasks"][0]["prompt_template"] = json!("{{ args.other }}");
-    config["triggers"] = json!([{"node_did":"owner","trigger_id":"trigger","task_id":"task","source":{"kind":"event","event_source_id":"event"}}]);
+    config["triggers"] = json!([{"node_did":owner,"trigger_id":"trigger","task_id":"task","source":{"kind":"event","event_source_id":"event"}}]);
     let plan = DesiredStateApplyPlan::from_pack_config(
         &serde_json::from_value::<super::super::PackConfig>(config.clone()).unwrap(),
     )
@@ -332,16 +345,17 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
         .is_err());
     access
         .transact_write("test.rollback", |txn| {
+            let owner = &owner;
             Box::pin(async move {
                 let (_, task) =
-                    read_desired_state_record_in_txn(txn, Collection::Task, "owner", "task")
+                    read_desired_state_record_in_txn(txn, Collection::Task, owner, "task")
                         .await?
                         .unwrap();
                 assert_eq!(task["prompt_template"], json!("{{ args.name }}"));
                 assert!(read_desired_state_record_in_txn(
                     txn,
                     Collection::Trigger,
-                    "owner",
+                    owner,
                     "trigger"
                 )
                 .await?
