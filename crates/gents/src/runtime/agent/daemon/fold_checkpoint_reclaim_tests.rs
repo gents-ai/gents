@@ -1,7 +1,6 @@
 async fn create_user_message(
     db: &crate::support::TestDb,
-    user: &crate::KeyIdentity,
-    client: &crate::ConfigAccess,
+    author: (&crate::KeyIdentity, &crate::ConfigAccess),
     agent_config: &ResolvedAgent,
     session_id: &str,
     content: &str,
@@ -12,6 +11,7 @@ async fn create_user_message(
         ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
     };
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    let (user, client) = author;
     let request_id = uuid::Uuid::new_v4().to_string();
     let mut spec = RequestSpec::new(
         RequestPurpose::Normal,
@@ -127,8 +127,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         let session_id = uuid::Uuid::new_v4().to_string();
         let head = create_user_message(
             &db,
-            &user,
-            &client,
+            (&user, &client),
             &agent_config,
             &session_id,
             "how are we looking",
@@ -138,8 +137,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         .await;
         let folded = create_user_message(
             &db,
-            &user,
-            &client,
+            (&user, &client),
             &agent_config,
             &session_id,
             "we should move faster",
@@ -440,8 +438,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
         let session_id = uuid::Uuid::new_v4().to_string();
         let parent = create_user_message(
             &db,
-            &user,
-            &client,
+            (&user, &client),
             &agent_config,
             &session_id,
             "how are we looking",
@@ -495,8 +492,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
 
         let retry = create_user_message(
             &db,
-            &user,
-            &client,
+            (&user, &client),
             &agent_config,
             &session_id,
             &parent.content,
@@ -506,8 +502,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
         .await;
         let queued = create_user_message(
             &db,
-            &user,
-            &client,
+            (&user, &client),
             &agent_config,
             &session_id,
             "and ship it today",

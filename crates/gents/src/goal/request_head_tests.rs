@@ -387,16 +387,13 @@ impl Fixture<'_> {
                 "{}: cyclic fixture request ancestry",
                 self.case.name
             );
-            next = model
-                .goal
-                .and_then(|_| model.parent_request)
-                .and_then(|parent| {
-                    self.case
-                        .rows
-                        .iter()
-                        .find(|row| row.request == parent)
-                        .cloned()
-                });
+            next = model.goal.and(model.parent_request).and_then(|parent| {
+                self.case
+                    .rows
+                    .iter()
+                    .find(|row| row.request == parent)
+                    .cloned()
+            });
             pending.push(model);
         }
         while let Some(model) = pending.pop() {

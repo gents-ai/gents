@@ -118,7 +118,7 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
                 .await
                 .unwrap();
         }
-        let user_did = identity::Did::new(&fixture.client.actor_did().unwrap()).unwrap();
+        let user_did = identity::Did::new(fixture.client.actor_did().unwrap()).unwrap();
         admin
             .grant_node_permission(
                 &user_did,

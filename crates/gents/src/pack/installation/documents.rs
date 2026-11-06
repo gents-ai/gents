@@ -423,10 +423,6 @@ pub(crate) async fn prepare_document_pack_archive_with_provisioner(
 }
 
 /// Rebuild the installation from locally reviewed archive bytes and staged host facts.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "hosted preparation shares canonical install inputs"
-)]
 pub async fn prepare_hosted_document_pack_archive(
     access: &ConfigAccess,
     owner: &str,

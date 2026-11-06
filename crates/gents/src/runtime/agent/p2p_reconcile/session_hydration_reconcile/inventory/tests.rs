@@ -48,7 +48,7 @@ async fn reserve_inventory_session(
     let requester = client.actor_did().expect("fixture holds the requester");
     let create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
-        &format!("reserve-inventory-{session_id}"),
+        format!("reserve-inventory-{session_id}"),
         node_did,
         &requester,
         agent_did,

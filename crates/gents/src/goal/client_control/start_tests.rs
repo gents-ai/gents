@@ -476,9 +476,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             .await,
             session_id: SESSION.into(),
             session_doc_id: case.expected_session_document.as_deref().map(|document| {
-                if document == "session-document" {
-                    session_before.as_ref().unwrap().doc_id.clone()
-                } else if document == "old-header" {
+                if matches!(document, "session-document" | "old-header") {
                     session_before.as_ref().unwrap().doc_id.clone()
                 } else {
                     document.into()

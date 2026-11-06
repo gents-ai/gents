@@ -5402,7 +5402,7 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
     }))
     .unwrap();
     crate::inference::backends::registry::record_model_catalog(
-        &node,
+        node,
         &backend,
         serde_json::from_value(json!({
             "node_did": null,
@@ -6292,7 +6292,7 @@ async fn pack_documents_install_and_release_documents_dependencies() {
         .await
         .unwrap();
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/dependee_fixture")
+        crate::pack::read_installed_pack(access, did, "fixture/dependee_fixture")
             .await
             .unwrap()
             .is_none()
@@ -6425,7 +6425,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     let digest = preview["artifact_digest"].as_str().unwrap();
     let access = &fixture.user_access;
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+        crate::pack::read_installed_pack(access, did, "fixture/documents_fixture")
             .await
             .unwrap()
             .is_none(),
@@ -6447,7 +6447,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     .unwrap_err();
     assert!(rejected.to_string().contains("digest"), "{rejected}");
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+        crate::pack::read_installed_pack(access, did, "fixture/documents_fixture")
             .await
             .unwrap()
             .is_none()
@@ -6481,7 +6481,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     );
 
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+        crate::pack::read_installed_pack(access, did, "fixture/documents_fixture")
             .await
             .unwrap()
             .is_some()
@@ -6508,7 +6508,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
         .await
         .unwrap();
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+        crate::pack::read_installed_pack(access, did, "fixture/documents_fixture")
             .await
             .unwrap()
             .is_none()
@@ -7764,7 +7764,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
     );
     let access = &agent_fixture.user_access;
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+        crate::pack::read_installed_pack(access, did, "fixture/documents_fixture")
             .await
             .unwrap()
             .is_none()
@@ -7994,7 +7994,7 @@ async fn pack_documents_install_refuses_non_default_account_inference_bindings()
     .unwrap_err();
     assert!(refused.to_string().contains("selects another"), "{refused}");
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+        crate::pack::read_installed_pack(access, did, "fixture/documents_fixture")
             .await
             .unwrap()
             .is_none()
@@ -8021,7 +8021,7 @@ async fn pack_documents_install_refuses_non_default_account_inference_bindings()
     .unwrap_err();
     assert!(refused.to_string().contains("selects another"), "{refused}");
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
+        crate::pack::read_installed_pack(access, did, "fixture/documents_fixture")
             .await
             .unwrap()
             .is_none()

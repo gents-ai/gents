@@ -718,13 +718,13 @@ where
                                                 Ok(true)
                                             },
                                         ).await {
-                                            Ok(Ok(false)) => return Err(anyhow::Error::new(crate::request::lifecycle::ExecutionOwnershipLost)
+                                            Ok(Ok(false)) => Err(anyhow::Error::new(crate::request::lifecycle::ExecutionOwnershipLost)
                                                 .context("shutdown drain was not attempted")),
-                                            Ok(Ok(true)) => return Err(anyhow!("shutdown requested during inference stream")),
-                                            Ok(Err(error)) => return Err(ShutdownDrainFailure {
+                                            Ok(Ok(true)) => Err(anyhow!("shutdown requested during inference stream")),
+                                            Ok(Err(error)) => Err(ShutdownDrainFailure {
                                                 reason: format!("partial-turn persistence failed: {error:#}"),
                                             }.into()),
-                                            Err(_) => return Err(ShutdownDrainFailure {
+                                            Err(_) => Err(ShutdownDrainFailure {
                                                 reason: "partial-turn persistence exceeded the embedded storage-step deadline; commit outcome must be recovered from durable state".into(),
                                             }.into()),
                                         }

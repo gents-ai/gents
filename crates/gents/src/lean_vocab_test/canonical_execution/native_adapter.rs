@@ -257,7 +257,7 @@ async fn create_client_fixture_request(
     let response = fixture_query(agent_access, &query).await?;
     let row: AgentRequestRow = crate::store::graphql::first_row(&response, "AgentRequest")?
         .context("signed client request disappeared")?;
-    Ok(row.try_into()?)
+    row.try_into()
 }
 
 #[expect(
