@@ -27,17 +27,7 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
     let runtime: Arc<dyn NodeIdentity> =
         Arc::new(KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap());
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let (node, endpoint) = serve_client_node(runtime.as_ref()).await;
     let first = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     let second = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     let first_signer =
@@ -61,14 +51,13 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
                 .unwrap();
         }
     }
-    let owner = ConfigAccess::local_as(node.clone(), user.did().parse().unwrap());
+    let owner = client_access(&endpoint, &user);
     seed_owned_agent(&owner, runtime.did(), &first).await;
     let parent = owner.execute("{ Node { _docID } }").await.unwrap()["data"]["Node"][0]["_docID"]
         .as_str()
         .unwrap()
         .to_owned();
-    let created = owner.write("test.watcher.second_agent", &format!(r#"mutation {{ create_Agent(input: {{node_did: "{}", agent_did: "{}", creation_nonce: "{}", inference_profile_id: "fixture", enabled: true}}) {{ _docID }} }}"#, runtime.did(), second.agent_did, second.creation_nonce)).await.unwrap();
-    let agent_doc = crate::store::graphql::created_doc_id(&created, "Agent").unwrap();
+    let agent_doc = create_client_agent(&owner, runtime.did(), &second).await;
     owner
         .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &parent)
         .await
@@ -403,17 +392,7 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             Arc::new(KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap());
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
         let owner = KeyIdentity::load_or_create(home.path().join("owner.key"), None).unwrap();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(runtime.did())
-                .with_node_acp_enabled()
-                .build()
-                .await
-                .unwrap(),
-        );
-        crate::store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        let (node, endpoint) = serve_client_node(runtime.as_ref()).await;
         let binding = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
         let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
         for did in [user.did(), owner.did(), binding.agent_did.as_str()] {
@@ -429,9 +408,9 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
                     .unwrap();
             }
         }
-        let user_access = ConfigAccess::local_as(node.clone(), user.did().parse().unwrap());
+        let user_access = client_access(&endpoint, &user);
         if name == "invoke_denied_at_check" {
-            let owner_access = ConfigAccess::local_as(node.clone(), owner.did().parse().unwrap());
+            let owner_access = client_access(&endpoint, &owner);
             seed_owned_agent(&owner_access, runtime.did(), &binding).await;
             let agent = owner_access.execute("{ Agent { _docID } }").await.unwrap();
             let doc = agent["data"]["Agent"][0]["_docID"].as_str().unwrap();
@@ -701,17 +680,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         KeyIdentity::load_or_create(home.path().join("foreign-control.key"), None).unwrap();
     let collaborator =
         KeyIdentity::load_or_create(home.path().join("collaborator.key"), None).unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let (node, endpoint) = serve_client_node(runtime.as_ref()).await;
     let binding = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
     for did in [
@@ -732,7 +701,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
                 .unwrap();
         }
     }
-    let user_access = ConfigAccess::local_as(node.clone(), user.did().parse().unwrap());
+    let user_access = client_access(&endpoint, &user);
     seed_owned_agent(&user_access, runtime.did(), &binding).await;
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
@@ -812,8 +781,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     .unwrap();
     let tool_doc = tool.doc_id().unwrap();
     agent_access.write("test.control.background_mode", &format!(r#"mutation {{ update_AgentToolCall(docID: "{}", input: {{ await_mode: "background" }}) {{ _docID }} }}"#, tool_doc)).await.unwrap();
-    let collaborator_access =
-        ConfigAccess::local_as(node.clone(), collaborator.did().parse().unwrap());
+    let collaborator_access = client_access(&endpoint, &collaborator);
     let collaborator_intent = prepare(
         &collaborator_access,
         &collaborator,
@@ -1096,7 +1064,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     let third = publish(&node, &user_access, &user, runtime.did(), tool_doc).await;
     let fourth = publish(&node, &user_access, &user, runtime.did(), tool_doc).await;
     let fifth = publish(&node, &user_access, &user, runtime.did(), tool_doc).await;
-    let foreign_access = ConfigAccess::local_as(node.clone(), foreign.did().parse().unwrap());
+    let foreign_access = client_access(&endpoint, &foreign);
     let fake = foreign_access.transact_write("test.control.foreign_claim", |txn| {
         let first = &first; let binding = &binding;
         Box::pin(async move {
@@ -1475,20 +1443,7 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let collaborator =
         KeyIdentity::load_or_create(home.path().join("collaborator.key"), None).unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let node = Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(runtime.did())
-            .with_node_acp_enabled()
-            .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let (node, endpoint) = serve_client_node(runtime.as_ref()).await;
     let binding = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
     let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
     let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
@@ -1504,7 +1459,8 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
                 .unwrap();
         }
     }
-    let owner = ConfigAccess::local_as(node.clone(), user.did().parse().unwrap());
+    let client = |identity: &KeyIdentity| client_access(&endpoint, identity);
+    let owner = client(&user);
     seed_owned_agent(&owner, runtime.did(), &binding).await;
     let agent_doc = owner.execute("{ Agent { _docID } }").await.unwrap()["data"]["Agent"][0]
         ["_docID"]
@@ -1520,16 +1476,6 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
         )
         .await
         .unwrap();
-    let client = |identity: &KeyIdentity| {
-        ConfigAccess::Graphql(
-            crate::store::config_client::GraphqlEndpoint::as_principal(
-                format!("http://{address}/api/v0/graphql"),
-                identity.did(),
-            )
-            .with_client_signing_capability(identity.client_signing_capability().unwrap())
-            .unwrap(),
-        )
-    };
     let user_access = client(&user);
     let collaborator_access = client(&collaborator);
     let mut head = AgentRequestCreate::base(

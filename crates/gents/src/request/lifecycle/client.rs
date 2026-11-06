@@ -1244,6 +1244,10 @@ mod tests {
             &binding,
         )
         .await;
+        crate::store::identity::GrantSet::AgentBaseline
+            .grant(&runtime_access, &identity::Did::new(&binding.agent_did).unwrap())
+            .await
+            .unwrap();
         let agent =
             crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
         let mut lifecycle = crate::RequestLifecycle::materialize_pending_with_execution_binding(
@@ -1343,6 +1347,58 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    /// Serves a fixture node over loopback HTTP. A user's configuration is
+    /// published only through its client-signed endpoint; embedded access
+    /// refuses non-runtime writes by design.
+    async fn serve_client_node(runtime: &dyn NodeIdentity) -> (Arc<defra_node::Node>, String) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let node = Arc::new(
+            defra_node::Node::builder()
+                .enable_signing()
+                .with_node_identity_did(runtime.did())
+                .with_node_acp_enabled()
+                .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
+        (node, format!("http://{address}/api/v0/graphql"))
+    }
+
+    fn client_access(endpoint: &str, identity: &KeyIdentity) -> ConfigAccess {
+        ConfigAccess::Graphql(
+            crate::store::config_client::GraphqlEndpoint::as_principal(endpoint, identity.did())
+                .with_client_signing_capability(identity.client_signing_capability().unwrap())
+                .unwrap(),
+        )
+    }
+
+    async fn create_client_agent(
+        access: &ConfigAccess,
+        runtime_did: &str,
+        agent: &gents_protocol::agent_identity::AgentIdentityBinding,
+    ) -> String {
+        access
+            .transact_write("test.client.created_agent", |txn| {
+                Box::pin(async move {
+                    let created = txn
+                        .execute_client_signed_create(
+                            "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
+                            &serde_json::json!({"input":{"node_did":runtime_did,"agent_did":agent.agent_did,"creation_nonce":agent.creation_nonce,"inference_profile_id":"fixture","enabled":true}}),
+                            gents_protocol::schemas::AGENT,
+                        )
+                        .await?;
+                    Ok::<_, anyhow::Error>(crate::store::graphql::created_doc_id(&created, "Agent")?)
+                })
+            })
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -1601,18 +1657,9 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(runtime.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        crate::store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        let (node, endpoint) = serve_client_node(&runtime).await;
         let agent = crate::store::identity::provision_agent_identity(&runtime).unwrap();
-        let access = ConfigAccess::local_as(node.clone(), user.did().parse().unwrap());
+        let access = client_access(&endpoint, &user);
         seed_owned_agent(&access, runtime.did(), &agent).await;
         let request = AgentRequestCreate::base(
             RequestPurpose::Normal,
@@ -1677,7 +1724,12 @@ mod tests {
             modeled["reservation"]["agent_granted"].as_bool().unwrap()
         );
         let agent_key = crate::store::identity::resolve_agent_identity(&runtime, &agent).unwrap();
-        let agent_access = ConfigAccess::local_as(node.clone(), agent.agent_did.parse().unwrap());
+        let agent_access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            agent.agent_did.parse().unwrap(),
+            agent_key.as_ref(),
+        )
+        .unwrap();
         let mut autonomous = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "agent-goal-first",
@@ -1727,18 +1779,9 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(runtime.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        crate::store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        let (node, endpoint) = serve_client_node(&runtime).await;
         let agent = crate::store::identity::provision_agent_identity(&runtime).unwrap();
-        let access = ConfigAccess::local_as(node.clone(), user.did().parse().unwrap());
+        let access = client_access(&endpoint, &user);
         seed_owned_agent(&access, runtime.did(), &agent).await;
         let node_owner = access
             .transact_readonly("test.client.node_owner", |txn| {
@@ -1812,7 +1855,13 @@ mod tests {
             .unwrap();
         assert_eq!(wrong_model["expected_pending"], true);
         assert!(reconcile_client_request(&wrong, &first).await.is_err());
-        let agent_access = ConfigAccess::local_as(node.clone(), agent.agent_did.parse().unwrap());
+        let agent_key = crate::store::identity::resolve_agent_identity(&runtime, &agent).unwrap();
+        let agent_access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            agent.agent_did.parse().unwrap(),
+            agent_key.as_ref(),
+        )
+        .unwrap();
         let sibling = crate::store::identity::provision_agent_identity(&runtime).unwrap();
         let sibling_access =
             ConfigAccess::local_as(node.clone(), sibling.agent_did.parse().unwrap());
@@ -1955,18 +2004,9 @@ mod tests {
         let runtime = KeyIdentity::load_or_create(home.path().join("runtime.key"), None).unwrap();
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
         let other = KeyIdentity::load_or_create(home.path().join("other.key"), None).unwrap();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(runtime.did())
-                .build()
-                .await
-                .unwrap(),
-        );
-        crate::store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
+        let (node, endpoint) = serve_client_node(&runtime).await;
         let agent = crate::store::identity::provision_agent_identity(&runtime).unwrap();
-        let access = ConfigAccess::local_as(node.clone(), user.did().parse().unwrap());
+        let access = client_access(&endpoint, &user);
         seed_owned_agent(&access, runtime.did(), &agent).await;
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
@@ -1990,11 +2030,15 @@ mod tests {
         crate::sign_agent_request_create(&user, &mut create)
             .await
             .unwrap();
+        let publication = create.graphql_client_publication_mutation().unwrap();
         access
-            .write(
-                "test.retry.pending",
-                &create.graphql_client_publication_mutation().unwrap(),
-            )
+            .transact_write("test.retry.pending", |txn| {
+                let publication = &publication;
+                Box::pin(async move {
+                    txn.execute(publication).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
             .await
             .unwrap();
         let wrong = ConfigAccess::local_as(node.clone(), other.did().parse().unwrap());
