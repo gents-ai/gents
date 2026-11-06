@@ -4,7 +4,7 @@ use gents_protocol::output::live::{
     project_live, LiveObservation, LiveTarget, LiveView, OwnerLiveness,
 };
 use gents_protocol::output::reconstruction::{
-    reconstruct_message, DependencyDenial, ObservedSegment,
+    fork_copy_observations, reconstruct_message, DependencyDenial, ObservedSegment,
 };
 use gents_protocol::output::{OutputSource, OutputWriter, ReconstructionError, TerminalOutput};
 
@@ -14,6 +14,19 @@ pub enum CanonicalMessageProjection {
     Loading(ReconstructionError),
     Denied { doc_id: String },
     Invalid(ReconstructionError),
+}
+
+/// Whether `header` is a fork resolving from copies observed in its own
+/// session; its projection then needs nothing from the fork origin.
+pub fn resolves_from_fork_copies(header: &TranscriptMessageRow, segments: &[OutputSegmentRow]) -> bool {
+    let observed = segments
+        .iter()
+        .map(|row| ObservedSegment {
+            doc_id: &row.doc_id,
+            segment: &row.segment,
+        })
+        .collect::<Vec<_>>();
+    fork_copy_observations(&header.message, &observed).is_some()
 }
 
 pub fn project_canonical_message(
@@ -29,6 +42,7 @@ pub fn project_canonical_message(
             segment: &row.segment,
         })
         .collect::<Vec<_>>();
+    let observed = fork_copy_observations(&header.message, &observed).unwrap_or(observed);
     match reconstruct_message(&observed, denied, dependency_denials, &header.message) {
         Ok(message) => CanonicalMessageProjection::Ready(message),
         Err(ReconstructionError::AccessDenied { doc_id }) => {
