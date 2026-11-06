@@ -438,7 +438,8 @@ async fn usage_capture_requires_no_persistent_schema() {
             .await
             .expect("node without schemas"),
     );
-    let cache = std::sync::Arc::default();
+    let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
+        std::sync::Arc::default();
     let account = usage_account(identity.did(), "backend-usage-failure");
     let reporter = crate::inference::usage_observation::UsageReporter::new(
         cache.clone(),
