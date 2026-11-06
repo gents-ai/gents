@@ -1233,23 +1233,29 @@ async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
 
 #[tokio::test]
 async fn materializer_rejects_workspace_from_different_explicit_owner() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    let behavior = integration_test_agent("general");
-    insert_ready_workspace(
-        &node,
-        "ws-owner",
-        "did:key:z-correct-owner",
-        behavior.node_did(),
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("workspace-reject-owner").await;
+    let (foreign_db, _foreign_user, _foreign_client_access, _foreign_behavior) =
+        signed_materializer_agent("workspace-reject-owner-foreign").await;
+    let node = db.node.clone();
+    let owner = behavior.node_did().to_owned();
+    let workspace_owner = foreign_db.node_identity.did().to_owned();
+    assert_ne!(owner, workspace_owner);
+    let agent_did = behavior.agent_did.clone();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        behavior.agent_identity.as_ref(),
     )
-    .await;
+    .unwrap();
+    publish_workspace_for_agent(&access, "ws-owner", &workspace_owner, &agent_did).await;
     let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
-    let context = writer_context("ws-owner", "did:key:z-wrong-owner");
+    let context = writer_context("ws-owner", &owner);
     let error = materializer
         .materialize(
-            &workspace_writer_task(),
+            &workspace_writer_task(&agent_did),
             Some("trigger-owner"),
             TriggerKind::Event,
             Some("trigger-owner-doc"),
@@ -1266,7 +1272,9 @@ async fn materializer_rejects_workspace_from_different_explicit_owner() {
         .unwrap_err();
     assert!(error.to_string().contains("not found"), "{error:#}");
     assert!(
-        workspace_requests(&node, "ws-owner").await.is_empty(),
+        workspace_requests_for_agent(&access, "ws-owner")
+            .await
+            .is_empty(),
         "wrong owner must reject before request publication"
     );
 }
@@ -1376,12 +1384,12 @@ async fn trigger_wide_gate_and_supersede_survive_kind_change_and_preserve_exclus
         .unwrap());
 }
 
-fn workspace_writer_task() -> ResolvedTask {
+fn workspace_writer_task(agent_did: &str) -> ResolvedTask {
     ResolvedTask {
         emit_outcome: false,
         task_id: "task-ws".to_string(),
         name: None,
-        agent_did: "general".to_string(),
+        agent_did: agent_did.to_owned(),
         prompt_template: "patch".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -1392,41 +1400,6 @@ fn workspace_writer_task() -> ResolvedTask {
 
 fn writer_context(workspace_id: &str, owner: &str) -> String {
     serde_json::json!({"version":1,"source_fields":{"workspace_id":workspace_id,"workspace_owner_node_did":owner,"workspace_authority":"readWrite"}}).to_string()
-}
-
-async fn insert_ready_workspace(
-    node: &defra_node::Node,
-    workspace_id: &str,
-    owner: &str,
-    writer_principal: &str,
-) {
-    let mutation = crate::tools::workspace::isolated_workspace_upsert_mutation(
-        &crate::tools::workspace::IsolatedWorkspaceDoc {
-            path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(vec![])
-                .unwrap(),
-            workspace_id: workspace_id.into(),
-            work_unit_id: "unit-1".into(),
-            repository_id: "repo-1".into(),
-            base_sha: "abc".into(),
-            branch: "topic".into(),
-            creation_policy: "git_worktree_diff".into(),
-            adapter: "git_worktree".into(),
-            owner_node_did: owner.into(),
-            writer_principal: writer_principal.into(),
-            integrator_principal: "did:key:integrator".into(),
-            instruction_manifest: "{}".into(),
-            seal_hash: None,
-            lifecycle_state: "ready".into(),
-            caused_by_invocation_id: "inv-1".into(),
-            caused_by_correlation: "corr-1".into(),
-        },
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "creating IsolatedWorkspace failed: {:?}",
-        response.errors
-    );
 }
 
 async fn publish_workspace_for_agent(
@@ -1508,36 +1481,6 @@ async fn workspace_requests_for_agent(
     result["data"]["AgentRequest"].as_array().unwrap().clone()
 }
 
-async fn workspace_requests(node: &defra_node::Node, workspace_id: &str) -> Vec<serde_json::Value> {
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{ workspace_id: {{ _eq: "{id}" }} }}) {{
-                request_id
-                node_did
-                lifecycle_state
-                workspace_id
-                workspace_seal_hash
-                workspace_owner_node_did
-                workspace_authority
-            }}
-        }}"#,
-        id = escape_graphql_string(workspace_id),
-    );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "querying workspace requests failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-}
-
 #[tokio::test]
 async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace() {
     let (db, _user, _client_access, behavior) =
@@ -1558,10 +1501,7 @@ async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace(
     let context=serde_json::json!({"version":1,"source_fields":{"workspace_id":"ws-incomplete","workspace_authority":"readWrite"}}).to_string();
     let request_id = materializer
         .materialize(
-            &ResolvedTask {
-                agent_did: agent_did.clone(),
-                ..workspace_writer_task()
-            },
+            &workspace_writer_task(&agent_did),
             Some("trigger-incomplete"),
             TriggerKind::Event,
             Some("trigger-incomplete-doc"),
@@ -1588,15 +1528,26 @@ async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace(
 
 #[tokio::test]
 async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    let behavior = integration_test_agent("general");
-    let owner = behavior.node_did().to_string();
-    insert_ready_workspace(
-        &node,
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("workspace-ownerless").await;
+    let (foreign_db, _foreign_user, _foreign_client_access, _foreign_behavior) =
+        signed_materializer_agent("workspace-ownerless-foreign").await;
+    let node = db.node.clone();
+    let owner = behavior.node_did().to_owned();
+    let workspace_owner = foreign_db.node_identity.did().to_owned();
+    assert_ne!(owner, workspace_owner);
+    let agent_did = behavior.agent_did.clone();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        behavior.agent_identity.as_ref(),
+    )
+    .unwrap();
+    publish_workspace_for_agent(
+        &access,
         "ws-foreign-ownerless",
-        "did:key:another-owner",
-        &owner,
+        &workspace_owner,
+        &agent_did,
     )
     .await;
     let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
@@ -1605,7 +1556,7 @@ async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
     let context = serde_json::json!({"version":1,"source_fields":{"workspace_id":"ws-foreign-ownerless","workspace_authority":"readOnly"}}).to_string();
     let error = materializer
         .materialize(
-            &workspace_writer_task(),
+            &workspace_writer_task(&agent_did),
             Some("trigger-foreign-ownerless"),
             TriggerKind::Event,
             Some("trigger-foreign-ownerless-doc"),
@@ -1626,32 +1577,38 @@ async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
             .contains("isolated workspace ws-foreign-ownerless not found"),
         "{error:#}"
     );
-    assert!(workspace_requests(&node, "ws-foreign-ownerless")
-        .await
-        .is_empty());
+    assert!(
+        workspace_requests_for_agent(&access, "ws-foreign-ownerless")
+            .await
+            .is_empty()
+    );
 }
 
 #[tokio::test]
 async fn materializer_preserves_explicit_workspace_owner_distinct_from_executor() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_agent("general");
-    let executor = behavior.node_did().to_owned();
-    assert_ne!(executor, "did:key:z-workspace-owner");
-    insert_ready_workspace(
-        node.as_ref(),
-        "ws-stamp",
-        "did:key:z-workspace-owner",
-        behavior.node_did(),
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("workspace-explicit-owner").await;
+    let (foreign_db, _foreign_user, _foreign_client_access, _foreign_behavior) =
+        signed_materializer_agent("workspace-explicit-owner-foreign").await;
+    let node = db.node.clone();
+    let owner = behavior.node_did().to_owned();
+    let workspace_owner = foreign_db.node_identity.did().to_owned();
+    assert_ne!(owner, workspace_owner);
+    let agent_did = behavior.agent_did.clone();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        behavior.agent_identity.as_ref(),
     )
-    .await;
+    .unwrap();
+    publish_workspace_for_agent(&access, "ws-stamp", &workspace_owner, &agent_did).await;
     let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
-    let context = writer_context("ws-stamp", "did:key:z-workspace-owner");
+    let context = writer_context("ws-stamp", &workspace_owner);
     let request_id = materializer
         .materialize(
-            &workspace_writer_task(),
+            &workspace_writer_task(&agent_did),
             Some("trigger-stamp"),
             TriggerKind::Event,
             Some("trigger-stamp-config-doc"),
@@ -1666,15 +1623,15 @@ async fn materializer_preserves_explicit_workspace_owner_distinct_from_executor(
         )
         .await
         .expect("explicit workspace owner survives request publication");
-    let rows = workspace_requests(node.as_ref(), "ws-stamp").await;
+    let rows = workspace_requests_for_agent(&access, "ws-stamp").await;
     assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["node_did"].as_str(), Some(executor.as_str()));
+    assert_eq!(rows[0]["node_did"].as_str(), Some(owner.as_str()));
     assert_eq!(rows[0]["workspace_id"].as_str(), Some("ws-stamp"));
     assert_eq!(rows[0]["workspace_authority"].as_str(), Some("readWrite"));
     assert_eq!(rows[0]["request_id"].as_str(), Some(request_id.as_str()));
     assert_eq!(
         rows[0]["workspace_owner_node_did"].as_str(),
-        Some("did:key:z-workspace-owner")
+        Some(workspace_owner.as_str())
     );
 }
 
@@ -1699,8 +1656,7 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let context = writer_context("ws-goal-retry", &workspace_owner);
-    let mut task = workspace_writer_task();
-    task.agent_did = agent_did.clone();
+    let mut task = workspace_writer_task(&agent_did);
     task.goal_objective_template = Some("finish workspace change".to_string());
     task.goal_token_budget = Some(2_048);
     let fire_key = "event:trigger-workspace-goal:doc:source-workspace-goal";
@@ -1780,23 +1736,29 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
 
 #[tokio::test]
 async fn unique_read_write_denial_does_not_leave_claimable_request() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_agent("general");
-    insert_ready_workspace(
-        node.as_ref(),
-        "ws-rw",
-        "did:key:z-workspace-owner",
-        behavior.node_did(),
+    let (db, _user, _client_access, behavior) =
+        signed_materializer_agent("workspace-unique-writer").await;
+    let (foreign_db, _foreign_user, _foreign_client_access, _foreign_behavior) =
+        signed_materializer_agent("workspace-unique-writer-foreign").await;
+    let node = db.node.clone();
+    let owner = behavior.node_did().to_owned();
+    let workspace_owner = foreign_db.node_identity.did().to_owned();
+    assert_ne!(owner, workspace_owner);
+    let agent_did = behavior.agent_did.clone();
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        behavior.agent_identity.as_ref(),
     )
-    .await;
+    .unwrap();
+    publish_workspace_for_agent(&access, "ws-rw", &workspace_owner, &agent_did).await;
     let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
-    let context = writer_context("ws-rw", "did:key:z-workspace-owner");
+    let context = writer_context("ws-rw", &workspace_owner);
     let first = materializer
         .materialize(
-            &workspace_writer_task(),
+            &workspace_writer_task(&agent_did),
             Some("trigger-rw-1"),
             TriggerKind::Event,
             Some("trigger-rw-1-config-doc"),
@@ -1813,7 +1775,7 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
         .expect("first writer");
     let error = materializer
         .materialize(
-            &workspace_writer_task(),
+            &workspace_writer_task(&agent_did),
             Some("trigger-rw-2"),
             TriggerKind::Event,
             Some("trigger-rw-2-config-doc"),
@@ -1832,7 +1794,7 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
         error.to_string().contains("unique Active ReadWrite"),
         "{error:#}"
     );
-    let rows = workspace_requests(node.as_ref(), "ws-rw").await;
+    let rows = workspace_requests_for_agent(&access, "ws-rw").await;
     assert_eq!(rows.len(), 2, "{rows:?}");
     let claimable = rows
         .iter()
