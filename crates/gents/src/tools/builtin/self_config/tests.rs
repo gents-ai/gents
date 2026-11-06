@@ -136,8 +136,52 @@ impl SelfConfigFixture {
             .expect("User grants selected configuration to the Agent");
     }
 
+    async fn install_sibling(&self, display_name: &str) -> String {
+        let user = identity::Did::new(self.user_access.actor_did().unwrap()).unwrap();
+        let binding = crate::store::identity::provision_agent_identity_authorized(
+            &self.db.node,
+            self.db.node_identity.as_ref(),
+            &user,
+        )
+        .await
+        .unwrap();
+        crate::test_support::install_test_agent_binding_with_access(
+            &self.db.node,
+            self.db.node_identity.did(),
+            display_name,
+            &binding,
+            &self.user_access,
+        )
+        .await;
+        binding.agent_did
+    }
+
+    async fn grant_node_reader(&self) {
+        self.user_access
+            .add_actor_relationship(
+                "Node",
+                &self.node_binding.doc_id,
+                "runtime_reader",
+                &identity::Did::new(&self.agent_did).unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+
     pub(super) fn agent_did(&self) -> &str {
         &self.agent_did
+    }
+
+    fn core(&self) -> SelfConfigCore {
+        SelfConfigCore::new(
+            self.db.node.clone(),
+            self.db.node_identity.did().to_owned(),
+            self.agent_did.clone(),
+        )
+        .unwrap()
+        .with_runtime_identity(Some(self.db.node_identity.clone()))
+        .with_agent_signer(self.agent.managed_agent_signer())
+        .with_node_binding(Some(self.node_binding.clone()))
     }
 
     pub(super) async fn add_collection(&self, sdl: &str) {
@@ -154,13 +198,18 @@ impl SelfConfigFixture {
         let mut grants = config(categories);
         grants.agent_did = self.agent_did.clone();
         grants.preview = true;
+        self.tools_with_config(&grants)
+    }
+
+    fn tools_with_config(&self, grants: &SelfConfigToolConfig) -> Vec<Box<dyn ToolDyn>> {
+        assert_eq!(grants.agent_did, self.agent_did);
         build_self_config_tools_with_runtime(
             Arc::default(),
             self.db.node.clone(),
             self.db.node_identity.did().to_owned(),
             Some(self.agent.clone()),
             Some(self.db.node_identity.clone()),
-            &grants,
+            grants,
             test_plugins(),
             Some(self.node_binding.clone()),
         )
@@ -1434,18 +1483,17 @@ async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recove
 
 #[tokio::test]
 async fn effective_config_reports_inherited_workspace_network_as_disabled() {
-    let node = build_agent_node().await;
-    let identity = node_identity("workspace-network-report");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
+    let fixture = SelfConfigFixture::new("workspace-network-report").await;
+    fixture.grant_selected_configuration().await;
     let root = tempfile::tempdir().unwrap();
-    let core = SelfConfigCore::new(node, owner, "beh-test".into())
-        .unwrap()
-        .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
-            file_mode: crate::tools::surface::FileToolMode::ReadWrite,
-            bash_mode: crate::tools::surface::BashMode::Unrestricted,
-            root: Some(root.path().into()),
-        });
+    let core =
+        fixture
+            .core()
+            .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
+                file_mode: crate::tools::surface::FileToolMode::ReadWrite,
+                bash_mode: crate::tools::surface::BashMode::Unrestricted,
+                root: Some(root.path().into()),
+            });
     core.apply(tools_request(
         &core,
         vec![(
@@ -1475,10 +1523,8 @@ async fn effective_config_reports_inherited_workspace_network_as_disabled() {
 
 #[tokio::test]
 async fn skill_import_previews_without_writes_and_requires_file_authority() {
-    let node = build_agent_node().await;
-    let identity = node_identity("skill-import");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
+    let fixture = SelfConfigFixture::new("skill-import").await;
+    fixture.grant_selected_configuration().await;
     let root = tempfile::tempdir().unwrap();
     let file = root.path().join("SKILL.md");
     std::fs::write(
@@ -1487,16 +1533,10 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
     )
     .unwrap();
     let mut grants = config(&["tools", "agent"]);
+    grants.agent_did = fixture.agent_did().to_owned();
     grants.preview = true;
     let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect();
-    let denied_tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity.clone()),
-        &grants,
-        test_plugins(),
-    );
+    let denied_tools = fixture.tools_with_config(&grants);
     let denied = call_config_tool(
         &denied_tools,
         command(&["skill", "import", "review", file.to_str().unwrap()]),
@@ -1509,7 +1549,7 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
         bash_mode: crate::tools::surface::BashMode::Off,
         root: Some(root.path().into()),
     };
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "beh-test".into()).unwrap();
+    let core = fixture.core();
     core.apply(tools_request(
         &core,
         vec![(
@@ -1521,14 +1561,7 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
     ))
     .await
     .unwrap();
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&grants);
     let outside = tempfile::tempdir().unwrap();
     std::fs::write(
         outside.path().join("SKILL.md"),
@@ -1624,10 +1657,8 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
 
 #[tokio::test]
 async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
-    let node = build_agent_node().await;
-    let identity = node_identity("configuration-discovery");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
+    let fixture = SelfConfigFixture::new("configuration-discovery").await;
+    fixture.grant_selected_configuration().await;
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("synthetic-codex");
     std::fs::create_dir_all(&source).unwrap();
@@ -1638,14 +1669,8 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
     std::fs::write(source.join("config.toml"), fixture).unwrap();
 
     let mut grants = config(&["tools"]);
-    let denied_tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity.clone()),
-        &grants,
-        test_plugins(),
-    );
+    grants.agent_did = fixture.agent_did().to_owned();
+    let denied_tools = fixture.tools_with_config(&grants);
     let command = |args: &[&str]| args.iter().map(|value| (*value).to_owned()).collect();
     let help = call_config_tool(&denied_tools, command(&["help", "discovery"]))
         .await
@@ -1679,7 +1704,7 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
         bash_mode: crate::tools::surface::BashMode::Off,
         root: Some(root.path().into()),
     };
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "beh-test".into()).unwrap();
+    let core = fixture.core();
     core.apply(tools_request(
         &core,
         vec![(
@@ -1695,14 +1720,7 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
         .read_effective_config(&BTreeSet::new(), false, false)
         .await
         .unwrap();
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
+    let tools = fixture.tools_with_config(&grants);
     let outside = tempfile::tempdir().unwrap();
     let outside_error = call_config_tool(
         &tools,
@@ -2284,21 +2302,9 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
 
 #[tokio::test]
 async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
-    let node = build_agent_node().await;
-    let identity = node_identity("structured-config");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "working").await;
-    let mut settings = config(&["agent"]);
-    settings.agent_did = "working".into();
-    settings.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner,
-        Some(identity),
-        &settings,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("structured-config").await;
+    fixture.grant_selected_configuration().await;
+    let tools = fixture.tools(&["agent"]);
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -2324,7 +2330,12 @@ async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
         serde_json::from_str::<Value>(&tool.call(read).await.unwrap()).unwrap(),
         after
     );
-    node.shutdown().await.expect("shut down test node");
+    fixture
+        .db
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
 }
 
 pub(super) async fn call_config_tool(
@@ -2511,11 +2522,9 @@ async fn config_errors_name_the_next_call() {
 
 #[tokio::test]
 async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch() {
-    let node = build_agent_node().await;
-    let identity = node_identity("config-execution");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    let mut grants = config(&[
+    let fixture = SelfConfigFixture::new("config-execution").await;
+    fixture.grant_selected_configuration().await;
+    let tools = fixture.tools(&[
         "node",
         "tools",
         "automation",
@@ -2523,15 +2532,6 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
         "backend",
         "mcp_service",
     ]);
-    grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner,
-        Some(identity),
-        &grants,
-        test_plugins(),
-    );
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -2591,36 +2591,24 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
     )
     .unwrap();
     assert_eq!(read["config_execution"]["mutation_entered"], false);
-    node.shutdown().await.expect("shut down test node");
+    fixture
+        .db
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
 }
 
 #[tokio::test]
 async fn agent_category_gates_the_tool() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-gate");
-    let node_did = identity.did().to_string();
-
-    let without_agent = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        node_did.clone(),
-        None,
-        &config(&["tools"]),
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("agent-gate").await;
+    let without_agent = fixture.tools(&["tools"]);
     let error = call_config_tool(&without_agent, vec!["agent".into(), "list".into()])
         .await
         .expect_err("catalog read requires agent grant");
     assert!(error.contains("not granted"), "{error}");
 
-    let with_agent = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        node_did,
-        Some(identity),
-        &config(&["node"]),
-        test_plugins(),
-    );
+    let with_agent = fixture.tools(&["node"]);
     assert!(with_agent
         .iter()
         .any(|tool| tool.name() == CONFIG_TOOL_NAME));
@@ -2628,25 +2616,17 @@ async fn agent_category_gates_the_tool() {
 
 #[tokio::test]
 async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact_signer() {
-    let node = build_agent_node().await;
-    let identity = node_identity("agent-only-owner");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "current").await;
-    let mut tool_config = config(&["agent"]);
-    tool_config.agent_did = "current".into();
-    tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("agent-only-owner").await;
+    fixture.grant_selected_configuration().await;
+    let node = fixture.db.node.clone();
+    let owner = fixture.db.node_identity.did().to_owned();
+    let current = fixture.agent_did();
+    let profile = format!("{current}:inference");
+    let tools = fixture.tools(&["agent"]);
     for argv in [
         vec!["agent", "list"],
-        vec!["agent", "preview", "default", "current"],
-        vec!["agent", "default", "current"],
+        vec!["agent", "preview", "default", current],
+        vec!["agent", "default", current],
         vec![
             "agent",
             "create",
@@ -2655,7 +2635,7 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
             "--system-prompt",
             "Other instructions",
             "--profile",
-            "current:inference",
+            &profile,
         ],
     ] {
         let error = call_config_tool(&tools, argv.into_iter().map(str::to_owned).collect())
@@ -2668,7 +2648,7 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
         vec![
             "agent".into(),
             "update".into(),
-            "current".into(),
+            current.into(),
             "--set".into(),
             r#"display_name="Renamed""#.into(),
         ],
@@ -2677,13 +2657,15 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
     .expect("agent authority can edit its own document");
     let edited: Value = serde_json::from_str(&edited).unwrap();
     assert_eq!(edited["committed"], true);
-    let foreign_identity = node_identity("foreign-signer");
+    let foreign_identity = tokio::task::spawn_blocking(|| node_identity("foreign-signer"))
+        .await
+        .unwrap();
     let params = agent_params(
         "edit",
         None,
         &[
             "--id".into(),
-            "current".into(),
+            current.into(),
             "--display-name".into(),
             "Renamed".into(),
         ],
@@ -2703,22 +2685,11 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
 
 #[tokio::test]
 async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only() {
-    let node = build_agent_node().await;
-    let identity = node_identity("config-inventory");
-    let owner = identity.did().to_string();
-    for agent in ["alpha", "beta", "gamma"] {
-        crate::test_support::install_test_agent(&node, &owner, agent).await;
-    }
-    let mut tool_config = config(&["node", "profile", "backend"]);
-    tool_config.agent_did = "alpha".into();
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("config-inventory").await;
+    fixture.install_sibling("beta").await;
+    fixture.install_sibling("gamma").await;
+    fixture.grant_node_reader().await;
+    let tools = fixture.tools(&["node", "profile", "backend"]);
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -2796,21 +2767,9 @@ async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
             .unwrap();
     });
 
-    let node = build_agent_node().await;
-    let identity = node_identity("local-backend-create");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "setup").await;
-    let mut tool_config = config(&["backend", "profile"]);
-    tool_config.agent_did = "setup".into();
-    tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("local-backend-create").await;
+    fixture.grant_selected_configuration().await;
+    let tools = fixture.tools(&["backend", "profile"]);
     let endpoint = format!("http://{address}/v1");
     let profiles_before: Value = serde_json::from_str(
         &call_config_tool(
@@ -4991,20 +4950,9 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
 
 #[tokio::test]
 async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply() {
-    let node = build_agent_node().await;
-    let identity = node_identity("self-config-lsp-guard");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    let mut tool_config = config(&["tools"]);
-    tool_config.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node,
-        owner,
-        None,
-        &tool_config,
-        test_plugins(),
-    );
+    let fixture = SelfConfigFixture::new("self-config-lsp-guard").await;
+    fixture.grant_selected_configuration().await;
+    let tools = fixture.tools(&["tools"]);
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
