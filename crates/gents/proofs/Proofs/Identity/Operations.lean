@@ -130,6 +130,44 @@ or a consequence of enrollment. Foreign relationships are not assumed to
 replicate. Terminal decisions, revisions and receipts reverse the creator and
 reader roles. A candidate User is a separate identity and must be authenticated
 independently before it is granted access to a decision. -/
+/-- A thin client authors enrollment requests using its own held peer key and
+need not have a Node configuration document. An absent visible Node leaves its
+request owned by that client, with only the verified server's explicit reader
+grant. A runtime with a visible Node links that exact registered parent in the
+same transaction. Neither path invents a Node or restores a revoked grant. -/
+def publishEnrollmentRequest (state : State) (candidate admin id : String)
+    (parent : Option String) (created parentGranted readerGranted committed : Bool) : State :=
+  if created && readerGranted && committed && (parent.isNone || parentGranted) then
+    let created := directCreate state candidate "enrollment_records" id true true
+    let parented := match parent with
+      | none => created
+      | some node => apply created (.grantAs candidate
+          ⟨"enrollment_records", id, "parent", .object "nodes" node⟩)
+    apply parented (.grantAs candidate ⟨"enrollment_records", id, "reader", .actor admin⟩)
+  else state
+
+theorem thin_client_request_remains_creator_owned_and_private :
+    let initial : State := { objects := [], relations := [], enrolled := [] }
+    let published := publishEnrollmentRequest initial "client" "admin" "request" none
+      true false true true
+    (allowed 5 published "client" "enrollment_records" "request" "update",
+     allowed 5 published "admin" "enrollment_records" "request" "read",
+     allowed 5 published "admin" "enrollment_records" "request" "update",
+     allowed 5 published "user" "enrollment_records" "request" "read",
+     allowed 5 published "agent" "enrollment_records" "request" "read",
+     allowed 5 published "outsider" "enrollment_records" "request" "read") =
+      (true, true, false, false, false, false) := by native_decide
+
+theorem parent_failure_aborts_runtime_request (state : State) (candidate admin id node : String)
+    (created reader committed : Bool) :
+    publishEnrollmentRequest state candidate admin id (some node) created false reader committed = state := by
+  simp [publishEnrollmentRequest]
+
+theorem reader_failure_aborts_client_request (state : State) (candidate admin id : String)
+    (created parent committed : Bool) :
+    publishEnrollmentRequest state candidate admin id none created parent false committed = state := by
+  simp [publishEnrollmentRequest]
+
 def enrollmentRequestFixture : State :=
   { objects := [⟨"nodes", "candidate-node", "user"⟩,
       ⟨"enrollment_records", "request", "candidate"⟩],
