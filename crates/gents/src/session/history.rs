@@ -177,30 +177,6 @@ pub(crate) async fn retry_has_published_input(
     }
 }
 
-#[cfg(test)]
-pub(super) async fn load_history_projection(
-    node: &EmbeddedNode,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    through_sequence: Option<u32>,
-    current_input_request_doc_id: Option<&str>,
-) -> Result<Vec<Message>> {
-    Ok(load_sequenced_history_projection(
-        node,
-        session_id,
-        node_did,
-        requester_did,
-        through_sequence,
-        None,
-        current_input_request_doc_id,
-    )
-    .await?
-    .into_iter()
-    .map(|row| row.message)
-    .collect())
-}
-
 pub(crate) async fn load_sequenced_history_projection(
     node: &EmbeddedNode,
     session_id: &str,

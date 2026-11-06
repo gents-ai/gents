@@ -1,6 +1,7 @@
 use super::*;
 use crate::store::config_client::{ConfigAccess, NodePermission};
 use crate::store::identity::{KeyIdentity, NodeIdentity};
+use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{OutputSource, OutputWriter};
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 use gents_protocol::request_admission::{

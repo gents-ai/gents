@@ -2558,11 +2558,11 @@ impl NativeCanonicalExecution {
                 return Err(error.context(detail));
             }
         };
-        let (stored_header, stored_native) = crate::session::load_canonical_message_from_node(
-            &self.node,
+        let (stored_header, stored_native) = crate::session::load_canonical_message(
+            &self.access,
             &published.message_doc_id,
             &self.node_did,
-            Some(&self.requester_did),
+            Some(&self.request_requester_did),
         )
         .await?;
         anyhow::ensure!(

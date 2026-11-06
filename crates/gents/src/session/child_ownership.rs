@@ -1,10 +1,6 @@
 use std::collections::BTreeMap;
-#[cfg(test)]
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
-#[cfg(test)]
-use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
@@ -62,22 +58,6 @@ pub(crate) async fn recover_agent_session_child_relationships_with_access(
     agent: &identity::Did,
 ) -> Result<usize> {
     recover_agent_children(access, node_did, agent, None).await
-}
-
-#[cfg(test)]
-pub(crate) async fn publish_agent_session_child_relationships(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
-    agent: &identity::Did,
-    session_id: &str,
-) -> Result<usize> {
-    publish_agent_session_child_relationships_with_access(
-        &ConfigAccess::local_as(node.clone(), agent.clone()),
-        node_did,
-        agent,
-        session_id,
-    )
-    .await
 }
 
 pub(crate) async fn publish_agent_session_child_relationships_with_access(
