@@ -74,8 +74,6 @@ mod command_policy;
 mod compaction_gate;
 #[path = "conformance/completion_retry.rs"]
 mod completion_retry;
-#[path = "conformance/config_replication.rs"]
-mod config_replication;
 #[path = "conformance/coverage.rs"]
 mod coverage;
 #[path = "conformance/directory_projection.rs"]
