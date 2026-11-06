@@ -89,13 +89,23 @@ impl Harness {
         fields.insert("agent_did".into(), json!(binding.agent_did));
         fields.insert("creation_nonce".into(), json!(binding.creation_nonce));
         fields.insert("node_did".into(), json!(launching.owner()));
-        fields.insert("inference_profile_id".into(), json!("local"));
         config.agents.push(serde_json::from_value(agent).unwrap());
+        let agent_bindings =
+            std::collections::BTreeMap::from([("monitor".into(), binding.clone())]);
+        let bound = crate::pack::BoundPackConfig {
+            installation_doc_id: None,
+            config,
+            agent_bindings: agent_bindings.clone(),
+            provisioned: Vec::new(),
+        };
+        let inference_bindings =
+            std::collections::BTreeMap::from([("primary".into(), "local".into())]);
+        let config = bound
+            .bind_inference(&authored.manifest, &inference_bindings)
+            .unwrap();
         let mut identity =
             crate::pack::PackIdentity::new(&authored.manifest, authored.digest, Vec::new());
-        identity
-            .agent_bindings
-            .insert("monitor".into(), binding.clone());
+        identity.agent_bindings = agent_bindings;
         crate::pack::install_pack_documents(
             &launching.access,
             launching.owner(),
@@ -183,6 +193,39 @@ impl Harness {
                 trial_budget: None,
             },
         }
+    }
+}
+
+#[tokio::test]
+async fn fixture_installs_bound_pack_documents_with_authored_origin() {
+    let harness = Harness::new().await;
+    let response = harness
+        .access()
+        .execute(
+            "{ Agent { agent_did tags } AgentContext { context_id tags } Tools { tools_id tags } }",
+        )
+        .await
+        .unwrap();
+    for (collection, field, expected) in [
+        ("Agent", "agent_did", harness.binding.agent_did.as_str()),
+        ("AgentContext", "context_id", "monitor-context"),
+        ("Tools", "tools_id", "monitor-tools"),
+    ] {
+        let rows = response["data"][collection].as_array().unwrap();
+        let matching = rows
+            .iter()
+            .filter(|row| row[field] == expected)
+            .collect::<Vec<_>>();
+        let [row] = matching.as_slice() else {
+            panic!("fixture {collection} must be unique")
+        };
+        let tags = row["tags"]
+            .as_array()
+            .expect("pack origin tags must be present");
+        assert!(
+            tags.iter().any(|tag| tag == "gents:pack:monitor_fixture"),
+            "{collection} lost its pack origin"
+        );
     }
 }
 
