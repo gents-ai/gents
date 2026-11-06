@@ -244,6 +244,17 @@ where
 #[cfg(test)]
 mod admission_tests;
 
+// Provider futures can be large; construct them outside the stream poll frame
+// so the idle monitor does not embed the provider's entire state machine.
+#[inline(never)]
+fn box_provider_call<F, Fut>(call: F) -> Pin<Box<Fut>>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future,
+{
+    Box::pin(call())
+}
+
 fn owned_loop_stream<M, H>(
     model: M,
     hook: Option<H>,
@@ -473,11 +484,14 @@ where
                     let dispatch_idle_timeout = config.provider_idle_timeout;
                     let (reply, result) = tokio::sync::oneshot::channel();
                     yield OwnedLoopItem::ProviderWork(Box::pin(async move {
-                        let outcome = within_provider_idle(
+                        let dispatch = box_provider_call(move || async move {
                             crate::provider_input::routing_affinity::scope(
                                 dispatch_affinity,
                                 dispatch_model.stream(dispatch_request),
-                            ),
+                            ).await
+                        });
+                        let outcome = within_provider_idle(
+                            dispatch,
                             dispatch_idle_timeout,
                             dispatch_activity.as_deref(),
                             true,
