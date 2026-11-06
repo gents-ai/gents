@@ -876,9 +876,9 @@ async fn stored_catalog_row(
 ) -> Result<serde_json::Value> {
     let filter = scope_filter(&backend.node_did, &backend.backend_id)?;
     let response = access.execute(&format!(
-        "{{ InferenceBackend(filter: {filter}) {{ _docID backend_id catalogs catalog_freshness }} }}"
+        "{{ InferenceBackendObservation(filter: {filter}) {{ _docID metadata_doc_id backend_id catalogs catalog_freshness }} }}"
     )).await?;
-    Ok(response["data"]["InferenceBackend"][0].clone())
+    Ok(response["data"]["InferenceBackendObservation"][0].clone())
 }
 
 fn catalog_action(
@@ -906,15 +906,15 @@ fn catalog_action(
 
 #[tokio::test]
 async fn generated_catalog_refreshes_preserve_payload_commits_and_latest_freshness() -> Result<()> {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
-    crate::ensure_runtime_schemas(&node).await?;
-    crate::ensure_node(&node, &base_backend().node_did).await?;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let (db, _user, access) =
+        crate::test_support::signed_test_node_without_agent("registry-generated-catalog").await;
+    let node = db.node.clone();
     for (index, case) in crate::lean_vocab_test::lean_catalog_refresh_cases()
         .iter()
         .enumerate()
     {
         let mut backend = base_backend();
+        backend.node_did = db.node_identity.did().to_owned();
         backend.backend_id = format!("catalog-case-{index}");
         crate::store::config_client::write_inference_backend_document(&access, &backend).await?;
         let row = stored_catalog_row(&access, &backend).await?;
@@ -929,7 +929,7 @@ async fn generated_catalog_refreshes_preserve_payload_commits_and_latest_freshne
         }
         let mut writes = [0_u64; 2];
         for action in case["actions"].as_array().unwrap() {
-            record_model_catalog(&node, &backend, catalog_action(action, &backend)?).await?;
+            record_catalog_for_runtime(&node, &backend, catalog_action(action, &backend)?).await?;
             for (index, field) in fields.iter().enumerate() {
                 let current = crate::inference::rendered_request::commits::field_commit(
                     &access, doc_id, field,
@@ -950,9 +950,10 @@ async fn generated_catalog_refreshes_preserve_payload_commits_and_latest_freshne
         );
         let row = stored_catalog_row(&access, &backend).await?;
         let raw: InferenceBackendObservation = serde_json::from_value(row.clone())?;
-        let projected = lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
-            .await?
-            .unwrap();
+        let projected =
+            lookup_backend_observation_for_runtime(&node, &backend.node_did, &backend.backend_id)
+                .await?
+                .unwrap();
         if case["expected"].is_null() {
             assert!(raw.catalogs.is_empty());
             assert!(projected.catalogs.is_empty());
@@ -982,20 +983,11 @@ async fn generated_catalog_refreshes_preserve_payload_commits_and_latest_freshne
 
 #[tokio::test]
 async fn catalog_freshness_survives_reopen_and_adopts_retained_payloads() -> Result<()> {
-    use crate::NodeIdentity as _;
-    let directory = tempfile::tempdir()?;
-    let identity = crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
-    let open = || {
-        crate::defra_node::Node::builder()
-            .data_path(directory.path())
-            .with_node_identity_did(identity.did())
-            .build()
-    };
-    let node = std::sync::Arc::new(open().await?);
-    crate::ensure_runtime_schemas(&node).await?;
-    let backend = base_backend();
-    crate::ensure_node(&node, &backend.node_did).await?;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let (mut db, user, access) =
+        crate::test_support::signed_test_node_without_agent("registry-reopen").await;
+    let node = db.node.clone();
+    let mut backend = base_backend();
+    backend.node_did = db.node_identity.did().to_owned();
     crate::store::config_client::write_inference_backend_document(&access, &backend).await?;
     let case = crate::lean_vocab_test::lean_catalog_refresh_cases()
         .iter()
@@ -1003,38 +995,52 @@ async fn catalog_freshness_survives_reopen_and_adopts_retained_payloads() -> Res
         .unwrap();
     let actions = case["actions"].as_array().unwrap();
     let original = catalog_action(&actions[0], &backend)?;
-    access.write("test.catalog.retained", &format!(
-        "mutation {{ update_InferenceBackend(filter: {}, input: {{ catalogs: {} }}) {{ _docID }} }}",
-        scope_filter(&backend.node_did, &backend.backend_id)?,
-        gents_protocol::graphql::graphql_input_literal(&serde_json::json!({"entries":[original.clone()]}))?
-    )).await?;
+    let row = stored_catalog_row(&access, &backend).await?;
+    let observation_doc = row["_docID"]
+        .as_str()
+        .context("observation document")?
+        .to_owned();
+    access.transact_write("test.catalog.retained", |txn| {
+        let doc = observation_doc.clone();
+        let original = original.clone();
+        Box::pin(async move {
+            txn.execute_client_signed_update(
+                &format!(r#"mutation($input: InferenceBackendObservationMutationInputArg!) {{ update_InferenceBackendObservation(docID: "{}", input: $input) {{ _docID }} }}"#, escape_graphql_string(&doc)),
+                &serde_json::json!({"input": {"catalogs": {"entries": [original]}}}),
+                gents_protocol::schemas::INFERENCE_BACKEND_OBSERVATION,
+            ).await?;
+            Ok::<(), anyhow::Error>(())
+        })
+    }).await?;
+
     let row = stored_catalog_row(&access, &backend).await?;
     assert!(row["catalog_freshness"].is_null());
     assert_eq!(
         decode_backend_observation(row)?.catalogs,
         std::slice::from_ref(&original)
     );
-    record_model_catalog(&node, &backend, original.clone()).await?;
-    record_model_catalog(&node, &backend, catalog_action(&actions[1], &backend)?).await?;
+    record_catalog_for_runtime(&node, &backend, original.clone()).await?;
+    record_catalog_for_runtime(&node, &backend, catalog_action(&actions[1], &backend)?).await?;
     let stored = stored_catalog_row(&access, &backend).await?;
     assert_eq!(
         serde_json::from_value::<InferenceBackendObservation>(stored.clone())?.catalogs,
         [original]
     );
     drop(access);
-    node.shutdown().await.expect("node shutdown");
     drop(node);
-    let node = std::sync::Arc::new(open().await?);
-    record_model_catalog(&node, &backend, catalog_action(&actions[2], &backend)?).await?;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    db.simulate_process_crash().await?;
+    let node = db.node.clone();
+    record_catalog_for_runtime(&node, &backend, catalog_action(&actions[2], &backend)?).await?;
+    let access = db.client_access(&user);
     assert_eq!(
         stored_catalog_row(&access, &backend).await?,
         stored,
         "a delayed result after reopen must not write either payload or freshness"
     );
-    let observed = lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
-        .await?
-        .unwrap();
+    let observed =
+        lookup_backend_observation_for_runtime(&node, &backend.node_did, &backend.backend_id)
+            .await?
+            .unwrap();
     assert_eq!(
         serde_json::to_string(&observed.catalogs[0].models)?,
         case["expected"]["payload"].as_str().unwrap()
