@@ -4,7 +4,6 @@ import { createStore } from "zustand/vanilla";
 import { FieldRows } from "@gents/ui/components/field";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@gents/ui/components/tabs";
 import type {
-  Invite,
   SharingAvailability,
   SharingDecision,
   SharingMember,
@@ -12,10 +11,9 @@ import type {
 import { useThisAppDid } from "@/hooks/useClient";
 import { EmptyList } from "../agent/ListDetail";
 import { DecisionRow } from "./History";
-import { InviteRow } from "./Invites";
 import { MemberRow } from "./Members";
 
-export type SharingTab = "access" | "invites" | "history";
+export type SharingTab = "access" | "history";
 
 /* this app's own pairing leads; the rest keep the runtime's order */
 const appFirst = (members: SharingMember[], appDid: string | null | undefined) =>
@@ -31,15 +29,14 @@ const chosen = createStore<{ tab: SharingTab }>(() => ({ tab: "access" }));
 export const chooseSharingTab = (tab: SharingTab) => chosen.setState({ tab });
 export const resetSharingTab = () => chosen.setState({ tab: "access" });
 
-/** The node's sharing one view at a time: who has access, the open invites,
-    and what was decided. A view the runtime doesn't offer is left out; the
+/** The node's sharing one view at a time: who has access, and what was
+    decided. A view the runtime doesn't offer is left out; the
     line under the tabs names it. */
 export function SharingTabs({
   nodeDid,
   name,
   available,
   members,
-  invites,
   history,
   historyLeftOut,
   note,
@@ -48,7 +45,6 @@ export function SharingTabs({
   name: string;
   available: SharingAvailability;
   members: SharingMember[];
-  invites: Invite[];
   history: SharingDecision[];
   /** what the history leaves out, under its list */
   historyLeftOut: string | null;
@@ -60,9 +56,6 @@ export function SharingTabs({
   const tabs: { id: SharingTab; label: string; count?: number }[] = [
     ...(available.members
       ? [{ id: "access" as const, label: "Access", count: members.length }]
-      : []),
-    ...(available.invites
-      ? [{ id: "invites" as const, label: "Invites", count: invites.length }]
       : []),
     ...(available.history ? [{ id: "history" as const, label: "History" }] : []),
   ];
@@ -93,13 +86,6 @@ export function SharingTabs({
         >
           {appFirst(members, thisApp).map((member) => (
             <MemberRow key={member.requestId} nodeDid={nodeDid} member={member} />
-          ))}
-        </List>
-      </TabsContent>
-      <TabsContent value="invites">
-        <List label="Open invites" empty="No open invites." count={invites.length}>
-          {invites.map((invite) => (
-            <InviteRow key={invite.inviteId} nodeDid={nodeDid} invite={invite} />
           ))}
         </List>
       </TabsContent>
@@ -143,12 +129,11 @@ function List({
 const PARTS: { key: keyof SharingAvailability; name: string; one: boolean }[] = [
   { key: "requests", name: "Requests to join", one: false },
   { key: "members", name: "Access", one: true },
-  { key: "invites", name: "Invites", one: false },
   { key: "history", name: "History", one: true },
 ];
 
 /** what the node's runtime doesn't offer yet, in one sentence, or null when
-    it offers everything: "Invites and history need a newer runtime on
+    it offers everything: "Access and history need a newer runtime on
     Forge." */
 export function missingText(available: SharingAvailability, name: string) {
   const missing = PARTS.filter((p) => !available[p.key]);

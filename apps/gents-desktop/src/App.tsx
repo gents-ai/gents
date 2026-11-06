@@ -53,7 +53,6 @@ import { isLocalNode, nodeSetUp } from "./ui/lib/firstRun";
 import { useUxHost } from "./ui/hooks/useUxHost";
 import { useHistoryInputs } from "./ui/lib/history-inputs";
 import {
-  bindHomeNode,
   bindNav,
   interceptNavClicks,
   navigate,
@@ -221,7 +220,6 @@ function AppBody() {
     fleetNodes(state).some((node) => isLocalNode(node, homeDid)),
   );
   useNativeWindowReadiness(startup.phase === "ready" && firstRun.settled);
-  useEffect(() => bindHomeNode(homeDid), [homeDid]);
   useOutsideLinks(
     startup.phase === "ready" && firstRun.settled && firstRun.phase !== "active",
   );

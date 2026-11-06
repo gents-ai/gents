@@ -5,7 +5,6 @@ import App from "../../src/App";
 import { setTimingForTests } from "../../src/hooks/timing";
 import { createDesktopUiHarness } from "./desktopHarness";
 import { createLiveDesktopUiHarness } from "./liveBridgeHarness";
-import { seedHarnessJoining } from "./sharingHarness";
 
 declare global {
   interface Window {
@@ -90,10 +89,6 @@ if (backend === "deterministic" && params.get("scenario") === "notices") {
   harness.adapter.getInferenceSetupCatalog = async () => {
     throw new Error("setup catalog: connection refused (os error 61)");
   };
-}
-
-if (backend === "deterministic") {
-  seedHarnessJoining(params.get("scenario"));
 }
 
 document.documentElement.dataset.desktopUiHarnessBackend = backend;

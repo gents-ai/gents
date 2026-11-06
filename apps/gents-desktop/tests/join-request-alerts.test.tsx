@@ -81,7 +81,7 @@ describe("telling the person about requests to join", () => {
     const { api } = show();
     const notice = await screen.findByRole("status", { name: /asks to join/ });
     expect(screen.getAllByRole("status", { name: /asks to join/ })).toHaveLength(1);
-    expect(notice.textContent).toContain("no invite · wants the whole node");
+    expect(notice.textContent).toContain(" · wants the whole node");
     expect(notice.textContent).toContain("A device asks to join");
     fireEvent.click(screen.getByRole("button", { name: "Review" }));
     const dialog = await screen.findByTestId("join-request-dialog");
