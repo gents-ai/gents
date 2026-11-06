@@ -99,15 +99,16 @@ async fn notification_texts(admission: &PublishedAdmission) -> Vec<(Value, Strin
         r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID request_doc_id role publication }} }}"#,
         escape_graphql_string(&admission.tool.session_id)
     );
-    let headers = rows(&admission.node, &query, "AgentMessage").await;
+    let response = admission.client.execute(&query).await.unwrap();
+    let headers = response["data"]["AgentMessage"].as_array().unwrap().clone();
     let mut notifications = Vec::new();
     for header in headers {
         let doc_id = header["_docID"].as_str().unwrap();
-        let (_, native) = crate::session::load_canonical_message_from_node(
-            &admission.node,
+        let (_, native) = crate::session::load_canonical_message(
+            &admission.client,
             doc_id,
             &admission.node_did,
-            Some(&admission.node_did),
+            Some(admission.requester_identity.did()),
         )
         .await
         .expect("reconstruct exact canonical header");
@@ -521,7 +522,6 @@ pub(crate) async fn selected_background_wake_with_successor(
     let node = &admission.node;
     let did = &admission.node_did;
     let session = admission.tool.session_id.clone();
-    crate::test_support::install_test_agent(node, did, "general").await;
 
     let mut wait = publish_accepted_on_claimed_request(
         node.clone(),
@@ -591,30 +591,33 @@ pub(crate) async fn selected_background_wake_with_successor(
     let notifications = notification_texts(&admission).await;
     assert_eq!(notifications.len(), 1);
     let notification_id = notifications[0].0["_docID"].as_str().unwrap();
-    let (wait_record, wait_native) =
-        crate::session::load_canonical_message_from_node(node, &wait_header, did, Some(did))
-            .await
-            .unwrap();
-    let (notification_record, _) =
-        crate::session::load_canonical_message_from_node(node, notification_id, did, Some(did))
-            .await
-            .unwrap();
+    let (wait_record, wait_native) = crate::session::load_canonical_message(
+        &admission.client,
+        &wait_header,
+        did,
+        Some(admission.requester_identity.did()),
+    )
+    .await
+    .unwrap();
+    let (notification_record, _) = crate::session::load_canonical_message(
+        &admission.client,
+        notification_id,
+        did,
+        Some(admission.requester_identity.did()),
+    )
+    .await
+    .unwrap();
     assert!(matches!(wait_native, Message::Assistant { ref content, .. }
         if content.iter().any(|part| matches!(part, AssistantContent::ToolCall(call) if call.function.name == crate::tools::native::LIST_PROCESSES_TOOL_NAME))));
     assert!(wait_record.sequence < notification_record.sequence);
     assert!(notifications[0].1.contains("<tool-completion"));
     assert!(notifications[0].1.contains("durable native output"));
 
-    let requests = rows(
-        node,
-        &format!(
-            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ {} lifecycle_state }} }}"#,
-            escape_graphql_string(&session),
-            crate::request::watcher::AGENT_REQUEST_FIELDS,
-        ),
-        "AgentRequest",
-    )
-    .await;
+    let response = admission.client.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ {} lifecycle_state }} }}"#,
+        escape_graphql_string(&session), crate::request::watcher::AGENT_REQUEST_FIELDS,
+    )).await.unwrap();
+    let requests = response["data"]["AgentRequest"].as_array().unwrap().clone();
     let wakes: Vec<gents_protocol::row::AgentRequestRow> = requests
         .into_iter()
         .map(|row| serde_json::from_value(row).unwrap())
@@ -655,7 +658,15 @@ pub(crate) async fn selected_background_wake_with_successor(
             .unwrap(),
         TerminalizeResult::Won
     );
-    let mut watcher = DefraWatcher::new_legacy(node.clone(), did).expect("request watcher");
+    let signer = admission
+        .tool
+        .access()
+        .unwrap()
+        .managed_agent_signer()
+        .unwrap();
+    let mut watcher =
+        DefraWatcher::for_agents(node.clone(), did, vec![std::sync::Arc::new(signer)])
+            .expect("request watcher");
     let selected = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             let selected = watcher
@@ -707,6 +718,13 @@ async fn generated_r6_notification_precedes_continuation_claim() {
         selected,
         60,
     );
+    let signer = admission
+        .tool
+        .access()
+        .unwrap()
+        .managed_agent_signer()
+        .unwrap();
+    continuation.bind_managed_agent(&signer).unwrap();
     assert_eq!(
         continuation.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed,
@@ -717,10 +735,14 @@ async fn generated_r6_notification_precedes_continuation_claim() {
         after, notifications,
         "claim preserves immutable notification history"
     );
-    let (_, wait_after) =
-        crate::session::load_canonical_message_from_node(node, &wait_header, did, Some(did))
-            .await
-            .unwrap();
+    let (_, wait_after) = crate::session::load_canonical_message(
+        &admission.client,
+        &wait_header,
+        did,
+        Some(admission.requester_identity.did()),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         wait_after, wait_native,
         "claim preserves the preceding assistant wait"
