@@ -640,124 +640,68 @@ mod tests {
         use crate::request::lifecycle::RequestTerminalOutcome;
         use crate::request::streaming::DefraStreamWriter;
         use crate::tools::call::lifecycle::admission_fixture::{
-            claimed_signed_request, publish_accepted_on_claimed_request,
+            pending_client_fixture_request, publish_accepted_on_claimed_request,
         };
         use crate::tools::call::lifecycle::{AwaitMode, FailureClass};
+        use crate::NodeIdentity;
         use gents_protocol::message::{AssistantContent, Message, Text};
         use gents_protocol::output::TerminalOutput;
         let home = EmbeddedHome::create_temp("observe-evidence").await.unwrap();
-        let did = home.did().to_owned();
-        let binding =
-            crate::store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
-        let owner = ConfigAccess::local_as(home.node.clone(), identity::Did::new(&did).unwrap());
-        let (node_doc, agent_doc) = owner
-            .transact_write("test.observe.household", |txn| {
-                let binding = &binding;
-                let did = &did;
-                Box::pin(async move {
-                    let node = txn.execute_with_variables(
-                        "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
-                        &serde_json::json!({"input": {"node_did": did}}),
-                    ).await?;
-                    let agent = txn.execute_with_variables(
-                        "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
-                        &serde_json::json!({"input": {"node_did": did, "agent_did": binding.agent_did,
-                            "creation_nonce": binding.creation_nonce, "inference_profile_id": "test-profile"}}),
-                    ).await?;
-                    Ok::<_, anyhow::Error>((
-                        crate::store::graphql::created_doc_id(&node, "Node")?,
-                        crate::store::graphql::created_doc_id(&agent, "Agent")?,
-                    ))
-                })
-            })
-            .await
-            .unwrap();
-        owner
-            .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
-            .await
-            .unwrap();
-        owner
-            .add_actor_relationship(
-                "Agent",
-                &agent_doc,
-                "executor",
-                &identity::Did::new(&binding.agent_did).unwrap(),
-            )
-            .await
-            .unwrap();
-        let agent_identity =
-            crate::store::identity::resolve_agent_identity(home.identity.as_ref(), &binding)
-                .unwrap();
-        let agent_access = ConfigAccess::local_managed_agent(
-            home.node.clone(),
-            identity::Did::new(&binding.agent_did).unwrap(),
-            agent_identity.as_ref(),
-        )
-        .unwrap();
-        let session_doc = agent_access
-            .transact_write("test.observe.session", |txn| {
-                let did = &did;
-                let agent_did = &binding.agent_did;
-                Box::pin(async move {
-                    crate::session::ensure_session_in_txn(
-                        txn,
-                        "s-evidence",
-                        did,
-                        agent_did,
-                        Some(agent_did),
-                        None,
-                        None,
-                        "2026-01-01T00:00:00Z",
-                    )
-                    .await?;
-                    Ok::<_, anyhow::Error>(
-                        crate::session::load_agent_session_owner_in_txn(txn, did, "s-evidence")
-                            .await?
-                            .unwrap()
-                            .doc_id,
-                    )
-                })
-            })
-            .await
-            .unwrap();
-        crate::session::grant_created_session_relationships(
-            &agent_access,
-            &session_doc,
-            &agent_doc,
+        let db = crate::support::test_db_from_home(home);
+        let (db, user, client, binding) =
+            crate::test_support::signed_test_node_from_db(db, "observe-evidence").await;
+        let did = db.node_identity.did().to_owned();
+        crate::eval::runner::embedded::executor::install::grant_trial_operations(
+            &db.home,
             &binding.agent_did,
         )
         .await
         .unwrap();
-        let mut request = claimed_signed_request(
-            &home.node,
-            "req-evidence",
-            "s-evidence",
-            home.identity.as_ref(),
-            None,
+        let agent_identity =
+            crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+                .unwrap();
+        let agent_access = ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            identity::Did::new(&binding.agent_did).unwrap(),
+            agent_identity.as_ref(),
         )
-        .await;
-        agent_access
-            .add_resource_relationship(
-                "AgentRequest",
-                &request.request().doc_id,
-                "parent",
-                "agents",
-                &agent_doc,
-            )
+        .unwrap();
+        let create = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            "req-evidence",
+            &did,
+            user.did(),
+            &binding.agent_did,
+            "s-evidence",
+            "x",
+            "interactive",
+            "2026-01-01T00:00:00Z".to_owned(),
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+        );
+        let mut request = pending_client_fixture_request(
+            &db.node,
+            &client,
+            db.node_identity.clone(),
+            &user,
+            agent_identity.as_ref(),
+            create,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            request.claim_with_identity().await.unwrap(),
+            crate::request::lifecycle::ClaimOutcome::Claimed
+        );
+        let sessions = client
+            .execute("{ AgentSession(filter: {session_id: {_eq: \"s-evidence\"}}) { _docID } }")
             .await
             .unwrap();
-        agent_access
-            .add_resource_relationship(
-                "AgentRequest",
-                &request.request().doc_id,
-                "session",
-                "sessions",
-                &session_doc,
-            )
-            .await
-            .unwrap();
+        let session_doc = sessions["data"]["AgentSession"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         let mut tool = publish_accepted_on_claimed_request(
-            home.node.clone(),
+            db.node.clone(),
             &mut request,
             &did,
             0,
@@ -773,7 +717,7 @@ mod tests {
             .await
             .unwrap();
         let writer = DefraStreamWriter::new_for_lifecycle(
-            home.node.clone(),
+            db.node.clone(),
             &request,
             Duration::from_millis(1),
         )
@@ -910,7 +854,7 @@ mod tests {
             classify_request_outcome(Some(RequestLifecycleState::Failed), false, &evidence),
             Some("tool")
         );
-        home.node.shutdown().await.expect("shutdown node");
+        db.node.shutdown().await.expect("shutdown node");
     }
 
     #[tokio::test]

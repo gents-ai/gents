@@ -20,7 +20,7 @@ pub struct RetainedRequest {
     pub request: AgentRequestRow,
 }
 
-/// Reads request content and lineage with the retained trial's existing key.
+/// Reads request content and lineage as the held evaluator who created the trial.
 /// No runtime or schema installer is started. The blocking task owns the home
 /// until shutdown, even if the caller drops its future; a query panic also
 /// unwinds only after shutdown.
@@ -28,6 +28,7 @@ pub async fn inspect_retained_requests(
     runtime: &tokio::runtime::Handle,
     runs_dir: &Path,
     locator: &TrialLocator,
+    evaluator: &dyn crate::NodeIdentity,
 ) -> Result<Vec<RetainedRequest>> {
     let hint = locator
         .home_hint
@@ -36,6 +37,12 @@ pub async fn inspect_retained_requests(
     let trial_dir = retained_trial_dir(runs_dir, hint)?;
     let home_dir = trial_dir.join("home");
     let did = locator.trial_node_did.clone();
+    let signing = evaluator.client_signing_capability()?;
+    ensure!(
+        signing.did() == evaluator.did(),
+        "held evaluator signing capability does not match its DID"
+    );
+    let evaluator_did = identity::Did::new(evaluator.did())?;
     crate::store::local::storage_backend::drive_unsendable(runtime, move || async move {
         let home = EmbeddedHome::open_for_inspection(&home_dir, &did)
             .await
@@ -45,7 +52,7 @@ pub async fn inspect_retained_requests(
                     home_dir.display()
                 )
             })?;
-        let result = std::panic::AssertUnwindSafe(read_requests(&home))
+        let result = std::panic::AssertUnwindSafe(read_requests(&home, evaluator_did))
             .catch_unwind()
             .await;
         if let Err(error) = home.node.shutdown().await {
@@ -92,8 +99,11 @@ pub(super) fn retained_trial_dir(runs_dir: &Path, hint: &str) -> Result<PathBuf>
     Ok(trial_dir)
 }
 
-async fn read_requests(home: &EmbeddedHome) -> Result<Vec<RetainedRequest>> {
-    let access = ConfigAccess::local(home.node.clone());
+async fn read_requests(
+    home: &EmbeddedHome,
+    evaluator: identity::Did,
+) -> Result<Vec<RetainedRequest>> {
+    let access = ConfigAccess::local_as(home.node.clone(), evaluator);
     let query = format!(
         r#"{{ AgentRequest(
             filter: {{ node_did: {{ _eq: "{}" }} }},
@@ -250,10 +260,14 @@ mod tests {
         let key = std::fs::read(path.join("node.key")).unwrap();
         let at = locator(&did, "trial");
         for _ in 0..2 {
-            let requests =
-                inspect_retained_requests(&crate::test_support::runtime_handle(), runs.path(), &at)
-                    .await
-                    .unwrap();
+            let requests = inspect_retained_requests(
+                &crate::test_support::runtime_handle(),
+                runs.path(),
+                &at,
+                &user,
+            )
+            .await
+            .unwrap();
             assert_eq!(requests.len(), 2);
             assert_eq!(requests[0].request.content.as_deref(), Some(content));
             assert!(!requests[0].request_doc_id.is_empty());
@@ -295,12 +309,30 @@ mod tests {
     async fn retained_requests_refuse_missing_mismatched_and_held_homes() {
         let runs = tempfile::tempdir().unwrap();
         let path = runs.path().join("trial/home");
+        let evaluator =
+            KeyIdentity::load_or_create(runs.path().join("evaluator.key"), None).unwrap();
         let home = EmbeddedHome::create_retained(&path).await.unwrap();
         let at = locator(home.did(), "trial");
-        let held =
-            inspect_retained_requests(&crate::test_support::runtime_handle(), runs.path(), &at)
+        let admin =
+            ConfigAccess::local_as(home.node.clone(), identity::Did::new(home.did()).unwrap());
+        for permission in [
+            crate::store::config_client::NodePermission::CollectionGet,
+            crate::store::config_client::NodePermission::DocumentRead,
+        ] {
+            admin
+                .grant_node_permission(&identity::Did::new(evaluator.did()).unwrap(), permission)
                 .await
-                .unwrap_err();
+                .unwrap();
+        }
+        drop(admin);
+        let held = inspect_retained_requests(
+            &crate::test_support::runtime_handle(),
+            runs.path(),
+            &at,
+            &evaluator,
+        )
+        .await
+        .unwrap_err();
         let held_text = format!("{held:#}");
         assert!(
             held_text.contains("already open in this process")
@@ -315,6 +347,7 @@ mod tests {
             &crate::test_support::runtime_handle(),
             runs.path(),
             &locator("did:key:other", "trial"),
+            &evaluator,
         )
         .await
         .unwrap_err();
@@ -325,16 +358,21 @@ mod tests {
         assert!(inspect_retained_requests(
             &crate::test_support::runtime_handle(),
             runs.path(),
-            &at
+            &at,
+            &evaluator
         )
         .await
         .unwrap()
         .is_empty());
         std::fs::remove_file(path.join("node.key")).unwrap();
-        let missing =
-            inspect_retained_requests(&crate::test_support::runtime_handle(), runs.path(), &at)
-                .await
-                .unwrap_err();
+        let missing = inspect_retained_requests(
+            &crate::test_support::runtime_handle(),
+            runs.path(),
+            &at,
+            &evaluator,
+        )
+        .await
+        .unwrap_err();
         assert!(
             format!("{missing:#}").contains("identity key does not exist"),
             "{missing:#}"
@@ -344,6 +382,7 @@ mod tests {
             &crate::test_support::runtime_handle(),
             runs.path(),
             &locator(&at.trial_node_did, "missing"),
+            &evaluator,
         )
         .await
         .unwrap_err();
@@ -355,13 +394,19 @@ mod tests {
     async fn failed_inspection_releases_the_store_without_installing_schemas() {
         let runs = tempfile::tempdir().unwrap();
         let path = runs.path().join("trial/home");
+        let evaluator =
+            KeyIdentity::load_or_create(runs.path().join("evaluator.key"), None).unwrap();
         std::fs::create_dir_all(&path).unwrap();
         let identity = KeyIdentity::load_or_create(path.join("node.key"), None).unwrap();
         let at = locator(identity.did(), "trial");
-        let missing =
-            inspect_retained_requests(&crate::test_support::runtime_handle(), runs.path(), &at)
-                .await
-                .unwrap_err();
+        let missing = inspect_retained_requests(
+            &crate::test_support::runtime_handle(),
+            runs.path(),
+            &at,
+            &evaluator,
+        )
+        .await
+        .unwrap_err();
         assert!(
             format!("{missing:#}").contains("no existing database"),
             "{missing:#}"
@@ -377,10 +422,14 @@ mod tests {
         node.shutdown().await.expect("shutdown node");
         drop(node);
         for _ in 0..2 {
-            let error =
-                inspect_retained_requests(&crate::test_support::runtime_handle(), runs.path(), &at)
-                    .await
-                    .unwrap_err();
+            let error = inspect_retained_requests(
+                &crate::test_support::runtime_handle(),
+                runs.path(),
+                &at,
+                &evaluator,
+            )
+            .await
+            .unwrap_err();
             let error = format!("{error:#}");
             assert!(error.contains("no existing database"), "{error}");
             assert!(!error.contains("already open"), "{error}");
