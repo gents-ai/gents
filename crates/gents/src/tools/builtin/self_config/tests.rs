@@ -4478,19 +4478,19 @@ async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
 
 #[tokio::test]
 async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
-    let node = build_agent_node().await;
-    let identity = node_identity("self-config-account");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "acct").await;
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), "acct".into()).unwrap();
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let fixture = SelfConfigFixture::new("self-config-account").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_selected_backend_writer().await;
+    let owner = fixture.node_did();
+    let backend_id = format!("{}:backend", fixture.agent_did());
+    let core = fixture.core();
+    let access = fixture.user_access();
     let store = |kind: &str, auth: Value| {
         let backend: crate::InferenceBackend = serde_json::from_value(json!({
-            "node_did": owner, "backend_id": "acct:backend", "name": "Test inference",
+            "node_did": owner, "backend_id": backend_id, "name": "Test inference",
             "provider_kind": kind, "endpoint": "http://127.0.0.1:1/v1", "auth": auth,
         }))
         .unwrap();
-        let access = &access;
         async move {
             crate::store::config_client::write_inference_backend_document(access, &backend)
                 .await
