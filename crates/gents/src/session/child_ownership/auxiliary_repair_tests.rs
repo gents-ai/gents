@@ -69,6 +69,7 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
             EmbeddedNode::builder()
                 .with_node_identity_did(root.did())
                 .with_node_acp_enabled()
+                .with_node_acp_owner(root.did().to_owned())
                 .build()
                 .await
                 .unwrap(),
