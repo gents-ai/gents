@@ -1,9 +1,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
+  closeSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -386,6 +389,7 @@ async function waitForScenario({
     }
 
     if (!processIsAlive(pid)) {
+      captureSimulatorLog(deviceId, artifactRoot, runIndex);
       throw new Error(
         `Gents exited during native E2E${
           lastStage ? ` at stage ${lastStage}` : ""
@@ -404,6 +408,44 @@ async function waitForScenario({
   throw new Error(
     `Native app E2E timed out${lastStage ? ` at stage ${lastStage}` : ""}`,
   );
+}
+
+function captureSimulatorLog(deviceId, artifactRoot, runIndex) {
+  let output;
+  try {
+    output = openSync(join(artifactRoot, `run-${runIndex}-simulator.log`), "w");
+    const result = spawnSync(
+      "xcrun",
+      [
+        "simctl", "spawn", deviceId, "log", "show", "--style", "compact",
+        "--last", "10m", "--info", "--predicate", 'process == "Gents"',
+      ],
+      { stdio: ["ignore", output, "pipe"], encoding: "utf8", timeout: 10_000 },
+    );
+    if (result.status !== 0) {
+      process.stderr.write(
+        `Simulator log warning: ${result.error?.message ?? result.stderr?.trim() ?? result.status}\n`,
+      );
+    }
+  } catch (error) {
+    process.stderr.write(`Simulator log warning: ${error.message}\n`);
+  } finally {
+    if (output !== undefined) closeSync(output);
+  }
+}
+
+function preserveScenarioFiles(statusPath, eventsPath, artifactRoot, runIndex) {
+  for (const [source, suffix] of [
+    [statusPath, "status.json"],
+    [eventsPath, "events.jsonl"],
+  ]) {
+    if (!existsSync(source)) continue;
+    try {
+      copyFileSync(source, join(artifactRoot, `run-${runIndex}-${suffix}`));
+    } catch (error) {
+      process.stderr.write(`Scenario artifact warning: ${error.message}\n`);
+    }
+  }
 }
 
 function sampleProcess(pid) {
@@ -576,53 +618,63 @@ try {
 
       process.stdout.write(`\nRunning isolated prompt round-trip ${index}/${runs}…\n`);
       const launchedAt = process.hrtime.bigint();
-      const launchResult = capture(
-        "xcrun",
-        [
-          "simctl",
-          "launch",
-          "--terminate-running-process",
-          `--stdout=${join(artifactRoot, `app-${index}.stdout.log`)}`,
-          `--stderr=${join(artifactRoot, `app-${index}.stderr.log`)}`,
-          device.udid,
-          APP_BUNDLE_ID,
-        ],
-        { env: launchEnvironment },
-      );
-      const pid = Number.parseInt(launchResult.match(/: (\d+)\s*$/)?.[1] ?? "", 10);
-      if (!Number.isInteger(pid)) {
-        throw new Error(`Could not parse Gents simulator PID from ${launchResult}`);
-      }
-      const scenarioEvidence = await waitForScenario({
-        deviceId: device.udid,
-        pid,
-        runIndex: index,
-        artifactRoot,
-        statusPath,
-        eventsPath,
-        enrollmentOperator,
-        reconnectFixture,
-      });
-      if (measurePerformance) {
-        const events = readEvents(eventsPath);
-        const boundaries = eventBoundaries(events);
-        measurementRuns.push({
+      try {
+        let launchResult;
+        try {
+          launchResult = capture(
+            "xcrun",
+            [
+              "simctl",
+              "launch",
+              "--terminate-running-process",
+              `--stdout=${join(artifactRoot, `app-${index}.stdout.log`)}`,
+              `--stderr=${join(artifactRoot, `app-${index}.stderr.log`)}`,
+              device.udid,
+              APP_BUNDLE_ID,
+            ],
+            { env: launchEnvironment },
+          );
+        } catch (error) {
+          captureSimulatorLog(device.udid, artifactRoot, index);
+          throw error;
+        }
+        const pid = Number.parseInt(launchResult.match(/: (\d+)\s*$/)?.[1] ?? "", 10);
+        if (!Number.isInteger(pid)) {
+          throw new Error(`Could not parse Gents simulator PID from ${launchResult}`);
+        }
+        const scenarioEvidence = await waitForScenario({
+          deviceId: device.udid,
+          pid,
           runIndex: index,
-          temperature: index === 1 && !keepData ? "cold-data" : "warm-data",
-          launchElapsedMs: Number(process.hrtime.bigint() - launchedAt) / 1_000_000,
-          events,
-          boundaries,
-          dataset: {
-            sessionIndexRows:
-              boundaries["session-index-visible"]?.metrics?.ui?.sessionRows ?? null,
-            transcriptCardsAtPass:
-              boundaries.passed?.metrics?.ui?.transcriptCards ?? null,
-            transcriptTurnBlocksAtPass:
-              boundaries.passed?.metrics?.ui?.transcriptTurnBlocks ?? null,
-          },
-          observerResponseMerges: observerResponseMerges(boundaries),
-          process: summarizeProcessSamples(scenarioEvidence.processSamples),
+          artifactRoot,
+          statusPath,
+          eventsPath,
+          enrollmentOperator,
+          reconnectFixture,
         });
+        if (measurePerformance) {
+          const events = readEvents(eventsPath);
+          const boundaries = eventBoundaries(events);
+          measurementRuns.push({
+            runIndex: index,
+            temperature: index === 1 && !keepData ? "cold-data" : "warm-data",
+            launchElapsedMs: Number(process.hrtime.bigint() - launchedAt) / 1_000_000,
+            events,
+            boundaries,
+            dataset: {
+              sessionIndexRows:
+                boundaries["session-index-visible"]?.metrics?.ui?.sessionRows ?? null,
+              transcriptCardsAtPass:
+                boundaries.passed?.metrics?.ui?.transcriptCards ?? null,
+              transcriptTurnBlocksAtPass:
+                boundaries.passed?.metrics?.ui?.transcriptTurnBlocks ?? null,
+            },
+            observerResponseMerges: observerResponseMerges(boundaries),
+            process: summarizeProcessSamples(scenarioEvidence.processSamples),
+          });
+        }
+      } finally {
+        preserveScenarioFiles(statusPath, eventsPath, artifactRoot, index);
       }
     }
     if (measurePerformance) {
