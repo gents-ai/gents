@@ -18,17 +18,6 @@ pub(super) use gents_protocol::node_readiness::{
 };
 pub(super) use serde_json::Value;
 
-pub(super) async fn test_node() -> Arc<defra_node::Node> {
-    let identity = test_identity("runtime-test-node");
-    Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    )
-}
-
 pub(super) fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
     KeyIdentity::load_or_create(path, None).unwrap()
