@@ -201,8 +201,14 @@ async fn check_turn_chronology(retry: bool) {
         .unwrap();
     retain_fork_fixture_capture(&node, &second_tool, "repeated.rs").await;
     finish_request(&node, &mut successor, RequestTerminalOutcome::Completed).await;
-    let session =
-        ConfigAccess::transact_local_readonly(&node, None, "test.inventory.turn_session", |txn| {
+    let session = ConfigAccess::transact_local_readonly(
+        &node,
+        original
+            .requester_did
+            .clone()
+            .map(|did| identity::Did::new(did).unwrap()),
+        "test.inventory.turn_session",
+        |txn| {
             let original = &original;
             Box::pin(async move {
                 crate::session::load_agent_session_row_in_txn(
@@ -213,10 +219,11 @@ async fn check_turn_chronology(retry: bool) {
                 )
                 .await
             })
-        })
-        .await
-        .unwrap()
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let admission = FileInventoryAdmission {
         session_doc_id: session.doc_id,
         request: HydrationRequest {

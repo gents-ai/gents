@@ -12,23 +12,16 @@ async fn temp_home() -> EmbeddedHome {
         .await
         .unwrap();
     let binding = crate::store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
-    crate::test_support::install_test_agent_binding(
-        &home.node,
-        home.identity.did(),
+    let access = client_access(&home, home.identity.as_ref());
+    crate::test_support::bootstrap_signed_test_node(&access, home.did()).await;
+    crate::test_support::install_test_agent_binding_with_access(
+        home.did(),
         "General",
         &binding,
+        &access,
     )
     .await;
-    crate::upsert_node(
-        &home.node,
-        home.identity.did(),
-        None,
-        Some(&binding.agent_did),
-        true,
-        None,
-    )
-    .await
-    .unwrap();
+    crate::test_support::set_test_default_agent_as(&access, home.did(), &binding.agent_did).await;
     home
 }
 

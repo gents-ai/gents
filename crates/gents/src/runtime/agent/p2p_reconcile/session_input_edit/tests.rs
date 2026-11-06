@@ -44,16 +44,22 @@ impl Fixture {
         );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
-        crate::test_support::install_test_agent_binding(&node, identity.did(), "General", &binding)
-            .await;
-        let agent_identity =
-            crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
         let access = ConfigAccess::Graphql(
             crate::store::config_client::GraphqlEndpoint::as_principal(&endpoint, identity.did())
                 .with_client_signing_capability(identity.client_signing_capability().unwrap())
                 .unwrap()
                 .with_client_signed_agent_creates(),
         );
+        crate::test_support::bootstrap_signed_test_node(&access, identity.did()).await;
+        crate::test_support::install_test_agent_binding_with_access(
+            identity.did(),
+            "General",
+            &binding,
+            &access,
+        )
+        .await;
+        let agent_identity =
+            crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
         let agent_doc = access
             .transact_readonly("test.edit.agent", |txn| {
                 Box::pin(async {

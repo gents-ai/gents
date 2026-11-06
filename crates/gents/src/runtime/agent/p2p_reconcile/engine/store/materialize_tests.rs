@@ -22,27 +22,28 @@ async fn fixture() -> Arc<defra_node::Node> {
             .await
             .unwrap(),
     );
-    node.add_dac_policy_with_counter_as(
-        &defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned())),
-        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
-        0,
-    )
-    .await
-    .unwrap();
+    let policy_id = node
+        .add_dac_policy_with_counter_as(
+            &defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned())),
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
+        .await
+        .unwrap();
     node.add_collection(gents_protocol::schemas::NODE)
         .await
         .unwrap();
     // Deliberately omit the unique index: merge-parked twins remain scan-visible
     // even though local creation through the production index would reject them.
-    node.add_collection(
-        r#"type PeerPairingDesired @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "pairing_observations") {
+    node.add_collection(&format!(
+        r#"type PeerPairingDesired @policy(id: "{policy_id}", resource: "pairing_observations") {{
         peer_id: String node_did: String actor_did: String @immutable source: String template: String
         collections: [String!] replicator_addresses: [String!] profiles: [String!]
         enrollment_request_digest: String enrollment_authorization_sequence: Int
         enrollment_authorization_expires_at: DateTime created_at: DateTime updated_at: DateTime
         node_doc_id: String parent_linked: Boolean
-    }"#,
-    )
+    }}"#,
+    ))
     .await
     .unwrap();
     node
