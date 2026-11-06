@@ -4,7 +4,7 @@ use gents::defra_node;
 use gents::runtime::agent::p2p_reconcile::{
     EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
 };
-use gents::store::config_client::ConfigAccess;
+use gents::store::config_client::{ConfigAccess, NodePermission};
 use gents::store::graphql::escape_graphql_string;
 use gents::{KeyIdentity, NodeIdentity};
 use std::{sync::Arc, time::Duration};
@@ -22,7 +22,7 @@ fn client_http(endpoint: &str, identity: &KeyIdentity) -> ConfigAccess {
     )
 }
 
-async fn runtime_http_test_node(identity: &dyn NodeIdentity) -> (TestNode, String) {
+async fn runtime_http_test_node(identity: Arc<KeyIdentity>) -> (TestNode, String) {
     let directory = tempfile::tempdir().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
@@ -30,6 +30,14 @@ async fn runtime_http_test_node(identity: &dyn NodeIdentity) -> (TestNode, Strin
         defra_node::Node::builder()
             .data_path(directory.path())
             .with_node_identity_did(identity.did())
+            .with_node_acp_enabled()
+            .with_document_projector(
+                gents::store::local::document_projector(
+                    identity.clone(),
+                    gents::tools::surface::ToolCeiling::meta_only(),
+                )
+                .unwrap(),
+            )
             .with_p2p(support::test_p2p_config(
                 &Default::default(),
                 directory.path(),
@@ -52,13 +60,26 @@ async fn runtime_http_test_node(identity: &dyn NodeIdentity) -> (TestNode, Strin
 #[tokio::test]
 async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull() {
     let keys = tempfile::tempdir().unwrap();
-    let owner = KeyIdentity::load_or_create(keys.path().join("client.key"), None).unwrap();
-    let other = KeyIdentity::load_or_create(keys.path().join("other.key"), None).unwrap();
+    let owner =
+        Arc::new(KeyIdentity::load_or_create(keys.path().join("client.key"), None).unwrap());
+    let other = Arc::new(KeyIdentity::load_or_create(keys.path().join("other.key"), None).unwrap());
     let runtime = KeyIdentity::load_or_create(keys.path().join("runtime.key"), None).unwrap();
     let agent = KeyIdentity::load_or_create(keys.path().join("agent.key"), None).unwrap();
-    let (source_test, endpoint) = runtime_http_test_node(&owner).await;
+    let (source_test, endpoint) = runtime_http_test_node(owner.clone()).await;
     let source = &source_test.node;
     let actor = ConfigAccess::local_as(source.clone(), owner.did().parse().unwrap());
+    for identity in [other.as_ref(), &runtime, &agent] {
+        for permission in [
+            NodePermission::DocumentRead,
+            NodePermission::DocumentUpdate,
+            NodePermission::CollectionGet,
+        ] {
+            actor
+                .grant_node_permission(&identity.did().parse().unwrap(), permission)
+                .await
+                .unwrap();
+        }
+    }
     let created = actor.write("test.private_journal.create", r#"mutation {
         create_PendingChatSubmission(input: {request_id: "private-request", payload: "client secret"}) {
             _docID _version { cid }
@@ -92,8 +113,8 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
         .unwrap();
     for case in checks {
         let identity = match case["role"].as_str().unwrap() {
-            "owner" => Some(&owner),
-            "other" => Some(&other),
+            "owner" => Some(owner.as_ref()),
+            "other" => Some(other.as_ref()),
             "runtime" => Some(&runtime),
             "agent" => Some(&agent),
             "anonymous" => None,
@@ -126,12 +147,19 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
                 Some(key) => client_http(&endpoint, key),
                 None => ConfigAccess::graphql(&endpoint),
             };
-            let response = http.execute(&format!(r#"{{ PendingChatSubmission(filter: {{_docID: {{_eq: "{doc_id_escaped}"}}}}) {{ _docID payload }} }}"#)).await.unwrap();
-            let visible = response["data"]["PendingChatSubmission"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|row| row["_docID"] == doc_id && row["payload"] == "client secret");
+            let response = http.execute(&format!(r#"{{ PendingChatSubmission(filter: {{_docID: {{_eq: "{doc_id_escaped}"}}}}) {{ _docID payload }} }}"#)).await;
+            let visible = match response {
+                Ok(response) => response["data"]["PendingChatSubmission"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row["_docID"] == doc_id && row["payload"] == "client secret"),
+                Err(error) if identity.is_none() => {
+                    assert!(error.to_string().contains("not authorized"), "{error:#}");
+                    false
+                }
+                Err(error) => panic!("authenticated journal read failed: {error:#}"),
+            };
             assert_eq!(visible, case["expected"].as_bool().unwrap(), "HTTP: {case}");
         }
     }
@@ -194,8 +222,16 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
     );
     drop(updates);
 
-    let (outsider_test, _) = runtime_http_test_node(&other).await;
+    let (outsider_test, _) = runtime_http_test_node(other.clone()).await;
     let receiver = &outsider_test.node;
+    let receiver_admin_access =
+        ConfigAccess::local_as(receiver.clone(), other.did().parse().unwrap());
+    for permission in [NodePermission::DocumentRead, NodePermission::CollectionGet] {
+        receiver_admin_access
+            .grant_node_permission(&owner.did().parse().unwrap(), permission)
+            .await
+            .unwrap();
+    }
     receiver
         .document_acp()
         .register_doc_object(

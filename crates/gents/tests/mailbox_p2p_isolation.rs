@@ -10,12 +10,23 @@ use gents::store::config_client::{ConfigAccess, NodePermission};
 use gents::{KeyIdentity, NodeIdentity};
 use std::{sync::Arc, time::Duration};
 
-async fn node(identity: &KeyIdentity, directory: &std::path::Path) -> Arc<gents::defra_node::Node> {
+async fn node(
+    identity: Arc<KeyIdentity>,
+    directory: &std::path::Path,
+) -> Arc<gents::defra_node::Node> {
     let node = Arc::new(
         gents::defra_node::Node::builder()
             .enable_signing()
             .data_path(directory)
             .with_node_identity_did(identity.did())
+            .with_node_acp_enabled()
+            .with_document_projector(
+                gents::store::local::document_projector(
+                    identity.clone(),
+                    gents::tools::surface::ToolCeiling::meta_only(),
+                )
+                .unwrap(),
+            )
             .with_p2p(support::test_p2p_config(&Default::default(), directory))
             .build()
             .await
@@ -28,15 +39,18 @@ async fn node(identity: &KeyIdentity, directory: &std::path::Path) -> Arc<gents:
 #[tokio::test]
 async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
     let keys = tempfile::tempdir().unwrap();
-    let source_key = KeyIdentity::load_or_create(keys.path().join("source.key"), None).unwrap();
+    let source_key =
+        Arc::new(KeyIdentity::load_or_create(keys.path().join("source.key"), None).unwrap());
     let recipient = KeyIdentity::load_or_create(keys.path().join("recipient.key"), None).unwrap();
-    let outsider = KeyIdentity::load_or_create(keys.path().join("outsider.key"), None).unwrap();
+    let outsider =
+        Arc::new(KeyIdentity::load_or_create(keys.path().join("outsider.key"), None).unwrap());
     let source_dir = tempfile::tempdir().unwrap();
     let receiver_dir = tempfile::tempdir().unwrap();
-    let source = node(&source_key, source_dir.path()).await;
-    let receiver = node(&outsider, receiver_dir.path()).await;
-    let binding = gents::store::identity::provision_agent_identity(&source_key).unwrap();
-    let agent = gents::store::identity::resolve_agent_identity(&source_key, &binding).unwrap();
+    let source = node(source_key.clone(), source_dir.path()).await;
+    let receiver = node(outsider.clone(), receiver_dir.path()).await;
+    let binding = gents::store::identity::provision_agent_identity(source_key.as_ref()).unwrap();
+    let agent =
+        gents::store::identity::resolve_agent_identity(source_key.as_ref(), &binding).unwrap();
     let admin = ConfigAccess::local_as(source.clone(), source_key.did().parse().unwrap());
     for actor in [agent.did(), recipient.did(), outsider.did()] {
         for permission in [
