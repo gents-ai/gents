@@ -372,8 +372,16 @@ pub(super) async fn run(case: &Value) {
             .replacement_delete
             .as_ref()
             .unwrap();
+        assert_eq!(block.generate_cid().unwrap().to_string(), cid);
+        assert_eq!(block.to_dag_cbor().unwrap(), block_bytes);
+        assert_eq!(signature.to_dag_cbor().unwrap(), signature_bytes);
+        let mut unsigned = block.clone();
         assert_eq!(
-            block_bytes,
+            unsigned.signature.take(),
+            Some(signature.generate_cid().unwrap())
+        );
+        assert_eq!(
+            unsigned.to_dag_cbor().unwrap(),
             serde_json::from_value::<Vec<u8>>(evidence["composite_block"].clone()).unwrap()
         );
         assert_eq!(
