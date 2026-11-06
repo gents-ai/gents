@@ -142,7 +142,10 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::local(node.clone());
+    let access = ConfigAccess::local_as(
+        node.clone(),
+        ::identity::Did::new(identity.did()).unwrap(),
+    );
     let mut roots = RapidHashMap::new();
     for version in case["versions"].as_array().unwrap() {
         let Some(root) = version["assignment"]["root"].as_u64() else {
@@ -247,7 +250,10 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
     let rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap();
     let actual =
-        super::super::load_request_assignment(&crate::ConfigAccess::local(node.clone()), &rows[0])
+        super::super::load_request_assignment(&crate::ConfigAccess::local_as(
+            node.clone(),
+            ::identity::Did::new(identity.did()).unwrap(),
+        ), &rows[0])
             .await;
     assert_eq!(
         observation(actual, Some(&roots)),
@@ -268,7 +274,10 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
         case["name"]
     );
     let handoff = crate::tools::background::completion::turn_assignment_handoff(
-        &crate::ConfigAccess::local(node.clone()),
+        &crate::ConfigAccess::local_as(
+            node.clone(),
+            ::identity::Did::new(identity.did()).unwrap(),
+        ),
         &rows[0],
         &crate::tools::call::lifecycle::CausedRequestTerminal::Completed {
             output: "turn finished".into(),
