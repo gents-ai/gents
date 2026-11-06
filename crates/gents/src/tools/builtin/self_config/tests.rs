@@ -273,6 +273,45 @@ impl SelfConfigFixture {
         self.db.node_identity.did()
     }
 
+    pub(super) fn user_access(&self) -> &crate::ConfigAccess {
+        &self.user_access
+    }
+
+    pub(super) async fn update_signed_configuration(
+        &self,
+        collection: crate::Collection,
+        id: &str,
+        patch: Value,
+    ) {
+        let schema = match collection {
+            crate::Collection::AgentContext => gents_protocol::schemas::AGENT_CONTEXT,
+            crate::Collection::InferenceProfile => gents_protocol::schemas::INFERENCE_PROFILE,
+            _ => panic!("no fixture schema for {}", collection.graphql_type()),
+        };
+        self.user_access
+            .transact_write("test.self_config.signed_fixture_update", |txn| {
+                let patch = &patch;
+                Box::pin(async move {
+                    let (doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                        txn, collection, self.node_did(), id,
+                    )
+                    .await?
+                    .expect("fixture document exists");
+                    let name = collection.graphql_type();
+                    let doc = crate::store::graphql::escape_graphql_string(&doc);
+                    txn.execute_client_signed_update(
+                        &format!(r#"mutation($input: {name}MutationInputArg!) {{ update_{name}(docID: "{doc}", input: $input) {{ _docID }} }}"#),
+                        &json!({"input": patch}),
+                        schema,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+    }
+
     fn core(&self) -> SelfConfigCore {
         SelfConfigCore::new(
             self.db.node.clone(),
@@ -302,7 +341,7 @@ impl SelfConfigFixture {
         self.tools_with_config(&grants)
     }
 
-    fn tools_with_config(&self, grants: &SelfConfigToolConfig) -> Vec<Box<dyn ToolDyn>> {
+    pub(super) fn tools_with_config(&self, grants: &SelfConfigToolConfig) -> Vec<Box<dyn ToolDyn>> {
         self.tools_with_plugins(grants, test_plugins())
     }
 

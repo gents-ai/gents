@@ -27,24 +27,6 @@ async fn refused(tools: &Tools, args: Value) -> String {
     }
 }
 
-async fn setup(label: &str, categories: &[&str]) -> (Arc<EmbeddedNode>, String, Tools) {
-    let node = build_agent_node().await;
-    let identity = node_identity(label);
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    let mut grants = config(categories);
-    grants.preview = true;
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner.clone(),
-        Some(identity),
-        &grants,
-        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
-    );
-    (node, owner, tools)
-}
-
 async fn authenticated_setup(label: &str, categories: &[&str]) -> (SelfConfigFixture, Tools) {
     let fixture = SelfConfigFixture::new(label).await;
     fixture.grant_selected_configuration().await;
@@ -1451,10 +1433,11 @@ async fn crud_help_exposes_parameters_for_the_named_resource_and_verb() {
 
 #[tokio::test]
 async fn local_target_creation_defaults_identity_but_updates_preserve_remote_destination() {
-    let (node, owner, tools) = setup("target-default", &["node", "tools"]).await;
-    let helper = format!("{owner}:helper");
-    crate::test_support::install_test_agent(&node, &owner, &helper).await;
-    let receipt = ok(&tools, json!({"argv":["agent-target","create"],"target_id":"local","set":{"name":"helper","agent_did":"helper"}})).await;
+    let (fixture, tools) = authenticated_setup("target-default", &["node", "tools"]).await;
+    let owner = fixture.node_did();
+    let helper = fixture.install_sibling("helper").await;
+    fixture.grant_node_reader().await;
+    let receipt = ok(&tools, json!({"argv":["agent-target","create"],"target_id":"local","set":{"name":"helper","agent_did":helper}})).await;
     assert_eq!(receipt["connection"]["kind"], "local");
     assert_eq!(receipt["connection"]["target_node_did"], owner);
     assert_eq!(receipt["connection"]["agent_did"], helper);
@@ -1469,15 +1452,26 @@ async fn local_target_creation_defaults_identity_but_updates_preserve_remote_des
             .await
             .is_err()
     );
-    let remote = node_identity("remote-target-owner").did().to_string();
-    ok(&tools, json!({"argv":["agent-target","create"],"target_id":"remote","set":{"name":"remote","target_node_did":remote,"agent_did":"helper"}})).await;
+    let (remote, remote_agent, next_agent) = tokio::task::spawn_blocking(|| {
+        (
+            node_identity("remote-target-owner"),
+            node_identity("remote-target-agent"),
+            node_identity("remote-target-next-agent"),
+        )
+    })
+    .await
+    .unwrap();
+    let remote = remote.did();
+    let remote_agent = remote_agent.did();
+    let next_agent = next_agent.did();
+    ok(&tools, json!({"argv":["agent-target","create"],"target_id":"remote","set":{"name":"remote","target_node_did":remote,"agent_did":remote_agent}})).await;
     let changed = ok(&tools, json!({"argv":["agent-target","update"],"target_id":"remote","set":{"description":"Remote helper"}})).await;
     assert_eq!(changed["connection"]["kind"], "remote");
     assert_eq!(changed["connection"]["target_node_did"], remote);
-    assert_eq!(changed["connection"]["agent_did"], "helper");
-    let changed = ok(&tools, json!({"argv":["agent-target","update"],"target_id":"remote","set":{"agent_did":"helper-2"}})).await;
+    assert_eq!(changed["connection"]["agent_did"], remote_agent);
+    let changed = ok(&tools, json!({"argv":["agent-target","update"],"target_id":"remote","set":{"agent_did":next_agent}})).await;
     assert_eq!(changed["connection"]["target_node_did"], remote);
-    assert_eq!(changed["connection"]["agent_did"], "helper-2");
+    assert_eq!(changed["connection"]["agent_did"], next_agent);
     assert!(call(
         &tools,
         json!({"argv":["agent-target","update"],"target_id":"remote","clear":["target_node_did"]})
@@ -1562,7 +1556,9 @@ async fn config_usage_errors_return_executable_resource_verb_recovery() {
 
 #[tokio::test]
 async fn saved_config_audit_reports_broken_references_without_mutation_and_accepts_repair() {
-    let (node, owner, tools) = setup("saved-audit", &["node", "tools"]).await;
+    let (fixture, tools) = authenticated_setup("saved-audit", &["node", "tools"]).await;
+    let context_id = format!("{}:context", fixture.agent_did());
+    let tools_id = format!("{}:tools", fixture.agent_did());
     let failure = structured_failure(&tools, json!({"argv":["datastore","validate"]})).await;
     assert_eq!(failure["config_execution"]["mutation_entered"], false);
     assert!(!failure["error"].as_str().unwrap().contains("sessions"));
@@ -1572,11 +1568,15 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_accep
     assert_eq!(valid["valid"], true);
     assert!(valid["checked_documents"].as_u64().unwrap() > 0);
     assert_eq!(valid["collections"]["Agent"], 1);
-    let owner = crate::store::graphql::escape_graphql_string(&owner);
-    crate::ConfigAccess::write_local(&node, "test.audit.corrupt", &format!(
-        r#"mutation {{ update_AgentContext(filter: {{node_did: {{_eq: "{owner}"}}, context_id: {{_eq: "beh-test:context"}}}}, input: {{tools_id: "absent-tools"}}) {{context_id}} }}"#
-    )).await.unwrap();
-    let access = crate::ConfigAccess::local(node.clone());
+    fixture
+        .update_signed_configuration(
+            crate::Collection::AgentContext,
+            &context_id,
+            json!({"tools_id": "absent-tools"}),
+        )
+        .await;
+    let owner = crate::store::graphql::escape_graphql_string(fixture.node_did());
+    let access = fixture.user_access();
     let query = format!(
         r#"{{ AgentContext(filter: {{node_did: {{_eq: "{owner}"}}}}) {{context_id tools_id}} }}"#
     );
@@ -1590,7 +1590,11 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_accep
     assert_eq!(invalid["errors"][0]["missing"]["id"], "absent-tools");
     assert_eq!(before, access.execute(&query).await.unwrap());
     ok(&tools, invalid["errors"][0]["inspect_with"].clone()).await;
-    ok(&tools, json!({"argv":["context","update"],"target_id":"beh-test:context","set":{"tools_id":"beh-test:tools"}})).await;
+    ok(
+        &tools,
+        json!({"argv":["context","update"],"target_id":context_id,"set":{"tools_id":tools_id}}),
+    )
+    .await;
     assert_eq!(
         ok(&tools, json!({"argv":["validate"]})).await["valid"],
         true
@@ -1599,28 +1603,51 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_accep
 
 #[tokio::test]
 async fn saved_config_audit_is_node_scoped_and_does_not_require_preview() {
-    let (node, owner, tools) = setup("audit-scope", &["node"]).await;
-    let foreign = node_identity("audit-foreign").did().to_string();
-    crate::ConfigAccess::write_local(&node, "test.audit.foreign", &format!(
-        r#"mutation {{create_AgentContext(input: {{node_did: "{}", context_id: "foreign-context", tools_id: "missing-foreign-tools"}}) {{context_id}}}}"#,
-        crate::store::graphql::escape_graphql_string(&foreign)
-    )).await.unwrap();
+    let (fixture, tools) = authenticated_setup("audit-scope", &["node"]).await;
+    let foreign = tokio::task::spawn_blocking(|| node_identity("audit-foreign"))
+        .await
+        .unwrap();
+    let access = fixture.user_access();
+    crate::test_support::bootstrap_signed_test_node(access, foreign.did()).await;
+    let node_response = access
+        .execute(&format!(
+            r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+            crate::store::graphql::escape_graphql_string(foreign.did()),
+        ))
+        .await
+        .unwrap();
+    let foreign_node = node_response["data"]["Node"][0]["_docID"].as_str().unwrap();
+    let foreign_did = foreign.did().to_owned();
+    let created = access.transact_write("test.audit.foreign", |txn| {
+        let foreign_did = &foreign_did;
+        Box::pin(async move {
+            txn.execute_client_signed_create(
+                "mutation($input: AgentContextMutationInputArg!) { create_AgentContext(input: $input) { _docID } }",
+                &json!({"input": {"node_did": foreign_did, "context_id": "foreign-context", "tools_id": "missing-foreign-tools"}}),
+                gents_protocol::schemas::AGENT_CONTEXT,
+            ).await
+        })
+    }).await.unwrap();
+    let foreign_doc = crate::store::graphql::created_doc_id(&created, "AgentContext").unwrap();
+    access
+        .add_resource_relationship(
+            "AgentContext",
+            &foreign_doc,
+            "parent",
+            "nodes",
+            foreign_node,
+        )
+        .await
+        .unwrap();
     let valid = ok(&tools, json!({"argv":["validate"]})).await;
     assert_eq!(valid["valid"], true, "{valid}");
     assert_eq!(valid["collections"]["AgentContext"], 1);
     assert!(!valid.to_string().contains("foreign-context"));
-    let identity = node_identity("audit-scope");
     for (categories, allowed) in [(&["node"][..], true), (&["tools"][..], false)] {
         let mut grants = config(categories);
+        grants.agent_did = fixture.agent_did().to_owned();
         grants.preview = false;
-        let tools = build_self_config_tools(
-            std::sync::Arc::default(),
-            node.clone(),
-            owner.clone(),
-            Some(identity.clone()),
-            &grants,
-            std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default()),
-        );
+        let tools = fixture.tools_with_config(&grants);
         assert_eq!(
             call(&tools, json!({"argv":["validate"]})).await.is_ok(),
             allowed
@@ -1635,10 +1662,14 @@ async fn saved_config_audit_is_node_scoped_and_does_not_require_preview() {
     )
     .await
     .is_err());
-    crate::ConfigAccess::write_local(&node, "test.audit.restricted", &format!(
-        r#"mutation {{update_InferenceProfile(filter: {{node_did: {{_eq: "{}"}}, profile_id: {{_eq: "beh-test:inference"}}}}, input: {{backend_id: "missing-backend"}}) {{profile_id}}}}"#,
-        crate::store::graphql::escape_graphql_string(&owner)
-    )).await.unwrap();
+    let profile_id = format!("{}:inference", fixture.agent_did());
+    fixture
+        .update_signed_configuration(
+            crate::Collection::InferenceProfile,
+            &profile_id,
+            json!({"backend_id": "missing-backend"}),
+        )
+        .await;
     let invalid = ok(&tools, json!({"argv":["validate"]})).await;
     assert_eq!(invalid["valid"], false);
     assert_eq!(invalid["errors"][0]["collection"], "InferenceProfile");
@@ -1801,10 +1832,11 @@ async fn composition_help_and_field_placement_match_the_accepted_calls() {
 
 #[tokio::test]
 async fn saved_config_audit_checks_selected_schema_fields_and_accepts_updates() {
-    let (node, _owner, tools) = setup("saved-schema-audit", &["node", "tools"]).await;
-    node.add_collection("type AuditRecord { message: String }")
-        .await
-        .unwrap();
+    let (fixture, tools) = authenticated_setup("saved-schema-audit", &["node", "tools"]).await;
+    fixture
+        .add_collection("type AuditRecord { message: String }")
+        .await;
+    let tools_id = format!("{}:tools", fixture.agent_did());
     let entries = json!([
         {"kind":"create","tool_name":"write_audit_record","collection":"AuditRecord","description":"Write a record","fields":[{"name":"message","required":true},{"name":"correlation","fill":"correlation"}]},
         {"kind":"query","tool_name":"find_audit_records","collection":"AuditRecord","description":"Read records","fields":["message","missing_projection"],"filter_fields":[{"name":"missing_filter"}]}
@@ -1818,7 +1850,7 @@ async fn saved_config_audit_checks_selected_schema_fields_and_accepts_updates() 
         ok(&tools, json!({"argv":["validate"]})).await["valid"],
         true
     );
-    ok(&tools, json!({"argv":["tools","update","beh-test:tools"],"set":{"datastore":{"datastore_tool_surface_ids":["audit"]}}})).await;
+    ok(&tools, json!({"argv":["tools","update",tools_id],"set":{"datastore":{"datastore_tool_surface_ids":["audit"]}}})).await;
     let before = ok(&tools, json!({"argv":["datastore","get","audit"]})).await;
     let invalid = ok(&tools, json!({"argv":["validate"]})).await;
     assert_eq!(invalid["valid"], false, "{invalid}");
