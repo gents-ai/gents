@@ -1,11 +1,11 @@
 use super::support::*;
 use super::*;
 use crate::store::config_client::{ConfigAccess, NodePermission};
-use crate::store::identity::NodeIdentity;
+use crate::store::identity::{GrantSet, NodeIdentity};
 
 struct PrivateSessionFixture {
-    node: Arc<defra_node::Node>,
-    runtime: crate::store::identity::KeyIdentity,
+    db: crate::support::TestDb,
+    runtime: Arc<dyn NodeIdentity>,
     user: crate::store::identity::KeyIdentity,
     selected: crate::store::identity::KeyIdentity,
     other: crate::store::identity::KeyIdentity,
@@ -13,34 +13,30 @@ struct PrivateSessionFixture {
 
 impl PrivateSessionFixture {
     async fn new() -> Self {
-        let runtime = test_identity("selection-runtime");
+        let db = crate::support::test_db("private-session-selection").await;
+        let runtime = db.node_identity.clone();
         let user = test_identity("selection-user");
         let selected = test_identity("selection-agent");
         let other = test_identity("selection-other-agent");
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(runtime.did())
-                .with_node_acp_enabled()
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(&node).await.unwrap();
-        let admin = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
-        for did in [user.did(), selected.did(), other.did()] {
+        let admin = ConfigAccess::local_as(db.node.clone(), runtime.did().parse().unwrap());
+        GrantSet::OperatorUser
+            .grant(&admin, &identity::Did::new(user.did()).unwrap())
+            .await
+            .unwrap();
+        for did in [selected.did(), other.did()] {
             for permission in [
                 NodePermission::DocumentRead,
                 NodePermission::DocumentUpdate,
                 NodePermission::DacRelationAdd,
             ] {
                 admin
-                    .grant_node_permission(&did.parse().unwrap(), permission)
+                    .grant_node_permission(&identity::Did::new(did).unwrap(), permission)
                     .await
                     .unwrap();
             }
         }
         Self {
-            node,
+            db,
             runtime,
             user,
             selected,
@@ -49,24 +45,16 @@ impl PrivateSessionFixture {
     }
 
     async fn create_session(&self, session: &str, bound: &str, selected_can_read: bool) {
-        let owner = ConfigAccess::local_as(self.node.clone(), self.user.did().parse().unwrap());
-        let created = owner.write("test.router.private_session", &format!(
-            r#"mutation {{ create_AgentSession(input: {{ node_did: "{}", session_id: "{}", requester_did: "{}", agent_did: "{}", created_at: "2026-11-04T00:00:00Z" }}) {{ _docID }} }}"#,
-            escape_graphql_string(self.runtime.did()), escape_graphql_string(session),
-            escape_graphql_string(self.user.did()), escape_graphql_string(bound),
-        )).await.unwrap();
-        let doc = crate::store::graphql::created_doc_id(&created, "AgentSession").unwrap();
-        if selected_can_read {
-            owner
-                .add_actor_relationship(
-                    "AgentSession",
-                    &doc,
-                    "working_agent",
-                    &self.selected.did().parse().unwrap(),
-                )
-                .await
-                .unwrap();
-        }
+        let access = self.db.client_access(&self.user);
+        create_user_agent_session(
+            &access,
+            self.runtime.did(),
+            Some(self.user.did()),
+            session,
+            bound,
+            selected_can_read.then(|| self.selected.did()),
+        )
+        .await;
     }
 
     fn request(&self, session: &str) -> AgentRequest {
@@ -108,13 +96,13 @@ async fn explicit_agent_resolution_matches_lean_binding_cases() {
         };
         fixture.create_session("session-binding", bound, true).await;
         let resolved =
-            resolve_agent_for_request(&fixture.node, &fixture.request("session-binding"))
+            resolve_agent_for_request(&fixture.db.node, &fixture.request("session-binding"))
                 .await
                 .unwrap()
                 .expect("the agent can read the session");
         assert_eq!(resolved.agent_did, fixture.selected.did(), "{name}");
         assert_eq!(resolved.rejection_reason.is_none(), case.legal, "{name}");
-        fixture.node.shutdown().await.unwrap();
+        fixture.db.node.shutdown().await.unwrap();
     }
 }
 
@@ -134,7 +122,7 @@ async fn private_session_selection_is_actor_scoped_and_matches_lean() {
             .create_session(name, bound, name != "invisible")
             .await;
         let node_view =
-            ConfigAccess::local_as(fixture.node.clone(), fixture.runtime.did().parse().unwrap())
+            ConfigAccess::local_as(fixture.db.node.clone(), fixture.runtime.did().parse().unwrap())
                 .execute(&format!(
                     r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
                     escape_graphql_string(name)
@@ -148,7 +136,7 @@ async fn private_session_selection_is_actor_scoped_and_matches_lean() {
                 .is_empty(),
             "runtime must not read private session"
         );
-        let result = resolve_agent_for_request(&fixture.node, &fixture.request(name))
+        let result = resolve_agent_for_request(&fixture.db.node, &fixture.request(name))
             .await
             .unwrap();
         let observed = match result {
@@ -159,10 +147,10 @@ async fn private_session_selection_is_actor_scoped_and_matches_lean() {
         assert_eq!(observed, case["expected"].as_str().unwrap(), "{name}");
     }
     assert!(
-        resolve_agent_for_request(&fixture.node, &fixture.request("missing"))
+        resolve_agent_for_request(&fixture.db.node, &fixture.request("missing"))
             .await
             .unwrap()
             .is_none()
     );
-    fixture.node.shutdown().await.unwrap();
+    fixture.db.node.shutdown().await.unwrap();
 }
