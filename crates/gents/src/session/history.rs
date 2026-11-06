@@ -24,6 +24,29 @@ pub async fn load_history(
     load_history_through_sequence(node, session_id, node_did, requester_did, None).await
 }
 
+#[cfg(test)]
+pub(crate) async fn load_history_with_access(
+    access: &crate::ConfigAccess,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<Vec<Message>> {
+    Ok(super::output::sequenced::load_sequenced_messages_using(
+        super::output::access::ReadAccess::Config(access),
+        session_id,
+        node_did,
+        requester_did,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await?
+    .into_iter()
+    .map(|row| row.message)
+    .collect())
+}
+
 pub(crate) async fn load_history_through_sequence(
     node: &EmbeddedNode,
     session_id: &str,

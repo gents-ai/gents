@@ -62,6 +62,8 @@ pub use fork::{
 #[cfg(test)]
 pub(crate) use history::load_history_through_sequence;
 #[cfg(test)]
+pub(crate) use history::load_history_with_access;
+#[cfg(test)]
 pub(crate) use history::load_sequenced_history_projection;
 pub use history::{load_history, sequence_message_key};
 pub(crate) use history::{
