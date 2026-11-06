@@ -5948,6 +5948,20 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
             .await
             .unwrap();
     }
+    let stored_keyed = access
+        .transact_readonly("test.backend_catalog.metadata", |txn| {
+            Box::pin(async move {
+                crate::store::config_client::load_inference_backend_in_txn(txn, owner, "keyed")
+                    .await
+            })
+        })
+        .await
+        .unwrap()
+        .expect("persisted keyed backend");
+    assert!(matches!(
+        &stored_keyed.auth,
+        crate::documents::BackendAuth::Credential { .. }
+    ));
     assert_eq!(
         crate::inference::backends::registry::record_connection_catalog_on(
             &runtime_access,
@@ -5963,7 +5977,7 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
     );
     crate::inference::backends::registry::record_discovered_catalog_on(
         &runtime_access,
-        &keyed,
+        &stored_keyed,
         models,
     )
     .await
