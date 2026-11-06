@@ -17,7 +17,7 @@ pub(super) async fn pairing_is_ready(state: &DesktopAppState, node_did: Option<&
         peer.node_did == node_did
             && peer.is_enrollment()
             && peer.is_managed_runtime()
-            && peer.is_chat_ready_at(chrono::Utc::now())
+            && peer.is_enrollment_ready_at(chrono::Utc::now())
     })
 }
 
@@ -91,7 +91,7 @@ pub(super) async fn start_managed_runtime_pairing(
         peer.node_did == target.node_did
             && peer.is_enrollment()
             && peer.is_managed_runtime()
-            && peer.is_chat_ready_at(chrono::Utc::now())
+            && peer.is_enrollment_ready_at(chrono::Utc::now())
     }) {
         return;
     }

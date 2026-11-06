@@ -327,7 +327,8 @@ impl ClientCore {
                             && peer.enrollment_authorization_expires_at.as_deref()
                                 == Some(&decision.authorization_expires_at)
                     });
-                    route_applied = matching_peer.is_some_and(|peer| peer.is_chat_ready_at(now));
+                    route_applied =
+                        matching_peer.is_some_and(|peer| peer.is_enrollment_ready_at(now));
                     let route_failure = matching_peer.is_some_and(|peer| {
                         sync.peers
                             .iter()

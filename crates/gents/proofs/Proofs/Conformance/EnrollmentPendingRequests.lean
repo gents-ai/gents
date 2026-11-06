@@ -90,5 +90,38 @@ def absentPeerCasesJson : String :=
       ",\"expected_present\":" ++ boolJson expected.1 ++
       ",\"expected_ready\":" ++ boolJson expected.2 ++ "}")
 
+structure RouteCase where
+  name : String
+  enrollment : Bool := true
+  routeApplied : Bool := true
+  network : Bool := true
+  digest : Bool := true
+  sequenceFresh : Bool := true
+  leaseFresh : Bool := true
+  operatorEndpoint : Bool := false
+
+def routeCases : List RouteCase :=
+  [ { name := "applied_fresh_enrollment" }
+  , { name := "managed_endpoint_without_route", routeApplied := false, operatorEndpoint := true }
+  , { name := "managed_endpoint_with_route", operatorEndpoint := true }
+  , { name := "not_enrollment", enrollment := false, operatorEndpoint := true }
+  , { name := "missing_network", network := false }
+  , { name := "missing_digest", digest := false }
+  , { name := "invalid_sequence", sequenceFresh := false }
+  , { name := "expired_lease", leaseFresh := false, operatorEndpoint := true } ]
+
+private def routeCaseJson (c : RouteCase) : String :=
+  "{\"name\":" ++ jsonString c.name ++
+  ",\"enrollment\":" ++ boolJson c.enrollment ++
+  ",\"route_applied\":" ++ boolJson c.routeApplied ++
+  ",\"network\":" ++ boolJson c.network ++
+  ",\"digest\":" ++ boolJson c.digest ++
+  ",\"sequence_fresh\":" ++ boolJson c.sequenceFresh ++
+  ",\"lease_fresh\":" ++ boolJson c.leaseFresh ++
+  ",\"operator_endpoint\":" ++ boolJson c.operatorEndpoint ++
+  ",\"expected_ready\":" ++ boolJson (enrollmentRouteReady c.enrollment c.routeApplied
+    c.network c.digest c.sequenceFresh c.leaseFresh c.operatorEndpoint) ++ "}"
+
+def routeCasesJson : String := jsonArray (routeCases.map routeCaseJson)
 
 end Conformance.EnrollmentPendingRequests

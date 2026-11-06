@@ -76,9 +76,11 @@ impl PeerRecord {
     }
 
     pub fn is_chat_ready_at(&self, now: DateTime<Utc>) -> bool {
-        if self.operator_graphql().is_some() {
-            return true;
-        }
+        self.operator_graphql().is_some() || self.is_enrollment_ready_at(now)
+    }
+
+    /// An operator endpoint does not establish an authenticated enrollment route.
+    pub fn is_enrollment_ready_at(&self, now: DateTime<Utc>) -> bool {
         self.is_enrollment()
             && self.pairing_ready
             && self
@@ -862,6 +864,42 @@ mod tests {
         assert!(reloaded.contains(&original));
         assert!(reloaded.contains(&later));
         assert!(!reloaded.contains(&failed));
+    }
+
+    #[test]
+    fn generated_enrollment_route_readiness_matches_lean() {
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let cases = snapshot["enrollment_route_readiness_cases"]
+            .as_array()
+            .unwrap();
+        assert!(!cases.is_empty());
+        let now = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        for case in cases {
+            let flag = |name: &str| case[name].as_bool().unwrap();
+            let mut peer = PeerRecord::base("runtime".into(), "peer".into(), "node".into());
+            peer.source = flag("enrollment").then(|| "enrollment".into());
+            peer.pairing_ready = flag("route_applied");
+            peer.pairing_network_id = flag("network").then(|| "network".into());
+            peer.enrollment_request_digest = flag("digest").then(|| "digest".into());
+            peer.enrollment_authorization_sequence = flag("sequence_fresh").then_some(1);
+            peer.enrollment_authorization_expires_at = Some(if flag("lease_fresh") {
+                "2026-01-02T00:00:00Z".into()
+            } else {
+                "2025-12-31T00:00:00Z".into()
+            });
+            if flag("operator_endpoint") {
+                peer.graphql = Some("http://127.0.0.1:9191/api/v0/graphql".into());
+                peer.local_node_home = Some("/runtime".into());
+            }
+            assert_eq!(
+                peer.is_enrollment_ready_at(now),
+                flag("expected_ready"),
+                "{}",
+                case["name"]
+            );
+        }
     }
 
     #[tokio::test]
