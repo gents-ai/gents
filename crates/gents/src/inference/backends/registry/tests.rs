@@ -430,13 +430,36 @@ fn admission_rejects_unrelated_observation_and_defaults_capacity() {
     );
 }
 
+async fn backend_for_user(
+    access: &crate::ConfigAccess,
+    node_did: &str,
+    backend_id: &str,
+) -> Result<Option<InferenceBackend>> {
+    access
+        .transact_readonly("test.registry.backend", |txn| {
+            Box::pin(async move {
+                crate::store::config_client::load_inference_backend_in_txn(
+                    txn, node_did, backend_id,
+                )
+                .await
+            })
+        })
+        .await
+}
+
 #[tokio::test]
 async fn scoped_backend_replacement_preserves_observations_and_resets_defaults() -> Result<()> {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
-    crate::ensure_runtime_schemas(&node).await?;
-    crate::ensure_node(&node, &base_backend().node_did).await?;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
+    let (db, _user, access) =
+        crate::test_support::signed_test_node_without_agent("registry-replacement").await;
+    let other_db = crate::support::test_db("registry-other-node").await;
+    let stranger_db = crate::support::test_db("registry-stranger").await;
+    let node = db.node.clone();
+    let owner = db.node_identity.did();
+    let other_did = other_db.node_identity.did();
+    let stranger = stranger_db.node_identity.did();
+    crate::test_support::bootstrap_signed_test_node(&access, other_did).await;
     let mut backend = base_backend();
+    backend.node_did = owner.to_owned();
     backend.backend_id = "reviewers\"quoted".into();
     backend.max_concurrent = Some(4);
     backend.max_queue_depth = Some(0);
@@ -448,32 +471,39 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
         crate::store::config_client::write_inference_backend_document(&access, &backend).await?;
     let catalogs = serde_json::json!([
         {"node_did":null,"observed_at":"2026-01-01T00:00:00Z","models":[{"model_name":"shared","display_name":null,"context_window":null,"max_context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]},
-        {"node_did":"did:key:invoker","observed_at":"2026-01-02T00:00:00Z","models":[{"model_name":"private","display_name":null,"context_window":null,"max_context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]}
+        {"node_did":other_did,"observed_at":"2026-01-02T00:00:00Z","models":[{"model_name":"private","display_name":null,"context_window":null,"max_context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]}
     ]);
     let observation = serde_json::json!({"catalogs":{"entries":catalogs.clone()},"probe_status":"healthy","last_probe":"2026-01-02T00:00:00Z"});
-    access
-        .write(
-            "test.backend.observation",
-            &format!(
-                r#"mutation {{ update_InferenceBackend(docID: "{}", input: {}) {{ _docID }} }}"#,
-                escape_graphql_string(&doc_id),
-                gents_protocol::graphql::graphql_input_literal(&observation)?
-            ),
-        )
-        .await?;
+    let row = stored_catalog_row(&access, &backend).await?;
+    let observation_doc = row["_docID"]
+        .as_str()
+        .context("observation document")?
+        .to_owned();
+    access.transact_write("test.backend.observation", |txn| {
+        let doc = observation_doc.clone();
+        let observation = observation.clone();
+        Box::pin(async move {
+            txn.execute_client_signed_update(
+                &format!(r#"mutation($input: InferenceBackendObservationMutationInputArg!) {{ update_InferenceBackendObservation(docID: "{}", input: $input) {{ _docID }} }}"#, escape_graphql_string(&doc)),
+                &serde_json::json!({"input": observation}),
+                gents_protocol::schemas::INFERENCE_BACKEND_OBSERVATION,
+            ).await?;
+            Ok::<(), anyhow::Error>(())
+        })
+    }).await?;
     let mut other = base_backend();
-    other.node_did = "did:key:other-owner".into();
+    other.node_did = other_did.to_owned();
     other.backend_id = backend.backend_id.clone();
     other.endpoint = "http://other.example/v1".into();
-    crate::ensure_node(&node, &other.node_did).await?;
     crate::store::config_client::write_inference_backend_document(&access, &other).await?;
     let mut replacement = base_backend();
+    replacement.node_did = owner.to_owned();
     replacement.backend_id = backend.backend_id.clone();
     let replaced_id =
         crate::store::config_client::write_inference_backend_document(&access, &replacement)
             .await?;
     assert_eq!(replaced_id, doc_id);
-    let loaded = lookup_backend(&node, &backend.node_did, &backend.backend_id)
+    let loaded = backend_for_user(&access, owner, &backend.backend_id)
         .await?
         .unwrap();
     assert_eq!(
@@ -482,7 +512,7 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
     );
     assert_eq!(loaded.effective_max_concurrent(), 1);
     assert_eq!(loaded.effective_max_queue_depth(), 100);
-    let observed = lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
+    let observed = lookup_backend_observation_for_runtime(&node, owner, &backend.backend_id)
         .await?
         .unwrap();
     assert_eq!(serde_json::to_value(&observed.catalogs)?, catalogs);
@@ -493,60 +523,93 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
         "shared"
     );
     assert_eq!(
-        observed
-            .catalog_for(Some("did:key:invoker"))?
-            .unwrap()
-            .models[0]
-            .model_name,
+        observed.catalog_for(Some(other_did))?.unwrap().models[0].model_name,
         "private"
     );
-    assert!(observed.catalog_for(Some("did:key:stranger"))?.is_none());
-    let other_loaded = lookup_backend(&node, &other.node_did, &other.backend_id)
+    assert!(observed.catalog_for(Some(stranger))?.is_none());
+    let other_loaded = backend_for_user(&access, other_did, &other.backend_id)
         .await?
         .unwrap();
     assert_eq!(other_loaded.endpoint, other.endpoint);
-    assert!(
-        lookup_backend(&node, "did:key:missing", &backend.backend_id)
-            .await?
-            .is_none()
-    );
+    assert!(backend_for_user(&access, stranger, &backend.backend_id)
+        .await?
+        .is_none());
     Ok(())
+}
+
+fn metadata_input(backend: &InferenceBackend) -> Result<serde_json::Value> {
+    let metadata = crate::documents::InferenceBackendMetadata::from_backend(
+        backend.clone(),
+        crate::documents::BackendAuthSelection::Unauthenticated,
+    )?;
+    let mut value = serde_json::to_value(metadata)?;
+    value["tags"] = serde_json::Value::Null;
+    value["creation_nonce"] = uuid::Uuid::new_v4().to_string().into();
+    Ok(value)
+}
+
+async fn seed_metadata(access: &crate::ConfigAccess, input: serde_json::Value) -> Result<()> {
+    let did = input["node_did"]
+        .as_str()
+        .context("metadata Node")?
+        .to_owned();
+    access.transact_write("test.registry.seed_metadata", |txn| {
+        let input = input.clone();
+        let did = did.clone();
+        Box::pin(async move {
+            let response = txn.execute_client_signed_create(
+                "mutation($input: InferenceBackendMetadataMutationInputArg!) { create_InferenceBackendMetadata(input: $input) { _docID } }",
+                &serde_json::json!({"input": input}),
+                gents_protocol::schemas::INFERENCE_BACKEND_METADATA,
+            ).await?;
+            let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "InferenceBackendMetadata")?;
+            crate::store::config_client::publish_node_child_in_txn(txn, "InferenceBackendMetadata", &doc, &did).await?;
+            Ok::<(), anyhow::Error>(())
+        })
+    }).await
 }
 
 #[tokio::test]
 async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Result<()> {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
-    crate::ensure_runtime_schemas(&node).await?;
-    crate::ensure_node(&node, &base_backend().node_did).await?;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
-    let backend = base_backend();
+    let (db, _user, access) =
+        crate::test_support::signed_test_node_without_agent("registry-duplicate").await;
+    let node = db.node.clone();
+    let mut backend = base_backend();
+    backend.node_did = db.node_identity.did().to_owned();
     crate::store::config_client::write_inference_backend_document(&access, &backend).await?;
+    let mut distinct = backend.clone();
+    distinct.backend_id = "distinct-control".into();
+    seed_metadata(&access, metadata_input(&distinct)?).await?;
     let mut duplicate = backend.clone();
     duplicate.name = "A physically distinct duplicate".into();
-    let duplicate_result = access
-        .write(
-            "test.backend.duplicate",
-            &format!(
-                "mutation {{ create_InferenceBackend(input: {}) {{ _docID }} }}",
-                gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(&duplicate)?)?
-            ),
-        )
-        .await;
+    let duplicate_result = seed_metadata(&access, metadata_input(&duplicate)?).await;
     assert!(
         duplicate_result.is_err(),
         "the canonical unique owner/ID index must reject duplicates"
     );
-    let loaded = lookup_backend(&node, &backend.node_did, &backend.backend_id)
+    let loaded = backend_for_user(&access, &backend.node_did, &backend.backend_id)
         .await?
         .expect("original backend remains");
     assert_eq!(loaded.name, backend.name);
-    let records = list_all_backends(&node).await?;
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].name, backend.name);
-    let response = node.execute("{ InferenceBackend { probe_status } }").await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let data = response.data.unwrap();
-    for row in data["InferenceBackend"].as_array().unwrap() {
+    let records = list_enabled_backends_for_runtime(&node, &backend.node_did).await?;
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records
+            .iter()
+            .filter(|row| row.backend_id == backend.backend_id)
+            .count(),
+        1
+    );
+    assert!(records
+        .iter()
+        .any(|row| row.backend_id == distinct.backend_id));
+    let response = access
+        .execute("{ InferenceBackendObservation { probe_status } }")
+        .await?;
+    for row in response["data"]["InferenceBackendObservation"]
+        .as_array()
+        .unwrap()
+    {
         assert!(row["probe_status"].is_null());
     }
     Ok(())
@@ -554,26 +617,19 @@ async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Re
 
 #[tokio::test]
 async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -> Result<()> {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
-    crate::ensure_runtime_schemas(&node).await?;
-    let owner = base_backend().node_did;
-    crate::ensure_node(&node, &owner).await?;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
-    crate::store::config_client::write_inference_backend_document(&access, &base_backend()).await?;
-    let mut future = serde_json::to_value(base_backend())?;
+    let (db, _user, access) =
+        crate::test_support::signed_test_node_without_agent("registry-future-kind").await;
+    let node = db.node.clone();
+    let owner = db.node_identity.did().to_owned();
+    let mut backend = base_backend();
+    backend.node_did = owner.clone();
+    crate::store::config_client::write_inference_backend_document(&access, &backend).await?;
+    let mut future = metadata_input(&backend)?;
     future["backend_id"] = "future".into();
     future["provider_kind"] = "FutureProviderKind".into();
     future["endpoint"] = "https://example.invalid/v1".into();
     future["enabled"] = true.into();
-    access
-        .write(
-            "test.backend.future_kind",
-            &format!(
-                "mutation {{ create_InferenceBackend(input: {}) {{ _docID }} }}",
-                gents_protocol::graphql::graphql_input_literal(&future)?
-            ),
-        )
-        .await?;
+    seed_metadata(&access, future).await?;
 
     let ids = |backends: Vec<InferenceBackend>| {
         backends
@@ -581,13 +637,21 @@ async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -
             .map(|backend| backend.backend_id)
             .collect::<Vec<_>>()
     };
-    assert_eq!(ids(list_all_backends(&node).await?), ["reviewers"]);
-    assert_eq!(ids(list_enabled_backends(&node).await?), ["reviewers"]);
+    let response = access
+        .execute(&format!(
+            "{{ InferenceBackendMetadata {{ _docID {BACKEND_CONFIG_FIELDS} }} }}"
+        ))
+        .await?;
+    let all = decode_backend_records(response.get("data"), true)?
+        .into_iter()
+        .map(|(_, backend)| backend)
+        .collect();
+    assert_eq!(ids(all), ["reviewers"]);
     assert_eq!(
-        ids(list_enabled_backends_for_agent(&node, &owner).await?),
+        ids(list_enabled_backends_for_runtime(&node, &owner).await?),
         ["reviewers"]
     );
-    let error = lookup_backend(&node, &owner, "future")
+    let error = backend_for_user(&access, &owner, "future")
         .await
         .expect_err("a single lookup stays strict");
     assert!(
