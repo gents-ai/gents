@@ -352,34 +352,33 @@ async fn seed_upgraded_row(
     provider: &str,
     account_id: Option<&str>,
 ) {
-    let credential = OAuthCredential {
-        doc_id: None,
-        credential_id: oauth_credential_id(did, provider),
-        node_did: did.into(),
-        provider: provider.into(),
-        access_token: "placeholder-access".into(),
-        refresh_token: "placeholder-refresh".into(),
-        id_token: None,
-        account_id: account_id.map(str::to_owned),
-        chatgpt_plan_type: None,
-        is_fedramp: false,
-        access_token_expires_at: DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
-            .unwrap()
-            .to_utc(),
-        last_refresh: Some(
-            DateTime::parse_from_rfc3339("2019-12-31T00:00:00Z")
-                .unwrap()
-                .to_utc(),
-        ),
-        enabled: true,
-        account_ref: None,
-        connected_at: None,
-        provider_account_key: None,
-        label: None,
-    };
-    upsert_oauth_credential_on(access, &credential)
-        .await
-        .unwrap();
+    let mut input = json!({
+        "credential_id": oauth_credential_id(did, provider),
+        "node_did": did,
+        "provider": provider,
+        "access_token": "placeholder-access",
+        "refresh_token": "placeholder-refresh",
+        "is_fedramp": false,
+        "access_token_expires_at": "2020-01-01T00:00:00Z",
+        "last_refresh": "2019-12-31T00:00:00Z",
+        "enabled": true,
+    });
+    if let Some(account_id) = account_id {
+        input["account_id"] = json!(account_id);
+    }
+    access.transact_write("test.seed_upgraded_row", |txn| {
+        let input = input.clone();
+        Box::pin(async move {
+            let response = txn.execute_client_signed_create(
+                "mutation($input: OAuthCredentialMutationInputArg!) { create_OAuthCredential(input: $input) { _docID } }",
+                &json!({"input": input}),
+                gents_protocol::schemas::OAUTH_CREDENTIAL,
+            ).await?;
+            let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
+            crate::store::config_client::publish_secret_configuration_in_txn(txn, "OAuthCredential", &doc, did).await?;
+            Ok(())
+        })
+    }).await.unwrap();
 }
 
 #[tokio::test]
