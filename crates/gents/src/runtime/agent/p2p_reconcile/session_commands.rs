@@ -81,6 +81,7 @@ pub(super) async fn unanswered_commands(
         ),
     )
     .await?;
+    let response: defra_node::QueryResponse = serde_json::from_value(response)?;
     if matches!(sweep, Sweep::Unanswered) {
         #[derive(Deserialize)]
         struct DocIdRow {
