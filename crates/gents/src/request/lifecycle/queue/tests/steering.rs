@@ -231,15 +231,32 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
         assert_eq!(case.queue_active, None, "{}", case.name);
 
         let db = test_db("generated-owned-steering-terminal").await;
-        crate::session::ensure_session_with_agent_did_and_requester_did(
-            &db.node,
-            "generated-owned-steering-session",
-            db.node_did(),
-            db.agent_did(),
-            Some(db.node_did()),
-        )
-        .await
-        .unwrap();
+        // The session is Agent-owned: created through the Agent's access so the
+        // parent request's own session check finds the same physical row.
+        let node_did = db.node_did().to_owned();
+        let agent_did = db.agent_did().to_owned();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.agent_access
+            .transact_write("test.owned_steering_session", |txn| {
+                let (node_did, agent_did, now) =
+                    (node_did.as_str(), agent_did.as_str(), now.as_str());
+                Box::pin(async move {
+                    crate::session::ensure_session_in_txn(
+                        txn,
+                        "generated-owned-steering-session",
+                        node_did,
+                        agent_did,
+                        Some(agent_did),
+                        None,
+                        None,
+                        now,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
         let mut parent_create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "parent-request",
