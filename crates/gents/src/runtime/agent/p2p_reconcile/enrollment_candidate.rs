@@ -394,8 +394,8 @@ async fn persisted_request(
     Ok(Some((request, row.doc_id.clone())))
 }
 
-/// Publish a request authored by the local runtime after the caller verifies
-/// the offer's signature and authenticated server identity.
+/// Publish a request authored by the local Node or thin client after the caller
+/// verifies the offer's signature and authenticated server identity.
 pub async fn write_enrollment_request(
     node: &Arc<EmbeddedNode>,
     request: &EnrollmentRequestRecord,
@@ -423,31 +423,37 @@ pub async fn write_enrollment_request(
                 );
                 let nodes = txn.execute(&query).await?;
                 let nodes = gents_protocol::graphql::graphql_rows_from_response(&nodes, "Node");
-                let [parent] = nodes.as_slice() else {
-                    anyhow::bail!("enrollment request requires exactly one visible local Node");
+                let parent = match nodes.as_slice() {
+                    [] => None,
+                    [node] => {
+                        let parent = node["_docID"]
+                            .as_str()
+                            .filter(|id| !id.is_empty())
+                            .context("enrollment request Node has no document ID")?;
+                        let owners = txn.document_owners("Node", &[parent.to_owned()]).await?;
+                        anyhow::ensure!(
+                            owners.len() == 1 && owners[0].visible && owners[0].owner.is_some(),
+                            "enrollment request Node has no visible native owner"
+                        );
+                        Some(parent)
+                    }
+                    _ => anyhow::bail!("enrollment request has multiple visible local Nodes"),
                 };
-                let parent = parent["_docID"]
-                    .as_str()
-                    .filter(|id| !id.is_empty())
-                    .context("enrollment request Node has no document ID")?;
-                let owners = txn.document_owners("Node", &[parent.to_owned()]).await?;
-                anyhow::ensure!(
-                    owners.len() == 1 && owners[0].visible && owners[0].owner.is_some(),
-                    "enrollment request Node has no visible native owner"
-                );
                 let response = txn.execute(mutation).await?;
                 let doc = gents_protocol::graphql::extract_mutation_doc_id(
                     &response,
                     "NetworkEnrollmentRequest",
                 )?;
-                txn.add_resource_relationship(
-                    "NetworkEnrollmentRequest",
-                    &doc,
-                    "parent",
-                    "nodes",
-                    parent,
-                )
-                .await?;
+                if let Some(parent) = parent {
+                    txn.add_resource_relationship(
+                        "NetworkEnrollmentRequest",
+                        &doc,
+                        "parent",
+                        "nodes",
+                        parent,
+                    )
+                    .await?;
+                }
                 txn.add_actor_relationship("NetworkEnrollmentRequest", &doc, "reader", admin)
                     .await?;
                 Ok::<_, anyhow::Error>(doc)
