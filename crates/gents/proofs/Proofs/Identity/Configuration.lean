@@ -17,6 +17,17 @@ def validToolGrantSource (source : ToolGrantSource) : Bool :=
   !source.toolsDoc.isEmpty && !source.agent.isEmpty && !source.purpose.isEmpty &&
     !source.permission.isEmpty
 
+/-- Tool-derived native authority requires the claimed Agent DID to match the
+held Node key and immutable creation nonce through the existing identity
+derivation owner. The cryptographic derivation and signing-key custody are
+external premises; document writer authority alone does not establish them. -/
+def managedToolSourceMatches (claimed derived : String) : Bool :=
+  !claimed.isEmpty && claimed == derived
+
+theorem foreign_agent_cannot_receive_tool_source (claimed derived : String)
+    (different : claimed ≠ derived) : managedToolSourceMatches claimed derived = false := by
+  simp [managedToolSourceMatches, different]
+
 /-- Schema commands expose collection/version reads, create/patch/activation
 and materialization, migration publication, and view creation. These names
 are the pinned DefraDB node-operation relations for those operations. -/
@@ -102,6 +113,25 @@ def changeToolGrant (state : ToolGrantProjection) (source : ToolGrantSource)
       enabled := (if enable then source :: enabled else enabled)
       grants := (if enable then source :: grants else grants) }
   else state
+
+/-- Reconciliation removes a previously projected source when its Agent does
+not match the identity derived by the holder of the Node key. Direct native
+grants remain independent of this projection. -/
+def reconcileManagedToolGrant (state : ToolGrantProjection) (source : ToolGrantSource)
+    (derived : String) (authorized committed : Bool) : ToolGrantProjection :=
+  changeToolGrant state source (managedToolSourceMatches source.agent derived) authorized committed
+
+theorem foreign_source_reconciles_disabled (state : ToolGrantProjection)
+    (source : ToolGrantSource) (derived : String) (authorized committed : Bool)
+    (different : source.agent ≠ derived) :
+    reconcileManagedToolGrant state source derived authorized committed =
+      changeToolGrant state source false authorized committed := by
+  simp [reconcileManagedToolGrant, foreign_agent_cannot_receive_tool_source _ _ different]
+
+theorem managed_reconcile_preserves_direct (state : ToolGrantProjection)
+    (source : ToolGrantSource) (derived : String) (authorized committed : Bool) :
+    (reconcileManagedToolGrant state source derived authorized committed).direct = state.direct := by
+  simp [reconcileManagedToolGrant, changeToolGrant]
 
 /-- Rebinding a tool replaces its old source and adds its new one in the same
 native transaction, so neither a failed removal nor a failed addition publishes
