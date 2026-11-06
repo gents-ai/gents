@@ -74,6 +74,9 @@ export async function createIosReconnectFixture(
   const sockets = new Set();
   let online = true;
   let agentEvidence = null;
+  let agentStreams = 0;
+  let agentStreamsBeforeDisconnect = 0;
+  let agentEvidenceChunks = 0;
   const cleanup = async () => {
     online = false;
     for (const socket of sockets) socket.destroy();
@@ -138,9 +141,11 @@ export async function createIosReconnectFixture(
         if (agentStream || request.length >= 16_384) return;
         request += chunk.toString("utf8");
         agentStream = request.includes("subscription { Agent(");
+        if (agentStream) agentStreams += 1;
       });
       upstream.on("data", (chunk) => {
         if (agentStream && agentEvidence !== null) {
+          agentEvidenceChunks += 1;
           agentEvidence = (agentEvidence + chunk.toString("utf8")).slice(-1_000_000);
         }
       });
@@ -208,7 +213,10 @@ export async function createIosReconnectFixture(
       statusUrl,
       setOnline(value) {
         online = value;
-        if (!online) for (const socket of sockets) socket.destroy();
+        if (!online) {
+          agentStreamsBeforeDisconnect = agentStreams;
+          for (const socket of sockets) socket.destroy();
+        }
       },
       writeName(name) {
         const result = JSON.parse(
@@ -240,9 +248,18 @@ export async function createIosReconnectFixture(
       },
       beginAgentEvidence() {
         agentEvidence = "";
+        agentEvidenceChunks = 0;
       },
       observedAgentDocument(id) {
         return agentEvidence?.includes(id) ?? false;
+      },
+      agentEvidenceSummary() {
+        return {
+          streamsBeforeDisconnect: agentStreamsBeforeDisconnect,
+          streamsAfterReconnect: agentStreams - agentStreamsBeforeDisconnect,
+          chunksSinceCatchUp: agentEvidenceChunks,
+          bufferedCharacters: agentEvidence?.length ?? 0,
+        };
       },
       cleanup,
     };

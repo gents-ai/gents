@@ -326,7 +326,7 @@ async function waitForScenario({
           (!liveDocumentId || !reconnectFixture.observedAgentDocument(liveDocumentId))
         ) {
           throw new Error(
-            "The changed Agent document was not observed on its re-armed SSE stream",
+            `The changed Agent document ${liveDocumentId ?? "(missing)"} was not observed on its re-armed SSE stream; ${JSON.stringify(reconnectFixture.agentEvidenceSummary())}`,
           );
         }
         if (realInference) {

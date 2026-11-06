@@ -391,26 +391,69 @@ async function runReconnectInferenceTurn(
     `${phase} reconnect send button`,
   );
   send.click();
-  const completed = await waitForAsync(async () => {
-    const snapshot = await invoke<DesktopClientSnapshot>(
-      bridgeCommand("desktop_client_snapshot"),
+  let lastEvidence: {
+    runtimeConnection: string | null;
+    newSessions: Array<{
+      sessionId: string;
+      agentDid: string | null;
+      requesterDid: string | null;
+      requestId: string | null;
+      turnState: string | null;
+    }>;
+    assistantMarkerVisible: boolean;
+  } = { runtimeConnection: null, newSessions: [], assistantMarkerVisible: false };
+  let completed: {
+    nodeDid: string;
+    clientDid: string;
+    agentDid: string;
+    sessionId: string;
+    requestId: string | null;
+  };
+  try {
+    completed = await waitForAsync(async () => {
+      const snapshot = await invoke<DesktopClientSnapshot>(
+        bridgeCommand("desktop_client_snapshot"),
+      );
+      const current = snapshot.client?.deployments.find(
+        (row) => row.nodeDid === nodeDid,
+      );
+      const sessions = current?.sessions ?? [];
+      const assistantMarkerVisible = Boolean(
+        findAssistantResponseMarker(document, marker),
+      );
+      lastEvidence = {
+        runtimeConnection: current?.runtimeConnection ?? null,
+        newSessions: sessions
+          .filter((session) => !existingSessions.has(session.sessionId))
+          .map((session) => ({
+            sessionId: session.sessionId,
+            agentDid: session.agentDid ?? null,
+            requesterDid: session.requesterDid ?? null,
+            requestId: session.latestRequestId ?? null,
+            turnState: session.turnState ?? null,
+          })),
+        assistantMarkerVisible,
+      };
+      const session = completedReconnectSession(
+        sessions,
+        existingSessions,
+        agentDid,
+        clientDid,
+      );
+      if (!session || !assistantMarkerVisible) return null;
+      return {
+        nodeDid,
+        clientDid,
+        agentDid,
+        sessionId: session.sessionId,
+        requestId: session.latestRequestId,
+      };
+    }, `${phase} reconnect inference completion`);
+  } catch (error) {
+    throw new Error(
+      `${errorText(error)}; last observation: ${JSON.stringify(lastEvidence)}`,
     );
-    const current = snapshot.client?.deployments.find((row) => row.nodeDid === nodeDid);
-    const session = completedReconnectSession(
-      current?.sessions ?? [],
-      existingSessions,
-      agentDid,
-      clientDid,
-    );
-    if (!session || !findAssistantResponseMarker(document, marker)) return null;
-    return {
-      nodeDid,
-      clientDid,
-      agentDid,
-      sessionId: session.sessionId,
-      requestId: session.latestRequestId,
-    };
-  }, `${phase} reconnect inference completion`);
+  }
   await reportStatus({
     stage: `reconnect-${phase}-turn`,
     detail: JSON.stringify(completed),
