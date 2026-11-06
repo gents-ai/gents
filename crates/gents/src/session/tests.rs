@@ -785,11 +785,19 @@ async fn create_session_with_agent_did_rejects_mismatched_existing_binding() {
     let (db, user, access, binding) =
         crate::test_support::signed_test_node("session-binding").await;
     let node_did = db.node_identity.did();
-    let other = crate::test_support::install_test_agent_as(
+    let other = crate::store::identity::provision_agent_identity_authorized(
         &db.node,
         db.node_identity.as_ref(),
-        &user,
+        &identity::Did::new(user.did()).unwrap(),
+    )
+    .await
+    .unwrap();
+    crate::test_support::install_test_agent_binding_with_access(
+        &db.node,
+        node_did,
         "Other fixture agent",
+        &other,
+        &access,
     )
     .await;
     assert_ne!(binding.agent_did, other.agent_did);
