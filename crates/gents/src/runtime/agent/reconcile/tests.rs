@@ -780,23 +780,98 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
         .unwrap();
 }
 
+/// Admission persists InferenceCall rows through the calling Agent's signed access, so the
+/// fixture Agent gets the same node grants the admission fixtures give a managed Agent.
+async fn grant_fixture_agent_call_access(
+    node: &Arc<defra_node::Node>,
+    signer: &crate::store::identity::ManagedAgentSigner,
+) {
+    use crate::store::config_client::NodePermission;
+    let admin = crate::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(signer.node_did()).unwrap(),
+    );
+    let actor = identity::Did::new(signer.did()).unwrap();
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DocumentDelete,
+        NodePermission::DacRelationAdd,
+        NodePermission::DacRelationDelete,
+    ] {
+        admin.grant_node_permission(&actor, permission).await.unwrap();
+    }
+}
+
+/// Admission captures the physical session of the call's scope, so the fixture publishes the
+/// session through the Agent's own signed access, as the Agent's requests are published.
+async fn seed_fixture_agent_session(
+    node: &Arc<defra_node::Node>,
+    signer: &crate::store::identity::ManagedAgentSigner,
+    session_id: &str,
+) {
+    let actor = identity::Did::new(signer.did()).unwrap();
+    let access =
+        crate::ConfigAccess::local_with_agent_signer(node.clone(), actor.clone(), signer.clone())
+            .unwrap();
+    let node_did = signer.node_did().to_string();
+    let agent_did = signer.did().to_string();
+    let session_id = session_id.to_string();
+    access
+        .transact_write("test.reconcile.seed_session", |txn| {
+            let actor = &actor;
+            let node_did = &node_did;
+            let agent_did = &agent_did;
+            let session_id = &session_id;
+            Box::pin(async move {
+                let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Agent,
+                    node_did,
+                    agent_did,
+                )
+                .await?
+                .expect("selected Agent must be visible to its signer");
+                let response = txn
+                    .execute_with_variables(
+                        "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                        &serde_json::json!({"input": {"node_did": node_did, "agent_did": agent_did,
+                            "requester_did": null, "session_id": session_id,
+                            "created_at": "2026-04-15T00:00:00Z"}}),
+                    )
+                    .await?;
+                let session_doc = crate::store::graphql::created_doc_id(&response, "AgentSession")?;
+                crate::session::stage_session_relationships_in_txn(
+                    txn,
+                    &session_doc,
+                    &agent_doc,
+                    actor,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .expect("publish signed Agent session");
+}
+
 #[tokio::test]
 async fn generation_supervisor_restages_slot_on_api_key_rotation() {
-    let identity = test_identity("rotation-general");
-    let node = Arc::new(
-        crate::test_support::node_builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
+    let (db, _user, _access, binding) =
+        crate::test_support::signed_test_node("reconcile-api-key-rotation").await;
+    let node = db.node.clone();
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = identity.did().to_string();
+    let node_did = db.node_identity.did().to_string();
     let runtime_status = runtime_status_handle(&node, &node_did);
 
-    let mut agent_config = PendingAgent::new("general").build_with_identity_for_test(identity);
+    let mut agent_config = PendingAgent::new("general")
+        .with_identity_binding_for_test(binding)
+        .build_with_identity_arc_for_test(db.node_identity.clone());
     let agent_did = agent_config.agent_did.clone();
     let signer = agent_config.agent_identity.managed_agent_signer().unwrap();
+    grant_fixture_agent_call_access(&node, &signer).await;
+    seed_fixture_agent_session(&node, &signer, "session-test").await;
     agent_config.backend_id = Some("backend-general".to_string());
     agent_config.backend_auth = crate::documents::BackendAuth::ApiKey {
         key: "fixture-old-key".into(),
