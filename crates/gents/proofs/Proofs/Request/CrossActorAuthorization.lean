@@ -121,6 +121,26 @@ theorem active_steer_and_idle_use_same_claim (intent : Intent) (observation : Ob
     (commit : NativeCommit) :
     decideActiveSteer intent observation commit = decideIdleClientClaim .steer intent observation commit := by rfl
 
+/-- An existing-session message is authored by the held calling Agent. The
+source witness binds its actual parent request and tool call; descriptive IDs
+alone do not establish that edge. Cross-runtime delivery requires the separate
+authenticated HTTP and distributed receipt owner, which is not assumed here. -/
+def decideLocalAgentMessage (local sourceVerified : Bool) (intent : Intent)
+    (observation : Observation) (commit : NativeCommit) : Decision :=
+  if !local || !sourceVerified then .unavailable else decideClaim intent observation commit
+
+theorem unverified_agent_message_cannot_claim (intent : Intent) (observation : Observation)
+    (commit : NativeCommit) :
+    decideLocalAgentMessage true false intent observation commit = .unavailable := by rfl
+
+theorem verified_local_message_uses_immediate_author_claim (intent : Intent)
+    (observation : Observation) (commit : NativeCommit) :
+    decideLocalAgentMessage true true intent observation commit = decideClaim intent observation commit := by rfl
+
+theorem remote_agent_message_waits_for_http_owner (intent : Intent)
+    (observation : Observation) (commit : NativeCommit) (sourceVerified : Bool) :
+    decideLocalAgentMessage false sourceVerified intent observation commit = .unavailable := by rfl
+
 /-- A pending request changes only with the native commit. Rejection uses the
 existing failed lifecycle and no-message terminal selection, and never exposes
 which authorization fact was absent. Existing terminal work is unchanged. -/
