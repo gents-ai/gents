@@ -88,6 +88,22 @@ mod tests {
     use crate::store::config_client::{ConfigAccess, NodePermission};
     use crate::store::identity::NodeIdentity;
 
+    fn updated(response: &Value, field: &str, doc_id: &str) -> Result<bool> {
+        let rows = crate::store::graphql::mutation_documents(response, field)?
+            .context("mutation response missing update field")?;
+        match rows {
+            [] => Ok(false),
+            [row] => {
+                anyhow::ensure!(
+                    row["_docID"] == doc_id,
+                    "mutation returned a different document"
+                );
+                Ok(true)
+            }
+            _ => anyhow::bail!("mutation returned multiple documents"),
+        }
+    }
+
     #[tokio::test]
     async fn selected_inference_self_config_requires_explicit_user_grant_and_preserves_revoke(
     ) -> Result<()> {
@@ -177,10 +193,18 @@ mod tests {
         let update = format!(
             r#"mutation {{ update_InferenceExecution(docID:"{doc_value}", input:{{max_turns:20}}) {{_docID}} }}"#
         );
+        let execution_query =
+            format!(r#"{{ InferenceExecution(docID:"{doc_value}") {{ max_turns }} }}"#);
+        let before = owner.execute(&execution_query).await?;
         assert_eq!(
-            agent.write("test.inference.before", &update).await.is_ok(),
+            updated(
+                &agent.write("test.inference.before", &update).await?,
+                "update_InferenceExecution",
+                &execution,
+            )?,
             modeled("before", "execution")
         );
+        assert_eq!(owner.execute(&execution_query).await?, before);
         let runtime_did = runtime.did().to_owned();
         owner
             .transact_write("test.inference.grant", |txn| {
@@ -193,7 +217,11 @@ mod tests {
             })
             .await?;
         assert_eq!(
-            agent.write("test.inference.after", &update).await.is_ok(),
+            updated(
+                &agent.write("test.inference.after", &update).await?,
+                "update_InferenceExecution",
+                &execution,
+            )?,
             modeled("granted", "execution")
         );
         let context_id = crate::store::graphql::escape_graphql_string(&context);
@@ -205,17 +233,23 @@ mod tests {
             r#"mutation {{ update_Tools(docID:"{tools_id}",input:{{display_name:"updated"}}) {{_docID}} }}"#
         );
         assert_eq!(
-            agent
-                .write("test.inference.context_granted", &context_update)
-                .await
-                .is_ok(),
+            updated(
+                &agent
+                    .write("test.inference.context_granted", &context_update)
+                    .await?,
+                "update_AgentContext",
+                &context,
+            )?,
             modeled("granted", "context")
         );
         assert_eq!(
-            agent
-                .write("test.inference.tools_granted", &tools_update)
-                .await
-                .is_ok(),
+            updated(
+                &agent
+                    .write("test.inference.tools_granted", &tools_update)
+                    .await?,
+                "update_Tools",
+                &tools,
+            )?,
             modeled("granted", "tools")
         );
         let new_execution = owner.write("test.inference.new_execution", &format!(r#"mutation {{ create_InferenceExecution(input: {{node_did:"{node_did}",execution_id:"new-execution"}}) {{_docID}} }}"#)).await?;
@@ -243,10 +277,13 @@ mod tests {
             r#"mutation {{ update_InferenceExecution(docID:"{new_doc}",input:{{max_turns:20}}) {{_docID}} }}"#
         );
         assert_eq!(
-            agent
-                .write("test.inference.new_granted", &new_update)
-                .await
-                .is_ok(),
+            updated(
+                &agent
+                    .write("test.inference.new_granted", &new_update)
+                    .await?,
+                "update_InferenceExecution",
+                &new_execution,
+            )?,
             modeled("granted", "new-execution")
         );
         let profile_value = crate::store::graphql::escape_graphql_string(&profile);
@@ -265,7 +302,11 @@ mod tests {
                 let profile_update = &profile_update;
                 let change = &change;
                 Box::pin(async move {
-                    txn.execute(profile_update).await?;
+                    let response = txn.execute(profile_update).await?;
+                    anyhow::ensure!(
+                        updated(&response, "update_InferenceProfile", &change.doc_id)?,
+                        "profile rebind did not update the selected document"
+                    );
                     super::super::selection::apply_selection_changes(
                         txn,
                         std::slice::from_ref(change),
@@ -298,40 +339,72 @@ mod tests {
             )
             .await?;
         assert_eq!(
-            agent
-                .write("test.inference.direct_after_revoke", &update)
-                .await
-                .is_ok(),
+            updated(
+                &agent
+                    .write("test.inference.direct_after_revoke", &update)
+                    .await?,
+                "update_InferenceExecution",
+                &execution,
+            )?,
             modeled("direct-after-revoke", "execution")
         );
+        let revoked_new_update = new_update.replace("max_turns:20", "max_turns:21");
+        let revoked_profile_update = profile_update.replace("new-execution", "execution");
+        let revoked_context_update = context_update.replace("updated", "revoked");
+        let revoked_tools_update = tools_update.replace("updated", "revoked");
         assert_eq!(
-            agent
-                .write("test.inference.new_revoked", &new_update)
-                .await
-                .is_ok(),
+            updated(
+                &agent
+                    .write("test.inference.new_revoked", &revoked_new_update)
+                    .await?,
+                "update_InferenceExecution",
+                &new_execution,
+            )?,
             modeled("revoked", "new-execution")
         );
         assert_eq!(
-            agent
-                .write("test.inference.profile_revoked", &profile_update)
-                .await
-                .is_ok(),
+            updated(
+                &agent
+                    .write("test.inference.profile_revoked", &revoked_profile_update)
+                    .await?,
+                "update_InferenceProfile",
+                &profile,
+            )?,
             modeled("revoked", "profile")
         );
         assert_eq!(
-            agent
-                .write("test.inference.context_revoked", &context_update)
-                .await
-                .is_ok(),
+            updated(
+                &agent
+                    .write("test.inference.context_revoked", &revoked_context_update)
+                    .await?,
+                "update_AgentContext",
+                &context,
+            )?,
             modeled("revoked", "context")
         );
         assert_eq!(
-            agent
-                .write("test.inference.tools_revoked", &tools_update)
-                .await
-                .is_ok(),
+            updated(
+                &agent
+                    .write("test.inference.tools_revoked", &revoked_tools_update)
+                    .await?,
+                "update_Tools",
+                &tools,
+            )?,
             modeled("revoked", "tools")
         );
+        let observed = owner.execute(&format!(
+            r#"{{ InferenceExecution(docID:"{new_doc}") {{ max_turns }} InferenceProfile(docID:"{profile_value}") {{ execution_id }} AgentContext(docID:"{context_id}") {{ display_name }} Tools(docID:"{tools_id}") {{ display_name }} }}"#
+        )).await?;
+        assert_eq!(observed["data"]["InferenceExecution"][0]["max_turns"], 20);
+        assert_eq!(
+            observed["data"]["InferenceProfile"][0]["execution_id"],
+            "new-execution"
+        );
+        assert_eq!(
+            observed["data"]["AgentContext"][0]["display_name"],
+            "updated"
+        );
+        assert_eq!(observed["data"]["Tools"][0]["display_name"], "updated");
         let relation_revoke = agent
             .transact_write("test.inference.revoke_denied", |txn| {
                 let new_execution = &new_execution;
@@ -357,9 +430,20 @@ mod tests {
         owner
             .delete_actor_relationship("InferenceExecution", &execution, "writer", &actor)
             .await?;
+        let revoked_update = update.replace("max_turns:20", "max_turns:21");
         assert_eq!(
-            agent.write("test.inference.revoked", &update).await.is_ok(),
+            updated(
+                &agent
+                    .write("test.inference.revoked", &revoked_update)
+                    .await?,
+                "update_InferenceExecution",
+                &execution,
+            )?,
             modeled("revoked", "execution")
+        );
+        assert_eq!(
+            owner.execute(&execution_query).await?["data"]["InferenceExecution"][0]["max_turns"],
+            20
         );
         assert!(
             node.nac_manager()
