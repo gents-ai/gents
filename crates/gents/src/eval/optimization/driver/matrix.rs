@@ -155,6 +155,16 @@ impl Harness {
         self.launching.install(documents).await;
     }
 
+    pub(crate) async fn grant_node_permissions(
+        &self,
+        actor: &str,
+        permissions: &[crate::store::config_client::NodePermission],
+    ) -> anyhow::Result<()> {
+        self.launching
+            .grant_node_permissions(actor, permissions)
+            .await
+    }
+
     pub(crate) async fn delete(&self, collection: Collection, id: &str) {
         self.launching.delete(collection, id).await;
     }

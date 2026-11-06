@@ -890,7 +890,6 @@ mod tests {
             )
             .await?;
         harness
-            .launching
             .grant_node_permissions(
                 outsider.did(),
                 &[
