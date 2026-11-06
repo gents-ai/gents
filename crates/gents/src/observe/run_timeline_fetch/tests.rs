@@ -270,68 +270,79 @@ fn child_bridge_requires_the_exact_parent_tool_document() {
 async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is_null() {
     use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
     use crate::request::streaming::DefraStreamWriter;
+    use crate::store::identity::NodeIdentity;
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
-    use std::{sync::Arc, time::Duration};
+    use std::time::Duration;
 
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::store::schema::ensure_runtime_schemas(node.as_ref())
+    let (db, user, access, binding) =
+        crate::test_support::signed_test_node("timeline-pending-tool").await;
+    let node = db.node.clone();
+    let node_did = db.node_identity.did().to_owned();
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let create = crate::request::lifecycle::build_signed_client_request(
+        &access,
+        crate::request::lifecycle::RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            crate::request::lifecycle::RequestIdentity {
+                request_id: "pending-tool-request".into(),
+                node_did: node_did.clone(),
+                requester_did: Some(user.did().to_owned()),
+                agent_did: binding.agent_did.clone(),
+                session_id: "pending-tool-session".into(),
+                content: "publish an accepted tool".into(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: "2026-09-22T00:00:00Z".into(),
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
+        ),
+        crate::request::lifecycle::RequestSigner::Identity(&user),
+    )
+    .await
+    .unwrap();
+    crate::request::lifecycle::submit_client_request(&access, &create)
         .await
         .unwrap();
-    let response = node
-        .execute(
-            r#"mutation {
-                create_AgentSession(input: {
-                    session_id: "pending-tool-session"
-                    node_did: "did:test:timeline"
-                    agent_did: "general"
-                    created_at: "2026-09-22T00:00:00Z"
-                }) { _docID }
-                create_AgentRequest(input: {
-                    request_id: "pending-tool-request"
-                    purpose: "normal"
-                    node_did: "did:test:timeline"
-                    agent_did: "general"
-                    session_id: "pending-tool-session"
-                    retry_parent_request: ""
-                    retry_root_request: "pending-tool-request"
-                    superseded_by_request: ""
-                    content: "publish an accepted tool"
-                    lifecycle_state: "pending"
-                    backend_id: ""
-                    execution_origin: "interactive"
-                    failure_reason: ""
-                    created_at: "2026-09-22T00:00:00Z"
-                    retry_count: 0
-                    max_retries: 3
-                    request_hop: 0
-                }) { _docID }
-            }"#,
-        )
-        .await;
-    assert!(
-        !response.has_errors(),
-        "seed accepted pending fixture: {:?}",
-        response.errors
-    );
-    let request_response = node
+    let agent_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let request_response = agent_access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "pending-tool-request" }} }}) {{ {} }} }}"#,
             crate::request::watcher::AGENT_REQUEST_FIELDS
         ))
-        .await;
+        .await
+        .unwrap();
     let request: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&request_response, "AgentRequest")
-            .unwrap()
-            .expect("pending fixture request");
-    let mut lifecycle = RequestLifecycle::new_with_node_did(
+        serde_json::from_value(request_response["data"]["AgentRequest"][0].clone()).unwrap();
+    let request = request.try_into().unwrap();
+    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
-        "general",
-        "did:test:timeline",
-        request.try_into().unwrap(),
-        60,
+        db.node_identity.clone(),
+        authority,
     );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let writer = DefraStreamWriter::new(node.clone(), "did:test:timeline", Duration::ZERO);
+    let (request, admission) = verifier
+        .verify_fresh_for_claim_with_identity(&request, agent.as_ref())
+        .await
+        .unwrap();
+    assert!(
+        admission.is_some(),
+        "client claim must retain its verified admission"
+    );
+    let mut lifecycle =
+        RequestLifecycle::new_with_node_did(node.clone(), agent.did(), &node_did, request, 60);
+    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
+    lifecycle.set_client_claim_admission(admission);
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let writer =
+        DefraStreamWriter::new_for_lifecycle(node.clone(), &lifecycle, Duration::ZERO).unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     writer
         .start_provider_attempt(
@@ -356,12 +367,11 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
             additional_params: None,
         })],
     };
-    let access = ConfigAccess::local(node.clone());
     let earlier_tools = event_loaders::load_timeline_tool_observations_for_session(
         &access,
-        "did:test:timeline",
+        &node_did,
         "pending-tool-session",
-        None,
+        Some(user.did()),
     )
     .await
     .unwrap();
@@ -374,18 +384,18 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
 
     let later_messages = resolve_timeline_messages_for_session(
         &access,
-        "did:test:timeline",
+        &node_did,
         "pending-tool-session",
-        None,
+        Some(user.did()),
     )
     .await
     .unwrap();
     assert_eq!(later_messages.len(), 1);
     assert!(event_loaders::resolve_timeline_tool_observations(
         &access,
-        "did:test:timeline",
+        &node_did,
         "pending-tool-session",
-        None,
+        Some(user.did()),
         earlier_tools,
         &later_messages,
     )
@@ -393,7 +403,7 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
     .unwrap()
     .is_empty());
 
-    let rows = load_run_timeline_rows(&ConfigAccess::local(node.clone()), "pending-tool-request")
+    let rows = load_run_timeline_rows(&access, "pending-tool-request")
         .await
         .expect("accepted pending call must remain timeline-readable");
     let tool = rows.tool_calls.first().expect("one accepted tool");
