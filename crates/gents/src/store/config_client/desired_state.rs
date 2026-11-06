@@ -458,7 +458,8 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
         let (owner, id) = document_identity(document.collection, &document.add)?;
         match document.collection {
             Collection::EventSource => {
-                super::event_source_cursor::seed_referencing_consumers(txn, owner, id).await?;
+                super::event_source_cursor::seed_referencing_consumers(txn, owner, id, binding)
+                    .await?;
             }
             Collection::Trigger => {
                 let trigger: crate::documents::Trigger =
@@ -470,14 +471,20 @@ pub(crate) async fn apply_desired_state_plan_with_node_binding(
                     let consumer = gents_protocol::event_delivery::EventConsumer::Trigger {
                         trigger_id: id.to_owned(),
                     };
-                    super::event_source_cursor::load_or_seed(txn, owner, &consumer).await?;
+                    super::event_source_cursor::load_or_seed_with_node_binding(
+                        txn, owner, &consumer, binding,
+                    )
+                    .await?;
                 }
             }
             Collection::CallbackBinding => {
                 let consumer = gents_protocol::event_delivery::EventConsumer::CallbackBinding {
                     binding_id: id.to_owned(),
                 };
-                super::event_source_cursor::load_or_seed(txn, owner, &consumer).await?;
+                super::event_source_cursor::load_or_seed_with_node_binding(
+                    txn, owner, &consumer, binding,
+                )
+                .await?;
             }
             _ => {}
         }

@@ -367,6 +367,87 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
 }
 
 #[tokio::test]
+async fn held_agent_cursor_seed_uses_runtime_observed_node_binding() -> Result<()> {
+    let fixture = fixture(false).await?;
+    let agent = &fixture.agent;
+    let hidden = agent.execute("{ Node { _docID } }").await?;
+    assert!(hidden["data"]["Node"].as_array().unwrap().is_empty());
+    let node = fixture.user.execute("{ Node { _docID node_did } }").await?;
+    let node_doc = node["data"]["Node"][0]["_docID"]
+        .as_str()
+        .context("fixture Node has no physical ID")?
+        .to_owned();
+    let binding = super::super::ConfigurationNodeBinding {
+        node_did: identity::Did::new(PIN_FIXED_DID)?,
+        doc_id: node_doc,
+        enabled: true,
+        default_agent_did: None,
+    };
+    let without_binding = agent
+        .transact_write("test.cursor.no_node_binding", |txn| {
+            Box::pin(async move {
+                load_or_seed_for_source(txn, PIN_FIXED_DID, &trigger_consumer(), "WorkB").await
+            })
+        })
+        .await;
+    assert!(
+        without_binding.is_err(),
+        "the Agent cannot substitute for the Node"
+    );
+    let agent_did = fixture.agent_identity.did().to_owned();
+    let record = agent
+        .transact_write("test.cursor.held_node_binding", |txn| {
+            let binding = &binding;
+            let agent_did = &agent_did;
+            Box::pin(async move {
+                assert_eq!(txn.actor_did(), Some(agent_did.as_str()));
+                load_or_seed_for_source_with_node_binding(
+                    txn,
+                    PIN_FIXED_DID,
+                    &trigger_consumer(),
+                    "WorkB",
+                    Some(binding),
+                )
+                .await
+            })
+        })
+        .await?;
+    assert!(!record.doc_id.is_empty());
+    assert_eq!(record.cursor.source_collection, "WorkB");
+    assert_eq!(cursor(agent, "WorkB").await?, record.cursor.after);
+
+    let mut new_trigger = trigger(false);
+    new_trigger.add["trigger_id"] = json!("trigger-agent-created");
+    new_trigger.update["trigger_id"] = json!("trigger-agent-created");
+    let plan = DesiredStateApplyPlan::new(vec![new_trigger])?;
+    agent
+        .transact_write("test.cursor.agent_trigger", |txn| {
+            let plan = &plan;
+            let binding = &binding;
+            Box::pin(async move {
+                super::super::apply_desired_state_plan_with_node_binding(txn, plan, Some(binding))
+                    .await
+            })
+        })
+        .await?;
+    let consumer = EventConsumer::Trigger {
+        trigger_id: "trigger-agent-created".into(),
+    };
+    let seeded = agent
+        .transact_readonly("test.cursor.agent_trigger_read", |txn| {
+            let consumer = &consumer;
+            Box::pin(async move { load_for_source(txn, PIN_FIXED_DID, consumer, "WorkA").await })
+        })
+        .await?;
+    assert!(
+        seeded.is_some(),
+        "configuration committed its initial cursor"
+    );
+    fixture.node.shutdown().await.expect("node shutdown");
+    Ok(())
+}
+
+#[tokio::test]
 async fn source_only_replacement_seeds_disabled_consumers_before_later_arrivals() -> Result<()> {
     let fixture = fixture(false).await?;
     let node = &fixture.node;

@@ -218,13 +218,30 @@ async fn consumer_agent(
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn load_or_seed(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     consumer: &EventConsumer,
 ) -> Result<CursorRecord> {
+    load_or_seed_with_node_binding(txn, owner, consumer, None).await
+}
+
+pub(crate) async fn load_or_seed_with_node_binding(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    consumer: &EventConsumer,
+    node_binding: Option<&super::ConfigurationNodeBinding>,
+) -> Result<CursorRecord> {
     let binding = event_binding(txn, owner, consumer).await?;
-    load_or_seed_for_source(txn, owner, consumer, &binding.source.source_collection).await
+    load_or_seed_for_source_with_node_binding(
+        txn,
+        owner,
+        consumer,
+        &binding.source.source_collection,
+        node_binding,
+    )
+    .await
 }
 
 /// Cursor creation belongs to the configuration transaction, including a
@@ -234,6 +251,7 @@ pub(crate) async fn seed_referencing_consumers(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     event_source_id: &str,
+    node_binding: Option<&super::ConfigurationNodeBinding>,
 ) -> Result<()> {
     let response = txn
         .execute(&format!(
@@ -257,7 +275,7 @@ pub(crate) async fn seed_referencing_consumers(
             let consumer = EventConsumer::Trigger {
                 trigger_id: trigger_id.to_owned(),
             };
-            load_or_seed(txn, owner, &consumer).await?;
+            load_or_seed_with_node_binding(txn, owner, &consumer, node_binding).await?;
         }
     }
     for row in response["data"]["CallbackBinding"]
@@ -273,7 +291,7 @@ pub(crate) async fn seed_referencing_consumers(
         let consumer = EventConsumer::CallbackBinding {
             binding_id: binding_id.to_owned(),
         };
-        load_or_seed(txn, owner, &consumer).await?;
+        load_or_seed_with_node_binding(txn, owner, &consumer, node_binding).await?;
     }
     Ok(())
 }
@@ -390,6 +408,16 @@ pub(crate) async fn load_or_seed_for_source(
     consumer: &EventConsumer,
     collection: &str,
 ) -> Result<CursorRecord> {
+    load_or_seed_for_source_with_node_binding(txn, owner, consumer, collection, None).await
+}
+
+async fn load_or_seed_for_source_with_node_binding(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    consumer: &EventConsumer,
+    collection: &str,
+    node_binding: Option<&super::ConfigurationNodeBinding>,
+) -> Result<CursorRecord> {
     if let Some(record) = load_for_source(txn, owner, consumer, collection).await? {
         return Ok(record);
     }
@@ -425,7 +453,7 @@ pub(crate) async fn load_or_seed_for_source(
         &json!({"input": cursor}), gents_protocol::schemas::EVENT_SOURCE_CURSOR,
     ).await?;
     let doc_id = crate::store::graphql::created_doc_id(&response, "EventSourceCursor")?;
-    let node_doc = super::configuration_node_doc(txn, owner, None).await?;
+    let node_doc = super::configuration_node_doc(txn, owner, node_binding).await?;
     let agent = identity::Did::new(consumer_agent(txn, owner, consumer).await?)?;
     txn.add_resource_relationship("EventSourceCursor", &doc_id, "parent", "nodes", &node_doc)
         .await?;
