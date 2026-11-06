@@ -472,6 +472,48 @@ mod tests {
                 .await?,
             allowed
         );
+        owner
+            .grant_node_permission(&user_did, NodePermission::CollectionPatch)
+            .await?;
+        let input = json!({"node_did":runtime.did(),"agent_did":binding.agent_did,
+            "creation_nonce":binding.creation_nonce,"context_id":"context","enabled":true});
+        access.transact_write("test.user_signed_managed_agent", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                txn.execute_desired_state_mutation(
+                    "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID _version { cid } } }",
+                    &json!({"input":input}), crate::Collection::Agent, true,
+                ).await
+            })
+        }).await?;
+        let matched = cases
+            .managed_tool_identity_cases
+            .iter()
+            .find(|case| case["name"] == "matched")
+            .unwrap()["allowed"]
+            .as_bool()
+            .unwrap();
+        let managed = identity::Did::new(&binding.agent_did)?;
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&managed, NodePermission::CollectionPatch)
+                .await?,
+            matched
+        );
+        assert!(
+            node.nac_manager()
+                .check_permission(&user_did, NodePermission::CollectionPatch)
+                .await?
+        );
+        owner
+            .revoke_node_permission(&user_did, NodePermission::CollectionPatch)
+            .await?;
+        assert_eq!(
+            node.nac_manager()
+                .check_permission(&user_did, NodePermission::CollectionPatch)
+                .await?,
+            allowed
+        );
         node.shutdown().await?;
         Ok(())
     }
