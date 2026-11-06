@@ -123,13 +123,6 @@ theorem raw_tool_disable_alone_does_not_revoke_reader :
      allowed 5 after.acp "agent" "pairing_observations" "route" "read") = (false, true) := by
   native_decide
 
-/-- Enrollment requests contain the signed offer token and client nonce. The
-candidate runtime is their native owner; the exact admin runtime is an explicit
-reader. A parent is a native relationship to a physical Node, not a DID field
-or a consequence of enrollment. Foreign relationships are not assumed to
-replicate. Terminal decisions, revisions and receipts reverse the creator and
-reader roles. A candidate User is a separate identity and must be authenticated
-independently before it is granted access to a decision. -/
 /-- A thin client authors enrollment requests using its own held peer key and
 need not have a Node configuration document. An absent visible Node leaves its
 request owned by that client, with only the verified server's explicit reader
@@ -168,6 +161,13 @@ theorem reader_failure_aborts_client_request (state : State) (candidate admin id
     publishEnrollmentRequest state candidate admin id none created parent false committed = state := by
   simp [publishEnrollmentRequest]
 
+/-- Enrollment requests contain the signed offer token and client nonce. The
+candidate runtime is their native owner; the exact admin runtime is an explicit
+reader. A parent is a native relationship to a physical Node, not a DID field
+or a consequence of enrollment. Foreign relationships are not assumed to
+replicate. Terminal decisions, revisions and receipts reverse the creator and
+reader roles. A candidate User is a separate identity and must be authenticated
+independently before it is granted access to a decision. -/
 def enrollmentRequestFixture : State :=
   { objects := [⟨"nodes", "candidate-node", "user"⟩,
       ⟨"enrollment_records", "request", "candidate"⟩],
