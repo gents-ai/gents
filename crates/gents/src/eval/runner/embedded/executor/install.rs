@@ -48,6 +48,19 @@ pub(super) async fn install(
         ::identity::Did::new(spec.evaluator_did.clone())?,
     );
     let access = home.client_access(&spec.evaluator_did)?;
+    // Agent bindings are authorized against the runtime's Node document, which
+    // must exist before the pack configuration is planned. The evaluator creates
+    // it here; the full trial node configuration is applied after planning.
+    apply(
+        &access,
+        "eval.trial.bootstrap_node",
+        &DesiredStateApplyPlan::new(vec![desired(
+            Collection::Node,
+            json!({ "node_did": node_did }),
+        )])?,
+    )
+    .await
+    .context("bootstrapping the evaluator-owned trial node")?;
     let provisioner = crate::pack::AgentProvisioner {
         node: &home.node,
         runtime: home.identity.as_ref(),
