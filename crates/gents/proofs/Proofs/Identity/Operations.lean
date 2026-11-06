@@ -190,10 +190,12 @@ def networkProtocolResource : String → Option String
   | _ => none
 
 /-- PeerRegistry visibility is an explicit wildcard relationship on each published
-registry document, not a grant on an enrollment record. NodeDirectoryEntry is
-scoped to attached clients rather than assumed public. Native ACP relationships
-are store-local, so a receiver cannot infer this tuple from a replicated document;
-publication on each store needs a native authorized mechanism. -/
+registry document, not an automated wildcard grant on an enrollment record.
+NodeDirectoryEntry is scoped to attached clients rather than assumed public.
+An authorized native owner or reader manager may intentionally share a private
+record with the wildcard; ordinary ungranted actors cannot. Native ACP
+relationships are store-local, so a receiver cannot infer this tuple from a
+replicated document; publication on each store needs native Node authority. -/
 def publicDiscoveryFixture : State :=
   { objects := [⟨"discovery", "directory", "runtime"⟩,
       ⟨"enrollment_records", "request", "runtime"⟩],
