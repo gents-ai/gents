@@ -236,7 +236,7 @@ async fn insert_generated_pending(
 ) -> String {
     let created_at = chrono::DateTime::from_timestamp(entry.created_at as i64, 0)
         .unwrap()
-        .to_rfc3339();
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let input = RequestInput {
         queue: Some(RequestQueue {
             delivery: Default::default(),

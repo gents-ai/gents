@@ -46,6 +46,23 @@ impl Fixture {
             .unwrap();
         let access =
             ConfigAccess::local_managed_agent(node.clone(), agent_did, agent.as_ref()).unwrap();
+        // The workspace must exist before the request is claim-verified.
+        let workspace_doc = access
+            .transact_write("test.workspace_rejection_workspace", |txn| {
+                let agent_did = agent.did();
+                let node_did = identity.did();
+                Box::pin(async move {
+                    let response = txn.execute(&format!(
+                        r#"mutation {{ create_IsolatedWorkspace(input: {{workspace_id:"cleanup-workspace", owner_node_did:"{}", writer_principal:"{}", integrator_principal:"{}", lifecycle_state:"ready"}}) {{_docID}} }}"#,
+                        escape_graphql_string(node_did), escape_graphql_string(agent_did), escape_graphql_string(agent_did),
+                    )).await?;
+                    let doc = crate::store::graphql::created_doc_id(&response, "IsolatedWorkspace")?;
+                    txn.add_actor_relationship("IsolatedWorkspace", &doc, "writer", &agent_did.parse()?).await?;
+                    Ok::<_, anyhow::Error>(doc)
+                })
+            })
+            .await
+            .unwrap();
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "workspace-rejected-request",
@@ -74,22 +91,6 @@ impl Fixture {
             .expect("publish an authorized User request before workspace rejection");
         let request = lifecycle.request().clone();
         let doc_id = request.doc_id.clone();
-        let workspace_doc = access
-            .transact_write("test.workspace_rejection_workspace", |txn| {
-                let agent_did = agent.did();
-                let node_did = identity.did();
-                Box::pin(async move {
-                    let response = txn.execute(&format!(
-                        r#"mutation {{ create_IsolatedWorkspace(input: {{workspace_id:"cleanup-workspace", owner_node_did:"{}", writer_principal:"{}", integrator_principal:"{}", lifecycle_state:"ready"}}) {{_docID}} }}"#,
-                        escape_graphql_string(node_did), escape_graphql_string(agent_did), escape_graphql_string(agent_did),
-                    )).await?;
-                    let doc = crate::store::graphql::created_doc_id(&response, "IsolatedWorkspace")?;
-                    txn.add_actor_relationship("IsolatedWorkspace", &doc, "writer", &agent_did.parse()?).await?;
-                    Ok::<_, anyhow::Error>(doc)
-                })
-            })
-            .await
-            .unwrap();
         let binding = WorkspaceBindingDoc {
             workspace_doc_id: Some(workspace_doc),
             binding_id: "exact-binding".to_string(),
