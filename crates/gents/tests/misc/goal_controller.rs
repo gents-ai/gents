@@ -1486,13 +1486,15 @@ async fn foreign_request_id_collision_cannot_preempt_owned_goal_continuation() {
     use sha2::{Digest, Sha256};
 
     let db = test_db("goal-foreign-request-id-collision").await;
-    seed_completed_request(&db, "parent-owned-collision").await;
-    let goal = set_goal(
-        &db.node,
+    let (_user, agent, access) =
+        goal_recovery_actors(&db, "parent-owned-collision", "completed").await;
+    let goal = set_goal_from_access(
+        &access,
         db.node_identity.did(),
         SESSION,
         Some("Ignore foreign request IDs"),
         Some(GoalStatus::Active),
+        None,
         None,
     )
     .await
@@ -1507,25 +1509,19 @@ async fn foreign_request_id_collision_cannot_preempt_owned_goal_continuation() {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     );
-    create_request_for_agent_with_signed_fields(
-        db.node.as_ref(),
-        "did:key:foreign",
+    create_visible_foreign_collision(
+        &db,
+        agent.as_ref(),
         &collision_id,
-        "foreign-session",
-        "pending",
-        "2026-07-15T00:00:01Z",
         None,
-        None,
-        None,
-        None,
+        gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
     )
     .await;
 
-    let (mut source, _tx) = source(&db).await;
+    let (mut source, _tx) = source_for_agent(&db, &agent).await;
     let fired = tokio::time::timeout(Duration::from_secs(2), source.next_fire()).await;
     if !matches!(fired, Ok(Some(_))) {
-        let state = db
-            .node
+        let state = access
             .execute("{ Goal { goal_id status last_continued_from_request_id continuation_sequence } AgentRequest { request_id node_did session_id retry_key caused_by_trigger_kind } }")
             .await;
         let outcome = match fired {
@@ -1535,7 +1531,7 @@ async fn foreign_request_id_collision_cannot_preempt_owned_goal_continuation() {
         };
         panic!("owned continuation did not fire ({outcome}); state={state:?}");
     }
-    let children = goal_children(&db).await;
+    let children = goal_children_from_access(&access).await;
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].request_id, collision_id);
     assert_eq!(children[0].session_id, SESSION);
@@ -1546,13 +1542,15 @@ async fn foreign_retry_key_collision_is_rejected_instead_of_reused() {
     use sha2::{Digest, Sha256};
 
     let db = test_db("goal-foreign-retry-key-collision").await;
-    seed_completed_request(&db, "parent-owned-retry-collision").await;
-    let goal = set_goal(
-        &db.node,
+    let (_user, agent, access) =
+        goal_recovery_actors(&db, "parent-owned-retry-collision", "completed").await;
+    let goal = set_goal_from_access(
+        &access,
         db.node_identity.did(),
         SESSION,
         Some("Reject foreign retry keys"),
         Some(GoalStatus::Active),
+        None,
         None,
     )
     .await
@@ -1566,33 +1564,23 @@ async fn foreign_retry_key_collision_is_rejected_instead_of_reused() {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     );
-    let mutation = format!(
-        r#"mutation {{ create_AgentRequest(input: {{
-            request_id: "foreign-retry-collision", purpose: "normal", node_did: "did:key:foreign",
-            agent_did: "foreign", session_id: "foreign-session",
-            retry_root_request: "foreign-retry-collision",
-            retry_key: "{}",
-            content: "foreign", lifecycle_state: "completed",
-            execution_origin: "interactive", created_at: "2026-07-15T00:00:01Z",
-            retry_count: 0, max_retries: 3
-        }}) {{ _docID }} }}"#,
-        retry_key
-    );
-    let response = db.node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "seed collision: {:?}",
-        response.errors
-    );
+    create_visible_foreign_collision(
+        &db,
+        agent.as_ref(),
+        "foreign-retry-collision",
+        Some(&retry_key),
+        gents_protocol::request_lifecycle::RequestLifecycleState::Completed,
+    )
+    .await;
 
-    let (mut source, _tx) = source(&db).await;
+    let (mut source, _tx) = source_for_agent(&db, &agent).await;
     assert!(
         tokio::time::timeout(Duration::from_millis(200), source.next_fire())
             .await
             .is_err(),
         "a conflicting retry key must not be reported as an owned continuation"
     );
-    assert!(goal_children(&db).await.is_empty());
+    assert!(goal_children_from_access(&access).await.is_empty());
 }
 
 #[tokio::test]
@@ -4337,69 +4325,69 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
 async fn operator_resume_retry_after_goal_progress_returns_original_child_without_mutation() {
     let db = test_db("operator-resume-retry-progress").await;
     let did = db.node_identity.did();
-    seed_operator_resume_parent(&db, "retry-parent").await;
-    set_goal(
-        &db.node,
+    let (user, agent) = goal_creation_actors(&db).await;
+    let access = db.client_access(&user);
+    let agent_access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    seed_operator_resume_parent_with_actors(&db, &user, &agent, "retry-parent").await;
+    set_goal_from_access(
+        &access,
         did,
         SESSION,
         Some("Original objective"),
         Some(GoalStatus::Paused),
         None,
+        None,
     )
     .await
     .unwrap();
-    let access = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+    let first = gents::goal::resume_goal_request(&access, &user, did, SESSION, "retry-parent")
+        .await
+        .unwrap();
+    let doc = escape_graphql_string(&first.doc_id);
+    let changed = agent_access.write("test.resume_child_interrupted", &format!(r#"mutation {{update_AgentRequest(docID: "{doc}", input: {{lifecycle_state: "interrupted"}}) {{_docID}}}}"#)).await.unwrap();
+    assert_eq!(
+        changed["data"]["update_AgentRequest"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
     );
-    let first = gents::goal::resume_goal_request(
+    let before = set_goal_from_access(
         &access,
-        db.node_identity.as_ref(),
-        did,
-        SESSION,
-        "retry-parent",
-    )
-    .await
-    .unwrap();
-    set_request_lifecycle_state(db.node.as_ref(), &first.doc_id, "interrupted").await;
-    let before = set_goal(
-        &db.node,
         did,
         SESSION,
         Some("Changed objective after progress"),
         Some(GoalStatus::Paused),
         None,
+        None,
     )
     .await
     .unwrap();
-    let child_before = operator_resume_child_row(&db, &first.doc_id).await;
-    let retry = gents::goal::resume_goal_request(
-        &access,
-        db.node_identity.as_ref(),
-        did,
-        SESSION,
-        "retry-parent",
-    )
-    .await
-    .unwrap();
+    let child_before = operator_resume_child_row_from_access(&access, &first.doc_id).await;
+    let retry = gents::goal::resume_goal_request(&access, &user, did, SESSION, "retry-parent")
+        .await
+        .unwrap();
     assert!(!retry.created);
     assert_eq!(
         (retry.request_id, retry.doc_id),
         (first.request_id, first.doc_id)
     );
-    let after = load_canonical_goal(db.node.as_ref(), did, SESSION)
-        .await
-        .unwrap()
-        .unwrap();
+    let after = load_goal_as(&access, did).await.unwrap();
     assert_eq!(
         serde_json::to_value(after).unwrap(),
         serde_json::to_value(before).unwrap()
     );
     assert_eq!(
-        operator_resume_child_row(&db, child_before["_docID"].as_str().unwrap()).await,
+        operator_resume_child_row_from_access(&access, child_before["_docID"].as_str().unwrap())
+            .await,
         child_before
     );
-    assert_eq!(goal_children(&db).await.len(), 1);
+    assert_eq!(goal_children_from_access(&agent_access).await.len(), 1);
 }
 
 #[tokio::test]
@@ -4407,21 +4395,26 @@ async fn operator_resume_rejects_foreign_identity_even_with_target_key_registere
     let target = test_db("operator-resume-target").await;
     let foreign = test_db("operator-resume-foreign").await;
     let did = target.node_identity.did();
-    seed_operator_resume_parent(&target, "owned-parent").await;
-    let before = set_goal(
-        &target.node,
+    let (user, agent) = goal_creation_actors(&target).await;
+    let access = target.client_access(&user);
+    let agent_access = ConfigAccess::local_managed_agent(
+        target.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    seed_operator_resume_parent_with_actors(&target, &user, &agent, "owned-parent").await;
+    let before = set_goal_from_access(
+        &access,
         did,
         SESSION,
         Some("Owner work"),
         Some(GoalStatus::Paused),
         None,
+        None,
     )
     .await
     .unwrap();
-    let access = ConfigAccess::local_as(
-        target.node.clone(),
-        ::identity::Did::new(target.node_identity.did().to_owned()).unwrap(),
-    );
     assert!(gents::goal::resume_goal_request(
         &access,
         foreign.node_identity.as_ref(),
@@ -4431,15 +4424,9 @@ async fn operator_resume_rejects_foreign_identity_even_with_target_key_registere
     )
     .await
     .is_err());
-    assert!(goal_children(&target).await.is_empty());
+    assert!(goal_children_from_access(&agent_access).await.is_empty());
     assert_eq!(
-        serde_json::to_value(
-            load_canonical_goal(target.node.as_ref(), did, SESSION)
-                .await
-                .unwrap()
-                .unwrap()
-        )
-        .unwrap(),
+        serde_json::to_value(load_goal_as(&access, did).await.unwrap()).unwrap(),
         serde_json::to_value(before).unwrap()
     );
 }
@@ -4449,52 +4436,43 @@ async fn operator_resume_rejects_busy_session_and_old_predecessor() {
     for newer_status in ["pending", "completed"] {
         let db = test_db(&format!("operator-resume-newer-{newer_status}")).await;
         let did = db.node_identity.did();
-        seed_operator_resume_parent(&db, "older-parent").await;
-        create_request_for_agent_with_signed_fields(
-            db.node.as_ref(),
-            did,
+        let (user, agent) = goal_creation_actors(&db).await;
+        let access = db.client_access(&user);
+        let agent_access = ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            agent.did().parse().unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        seed_operator_resume_parent_with_actors(&db, &user, &agent, "older-parent").await;
+        goal_fixture_request_with_state_at(
+            &db,
+            &user,
+            &agent,
             "newer-request",
-            SESSION,
             newer_status,
             "2026-07-15T00:00:01Z",
-            None,
-            None,
-            None,
-            None,
         )
         .await;
-        let before = set_goal(
-            &db.node,
+        let before = set_goal_from_access(
+            &access,
             did,
             SESSION,
             Some("Respect latest work"),
             Some(GoalStatus::Paused),
             None,
+            None,
         )
         .await
         .unwrap();
-        let access = ConfigAccess::local_as(
-            db.node.clone(),
-            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
+        assert!(
+            gents::goal::resume_goal_request(&access, &user, did, SESSION, "older-parent")
+                .await
+                .is_err()
         );
-        assert!(gents::goal::resume_goal_request(
-            &access,
-            db.node_identity.as_ref(),
-            did,
-            SESSION,
-            "older-parent"
-        )
-        .await
-        .is_err());
-        assert!(goal_children(&db).await.is_empty());
+        assert!(goal_children_from_access(&agent_access).await.is_empty());
         assert_eq!(
-            serde_json::to_value(
-                load_canonical_goal(db.node.as_ref(), did, SESSION)
-                    .await
-                    .unwrap()
-                    .unwrap()
-            )
-            .unwrap(),
+            serde_json::to_value(load_goal_as(&access, did).await.unwrap()).unwrap(),
             serde_json::to_value(before).unwrap()
         );
     }
@@ -4504,78 +4482,67 @@ async fn operator_resume_rejects_busy_session_and_old_predecessor() {
 async fn resume_resets_blocked_audit_identity_and_count() {
     let db = test_db("goal-resume-audit-reset").await;
     let did = db.node_identity.did();
-    seed_operator_resume_parent(&db, "request-3").await;
-    let goal = set_goal(
-        &db.node,
+    let (user, agent) = goal_creation_actors(&db).await;
+    let access = db.client_access(&user);
+    let agent_access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    seed_operator_resume_parent_with_actors(&db, &user, &agent, "request-3").await;
+    let goal = set_goal_from_access(
+        &agent_access,
         did,
         SESSION,
         Some("Resume with a fresh blocked audit"),
         Some(GoalStatus::Active),
         None,
+        None,
     )
     .await
     .unwrap();
-    seed_goal_fields(db.node.as_ref(), &goal,
-        r#"status: "blocked", consecutive_blocked_audits: 3, last_blocked_request_id: "request-3", last_blocked_reason: "needs approval", active_started_at: null"#).await.unwrap();
-    let access = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    );
-    let receipt = gents::goal::resume_goal_request(
-        &access,
-        db.node_identity.as_ref(),
-        did,
-        SESSION,
-        "request-3",
-    )
-    .await
-    .unwrap();
-    assert!(receipt.created);
-    let resumed = load_canonical_goal(db.node.as_ref(), did, SESSION)
+    seed_goal_fields_from_access(&agent_access, &goal,
+        r#"status: "blocked", consecutive_blocked_audits: 3, last_blocked_request_id: "request-3", last_blocked_reason: "needs approval", active_started_at: null"#).await;
+    let receipt = gents::goal::resume_goal_request(&access, &user, did, SESSION, "request-3")
         .await
-        .unwrap()
         .unwrap();
+    assert!(receipt.created);
+    let resumed = load_goal_as(&access, did).await.unwrap();
     assert_eq!(resumed.parsed_status(), Some(GoalStatus::Active));
     assert_eq!(resumed.consecutive_blocked_audits, Some(0));
     assert_eq!(resumed.last_blocked_request_id, None);
     assert_eq!(resumed.last_blocked_reason, None);
-    assert_eq!(goal_children(&db).await.len(), 1);
+    assert_eq!(goal_children_from_access(&agent_access).await.len(), 1);
 }
 
 #[tokio::test]
 async fn concurrent_operator_resumes_publish_one_child() {
     let db = test_db("operator-resume-concurrent").await;
     let did = db.node_identity.did();
-    seed_operator_resume_parent(&db, "concurrent-parent").await;
-    set_goal(
-        &db.node,
+    let (user, agent) = goal_creation_actors(&db).await;
+    let access = db.client_access(&user);
+    let agent_access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    seed_operator_resume_parent_with_actors(&db, &user, &agent, "concurrent-parent").await;
+    set_goal_from_access(
+        &access,
         did,
         SESSION,
         Some("One operator continuation"),
         Some(GoalStatus::Paused),
         None,
+        None,
     )
     .await
     .unwrap();
-    let access = ConfigAccess::local_as(
-        db.node.clone(),
-        ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-    );
     let (left, right) = tokio::join!(
-        gents::goal::resume_goal_request(
-            &access,
-            db.node_identity.as_ref(),
-            did,
-            SESSION,
-            "concurrent-parent"
-        ),
-        gents::goal::resume_goal_request(
-            &access,
-            db.node_identity.as_ref(),
-            did,
-            SESSION,
-            "concurrent-parent"
-        ),
+        gents::goal::resume_goal_request(&access, &user, did, SESSION, "concurrent-parent"),
+        gents::goal::resume_goal_request(&access, &user, did, SESSION, "concurrent-parent"),
     );
     let left = left.unwrap();
     let right = right.unwrap();
@@ -4584,11 +4551,8 @@ async fn concurrent_operator_resumes_publish_one_child() {
         (left.request_id, left.doc_id),
         (right.request_id, right.doc_id)
     );
-    assert_eq!(goal_children(&db).await.len(), 1);
-    let goal = load_canonical_goal(db.node.as_ref(), did, SESSION)
-        .await
-        .unwrap()
-        .unwrap();
+    assert_eq!(goal_children_from_access(&agent_access).await.len(), 1);
+    let goal = load_goal_as(&access, did).await.unwrap();
     assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
     assert_eq!(goal.continuation_sequence(), 1);
 }
@@ -4695,8 +4659,16 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
     ] {
         let db = test_db(&format!("operator-resume-unfinished-{label}")).await;
         let did = db.node_identity.did();
-        let sibling = seed_operator_resume_parent(&db, "a-older").await;
-        seed_operator_resume_parent(&db, "z-parent").await;
+        let (user, agent) = goal_creation_actors(&db).await;
+        let client = db.client_access(&user);
+        let agent_access = ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            agent.did().parse().unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        let sibling = seed_operator_resume_parent_with_actors(&db, &user, &agent, "a-older").await;
+        seed_operator_resume_parent_with_actors(&db, &user, &agent, "z-parent").await;
         let state = state
             .map(|value| {
                 format!(
@@ -4705,33 +4677,31 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
                 )
             })
             .unwrap_or_else(|| "null".to_owned());
-        let response = db.node.execute(&format!(
+        let response = agent_access.write("test.resume_sibling_state", &format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: {state} }}) {{ _docID }} }}"#,
             gents::store::graphql::escape_graphql_string(&sibling)
-        )).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let before = set_goal(
-            &db.node,
+        )).await.unwrap();
+        assert_eq!(
+            response["data"]["update_AgentRequest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let before = set_goal_from_access(
+            &client,
             did,
             SESSION,
             Some("Do not bypass unfinished sibling work"),
             Some(GoalStatus::Paused),
             None,
+            None,
         )
         .await
         .unwrap();
-        let error = gents::goal::resume_goal_request(
-            &ConfigAccess::local_as(
-                db.node.clone(),
-                ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-            ),
-            db.node_identity.as_ref(),
-            did,
-            SESSION,
-            "z-parent",
-        )
-        .await
-        .expect_err("every unfinished sibling must block resume");
+        let error = gents::goal::resume_goal_request(&client, &user, did, SESSION, "z-parent")
+            .await
+            .expect_err("every unfinished sibling must block resume");
         let detail = format!("{error:#}");
         assert!(
             !detail.contains("no longer the latest"),
@@ -4740,11 +4710,8 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
         if label != "unknown" {
             assert!(detail.contains("unfinished"), "unexpected guard: {detail}");
         }
-        assert!(goal_children(&db).await.is_empty());
-        let after = load_canonical_goal(db.node.as_ref(), did, SESSION)
-            .await
-            .unwrap()
-            .unwrap();
+        assert!(goal_children_from_access(&agent_access).await.is_empty());
+        let after = load_goal_as(&client, did).await.unwrap();
         assert_eq!(
             serde_json::to_value(after).unwrap(),
             serde_json::to_value(before).unwrap()
@@ -4756,44 +4723,40 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
 async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
     let db = test_db("operator-resume-retained-wrapup").await;
     let did = db.node_identity.did();
-    seed_operator_resume_parent(&db, "wrapup-parent").await;
-    let paused = set_goal(
-        &db.node,
+    let (user, agent) = goal_creation_actors(&db).await;
+    let client = db.client_access(&user);
+    let agent_access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    seed_operator_resume_parent_with_actors(&db, &user, &agent, "wrapup-parent").await;
+    let paused = set_goal_from_access(
+        &client,
         did,
         SESSION,
         Some("Finish the already requested wrap-up"),
         Some(GoalStatus::Paused),
         None,
+        None,
     )
     .await
     .unwrap();
-    seed_goal_fields(
-        db.node.as_ref(),
+    seed_goal_fields_from_access(
+        &agent_access,
         &paused,
         "wrapup_requested: true, wrapup_completed: false",
     )
-    .await
-    .unwrap();
-    let receipt = gents::goal::resume_goal_request(
-        &ConfigAccess::local_as(
-            db.node.clone(),
-            ::identity::Did::new(db.node_identity.did().to_owned()).unwrap(),
-        ),
-        db.node_identity.as_ref(),
-        did,
-        SESSION,
-        "wrapup-parent",
-    )
-    .await
-    .unwrap();
-    let goal = load_canonical_goal(db.node.as_ref(), did, SESSION)
+    .await;
+    let receipt = gents::goal::resume_goal_request(&client, &user, did, SESSION, "wrapup-parent")
         .await
-        .unwrap()
         .unwrap();
+    let goal = load_goal_as(&client, did).await.unwrap();
     assert_eq!(goal.parsed_status(), Some(GoalStatus::BudgetLimited));
     assert_eq!(goal.wrapup_requested, Some(true));
     assert_eq!(goal.wrapup_completed, Some(false));
-    let child = operator_resume_child_row(&db, &receipt.doc_id).await;
+    let child = operator_resume_child_row_from_access(&client, &receipt.doc_id).await;
     let input = &child["input"];
     assert_eq!(
         input
@@ -5762,4 +5725,182 @@ async fn seed_failed_call_from_access(
             Ok::<_, anyhow::Error>(())
         })
     }).await.unwrap();
+}
+
+async fn operator_resume_child_row_from_access(
+    access: &ConfigAccess,
+    doc_id: &str,
+) -> serde_json::Value {
+    let doc = escape_graphql_string(doc_id);
+    let response = access.execute(&format!(r#"{{AgentRequest(docID: "{doc}") {{
+        _docID request_id node_did requester_did session_id agent_did lifecycle_state
+        content created_at execution_origin retry_key input admission_kind admission_signer_did
+        admission_signature runtime_issuer_did runtime_source_request_id runtime_source_kind
+        caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation
+        caused_by_source_doc_id caused_by_trigger_context caused_by_parent_request_id caused_by_parent_request_doc_id
+        caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id request_hop workspace_id workspace_authority
+        workspace_owner_node_did workspace_seal_hash
+    }}}}"#)).await.unwrap();
+    response["data"]["AgentRequest"][0].clone()
+}
+
+async fn seed_operator_resume_parent_with_actors(
+    db: &TestDb,
+    user: &gents::KeyIdentity,
+    agent: &Arc<dyn NodeIdentity>,
+    request_id: &str,
+) -> String {
+    goal_fixture_request_with_state_at(
+        db,
+        user,
+        agent,
+        request_id,
+        "interrupted",
+        "2026-07-15T00:00:00Z",
+    )
+    .await
+}
+
+async fn create_visible_foreign_collision(
+    db: &TestDb,
+    observer: &dyn NodeIdentity,
+    request_id: &str,
+    retry_key: Option<&str>,
+    state: gents_protocol::request_lifecycle::RequestLifecycleState,
+) -> String {
+    use gents::request::lifecycle::{
+        build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
+        RequestSigner, RequestSpec,
+    };
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    let directory = tempfile::tempdir().unwrap();
+    let foreign_node =
+        gents::KeyIdentity::load_or_create(directory.path().join("foreign-node.key"), None)
+            .unwrap();
+    let binding = gents::store::identity::provision_agent_identity(&foreign_node).unwrap();
+    let foreign_agent =
+        gents::store::identity::resolve_agent_identity(&foreign_node, &binding).unwrap();
+    let foreign_user =
+        gents::KeyIdentity::load_or_create(directory.path().join("foreign-user.key"), None)
+            .unwrap();
+    let admin = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
+    for actor in [foreign_user.did(), foreign_agent.did()] {
+        for permission in [
+            gents::store::config_client::NodePermission::DocumentRead,
+            gents::store::config_client::NodePermission::DocumentUpdate,
+            gents::store::config_client::NodePermission::CollectionGet,
+            gents::store::config_client::NodePermission::DacRelationAdd,
+            gents::store::config_client::NodePermission::DacRelationDelete,
+        ] {
+            admin
+                .grant_node_permission(&actor.parse().unwrap(), permission)
+                .await
+                .unwrap();
+        }
+    }
+    let client = db.client_access(&foreign_user);
+    let node = serde_json::json!({"node_did": foreign_node.did()});
+    let agent = serde_json::json!({"node_did": foreign_node.did(), "agent_did": foreign_agent.did(),
+        "creation_nonce": binding.creation_nonce, "display_name": "Foreign collision Agent"});
+    let plan = gents::store::config_client::DesiredStateApplyPlan::new(vec![
+        gents::store::config_client::DesiredStateApplyDocument {
+            collection: gents::Collection::Node,
+            add: node.clone(),
+            update: node,
+        },
+        gents::store::config_client::DesiredStateApplyDocument {
+            collection: gents::Collection::Agent,
+            add: agent.clone(),
+            update: agent,
+        },
+    ])
+    .unwrap();
+    client
+        .transact_write("test.foreign_collision.configuration", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .unwrap();
+    let mut spec = RequestSpec::new(
+        RequestPurpose::Normal,
+        RequestIdentity {
+            node_did: foreign_node.did().into(),
+            requester_did: Some(foreign_user.did().into()),
+            agent_did: foreign_agent.did().into(),
+            session_id: "foreign-session".into(),
+            request_id: request_id.into(),
+            content: "foreign collision".into(),
+            execution_origin: ExecutionOrigin::Interactive,
+            created_at: "2026-07-15T00:00:01Z".into(),
+        },
+        AgentRequestAdmissionRecord::client(foreign_user.did()),
+    );
+    spec.retry_key = retry_key.map(str::to_owned);
+    let create = build_signed_client_request(&client, spec, RequestSigner::Identity(&foreign_user))
+        .await
+        .unwrap();
+    submit_client_request(&client, &create).await.unwrap();
+    let request = escape_graphql_string(request_id);
+    let result = client.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{request}"}}}}, limit: 2) {{_docID node_did session_doc_id agent_doc_id}}}}"#)).await.unwrap();
+    let [row] = result["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .as_slice()
+    else {
+        panic!("one foreign collision request")
+    };
+    let doc = row["_docID"].as_str().unwrap().to_owned();
+    assert_eq!(
+        row["session_doc_id"],
+        create.session_doc_id.as_deref().unwrap()
+    );
+    assert_eq!(row["agent_doc_id"], create.agent_doc_id.as_deref().unwrap());
+    if state != gents_protocol::request_lifecycle::RequestLifecycleState::Pending {
+        let foreign_access = ConfigAccess::local_managed_agent(
+            db.node.clone(),
+            foreign_agent.did().parse().unwrap(),
+            foreign_agent.as_ref(),
+        )
+        .unwrap();
+        let status = escape_graphql_string(state.as_str());
+        let escaped_doc = escape_graphql_string(&doc);
+        let changed = foreign_access.write("test.foreign_collision.state", &format!(
+            r#"mutation {{update_AgentRequest(docID: "{escaped_doc}", input: {{lifecycle_state: "{status}"}}) {{_docID}}}}"#,
+        )).await.unwrap();
+        assert_eq!(
+            changed["data"]["update_AgentRequest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+    client
+        .add_actor_relationship(
+            "AgentRequest",
+            &doc,
+            "reader",
+            &observer.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+    let observer_access = ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        observer.did().parse().unwrap(),
+        observer,
+    )
+    .unwrap();
+    let query = format!(
+        r#"{{AgentRequest(docID: "{}") {{_docID node_did}}}}"#,
+        escape_graphql_string(&doc)
+    );
+    let visible = observer_access.execute(&query).await.unwrap();
+    assert_eq!(
+        visible["data"]["AgentRequest"][0]["node_did"],
+        foreign_node.did()
+    );
+    doc
 }
