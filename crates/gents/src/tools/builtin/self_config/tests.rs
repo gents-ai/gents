@@ -4146,7 +4146,6 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         .expect("original transcript fixture");
 
     let selected_text = selected_root.to_string_lossy().into_owned();
-    let fixture_actor = ::identity::Did::new(seed_agent.clone()).expect("fixture Agent DID");
     crate::tools::surface::set_workspace_root_with_readers(
         operator,
         &owner,
@@ -4208,6 +4207,17 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         .iter()
         .find(|agent| agent.agent_did != seed_agent)
         .expect("agent reconciler materialized one agent");
+    let created_signer = crate::store::identity::resolve_agent_identity(
+        identity.as_ref(),
+        &created.identity_binding(),
+    )
+    .expect("created Agent is derived from the held runtime");
+    let created_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        ::identity::Did::new(&created.agent_did).unwrap(),
+        created_signer.as_ref(),
+    )
+    .unwrap();
     fixture
         .update_signed_configuration(
             crate::Collection::Node,
@@ -4292,20 +4302,43 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         ),
     ];
     for (label, path, expected_result, forbidden_content) in cases {
-        let request_doc_id = crate::write_manual_agent_request(
-            &node,
-            fixture_actor.clone(),
-            fixture.agent.as_ref(),
-            crate::request::lifecycle::ManualRequestTarget {
-                node_did: &owner,
-                agent_did: &created.agent_did,
-                task_id: &format!("descendant-root-{label}"),
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let request = crate::request::lifecycle::RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            crate::request::lifecycle::RequestIdentity {
+                requester_did: Some(created.agent_did.clone()),
+                request_id: request_id.clone(),
+                node_did: owner.clone(),
+                agent_did: created.agent_did.clone(),
+                session_id: uuid::Uuid::new_v4().to_string(),
+                content: "Read the requested workspace path.".to_string(),
+                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             },
-            "Read the requested workspace path.",
-            json!({}),
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                &created.agent_did,
+            ),
+        );
+        let request = crate::request::lifecycle::build_signed_client_request(
+            &created_access,
+            request,
+            crate::request::lifecycle::RequestSigner::Identity(created_signer.as_ref()),
         )
         .await
-        .expect("enqueue a fresh request for the reconciled agent");
+        .expect("reserve and sign a fresh request for the reconciled Agent");
+        crate::request::lifecycle::submit_client_request(&created_access, &request)
+            .await
+            .expect("publish the fresh request and its session");
+        let response = created_access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+                escape_graphql_string(&request_id),
+            ))
+            .await
+            .unwrap();
+        let rows = response["data"]["AgentRequest"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        let request_doc_id = rows[0]["_docID"].as_str().unwrap().to_owned();
         let request = crate::request::admission::load_request_for_admission_test(
             node.as_ref(),
             &request_doc_id,
