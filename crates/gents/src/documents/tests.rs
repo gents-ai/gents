@@ -1217,7 +1217,7 @@ fn default_agent_publication_matches_lean() {
 #[tokio::test]
 async fn oauth_account_scope_matches_lean() {
     use crate::inference::auth::credential::{
-        resolve_oauth_credential, resolve_oauth_pool, upsert_oauth_credential, AccountPick,
+        resolve_oauth_credential, resolve_oauth_pool, upsert_oauth_credential_on, AccountPick,
     };
     use crate::inference::backends::provider::{BackendProviderKind, BackendProviderOauthExt};
     let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
@@ -1226,7 +1226,27 @@ async fn oauth_account_scope_matches_lean() {
         serde_json::from_value(value.clone()).unwrap()
     };
 
-    let node = crate::inference::auth::credential::test_support::test_node().await;
+    let (local_db, _local_user, access, _local_agent) =
+        crate::test_support::signed_test_node("oauth-model-local").await;
+    let (foreign_db, _foreign_user, foreign_access, _foreign_agent) =
+        crate::test_support::signed_test_node("oauth-model-foreign").await;
+    let local_node = local_db.node_identity.did();
+    let foreign_node = foreign_db.node_identity.did();
+    assert_ne!(local_node, foreign_node);
+    let actual_owner = |model: &str| match model {
+        "alice" => local_node,
+        "bob" => foreign_node,
+        _ => panic!("unknown model Node {model}"),
+    };
+    let model_owner = |actual: &str| {
+        if actual == local_node {
+            "alice"
+        } else if actual == foreign_node {
+            "bob"
+        } else {
+            panic!("unknown actual Node {actual}")
+        }
+    };
     for row in lean["rows"].as_array().unwrap() {
         let provider = kind_of(&row["provider_kind"]).oauth_provider().unwrap();
         let owner = row["owner"].as_str().unwrap();
@@ -1234,7 +1254,7 @@ async fn oauth_account_scope_matches_lean() {
         let credential = crate::inference::auth::credential::OAuthCredential {
             doc_id: None,
             credential_id: format!("{provider}:{owner}:{}", account.unwrap_or("original")),
-            node_did: owner.to_string(),
+            node_did: actual_owner(owner).to_string(),
             provider: provider.to_string(),
             access_token: "access-TEST".to_string(),
             refresh_token: "refresh-TEST".to_string(),
@@ -1250,9 +1270,15 @@ async fn oauth_account_scope_matches_lean() {
             provider_account_key: None,
             label: None,
         };
-        upsert_oauth_credential(&node, &credential).await.unwrap();
+        let writer = if owner == "alice" {
+            &access
+        } else {
+            &foreign_access
+        };
+        upsert_oauth_credential_on(writer, &credential)
+            .await
+            .unwrap();
     }
-    let access = crate::store::config_client::ConfigAccess::local(node);
 
     let row_json = |owner: &str, account: Option<&str>| serde_json::json!({"owner": owner, "account": account});
     let cases = lean["cases"].as_array().unwrap();
@@ -1267,14 +1293,17 @@ async fn oauth_account_scope_matches_lean() {
             !text.contains(scope) && !text.contains(stored_owner),
             "{case}"
         );
+        let actual_scope = actual_owner(scope);
         if let BackendAuth::NodeOAuthPool { .. } = auth {
             let owner = case["owner"].as_str().unwrap();
             let provider = kind_of(&case["provider_kind"]).oauth_provider().unwrap();
-            let rows = resolve_oauth_pool(&access, scope, provider).await.unwrap();
+            let rows = resolve_oauth_pool(&access, actual_scope, provider)
+                .await
+                .unwrap();
             let mut pool: Vec<_> = rows
                 .iter()
-                .inspect(|row| assert_eq!(row.node_did, owner, "{case}"))
-                .map(|row| row_json(&row.node_did, row.account_ref.as_deref()))
+                .inspect(|row| assert_eq!(row.node_did, actual_owner(owner), "{case}"))
+                .map(|row| row_json(model_owner(&row.node_did), row.account_ref.as_deref()))
                 .collect();
             let mut expected: Vec<_> = case["resolved"]
                 .as_array()
@@ -1294,16 +1323,16 @@ async fn oauth_account_scope_matches_lean() {
                 let provider = kind_of(&case["provider_kind"]).oauth_provider().unwrap();
                 let row = resolve_oauth_credential(
                     &access,
-                    scope,
+                    actual_scope,
                     provider,
                     AccountPick::Reference(auth.oauth_account_ref()),
                 )
                 .await
                 .unwrap();
                 if let Some(row) = &row {
-                    assert_eq!(row.node_did, owner, "{case}");
+                    assert_eq!(row.node_did, actual_owner(owner), "{case}");
                 }
-                row.map(|row| row_json(&row.node_did, row.account_ref.as_deref()))
+                row.map(|row| row_json(model_owner(&row.node_did), row.account_ref.as_deref()))
             }
             None => {
                 assert!(!matches!(auth, BackendAuth::NodeOAuth { .. }), "{case}");
