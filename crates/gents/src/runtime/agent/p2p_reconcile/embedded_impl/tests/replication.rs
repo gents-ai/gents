@@ -112,8 +112,8 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
             &candidate,
             &offer.offer,
             &offer.token,
-            candidate_peer,
-            candidate_ticket,
+            candidate_peer.clone(),
+            candidate_ticket.clone(),
         )
         .await?;
     anyhow::ensure!(
@@ -365,14 +365,30 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     )
     .is_empty());
 
-    let public_doc = candidate_local.transact_write("test.transport.public_registry", |txn| {
-        Box::pin(async move {
-            let response = txn.execute(r#"mutation { create_PeerRegistry(input:{peer_id:"public-probe",node_did:"public-node",addresses:["routing-address"]}) {_docID} }"#).await?;
-            let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "PeerRegistry")?;
-            txn.add_actor_relationship("PeerRegistry", &doc, "reader", &identity::Did::wildcard()).await?;
-            Ok::<_, anyhow::Error>(doc)
+    let public_mutation = format!(
+        r#"mutation {{ create_PeerRegistry(input:{{peer_id:"{}",node_did:"{}",addresses:["{}"]}}) {{_docID}} }}"#,
+        escape_graphql_string(&candidate_peer),
+        escape_graphql_string(candidate.did()),
+        escape_graphql_string(&candidate_ticket),
+    );
+    let public_doc = candidate_local
+        .transact_write("test.transport.public_registry", |txn| {
+            let public_mutation = &public_mutation;
+            Box::pin(async move {
+                let response = txn.execute(public_mutation).await?;
+                let doc =
+                    gents_protocol::graphql::extract_mutation_doc_id(&response, "PeerRegistry")?;
+                txn.add_actor_relationship(
+                    "PeerRegistry",
+                    &doc,
+                    "reader",
+                    &identity::Did::wildcard(),
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(doc)
+            })
         })
-    }).await?;
+        .await?;
     let mut public_arrivals = crate::subscribe_collections(admin_node, ["PeerRegistry"])?;
     candidate_admin
         .add_replicator(
@@ -424,7 +440,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
         gents_protocol::graphql::graphql_rows_from_response(&public, "PeerRegistry").len() != 0,
         public_expected
     );
-    assert_eq!(public["data"]["PeerRegistry"][0]["peer_id"], "public-probe");
+    assert_eq!(public["data"]["PeerRegistry"][0]["peer_id"], candidate_peer);
     assert_eq!(
         count(&http(admin_address, &outsider)?.execute(&query).await?) != 0,
         case("after-repair")?["outsider_read"] == true
