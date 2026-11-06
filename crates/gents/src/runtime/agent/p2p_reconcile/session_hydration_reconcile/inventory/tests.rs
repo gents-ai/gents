@@ -546,9 +546,9 @@ async fn retain_fork_fixture_capture(
 
 #[tokio::test]
 async fn generated_fork_inventory_retains_only_selected_native_origins() {
-    use crate::session::{fork, ForkBoundary, ForkParams};
+    use crate::session::{fork_on, ForkBoundary, ForkParams};
     use crate::tools::call::lifecycle::admission_fixture::{
-        claimed_signed_request, publish_accepted_on_claimed_request,
+        pending_client_fixture_request, publish_accepted_on_claimed_request,
     };
     use serde_json::Value;
     let contracts: Value =
@@ -572,6 +572,12 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         let parent = origin_tool.session_id().to_owned();
         let did = origin_tool.node_did().to_owned();
         let requester = origin_tool.requester_did().unwrap().to_owned();
+        grant_session_reader(&fixture.client, &did, &parent, &did).await;
+        let signer = origin_tool
+            .access()
+            .unwrap()
+            .managed_agent_signer()
+            .unwrap();
         origin_tool.complete("origin complete").await.unwrap();
         retain_fork_fixture_capture(&node, &origin_tool, "selected.rs").await;
         request_owner
@@ -584,7 +590,6 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             )
             .await
             .unwrap();
-        crate::test_support::install_test_agent(&node, &did, "general").await;
         let headers = ConfigAccess::local(node.clone())
             .execute(&format!(
                 "{{ AgentMessage(filter: {{ {} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}",
@@ -598,9 +603,8 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             .iter()
             .filter(|row| crate::session::is_user_turn(row).unwrap())
             .count();
-        let child = fork(
-            &node,
-            &identity::Did::new(&requester).unwrap(),
+        let child = fork_on(
+            &fixture.client,
             ForkParams {
                 source_session_id: &parent,
                 boundary: ForkBoundary::UserTurn(turns as u32),
@@ -611,6 +615,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         )
         .await
         .unwrap();
+        grant_session_reader(&fixture.client, &did, &child.session_id, &did).await;
         let load_admission = |session_id: String| {
             let (node, did, requester) = (node.clone(), did.clone(), requester.clone());
             async move {
@@ -656,14 +661,34 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             &before_later_parent_work,
             &[(origin_tool.doc_id().unwrap(), 90)],
         );
-        let key_path = fixture.path.join("node.key");
-        let identity =
-            tokio::task::spawn_blocking(move || crate::KeyIdentity::load_existing(key_path, None))
-                .await
-                .unwrap()
-                .unwrap();
-        let mut later_request =
-            claimed_signed_request(&node, "later-parent-request", &parent, &identity, None).await;
+        let make_request = |request_id: &str| {
+            gents_protocol::request_admission::AgentRequestCreate::base(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                request_id,
+                &did,
+                &requester,
+                signer.did(),
+                &parent,
+                "spawn",
+                "interactive",
+                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::client(&requester),
+            )
+        };
+        let mut later_request = pending_client_fixture_request(
+            &node,
+            &fixture.client,
+            fixture.runtime.clone(),
+            fixture.requester_identity.as_ref(),
+            &signer,
+            make_request("later-parent-request"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            later_request.claim_with_identity().await.unwrap(),
+            crate::request::lifecycle::ClaimOutcome::Claimed
+        );
         let mut later_tool = publish_accepted_on_claimed_request(
             node.clone(),
             &mut later_request,
@@ -757,9 +782,8 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             .iter()
             .filter(|row| crate::session::is_user_turn(row).unwrap())
             .count();
-        let complete_child = fork(
-            &node,
-            &identity::Did::new(&requester).unwrap(),
+        let complete_child = fork_on(
+            &fixture.client,
             ForkParams {
                 source_session_id: &parent,
                 boundary: ForkBoundary::UserTurn(turns as u32),
@@ -770,6 +794,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         )
         .await
         .unwrap();
+        grant_session_reader(&fixture.client, &did, &complete_child.session_id, &did).await;
         let complete = FileInventorySnapshot::load(
             &node,
             &load_admission(complete_child.session_id.clone()).await,
@@ -785,8 +810,20 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         assert!(complete.entries.iter().all(|entry| {
             entry.scope.session_id == parent && entry.scope.session_id != complete_child.session_id
         }));
-        let mut unknown_request =
-            claimed_signed_request(&node, "unknown-parent-request", &parent, &identity, None).await;
+        let mut unknown_request = pending_client_fixture_request(
+            &node,
+            &fixture.client,
+            fixture.runtime.clone(),
+            fixture.requester_identity.as_ref(),
+            &signer,
+            make_request("unknown-parent-request"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            unknown_request.claim_with_identity().await.unwrap(),
+            crate::request::lifecycle::ClaimOutcome::Claimed
+        );
         let mut unknown_tool = publish_accepted_on_claimed_request(
             node.clone(),
             &mut unknown_request,

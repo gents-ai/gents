@@ -170,6 +170,7 @@ pub struct PublishedAdmission {
     pub node_did: String,
     pub runtime: Arc<dyn NodeIdentity>,
     pub client: crate::ConfigAccess,
+    pub requester_identity: Arc<dyn NodeIdentity>,
 }
 
 pub(crate) async fn complete_child_managed(
@@ -667,6 +668,7 @@ pub async fn published_admission_with_owner(
     )
     .await?;
     crate::request::lifecycle::submit_client_request(&client, &create).await?;
+    let requester_identity: Arc<dyn NodeIdentity> = Arc::new(paired.unwrap_or(user));
     let request_id = crate::store::graphql::escape_graphql_string(&create.request_id);
     let response = agent_access
         .execute(&format!(
@@ -782,9 +784,78 @@ pub async fn published_admission_with_owner(
             node_did,
             runtime,
             client,
+            requester_identity,
         },
         request,
     ))
+}
+
+pub(crate) async fn pending_client_fixture_request(
+    node: &Arc<EmbeddedNode>,
+    client: &crate::ConfigAccess,
+    runtime: Arc<dyn NodeIdentity>,
+    requester: &dyn NodeIdentity,
+    agent: &dyn NodeIdentity,
+    mut create: gents_protocol::request_admission::AgentRequestCreate,
+) -> anyhow::Result<RequestLifecycle> {
+    anyhow::ensure!(client.actor_did().as_deref() == Some(requester.did()));
+    anyhow::ensure!(create.requester_did == requester.did() && create.agent_did == agent.did());
+    create.session_doc_id =
+        Some(crate::request::lifecycle::reserve_goal_session(client, &create).await?);
+    let did = crate::store::graphql::escape_graphql_string(agent.did());
+    let response = client
+        .execute(&format!(
+            r#"{{ Agent(filter: {{ agent_did: {{ _eq: "{did}" }} }}) {{ _docID }} }}"#
+        ))
+        .await?;
+    let [row] = response["data"]["Agent"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing Agent rows"))?
+        .as_slice()
+    else {
+        anyhow::bail!("client must see exactly one selected Agent");
+    };
+    create.agent_doc_id = Some(
+        row["_docID"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Agent has no ID"))?
+            .to_owned(),
+    );
+    crate::sign_agent_request_create(requester, &mut create).await?;
+    crate::request::lifecycle::submit_client_request(client, &create).await?;
+    let agent_access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did())?,
+        agent,
+    )?;
+    let request_id = crate::store::graphql::escape_graphql_string(&create.request_id);
+    let response = agent_access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
+            crate::request::watcher::AGENT_REQUEST_FIELDS
+        ))
+        .await?;
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone())?;
+    let request = row.try_into()?;
+    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        runtime.clone(),
+        authority,
+    );
+    let (request, admission) = verifier
+        .verify_fresh_for_claim_with_identity(&request, agent)
+        .await?;
+    anyhow::ensure!(
+        admission.is_some(),
+        "fixture client request lacks native claim admission"
+    );
+    let mut lifecycle =
+        RequestLifecycle::new_with_node_did(node.clone(), agent.did(), runtime.did(), request, 60);
+    lifecycle.bind_managed_agent(agent)?;
+    lifecycle.set_client_claim_admission(admission);
+    Ok(lifecycle)
 }
 
 pub(crate) fn test_p2p_config() -> defra_node::P2PConfig {

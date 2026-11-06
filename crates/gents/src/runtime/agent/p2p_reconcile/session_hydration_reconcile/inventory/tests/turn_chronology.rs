@@ -2,7 +2,6 @@ use super::*;
 use crate::request::lifecycle::{
     ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
 };
-use crate::store::identity::NodeIdentity;
 use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_admission::{
@@ -20,38 +19,17 @@ async fn retried_turn_preserves_failed_turn_file_order_across_restart() {
     check_turn_chronology(true).await;
 }
 
-async fn pending_request(
-    node: &Arc<EmbeddedNode>,
-    signer: &dyn NodeIdentity,
-    mut create: AgentRequestCreate,
-) -> RequestLifecycle {
-    crate::sign_agent_request_create(signer, &mut create)
-        .await
-        .unwrap();
-    let created = ConfigAccess::write_local(
-        node,
-        "test.inventory.turn_admission",
-        &create.graphql_mutation().unwrap(),
-    )
-    .await
-    .unwrap();
-    let doc_id = crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
-    let request = crate::request::admission::load_request_for_admission_test(node, &doc_id)
-        .await
-        .unwrap();
-    RequestLifecycle::new_with_node_did(node.clone(), "general", signer.did(), request, 60)
-}
-
 async fn finish_request(
     node: &Arc<EmbeddedNode>,
     request: &mut RequestLifecycle,
     outcome: RequestTerminalOutcome,
 ) {
-    let writer = crate::request::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
         node.clone(),
-        &request.request().node_did,
+        request,
         std::time::Duration::ZERO,
-    );
+    )
+    .unwrap();
     writer
         .start_provider_attempt(
             &request.request().doc_id,
@@ -101,33 +79,34 @@ async fn check_turn_chronology(retry: bool) {
     })
     .await
     .unwrap();
-    let key_path = fixture.path.join("node.key");
-    let signer =
-        tokio::task::spawn_blocking(move || crate::KeyIdentity::load_existing(key_path, None))
-            .await
-            .unwrap()
-            .unwrap();
-    assert_eq!(signer.did(), fixture.node_did);
     let node = fixture.node;
     let mut first_tool = fixture.tool;
+    grant_session_reader(
+        &fixture.client,
+        &fixture.node_did,
+        first_tool.session_id(),
+        &fixture.node_did,
+    )
+    .await;
+    let signer = first_tool.access().unwrap().managed_agent_signer().unwrap();
     let original = first_request.request().clone();
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
         format!("successor-{name}"),
         &fixture.node_did,
-        &fixture.node_did,
-        "general",
+        fixture.requester_identity.did(),
+        signer.did(),
         &original.session_id,
         &original.content,
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        AgentRequestAdmissionRecord::local_self(&fixture.node_did),
+        AgentRequestAdmissionRecord::client(fixture.requester_identity.did()),
     );
     let mut queued = if retry {
         None
     } else {
         create.input = crate::request::lifecycle::queue::prepare_user_message_input(
-            &ConfigAccess::local(node.clone()),
+            &fixture.client,
             &fixture.node_did,
             &original.session_id,
             RequestInput::default(),
@@ -145,8 +124,21 @@ async fn check_turn_chronology(retry: bool) {
                 .as_deref(),
             Some(original.request_id.as_str()),
         );
-        let mut pending = pending_request(&node, &signer, create.clone()).await;
-        assert_eq!(pending.claim().await.unwrap(), ClaimOutcome::Queued);
+        let mut pending =
+            crate::tools::call::lifecycle::admission_fixture::pending_client_fixture_request(
+                &node,
+                &fixture.client,
+                fixture.runtime.clone(),
+                fixture.requester_identity.as_ref(),
+                &signer,
+                create.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            pending.claim_with_identity().await.unwrap(),
+            ClaimOutcome::Queued
+        );
         Some(pending)
     };
     first_tool.complete("first retained output").await.unwrap();
@@ -169,9 +161,21 @@ async fn check_turn_chronology(retry: bool) {
         create.retry_root_request = Some(original.request_id.clone());
         create.retry_count = 1;
         create.input = original.input.reissued(&original.doc_id);
-        pending_request(&node, &signer, create).await
+        crate::tools::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            &node,
+            &fixture.client,
+            fixture.runtime.clone(),
+            fixture.requester_identity.as_ref(),
+            &signer,
+            create,
+        )
+        .await
+        .unwrap()
     };
-    assert_eq!(successor.claim().await.unwrap(), ClaimOutcome::Claimed);
+    assert_eq!(
+        successor.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
     if retry {
         assert_eq!(
             successor.request().retry_parent_request_doc_id.as_deref(),
@@ -218,7 +222,7 @@ async fn check_turn_chronology(retry: bool) {
         request: HydrationRequest {
             request_key: format!("turn-inventory-{name}"),
             peer_id: "fixture-peer".into(),
-            requester_did: fixture.node_did.clone(),
+            requester_did: original.requester_did.clone().unwrap(),
             node_did: fixture.node_did.clone(),
             session_id: original.session_id,
         },
