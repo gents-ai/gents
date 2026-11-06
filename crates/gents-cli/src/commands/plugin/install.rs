@@ -27,10 +27,17 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
     let notification_scope = crate::commands::pack::plugin_notification_scope(&home).await?;
     let notify_scope = notification_scope.clone();
     let notify_home = home.clone();
-    let result = gents::pack::plugin_lifecycle::install_plugin(
+    let source = gents::pack::PackSource::Registry {
+        namespace: pack.namespace.clone(),
+        name: pack.name.clone(),
+        version: pack.version.clone(),
+        artifact_digest: pack.artifact_digest.clone(),
+    };
+    let result = gents::pack::plugin_lifecycle::install_plugin_with_source(
         &home,
         &pack.archive,
         args.grant_authority,
+        Some(source),
         move |identity| async move {
             if let Some((access, owner)) = notify_scope {
                 gents::pack::record_plugin_store_change(

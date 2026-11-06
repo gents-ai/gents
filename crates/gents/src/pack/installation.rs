@@ -30,6 +30,90 @@ pub use scope_preview::{preview_installed_pack_scope, InstalledPackScopePreview}
 const RECORD: &str = "PackInstallation";
 const HISTORY_LIMIT: usize = 32;
 
+/// Portable description of how an operator obtained a pack archive.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PackSource {
+    Local {
+        file_name: Option<String>,
+    },
+    Installed,
+    Store,
+    Registry {
+        namespace: String,
+        name: String,
+        version: String,
+        artifact_digest: String,
+    },
+}
+
+impl PackSource {
+    /// Retain only the final path component, which is portable between nodes.
+    pub fn local(path: &Path) -> Self {
+        Self::Local {
+            file_name: path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned()),
+        }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if let Self::Local {
+            file_name: Some(name),
+        } = self
+        {
+            anyhow::ensure!(
+                !name.is_empty()
+                    && name.len() <= 255
+                    && !name.contains(['/', '\\'])
+                    && !name.chars().any(char::is_control)
+                    && name != "."
+                    && name != "..",
+                "invalid local pack filename"
+            );
+        }
+        if let Self::Registry {
+            namespace,
+            name,
+            version,
+            artifact_digest,
+        } = self
+        {
+            anyhow::ensure!(
+                super::is_valid_pack_name(namespace) && super::is_valid_pack_name(name),
+                "invalid registry pack coordinate"
+            );
+            anyhow::ensure!(
+                super::store::is_valid_index_version(version),
+                "invalid registry pack version"
+            );
+            anyhow::ensure!(
+                artifact_digest.len() == 64
+                    && artifact_digest.bytes().all(|b| b.is_ascii_hexdigit()),
+                "invalid registry artifact digest"
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_for(&self, coordinate: &str, installed_version: &str) -> Result<()> {
+        self.validate()?;
+        if let Self::Registry {
+            namespace,
+            name,
+            version,
+            ..
+        } = self
+        {
+            anyhow::ensure!(
+                coordinate == format!("{namespace}/{name}") && installed_version == version,
+                "registry source does not match the installed pack"
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PackIdentity {
     pub coordinate: String,
@@ -89,10 +173,19 @@ struct Record {
     documents: BTreeMap<String, RecordedDocument>,
     plugins: Vec<InstalledPackPlugin>,
     history: Vec<String>,
+    source: Option<PackSource>,
+    source_history: Vec<PackSourceHistory>,
     required_by: BTreeSet<String>,
     /// Missing legacy records default to explicit ownership.
     explicit: bool,
     plugin_store: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PackSourceHistory {
+    pub version: String,
+    pub digest: String,
+    pub source: Option<PackSource>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -148,7 +241,7 @@ fn is_reserved(document: &RecordedDocument) -> bool {
 async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) -> Result<Record> {
     let response = txn
         .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID version digest documents plugins history required_by explicit plugin_store }} }}"#,
+            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID version digest documents plugins history source source_history required_by explicit plugin_store }} }}"#,
             escape_graphql_string(owner),
             escape_graphql_string(coordinate)
         ))
@@ -176,6 +269,8 @@ async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) ->
             .collect(),
         plugins: decode_record_field(row, "plugins", owner, coordinate)?,
         history: decode_record_field(row, "history", owner, coordinate)?,
+        source: decode_record_field(row, "source", owner, coordinate)?,
+        source_history: decode_record_field(row, "source_history", owner, coordinate)?,
         required_by: required_by.into_iter().collect(),
         explicit: row.get("explicit").and_then(Value::as_bool).unwrap_or(true),
         plugin_store: row["plugin_store"].as_bool().unwrap_or(false),
@@ -231,6 +326,7 @@ fn edited_error(coordinate: &str, edited: &[String]) -> anyhow::Error {
     )
 }
 
+#[expect(clippy::too_many_arguments, reason = "installation record inputs")]
 async fn write_record_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -239,7 +335,19 @@ async fn write_record_in_txn(
     documents: Vec<RecordedDocument>,
     explicit: bool,
     plugin_store: bool,
+    source: Option<&PackSource>,
 ) -> Result<()> {
+    if let Some(source) = source {
+        source.validate_for(&pack.coordinate, &pack.version)?;
+    }
+    if let (Some(source), Some(version)) = (&prior.source, &prior.version) {
+        source.validate_for(&pack.coordinate, version)?;
+    }
+    for entry in &prior.source_history {
+        if let Some(source) = &entry.source {
+            source.validate_for(&pack.coordinate, &entry.version)?;
+        }
+    }
     let mut history = prior.history.clone();
     if let Some(previous) = prior
         .digest
@@ -250,6 +358,25 @@ async fn write_record_in_txn(
         history.truncate(HISTORY_LIMIT);
     }
     let required_by: Vec<&String> = prior.required_by.iter().collect();
+    let source = source.cloned().or_else(|| {
+        (prior.digest.as_deref() == Some(pack.digest.as_str()))
+            .then(|| prior.source.clone())
+            .flatten()
+    });
+    let mut source_history = prior.source_history.clone();
+    if let (Some(version), Some(digest)) = (&prior.version, &prior.digest) {
+        if *version != pack.version || *digest != pack.digest || prior.source != source {
+            source_history.insert(
+                0,
+                PackSourceHistory {
+                    version: version.clone(),
+                    digest: digest.clone(),
+                    source: prior.source.clone(),
+                },
+            );
+            source_history.truncate(HISTORY_LIMIT);
+        }
+    }
     let input = json!({
         "node_did": owner,
         "coordinate": pack.coordinate,
@@ -261,7 +388,9 @@ async fn write_record_in_txn(
         } else {
             json!(pack.plugins)
         },
-        "history": history,
+        "history": if history.is_empty() { Value::Null } else { json!(history) },
+        "source": source,
+        "source_history": if source_history.is_empty() { Value::Null } else { json!(source_history) },
         // A remove immediately followed by a reinstall must not regenerate
         // the just-tombstoned record's content-addressed docID (see
         // `mint_recreate_identity_timestamp`).
@@ -310,6 +439,7 @@ pub(crate) async fn install_in_txn(
     pack: &PackIdentity,
     documents: Vec<DesiredStateApplyDocument>,
     policy: DriftPolicy,
+    source: Option<&PackSource>,
 ) -> Result<InstallReport> {
     let prior = read_record(txn, owner, &pack.coordinate).await?;
     let mut report = InstallReport::default();
@@ -464,6 +594,7 @@ pub(crate) async fn install_in_txn(
         recorded.into_values().collect(),
         pack.explicit,
         false,
+        source,
     )
     .await?;
     dependencies::claim_in_txn(txn, owner, &pack.coordinate, &pack.dependencies, policy).await?;
@@ -606,6 +737,9 @@ async fn write_plugin_record(
         }
     }
     let current_home = super::read_home_install(home, coordinate)?;
+    let current_source = current_home
+        .as_ref()
+        .and_then(|record| record.source.clone());
     let current_identity = current_home.map(|record| PackIdentity {
         coordinate: record.coordinate,
         version: record.version,
@@ -624,9 +758,18 @@ async fn write_plugin_record(
     let own = prior.doc_id.is_none() || prior.plugin_store;
     match installed {
         Some(pack) if own => {
-            return write_record_in_txn(txn, owner, pack, &prior, documents, false, true)
-                .await
-                .map_err(Into::into)
+            return write_record_in_txn(
+                txn,
+                owner,
+                pack,
+                &prior,
+                documents,
+                false,
+                true,
+                current_source.as_ref(),
+            )
+            .await
+            .map_err(Into::into)
         }
         None if prior.doc_id.is_none() => return Ok(()),
         None if own && !retained => {
@@ -659,6 +802,7 @@ async fn write_plugin_record(
         documents,
         false,
         plugin_store,
+        None,
     )
     .await
     .map_err(Into::into)

@@ -182,6 +182,8 @@ fn install_plugin(
             ux: Vec::new(),
             installed_at: "2026-01-01T00:00:00Z".into(),
             installed_via: Some(via),
+            source: None,
+            source_history: Vec::new(),
         },
     )
     .unwrap();

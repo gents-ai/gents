@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::{is_valid_pack_name, InstalledPackPlugin, PackKind};
+use super::{is_valid_pack_name, InstalledPackPlugin, PackKind, PackSource, PackSourceHistory};
 use crate::pack::archive::PackArchive;
 use crate::store::local::file_lock::FileLock;
 
@@ -40,6 +40,10 @@ pub struct HomePackInstall {
     /// [`recorded_provenance`].
     #[serde(default)]
     pub installed_via: Option<InstalledVia>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<PackSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_history: Vec<PackSourceHistory>,
 }
 
 /// Lean `provenanceOf`. `record` is `None` without a record, `Some(None)` for
@@ -78,7 +82,9 @@ pub fn record_after_install(
     installed_via: InstalledVia,
     explicit: bool,
 ) -> Result<()> {
-    let prior = read_home_install(home, &record.coordinate)?.map(|stored| stored.installed_via);
+    let prior_record = read_home_install(home, &record.coordinate)?;
+    record_source(&mut record, prior_record.as_ref())?;
+    let prior = prior_record.map(|stored| stored.installed_via);
     record.installed_via = Some(record_after_install_via(
         prior,
         record.kind.clone(),
@@ -86,6 +92,44 @@ pub fn record_after_install(
         installed_via,
     ));
     write_home_install(home, &record)
+}
+
+pub(super) fn record_source(
+    record: &mut HomePackInstall,
+    prior: Option<&HomePackInstall>,
+) -> Result<()> {
+    if let Some(source) = &record.source {
+        source.validate_for(&record.coordinate, &record.version)?;
+    }
+    if let Some(prior) = prior {
+        if let Some(source) = &prior.source {
+            source.validate_for(&prior.coordinate, &prior.version)?;
+        }
+        for entry in &prior.source_history {
+            if let Some(source) = &entry.source {
+                source.validate_for(&prior.coordinate, &entry.version)?;
+            }
+        }
+        if record.source.is_none() && record.digest == prior.digest {
+            record.source = prior.source.clone();
+        }
+        record.source_history = prior.source_history.clone();
+        if prior.digest != record.digest
+            || prior.version != record.version
+            || prior.source != record.source
+        {
+            record.source_history.insert(
+                0,
+                PackSourceHistory {
+                    version: prior.version.clone(),
+                    digest: prior.digest.clone(),
+                    source: prior.source.clone(),
+                },
+            );
+            record.source_history.truncate(32);
+        }
+    }
+    Ok(())
 }
 
 /// Materializes `pack` into the home's asset cache when it ships an asset
@@ -282,6 +326,8 @@ mod tests {
             installed_at: "2026-01-01T00:00:00Z".into(),
             ux: vec![],
             installed_via: None,
+            source: None,
+            source_history: Vec::new(),
         }
     }
 
@@ -289,6 +335,34 @@ mod tests {
         read_home_install(home, coordinate)
             .unwrap()
             .map(|record| record.installed_via)
+    }
+
+    #[test]
+    fn home_install_preserves_source_and_prior_source_on_update() {
+        let home = tempfile::tempdir().unwrap();
+        let mut first = sample("acme/tools");
+        first.source = Some(PackSource::local(Path::new("/private/folder/tools.pack")));
+        record_after_install(home.path(), first.clone(), InstalledVia::Operator, true).unwrap();
+        let mut second = sample("acme/tools");
+        second.version = "2.0.0".into();
+        second.digest = format!("sha256:{}", "b".repeat(64));
+        second.source = Some(PackSource::Store);
+        record_after_install(home.path(), second, InstalledVia::Operator, true).unwrap();
+        let saved = read_home_install(home.path(), "acme/tools")
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.source, Some(PackSource::Store));
+        assert_eq!(
+            saved.source_history,
+            vec![PackSourceHistory {
+                version: first.version,
+                digest: first.digest,
+                source: first.source,
+            }]
+        );
+        assert!(!serde_json::to_string(&saved)
+            .unwrap()
+            .contains("/private/folder"));
     }
 
     #[test]

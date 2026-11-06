@@ -6,6 +6,75 @@ use crate::pack::InstalledVia;
 const OWNER: &str = "did:key:zPackInstallOwner";
 
 #[test]
+fn local_pack_source_keeps_only_the_archive_name() {
+    let source = PackSource::local(std::path::Path::new("/private/workspace/packs/demo.pack"));
+    assert_eq!(
+        serde_json::to_value(source).unwrap(),
+        json!({ "kind": "local", "file_name": "demo.pack" })
+    );
+}
+
+#[tokio::test]
+async fn install_source_is_recorded_and_retained_across_updates() {
+    let access = access().await;
+    let local = PackSource::local(std::path::Path::new("/private/packs/demo.pack"));
+    let registry = PackSource::Registry {
+        namespace: "acme".into(),
+        name: "demo".into(),
+        version: "2.0.0".into(),
+        artifact_digest: "a".repeat(64),
+    };
+    for (version, source) in [("1.0.0", &local), ("2.0.0", &registry)] {
+        let pack = identity(version);
+        access
+            .transact_write("test.source", |txn| {
+                let pack = &pack;
+                Box::pin(async move {
+                    let prior = read_record(txn, OWNER, &pack.coordinate).await?;
+                    write_record_in_txn(
+                        txn,
+                        OWNER,
+                        pack,
+                        &prior,
+                        Vec::new(),
+                        true,
+                        false,
+                        Some(source),
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+    }
+    let unchanged = identity("2.0.0");
+    access
+        .transact_write("test.source.unchanged", |txn| {
+            let unchanged = &unchanged;
+            Box::pin(async move {
+                let prior = read_record(txn, OWNER, &unchanged.coordinate).await?;
+                write_record_in_txn(txn, OWNER, unchanged, &prior, Vec::new(), true, false, None)
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+    let rows = access
+        .execute("{ PackInstallation { source source_history history } }")
+        .await
+        .unwrap();
+    let row = &rows["data"]["PackInstallation"][0];
+    assert_eq!(row["source"], serde_json::to_value(registry).unwrap());
+    assert_eq!(
+        row["source_history"][0],
+        json!({"version":"1.0.0", "digest":identity("1.0.0").digest, "source":local})
+    );
+    assert_eq!(row["history"], json!([identity("1.0.0").digest]));
+    assert_eq!(row["source_history"].as_array().unwrap().len(), 1);
+    assert!(!row.to_string().contains("/private/packs"));
+}
+
+#[test]
 fn edited_pack_error_identifies_the_operator_cli() {
     let error = edited_error("acme/demo", &["Tools/t1".to_owned()]).to_string();
     assert!(error.contains("Tools/t1"));
@@ -1151,6 +1220,8 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
             installed_at: "2026-01-01T00:00:00Z".into(),
             ux: Vec::new(),
             installed_via: None,
+            source: None,
+            source_history: Vec::new(),
         },
     )
     .unwrap();
@@ -1354,6 +1425,7 @@ fn prepared() -> PreparedDocumentPackInstall {
         },
         dependency_inference: BTreeMap::new(),
         dependencies: Vec::new(),
+        sources: BTreeMap::new(),
     }
 }
 
@@ -1373,6 +1445,8 @@ fn operator_record(archive: &crate::pack::archive::PackArchive) -> crate::pack::
         ux: Vec::new(),
         installed_at: "2026-01-01T00:00:00Z".into(),
         installed_via: Some(crate::pack::InstalledVia::Operator),
+        source: None,
+        source_history: Vec::new(),
     }
 }
 
@@ -2863,6 +2937,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         bindings: Default::default(),
         dependencies,
         explicit: true,
+        source: None,
     };
     let initial = vec![
         stage(&dependency, "1", empty.clone(), Some(old_bytes), vec![]),

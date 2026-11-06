@@ -26,16 +26,33 @@ pub async fn installed_catalog(
     home: Option<&Path>,
 ) -> Result<BTreeMap<String, InstalledCatalogEntry>> {
     let mut installed = BTreeMap::new();
-    for record in super::list_installed_packs(access, owner).await? {
+    let response = access.execute(&format!(
+        r#"{{ PackInstallation(filter: {{ node_did: {{ _eq: "{}" }} }}, order: {{ coordinate: ASC }}) {{ coordinate version digest plugin_store source source_history }} }}"#,
+        crate::store::graphql::escape_graphql_string(owner)
+    )).await?;
+    let records = response["data"]["PackInstallation"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("reading pack installation records"))?;
+    for record in records
+        .iter()
+        .filter(|row| !super::is_plugin_store_row(row))
+    {
+        let coordinate = super::required_record_field_str(record, "coordinate")?;
+        let version = super::required_record_field_str(record, "version")?;
+        let digest = super::required_record_field_str(record, "digest")?;
+        let public_record = serde_json::json!({
+            "coordinate": coordinate, "version": version, "digest": digest,
+            "source": record["source"], "source_history": record["source_history"],
+        });
         let entry = InstalledCatalogEntry {
             stored: StoredName {
-                version: record.version.clone(),
-                digest: record.digest.clone(),
+                version: version.to_owned(),
+                digest: digest.to_owned(),
             },
-            record: serde_json::to_value(&record)?,
+            record: public_record,
             kind: PackKind::Documents,
         };
-        installed.insert(record.coordinate, entry);
+        installed.insert(coordinate.to_owned(), entry);
     }
     let Some(home) = home else {
         return Ok(installed);

@@ -27,6 +27,22 @@ const MESSAGE_RC1_FRESH: &str = "bafyreih6qxw3cq3uswastxlatdplwmkpknqkf7csgecosw
 const MESSAGE_RC1_PATCH: &str = r#"[{"op":"add","path":"/AgentMessage/Fields/-","value":{"Name":"native_request_id","Kind":"String","Immutable":true}}]"#;
 const BACKEND_RC1_FRESH: &str = "bafyreibyanrs5nrmpd6dp5pa74agyp5njjfztpctt3ls5qyl5pt2mkojd4";
 
+#[tokio::test]
+async fn pack_source_patch_preserves_the_rc0_lineage() {
+    let node = fresh_node().await;
+    let collection = rc0_baseline()
+        .into_iter()
+        .find(|c| c.name == "PackInstallation")
+        .unwrap();
+    node.add_collection(&collection.sdl).await.unwrap();
+    let patched = node.patch_collection("PackInstallation", r#"[{"op":"add","path":"/PackInstallation/Fields/-","value":{"Name":"source","Kind":"JSON"}},{"op":"add","path":"/PackInstallation/Fields/-","value":{"Name":"source_history","Kind":"JSON"}}]"#).await.unwrap();
+    assert_eq!(
+        patched.version_id,
+        "bafyreih4nu6lapwuep7xaym3n33smlicbo2pbeicteqtwn2vdyulpeofq4"
+    );
+    node.shutdown().await;
+}
+
 /// The AgentMessage SDL v1.0.0-rc1 shipped: this release's plus `native_request_id`.
 fn rc1_agent_message_sdl() -> String {
     let anchor = "    blocks: JSON @immutable\n";

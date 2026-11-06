@@ -5,6 +5,12 @@ use crate::expectation::CollectionExpectation;
 use crate::registry::{BaselineCollection, MigrationStep};
 
 const NODE_MEMORY_ROOT: &str = "bafyreifcm3bi3qofvhfws7nps45xomrsxb2zslvjkkhb7uwh34esxi5okq";
+const PACK_INSTALLATION_ROOT: &str = "bafyreid74trtjvnquhtehlqi2on37cdd7q77jvpwxadbudn6t3k2bx7ety";
+const PACK_INSTALLATION_TARGET: &str =
+    "bafyreih4nu6lapwuep7xaym3n33smlicbo2pbeicteqtwn2vdyulpeofq4";
+pub(crate) const PACK_INSTALLATION_RC0_SDL: &str =
+    include_str!("../schemas/rc0/pack_installation.graphql");
+const PACK_INSTALLATION_SOURCE_PATCH: &str = r#"[{"op":"add","path":"/PackInstallation/Fields/-","value":{"Name":"source","Kind":"JSON"}},{"op":"add","path":"/PackInstallation/Fields/-","value":{"Name":"source_history","Kind":"JSON"}}]"#;
 const NODE_MEMORY_TEXT_TARGET: &str = "bafyreihb3faohzgyj4zedddsedlnivyjhonk6tkhdovvrzyiaris3rkmtu";
 const NODE_MEMORY_TEXT_PATCH: &str = r#"[{"op":"add","path":"/NodeMemory/Fields/-","value":{"Name":"value_text","Kind":"String","Typ":6}}]"#;
 
@@ -112,6 +118,11 @@ const BACKEND_PLATFORM_PATCH: &str = r#"[{"op":"add","path":"/InferenceBackend/F
 /// its baseline entry at the same SDL and root. `tests/rc0_lineage_parity.rs` fails until both
 /// are done.
 pub(crate) const CANONICAL_ROOTS: &[(&str, &str, &str)] = &[
+    (
+        "PackInstallation",
+        PACK_INSTALLATION_RC0_SDL,
+        PACK_INSTALLATION_ROOT,
+    ),
     ("InferenceBackend", BACKEND_RC0_SDL, BACKEND_FRESHNESS_FRESH),
     ("Node", NODE_RC0_SDL, NODE_ROOT),
 ];
@@ -199,6 +210,14 @@ pub(crate) fn include_existing_by_version(
         Ok(get_version(name)?.or_else(|| canonical_root(name).map(str::to_owned)))
     };
     for (name, root, target, id, patch, fields) in [
+        (
+            "PackInstallation",
+            PACK_INSTALLATION_ROOT,
+            PACK_INSTALLATION_TARGET,
+            "pack-installation-source",
+            PACK_INSTALLATION_SOURCE_PATCH,
+            &["source", "source_history"][..],
+        ),
         (
             "InferenceBackend",
             "bafyreihvtdq5hp7qrehkfhgkdtqql6v6mq4podhdnfrpbrcy4x3xasddwy",
