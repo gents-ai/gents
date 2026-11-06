@@ -50,6 +50,15 @@ impl Fixture {
         terminal_parent: bool,
         earlier: Option<&str>,
     ) -> Self {
+        Self::new_with_goal_author(before, terminal_parent, earlier, false).await
+    }
+
+    pub async fn new_with_goal_author(
+        before: &Value,
+        terminal_parent: bool,
+        earlier: Option<&str>,
+        user_owned_goal: bool,
+    ) -> Self {
         let (db, user, user_access, binding) =
             crate::test_support::signed_test_node("goal-operator").await;
         let node = db.node.clone();
@@ -165,7 +174,11 @@ impl Fixture {
         )
         .unwrap();
         let goal = set_goal_from_access(
-            &agent_access,
+            if user_owned_goal {
+                &user_access
+            } else {
+                &agent_access
+            },
             identity.did(),
             SESSION,
             Some("Finish the original work"),

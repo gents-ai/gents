@@ -6,6 +6,9 @@ use crate::store::config_client::ConfigApplyTxn;
 use crate::store::identity::NodeIdentity;
 use gents_protocol::row::AgentRequestRow;
 
+#[cfg(test)]
+mod client_claim_fence_tests;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct GoalResumeReceipt {
     pub goal_id: String,
