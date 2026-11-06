@@ -2375,23 +2375,26 @@ pub(super) async fn call_config_tool(
 #[tokio::test]
 async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     use crate::inference::llm::tool::Tool;
-    let node = build_agent_node().await;
-    let identity = node_identity("schema-recovery");
-    let owner = identity.did().to_string();
-    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    let access = crate::store::config_client::ConfigAccess::local(node.clone());
-    access
+    let fixture = SelfConfigFixture::new("schema-recovery").await;
+    fixture.grant_selected_configuration().await;
+    fixture
         .add_collection("type Delivery { body: String }")
-        .await
-        .unwrap();
-    let tools = build_self_config_tools(
-        std::sync::Arc::default(),
-        node.clone(),
-        owner,
-        Some(identity),
-        &config(&["automation"]),
-        test_plugins(),
+        .await;
+    let admin = crate::ConfigAccess::local_as(
+        fixture.db.node.clone(),
+        identity::Did::new(fixture.db.node_identity.did()).unwrap(),
     );
+    let actor = identity::Did::new(fixture.agent_did()).unwrap();
+    for permission in [
+        crate::store::config_client::NodePermission::CollectionGet,
+        crate::store::config_client::NodePermission::CollectionPatch,
+    ] {
+        admin
+            .grant_node_permission(&actor, permission)
+            .await
+            .unwrap();
+    }
+    let tools = fixture.tools(&["automation"]);
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -2413,7 +2416,11 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
         failure["recovery"]["next_call"]["argv"],
         json!(["collection", "preview", "update", "Delivery"])
     );
-    let schema = crate::tools::builtin::schema_help::SchemaTool::new(node.clone());
+    let schema = crate::tools::builtin::schema_help::SchemaTool::for_managed_agent(
+        fixture.db.node.clone(),
+        fixture.agent.as_ref(),
+    )
+    .unwrap();
     let preview: Value = serde_json::from_str(
         &Tool::call(
             &schema,
@@ -2430,9 +2437,18 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     .await
     .unwrap();
     tool.call(trigger.to_string()).await.unwrap();
-    let rows = access.execute("{ Trigger { trigger_id } }").await.unwrap();
+    let rows = fixture
+        .user_access
+        .execute("{ Trigger { trigger_id } }")
+        .await
+        .unwrap();
     assert_eq!(rows["data"]["Trigger"].as_array().unwrap().len(), 1);
-    node.shutdown().await.expect("shut down test node");
+    fixture
+        .db
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
 }
 
 #[tokio::test]
