@@ -7,6 +7,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
+use futures_util::StreamExt;
 use gents::store::config_client::{
     ConfigAccess, ConfigApplyTxn, PackApprovalError, PackApprovalScope, PackEffectApprover,
     PackEvidence, PackMutation, PackRelationship, PackRelationshipEvidence,
