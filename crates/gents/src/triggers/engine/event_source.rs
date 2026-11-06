@@ -1308,6 +1308,7 @@ impl EventSource {
 
     async fn marked_group_correlations(
         &self,
+        access: &crate::ConfigAccess,
         snapshot: &ActiveRuntimeSnapshot,
         trigger: &crate::runtime::snapshot::ResolvedEventTrigger,
         correlations: &[String],
@@ -1356,13 +1357,7 @@ impl EventSource {
             trigger_id = crate::store::graphql::escape_graphql_string(&trigger.trigger_id),
             limit = GROUP_RECOVERY_PAGE_SIZE,
         );
-        let response = match crate::store::graphql::graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "event-trigger batched marker prune",
-        )
-        .await
-        {
+        let response = match access.execute(&query).await {
             Ok(response) => response,
             Err(error) => {
                 tracing::warn!(
@@ -1374,8 +1369,7 @@ impl EventSource {
             }
         };
         response
-            .data
-            .as_ref()
+            .get("data")
             .and_then(|data| data.get("AgentRequest"))
             .and_then(serde_json::Value::as_array)
             .into_iter()
@@ -1393,6 +1387,7 @@ impl EventSource {
 
     async fn quiesced_group_correlations(
         &self,
+        access: &crate::ConfigAccess,
         delivery: Delivery<'_>,
         correlations: &[String],
     ) -> RapidHashSet<String> {
@@ -1421,25 +1416,7 @@ impl EventSource {
             owner = crate::store::graphql::escape_graphql_string(delivery.owner()),
             limit = GROUP_RECOVERY_PAGE_SIZE,
         );
-        let actor = match delivery.actor() {
-            Ok(Some(actor)) => actor,
-            Ok(None) => return RapidHashSet::new(),
-            Err(error) => {
-                tracing::warn!(%error, "event group actor unavailable");
-                return RapidHashSet::new();
-            }
-        };
-        let response = match crate::store::config_client::ConfigAccess::transact_local_readonly(
-            &self.node,
-            Some(actor),
-            "event-trigger durable quiescence prune",
-            |txn| {
-                let query = &query;
-                Box::pin(async move { txn.execute_local_response(query).await })
-            },
-        )
-        .await
-        {
+        let response = match access.execute(&query).await {
             Ok(response) => response,
             Err(error) => {
                 tracing::warn!(
@@ -1451,8 +1428,7 @@ impl EventSource {
             }
         };
         response
-            .data
-            .as_ref()
+            .get("data")
             .and_then(|data| data.get("EventGroupState"))
             .and_then(serde_json::Value::as_array)
             .into_iter()
@@ -1485,8 +1461,28 @@ impl EventSource {
                 return (Vec::new(), None, true);
             }
         };
+        let Some(agent) = snapshot.agent(&trigger.task.agent_did) else {
+            tracing::warn!(trigger_id = %trigger.trigger_id, "event group Agent unavailable");
+            return (Vec::new(), cursor.map(str::to_owned), false);
+        };
+        let access = match identity::Did::new(&trigger.task.agent_did)
+            .map_err(anyhow::Error::from)
+            .and_then(|actor| {
+                crate::ConfigAccess::local_managed_agent(
+                    self.node.clone(),
+                    actor,
+                    agent.agent_identity.as_ref(),
+                )
+                .map_err(anyhow::Error::from)
+            }) {
+            Ok(access) => access,
+            Err(error) => {
+                tracing::warn!(%error, "event group Agent signer unavailable");
+                return (Vec::new(), cursor.map(str::to_owned), false);
+            }
+        };
         let (correlations, next_cursor, complete) =
-            match event_delivery::group_correlation_page(&self.node, delivery, cursor).await {
+            match event_delivery::group_correlation_page(&access, delivery, cursor).await {
                 Ok(page) => page,
                 Err(error) => {
                     tracing::warn!(%error,"event group recovery page failed");
@@ -1498,10 +1494,10 @@ impl EventSource {
             .filter(|value| seen_correlations.insert(value.clone()))
             .collect::<Vec<_>>();
         let marked = self
-            .marked_group_correlations(snapshot, trigger, &correlations)
+            .marked_group_correlations(&access, snapshot, trigger, &correlations)
             .await;
         let quiesced = self
-            .quiesced_group_correlations(delivery, &correlations)
+            .quiesced_group_correlations(&access, delivery, &correlations)
             .await;
         let mut intents = Vec::new();
         for correlation in correlations

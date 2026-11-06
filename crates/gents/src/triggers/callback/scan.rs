@@ -855,8 +855,15 @@ impl CallbackEngine {
         let (binding, source) = &grouped[index];
         let delivery = Delivery::Callback { binding, source };
         let key = delivery.consumer_key();
+        let access = match self.access_for_agent(&binding.agent_did) {
+            Ok(access) => access,
+            Err(error) => {
+                tracing::warn!(%error, binding_id = %binding.binding_id, "callback group recovery Agent unavailable");
+                return;
+            }
+        };
         match event_delivery::group_correlation_page(
-            &self.node,
+            &access,
             delivery,
             self.group_page_cursors.get(&key).map(String::as_str),
         )

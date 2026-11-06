@@ -1170,6 +1170,229 @@ async fn create_request(
 }
 
 #[tokio::test]
+async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
+    use crate::store::identity::NodeIdentity;
+    let (db, user, client_access, agent) = signed_materializer_agent("group-marker-agent").await;
+    let binding = crate::store::identity::provision_agent_identity_authorized(
+        &db.node,
+        db.node_identity.as_ref(),
+        &identity::Did::new(user.did()).unwrap(),
+    )
+    .await
+    .unwrap();
+    let input = serde_json::json!({
+        "node_did": db.node_identity.did(),
+        "agent_did": binding.agent_did,
+        "creation_nonce": binding.creation_nonce,
+        "display_name": "other group Agent",
+    });
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::Agent,
+            add: input.clone(),
+            update: input,
+        },
+    ])
+    .unwrap();
+    client_access
+        .transact_write("test.group_sibling_agent", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        })
+        .await
+        .expect("the held User publishes the sibling Agent");
+    let mut sibling = (*agent).clone();
+    sibling.agent_did = binding.agent_did.clone();
+    sibling.agent_identity =
+        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+            .unwrap();
+    let sibling = Arc::new(sibling);
+    let mut task = resolved_task("work");
+    task.agent_did = agent.agent_did.clone();
+    let mut sibling_task = task.clone();
+    sibling_task.agent_did = sibling.agent_did.clone();
+    let trigger_id = "group-trigger";
+    let other_trigger = "other-trigger";
+    let triggers = RapidHashMap::from_iter([
+        (
+            trigger_id.to_owned(),
+            resolved_event_trigger_with_concurrency(
+                trigger_id,
+                task.clone(),
+                ConcurrencyMode::Parallel,
+            ),
+        ),
+        (
+            other_trigger.to_owned(),
+            resolved_event_trigger_with_concurrency(
+                other_trigger,
+                sibling_task.clone(),
+                ConcurrencyMode::Parallel,
+            ),
+        ),
+    ]);
+    let snapshot = Arc::new(
+        ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+            agent.agent_did.clone(),
+            vec![agent.clone(), sibling.clone()],
+            RapidHashMap::new(),
+            RapidHashMap::new(),
+            RapidHashMap::new(),
+        )
+        .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+            event_triggers: triggers,
+            ..Default::default()
+        })
+        .with_node(agent.node.clone())
+        .with_local_did(agent.node_did().to_owned())
+        .activate(1, RapidHashMap::new()),
+    );
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(db.node.clone(), rx);
+    let key = super::super::durable_fire_key("event-group", &["generation-one"]);
+    let next = super::super::durable_fire_key("event-group", &["generation-two"]);
+    let request_id = materializer
+        .materialize(
+            &task,
+            Some(trigger_id),
+            TriggerKind::Event,
+            Some("trigger-doc"),
+            Some("source-doc"),
+            Some("correlation"),
+            None,
+            "work",
+            None,
+            &key,
+            None,
+            None,
+        )
+        .await
+        .expect("publish selected Agent's group request");
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+        escape_graphql_string(&request_id),
+    );
+    let access = crate::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        agent.agent_did.parse().unwrap(),
+        agent.agent_identity.as_ref(),
+    )
+    .unwrap();
+    let own = access.execute(&query).await.unwrap();
+    assert_eq!(own["data"]["AgentRequest"].as_array().unwrap().len(), 1);
+    let node_view = crate::ConfigAccess::local(db.node.clone())
+        .execute(&query)
+        .await
+        .unwrap();
+    assert!(node_view["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(materializer
+        .has_materialized_group_request(agent.node_did(), trigger_id, &key)
+        .await
+        .unwrap());
+    assert!(!materializer
+        .has_materialized_group_request(agent.node_did(), trigger_id, &next)
+        .await
+        .unwrap());
+    assert!(!materializer
+        .has_materialized_group_request(agent.node_did(), other_trigger, &key)
+        .await
+        .unwrap());
+    let mut grouped_source = resolved_event_trigger_with_concurrency(
+        trigger_id,
+        task.clone(),
+        ConcurrencyMode::Parallel,
+    );
+    grouped_source.source_collection = "AgentRequest".into();
+    grouped_source.correlation_field = Some("caused_by_correlation".into());
+    grouped_source.expected_count = Some(1);
+    grouped_source.fire_mode = crate::runtime::snapshot::EventTriggerFireMode::PerGroup;
+    let delivery = crate::triggers::engine::event_delivery::Delivery::Trigger {
+        node_did: agent.node_did(),
+        trigger: &grouped_source,
+    };
+    let (visible, _, _) =
+        crate::triggers::engine::event_delivery::group_correlation_page(&access, delivery, None)
+            .await
+            .unwrap();
+    assert_eq!(visible, vec!["correlation"]);
+    let sibling_access = crate::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        sibling.agent_did.parse().unwrap(),
+        sibling.agent_identity.as_ref(),
+    )
+    .unwrap();
+    assert!(
+        crate::triggers::engine::event_delivery::group_correlation_page(
+            &sibling_access,
+            delivery,
+            None,
+        )
+        .await
+        .is_err(),
+        "source scan must bind its selected actor"
+    );
+    let mut sibling_grouped_source = grouped_source.clone();
+    sibling_grouped_source.task = sibling_task.clone();
+    let sibling_delivery = crate::triggers::engine::event_delivery::Delivery::Trigger {
+        node_did: sibling.node_did(),
+        trigger: &sibling_grouped_source,
+    };
+    let (hidden, _, _) = crate::triggers::engine::event_delivery::group_correlation_page(
+        &sibling_access,
+        sibling_delivery,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        hidden.is_empty(),
+        "a sibling Agent cannot discover the source record"
+    );
+    let sibling_snapshot = Arc::new(
+        ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+            sibling.agent_did.clone(),
+            vec![sibling.clone()],
+            RapidHashMap::new(),
+            RapidHashMap::new(),
+            RapidHashMap::new(),
+        )
+        .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+            event_triggers: RapidHashMap::from_iter([(
+                trigger_id.to_owned(),
+                resolved_event_trigger_with_concurrency(
+                    trigger_id,
+                    sibling_task,
+                    ConcurrencyMode::Parallel,
+                ),
+            )]),
+            ..Default::default()
+        })
+        .with_node(sibling.node.clone())
+        .with_local_did(sibling.node_did().to_owned())
+        .activate(1, RapidHashMap::new()),
+    );
+    let (_sibling_tx, sibling_rx) = watch::channel(sibling_snapshot);
+    let sibling_materializer = ProductionMaterializer::new(db.node.clone(), sibling_rx);
+    assert!(
+        !sibling_materializer
+            .has_materialized_group_request(agent.node_did(), trigger_id, &key)
+            .await
+            .unwrap(),
+        "a different Agent cannot observe the selected Agent's marker"
+    );
+    assert!(materializer
+        .has_materialized_group_request(agent.node_did(), "unconfigured", &key)
+        .await
+        .is_err());
+    db.node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
     let (node, materializer) = materializer_with_node().await;
     let owner = "did:key:z-marker-owner";

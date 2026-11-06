@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use super::event_source::SourceSchemaCache;
 use crate::documents::{CallbackBinding, EventGroupCount, EventSource};
 use crate::runtime::snapshot::{ResolvedEventTrigger, MAX_EVENT_TRIGGER_GROUP_DOCS};
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::escape_graphql_string;
 
 pub(crate) const GROUP_RECOVERY_PAGE_SIZE: usize = 256;
 
@@ -615,11 +615,15 @@ pub(crate) fn expected_group_count(
 }
 
 pub(crate) async fn group_correlation_page(
-    node: &defra_node::Node,
+    access: &crate::ConfigAccess,
     delivery: Delivery<'_>,
     cursor: Option<&str>,
 ) -> Result<(Vec<String>, Option<String>, bool)> {
     delivery.validate_group()?;
+    anyhow::ensure!(
+        access.actor_did().as_deref() == delivery.actor()?.as_ref().map(identity::Did::as_str),
+        "event group actor mismatch"
+    );
     let field = delivery
         .correlation_field()
         .context("group correlation field missing")?;
@@ -631,16 +635,13 @@ pub(crate) async fn group_correlation_page(
             escape_graphql_string(cursor)
         )
     });
-    let response = graphql_with_transaction_retry(
-        node,
-        &format!(
+    let response = access
+        .execute(&format!(
             "{{{}(filter:{filter},order:{{_docID:ASC}},limit:{GROUP_RECOVERY_PAGE_SIZE}){{_docID {field}}}}}",
             delivery.collection()
-        ),
-        "event group recovery page",
-    )
-    .await?;
-    let rows = crate::store::graphql::rows::<Value>(&response, delivery.collection())?;
+        ))
+        .await?;
+    let rows: Vec<Value> = serde_json::from_value(response["data"][delivery.collection()].clone())?;
     let cursor = rows
         .last()
         .and_then(|row| row.get("_docID"))
