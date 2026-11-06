@@ -263,21 +263,38 @@ pub fn run_contract_generator(proofs_dir: &Path) -> Result<String> {
 /// Lake configuration and imported oleans are mutable across direct targets.
 pub fn run_prepared_generator(proofs_dir: &Path, target: &str, file: &str) -> Result<String> {
     with_proofs_dir_lock(proofs_dir, || {
-        let mut command = Command::new("lake");
-        command
-            .args(["build", target])
-            .current_dir(proofs_dir)
-            .stdin(Stdio::null());
-        let output = run_with_visible_output(&mut command, io::stderr(), io::stderr())
-            .with_context(|| format!("failed to prepare Lean target {target}"))?;
-        anyhow::ensure!(
-            output.status.success(),
-            "Lean target preparation failed\n  target: {target}\n  cwd: {}\n  status: {}\n  stdout:\n{}\n  stderr:\n{}",
-            proofs_dir.display(), output.status,
-            String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)
-        );
+        prepare_generator_unlocked(proofs_dir, target)?;
         run_generator_unlocked(proofs_dir, file)
     })
+}
+
+/// Execute the same Lean owner against the serialized inputs observed by a
+/// native conformance test, under the existing proof-directory lock.
+pub fn run_prepared_generator_with_input(
+    proofs_dir: &Path,
+    target: &str,
+    file: &str,
+    input: &str,
+) -> Result<String> {
+    with_proofs_dir_lock(proofs_dir, || {
+        prepare_generator_unlocked(proofs_dir, target)?;
+        run_generator_with_input_unlocked(proofs_dir, file, Some(input))
+    })
+}
+
+fn prepare_generator_unlocked(proofs_dir: &Path, target: &str) -> Result<()> {
+    let mut command = Command::new("lake");
+    command
+        .args(["build", target])
+        .current_dir(proofs_dir)
+        .stdin(Stdio::null());
+    let output = run_with_visible_output(&mut command, io::stderr(), io::stderr())
+        .with_context(|| format!("failed to prepare Lean target {target}"))?;
+    anyhow::ensure!(output.status.success(),
+        "Lean target preparation failed\n  target: {target}\n  cwd: {}\n  status: {}\n  stdout:\n{}\n  stderr:\n{}",
+        proofs_dir.display(), output.status, String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr));
+    Ok(())
 }
 
 fn run_contract_generator_unlocked(proofs_dir: &Path) -> Result<String> {
@@ -285,27 +302,53 @@ fn run_contract_generator_unlocked(proofs_dir: &Path) -> Result<String> {
 }
 
 fn run_generator_unlocked(proofs_dir: &Path, file: &str) -> Result<String> {
-    let output = Command::new("lake")
+    run_generator_with_input_unlocked(proofs_dir, file, None)
+}
+
+fn run_generator_with_input_unlocked(
+    proofs_dir: &Path,
+    file: &str,
+    input: Option<&str>,
+) -> Result<String> {
+    let mut command = Command::new("lake");
+    command
         .args(["env", "lean", "--run", file])
-        .current_dir(proofs_dir)
-        .output()
-        .with_context(|| {
+        .current_dir(proofs_dir);
+    let output = if let Some(input) = input {
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| {
+                format!(
+                    "failed to run Lean conformance contract generator in {}",
+                    proofs_dir.display()
+                )
+            })?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .context("Lean generator stdin unavailable")?;
+        writeln!(stdin, "{input}").context("writing observed inputs to Lean")?;
+        drop(stdin);
+        child
+            .wait_with_output()
+            .context("waiting for Lean conformance generator")?
+    } else {
+        command.output().with_context(|| {
             format!(
                 "failed to run Lean conformance contract generator in {}",
                 proofs_dir.display()
             )
-        })?;
-
+        })?
+    };
     if !output.status.success() {
         anyhow::bail!(
             "Lean conformance contract generator failed\n  cwd: {}\n  status: {}\n  stdout:\n{}\n  stderr:\n{}",
-            proofs_dir.display(),
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+            proofs_dir.display(), output.status, String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr));
     }
-
     String::from_utf8(output.stdout).context("Lean conformance contract stdout was not UTF-8")
 }
 
