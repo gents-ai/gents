@@ -826,6 +826,7 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
 
     let (node, path, lifecycle, _writer, observed, expiry) =
         recovery_receipt_fixture("recovery-mutation-rollback").await;
+    let access = fixture_access(&node, &lifecycle);
     let doc_id = observed.doc_id.as_deref().unwrap();
     let escaped = crate::store::graphql::escape_graphql_string(doc_id);
     let snapshot = || async {
@@ -847,7 +848,7 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
     let now = chrono::Utc::now();
     let recover = || {
         recover_expired_generation_with_access_for_test(
-            &fixture_access(&node, &lifecycle),
+            &access,
             &observed,
             generation,
             &expiry,
@@ -889,6 +890,7 @@ async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selecti
 
     let (node, path, lifecycle, _writer, observed, expiry) =
         recovery_receipt_fixture("recovery-receipt-loss").await;
+    let access = fixture_access(&node, &lifecycle);
     let request_doc_id = observed.doc_id.as_deref().unwrap();
     let old_generation = observed.execution_generation.as_deref().unwrap();
     let fresh_generation = "recovery-receipt-loss-generation";
@@ -919,7 +921,7 @@ async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selecti
     assert!(original["close"].is_null());
     let recover = || {
         recover_expired_generation_with_access_for_test(
-            &fixture_access(&node, &lifecycle),
+            &access,
             &observed,
             old_generation,
             &expiry,
